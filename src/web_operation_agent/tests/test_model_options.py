@@ -5,6 +5,7 @@ live in policy data keyed by model name rather than in model-specific code branc
 """
 import json
 import io
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -219,7 +220,26 @@ class SessionRecoveryIsVisible(unittest.TestCase):
         self.assertEqual(c.relogins, 0)
 
     def test_the_action_ledger_carries_it_per_action(self):
-        import inspect
-        from web_operation_agent.session import ServerAgentSession
-        src = inspect.getsource(ServerAgentSession.run)
-        self.assertIn("relogin=receipt.relogin", src)
+        from dataclasses import replace
+        from web_operation_agent.tests.test_session import (_Browser, _Chat, _Control,
+                                                            _obs, _session)
+
+        class ReloginBrowser(_Browser):
+            def execute(self, action, args=None, expect_navigation=False):
+                return replace(super().execute(action, args, expect_navigation),
+                               relogin=True)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            session = _session(
+                tmp,
+                _Chat([("click", {"ref": "e1"}),
+                       ("finish", {"done": False, "why": "done"})]),
+                ReloginBrowser([_obs(1), _obs(2)]),
+                _Control([[], [], []]),
+            )
+            session.run()
+            rows = [json.loads(line) for line in (Path(tmp) / "l.jsonl").read_text().splitlines()]
+
+        action = next(row for row in rows
+                      if row.get("event") == "action_receipt" and row.get("tool") == "click")
+        self.assertTrue(action["relogin"])

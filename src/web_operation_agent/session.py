@@ -506,6 +506,7 @@ class ServerAgentSession:
         self.plan_state: PlanState = PlanState.of(self.contract)
         #: How much of the control plane's decision log this session has already read.
         self._control_seen = 0
+        self._control_started = False
         #: Set once the agent has been told a write of its own did not execute.
         self._challenged_false_success = False
         self.write_refusals = 0
@@ -605,12 +606,45 @@ class ServerAgentSession:
         return self.contract
 
     def install_control_plan(self, plan: ControlPlan) -> None:
+        self._begin_control()
+        try:
+            installed = self.control.install(plan)
+            # Redacted on purpose: the ledger proves a plan existed and was stable, and reveals
+            # nothing a reader could use to reconstruct the authorised write.
+            self.ledger.append("control_plan_installed", plan=plan.redacted(),
+                               tickets_installed=len(installed))
+        except Exception:
+            self._end_control()
+            raise
+
+    def _begin_control(self) -> None:
+        if self._control_started:
+            return
         self.control.begin_run(self.run_id)
-        installed = self.control.install(plan)
-        # Redacted on purpose: the ledger proves a plan existed and was stable, and reveals
-        # nothing a reader could use to reconstruct the authorised write.
-        self.ledger.append("control_plan_installed", plan=plan.redacted(),
-                           tickets_installed=len(installed))
+        self._control_started = True
+        self.ledger.append("control_run_started")
+
+    def _end_control(self) -> ControlPlaneError | None:
+        if not self._control_started:
+            return None
+        end_run = getattr(self.control, "end_run", None)
+        if not callable(end_run):
+            self._control_started = False
+            return None
+        try:
+            end_run(self.run_id)
+            self._control_started = False
+            self.ledger.append("control_run_released")
+            return None
+        except Exception as exc:
+            self.ledger.append(
+                "control_run_release_failed", error_type=type(exc).__name__)
+            return (exc if isinstance(exc, ControlPlaneError)
+                    else ControlPlaneError("control run release failed"))
+
+    def close(self) -> None:
+        """Release external run-scoped resources when execution never reached ``run``."""
+        self._end_control()
 
     def _cancel_requested(self) -> bool:
         try:
@@ -622,6 +656,12 @@ class ServerAgentSession:
 
     # -- the loop ----------------------------------------------------------------------
     def run(self) -> RunResult:
+        try:
+            return self._run()
+        finally:
+            self._end_control()
+
+    def _run(self) -> RunResult:
         t0 = time.time()
         self._turn_deadline_ms = int((t0 + self.wall_budget_s) * 1000)
         result = RunResult(run_id=self.run_id, task_ref=self.task.task_ref, arm=self.arm,
@@ -629,6 +669,10 @@ class ServerAgentSession:
                            contract_digest=self.contract.content_digest,
                            contract_source=self.contract_source,
                            citations=len(self.contract.cited_keys()))
+        try:
+            self._begin_control()
+        except ControlPlaneError as exc:
+            return self._finish(result, t0, "control_plane_error", str(exc))
         if self._cancel_requested():
             return self._finish(
                 result, t0, "user_cancelled", "the user stopped this task")
@@ -2003,6 +2047,13 @@ class ServerAgentSession:
                 reason, detail = "control_plane_error", str(e)
         if self._uncertain_write:
             reason, detail = "indeterminate_write", self._uncertain_write
+        release_error = self._end_control()
+        if release_error is not None:
+            if self.pending_write or self._awaiting_control or self.writes_permitted:
+                reason = "indeterminate_write"
+                detail = "control cleanup failed after a write decision"
+            elif reason not in ("transport_error", "indeterminate_write"):
+                reason, detail = "control_plane_error", str(release_error)
         result.terminal_reason = reason
         result.detail = detail[:800]
         if reason in ("agent_finished", "agent_refused"):

@@ -233,12 +233,18 @@ def cmd_run(a) -> int:
         session.observe_entry()
         session.plan()
         result = session.run()
-    except (TransportError, ControlPlaneError) as e:
+    except TransportError as e:
         session.ledger.append("apparatus_error", detail=str(e))
         print(json.dumps({"run_id": run_id, "terminal_reason": "transport_error",
                           "detail": str(e), "spend": meter.report()}, indent=1))
         return 3
+    except ControlPlaneError as e:
+        session.ledger.append("apparatus_error", detail=str(e))
+        print(json.dumps({"run_id": run_id, "terminal_reason": "control_plane_error",
+                          "detail": str(e), "spend": meter.report()}, indent=1))
+        return 3
     finally:
+        session.close()
         browser.close()
     print(json.dumps(result.to_json(), ensure_ascii=False, indent=1))
     return 0 if result.terminal_reason in ("agent_finished", "agent_refused") else 1

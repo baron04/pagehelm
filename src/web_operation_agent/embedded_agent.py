@@ -26,6 +26,9 @@ class ReadOnlyControl:
     def begin_run(self, _run_id: str) -> None:
         return None
 
+    def end_run(self, _run_id: str) -> None:
+        return None
+
     def since(self, seen: int) -> tuple[list[dict], int]:
         if seen != 0:
             raise ValueError("read-only control trace cannot advance or rewind")

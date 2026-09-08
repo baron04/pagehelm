@@ -268,6 +268,8 @@ App Skill 适合描述当前菜单不可见、但已审核的只读页面入口�
 
 页面中的点击、填写、选择、提交、跳转和返回在部分旧式应用中都可能触发服务端写入，不能仅凭工具名称判断安全性。`ServerAgentSession` 能读取注入 control 的许可与拒绝事件，并在许可已消耗但结果未确认时停止后续潜在写入。
 
+仓库保留的旧 `ControlPlaneClient` 面向一个许可和 trace 均为全局状态的外部网关。客户端会在本机线程和进程间独占这个网关，在 run 开始前重置状态，将 `run_id` 附加到声明，并在读取最终 trace 后再次清空状态才释放租约。密钥只允许从不超过 4 KiB、非链接且不对 group/world 开放的普通文件读取；管理请求拒绝重定向和超限响应。结束清理失败会保留租约并使只读 run 失败，已出现写入决策的 run 则进入 `INDETERMINATE`。这是一条防止协作客户端串 run 的兼容边界，不支持并发页面写入，也不能代替网关内部的 tenant/session/turn/operation scope、TTL 和 replay protection。
+
 当前通用 Turn Executor 不根据自然语言自行生成或安装隐藏 ControlPlan。产品组合只有在外部控制层已经建立精确许可和网络侧 fail-closed 约束时，才能开放页面写动作；否则必须通过 `disabled_actions` 在 dispatch 前关闭这些动作。当前公司创建纵切采用受确认的服务端 API 写入，页面执行层只负责受限导航。
 
 ## 8. 状态与错误语义
@@ -325,6 +327,7 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 - Conversation Host 使用进程内线程、队列和有界引用上下文，没有加密的持久会话、外部任务队列、跨实例调度、背压或服务级高可用。进程崩溃会丢失对话引用；当前同步 Python 调用栈也无法从 ReAct 中间步骤安全续跑。
 - Session Ledger 是本机 append-only JSONL，逐条 flush 与 fsync；它不是集中式审计存储，也没有跨进程事务。
 - capability、Origin、短期 principal、turn、业务工具 scope、审批和 mutation proposal 绑定已经实现；Twenty demo 会匹配页面 session 与 OAuth 身份，并在浏览器 cookie 变化时终止 session；Twenty API 写 proposal 的 dispatch 状态可以持久化。普通嵌入部署的应用服务端身份断言、principal 续期、完整的持久会话、组织级策略和跨进程撤销尚未完成。
+- 旧外部页面控制网关仍是全局状态，当前客户端只能通过跨进程独占和双边界 reset 安全地串行运行；网关原生的租户/会话/轮次隔离与崩溃后 TTL 尚未实现。
 - 浏览器 sessionStorage 可以处理同一标签页内的刷新恢复，不能替代服务端持久幂等存储。
 - 模型调用、页面动作和确认有局部超时，消息级取消已覆盖审批、业务工具和未认领页面动作；provider 请求的主动中断、跨进程取消、完整 deadline 传播和资源回收仍不完整。
 - 目前只有一个窄业务 Adapter 和少量 Skill/API 工具，覆盖面不能代表复杂企业应用的完整操作集。

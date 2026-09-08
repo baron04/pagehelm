@@ -1,5 +1,7 @@
 """The authorisation plane: what it accepts, and what it must never reveal."""
 import json
+import multiprocessing
+import os
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -12,6 +14,19 @@ from web_operation_agent.controlplane import (ControlGatewayConfig, ControlPlane
 
 OPS = [{"webapp": "accounting", "request": "createSomething",
         "targets": [{"thingId": "42", "otherId": "demo1"}], "changes": {"amount": "20"}}]
+
+
+def _hold_process_lock(path: str, ready, release) -> None:
+    import fcntl
+
+    descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        ready.send(True)
+        release.recv()
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
 
 
 class PlanConstruction(unittest.TestCase):
@@ -98,6 +113,7 @@ class Installation(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         cls.key = Path(cls.tmp.name) / "key"
         cls.key.write_text("s3cret-key\n")
+        cls.key.chmod(0o600)
 
     @classmethod
     def tearDownClass(cls):
@@ -116,27 +132,54 @@ class Installation(unittest.TestCase):
     def test_a_run_starts_by_clearing_the_previous_one(self):
         c = self._client()
         c.begin_run("r1")
-        self.assertEqual(_FakeGateway.calls[0][0], "/admin/reset")
-        self.assertEqual(_FakeGateway.calls[0][1]["run_id"], "r1")
+        try:
+            self.assertEqual(_FakeGateway.calls[0][0], "/admin/reset")
+            self.assertEqual(_FakeGateway.calls[0][1]["run_id"], "r1")
+        finally:
+            c.end_run("r1")
 
     def test_the_key_is_sent_and_comes_from_the_file(self):
         c = self._client()
         c.begin_run("r1")
-        self.assertEqual(_FakeGateway.calls[0][2], "s3cret-key")
+        try:
+            self.assertEqual(_FakeGateway.calls[0][2], "s3cret-key")
+        finally:
+            c.end_run("r1")
+
+    def test_run_end_clears_permits_before_releasing_the_gateway(self):
+        c = self._client()
+        c.begin_run("r1")
+        c.end_run("r1")
+
+        resets = [call for call in _FakeGateway.calls if call[0] == "/admin/reset"]
+        self.assertEqual(len(resets), 2)
+        self.assertEqual(resets[-1][1], {"run_id": "r1", "reason": "run_ended"})
+        with self.assertRaisesRegex(ControlPlaneError, "no active run"):
+            c.trace()
 
     def test_every_ticket_is_installed(self):
         c = self._client()
-        installed = c.install(plan_from_spec("p", "T", OPS * 2))
-        self.assertEqual(len(installed), 2)
-        declares = [c for c in _FakeGateway.calls if c[0] == "/admin/declare"]
-        self.assertEqual(len(declares), 2)
-        self.assertEqual(declares[0][1]["uri"], "createSomething")
+        c.begin_run("r1")
+        try:
+            installed = c.install(plan_from_spec("p", "T", OPS * 2))
+            self.assertEqual(len(installed), 2)
+            declares = [call for call in _FakeGateway.calls
+                        if call[0] == "/admin/declare"]
+            self.assertEqual(len(declares), 2)
+            self.assertEqual(declares[0][1]["uri"], "createSomething")
+            self.assertEqual(declares[0][1]["run_id"], "r1")
+        finally:
+            c.end_run("r1")
 
     def test_a_refused_ticket_aborts_the_whole_plan(self):
         c = self._client()
-        _FakeGateway.refuse_index = 1
-        with self.assertRaises(ControlPlaneError):
-            c.install(plan_from_spec("p", "T", OPS * 3))
+        c.begin_run("r1")
+        try:
+            _FakeGateway.refuse_index = 1
+            with self.assertRaises(ControlPlaneError):
+                c.install(plan_from_spec("p", "T", OPS * 3))
+        finally:
+            c.end_run("r1")
 
     def test_a_missing_key_file_is_an_error_not_a_silent_open(self):
         with self.assertRaises(ControlPlaneError):
@@ -157,10 +200,78 @@ class Installation(unittest.TestCase):
 
     def test_the_outcome_is_read_from_the_enforcement_point_not_from_the_agent(self):
         c = self._client()
-        out = c.outcome()
-        self.assertEqual(out["permit_consumed"], 1)
-        self.assertEqual(out["write_blocked"], 1)
-        self.assertEqual(out["consumed_requests"], ["accounting/createSomething"])
+        c.begin_run("r1")
+        try:
+            out = c.outcome()
+            self.assertEqual(out["permit_consumed"], 1)
+            self.assertEqual(out["write_blocked"], 1)
+            self.assertEqual(out["consumed_requests"], ["accounting/createSomething"])
+        finally:
+            c.end_run("r1")
+
+    def test_calls_without_an_active_run_fail_closed(self):
+        c = self._client()
+        with self.assertRaisesRegex(ControlPlaneError, "no active run"):
+            c.install(plan_from_spec("p", "T", OPS))
+        with self.assertRaisesRegex(ControlPlaneError, "no active run"):
+            c.trace()
+        with self.assertRaisesRegex(ControlPlaneError, "no active run"):
+            c.outcome()
+
+    def test_a_second_run_cannot_reset_the_global_gateway_until_release(self):
+        first = self._client()
+        second = ControlPlaneClient(ControlGatewayConfig(
+            base_url=f"http://127.0.0.1:{self.srv.server_address[1]}",
+            key_file=self.key.resolve(),
+            key_header="X-WOA-Fixture-Key",
+        ))
+        first.begin_run("r1")
+        try:
+            with self.assertRaisesRegex(ControlPlaneError, "already leased"):
+                second.begin_run("r2")
+        finally:
+            first.end_run("r1")
+        second.begin_run("r2")
+        second.end_run("r2")
+
+    def test_a_run_in_another_process_blocks_before_gateway_reset(self):
+        client = self._client()
+        client._prepare_lease_dir()
+        context = multiprocessing.get_context("spawn")
+        ready_reader, ready_writer = context.Pipe(duplex=False)
+        release_reader, release_writer = context.Pipe(duplex=False)
+        process = context.Process(
+            target=_hold_process_lock,
+            args=(str(client._lease_path), ready_writer, release_reader),
+        )
+        process.start()
+        try:
+            self.assertTrue(ready_reader.poll(5), "child did not acquire the lease")
+            self.assertTrue(ready_reader.recv())
+            with self.assertRaisesRegex(ControlPlaneError, "another process"):
+                client.begin_run("r1")
+            self.assertEqual(_FakeGateway.calls, [])
+        finally:
+            if process.is_alive():
+                release_writer.send(True)
+            process.join(5)
+            if process.is_alive():
+                process.terminate()
+                process.join(5)
+        self.assertEqual(process.exitcode, 0)
+
+    def test_failed_reset_releases_the_run_lease(self):
+        dead_config = ControlGatewayConfig(
+            base_url=f"http://127.0.0.1:{_free_port()}",
+            key_file=self.key.resolve(),
+            key_header="X-WOA-Fixture-Key",
+            timeout_s=0.1,
+        )
+        with self.assertRaises(ControlPlaneError):
+            ControlPlaneClient(dead_config).begin_run("failed")
+        replacement = ControlPlaneClient(dead_config)
+        with self.assertRaisesRegex(ControlPlaneError, "POST /admin/reset failed"):
+            replacement.begin_run("replacement")
 
 
 class ExplicitGatewayConfiguration(unittest.TestCase):
@@ -194,6 +305,34 @@ class ExplicitGatewayConfiguration(unittest.TestCase):
                     key_header="X-WOA-Control-Key",
                     timeout_s=timeout,
                 )
+
+    def test_key_file_permissions_fail_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            key = Path(tmp) / "control.key"
+            key.write_text("secret")
+            key.chmod(0o644)
+            with self.assertRaisesRegex(ControlPlaneError, "group/world"):
+                ControlPlaneClient(ControlGatewayConfig(
+                    base_url="https://gateway.example.test",
+                    key_file=key,
+                    key_header="X-WOA-Control-Key",
+                ))
+
+    def test_a_symlink_cannot_supply_the_control_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "target.key"
+            target.write_text("secret")
+            target.chmod(0o600)
+            link = root / "control.key"
+            link.symlink_to(target)
+
+            with self.assertRaisesRegex(ControlPlaneError, "unreadable"):
+                ControlPlaneClient(ControlGatewayConfig(
+                    base_url="https://gateway.example.test",
+                    key_file=link,
+                    key_header="X-WOA-Control-Key",
+                ))
 
 
 if __name__ == "__main__":

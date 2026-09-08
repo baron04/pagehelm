@@ -17,6 +17,7 @@ Web Operation Agent 是一个早期阶段的框架，用于在第一方 Web 应�
 | 有依据的页面操作 | 导航和元素操作必须通过当前页面观察与应用控制层检查。 |
 | Skill 与业务工具 | Skill 描述何时、如何调用类型化工具；实时数据来自应用 API，而不是 Skill 文本。 |
 | 受控写入 | 业务写入默认关闭。启用后仍需页面中的明确确认，并以原子状态机记录 `prepared → dispatching → completed/failed/indeterminate`。Twenty 演示使用私有 SQLite journal，崩溃或不确定结果不会使同一 proposal 恢复为可重试。 |
+| 旧页面控制层 | 旧版外部页面控制网关在本机线程和进程间只允许一个协作 run 持有租约，使用前重置，释放前清空；清理失败时关闭执行。这条兼容路径不能提供并发的租户级许可。 |
 | 多轮会话承载 | 会话 Host 按顺序处理面板消息、隔离普通单轮失败，并在内存中保留最多 4 轮或 32 KiB 的引用上下文。历史业务事实可以帮助理解“第二家公司”等指代，但 Agent 必须重新读取当前 API 或页面，历史路由不会获得权限。 |
 | 共享本地网关 | 有容量上限的 server composition 可以在一个网关中承载多个可独立撤销的 session capability；50 会话确定性隔离测试覆盖 token 与 channel 分离。状态仍只存在于当前进程。 |
 | 任务控制 | 面板可通过当前已认证 Runtime lease 停止精确绑定的活动消息。尚未被浏览器认领的动作和等待确认的写入不会再下发；已经认领的动作仍会结算为确定结果或 `indeterminate`。 |
@@ -125,7 +126,7 @@ python src/web_operation_agent/tests/run_all.py -k test_product.py
 
 ## 已知限制
 
-- 共享网关、session registry、事件 journal、会话上下文和账本仍是本地进程组件；重启恢复、水平扩展和持久租户隔离尚未完成。已确认的 Twenty API 写入拥有持久的一次性 SQLite journal，但 dispatch 之后发生崩溃仍会标记为 `indeterminate`，必须核对而不能自动重试。Twenty demo 已通过可信 Playwright 宿主强制身份绑定；普通嵌入式应用仍需从自身登录边界提供服务端认证的身份断言，principal 续期和分布式撤销也尚未实现。
+- 共享 Runtime 网关、session registry、事件 journal、会话上下文和账本仍是本地进程组件；重启恢复、水平扩展和持久租户隔离尚未完成。已确认的 Twenty API 写入拥有持久的一次性 SQLite journal，但 dispatch 之后发生崩溃仍会标记为 `indeterminate`，必须核对而不能自动重试。Twenty demo 已通过可信 Playwright 宿主强制身份绑定；普通嵌入式应用仍需从自身登录边界提供服务端认证的身份断言，principal 续期和分布式撤销也尚未实现。独立的旧页面控制网关仍使用全局许可与 trace：协作客户端会串行执行完整 run，并在前后边界清空状态，但并发页面写入前仍需在网关内部实现 tenant/session/turn scope。
 - 单轮截止时间已限制每次 provider 请求不得超过剩余墙钟预算。消息级主动取消会阻止后续工具下发并解除审批等待，但当前 provider HTTP transport 还不能中断正在进行的 socket 请求，其迟到结果会被丢弃。已有初始页面观察绑定，以及 claim 前对目标控件、关联表单和路由的新鲜度检查；目标元素之外的依赖、更广泛的并发、崩溃恢复和运行监控仍未完成。
 - 唯一打包的业务适配器是范围有限的 Twenty CRM Companies 纵切。
 - 尚未实现任意第三方网站支持和浏览器扩展。

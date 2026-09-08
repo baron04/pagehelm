@@ -172,6 +172,8 @@ class _Control:
         self.unreadable_after = unreadable_after
         self.reads = 0
         self._events = []
+        self.begun = []
+        self.ended = []
 
     def since(self, seen):
         self.reads += 1
@@ -193,7 +195,10 @@ class _Control:
                 "blocked_requests": out["refused_requests"], "trace_events": len(self._events)}
 
     def begin_run(self, run_id):
-        pass
+        self.begun.append(run_id)
+
+    def end_run(self, run_id):
+        self.ended.append(run_id)
 
 
 BLOCKED = [{"event": "write_blocked", "webapp": "accounting", "uri": "SomeRequest"}]
@@ -212,6 +217,80 @@ def _session(tmp, chat, browser, control, contract=None):
         session.plan_state = PlanState.of(contract)
     session.entry_observation = browser.pages[0]
     return session
+
+
+class ControlRunLifecycle(unittest.TestCase):
+    def test_normal_terminal_result_releases_the_control_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            control = _Control([[], []])
+            session = _session(
+                tmp,
+                _Chat([("finish", {"done": False, "why": "unsupported"})]),
+                _Browser([_obs()]),
+                control,
+            )
+
+            result = session.run()
+
+        self.assertEqual(result.terminal_reason, "agent_refused")
+        self.assertEqual(control.begun, ["r1"])
+        self.assertEqual(control.ended, ["r1"])
+
+    def test_unexpected_provider_exception_still_releases_the_control_run(self):
+        class ExplodingChat(_Chat):
+            def complete(self, *args, **kwargs):
+                raise RuntimeError("unexpected provider defect")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            control = _Control([[]])
+            session = _session(
+                tmp, ExplodingChat([]), _Browser([_obs()]), control)
+
+            with self.assertRaisesRegex(RuntimeError, "provider defect"):
+                session.run()
+
+        self.assertEqual(control.begun, ["r1"])
+        self.assertEqual(control.ended, ["r1"])
+
+    def test_failed_control_cleanup_changes_a_read_only_terminal_to_control_error(self):
+        class CleanupFailure(_Control):
+            def end_run(self, run_id):
+                self.ended.append(run_id)
+                raise ControlPlaneError("cleanup unavailable")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            control = CleanupFailure([[], []])
+            session = _session(
+                tmp,
+                _Chat([("finish", {"done": False, "why": "unsupported"})]),
+                _Browser([_obs()]),
+                control,
+            )
+
+            result = session.run()
+
+        self.assertEqual(result.terminal_reason, "control_plane_error")
+        self.assertIn("cleanup unavailable", result.detail)
+
+    def test_failed_control_cleanup_after_a_permit_is_indeterminate(self):
+        class CleanupFailure(_Control):
+            def end_run(self, run_id):
+                self.ended.append(run_id)
+                raise ControlPlaneError("cleanup unavailable")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            control = CleanupFailure([CONSUMED])
+            session = _session(
+                tmp,
+                _Chat([("finish", {"done": True, "why": "done"})]),
+                _Browser([_obs()]),
+                control,
+            )
+
+            result = session.run()
+
+        self.assertEqual(result.terminal_reason, "indeterminate_write")
+        self.assertEqual(result.detail, "control cleanup failed after a write decision")
 
 
 class ActiveCancellation(unittest.TestCase):

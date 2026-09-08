@@ -36,6 +36,7 @@ def _local_evidence(root: Path) -> None:
     (root / "source").mkdir()
     (root / "proxy.js").write_text("// deployment-owned fail-closed proxy\n")
     (root / "control.key").write_text("fixture-secret\n")
+    (root / "control.key").chmod(0o600)
 
 
 def _tree() -> MagicMock:

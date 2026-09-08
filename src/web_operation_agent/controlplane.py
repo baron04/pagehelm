@@ -10,10 +10,14 @@ installs permits and reads back the decision trace.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
 import re
+import stat
+import tempfile
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -22,12 +26,24 @@ from pathlib import Path
 
 from .schemas import ControlPlan, ControlTicket
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - the supported runtime is POSIX.
+    fcntl = None
+
 
 class ControlPlaneError(Exception):
     """Callers map this to terminal reason `control_plane_error`. Never fail open."""
 
 
 _HEADER_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9-]{0,63}$")
+_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
+_MAX_CONTROL_RESPONSE_BYTES = 1024 * 1024
+
+
+class _RejectRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +73,10 @@ class ControlGatewayConfig:
         if not path.is_absolute():
             raise ValueError("control gateway key_file must be an absolute path")
         object.__setattr__(self, "base_url", self.base_url.rstrip("/"))
-        object.__setattr__(self, "key_file", path.resolve())
+        # Normalise `..` without resolving the final component. `read_key()` uses
+        # O_NOFOLLOW, which would be defeated if configuration eagerly dereferenced a
+        # caller-supplied symlink here.
+        object.__setattr__(self, "key_file", Path(os.path.abspath(path)))
         if (not isinstance(self.key_header, str)
                 or not _HEADER_NAME.fullmatch(self.key_header)
                 or self.key_header.casefold() in {"content-type", "content-length", "host"}):
@@ -68,27 +87,73 @@ class ControlGatewayConfig:
             raise ValueError("control gateway timeout_s must be in (0, 120]")
 
     def read_key(self) -> str:
+        descriptor = -1
         try:
-            if not self.key_file.is_file() or self.key_file.stat().st_size > 4096:
+            flags = os.O_RDONLY
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            descriptor = os.open(self.key_file, flags)
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 4096:
                 raise OSError("not a regular key file of at most 4096 bytes")
-            key = self.key_file.read_text(encoding="utf-8").strip()
-        except OSError as exc:
-            raise ControlPlaneError(
-                f"control key {self.key_file} is unreadable: {exc}") from exc
+            if metadata.st_mode & 0o077:
+                raise ControlPlaneError(
+                    "control key file must not be group/world accessible")
+            with os.fdopen(descriptor, "rb") as handle:
+                descriptor = -1
+                raw = handle.read(4097)
+            if len(raw) > 4096:
+                raise OSError("control key file exceeds 4096 bytes")
+            key = raw.decode("utf-8").strip()
+        except ControlPlaneError:
+            raise
+        except (OSError, UnicodeError) as exc:
+            raise ControlPlaneError("control key file is unreadable") from exc
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
         if not key:
-            raise ControlPlaneError(f"control key {self.key_file} is empty")
+            raise ControlPlaneError("control key file is empty")
         if "\r" in key or "\n" in key:
             raise ControlPlaneError("control key contains a line break")
         return key
 
 
 class ControlPlaneClient:
+    _leases_guard = threading.Lock()
+    _active_gateways: set[str] = set()
+
     def __init__(self, config: ControlGatewayConfig):
         if not isinstance(config, ControlGatewayConfig):
             raise TypeError("ControlPlaneClient requires an explicit ControlGatewayConfig")
         self.config = config
         self.base_url = config.base_url
         self._key = config.read_key()
+        self._opener = urllib.request.build_opener(_RejectRedirects())
+        self._active_run_id = ""
+        self._lease_descriptor = -1
+        gateway_digest = hashlib.sha256(self.base_url.encode("utf-8")).hexdigest()[:24]
+        self._lease_key = self.base_url
+        self._lease_dir = (Path(tempfile.gettempdir())
+                           / f"web-operation-agent-{os.geteuid()}")
+        self._lease_path = self._lease_dir / f"control-{gateway_digest}.lock"
+
+    def _prepare_lease_dir(self) -> None:
+        try:
+            self._lease_dir.mkdir(mode=0o700)
+        except FileExistsError:
+            pass
+        except OSError as exc:
+            raise ControlPlaneError("control lease directory is unavailable") from exc
+        try:
+            metadata = self._lease_dir.lstat()
+        except OSError as exc:
+            raise ControlPlaneError("control lease directory is unavailable") from exc
+        if (not stat.S_ISDIR(metadata.st_mode)
+                or metadata.st_uid != os.geteuid()
+                or metadata.st_mode & 0o077):
+            raise ControlPlaneError(
+                "control lease directory must be private and owned by the current user")
 
     def _call(self, path: str, payload: dict | None = None, method: str = "POST") -> dict:
         url = f"{self.base_url}{path}"
@@ -97,19 +162,96 @@ class ControlPlaneClient:
                                      headers={"content-type": "application/json",
                                               self.config.key_header: self._key})
         try:
-            with urllib.request.urlopen(req, timeout=self.config.timeout_s) as r:
-                return json.load(r)
+            with self._opener.open(req, timeout=self.config.timeout_s) as response:
+                raw = response.read(_MAX_CONTROL_RESPONSE_BYTES + 1)
+            if len(raw) > _MAX_CONTROL_RESPONSE_BYTES:
+                raise ControlPlaneError("control gateway response exceeds 1 MiB")
+            payload = json.loads(raw)
+            if not isinstance(payload, dict):
+                raise ControlPlaneError("control gateway response must be an object")
+            return payload
         except urllib.error.HTTPError as e:
-            raise ControlPlaneError(f"{method} {path} -> {e.code}: {e.read()[:300]!r}")
+            raise ControlPlaneError(f"{method} {path} returned HTTP {e.code}") from e
+        except ControlPlaneError:
+            raise
         except Exception as e:
             raise ControlPlaneError(f"{method} {path} failed: {type(e).__name__}: {e}")
 
+    def _require_active(self) -> str:
+        if not self._active_run_id or self._lease_descriptor < 0:
+            raise ControlPlaneError("control gateway has no active run lease")
+        return self._active_run_id
+
     # -- run lifecycle -----------------------------------------------------------------
     def begin_run(self, run_id: str) -> None:
-        """Clear the previous run's declarations and trace. Permits never span runs."""
-        r = self._call("/admin/reset", {"run_id": run_id})
-        if not r.get("ok"):
-            raise ControlPlaneError(f"control plane refused to start run {run_id}: {r}")
+        """Exclusively lease and reset a legacy global gateway for one bounded run."""
+        if not isinstance(run_id, str) or not _RUN_ID.fullmatch(run_id):
+            raise ControlPlaneError("control run_id is invalid")
+        if self._active_run_id:
+            raise ControlPlaneError("this control client already owns an active run")
+        if fcntl is None:
+            raise ControlPlaneError("control run isolation requires a POSIX file lock")
+        with self._leases_guard:
+            if self._lease_key in self._active_gateways:
+                raise ControlPlaneError("control gateway is already leased by another run")
+            self._active_gateways.add(self._lease_key)
+        descriptor = -1
+        try:
+            self._prepare_lease_dir()
+            flags = os.O_CREAT | os.O_RDWR
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            descriptor = os.open(self._lease_path, flags, 0o600)
+            metadata = os.fstat(descriptor)
+            if (not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_uid != os.geteuid()):
+                raise ControlPlaneError(
+                    "control lease file must be regular and owned by the current user")
+            os.fchmod(descriptor, 0o600)
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                raise ControlPlaneError(
+                    "control gateway is already leased by another process") from exc
+            self._active_run_id = run_id
+            self._lease_descriptor = descriptor
+            descriptor = -1
+            response = self._call("/admin/reset", {"run_id": run_id})
+            if not response.get("ok"):
+                raise ControlPlaneError("control plane refused to start the run")
+        except Exception:
+            self._release_lease()
+            raise
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+
+    def _release_lease(self) -> None:
+        descriptor = self._lease_descriptor
+        self._lease_descriptor = -1
+        self._active_run_id = ""
+        if descriptor >= 0:
+            try:
+                if fcntl is not None:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
+        with self._leases_guard:
+            self._active_gateways.discard(self._lease_key)
+
+    def end_run(self, run_id: str) -> None:
+        """Clear all permits while exclusively leased, then release the gateway."""
+        if not self._active_run_id or self._lease_descriptor < 0:
+            raise ControlPlaneError("control gateway has no active run lease")
+        if run_id != self._active_run_id:
+            raise ControlPlaneError("cannot release another control run")
+        response = self._call("/admin/reset", {
+            "run_id": run_id,
+            "reason": "run_ended",
+        })
+        if not response.get("ok"):
+            raise ControlPlaneError("control plane refused to clear the completed run")
+        self._release_lease()
 
     def install(self, plan: ControlPlan) -> list[dict]:
         """Register every ticket as a single-use permit. All or nothing.
@@ -118,9 +260,11 @@ class ControlPlaneClient:
         sequence and then be refused at step two for a reason indistinguishable from a real
         authorisation boundary. Any failure here aborts the run.
         """
+        run_id = self._require_active()
         installed = []
         for i, ticket in enumerate(plan.tickets):
             r = self._call("/admin/declare", {
+                "run_id": run_id,
                 "operation_id": f"{plan.plan_id}:{i}", "intent": "update",
                 "webapp": ticket.webapp, "uri": ticket.request,
                 "targets": [dict(t) for t in ticket.targets], "changes": dict(ticket.changes)})
@@ -131,7 +275,11 @@ class ControlPlaneClient:
         return installed
 
     def trace(self) -> list[dict]:
-        return self._call("/admin/trace", method="GET").get("trace", [])
+        self._require_active()
+        trace = self._call("/admin/trace", method="GET").get("trace")
+        if not isinstance(trace, list) or any(not isinstance(event, dict) for event in trace):
+            raise ControlPlaneError("control gateway trace is invalid")
+        return trace
 
     def since(self, seen: int) -> tuple[list[dict], int]:
         """Decisions taken since the caller last looked, and the new watermark.
