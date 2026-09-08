@@ -15,6 +15,7 @@ from web_operation_agent.business import (BusinessSkill, BusinessToolError,
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.identity import OperationContext, PrincipalContext
+from web_operation_agent.mutation import MemoryMutationJournal, MutationJournalError
 from web_operation_agent.schemas import ActionReceipt, PageObservation
 from web_operation_agent.session import ServerAgentSession, TaskSpec
 from web_operation_agent.twenty import TwentyBusinessToolExecutor
@@ -316,7 +317,9 @@ class BusinessRuntimeValidation(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             skill = _write_skill(Path(tmp) / "write-skill.json")
             executor = _MutationExecutor()
-            runtime = BusinessToolRuntime((skill,), executor)
+            journal = MemoryMutationJournal()
+            runtime = BusinessToolRuntime(
+                (skill,), executor, mutation_journal=journal)
             loaded = {skill.skill_id}
             with self.assertRaisesRegex(BusinessToolError, "explicit approval"):
                 runtime.execute("create_company", {"name": " Acme "}, loaded)
@@ -330,7 +333,12 @@ class BusinessRuntimeValidation(unittest.TestCase):
                 proposal, proposal.content_digest, loaded)
             self.assertTrue(result.content["created"])
             self.assertEqual(executor.executions, 1)
-            with self.assertRaisesRegex(BusinessToolError, "already consumed"):
+            self.assertEqual(
+                journal.get(proposal.content_digest).state, "completed")
+            self.assertEqual(
+                journal.get(proposal.content_digest).result_digest,
+                result.content_digest)
+            with self.assertRaisesRegex(BusinessToolError, "already completed"):
                 runtime.execute_mutation(proposal, proposal.content_digest, loaded)
             self.assertEqual(executor.executions, 1)
 
@@ -338,16 +346,45 @@ class BusinessRuntimeValidation(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             skill = _write_skill(Path(tmp) / "write-skill.json")
             executor = _MutationExecutor(indeterminate=True)
-            runtime = BusinessToolRuntime((skill,), executor)
+            journal = MemoryMutationJournal()
+            runtime = BusinessToolRuntime(
+                (skill,), executor, mutation_journal=journal)
             proposal = runtime.prepare_mutation(
                 "create_company", {"name": "Acme"}, {skill.skill_id})
             with self.assertRaises(BusinessMutationIndeterminate):
                 runtime.execute_mutation(
                     proposal, proposal.content_digest, {skill.skill_id})
-            with self.assertRaisesRegex(BusinessToolError, "already consumed"):
+            self.assertEqual(
+                journal.get(proposal.content_digest).state, "indeterminate")
+            with self.assertRaisesRegex(BusinessToolError, "already indeterminate"):
                 runtime.execute_mutation(
                     proposal, proposal.content_digest, {skill.skill_id})
             self.assertEqual(executor.executions, 1)
+
+    def test_missing_durable_completion_turns_success_into_indeterminate(self):
+        class BrokenFinishJournal(MemoryMutationJournal):
+            def finish(self, proposal_digest, state, *, result_digest="", now_ms=None):
+                if state == "completed":
+                    raise MutationJournalError("disk unavailable")
+                return super().finish(
+                    proposal_digest, state, result_digest=result_digest,
+                    now_ms=now_ms)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _write_skill(Path(tmp) / "write-skill.json")
+            executor = _MutationExecutor()
+            journal = BrokenFinishJournal()
+            runtime = BusinessToolRuntime(
+                (skill,), executor, mutation_journal=journal)
+            proposal = runtime.prepare_mutation(
+                "create_company", {"name": "Acme"}, {skill.skill_id})
+            with self.assertRaisesRegex(
+                    BusinessMutationIndeterminate, "durable outcome"):
+                runtime.execute_mutation(
+                    proposal, proposal.content_digest, {skill.skill_id})
+            self.assertEqual(executor.executions, 1)
+            self.assertEqual(
+                journal.get(proposal.content_digest).state, "dispatching")
 
     def test_twenty_adapter_projects_only_valid_returned_record_routes(self):
         class FixtureTwenty(TwentyBusinessToolExecutor):

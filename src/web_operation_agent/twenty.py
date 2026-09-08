@@ -25,6 +25,7 @@ from web_operation_agent.application import (APPLICATION_ADAPTER_VERSION,
                                              ApplicationDescriptor)
 from web_operation_agent.identity import (IdentityAssertion, OperationContext,
                                           PrincipalContext, bind_matching_identity)
+from web_operation_agent.mutation import MutationJournal
 
 
 QUERY_COMPANIES_SCHEMA = {
@@ -534,7 +535,8 @@ class TwentyApplicationAdapter:
                  registration_path: str | Path,
                  skill_path: str | Path | None = None,
                  mutation_skill_path: str | Path | None = None,
-                 allow_mutations: bool = False):
+                 allow_mutations: bool = False,
+                 mutation_journal: MutationJournal | None = None):
         if not isinstance(allow_mutations, bool):
             raise ValueError("allow_mutations must be a boolean")
         if mutation_skill_path is not None and not allow_mutations:
@@ -559,7 +561,8 @@ class TwentyApplicationAdapter:
             required_scopes["create_company"] = "companies:write"
         self.business_tools = BusinessToolRuntime(
             tuple(skills), executor, application_id="twenty",
-            required_scopes=required_scopes)
+            required_scopes=required_scopes,
+            mutation_journal=mutation_journal)
         self._executor = executor
         self._principal_scopes = tuple(sorted(required_scopes.values()))
         self.descriptor = ApplicationDescriptor(

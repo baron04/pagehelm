@@ -10,6 +10,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +19,8 @@ from typing import Protocol
 from urllib.parse import urlsplit
 
 from .identity import OperationContext, PrincipalError
+from .mutation import (MemoryMutationJournal, MutationJournal,
+                       MutationJournalError)
 
 
 _SKILL_ID = re.compile(r"^[a-z][a-z0-9_.-]{2,79}$")
@@ -304,7 +308,9 @@ class BusinessToolRuntime:
 
     def __init__(self, skills: tuple[BusinessSkill, ...], executor: BusinessToolExecutor,
                  *, application_id: str = "",
-                 required_scopes: dict[str, str] | None = None):
+                 required_scopes: dict[str, str] | None = None,
+                 mutation_journal: MutationJournal | None = None,
+                 max_pending_mutations: int = 1_000):
         skill_ids = [skill.skill_id for skill in skills]
         if len(skill_ids) != len(set(skill_ids)):
             raise ValueError("Business Skill IDs must be unique")
@@ -339,14 +345,26 @@ class BusinessToolRuntime:
         if any(not isinstance(scope, str) or not re.fullmatch(
                 r"[a-z][a-z0-9:._-]{1,99}", scope) for scope in scopes.values()):
             raise ValueError("business tool required scope is invalid")
+        if (isinstance(max_pending_mutations, bool)
+                or not isinstance(max_pending_mutations, int)
+                or not 1 <= max_pending_mutations <= 100_000):
+            raise ValueError("max_pending_mutations must be an integer from 1 to 100000")
         self._skills = {skill.skill_id: skill for skill in skills}
         self._schemas = schemas
         self._effects = dict(effects)
         self._executor = executor
         self.application_id = application_id
         self._required_scopes = scopes
-        self._prepared_mutations: dict[str, BusinessMutationProposal] = {}
-        self._consumed_mutations: set[str] = set()
+        self._mutation_journal = (mutation_journal
+                                  if mutation_journal is not None
+                                  else MemoryMutationJournal())
+        if any(not callable(getattr(self._mutation_journal, method, None))
+               for method in ("register", "claim", "finish", "get")):
+            raise TypeError("mutation_journal does not implement the journal contract")
+        self._max_pending_mutations = max_pending_mutations
+        self._mutation_lock = threading.RLock()
+        self._prepared_mutations: dict[
+            str, tuple[BusinessMutationProposal, int]] = {}
 
     @classmethod
     def from_paths(cls, paths: list[str | Path] | tuple[str | Path, ...],
@@ -410,6 +428,10 @@ class BusinessToolRuntime:
     def is_mutation(self, name: str) -> bool:
         return self._effects.get(name) == "write"
 
+    def _forget_mutation(self, digest: str) -> None:
+        with self._mutation_lock:
+            self._prepared_mutations.pop(digest, None)
+
     def _validate_call(self, name: str, args: object,
                        loaded_ids: set[str],
                        context: OperationContext | None = None) -> dict:
@@ -471,11 +493,28 @@ class BusinessToolRuntime:
                 f"business mutation preparation failed: {type(exc).__name__}") from exc
         if not isinstance(spec, BusinessMutationSpec):
             raise BusinessToolError("business mutation preparation returned an invalid result")
+        now_ms = int(time.time() * 1000)
         proposal = BusinessMutationProposal(
             tool=name, args=spec.args, effect=spec.effect, targets=spec.targets,
             nonce=uuid.uuid4().hex,
             operation_context_digest=(context.binding_digest if context else ""))
-        self._prepared_mutations[proposal.content_digest] = proposal
+        expires_at = context.expires_at if context is not None else now_ms + 10 * 60 * 1000
+        with self._mutation_lock:
+            expired = [digest for digest, (_proposal, item_expires_at)
+                       in self._prepared_mutations.items()
+                       if item_expires_at <= now_ms]
+            for digest in expired:
+                self._prepared_mutations.pop(digest, None)
+            if len(self._prepared_mutations) >= self._max_pending_mutations:
+                raise BusinessToolError(
+                    "too many business mutations are awaiting a decision")
+            try:
+                self._mutation_journal.register(
+                    proposal.content_digest, proposal.operation_context_digest,
+                    expires_at=expires_at, now_ms=now_ms)
+            except MutationJournalError as exc:
+                raise BusinessToolError(str(exc)) from exc
+            self._prepared_mutations[proposal.content_digest] = (proposal, expires_at)
         return proposal
 
     def execute_mutation(self, proposal: BusinessMutationProposal,
@@ -485,31 +524,72 @@ class BusinessToolRuntime:
         if not isinstance(proposal, BusinessMutationProposal):
             raise BusinessToolError("business mutation proposal is invalid")
         digest = proposal.content_digest
-        prepared = self._prepared_mutations.get(digest)
-        if prepared != proposal or approved_digest != digest:
-            raise BusinessToolError("business mutation approval does not match the proposal")
-        self._validate_call(proposal.tool, proposal.args, loaded_ids, context)
-        context_digest = context.binding_digest if context is not None else ""
-        if proposal.operation_context_digest != context_digest:
-            raise BusinessToolError("business mutation belongs to another operation context")
-        if not self.is_mutation(proposal.tool):
-            raise BusinessToolError("business mutation proposal names a read-only tool")
-        if digest in self._consumed_mutations:
-            raise BusinessToolError("business mutation proposal was already consumed")
-        # Consume before dispatch. A timeout or malformed acknowledgement cannot make the
-        # same proposal eligible for a second write.
-        self._consumed_mutations.add(digest)
+        with self._mutation_lock:
+            prepared_entry = self._prepared_mutations.get(digest)
+            prepared = prepared_entry[0] if prepared_entry is not None else None
+            if prepared != proposal or approved_digest != digest:
+                prior = self._mutation_journal.get(digest)
+                if prepared is None and prior is not None and prior.state != "prepared":
+                    raise BusinessToolError(
+                        f"business mutation proposal is already {prior.state}")
+                raise BusinessToolError(
+                    "business mutation approval does not match the proposal")
+            self._validate_call(proposal.tool, proposal.args, loaded_ids, context)
+            context_digest = context.binding_digest if context is not None else ""
+            if proposal.operation_context_digest != context_digest:
+                raise BusinessToolError(
+                    "business mutation belongs to another operation context")
+            if not self.is_mutation(proposal.tool):
+                raise BusinessToolError(
+                    "business mutation proposal names a read-only tool")
+            # Claim atomically before dispatch. A competing caller, process restart, timeout,
+            # or malformed acknowledgement cannot make the same proposal eligible again.
+            try:
+                self._mutation_journal.claim(
+                    digest, proposal.operation_context_digest)
+            except MutationJournalError as exc:
+                raise BusinessToolError(str(exc)) from exc
         try:
             result = (self._executor.execute_mutation(proposal.tool, proposal.args)
                       if context is None
                       else self._executor.execute_mutation(
                           proposal.tool, proposal.args, context=context))
-        except (BusinessToolError, BusinessMutationIndeterminate):
+        except BusinessToolError:
+            try:
+                self._mutation_journal.finish(digest, "failed")
+            except MutationJournalError:
+                pass
+            self._forget_mutation(digest)
+            raise
+        except BusinessMutationIndeterminate:
+            try:
+                self._mutation_journal.finish(digest, "indeterminate")
+            except MutationJournalError:
+                pass
+            self._forget_mutation(digest)
             raise
         except Exception as exc:
+            try:
+                self._mutation_journal.finish(digest, "indeterminate")
+            except MutationJournalError:
+                pass
+            self._forget_mutation(digest)
             raise BusinessMutationIndeterminate(
                 f"business mutation outcome is unknown: {type(exc).__name__}") from exc
         if not isinstance(result, BusinessToolResult):
+            try:
+                self._mutation_journal.finish(digest, "indeterminate")
+            except MutationJournalError:
+                pass
+            self._forget_mutation(digest)
             raise BusinessMutationIndeterminate(
                 "business mutation returned an invalid acknowledgement")
+        try:
+            self._mutation_journal.finish(
+                digest, "completed", result_digest=result.content_digest)
+        except MutationJournalError as exc:
+            self._forget_mutation(digest)
+            raise BusinessMutationIndeterminate(
+                "business mutation completed but its durable outcome was not recorded") from exc
+        self._forget_mutation(digest)
         return result

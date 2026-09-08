@@ -254,13 +254,13 @@ App Skill 适合描述当前菜单不可见、但已审核的只读页面入口�
 3. 生成包含 effect、targets、规范化参数和随机 nonce 的 mutation proposal；
 4. 在页面面板展示 effect 与 targets；
 5. 将当前受认证浏览器会话的决定在服务端绑定到 proposal digest；
-6. 在 dispatch 前消耗该 proposal，使其不可再次执行；
+6. 在持久 mutation journal 中原子地将 proposal 从 `prepared` 认领为 `dispatching`，使并发调用和进程重启都不能再次执行；
 7. 最多发送一次写请求；
-8. 返回带审计投影的结构化结果；需要业务成功判定的集成还应由 Adapter 进行同用户回读。
+8. 将确定结果持久记录为 `completed` 或 `failed`，将无法确定的结果记录为 `indeterminate`；需要业务成功判定的集成还应由 Adapter 进行同用户回读。
 
 `allow_business_mutations` 默认是 `false`。没有显式启用或没有确认通道时，写工具在 dispatch 前终止。用户拒绝对应 `CANCELLED`。
 
-任何发生在 dispatch 后、又无法确定结果的异常都必须对应 `INDETERMINATE`。系统不会因为超时、连接丢失、回执格式错误或回读失败而自动重试写请求。
+任何发生在 dispatch 后、又无法确定结果的异常都必须对应 `INDETERMINATE`。系统不会因为超时、连接丢失、回执格式错误、回读失败或进程在 dispatch 后崩溃而自动重试写请求。公开 Twenty composition 要求独立的私有 SQLite journal；它持久保留 proposal digest、operation context digest、状态、期限和结果摘要，不保存原始业务参数或身份字段。journal 解决的是重复发送风险，不提供应用数据库事务或自动判断崩溃前的请求是否已经生效。
 
 ### 7.3 页面写入
 
@@ -318,7 +318,7 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 - 多个 session 可以共享一个 Gateway，并通过独立 capability 和 channel 隔离；Remote Session registry、事件序列、消息队列和 lease 仍在单个 Python 进程内存中，进程重启后不能恢复会话。
 - Conversation Host 使用进程内线程和队列，没有外部任务队列、跨实例调度、背压或服务级高可用。
 - Session Ledger 是本机 append-only JSONL，逐条 flush 与 fsync；它不是集中式审计存储，也没有跨进程事务。
-- capability、Origin、短期 principal、turn、业务工具 scope、审批和 mutation proposal 的内存绑定已经实现；可信页面身份解析、持久身份会话、组织级策略和跨进程撤销尚未完成。
+- capability、Origin、短期 principal、turn、业务工具 scope、审批和 mutation proposal 绑定已经实现；Twenty API 写 proposal 的 dispatch 状态可以持久化。可信页面身份解析、完整的持久会话、组织级策略和跨进程撤销尚未完成。
 - 浏览器 sessionStorage 可以处理同一标签页内的刷新恢复，不能替代服务端持久幂等存储。
 - 模型调用、页面动作和确认有局部超时，消息级取消已覆盖审批、业务工具和未认领页面动作；provider 请求的主动中断、跨进程取消、完整 deadline 传播和资源回收仍不完整。
 - 目前只有一个窄业务 Adapter 和少量 Skill/API 工具，覆盖面不能代表复杂企业应用的完整操作集。

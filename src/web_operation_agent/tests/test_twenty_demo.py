@@ -30,6 +30,7 @@ BASE_ENV = {
     "WOA_AUDIT_LEDGER": "/tmp/twenty-audit.jsonl",
     "WOA_SPEND_LEDGER": "/tmp/twenty-spend.jsonl",
     "WOA_OUTPUT_DIR": "/tmp/twenty-output",
+    "WOA_MUTATION_JOURNAL": "/tmp/twenty-mutations.sqlite3",
 }
 
 
@@ -76,6 +77,18 @@ class TwentyDemoArgumentsTests(unittest.TestCase):
             demo.parse_config([
                 "--headless", "--task", "create company Acme with domain acme.test",
                 "--allow-mutations",
+            ], BASE_ENV)
+
+    def test_mutation_session_requires_a_dedicated_journal(self):
+        env = {key: value for key, value in BASE_ENV.items()
+               if key != "WOA_MUTATION_JOURNAL"}
+        with self.assertRaisesRegex(ValueError, "durable mutation journal"):
+            demo.parse_config(["--allow-mutations"], env)
+
+        with self.assertRaisesRegex(ValueError, "dedicated path"):
+            demo.parse_config([
+                "--allow-mutations",
+                "--mutation-journal", BASE_ENV["WOA_AUDIT_LEDGER"],
             ], BASE_ENV)
 
     def test_page_controller_must_share_the_application_origin(self):
@@ -145,6 +158,8 @@ class TwentyDemoCompositionTests(unittest.TestCase):
             audit_ledger_path=root / "audit.jsonl",
             spend_ledger_path=root / "spend.jsonl",
             output_root=root / "output",
+            mutation_journal_path=(root / "mutations.sqlite3"
+                                   if allow_mutations else None),
             allow_mutations=allow_mutations,
         )
 
@@ -163,6 +178,14 @@ class TwentyDemoCompositionTests(unittest.TestCase):
             config = self._config(Path(tmp), allow_mutations=True)
             adapter = demo.build_adapter(config)
             turn = demo.build_turn_config(config)
+
+            self.assertTrue(config.mutation_journal_path.is_file())
+            self.assertEqual(
+                config.mutation_journal_path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(
+                adapter.business_tools._mutation_journal.path,
+                config.mutation_journal_path,
+            )
 
         self.assertEqual(
             adapter.business_tools.tool_names,

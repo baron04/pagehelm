@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.live import LiveConversationRunner, LiveProductSession, LiveTurnOutcome
 from web_operation_agent.model import ChatModel, SpendMeter, load_env
+from web_operation_agent.mutation import SQLiteMutationJournal
 from web_operation_agent.privacy import redact_sensitive_assignments, redact_session_handoffs
 from web_operation_agent.product import AgentTurnConfig, AgentTurnExecution, AgentTurnExecutor
 from web_operation_agent.twenty import TwentyApplicationAdapter
@@ -50,6 +51,11 @@ _MUTATION_SCOPE = (
 
 def _path(value: str) -> Path:
     return Path(value).expanduser().resolve()
+
+
+def _state_path(value: str) -> Path:
+    candidate = Path(value).expanduser()
+    return candidate if candidate.is_absolute() else Path.cwd() / candidate
 
 
 def _positive_int(value: str) -> int:
@@ -106,6 +112,7 @@ class TwentyDemoConfig:
     audit_ledger_path: Path
     spend_ledger_path: Path
     output_root: Path
+    mutation_journal_path: Path | None = None
     model_env_path: Path | None = None
     model: str | None = None
     browser_executable: Path | None = None
@@ -128,6 +135,9 @@ class TwentyDemoConfig:
             object.__setattr__(self, "model_env_path", Path(self.model_env_path))
         if self.browser_executable is not None:
             object.__setattr__(self, "browser_executable", Path(self.browser_executable))
+        if self.mutation_journal_path is not None:
+            object.__setattr__(
+                self, "mutation_journal_path", Path(self.mutation_journal_path))
         if not isinstance(self.allow_mutations, bool) or not isinstance(self.headless, bool):
             raise ValueError("demo mode flags must be booleans")
         if not self.entry_path.startswith("/") or self.entry_path.startswith("//"):
@@ -142,15 +152,23 @@ class TwentyDemoConfig:
         module_origin = _origin(module)
         if module_origin != base_origin:
             raise ValueError("page_controller_module must use the Twenty origin")
-        if self.audit_ledger_path == self.spend_ledger_path:
+        audit_location = self.audit_ledger_path.resolve(strict=False)
+        spend_location = self.spend_ledger_path.resolve(strict=False)
+        if audit_location == spend_location:
             raise ValueError("audit and spend ledgers must be different files")
-        inputs = {
-            self.storage_state_path,
-            self.oauth_token_path,
-            self.oauth_registration_path,
+        input_locations = {
+            self.storage_state_path.resolve(strict=False),
+            self.oauth_token_path.resolve(strict=False),
+            self.oauth_registration_path.resolve(strict=False),
         }
-        if self.audit_ledger_path in inputs or self.spend_ledger_path in inputs:
+        if audit_location in input_locations or spend_location in input_locations:
             raise ValueError("ledger paths must not overwrite authentication inputs")
+        if self.allow_mutations and self.mutation_journal_path is None:
+            raise ValueError("mutation-enabled sessions require a durable mutation journal")
+        if (self.mutation_journal_path is not None
+                and self.mutation_journal_path.resolve(strict=False) in input_locations | {
+                    audit_location, spend_location}):
+            raise ValueError("mutation journal must use a dedicated path")
         for name in ("step_budget", "wall_budget_s", "approval_ttl_s"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
@@ -210,6 +228,11 @@ def build_parser(environ: Mapping[str, str] | None = None) -> argparse.ArgumentP
     _add_configured_argument(
         parser, "--output-dir", env, "WOA_OUTPUT_DIR",
         help_text="directory under which this session writes redacted summaries",
+    )
+    parser.add_argument(
+        "--mutation-journal",
+        default=_configured(env, "WOA_MUTATION_JOURNAL"),
+        help="durable SQLite mutation state (required with --allow-mutations; or WOA_MUTATION_JOURNAL)",
     )
     parser.add_argument(
         "--entry-path",
@@ -283,6 +306,8 @@ def parse_config(
         audit_ledger_path=_path(namespace.audit_ledger),
         spend_ledger_path=_path(namespace.spend_ledger),
         output_root=_path(namespace.output_dir),
+        mutation_journal_path=(
+            _state_path(namespace.mutation_journal) if namespace.mutation_journal else None),
         model_env_path=_path(namespace.model_env) if namespace.model_env else None,
         model=namespace.model,
         browser_executable=(
@@ -315,11 +340,15 @@ def validate_inputs(config: TwentyDemoConfig) -> None:
 
 
 def build_adapter(config: TwentyDemoConfig) -> TwentyApplicationAdapter:
+    journal = (SQLiteMutationJournal(config.mutation_journal_path)
+               if config.allow_mutations and config.mutation_journal_path is not None
+               else None)
     return TwentyApplicationAdapter(
         base_url=config.base_url,
         token_path=config.oauth_token_path,
         registration_path=config.oauth_registration_path,
         allow_mutations=config.allow_mutations,
+        mutation_journal=journal,
     )
 
 
