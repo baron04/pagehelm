@@ -26,6 +26,96 @@ PAGE_CONTROLLER = Path(_PAGE_CONTROLLER_PATH).expanduser() if _PAGE_CONTROLLER_P
 
 
 class EmbeddedRuntimeTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("node"), "Node is needed to execute DOM freshness tests")
+    def test_action_fingerprint_rejects_target_or_route_changes_only(self):
+        source = base64.b64encode(RUNTIME.read_bytes()).decode()
+        script = f"""
+          const mod = await import('data:text/javascript;base64,{source}');
+          const h = mod.runtimeInternals;
+          const pageLocation = {{href:'https://app.test/companies', origin:'https://app.test'}};
+          globalThis.location = pageLocation;
+          const form = {{action:'https://app.test/companies', method:'post', target:''}};
+          const target = {{tagName:'BUTTON', type:'submit', name:'create', id:'new-company',
+            role:'button', textContent:'Create', value:'', checked:false, disabled:false,
+            readOnly:false, href:'', target:'', form, isConnected:true,
+            getAttribute(name) {{ return this[name] || ''; }}}};
+          const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
+          runtime.currentObservation = {{observation:{{url:pageLocation.href}}}};
+          runtime.observedUrl = pageLocation.href;
+          runtime.controller = {{selectorMap:{{}}}};
+          runtime.getElementByIndex = () => target;
+          runtime.observationFingerprints = new Map([
+            ['e0', h.actionElementFingerprint(target)],
+          ]);
+          const command = {{action:'click', args:{{ref:'e0'}}}};
+          const initial = runtime._actionFreshness(command);
+          runtime.domMutationRevision = 4;
+          const unrelatedMutation = runtime._actionFreshness(command);
+          target.disabled = true;
+          const targetMutation = runtime._actionFreshness(command);
+          target.disabled = false;
+          form.action = 'https://app.test/companies/import';
+          const formMutation = runtime._actionFreshness(command);
+          form.action = 'https://app.test/companies';
+          pageLocation.href = 'https://app.test/settings';
+          const routeMutation = runtime._actionFreshness(command);
+
+          pageLocation.href = 'https://app.test/companies';
+          target.disabled = true;
+          runtime.runtimeInstanceId = 'runtime-freshness';
+          runtime.panel = null;
+          runtime.stopped = false;
+          runtime.stored = {{inFlight:null, cachedResult:null}};
+          runtime._save = () => {{}};
+          runtime.currentObservation = {{session_id:'s', observation_id:'o-1', page_epoch:1,
+            observation:{{url:pageLocation.href, elements:[]}}}};
+          runtime.observe = async actionId => ({{session_id:'s', observation_id:'o-2',
+            page_epoch:2, caused_by_action_id:actionId,
+            observation:{{url:pageLocation.href, elements:[]}}}});
+          let executed = 0;
+          runtime._execute = async () => {{ executed += 1; return {{success:true}}; }};
+          const posts = [];
+          runtime._post = async (path, body) => {{ posts.push({{path, body}}); return {{claimed:true}}; }};
+          await runtime._handleAction({{schema_version:1, session_id:'s', turn_id:'t',
+            action_id:'a-stale', based_on_observation_id:'o-1', page_epoch:1,
+            deadline:Date.now()+1000, command_digest:'0'.repeat(64),
+            command:{{command_id:'a-stale', action:'click', args:{{ref:'e0'}}}}}});
+          const staleDispatch = {{executed, paths:posts.map(row => row.path),
+            status:posts.at(-1)?.body?.status, code:posts.at(-1)?.body?.error_code}};
+
+          let observer = null;
+          globalThis.document = {{documentElement:{{}}}};
+          globalThis.MutationObserver = class {{
+            constructor(callback) {{ this.callback = callback; observer = this; }}
+            observe(target, options) {{ this.target = target; this.options = options; }}
+            disconnect() {{}}
+          }};
+          const watched = Object.create(mod.EmbeddedWebRuntime.prototype);
+          watched.domMutationObserver = null;
+          watched.domMutationRevision = 0;
+          watched._startDomMutationObserver();
+          observer.callback();
+          process.stdout.write(JSON.stringify({{initial, unrelatedMutation, targetMutation,
+            formMutation, routeMutation, staleDispatch, revision:watched.domMutationRevision,
+            observesSubtree:observer.options.subtree}}));
+        """
+        proc = subprocess.run(["node", "--input-type=module", "-e", script],
+                              text=True, capture_output=True, timeout=10, check=True)
+        result = json.loads(proc.stdout)
+        self.assertTrue(result["initial"]["fresh"])
+        self.assertTrue(result["unrelatedMutation"]["fresh"])
+        self.assertFalse(result["targetMutation"]["fresh"])
+        self.assertFalse(result["formMutation"]["fresh"])
+        self.assertFalse(result["routeMutation"]["fresh"])
+        self.assertEqual(result["staleDispatch"], {
+            "executed": 0,
+            "paths": ["/results"],
+            "status": "rejected",
+            "code": "stale_observation",
+        })
+        self.assertEqual(result["revision"], 1)
+        self.assertTrue(result["observesSubtree"])
+
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_action_progress_is_readable_and_never_echoes_fill_value(self):
         source = base64.b64encode(RUNTIME.read_bytes()).decode()

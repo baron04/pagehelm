@@ -136,6 +136,34 @@ function refIndex(ref) {
   return Number(match[1])
 }
 
+function actionElementFingerprint(element) {
+  if (!element || element.isConnected === false) return 'missing'
+  const form = String(element.tagName || '').toUpperCase() === 'FORM'
+    ? element : element.form
+  const options = Array.from(element.options || []).map(option => [
+    String(option.value || ''), String(option.textContent || ''),
+    Boolean(option.disabled), Boolean(option.selected),
+  ])
+  return JSON.stringify({
+    tag: String(element.tagName || '').toUpperCase(),
+    type: String(element.type || ''),
+    name: String(element.name || ''),
+    id: String(element.id || ''),
+    role: String(element.getAttribute?.('role') || element.role || ''),
+    text: String(element.textContent || ''),
+    value: String(element.value || ''),
+    checked: Boolean(element.checked),
+    disabled: Boolean(element.disabled),
+    readOnly: Boolean(element.readOnly),
+    href: String(element.href || ''),
+    target: String(element.target || ''),
+    formAction: String(form?.action || ''),
+    formMethod: String(form?.method || ''),
+    formTarget: String(form?.target || ''),
+    options,
+  })
+}
+
 function attrsFrom(text) {
   const attrs = {}
   const matcher = /([\w:-]+)=(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g
@@ -459,6 +487,11 @@ export class EmbeddedWebRuntime {
     this.stored.taskInFlight = Boolean(this.stored.taskInFlight)
     writeStored(this.sessionId, this.stored)
     this.currentObservation = null
+    this.observationFingerprints = new Map()
+    this.observedUrl = ''
+    this.domMutationRevision = 0
+    this.observedDomMutationRevision = 0
+    this.domMutationObserver = null
     this.stopped = false
     this.eventAbortController = null
     this.controller = null
@@ -528,7 +561,17 @@ export class EmbeddedWebRuntime {
       ],
       interactiveBlacklist: this.panel ? [this.panel.host] : [],
     })
+    this._startDomMutationObserver()
     return this._startConnectedRuntime()
+  }
+
+  _startDomMutationObserver() {
+    if (this.domMutationObserver || typeof globalThis.MutationObserver !== 'function') return
+    this.domMutationObserver = new globalThis.MutationObserver(
+      () => { this.domMutationRevision += 1 })
+    this.domMutationObserver.observe(document.documentElement, {
+      subtree: true, childList: true, attributes: true, characterData: true,
+    })
   }
 
   async _startConnectedRuntime() {
@@ -646,6 +689,8 @@ export class EmbeddedWebRuntime {
     this.eventAbortController = null
     window.removeEventListener?.('pageshow', this._onPageShow)
     this.controller?.dispose()
+    this.domMutationObserver?.disconnect()
+    this.domMutationObserver = null
     this.panel?.host.remove()
   }
 
@@ -677,6 +722,13 @@ export class EmbeddedWebRuntime {
     this._save()
     const elements = hydrateLinkFacts(
       elementsFrom(content, epoch), this.controller.selectorMap, this.getElementByIndex)
+    const fingerprints = new Map()
+    for (const item of elements) {
+      try {
+        fingerprints.set(item.ref, actionElementFingerprint(
+          this.getElementByIndex(this.controller.selectorMap, refIndex(item.ref))))
+      } catch { fingerprints.set(item.ref, 'missing') }
+    }
     const observation = {
       schema_version: WIRE_VERSION,
       epoch,
@@ -698,7 +750,38 @@ export class EmbeddedWebRuntime {
       caused_by_action_id: causedByActionId,
     }
     this.currentObservation = envelope
+    this.observationFingerprints = fingerprints
+    this.observedUrl = canonicalUrl(state.url)
+    this.observedDomMutationRevision = this.domMutationRevision
     return envelope
+  }
+
+  _actionFreshness(command) {
+    if (command?.action === 'observe') return {fresh: true, reason: ''}
+    const observedUrl = this.observedUrl || canonicalUrl(
+      this.currentObservation?.observation?.url || location.href)
+    if (canonicalUrl(location.href) !== observedUrl) {
+      return {fresh: false, reason: 'the page URL changed after the last observation'}
+    }
+    if (!['click', 'fill', 'select', 'submit'].includes(command?.action)) {
+      return {fresh: true, reason: ''}
+    }
+    // Old constructed test shells have no map. Every real runtime initializes and replaces
+    // this map during observe(), before it can receive an action.
+    if (!(this.observationFingerprints instanceof Map)) {
+      return {fresh: true, reason: ''}
+    }
+    const ref = String(command?.args?.ref || '')
+    const expected = this.observationFingerprints.get(ref)
+    let actual = 'missing'
+    try {
+      actual = actionElementFingerprint(
+        this.getElementByIndex(this.controller.selectorMap, refIndex(ref)))
+    } catch { /* missing stays fail-closed */ }
+    if (expected === undefined || actual !== expected) {
+      return {fresh: false, reason: 'the target element changed after the last observation'}
+    }
+    return {fresh: true, reason: ''}
   }
 
   async _recoverAfterNavigation(observation) {
@@ -879,6 +962,18 @@ export class EmbeddedWebRuntime {
         error_code: Date.now() > action.deadline ? 'deadline_expired' : 'stale_observation',
         error_detail: 'Action was not executed because its page observation is no longer current.',
       }
+      this.stored.cachedResult = result
+      this._save()
+      await this._sendResult(result)
+      return
+    }
+
+    const freshness = this._actionFreshness(action.command)
+    if (!freshness.fresh) {
+      const observation = await this.observe(action.action_id)
+      const result = this._rejectedResult(
+        action, observation, 'stale_observation',
+        `Action was not executed because ${freshness.reason}.`)
       this.stored.cachedResult = result
       this._save()
       await this._sendResult(result)
@@ -1230,7 +1325,7 @@ export async function startEmbeddedRuntime(config) {
 // shells that want to preflight their own redaction rules.  They contain no session state.
 export const runtimeInternals = Object.freeze({
   redactString, sanitizePageContent, safeArgs, safeErrorDetail, elementsFrom,
-  hydrateLinkFacts,
+  hydrateLinkFacts, actionElementFingerprint,
   urlDigest, navigationWal, recoveryProvesNavigation, formGetUrl,
 })
 

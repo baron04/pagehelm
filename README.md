@@ -120,7 +120,7 @@ Results use four distinct states: `PASS`, `FAIL`, `INDETERMINATE` for an uncerta
 ## Known limitations
 
 - The server state, ledger, and session registry are local-process components; durable storage, horizontal scaling, tenant isolation, and production identity binding are not complete.
-- Turn deadlines cap each provider request by the remaining wall budget and initial observation binding exists, but user-driven cancellation, action-relevant DOM freshness, broader concurrency, crash recovery, and operational observability are incomplete.
+- Turn deadlines cap each provider request by the remaining wall budget. Initial observation binding and claim-before-execution target/form/route freshness checks exist, but user-driven cancellation, dependencies outside the target element, broader concurrency, crash recovery, and operational observability are incomplete.
 - The only packaged business adapter is a narrow Twenty CRM Companies vertical.
 - Arbitrary third-party websites and a browser extension are not implemented.
 - Browser actions do not provide database transaction or rollback semantics.
