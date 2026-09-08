@@ -330,7 +330,7 @@ class TheEvidenceThePlannerHadIsRecorded(unittest.TestCase):
                         return {"provider_calls": 0, "cost_cny": 0.0}
                 self.meter = _M()
 
-            def complete(self, messages, tools, run_id, max_tokens=None, options=None):
+            def complete(self, messages, tools, run_id, max_tokens=None, options=None, timeout_s=None):
                 return {"content": _json.dumps({
                     "task_ref": "T", "summary": "s", "entry_candidates": [], "steps": [],
                     "mutation": None, "citations": []}),

@@ -565,16 +565,30 @@ class ServerAgentSession:
             if step >= self.step_budget:
                 return self._finish(result, t0, "step_budget", f"used all {self.step_budget} steps",
                                     steps=step)
-            if time.time() - t0 > self.wall_budget_s:
+            elapsed = time.time() - t0
+            if elapsed >= self.wall_budget_s:
                 return self._finish(result, t0, "wall_clock_budget",
                                     f"exceeded {self.wall_budget_s}s", steps=step)
             try:
-                reply = self.chat.complete(messages, self.tool_schemas(), self.run_id)
+                reply = self.chat.complete(
+                    messages, self.tool_schemas(), self.run_id,
+                    timeout_s=max(0.001, self.wall_budget_s - elapsed),
+                )
             except BudgetExhausted as e:
                 return self._finish(result, t0, "token_budget" if e.kind == "token_budget"
                                     else "wall_clock_budget", str(e), steps=step)
             except ProviderError as e:
-                return self._finish(result, t0, "provider_error", str(e), steps=step)
+                reason = ("wall_clock_budget"
+                          if time.time() - t0 >= self.wall_budget_s
+                          else "provider_error")
+                return self._finish(result, t0, reason, str(e), steps=step)
+
+            if time.time() - t0 >= self.wall_budget_s:
+                return self._finish(
+                    result, t0, "wall_clock_budget",
+                    f"provider returned after the {self.wall_budget_s}s deadline",
+                    steps=step,
+                )
 
             calls = reply.get("tool_calls") or []
             if not calls:

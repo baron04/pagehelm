@@ -38,7 +38,7 @@ class _StubModel:
                 return {"provider_calls": 0}
         self.meter = _Meter()
 
-    def complete(self, messages, tools, run_id, max_tokens=None, options=None):
+    def complete(self, messages, tools, run_id, max_tokens=None, options=None, timeout_s=None):
         self.calls.append([dict(m) for m in messages])
         self.max_tokens = max_tokens
         self.budgets.append(max_tokens)

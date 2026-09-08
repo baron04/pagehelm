@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import math
 import os
 import threading
 import time
@@ -234,7 +235,8 @@ class ChatModel:
                         if options is not None else options_for(self.model))
 
     def complete(self, messages: list[dict], tools: list[dict] | None, run_id: str,
-                 max_tokens: int | None = None, options: dict | None = None) -> dict:
+                 max_tokens: int | None = None, options: dict | None = None,
+                 timeout_s: float | None = None) -> dict:
         """`max_tokens` overrides the per-call ceiling for this one request.
 
         The action loop's 2,048 is frozen: one structured tool call never needs more, and a
@@ -255,12 +257,17 @@ class ChatModel:
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"
+        if timeout_s is not None and (
+                isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float))
+                or not math.isfinite(timeout_s) or timeout_s <= 0):
+            raise ValueError("timeout_s must be a positive finite number")
+        request_timeout = self.timeout if timeout_s is None else min(self.timeout, timeout_s)
         payload = json.dumps(body).encode()
         req = urllib.request.Request(f"{self.base}/chat/completions", data=payload, method="POST",
                                      headers={"content-type": "application/json",
                                               "authorization": f"Bearer {self._key}"})
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+            with urllib.request.urlopen(req, timeout=request_timeout) as r:
                 data = json.load(r)
         except urllib.error.HTTPError as e:
             raise ProviderError(f"provider returned {e.code}: {e.read()[:400]!r}")

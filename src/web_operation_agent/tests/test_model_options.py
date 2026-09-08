@@ -6,6 +6,7 @@ live in policy data keyed by model name rather than in model-specific code branc
 import json
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from web_operation_agent import model as M
 
@@ -57,7 +58,7 @@ class _Recorder:
         self.temperature, self.max_completion_tokens = 0.0, 2048
         self.body = None
 
-    def complete(self, messages, tools, run_id, max_tokens=None, options=None):
+    def complete(self, messages, tools, run_id, max_tokens=None, options=None, timeout_s=None):
         body = {"model": self.model, "messages": messages, "temperature": self.temperature,
                 "max_tokens": max_tokens or self.max_completion_tokens}
         body.update(self.options)
@@ -83,6 +84,47 @@ class TheRequestBody(unittest.TestCase):
         c = _Recorder("qwen3.8-flash")
         c.complete([], None, "r", options={"model": "elsewhere"})
         self.assertEqual(c.body["model"], "qwen3.8-flash")
+
+
+class ProviderDeadline(unittest.TestCase):
+    def _chat(self):
+        chat = object.__new__(M.ChatModel)
+        chat.base = "https://provider.example/v1"
+        chat._key = "test-key"
+        chat.model = "test-model"
+        chat.provider = "test-provider"
+        chat.max_completion_tokens = 10
+        chat.temperature = 0.0
+        chat.timeout = 180
+        chat.options = {}
+
+        class _Meter:
+            price = {}
+
+            @staticmethod
+            def record(**_kwargs):
+                return None
+
+        chat.meter = _Meter()
+        return chat
+
+    def test_turn_deadline_caps_the_provider_socket_timeout(self):
+        response = MagicMock()
+        response.__enter__.return_value = response
+        payload = {"usage": {}, "choices": [{
+            "finish_reason": "stop", "message": {"content": "done"}}]}
+        with patch.object(M.urllib.request, "urlopen", return_value=response) as opened, \
+                patch.object(M.json, "load", return_value=payload):
+            result = self._chat().complete([], None, "run", timeout_s=7.5)
+
+        self.assertEqual(result["content"], "done")
+        self.assertEqual(opened.call_args.kwargs["timeout"], 7.5)
+
+    def test_invalid_turn_timeout_is_rejected_before_network(self):
+        with patch.object(M.urllib.request, "urlopen") as opened:
+            with self.assertRaisesRegex(ValueError, "positive finite"):
+                self._chat().complete([], None, "run", timeout_s=float("inf"))
+        opened.assert_not_called()
 
 
 class PlannerAllowance(unittest.TestCase):

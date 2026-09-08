@@ -103,14 +103,16 @@ class _Chat:
     def __init__(self, calls):
         self.script = list(calls)
         self.seen = []
+        self.timeouts = []
 
         class _M:
             def report(self):
                 return {"provider_calls": 0, "cost_cny": 0.0}
         self.meter = _M()
 
-    def complete(self, messages, tools, run_id, max_tokens=None, options=None):
+    def complete(self, messages, tools, run_id, max_tokens=None, options=None, timeout_s=None):
         self.seen.append([dict(m) for m in messages])
+        self.timeouts.append(timeout_s)
         if not self.script:
             return {"tool_calls": [{"id": "z", "function": {"name": "finish",
                                                             "arguments": '{"done": false, "why": "out of script"}'}}]}
@@ -125,10 +127,10 @@ class _MultiThenFinishChat(_Chat):
         super().__init__([("finish", {"done": False, "why": "used one-call feedback"})])
         self.multiple_sent = False
 
-    def complete(self, messages, tools, run_id, max_tokens=None, options=None):
+    def complete(self, messages, tools, run_id, max_tokens=None, options=None, timeout_s=None):
         if self.multiple_sent:
             return super().complete(messages, tools, run_id, max_tokens=max_tokens,
-                                    options=options)
+                                    options=options, timeout_s=timeout_s)
         self.multiple_sent = True
         self.seen.append([dict(message) for message in messages])
         return {"tool_calls": [
@@ -264,6 +266,18 @@ class WriteRefusalReachesTheAgent(unittest.TestCase):
 
 
 class PreDispatchActionPolicy(unittest.TestCase):
+    def test_each_model_call_is_bounded_by_the_remaining_turn_deadline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            chat = _Chat([("finish", {"done": False, "why": "done"})])
+            session = _session(
+                tmp, chat, _Browser([_page(1)]), _Control([[]]))
+
+            session.run()
+
+            self.assertEqual(len(chat.timeouts), 1)
+            self.assertGreater(chat.timeouts[0], 0)
+            self.assertLessEqual(chat.timeouts[0], session.wall_budget_s)
+
     def test_multiple_tool_calls_are_all_rejected_before_browser_dispatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             chat = _MultiThenFinishChat()
