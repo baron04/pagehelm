@@ -114,12 +114,7 @@ task shapes: querying the exact active name/domain set without changing business
 opening one baseline company without changing business state, and creating exactly one
 requested company with acknowledged same-actor readback and forbidden-change checks.
 
-Results use four distinct states: `PASS`, `FAIL`, `INDETERMINATE` for an uncertain final
-state or write outcome, and `INVALID` when the task or evidence cannot support a trial. Its
-offline tests use an injected command runner. The fixture commands have not yet been run
-against a real Docker-backed Twenty deployment in this public form. This foundation is not
-a benchmark and does not establish a success rate, a baseline comparison, or a
-source-retrieval benefit.
+Results use four distinct states: `PASS`, `FAIL`, `INDETERMINATE` for an uncertain final state or write outcome, and `INVALID` when the task or evidence cannot support a trial. Its offline tests use an injected command runner. Capture, schema snapshot, controlled mutation, restore, and post-restore digest checks have also passed against a local Docker-backed synthetic Twenty fixture. This foundation is not a benchmark and does not establish a success rate, a baseline comparison, or a source-retrieval benefit. The public repository still needs reproducible fixture provisioning before others can repeat the live qualification.
 
 ## Known limitations
 

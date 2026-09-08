@@ -17,6 +17,21 @@ The evaluator currently covers only three Companies tasks:
 This is fixture infrastructure, not a complete benchmark. It does not measure planning
 quality, latency, model cost, source-retrieval benefit, or PageAgent performance.
 
+## Qualify a fixture
+
+Before collecting a trial, run `qualify` with the exact synthetic fixture identity. The command captures the business projection, creates an in-memory schema dump, captures again, and returns `READY` only when the two digests match. Its output contains fixture identity, counts, the baseline digest, and snapshot metadata; it does not contain people or opportunity rows.
+
+```bash
+python -m evals.twenty qualify \
+  --container twenty-db-1 \
+  --database default \
+  --db-user postgres \
+  --workspace-schema workspace_example \
+  --output .artifacts/evals/twenty/qualification.json
+```
+
+Qualification proves that the explicitly named, already provisioned Twenty database can be observed and can produce a trial-reset dump at that moment. It does not bootstrap Twenty into an empty PostgreSQL server. The workspace schema references extensions and functions installed outside that schema, so use a full database provisioning procedure to create a new fixture.
+
 ## Trust boundary
 
 `baseline` and `capture` invoke `psql` inside one explicitly named local container. The
@@ -147,9 +162,7 @@ Before `pg_restore` starts, the recovery record is atomically changed to `RESTOR
 whole database or another workspace.
 A command failure becomes `INDETERMINATE` and is never retried automatically. A successful
 command is `PASS` only after a fresh projection matches the expected baseline digest.
-The fixture owner remains responsible for stopping application writers and checking
-application health; this foundation deliberately does not own the product or container
-lifecycle.
+The fixture owner remains responsible for stopping application writers and checking application health; this foundation deliberately does not own the product or container lifecycle. The schema-only snapshot is bound to the exact fixture identity and is intended to reset trials inside that provisioned database. It is not a portable Twenty installation backup.
 
 ## Offline tests
 

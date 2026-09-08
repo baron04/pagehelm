@@ -8,7 +8,8 @@ from pathlib import Path
 from .evaluator import (ARTIFACT_VERSION, EvaluationInputError, evaluate,
                         make_unavailable_state)
 from .fixture import (FixtureUnavailable, TwentyPostgresFixture, atomic_write_json,
-                      load_json, prepare_snapshot, restore_snapshot, utc_now)
+                      load_json, prepare_snapshot, qualify_fixture, restore_snapshot,
+                      utc_now)
 
 
 _EXIT = {"PASS": 0, "READY": 0, "FAIL": 1, "INVALID": 2, "INDETERMINATE": 3}
@@ -50,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Independent deterministic checks for a local synthetic Twenty fixture.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("baseline", "capture"):
+    for name in ("baseline", "capture", "qualify"):
         command = commands.add_parser(name)
         _add_fixture(command)
         command.add_argument("--output", required=True)
@@ -92,6 +93,8 @@ def main(argv: list[str] | None = None) -> int:
                     fixture=fixture.identity, captured_at=utc_now(), role=role,
                 )
             return _emit(value, args.output)
+        if args.command == "qualify":
+            return _emit(qualify_fixture(_fixture(args)), args.output)
         if args.command == "evaluate":
             value = evaluate(
                 task=load_json(Path(args.task)), before=load_json(Path(args.before)),

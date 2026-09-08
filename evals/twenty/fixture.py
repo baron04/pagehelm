@@ -80,6 +80,33 @@ def load_json(path: Path) -> dict:
     return value
 
 
+def qualify_fixture(fixture: "TwentyPostgresFixture") -> dict:
+    """Check that a fixture is stable and can produce a schema reset snapshot."""
+    before = fixture.capture(role="baseline")
+    dump = fixture.dump()
+    after = fixture.capture(role="observation")
+    if before["digest"] != after["digest"]:
+        raise EvaluationInputError("fixture changed while qualification was running")
+    projection = before["projection"]
+    return {
+        "artifact_version": ARTIFACT_VERSION,
+        "kind": "twenty_fixture_qualification",
+        "status": "READY",
+        "fixture": validate_fixture(fixture.identity),
+        "baseline_digest": before["digest"],
+        "counts": {
+            "companies": len(projection["companies"]),
+            "people": projection["guards"]["people"]["row_count"],
+            "opportunities": projection["guards"]["opportunities"]["row_count"],
+        },
+        "snapshot": {
+            "bytes": len(dump),
+            "sha256": "sha256:" + hashlib.sha256(dump).hexdigest(),
+        },
+        "qualified_at": utc_now(),
+    }
+
+
 @dataclass(frozen=True)
 class TwentyPostgresFixture:
     container: str

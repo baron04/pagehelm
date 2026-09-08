@@ -10,7 +10,8 @@ from pathlib import Path
 
 from evals.twenty.evaluator import EvaluationInputError, digest_json
 from evals.twenty.fixture import (FixtureUnavailable, TwentyPostgresFixture,
-                                  load_json, prepare_snapshot, restore_snapshot)
+                                  load_json, prepare_snapshot, qualify_fixture,
+                                  restore_snapshot)
 
 
 FIXTURE_ARGS = {
@@ -51,6 +52,34 @@ class FakeRunner:
 
 
 class TwentyFixtureTests(unittest.TestCase):
+    def test_qualification_proves_stable_capture_and_reset_dump_without_raw_guards(self):
+        dump = b"PGDMP\x00synthetic-dump"
+        runner = FakeRunner([capture_output(), dump, capture_output()])
+        result = qualify_fixture(TwentyPostgresFixture(**FIXTURE_ARGS, runner=runner))
+
+        self.assertEqual(result["status"], "READY")
+        self.assertEqual(result["counts"], {
+            "companies": 1, "people": 1, "opportunities": 0,
+        })
+        self.assertEqual(result["snapshot"]["bytes"], len(dump))
+        self.assertNotIn("Synthetic", json.dumps(result))
+        self.assertEqual([call[0][4] for call in runner.calls],
+                         ["psql", "pg_dump", "psql"])
+
+    def test_qualification_rejects_a_fixture_that_changes_during_dump(self):
+        changed = json.loads(capture_output().decode().splitlines()[0])
+        changed["rows"][0]["name"] = "Changed"
+        changed_output = ("\n".join((
+            json.dumps(changed, sort_keys=True),
+            json.dumps({"section": "people", "rows": [
+                {"id": "person-1", "name": "Synthetic"}],}, sort_keys=True),
+            json.dumps({"section": "opportunities", "rows": []}, sort_keys=True),
+        )) + "\n").encode()
+        runner = FakeRunner([capture_output(), b"PGDMP\x00synthetic-dump", changed_output])
+
+        with self.assertRaisesRegex(EvaluationInputError, "fixture changed"):
+            qualify_fixture(TwentyPostgresFixture(**FIXTURE_ARGS, runner=runner))
+
     def test_capture_uses_explicit_identity_and_persists_only_guard_digests(self):
         runner = FakeRunner([capture_output()])
         fixture = TwentyPostgresFixture(**FIXTURE_ARGS, runner=runner)

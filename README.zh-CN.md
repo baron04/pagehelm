@@ -111,10 +111,7 @@ python src/web_operation_agent/tests/run_all.py -k test_product.py
 打开基线中的指定公司且业务状态不变；创建且仅创建一个指定公司，同时要求已确认的同一用户
 回读，并检查禁止变化的状态。
 
-结果明确区分四种状态：`PASS`、`FAIL`、表示终态或写入结果不确定的 `INDETERMINATE`，以及
-表示任务或证据无法支撑该次试验的 `INVALID`。离线测试使用注入的假命令执行器。当前公开形态
-尚未在真实 Docker Twenty 环境中运行 fixture 命令。这套基础设施还不是 benchmark，不能据此
-给出成功率、基线对比或源码检索收益结论。
+结果明确区分四种状态：`PASS`、`FAIL`、表示终态或写入结果不确定的 `INDETERMINATE`，以及表示任务或证据无法支撑该次试验的 `INVALID`。离线测试使用注入的假命令执行器；采集、schema 快照、受控变化、恢复和恢复后摘要核对也已在本地 Docker 合成 Twenty fixture 上通过。这套基础设施还不是 benchmark，不能据此给出成功率、基线对比或源码检索收益结论。公开仓库仍需提供可复现的 fixture 部署，其他开发者才能重复这项真实装置资格验证。
 
 ## 已知限制
 

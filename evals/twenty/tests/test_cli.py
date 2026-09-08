@@ -20,6 +20,14 @@ FIXTURE = {
 
 
 class TwentyCliTests(unittest.TestCase):
+    def test_qualify_requires_an_explicit_fixture_identity(self):
+        process = subprocess.run(
+            [sys.executable, "-m", "evals.twenty", "qualify"],
+            cwd=ROOT, capture_output=True, text=True, timeout=10, check=False,
+        )
+        self.assertEqual(process.returncode, 2)
+        self.assertIn("--workspace-schema", process.stderr)
+
     def test_evaluate_runs_as_a_file_only_subprocess(self):
         guards = {
             "people": {"row_count": 0, "digest": digest_json([])},
