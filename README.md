@@ -17,7 +17,7 @@ The repository currently verifies these behaviors with local automated tests and
 | Grounded page actions | Navigation and element actions are checked against the current observation and an application-owned control layer. |
 | Skills and business tools | A Skill describes when and how to use typed tools. Current data comes from the application API rather than the Skill text. |
 | Guarded writes | Business mutations are disabled by default. Enabled integrations require an explicit page confirmation and atomically record `prepared → dispatching → completed/failed/indeterminate`. The Twenty demo uses a private SQLite journal so a crash or uncertain outcome cannot make the same proposal retryable. |
-| Multi-turn hosting | A conversation host processes panel messages sequentially and isolates an ordinary turn failure from later turns. |
+| Multi-turn hosting | A conversation host processes panel messages sequentially, isolates an ordinary turn failure from later turns, and retains at most four turns or 32 KiB of in-memory reference context. Historical business facts can resolve phrases such as “the second company,” but the Agent must refresh the current API or page and historical routes receive no authority. |
 | Shared local gateway | A bounded server composition can host multiple independently revocable session capabilities on one gateway; a 50-session deterministic isolation test covers token/channel separation. State is still process-local. |
 | Task control | The panel can stop its exact active message through the current authenticated runtime lease. Cancellation prevents unclaimed actions and pending approved writes from dispatching; already claimed actions still settle to a definite or indeterminate result. |
 | Identity binding primitives | A host can bind a short-lived actor/tenant/workspace principal to the runtime capability, Agent turn, typed-tool scope, approval, mutation proposal, and redacted audit events. Bound sessions reject mismatch, expiry, and cross-operation proposal reuse. |
@@ -53,6 +53,7 @@ The main reusable boundaries are:
 | --- | --- |
 | `web_operation_agent.application` | Validates a versioned application descriptor and binds its exact Skill/tool catalog to a product session. |
 | `web_operation_agent.product` | Validates and binds one user message to the latest observation, then runs one application-neutral agent turn. |
+| `web_operation_agent.conversation` | Retains bounded, redacted reference context across turns without granting current facts or routes. |
 | `web_operation_agent.live` | Owns the gateway and sequential conversation lifecycle. |
 | `web_operation_agent.remote` | Defines the capability-bound remote browser channel and client. |
 | `web_operation_agent.embedded_gateway` | Serves the embedded runtime and authenticated SSE/HTTP endpoints. |
@@ -127,7 +128,7 @@ Results use four distinct states: `PASS`, `FAIL`, `INDETERMINATE` for an uncerta
 
 ## Known limitations
 
-- The shared gateway, session registry, event journal, and ledger remain local-process components; restart recovery, horizontal scaling, and durable tenant isolation are not complete. Confirmed Twenty API writes have a durable single-use SQLite journal, but a crash after dispatch remains `indeterminate` and requires reconciliation rather than automatic retry. Identity binding is available as an opt-in fail-closed contract, but the public Twenty demo does not yet obtain a trusted page-session identity from a Twenty server integration and therefore does not enable the production identity requirement.
+- The shared gateway, session registry, event journal, conversation context, and ledger remain local-process components; restart recovery, horizontal scaling, and durable tenant isolation are not complete. Confirmed Twenty API writes have a durable single-use SQLite journal, but a crash after dispatch remains `indeterminate` and requires reconciliation rather than automatic retry. Identity binding is available as an opt-in fail-closed contract, but the public Twenty demo does not yet obtain a trusted page-session identity from a Twenty server integration and therefore does not enable the production identity requirement.
 - Turn deadlines cap each provider request by the remaining wall budget. Message-bound user cancellation prevents later tool dispatch and releases approval waits, but the current provider HTTP transport cannot interrupt an in-flight socket request; its late result is discarded. Initial observation binding and claim-before-execution target/form/route freshness checks exist, while dependencies outside the target element, broader concurrency, crash recovery, and operational observability remain incomplete.
 - The only packaged business adapter is a narrow Twenty CRM Companies vertical.
 - Arbitrary third-party websites and a browser extension are not implemented.

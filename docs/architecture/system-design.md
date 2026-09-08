@@ -116,6 +116,8 @@ Remote Session 维护严格 schema 的消息、观察、动作、结果、确认
 
 `LiveConversationRunner` 顺序消费同一面板中的多轮消息，并复用同一个 Turn Executor。单轮异常会形成独立 outcome，后续消息仍可继续；关闭页面或会话是正常生命周期，不被伪装成任务失败。
 
+每个 Turn Executor 拥有一个有界 `ConversationState`，默认只在当前进程内保留最近 4 轮且模型投影不超过 32 KiB。已完成轮次可以保留经过 `BusinessToolResult` 边界校验的业务事实，用于理解“它”“第二个”等后续指代；失败、取消或不确定轮次不保留业务事实。历史上下文在 prompt 中显式标记为可能过期的不可信应用数据，只参与引用解析；只有当前目标含指代词时，历史文本才可以补充只读 Skill 候选，写 Skill 仍必须由当前目标直接命中。新 turn 在陈述事实或执行页面动作前必须重新读取页面或类型化 API；历史 `ui_path` 不会进入本轮 `_business_routes`，所以不能直接授权跳转。审计只写保留轮数和上下文摘要，不复制上下文正文。
+
 每条活动消息具有唯一 `message_id`。页面内停止操作通过当前 Runtime lease 提交严格 schema 的 `CancellationRequest`，服务端只接受同一 session 中已登记的消息。页面动作的 `turn_id` 与该 `message_id` 相同，因此取消请求、模型轮次、审批和动作可以在同一消息边界内关联。Conversation Host 在成功、普通异常、会话关闭和非预期退出路径中统一完成消息生命周期，完成后的消息不能重新进入取消状态。
 
 主体绑定会话中的每次业务工具调用还会创建一个不可变 `OperationContext`，把 principal、session、turn、operation 和有效期固定在一起。Business Tool 逐次校验 application 与 required scope；mutation proposal 的摘要包含 operation context 摘要，审批请求与决定必须匹配同一 principal、turn 和 operation。原始身份字段不会进入浏览器或 Ledger，审计只记录稳定摘要。
@@ -320,7 +322,7 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 当前代码是一条可运行的本地产品纵切，距离工业级部署仍有明确差距：
 
 - 多个 session 可以共享一个 Gateway，并通过独立 capability 和 channel 隔离；Remote Session registry、事件序列、消息队列和 lease 仍在单个 Python 进程内存中，进程重启后不能恢复会话。
-- Conversation Host 使用进程内线程和队列，没有外部任务队列、跨实例调度、背压或服务级高可用。
+- Conversation Host 使用进程内线程、队列和有界引用上下文，没有加密的持久会话、外部任务队列、跨实例调度、背压或服务级高可用。进程崩溃会丢失对话引用；当前同步 Python 调用栈也无法从 ReAct 中间步骤安全续跑。
 - Session Ledger 是本机 append-only JSONL，逐条 flush 与 fsync；它不是集中式审计存储，也没有跨进程事务。
 - capability、Origin、短期 principal、turn、业务工具 scope、审批和 mutation proposal 绑定已经实现；Twenty API 写 proposal 的 dispatch 状态可以持久化。可信页面身份解析、完整的持久会话、组织级策略和跨进程撤销尚未完成。
 - 浏览器 sessionStorage 可以处理同一标签页内的刷新恢复，不能替代服务端持久幂等存储。
@@ -347,6 +349,7 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 
 - 单轮产品边界：[product.py](../../src/web_operation_agent/product.py)
 - 多轮会话与本地产品宿主：[live.py](../../src/web_operation_agent/live.py)
+- 有界对话引用状态：[conversation.py](../../src/web_operation_agent/conversation.py)
 - 单 Agent ReAct 循环：[session.py](../../src/web_operation_agent/session.py)
 - Business Skill 与业务工具合同：[business.py](../../src/web_operation_agent/business.py)
 - 当前 Application Adapter 示例：[twenty.py](../../src/web_operation_agent/twenty.py)

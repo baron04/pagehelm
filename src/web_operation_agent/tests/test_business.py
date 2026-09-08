@@ -512,6 +512,56 @@ class BusinessRuntimeValidation(unittest.TestCase):
 
 
 class BusinessReActTransition(unittest.TestCase):
+    def test_assistant_history_cannot_expose_a_skill_for_a_referential_followup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _skill(Path(tmp) / "skill.json")
+            runtime = BusinessToolRuntime((skill,), _Executor())
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="Open the second one.",
+                              supported_scope="Read the current page only."),
+                arm="U", chat=_Chat([]), browser=_Browser(),
+                control=ReadOnlyControl(),
+                ledger=SessionLedger(Path(tmp) / "session.jsonl", "assistant-history"),
+                attestation=None, source_contract=False,
+                business_tools=runtime,
+                conversation_context={
+                    "schema_version": 1,
+                    "prior_turns": [{
+                        "message_id": "m1",
+                        "user": "Show the available records.",
+                        "assistant": "The companies include Acme and Example.",
+                        "status": "finished",
+                    }],
+                },
+            )
+
+            self.assertEqual(session._task_business_skill_ids, set())
+
+    def test_unrelated_followup_does_not_expose_skill_from_prior_text(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _skill(Path(tmp) / "skill.json")
+            runtime = BusinessToolRuntime((skill,), _Executor())
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="Show the dashboard.",
+                              supported_scope="Read the current page only."),
+                arm="U", chat=_Chat([]), browser=_Browser(),
+                control=ReadOnlyControl(),
+                ledger=SessionLedger(Path(tmp) / "session.jsonl", "unrelated-followup"),
+                attestation=None, source_contract=False,
+                business_tools=runtime,
+                conversation_context={
+                    "schema_version": 1,
+                    "prior_turns": [{
+                        "message_id": "m1",
+                        "user": "Which companies are available?",
+                        "assistant": "Acme",
+                        "status": "finished",
+                    }],
+                },
+            )
+
+            self.assertEqual(session._task_business_skill_ids, set())
+
     def test_denied_server_mutation_is_terminal_and_never_executes(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill = _write_skill(Path(tmp) / "write-skill.json")

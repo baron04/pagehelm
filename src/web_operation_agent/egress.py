@@ -119,6 +119,8 @@ class ProviderEgressPolicy:
                 classes.add("application_page_observation")
             if "BEGIN_UNTRUSTED_SOURCE_EVIDENCE" in content:
                 classes.add("application_source_evidence")
+            if "PRIOR CONVERSATION CONTEXT" in content:
+                classes.add("application_conversation_history")
             if any(marker in content for marker in (
                     "APP SKILLS", "BUSINESS SKILL", "SOURCE AFFORDANCES",
                     "PLAN STATUS")):

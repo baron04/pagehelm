@@ -15,7 +15,8 @@ class ProviderEgressPolicyTests(unittest.TestCase):
         messages = [
             {"role": "system", "content": "system"},
             {"role": "user", "content": (
-                "goal\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\n"
+                "goal\nPRIOR CONVERSATION CONTEXT\nprior turn\n"
+                "BEGIN_UNTRUSTED_PAGE_OBSERVATION\n"
                 "customer: Synthetic Acme\nEND_UNTRUSTED_PAGE_OBSERVATION")},
             {"role": "tool", "name": "query_companies", "tool_call_id": "c1",
              "content": "Synthetic Acme"},
@@ -28,6 +29,7 @@ class ProviderEgressPolicyTests(unittest.TestCase):
         self.assertEqual(projection["tool_count"], 1)
         self.assertEqual(projection["roles"], {"system": 1, "tool": 1, "user": 1})
         self.assertIn("application_page_observation", projection["data_classes"])
+        self.assertIn("application_conversation_history", projection["data_classes"])
         self.assertIn("application_tool_result", projection["data_classes"])
         self.assertFalse(projection["contains_raw_payload"])
         self.assertNotIn("Synthetic Acme", json.dumps(projection))

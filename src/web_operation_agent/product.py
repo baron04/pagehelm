@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 
 from .browser import TransportError
 from .business import BusinessToolResult, BusinessToolRuntime
+from .conversation import ConversationState
 from .embedded_agent import ApprovalGate
 from .identity import OperationContext, PrincipalError
 from .ledger import SessionLedger
@@ -248,7 +249,8 @@ class AgentTurnExecutor:
                  run_id_factory: RunIdFactory,
                  answer_renderer: AnswerRenderer = render_neutral_user_answer,
                  ledger_factory: LedgerFactory = SessionLedger,
-                 attestation=None):
+                 attestation=None,
+                 conversation_state: ConversationState | None = None):
         self.channel = channel
         self.config = config
         self.chat = chat
@@ -258,6 +260,10 @@ class AgentTurnExecutor:
         self.answer_renderer = answer_renderer
         self.ledger_factory = ledger_factory
         self.attestation = attestation
+        if conversation_state is not None and not isinstance(
+                conversation_state, ConversationState):
+            raise TypeError("conversation_state must be a ConversationState or None")
+        self.conversation_state = conversation_state or ConversationState()
 
     def run_once(self, message: dict | None = None) -> AgentTurnExecution:
         if message is None:
@@ -394,6 +400,7 @@ class AgentTurnExecutor:
             principal=principal,
             session_id=(self.channel.session_id if principal is not None else ""),
             turn_id=(turn_message.message_id if principal is not None else ""),
+            conversation_context=self.conversation_state.model_context(),
         )
         session.entry_observation = current.observation
         try:
@@ -448,6 +455,18 @@ class AgentTurnExecutor:
             answer_fallback_used=fallback_used,
             started_at=started_at,
             finished_at=time.time(),
+        )
+        self.conversation_state.record(
+            message_id=turn_message.message_id,
+            user_text=turn_message.text,
+            assistant_text=user_answer,
+            status=status.value,
+            business_result=session.latest_business_tool_result,
+        )
+        ledger.append(
+            "conversation_state_updated",
+            retained_turns=self.conversation_state.turn_count,
+            context_digest=self.conversation_state.content_digest,
         )
         ledger.append(
             "product_turn_finished",

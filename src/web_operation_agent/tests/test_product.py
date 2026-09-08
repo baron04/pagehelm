@@ -9,7 +9,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from web_operation_agent import product
-from web_operation_agent.business import BusinessToolRuntime
+from web_operation_agent.business import BusinessToolResult, BusinessToolRuntime
+from web_operation_agent.conversation import ConversationState
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.identity import PrincipalContext
 from web_operation_agent.product import (
@@ -330,6 +331,87 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 [item[1]["state"] for item in channel.published],
                 ["agent_started", "finished"],
             )
+
+    def test_second_turn_resolves_reference_but_must_refresh_before_opening(self):
+        class TwoCompanyExecutor(_Executor):
+            @staticmethod
+            def execute(name, args, *, context=None):
+                if name != "query_companies" or args:
+                    raise AssertionError("unexpected business call")
+                return BusinessToolResult(
+                    content={
+                        "companies": [
+                            {"name": "First Co", "domain": "first.test",
+                             "ui_path": "/object/company/first"},
+                            {"name": "Second Co", "domain": "second.test",
+                             "ui_path": "/object/company/second"},
+                        ],
+                        "matched_count": 2,
+                        "source_total": 2,
+                        "completeness": {"source_complete": True,
+                                         "result_truncated": False},
+                    },
+                    audit={"application": "fixture", "operation": name,
+                           "source_complete": True},
+                    allowed_routes=(
+                        "/object/company/first", "/object/company/second"),
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = _skill(root / "query-skill.json")
+            state = ConversationState()
+            chat = _Chat([
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("query_companies", {}),
+                (None, {"content": "First Co and Second Co."}),
+                ("goto", {"url": "/object/company/second"}),
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("query_companies", {}),
+                ("goto", {"url": "/object/company/second"}),
+                (None, {"content": "Opened Second Co."}),
+            ])
+            channel = _Channel()
+            executor = AgentTurnExecutor(
+                channel=channel,
+                config=AgentTurnConfig(
+                    supported_scope="Read and open one company.",
+                    ledger_path=root / "session.jsonl",
+                    plain_business_answer_min_page_actions=0,
+                ),
+                chat=chat,
+                business_tools=BusinessToolRuntime((skill,), TwoCompanyExecutor()),
+                control=ReadOnlyControl(),
+                run_id_factory=lambda message: f"turn-{message.message_id}",
+                conversation_state=state,
+            )
+            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+                first = executor.execute({
+                    "message_id": "message-1",
+                    "text": "Which companies are available?",
+                    "page_url": "http://app.test/companies",
+                })
+                second = executor.execute({
+                    "message_id": "message-2",
+                    "text": "Open the second one.",
+                    "page_url": "http://app.test/companies",
+                })
+
+            self.assertEqual(first.user_answer, "First Co and Second Co.")
+            self.assertEqual(second.user_answer, "Opened Second Co.")
+            second_opening = chat.messages[3][1]["content"]
+            self.assertIn("PRIOR CONVERSATION CONTEXT", second_opening)
+            self.assertIn("Second Co", second_opening)
+            self.assertIn("potentially stale", second_opening)
+            self.assertIn("load_skill", chat.tool_names[3])
+            self.assertNotIn("query_companies", chat.tool_names[3])
+            self.assertEqual(_RemoteBrowser.instances[1].actions,
+                             ["observe", "observe", "goto"])
+            events = [json.loads(line) for line in
+                      (root / "session.jsonl").read_text().splitlines()]
+            self.assertEqual(
+                sum(event["event"] == "page_route_rejected" for event in events), 1)
+            self.assertEqual(state.turn_count, 2)
 
     def test_principal_context_reaches_tool_and_redacted_audit(self):
         class ContextExecutor(_Executor):
