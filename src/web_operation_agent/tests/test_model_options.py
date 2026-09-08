@@ -4,9 +4,10 @@ Some providers bound answer and reasoning tokens separately. Reasoning allowance
 live in policy data keyed by model name rather than in model-specific code branches.
 """
 import json
+import io
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from web_operation_agent import model as M
 
@@ -82,8 +83,11 @@ class TheRequestBody(unittest.TestCase):
 
     def test_a_caller_may_not_redirect_the_call_to_another_model(self):
         c = _Recorder("qwen3.8-flash")
-        c.complete([], None, "r", options={"model": "elsewhere"})
+        c.complete([], None, "r", options={
+            "model": "elsewhere", "temperature": 2, "stream": True})
         self.assertEqual(c.body["model"], "qwen3.8-flash")
+        self.assertEqual(c.body["temperature"], 0.0)
+        self.assertNotIn("stream", c.body)
 
 
 class ProviderDeadline(unittest.TestCase):
@@ -109,13 +113,14 @@ class ProviderDeadline(unittest.TestCase):
         return chat
 
     def test_turn_deadline_caps_the_provider_socket_timeout(self):
-        response = MagicMock()
-        response.__enter__.return_value = response
         payload = {"usage": {}, "choices": [{
             "finish_reason": "stop", "message": {"content": "done"}}]}
-        with patch.object(M.urllib.request, "urlopen", return_value=response) as opened, \
-                patch.object(M.json, "load", return_value=payload):
-            result = self._chat().complete([], None, "run", timeout_s=7.5)
+        response = io.BytesIO(json.dumps(payload).encode("utf-8"))
+        response.__enter__ = lambda stream=response: stream
+        response.__exit__ = lambda stream=response, *_args: None
+        with patch.object(M.urllib.request, "urlopen", return_value=response) as opened:
+            result = self._chat().complete(
+                [{"role": "user", "content": "test"}], None, "run", timeout_s=7.5)
 
         self.assertEqual(result["content"], "done")
         self.assertEqual(opened.call_args.kwargs["timeout"], 7.5)

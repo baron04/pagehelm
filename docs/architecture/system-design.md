@@ -299,6 +299,10 @@ App Skill 适合描述当前菜单不可见、但已审核的只读页面入口�
 
 所有跨浏览器边界的数据都会检查未脱敏的 session handoff 和 credential assignment。填写值不会进入动作描述或参数回显，Ledger 在写盘前再次脱敏。原始 capability 会进入短期 bootstrap 和 Runtime，并由产品宿主在会话存续期间持有；registry 只保存其哈希。业务 OAuth 凭据只留在 Adapter 侧。
 
+发送给模型的页面观察、业务工具结果、Skill 与源码证据都标记为不可信应用数据。模型可以使用其事实，但不能据此扩大任务范围、获得授权、请求凭据或重新定义工具；最终约束仍由确定性工具 schema、动作策略、principal scope 和确认通道执行。每次 provider 请求在网络调用前经过结构、数量、总字节、有限 JSON 和已知凭据形态检查，并向 Session Ledger 写入模型输入摘要、字节数、角色计数和数据类别，不写入原始 payload。传输层再次验证完整请求体并限制为 2 MiB。远程 provider endpoint 必须使用 HTTPS，只有 loopback 开发端点可以使用 HTTP；返回体有 4 MiB 上限，HTTP 错误正文不会进入异常或日志。
+
+这些通用检查不能决定某个应用的普通业务字段是否允许发送到某个模型服务。部署方仍需提供字段级分类、provider/区域策略、保留期和必要的加密或 DLP 边界；在这些策略完成前，不应把包含真实客户数据的页面接入当前 Alpha。
+
 ## 10. 产品执行与 Evaluator 隔离
 
 Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户确认都不是最终业务成功。

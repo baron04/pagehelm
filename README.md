@@ -21,6 +21,7 @@ The repository currently verifies these behaviors with local automated tests and
 | Shared local gateway | A bounded server composition can host multiple independently revocable session capabilities on one gateway; a 50-session deterministic isolation test covers token/channel separation. State is still process-local. |
 | Task control | The panel can stop its exact active message through the current authenticated runtime lease. Cancellation prevents unclaimed actions and pending approved writes from dispatching; already claimed actions still settle to a definite or indeterminate result. |
 | Identity binding primitives | A host can bind a short-lived actor/tenant/workspace principal to the runtime capability, Agent turn, typed-tool scope, approval, mutation proposal, and redacted audit events. Bound sessions reject mismatch, expiry, and cross-operation proposal reuse. |
+| Provider data boundary | Model requests have deterministic schema, count, byte, credential, and finite-JSON checks. The audit ledger records a payload digest and data classes without copying page, tool, source, or user content. Remote provider endpoints require HTTPS except on loopback. |
 | Audit and replay primitives | Server events can be written to an append-only ledger and projected into a redacted replay. |
 | Twenty CRM vertical | The packaged adapter can query companies, hand an API-discovered company route to the browser, and opt in to creating one company with confirmation and delegated-token readback. It can resolve the OAuth actor through Twenty's Metadata API for a trusted application host to match against its page-session identity. |
 
@@ -57,6 +58,7 @@ The main reusable boundaries are:
 | `web_operation_agent.embedded_gateway` | Serves the embedded runtime and authenticated SSE/HTTP endpoints. |
 | `web_operation_agent.business` | Loads Skills and mediates typed read and mutation tools. |
 | `web_operation_agent.mutation` | Atomically records single-use mutation intent and terminal outcome in memory or SQLite. |
+| `web_operation_agent.egress` | Enforces and audits the model-provider data boundary without storing request content. |
 | `web_operation_agent.twenty` | Provides the current Twenty CRM Companies adapter. |
 | `web_operation_agent.session` | Implements the bounded server-side agent loop. |
 
@@ -129,6 +131,7 @@ Results use four distinct states: `PASS`, `FAIL`, `INDETERMINATE` for an uncerta
 - Arbitrary third-party websites and a browser extension are not implemented.
 - Browser actions do not provide database transaction or rollback semantics.
 - Source-aware retrieval exists as an optional planning input, but its benefit has not been established across a representative held-out evaluation.
+- Provider egress is bounded, classified and credential-checked, but the framework does not yet provide application-specific field classification, customer-managed encryption, regional routing, a DLP service, or a complete data-retention policy.
 - The assistant panel and end-to-end deployment flow still need product-level accessibility, localization, and visual polish.
 - Do not connect this alpha to production accounts, customer data, payments, email, or other consequential systems.
 

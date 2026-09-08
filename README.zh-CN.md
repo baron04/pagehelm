@@ -21,6 +21,7 @@ Web Operation Agent 是一个早期阶段的框架，用于在第一方 Web 应�
 | 共享本地网关 | 有容量上限的 server composition 可以在一个网关中承载多个可独立撤销的 session capability；50 会话确定性隔离测试覆盖 token 与 channel 分离。状态仍只存在于当前进程。 |
 | 任务控制 | 面板可通过当前已认证 Runtime lease 停止精确绑定的活动消息。尚未被浏览器认领的动作和等待确认的写入不会再下发；已经认领的动作仍会结算为确定结果或 `indeterminate`。 |
 | 身份绑定基础能力 | 应用宿主可以把短期 actor/tenant/workspace 主体绑定到 Runtime capability、Agent turn、类型化工具 scope、审批、mutation proposal 和脱敏审计事件。绑定会话会拒绝身份不匹配、过期和跨操作 proposal 复用。 |
+| Provider 数据边界 | 模型请求在发送前经过结构、数量、字节、凭据形态和有限 JSON 检查。审计账本只记录 payload 摘要与数据类别，不复制页面、工具、源码或用户内容。远程 provider 必须使用 HTTPS，本机 loopback 开发端点除外。 |
 | 审计与回放基础能力 | 服务端事件可以写入追加式账本，并转换成脱敏回放。 |
 | Twenty CRM 纵切 | 已打包的适配器支持查询公司、把 API 找到的公司路由交给浏览器，以及在显式开启后经确认创建一家公司并使用同一委托 token 回读。适配器可以通过 Twenty Metadata API 解析 OAuth actor，供可信应用宿主与页面 session 身份匹配。 |
 
@@ -56,6 +57,7 @@ flowchart LR
 | `web_operation_agent.remote` | 定义受能力凭据约束的远程浏览器通道和客户端。 |
 | `web_operation_agent.embedded_gateway` | 提供页面 Runtime 及带认证的 SSE/HTTP 端点。 |
 | `web_operation_agent.business` | 加载 Skill，并代理类型化的读取和写入工具。 |
+| `web_operation_agent.egress` | 执行模型 provider 数据边界，并在不保存请求内容的前提下生成审计记录。 |
 | `web_operation_agent.mutation` | 在内存或 SQLite 中原子记录一次性 mutation intent 与终态。 |
 | `web_operation_agent.twenty` | 提供当前 Twenty CRM Companies 适配器。 |
 | `web_operation_agent.session` | 实现有步数和时间限制的服务端 Agent 循环。 |
@@ -126,6 +128,7 @@ python src/web_operation_agent/tests/run_all.py -k test_product.py
 - 尚未实现任意第三方网站支持和浏览器扩展。
 - 浏览器操作不具备数据库事务或回滚语义。
 - 源码感知检索可以作为可选规划输入，但尚未在有代表性的保留测试集上证明收益。
+- Provider egress 已有大小限制、数据分类和凭据检查，但还没有应用字段级分类、客户管理的加密、区域路由、DLP 服务或完整的数据保留策略。
 - 助手面板和端到端部署流程仍需按产品标准完善无障碍、本地化和视觉体验。
 - 不要把当前 Alpha 版本连接到生产账号、客户数据、支付、邮件或其他高影响系统。
 

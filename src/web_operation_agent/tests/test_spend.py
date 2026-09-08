@@ -164,6 +164,15 @@ class TheClientIsNotTiedToOneProvider(unittest.TestCase):
     def test_an_odd_base_url_still_yields_some_label(self):
         self.assertTrue(self._chat(AGENT_OPENAI_BASE_URL="http://localhost:8080/v1").provider)
 
+    def test_remote_provider_requires_https_and_rejects_url_credentials(self):
+        from web_operation_agent.model import ProviderError
+        for value in (
+                "http://provider.example/v1",
+                "https://user:secret@provider.example/v1",
+                "file:///tmp/provider"):
+            with self.subTest(value=value), self.assertRaises(ProviderError):
+                self._chat(AGENT_OPENAI_BASE_URL=value)
+
     def test_the_model_name_comes_from_the_environment(self):
         self.assertEqual(self._chat().model, "MiniMax-M3")
 
@@ -216,6 +225,42 @@ class ProviderSignalsReachTheCaller(unittest.TestCase):
         self.assertEqual(msg["finish_reason"], "")
         self.assertEqual(msg["reasoning"], "")
 
+    def test_oversized_provider_response_is_rejected_before_json_parsing(self):
+        import io
+        import urllib.request
+        from unittest import mock
+        from web_operation_agent.model import (MAX_PROVIDER_RESPONSE_BYTES, ChatModel,
+                                                ProviderError)
+        with tempfile.TemporaryDirectory() as directory:
+            chat = ChatModel(
+                SpendMeter(ledger=Path(directory) / "spend.jsonl"),
+                env=TheClientIsNotTiedToOneProvider.ENV)
+            body = io.BytesIO(b"x" * (MAX_PROVIDER_RESPONSE_BYTES + 1))
+            body.__enter__ = lambda stream=body: stream
+            body.__exit__ = lambda stream=body, *_args: None
+            with mock.patch.object(urllib.request, "urlopen", return_value=body):
+                with self.assertRaisesRegex(ProviderError, "4 MiB"):
+                    chat.complete([{"role": "user", "content": "hi"}], None, "r1")
+
+    def test_http_error_body_is_not_copied_into_the_exception(self):
+        import io
+        import urllib.error
+        import urllib.request
+        from unittest import mock
+        from web_operation_agent.model import ChatModel, ProviderError
+        with tempfile.TemporaryDirectory() as directory:
+            chat = ChatModel(
+                SpendMeter(ledger=Path(directory) / "spend.jsonl"),
+                env=TheClientIsNotTiedToOneProvider.ENV)
+            error = urllib.error.HTTPError(
+                chat.base, 401, "unauthorized", {},
+                io.BytesIO(b"access_token=PROVIDER_SECRET"))
+            with mock.patch.object(urllib.request, "urlopen", side_effect=error):
+                with self.assertRaises(ProviderError) as caught:
+                    chat.complete([{"role": "user", "content": "hi"}], None, "r1")
+        self.assertEqual(str(caught.exception), "provider returned HTTP 401")
+        self.assertNotIn("PROVIDER_SECRET", str(caught.exception))
+
 
 class ReasoningTokensAreAccountedSeparately(unittest.TestCase):
     """Billed inside the completion count, but worth their own column: on a reasoning model
@@ -252,6 +297,23 @@ class ReasoningTokensAreAccountedSeparately(unittest.TestCase):
         m.record(provider="p", model="m", run_id="r1",
                  usage={"prompt_tokens": 10, "completion_tokens": 5})
         self.assertEqual(m.report()["reasoning_tokens"], 0)
+
+    def test_malformed_usage_cannot_corrupt_in_memory_or_disk_totals(self):
+        m = SpendMeter(ledger=self.path, batch_id="t")
+        invalid = (
+            {"prompt_tokens": -1, "completion_tokens": 0},
+            {"prompt_tokens": 1, "completion_tokens": 0,
+             "prompt_tokens_details": {"cached_tokens": 2}},
+            {"prompt_tokens": "10", "completion_tokens": 0},
+            {"prompt_tokens": 1, "completion_tokens": 0,
+             "completion_tokens_details": []},
+        )
+        for usage in invalid:
+            with self.subTest(usage=usage), self.assertRaises(ValueError):
+                m.record(provider="p", model="m", run_id="r", usage=usage)
+        self.assertEqual(m.calls, 0)
+        self.assertEqual(m.report()["input_tokens"], 0)
+        self.assertFalse(self.path.exists())
 
 
 class TheReportedLedgerPathCarriesNoMachine(unittest.TestCase):
