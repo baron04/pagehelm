@@ -5,14 +5,19 @@ import contextlib
 import io
 import json
 import tempfile
+import threading
+import time
 import unittest
+import uuid
 from importlib import resources
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from web_operation_agent.business import BusinessToolError
 from web_operation_agent.identity import IdentityAssertion, PrincipalError
 from web_operation_agent.twenty import (TwentyApplicationAdapter,
                                         TwentyBusinessToolExecutor,
+                                        TwentyOAuthTokenStore,
                                         normalize_twenty_domain)
 
 
@@ -149,6 +154,177 @@ class TwentyNormalizationTests(unittest.TestCase):
         self.assertIn("currentWorkspace", body["query"])
         self.assertNotIn("companies", body["query"])
         self.assertEqual(identity.actor_id, "actor-1")
+
+
+class TwentyPaginationTests(unittest.TestCase):
+    @staticmethod
+    def _rows(start: int, count: int) -> list[dict]:
+        return [{
+            "id": str(uuid.UUID(int=index + 1)),
+            "name": f"Company {index:03d}",
+            "domainName": {"primaryLinkLabel": f"company-{index}.example"},
+        } for index in range(start, start + count)]
+
+    def test_company_query_scans_every_cursor_page_before_answering(self):
+        first = self._rows(0, 100)
+        second = self._rows(100, 50)
+
+        class Tokens:
+            @staticmethod
+            def access_token():
+                return "token"
+
+        class FixtureTwenty(TwentyBusinessToolExecutor):
+            def __init__(self):
+                super().__init__(
+                    base_url="http://127.0.0.1:3000", tokens=Tokens())
+                self.paths = []
+
+            def _authorized_json(self, path, token):
+                self.paths.append(path)
+                if len(self.paths) == 1:
+                    return {"totalCount": 150, "data": {"companies": first},
+                            "pageInfo": {"hasNextPage": True,
+                                         "endCursor": "cursor/one+="}}
+                if len(self.paths) == 2:
+                    return {"totalCount": 150, "data": {"companies": second},
+                            "pageInfo": {"hasNextPage": False,
+                                         "endCursor": "cursor/two+="}}
+                raise AssertionError("unexpected page")
+
+        executor = FixtureTwenty()
+        result = executor.execute("query_companies", {"limit": 50})
+
+        self.assertEqual(executor.paths, [
+            "/rest/companies?limit=100",
+            "/rest/companies?limit=100&starting_after=cursor%2Fone%2B%3D",
+        ])
+        self.assertEqual(result.content["source_total"], 150)
+        self.assertEqual(result.content["matched_count"], 150)
+        self.assertEqual(len(result.content["companies"]), 50)
+        self.assertTrue(result.content["completeness"]["source_complete"])
+        self.assertEqual(result.content["completeness"]["pages_scanned"], 2)
+        self.assertEqual(result.content["completeness"]["incomplete_reason"], "")
+        self.assertTrue(result.content["completeness"]["result_truncated"])
+
+    def test_nonadvancing_cursor_returns_an_explicit_partial_result(self):
+        pages = [self._rows(0, 2), self._rows(2, 2)]
+
+        class Tokens:
+            @staticmethod
+            def access_token():
+                return "token"
+
+        class FixtureTwenty(TwentyBusinessToolExecutor):
+            def __init__(self):
+                super().__init__(
+                    base_url="http://127.0.0.1:3000", tokens=Tokens())
+                self.index = 0
+
+            def _authorized_json(self, _path, _token):
+                rows = pages[self.index]
+                self.index += 1
+                return {"totalCount": 5, "data": {"companies": rows},
+                        "pageInfo": {"hasNextPage": True,
+                                     "endCursor": "same-cursor"}}
+
+        with patch("web_operation_agent.twenty._COMPANY_PAGE_SIZE", 2):
+            result = FixtureTwenty().execute("query_companies", {"limit": 5})
+
+        completeness = result.content["completeness"]
+        self.assertFalse(completeness["source_complete"])
+        self.assertTrue(completeness["result_truncated"])
+        self.assertEqual(completeness["incomplete_reason"], "cursor_did_not_advance")
+        self.assertEqual(completeness["records_scanned"], 4)
+
+    def test_page_cap_is_partial_and_duplicate_preflight_fails_closed(self):
+        class Tokens:
+            @staticmethod
+            def access_token():
+                return "token"
+
+        class FixtureTwenty(TwentyBusinessToolExecutor):
+            def __init__(self):
+                super().__init__(
+                    base_url="http://127.0.0.1:3000", tokens=Tokens(),
+                    allow_mutations=True)
+                self.page = 0
+
+            def _authorized_json(self, _path, _token):
+                rows = TwentyPaginationTests._rows(self.page * 2, 2)
+                self.page += 1
+                return {"totalCount": 6, "data": {"companies": rows},
+                        "pageInfo": {"hasNextPage": True,
+                                     "endCursor": f"cursor-{self.page}"}}
+
+        executor = FixtureTwenty()
+        with patch("web_operation_agent.twenty._COMPANY_PAGE_SIZE", 2), \
+                patch("web_operation_agent.twenty._MAX_COMPANY_PAGES", 2):
+            result = executor.execute("query_companies", {"limit": 5})
+            self.assertEqual(
+                result.content["completeness"]["incomplete_reason"],
+                "page_limit_reached")
+            with self.assertRaisesRegex(BusinessToolError, "incomplete"):
+                executor.prepare_mutation(
+                    "create_company", {"name": "New", "domain": "new.example"})
+
+
+class TwentyOAuthRefreshTests(unittest.TestCase):
+    class Response(io.BytesIO):
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            self.close()
+
+    def test_concurrent_rejected_token_causes_one_refresh(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tokens = root / "tokens.json"
+            registration = root / "registration.json"
+            tokens.write_text(json.dumps({
+                "access_token": "expired", "refresh_token": "refresh"}))
+            registration.write_text(json.dumps({"client_id": "client"}))
+            store = TwentyOAuthTokenStore(tokens, registration)
+            calls = 0
+            calls_lock = threading.Lock()
+
+            def open_refresh(_request, timeout):
+                nonlocal calls
+                self.assertEqual(timeout, 3)
+                with calls_lock:
+                    calls += 1
+                time.sleep(0.02)
+                return self.Response(json.dumps({
+                    "access_token": "new-token",
+                    "refresh_token": "new-refresh",
+                }).encode())
+
+            results: list[str] = []
+            errors: list[BaseException] = []
+
+            def worker():
+                try:
+                    results.append(store.refresh(
+                        "http://127.0.0.1:3000", 3,
+                        rejected_access_token="expired"))
+                except BaseException as exc:  # pragma: no cover - asserted below
+                    errors.append(exc)
+
+            with patch("web_operation_agent.twenty.urlopen", side_effect=open_refresh):
+                threads = [threading.Thread(target=worker) for _ in range(8)]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join()
+
+            self.assertEqual(errors, [])
+            self.assertEqual(calls, 1)
+            self.assertEqual(results, ["new-token"] * 8)
+            self.assertEqual(store.access_token(), "new-token")
+            self.assertEqual(tokens.stat().st_mode & 0o777, 0o600)
 
 
 if __name__ == "__main__":

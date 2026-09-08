@@ -23,7 +23,7 @@ Web Operation Agent 是一个早期阶段的框架，用于在第一方 Web 应�
 | 身份绑定基础能力 | 应用宿主可以把短期 actor/tenant/workspace 主体绑定到 Runtime capability、Agent turn、类型化工具 scope、审批、mutation proposal 和脱敏审计事件。绑定会话会拒绝身份不匹配、过期和跨操作 proposal 复用。 |
 | Provider 数据边界 | 模型请求在发送前经过结构、数量、字节、凭据形态和有限 JSON 检查。审计账本只记录 payload 摘要与数据类别，不复制页面、工具、源码或用户内容。远程 provider 必须使用 HTTPS，本机 loopback 开发端点除外。 |
 | 审计与回放基础能力 | 服务端事件可以写入追加式账本，并转换成脱敏回放。 |
-| Twenty CRM 纵切 | 已打包的适配器支持查询公司、把 API 找到的公司路由交给浏览器，以及在显式开启后经确认创建一家公司并使用同一委托 token 回读。适配器可以通过 Twenty Metadata API 解析 OAuth actor，供可信应用宿主与页面 session 身份匹配。 |
+| Twenty CRM 纵切 | 已打包的适配器支持通过有界 cursor 分页查询公司、显式标记不完整扫描、把 API 找到的公司路由交给浏览器，以及在显式开启后经确认创建一家公司并使用同一委托 token 回读。OAuth 刷新会在本机线程和进程间串行化。适配器可以通过 Twenty Metadata API 解析 OAuth actor，供可信应用宿主与页面 session 身份匹配。 |
 
 这些结论只覆盖已经实现的路径。项目还没有规模足够的公开评测，不能据此宣称通用任务成功率、源码检索收益，或优于 PageAgent 等浏览器 Agent。
 
@@ -104,6 +104,8 @@ python src/web_operation_agent/tests/run_all.py -k test_product.py
 - 提供模型、控制层、账本位置和会话 Host 的应用装配。
 
 默认只有读取能力。创建公司需要同时在 Twenty 适配器和 turn 策略中显式开启，然后经过页面内的用户确认流程。
+
+公司枚举使用 Twenty 的 `pageInfo.endCursor` 和 `starting_after` 翻页，并设置页数与记录数硬上限，同时检测重复记录、cursor 停滞、总数变化和畸形响应。扫描被有界中断时，工具会明确返回部分结果，不会把它表示成完整公司清单。创建公司的重复项检查只有在完整扫描当前集合后才会继续。Cursor 分页不是数据库快照；如果扫描期间工作区正在变化，结果仍可能被标记为不完整，需要等数据稳定后重试。
 
 根目录 [`demo.sh`](demo.sh) 会启动 [`examples/twenty`](examples/twenty/README.md)
 中的公开装配。它要求已有一个只包含合成数据的 Twenty 实例，并显式提供浏览器登录状态、

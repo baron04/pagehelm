@@ -23,7 +23,7 @@ The repository currently verifies these behaviors with local automated tests and
 | Identity binding primitives | A host can bind a short-lived actor/tenant/workspace principal to the runtime capability, Agent turn, typed-tool scope, approval, mutation proposal, and redacted audit events. Bound sessions reject mismatch, expiry, and cross-operation proposal reuse. |
 | Provider data boundary | Model requests have deterministic schema, count, byte, credential, and finite-JSON checks. The audit ledger records a payload digest and data classes without copying page, tool, source, or user content. Remote provider endpoints require HTTPS except on loopback. |
 | Audit and replay primitives | Server events can be written to an append-only ledger and projected into a redacted replay. |
-| Twenty CRM vertical | The packaged adapter can query companies, hand an API-discovered company route to the browser, and opt in to creating one company with confirmation and delegated-token readback. It can resolve the OAuth actor through Twenty's Metadata API for a trusted application host to match against its page-session identity. |
+| Twenty CRM vertical | The packaged adapter can query companies through bounded cursor pagination, explicitly label incomplete scans, hand an API-discovered company route to the browser, and opt in to creating one company with confirmation and delegated-token readback. OAuth refresh is serialized across local threads and processes. The adapter can resolve the OAuth actor through Twenty's Metadata API for a trusted application host to match against its page-session identity. |
 
 These claims describe the implemented paths only. The project does not yet have a public benchmark large enough to establish general task success, a source-retrieval advantage, or superiority over PageAgent or other browser agents.
 
@@ -104,6 +104,8 @@ python src/web_operation_agent/tests/run_all.py -k test_product.py
 - an application composition that supplies the model, control plane, ledger location, and session host.
 
 Read access is the default. Creating a company requires opting in at both the Twenty adapter and turn policy, followed by the user-visible approval flow.
+
+Company enumeration follows Twenty's `pageInfo.endCursor` with `starting_after`, with hard page and record ceilings plus repeated-record, stalled-cursor, changing-total, and malformed-page detection. A bounded interruption is returned as an explicit partial result; it is never represented as a complete company list. Duplicate checks for company creation fail closed unless the complete active set was scanned. Cursor pagination does not provide a database snapshot, so a workspace changing during a scan can still force an incomplete result and a retry after the data settles.
 
 The root [`demo.sh`](demo.sh) launches the public composition in
 [`examples/twenty`](examples/twenty/README.md). It requires an externally provisioned,

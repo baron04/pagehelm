@@ -225,7 +225,7 @@ Skill 不保存当前业务数据或凭据。Agent 只能先从当前任务匹�
 
 结果拒绝凭据形态的字段，正文大小受限，页面路径必须是无跨源、无路径穿越、无 fragment 的相对路径。模型只能打开本次 ToolResult 实际返回的路径。
 
-当前 Twenty executor 使用委托用户 OAuth 身份查询公司。创建公司时，它在提案前和 dispatch 前检查重复项，执行一次创建请求，并用同一用户读取新记录；响应或回读无法确定时返回不确定写入，而不是重试。
+当前 Twenty executor 使用委托用户 OAuth 身份查询公司。公司枚举通过 `pageInfo.endCursor` 和 `starting_after` 进行有页数、记录数与响应一致性上限的 cursor 扫描；cursor 不前进、记录重复、总数变化、缺失分页信息、响应异常或达到上限都会产生带原因的部分结果，不能对用户宣称为完整清单。OAuth token 刷新使用进程内锁与 POSIX 文件锁串行化，在获得锁后重新读取 token，若其他执行者已经替换被拒绝的 token 就直接复用；新 token 以 `0600` 临时文件、`fsync` 和原子替换落盘。创建公司时，它在提案前和 dispatch 前检查重复项，且只有完整扫描当前集合才继续；随后执行一次创建请求，并用同一用户读取新记录。响应或回读无法确定时返回不确定写入，不自动重试。
 
 Twenty Adapter 还可以通过 `/metadata` 查询 `currentUser` 与 `currentWorkspace`，并与可信应用宿主提供的页面 session 身份断言逐字段匹配。只有 application、tenant/workspace 和 actor 全部一致才会生成 `PrincipalContext`。页面 DOM、自报用户 id 或 capability 的持有本身都不能证明 Twenty 登录身份；宿主必须从 Twenty 的服务端认证边界产生页面身份断言。
 

@@ -9,7 +9,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
+import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
@@ -26,6 +29,11 @@ from web_operation_agent.application import (APPLICATION_ADAPTER_VERSION,
 from web_operation_agent.identity import (IdentityAssertion, OperationContext,
                                           PrincipalContext, bind_matching_identity)
 from web_operation_agent.mutation import MutationJournal
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - the public runtime requires POSIX.
+    fcntl = None
 
 
 QUERY_COMPANIES_SCHEMA = {
@@ -92,6 +100,9 @@ _SKILL_RESOURCE_ROOT = ("skills", "twenty")
 _QUERY_SKILL_RESOURCE = "companies-query.json"
 _MUTATION_SKILL_RESOURCE = "companies-create.json"
 _IDENTITY_QUERY = "query WoaIdentity { currentUser { id } currentWorkspace { id } }"
+_COMPANY_PAGE_SIZE = 100
+_MAX_COMPANY_PAGES = 20
+_MAX_COMPANY_RECORDS = 2_000
 
 
 def _packaged_skill(filename: str) -> BusinessSkill:
@@ -123,6 +134,9 @@ def _validated_origin(value: str) -> str:
 
 
 class TwentyOAuthTokenStore:
+    _locks_guard = threading.Lock()
+    _thread_locks: dict[str, threading.Lock] = {}
+
     def __init__(self, token_path: str | Path, registration_path: str | Path):
         self.token_path = Path(token_path)
         self.registration_path = Path(registration_path)
@@ -143,44 +157,91 @@ class TwentyOAuthTokenStore:
             raise BusinessToolError("Twenty OAuth access token is unavailable")
         return value
 
-    def refresh(self, base_url: str, timeout_s: float) -> str:
-        tokens = self._read(self.token_path)
-        registration = self._read(self.registration_path)
-        refresh = tokens.get("refresh_token")
-        client_id = registration.get("client_id")
-        if not isinstance(refresh, str) or not refresh or not isinstance(client_id, str) \
-                or not client_id:
-            raise BusinessToolError("Twenty OAuth refresh state is unavailable")
-        body = urlencode({
-            "grant_type": "refresh_token",
-            "refresh_token": refresh,
-            "client_id": client_id,
-        }).encode()
-        request = Request(
-            base_url + "/oauth/token", data=body,
-            headers={"Content-Type": "application/x-www-form-urlencoded"}, method="POST")
-        try:
-            with urlopen(request, timeout=timeout_s) as response:
-                updated = json.load(response)
-        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
-            raise BusinessToolError("Twenty OAuth refresh failed") from exc
-        if not isinstance(updated, dict) or not isinstance(updated.get("access_token"), str):
-            raise BusinessToolError("Twenty OAuth refresh returned no access token")
-        if not updated.get("refresh_token"):
-            updated["refresh_token"] = refresh
-        updated["obtained_at"] = int(time.time())
-        temporary = self.token_path.with_name(f".{self.token_path.name}.{os.getpid()}.tmp")
-        try:
-            with open(temporary, "x", encoding="utf-8") as handle:
-                json.dump(updated, handle, ensure_ascii=False, sort_keys=True, indent=2)
-                handle.write("\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.chmod(temporary, 0o600)
-            os.replace(temporary, self.token_path)
-        finally:
-            temporary.unlink(missing_ok=True)
-        return updated["access_token"]
+    @contextmanager
+    def _refresh_lock(self):
+        if fcntl is None:
+            raise BusinessToolError("Twenty OAuth refresh requires a POSIX file lock")
+        key = str(self.token_path.resolve(strict=False))
+        with self._locks_guard:
+            thread_lock = self._thread_locks.setdefault(key, threading.Lock())
+        with thread_lock:
+            lock_path = self.token_path.with_name(f".{self.token_path.name}.refresh.lock")
+            flags = os.O_CREAT | os.O_RDWR
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            try:
+                descriptor = os.open(lock_path, flags, 0o600)
+            except OSError as exc:
+                raise BusinessToolError("Twenty OAuth refresh lock is unavailable") from exc
+            try:
+                os.fchmod(descriptor, 0o600)
+                fcntl.flock(descriptor, fcntl.LOCK_EX)
+                yield
+            finally:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                finally:
+                    os.close(descriptor)
+
+    def refresh(self, base_url: str, timeout_s: float, *,
+                rejected_access_token: str | None = None) -> str:
+        """Refresh once across threads/processes, or reuse a newer stored token."""
+        with self._refresh_lock():
+            tokens = self._read(self.token_path)
+            current = tokens.get("access_token")
+            if (rejected_access_token is not None and isinstance(current, str)
+                    and current and current != rejected_access_token):
+                return current
+            registration = self._read(self.registration_path)
+            refresh = tokens.get("refresh_token")
+            client_id = registration.get("client_id")
+            if not isinstance(refresh, str) or not refresh or not isinstance(client_id, str) \
+                    or not client_id:
+                raise BusinessToolError("Twenty OAuth refresh state is unavailable")
+            body = urlencode({
+                "grant_type": "refresh_token",
+                "refresh_token": refresh,
+                "client_id": client_id,
+            }).encode()
+            request = Request(
+                base_url + "/oauth/token", data=body,
+                headers={"Content-Type": "application/x-www-form-urlencoded"}, method="POST")
+            try:
+                with urlopen(request, timeout=timeout_s) as response:
+                    updated = json.load(response)
+            except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+                raise BusinessToolError("Twenty OAuth refresh failed") from exc
+            access_token = updated.get("access_token") if isinstance(updated, dict) else None
+            if not isinstance(access_token, str) or not access_token:
+                raise BusinessToolError("Twenty OAuth refresh returned no access token")
+            if not updated.get("refresh_token"):
+                updated["refresh_token"] = refresh
+            updated["obtained_at"] = int(time.time())
+            self.token_path.parent.mkdir(parents=True, exist_ok=True)
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{self.token_path.name}.", suffix=".tmp",
+                dir=self.token_path.parent)
+            temporary = Path(temporary_name)
+            try:
+                os.fchmod(descriptor, 0o600)
+                handle = os.fdopen(descriptor, "w", encoding="utf-8")
+                descriptor = -1
+                with handle:
+                    json.dump(updated, handle, ensure_ascii=False, sort_keys=True, indent=2)
+                    handle.write("\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, self.token_path)
+                directory_fd = os.open(self.token_path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+            finally:
+                if descriptor >= 0:
+                    os.close(descriptor)
+                temporary.unlink(missing_ok=True)
+            return access_token
 
 
 class TwentyBusinessToolExecutor:
@@ -215,7 +276,8 @@ class TwentyBusinessToolExecutor:
         except BusinessToolError as exc:
             if str(exc) != "Twenty API authorization expired":
                 raise
-            token = self.tokens.refresh(self.base_url, self.timeout_s)
+            token = self.tokens.refresh(
+                self.base_url, self.timeout_s, rejected_access_token=token)
             payload = self._authorized_metadata_json(token)
         data = payload.get("data") if isinstance(payload, dict) else None
         user = data.get("currentUser") if isinstance(data, dict) else None
@@ -286,13 +348,17 @@ class TwentyBusinessToolExecutor:
         visible = projected[:limit]
         allowed_routes = tuple(
             row["ui_path"] for row in visible if isinstance(row.get("ui_path"), str))
+        pagination = payload.get("_woaPagination")
+        pagination = pagination if isinstance(pagination, dict) else {}
         raw_source_total = payload.get("totalCount")
         source_total_known = (not isinstance(raw_source_total, bool)
                               and isinstance(raw_source_total, int))
         source_total = raw_source_total
         if not source_total_known:
             source_total = len(rows)
-        source_complete = source_total_known and len(rows) == source_total
+        source_complete = (
+            pagination.get("complete") is True
+            if pagination else source_total_known and len(rows) == source_total)
         result_truncated = matched > limit or not source_complete
         observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         return BusinessToolResult(
@@ -306,6 +372,9 @@ class TwentyBusinessToolExecutor:
                     "source_total_known": source_total_known,
                     "source_complete": source_complete,
                     "result_truncated": result_truncated,
+                    "pages_scanned": pagination.get("pages_scanned", 1),
+                    "records_scanned": pagination.get("records_scanned", len(rows)),
+                    "incomplete_reason": pagination.get("incomplete_reason", ""),
                 },
             },
             audit={
@@ -318,6 +387,9 @@ class TwentyBusinessToolExecutor:
                 "source_total_known": source_total_known,
                 "source_complete": source_complete,
                 "result_truncated": result_truncated,
+                "pages_scanned": pagination.get("pages_scanned", 1),
+                "records_scanned": pagination.get("records_scanned", len(rows)),
+                "incomplete_reason": pagination.get("incomplete_reason", ""),
                 "scope": "current_delegated_workspace",
                 "observed_at": observed_at,
                 "oauth_refreshed": refreshed,
@@ -432,9 +504,11 @@ class TwentyBusinessToolExecutor:
         data = payload.get("data") if isinstance(payload, dict) else None
         rows = data.get("companies") if isinstance(data, dict) else None
         total = payload.get("totalCount") if isinstance(payload, dict) else None
+        pagination = payload.get("_woaPagination") if isinstance(payload, dict) else None
         if not isinstance(rows, list) or isinstance(total, bool) or not isinstance(total, int):
             raise BusinessToolError("Twenty duplicate check returned an unexpected shape")
-        if len(rows) != total:
+        if ((isinstance(pagination, dict) and pagination.get("complete") is not True)
+                or len(rows) != total):
             raise BusinessToolError("Twenty duplicate check was incomplete")
         for row in rows:
             if not isinstance(row, dict):
@@ -454,13 +528,97 @@ class TwentyBusinessToolExecutor:
 
     def _get_companies(self) -> tuple[dict, int, bool]:
         token = self.tokens.access_token()
-        try:
-            return self._authorized_json("/rest/companies", token), 200, False
-        except BusinessToolError as exc:
-            if str(exc) != "Twenty API authorization expired":
-                raise
-        token = self.tokens.refresh(self.base_url, self.timeout_s)
-        return self._authorized_json("/rest/companies", token), 200, True
+        refreshed = False
+        rows: list[dict] = []
+        seen_ids: set[str] = set()
+        seen_cursors: set[str] = set()
+        cursor = ""
+        expected_total: int | None = None
+        incomplete_reason = "page_limit_reached"
+        pages_scanned = 0
+        complete = False
+        for _page_number in range(_MAX_COMPANY_PAGES):
+            query = {"limit": _COMPANY_PAGE_SIZE}
+            if cursor:
+                query["starting_after"] = cursor
+            path = "/rest/companies?" + urlencode(query)
+            try:
+                page = self._authorized_json(path, token)
+            except BusinessToolError as exc:
+                if str(exc) != "Twenty API authorization expired":
+                    if rows:
+                        incomplete_reason = "upstream_read_failed"
+                        break
+                    raise
+                token = self.tokens.refresh(
+                    self.base_url, self.timeout_s,
+                    rejected_access_token=token)
+                refreshed = True
+                page = self._authorized_json(path, token)
+            pages_scanned += 1
+            data = page.get("data") if isinstance(page, dict) else None
+            page_rows = data.get("companies") if isinstance(data, dict) else None
+            total = page.get("totalCount") if isinstance(page, dict) else None
+            if (not isinstance(page_rows, list) or isinstance(total, bool)
+                    or not isinstance(total, int) or total < 0):
+                if rows:
+                    incomplete_reason = "unexpected_page_shape"
+                    break
+                raise BusinessToolError("Twenty companies response has an unexpected shape")
+            if expected_total is None:
+                expected_total = total
+            elif total != expected_total:
+                incomplete_reason = "source_changed_during_scan"
+                break
+            duplicate_record = False
+            for row in page_rows:
+                if len(rows) >= _MAX_COMPANY_RECORDS:
+                    incomplete_reason = "record_limit_reached"
+                    break
+                if isinstance(row, dict):
+                    record_id = row.get("id")
+                    if isinstance(record_id, str):
+                        if record_id in seen_ids:
+                            duplicate_record = True
+                            incomplete_reason = "repeated_record"
+                            break
+                        seen_ids.add(record_id)
+                    rows.append(row)
+            if (len(rows) >= _MAX_COMPANY_RECORDS and len(rows) < expected_total) \
+                    or duplicate_record:
+                break
+            if len(rows) == expected_total:
+                complete = True
+                incomplete_reason = ""
+                break
+            if len(rows) > expected_total:
+                incomplete_reason = "source_count_mismatch"
+                break
+            page_info = page.get("pageInfo")
+            if not isinstance(page_info, dict):
+                incomplete_reason = "missing_page_info"
+                break
+            has_next = page_info.get("hasNextPage")
+            next_cursor = page_info.get("endCursor")
+            if has_next is not True:
+                incomplete_reason = "upstream_ended_before_total"
+                break
+            if (not isinstance(next_cursor, str) or not next_cursor
+                    or next_cursor == cursor or next_cursor in seen_cursors):
+                incomplete_reason = "cursor_did_not_advance"
+                break
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+        return ({
+            "totalCount": expected_total if expected_total is not None else len(rows),
+            "data": {"companies": rows},
+            "_woaPagination": {
+                "complete": complete,
+                "pages_scanned": pages_scanned,
+                "records_scanned": len(rows),
+                "incomplete_reason": incomplete_reason,
+            },
+        }, 200, refreshed)
 
     def _authorized_json(self, path: str, token: str) -> dict:
         request = Request(
