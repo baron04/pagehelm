@@ -18,6 +18,7 @@ from web_operation_agent.identity import IdentityAssertion, PrincipalError
 from web_operation_agent.twenty import (TwentyApplicationAdapter,
                                         TwentyBusinessToolExecutor,
                                         TwentyOAuthTokenStore,
+                                        TwentyPageSessionIdentityResolver,
                                         normalize_twenty_domain)
 
 
@@ -154,6 +155,181 @@ class TwentyNormalizationTests(unittest.TestCase):
         self.assertIn("currentWorkspace", body["query"])
         self.assertNotIn("companies", body["query"])
         self.assertEqual(identity.actor_id, "actor-1")
+
+    def test_metadata_identity_refreshes_after_graphql_unauthenticated(self):
+        class Tokens:
+            refreshed = []
+
+            @staticmethod
+            def access_token():
+                return "expired-token"
+
+            @classmethod
+            def refresh(cls, base_url, timeout_s, *, rejected_access_token=None):
+                cls.refreshed.append((base_url, timeout_s, rejected_access_token))
+                return "fresh-token"
+
+        class Response(io.BytesIO):
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                self.close()
+
+        expired = Response(json.dumps({"errors": [{
+            "message": "Token has expired.",
+            "extensions": {"code": "UNAUTHENTICATED"},
+        }]}).encode())
+        success = Response(json.dumps({"data": {
+            "currentUser": {"id": "actor-1"},
+            "currentWorkspace": {"id": "workspace-1"},
+        }}).encode())
+        executor = TwentyBusinessToolExecutor(
+            base_url="http://127.0.0.1:3000", tokens=Tokens())
+        with patch("web_operation_agent.twenty.urlopen",
+                   side_effect=[expired, success]) as opened:
+            identity = executor.resolve_delegated_identity(now_ms=1_000_000)
+
+        self.assertEqual(identity.actor_id, "actor-1")
+        self.assertEqual(opened.call_count, 2)
+        self.assertEqual(
+            Tokens.refreshed,
+            [("http://127.0.0.1:3000", 15, "expired-token")],
+        )
+        second_request = opened.call_args_list[1].args[0]
+        self.assertEqual(second_request.headers["Authorization"], "Bearer fresh-token")
+
+
+class TwentyPageSessionIdentityTests(unittest.TestCase):
+    @staticmethod
+    def _write_state(path: Path, *, cookies: list[dict]) -> None:
+        path.write_text(json.dumps({
+            "cookies": cookies,
+            "origins": [{"origin": "http://127.0.0.1:3000", "localStorage": [{
+                "name": "currentUserState", "value": "untrusted and ignored",
+            }]}],
+        }), encoding="utf-8")
+        path.chmod(0o600)
+
+    def test_http_only_cookie_resolves_identity_without_sending_other_state(self):
+        response_body = json.dumps({"data": {
+            "currentUser": {"id": "actor-1"},
+            "currentWorkspace": {"id": "workspace-1"},
+        }}).encode()
+
+        class Response:
+            status = 200
+
+            @staticmethod
+            def read(_limit):
+                return response_body
+
+        class Connection:
+            instance = None
+
+            def __init__(self, host, port, timeout):
+                self.host, self.port, self.timeout = host, port, timeout
+                self.request_args = None
+                self.closed = False
+                Connection.instance = self
+
+            def request(self, *args, **kwargs):
+                self.request_args = (args, kwargs)
+
+            @staticmethod
+            def getresponse():
+                return Response()
+
+            def close(self):
+                self.closed = True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "storage.json"
+            self._write_state(state, cookies=[
+                {"name": "analyticsCookie", "value": "tracking", "domain": "127.0.0.1",
+                 "path": "/", "httpOnly": False, "secure": False, "expires": 2_000},
+                {"name": "twenty-session", "value": "session-value",
+                 "domain": "127.0.0.1", "path": "/", "httpOnly": True,
+                 "secure": False, "expires": 1_020},
+            ])
+            resolver = TwentyPageSessionIdentityResolver(
+                base_url="http://127.0.0.1:3000", storage_state_path=state)
+            file_binding = resolver.binding_digest(now_ms=1_000_000)
+            memory_binding = TwentyPageSessionIdentityResolver(
+                base_url="http://127.0.0.1:3000",
+                storage_state=json.loads(state.read_text()),
+            ).binding_digest(now_ms=1_000_000)
+            with patch("web_operation_agent.twenty.HTTPConnection", Connection):
+                identity = resolver.resolve(lifetime_s=60, now_ms=1_000_000)
+
+        connection = Connection.instance
+        self.assertEqual((connection.host, connection.port), ("127.0.0.1", 3000))
+        self.assertTrue(connection.closed)
+        args, kwargs = connection.request_args
+        self.assertEqual(args[:2], ("POST", "/metadata"))
+        self.assertEqual(kwargs["headers"]["Cookie"], "twenty-session=session-value")
+        self.assertEqual(kwargs["headers"]["Origin"], "http://127.0.0.1:3000")
+        self.assertNotIn("tracking", str(connection.request_args))
+        self.assertNotIn("currentUserState", str(connection.request_args))
+        self.assertEqual(file_binding, memory_binding)
+        self.assertNotIn("session-value", file_binding)
+        self.assertEqual(len(file_binding), 64)
+        self.assertEqual(identity.source, "page_session")
+        self.assertEqual(identity.actor_id, "actor-1")
+        self.assertEqual(identity.workspace_id, "workspace-1")
+        self.assertEqual(identity.expires_at, 1_020_000)
+
+    def test_missing_expired_mismatched_or_duplicate_session_cookie_fails_closed(self):
+        cases = [
+            [],
+            [{"name": "twenty-session", "value": "x", "domain": "127.0.0.1",
+              "path": "/", "httpOnly": True, "secure": False, "expires": 999}],
+            [{"name": "twenty-session", "value": "x", "domain": "other.test",
+              "path": "/", "httpOnly": True, "secure": False, "expires": 2_000}],
+            [
+                {"name": "twenty-session", "value": "x", "domain": "127.0.0.1",
+                 "path": "/", "httpOnly": True, "secure": False, "expires": 2_000},
+                {"name": "twenty-session", "value": "y", "domain": "127.0.0.1",
+                 "path": "/", "httpOnly": True, "secure": False, "expires": 2_000},
+            ],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "storage.json"
+            for cookies in cases:
+                with self.subTest(cookies=len(cookies)):
+                    self._write_state(state, cookies=cookies)
+                    resolver = TwentyPageSessionIdentityResolver(
+                        base_url="http://127.0.0.1:3000", storage_state_path=state)
+                    with self.assertRaisesRegex(BusinessToolError, "one live session cookie"):
+                        resolver.resolve(now_ms=1_000_000)
+
+    def test_cookie_shape_and_storage_size_are_bounded_before_network(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "storage.json"
+            self._write_state(state, cookies=[{
+                "name": "twenty-session", "value": "bad;cookie",
+                "domain": "127.0.0.1", "path": "/", "httpOnly": True,
+                "secure": False, "expires": 2_000,
+            }])
+            resolver = TwentyPageSessionIdentityResolver(
+                base_url="http://127.0.0.1:3000", storage_state_path=state)
+            with self.assertRaisesRegex(BusinessToolError, "cookie is invalid"):
+                resolver.resolve(now_ms=1_000_000)
+
+            state.write_bytes(b" " * (2 * 1024 * 1024 + 1))
+            with self.assertRaisesRegex(BusinessToolError, "exceeds 2 MiB"):
+                resolver.resolve(now_ms=1_000_000)
+
+            self._write_state(state, cookies=[{
+                "name": "twenty-session", "value": "valid-cookie",
+                "domain": "127.0.0.1", "path": "/", "httpOnly": True,
+                "secure": False, "expires": 2_000,
+            }])
+            state.chmod(0o644)
+            with self.assertRaisesRegex(BusinessToolError, "group/world"):
+                resolver.resolve(now_ms=1_000_000)
 
 
 class TwentyPaginationTests(unittest.TestCase):

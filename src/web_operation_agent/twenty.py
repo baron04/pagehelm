@@ -6,7 +6,9 @@ tokens, browser cookies, or raw result rows.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import os
 import re
 import tempfile
@@ -14,6 +16,7 @@ import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from http.client import HTTPConnection, HTTPSConnection, HTTPException
 from importlib import resources
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -100,6 +103,10 @@ _SKILL_RESOURCE_ROOT = ("skills", "twenty")
 _QUERY_SKILL_RESOURCE = "companies-query.json"
 _MUTATION_SKILL_RESOURCE = "companies-create.json"
 _IDENTITY_QUERY = "query WoaIdentity { currentUser { id } currentWorkspace { id } }"
+_SESSION_COOKIE_NAMES = frozenset({"twenty-session", "__Host-twenty-session"})
+_COOKIE_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+\Z")
+_MAX_STORAGE_STATE_BYTES = 2 * 1024 * 1024
+_MAX_IDENTITY_RESPONSE_BYTES = 1024 * 1024
 _COMPANY_PAGE_SIZE = 100
 _MAX_COMPANY_PAGES = 20
 _MAX_COMPANY_RECORDS = 2_000
@@ -131,6 +138,181 @@ def _validated_origin(value: str) -> str:
     if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
         raise ValueError("plain HTTP is allowed only for a loopback Twenty instance")
     return f"{parsed.scheme}://{parsed.netloc}"
+
+
+class TwentyPageSessionIdentityResolver:
+    """Resolve the browser actor by presenting its exact session cookie to Twenty.
+
+    The storage-state file is trusted host input and never crosses the Runtime or model
+    boundary. Only Twenty's HttpOnly session cookie is sent, directly to the configured
+    origin with no redirect support; analytics and local-storage values are ignored.
+    """
+
+    def __init__(self, *, base_url: str,
+                 storage_state_path: str | Path | None = None,
+                 storage_state: dict | None = None,
+                 timeout_s: float = 15):
+        self.base_url = _validated_origin(base_url)
+        if (storage_state_path is None) == (storage_state is None):
+            raise ValueError("supply exactly one browser storage state source")
+        self.storage_state_path = (
+            Path(storage_state_path) if storage_state_path is not None else None)
+        self._storage_state = storage_state
+        if (isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float))
+                or not math.isfinite(timeout_s) or timeout_s <= 0 or timeout_s > 60):
+            raise ValueError("page identity timeout_s must be greater than 0 and at most 60 seconds")
+        self.timeout_s = float(timeout_s)
+
+    def _load_storage_state(self) -> dict:
+        if self.storage_state_path is not None:
+            descriptor = -1
+            try:
+                flags = os.O_RDONLY
+                if hasattr(os, "O_NOFOLLOW"):
+                    flags |= os.O_NOFOLLOW
+                descriptor = os.open(self.storage_state_path, flags)
+                metadata = os.fstat(descriptor)
+                if metadata.st_mode & 0o077:
+                    raise BusinessToolError(
+                        "Twenty browser storage state must not be group/world accessible")
+                with os.fdopen(descriptor, "rb") as handle:
+                    descriptor = -1
+                    raw = handle.read(_MAX_STORAGE_STATE_BYTES + 1)
+                if len(raw) > _MAX_STORAGE_STATE_BYTES:
+                    raise BusinessToolError("Twenty browser storage state exceeds 2 MiB")
+                payload = json.loads(raw)
+            except BusinessToolError:
+                raise
+            except (OSError, json.JSONDecodeError) as exc:
+                raise BusinessToolError("Twenty browser storage state is unavailable") from exc
+            finally:
+                if descriptor >= 0:
+                    os.close(descriptor)
+        else:
+            try:
+                raw = json.dumps(
+                    self._storage_state, ensure_ascii=False, sort_keys=True,
+                    separators=(",", ":"), allow_nan=False).encode("utf-8")
+                if len(raw) > _MAX_STORAGE_STATE_BYTES:
+                    raise BusinessToolError("Twenty browser storage state exceeds 2 MiB")
+                payload = json.loads(raw)
+            except BusinessToolError:
+                raise
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise BusinessToolError("Twenty browser storage state is invalid") from exc
+        if not isinstance(payload, dict):
+            raise BusinessToolError("Twenty browser storage state is invalid")
+        return payload
+
+    def _session_cookie(self, *, now_s: float) -> tuple[str, int | None]:
+        cookies = self._load_storage_state().get("cookies")
+        if not isinstance(cookies, list):
+            raise BusinessToolError("Twenty browser storage state is invalid")
+        parsed = urlsplit(self.base_url)
+        host = (parsed.hostname or "").casefold()
+        secure_request = parsed.scheme == "https"
+        matches: list[tuple[str, str, int | None]] = []
+        for cookie in cookies:
+            if not isinstance(cookie, dict) or cookie.get("name") not in _SESSION_COOKIE_NAMES:
+                continue
+            name = cookie.get("name")
+            value = cookie.get("value")
+            domain = cookie.get("domain")
+            path = cookie.get("path", "/")
+            secure = cookie.get("secure", False)
+            http_only = cookie.get("httpOnly")
+            expires = cookie.get("expires", -1)
+            if (not isinstance(name, str) or not _COOKIE_NAME.fullmatch(name)
+                    or not isinstance(value, str) or not value
+                    or re.search(r"[\x00-\x20\x7f;,]", value)
+                    or not isinstance(domain, str) or not domain
+                    or not isinstance(path, str) or not path.startswith("/")
+                    or not isinstance(secure, bool) or http_only is not True
+                    or isinstance(expires, bool)
+                    or not isinstance(expires, (int, float))
+                    or not math.isfinite(expires)):
+                raise BusinessToolError("Twenty browser session cookie is invalid")
+            cookie_domain = domain.lstrip(".").casefold()
+            if host != cookie_domain:
+                continue
+            if secure and not secure_request:
+                continue
+            if path != "/":
+                continue
+            expires_at = int(expires * 1000) if expires > 0 else None
+            if expires_at is not None and expires <= now_s:
+                continue
+            matches.append((name, value, expires_at))
+        if len(matches) != 1:
+            raise BusinessToolError(
+                "Twenty browser storage state must contain one live session cookie")
+        name, value, expires_at = matches[0]
+        return f"{name}={value}", expires_at
+
+    def binding_digest(self, *, now_ms: int | None = None) -> str:
+        """Return a non-secret binding for detecting browser session replacement."""
+        checked_at = int(time.time() * 1000) if now_ms is None else now_ms
+        if isinstance(checked_at, bool) or not isinstance(checked_at, int) or checked_at < 0:
+            raise ValueError("identity now_ms must be a non-negative integer")
+        cookie, _expires_at = self._session_cookie(now_s=checked_at / 1000)
+        return hashlib.sha256(cookie.encode("utf-8")).hexdigest()
+
+    def resolve(self, *, lifetime_s: int = 300,
+                now_ms: int | None = None) -> IdentityAssertion:
+        if (isinstance(lifetime_s, bool) or not isinstance(lifetime_s, int)
+                or not 1 <= lifetime_s <= 3_600):
+            raise ValueError("identity lifetime_s must be an integer from 1 to 3600")
+        issued_at = int(time.time() * 1000) if now_ms is None else now_ms
+        if isinstance(issued_at, bool) or not isinstance(issued_at, int) or issued_at < 0:
+            raise ValueError("identity now_ms must be a non-negative integer")
+        cookie, cookie_expires_at = self._session_cookie(now_s=issued_at / 1000)
+        parsed = urlsplit(self.base_url)
+        connection_type = HTTPSConnection if parsed.scheme == "https" else HTTPConnection
+        connection = connection_type(
+            parsed.hostname, parsed.port, timeout=self.timeout_s)
+        body = json.dumps({"query": _IDENTITY_QUERY}, separators=(",", ":")).encode()
+        try:
+            connection.request("POST", "/metadata", body=body, headers={
+                "Cookie": cookie,
+                "Origin": self.base_url,
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            })
+            response = connection.getresponse()
+            raw = response.read(_MAX_IDENTITY_RESPONSE_BYTES + 1)
+            if len(raw) > _MAX_IDENTITY_RESPONSE_BYTES:
+                raise BusinessToolError("Twenty page identity response exceeds 1 MiB")
+            payload = json.loads(raw)
+        except BusinessToolError:
+            raise
+        except (OSError, TimeoutError, HTTPException, json.JSONDecodeError) as exc:
+            raise BusinessToolError("Twenty page session identity read failed") from exc
+        finally:
+            connection.close()
+        if response.status != 200 or not isinstance(payload, dict) or payload.get("errors"):
+            raise BusinessToolError("Twenty page session identity response is invalid")
+        data = payload.get("data")
+        user = data.get("currentUser") if isinstance(data, dict) else None
+        workspace = data.get("currentWorkspace") if isinstance(data, dict) else None
+        actor_id = user.get("id") if isinstance(user, dict) else None
+        workspace_id = workspace.get("id") if isinstance(workspace, dict) else None
+        if not isinstance(actor_id, str) or not isinstance(workspace_id, str):
+            raise BusinessToolError("Twenty page session identity response is incomplete")
+        expires_at = issued_at + lifetime_s * 1000
+        if cookie_expires_at is not None:
+            expires_at = min(expires_at, cookie_expires_at)
+        if expires_at <= issued_at:
+            raise BusinessToolError("Twenty browser session cookie has expired")
+        return IdentityAssertion(
+            schema_version=1,
+            source="page_session",
+            application_id="twenty",
+            tenant_id=workspace_id,
+            workspace_id=workspace_id,
+            actor_id=actor_id,
+            issued_at=issued_at,
+            expires_at=expires_at,
+        )
 
 
 class TwentyOAuthTokenStore:
@@ -656,8 +838,16 @@ class TwentyBusinessToolExecutor:
                 f"Twenty Metadata API returned HTTP {exc.code}") from exc
         except (URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise BusinessToolError("Twenty Metadata identity read failed") from exc
-        if (status != 200 or not isinstance(payload, dict)
-                or payload.get("errors")):
+        if status != 200 or not isinstance(payload, dict):
+            raise BusinessToolError("Twenty Metadata identity response is invalid")
+        errors = payload.get("errors")
+        if isinstance(errors, list) and any(
+                isinstance(error, dict)
+                and isinstance(error.get("extensions"), dict)
+                and error["extensions"].get("code") == "UNAUTHENTICATED"
+                for error in errors):
+            raise BusinessToolError("Twenty API authorization expired")
+        if errors:
             raise BusinessToolError("Twenty Metadata identity response is invalid")
         return payload
 
@@ -755,3 +945,28 @@ class TwentyApplicationAdapter:
         return bind_matching_identity(
             page_identity, delegated, delegation_id=delegation_id,
             scopes=self._principal_scopes, now_ms=now_ms)
+
+    def bind_browser_session(self, storage_state_path: str | Path, *,
+                             delegation_id: str, lifetime_s: int = 300,
+                             now_ms: int | None = None) -> PrincipalContext:
+        """Bind the exact browser storage state to the delegated OAuth identity."""
+        page = TwentyPageSessionIdentityResolver(
+            base_url=self.origin,
+            storage_state_path=storage_state_path,
+            timeout_s=self._executor.timeout_s,
+        ).resolve(lifetime_s=lifetime_s, now_ms=now_ms)
+        return self.bind_principal(
+            page, delegation_id=delegation_id,
+            lifetime_s=lifetime_s, now_ms=now_ms)
+
+    def page_session_binding(self, storage_state: str | Path | dict, *,
+                             now_ms: int | None = None) -> str:
+        """Hash the active Twenty session cookie without exposing it to the Agent."""
+        source = ({"storage_state": storage_state}
+                  if isinstance(storage_state, dict)
+                  else {"storage_state_path": storage_state})
+        return TwentyPageSessionIdentityResolver(
+            base_url=self.origin,
+            timeout_s=self._executor.timeout_s,
+            **source,
+        ).binding_digest(now_ms=now_ms)

@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 
 from examples.twenty import demo
+from web_operation_agent.identity import PrincipalContext
 from web_operation_agent.live import LiveConversationRunner, LiveTurnOutcome
 from web_operation_agent.product import (AgentTurnExecution, AgentTurnMessage,
                                          AgentTurnStatus)
@@ -171,6 +172,7 @@ class TwentyDemoCompositionTests(unittest.TestCase):
 
         self.assertEqual(adapter.business_tools.tool_names, frozenset({"query_companies"}))
         self.assertFalse(turn.allow_business_mutations)
+        self.assertTrue(turn.require_identity)
         self.assertTrue({"click", "fill", "select", "submit"} <= turn.disabled_actions)
 
     def test_exact_opt_in_enables_create_skill_and_turn_mutations_together(self):
@@ -243,10 +245,14 @@ class TwentyDemoCompositionTests(unittest.TestCase):
             adapter = demo.build_adapter(config)
             holder = {}
             sentinel = object()
+            principal = PrincipalContext(
+                1, "twenty", "workspace-1", "workspace-1", "actor-1", "delegation-1",
+                1_000_000, 1_060_000, ("companies:read",))
             with patch.object(demo, "LiveProductSession", return_value=sentinel) as session:
                 live = demo.build_live_session(
                     config, adapter, object(), run_prefix="twenty-public-test",
-                    conversation_holder=holder, session_id="twenty-public-session",
+                    conversation_holder=holder, principal=principal,
+                    session_id="twenty-public-session",
                 )
             self.assertIs(live, sentinel)
             options = session.call_args.kwargs
@@ -257,8 +263,41 @@ class TwentyDemoCompositionTests(unittest.TestCase):
             )
             self.assertEqual(options["navigation_mode"], "spa")
             self.assertEqual(options["session_id"], "twenty-public-session")
+            self.assertIs(options["principal"], principal)
             conversation = options["runner_factory"](object())
             self.assertIs(holder["conversation"], conversation)
+
+    def test_browser_cookie_replacement_closes_the_bound_agent_session(self):
+        class Context:
+            @staticmethod
+            def storage_state():
+                return {"cookies": []}
+
+        class Adapter:
+            binding = "same-binding"
+
+            @classmethod
+            def page_session_binding(cls, _state):
+                return cls.binding
+
+        class Live:
+            closed = False
+
+            @classmethod
+            def close(cls):
+                cls.closed = True
+
+        demo._assert_browser_session_unchanged(
+            Context(), adapter=Adapter(), live=Live(),
+            expected_binding="same-binding")
+        self.assertFalse(Live.closed)
+
+        Adapter.binding = "replacement-binding"
+        with self.assertRaisesRegex(RuntimeError, "session changed"):
+            demo._assert_browser_session_unchanged(
+                Context(), adapter=Adapter(), live=Live(),
+                expected_binding="same-binding")
+        self.assertTrue(Live.closed)
 
     def test_public_launcher_and_process_have_no_historical_fixture_dependency(self):
         source = (ROOT / "examples" / "twenty" / "demo.py").read_text().casefold()

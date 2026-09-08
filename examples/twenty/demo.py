@@ -9,6 +9,7 @@ the user's business goal was achieved.
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
 import math
 import os
@@ -21,6 +22,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from web_operation_agent.embedded_agent import ReadOnlyControl
+from web_operation_agent.identity import PrincipalContext
 from web_operation_agent.live import LiveConversationRunner, LiveProductSession, LiveTurnOutcome
 from web_operation_agent.model import ChatModel, SpendMeter, load_env
 from web_operation_agent.mutation import SQLiteMutationJournal
@@ -47,6 +49,7 @@ _MUTATION_SCOPE = (
     "typed API; every proposal requires a fresh confirmation. Do not submit browser forms or "
     "modify any other record."
 )
+_PRINCIPAL_LIFETIME_S = 3_600
 
 
 def _path(value: str) -> Path:
@@ -365,6 +368,7 @@ def build_turn_config(config: TwentyDemoConfig) -> AgentTurnConfig:
         plain_business_answer_min_page_actions=0,
         approval_ttl_s=config.approval_ttl_s,
         allow_business_mutations=config.allow_mutations,
+        require_identity=True,
         max_user_answer_chars=20_000,
     )
 
@@ -415,6 +419,7 @@ def build_conversation(
 def build_live_session(
         config: TwentyDemoConfig, adapter: TwentyApplicationAdapter, chat,
         *, run_prefix: str, conversation_holder: dict[str, LiveConversationRunner],
+        principal: PrincipalContext,
         session_id: str | None = None) -> LiveProductSession:
     def runner_factory(channel):
         conversation = build_conversation(
@@ -431,6 +436,7 @@ def build_live_session(
         runner_factory=runner_factory,
         session_id=session_id or f"twenty-live-{uuid.uuid4().hex[:12]}",
         navigation_mode=application.descriptor.navigation_mode,
+        principal=principal,
     )
 
 
@@ -494,8 +500,41 @@ def _record_outcome(path: Path, outcome: LiveTurnOutcome) -> dict:
     return record
 
 
+def _assert_browser_session_unchanged(
+        context, *, adapter: TwentyApplicationAdapter,
+        live: LiveProductSession, expected_binding: str) -> None:
+    try:
+        current = adapter.page_session_binding(context.storage_state())
+    except Exception as exc:
+        live.close()
+        raise RuntimeError("the Twenty browser session is no longer valid") from exc
+    if not hmac.compare_digest(current, expected_binding):
+        live.close()
+        raise RuntimeError("the Twenty browser session changed; start a new Agent session")
+
+
+def _wait_for_outcome(
+        conversation: LiveConversationRunner, *, context,
+        config: TwentyDemoConfig, adapter: TwentyApplicationAdapter,
+        live: LiveProductSession, expected_binding: str) -> LiveTurnOutcome:
+    deadline = time.monotonic() + config.turn_timeout_s
+    while True:
+        _assert_browser_session_unchanged(
+            context, adapter=adapter, live=live,
+            expected_binding=expected_binding)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("timed out waiting for the current Agent turn")
+        try:
+            return conversation.next_outcome(timeout_s=min(0.25, remaining))
+        except TimeoutError:
+            continue
+
+
 def _run_browser(config: TwentyDemoConfig, live: LiveProductSession,
-                 conversation: LiveConversationRunner, outcomes_path: Path) -> list[dict]:
+                 conversation: LiveConversationRunner, outcomes_path: Path,
+                 *, adapter: TwentyApplicationAdapter,
+                 expected_session_binding: str) -> list[dict]:
     from playwright.sync_api import Error as PlaywrightError, sync_playwright
 
     records: list[dict] = []
@@ -531,6 +570,9 @@ def _run_browser(config: TwentyDemoConfig, live: LiveProductSession,
                     "async () => { await window.__WOA_RUNTIME_READY__; return true; }")
                 page.locator("#woa-assistant").wait_for(
                     state="visible", timeout=int(config.transport_timeout_s * 1000))
+                _assert_browser_session_unchanged(
+                    context, adapter=adapter, live=live,
+                    expected_binding=expected_session_binding)
                 ready = {
                     "schema_version": 1,
                     "event": "demo_ready",
@@ -548,10 +590,10 @@ def _run_browser(config: TwentyDemoConfig, live: LiveProductSession,
                             "runtime => runtime.submitTask(task))",
                             task,
                         )
-                        records.append(_record_outcome(
-                            outcomes_path,
-                            conversation.next_outcome(timeout_s=config.turn_timeout_s),
-                        ))
+                        records.append(_record_outcome(outcomes_path, _wait_for_outcome(
+                            conversation, context=context, config=config, adapter=adapter,
+                            live=live, expected_binding=expected_session_binding,
+                        )))
                         page.wait_for_function(
                             """() => {
                               const input = document.querySelector('#woa-assistant')?.shadowRoot
@@ -565,6 +607,9 @@ def _run_browser(config: TwentyDemoConfig, live: LiveProductSession,
                 else:
                     try:
                         while not page.is_closed():
+                            _assert_browser_session_unchanged(
+                                context, adapter=adapter, live=live,
+                                expected_binding=expected_session_binding)
                             for outcome in conversation.outcomes_nowait():
                                 records.append(_record_outcome(outcomes_path, outcome))
                             page.wait_for_timeout(250)
@@ -594,6 +639,15 @@ def run(config: TwentyDemoConfig, *, environ: Mapping[str, str] | None = None) -
     adapter = build_adapter(config)
     if not adapter.health().get("passed"):
         raise RuntimeError("the configured Twenty instance did not pass its health check")
+    identity_now_ms = int(time.time() * 1000)
+    expected_session_binding = adapter.page_session_binding(
+        config.storage_state_path, now_ms=identity_now_ms)
+    principal = adapter.bind_browser_session(
+        config.storage_state_path,
+        delegation_id=f"twenty-oauth-{uuid.uuid4().hex}",
+        lifetime_s=_PRINCIPAL_LIFETIME_S,
+        now_ms=identity_now_ms,
+    )
 
     run_tag = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
     run_dir = config.output_root / run_tag
@@ -603,13 +657,15 @@ def run(config: TwentyDemoConfig, *, environ: Mapping[str, str] | None = None) -
     holder: dict[str, LiveConversationRunner] = {}
     live = build_live_session(
         config, adapter, chat, run_prefix=f"twenty-{run_tag}",
-        conversation_holder=holder,
+        conversation_holder=holder, principal=principal,
     )
     records: list[dict] = []
     worker_error = ""
     live.start()
     try:
-        records = _run_browser(config, live, holder["conversation"], outcomes_path)
+        records = _run_browser(
+            config, live, holder["conversation"], outcomes_path,
+            adapter=adapter, expected_session_binding=expected_session_binding)
     finally:
         live.close()
         try:
@@ -625,6 +681,8 @@ def run(config: TwentyDemoConfig, *, environ: Mapping[str, str] | None = None) -
         "schema_version": 1,
         "application": "twenty",
         "session_id": live.grant.session_id,
+        "identity_binding": "principal_bound",
+        "principal_expires_at": principal.expires_at,
         "mode": "mutation_enabled" if config.allow_mutations else "read_only",
         "turn_count": len(records),
         "terminal_counts": terminal_counts,

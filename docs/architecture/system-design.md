@@ -101,7 +101,7 @@ Runtime 运行在业务页面的同源脚本环境中。因此当前安全模型
 
 Gateway 为每个会话签发随机 capability，并绑定允许的页面 Origin。Registry 只保存 token 哈希，产品宿主在会话存续期间保留用于生成 bootstrap 的原始 grant。Runtime 建立连接后还会取得活动 lease；整页导航产生的新 Runtime 会替换旧 lease，旧页面不能继续提交观察或结果。共享 server 对活动 session 数量执行准入上限；关闭一个 session 会原子移除其 token 哈希与 channel，使旧 capability 立即失效而不影响其他 session。
 
-应用宿主还可以在创建 session 前提供短期不可变 `PrincipalContext`。它包含 application、tenant、workspace、actor、delegation 和 scopes，但原始标识只存在于可信服务端内存中；bootstrap、Runtime hello 和跨浏览器协议只携带 application id 与主体摘要。启用 `require_identity` 后，缺少主体、主体过期或应用不匹配会在建立 turn 前拒绝。当前公开 Twenty demo 尚未取得可信的页面 session 身份，因此这个生产门默认未开启。
+应用宿主还可以在创建 session 前提供短期不可变 `PrincipalContext`。它包含 application、tenant、workspace、actor、delegation 和 scopes，但原始标识只存在于可信服务端内存中；bootstrap、Runtime hello 和跨浏览器协议只携带 application id 与主体摘要。启用 `require_identity` 后，缺少主体、主体过期或应用不匹配会在建立 turn 前拒绝。公开 Twenty demo 已从可信 Playwright 宿主读取即将用于浏览器的 HttpOnly session cookie，由 Twenty `/metadata` 解析页面 actor/workspace，再与 delegated OAuth 身份严格匹配；cookie 不进入 Runtime、模型或日志。浏览器运行期间宿主轮询 cookie 单向摘要，删除或替换会关闭 Agent session。
 
 Remote Session 维护严格 schema 的消息、观察、动作、结果、确认和事件序列。每个页面动作必须：
 
@@ -229,7 +229,7 @@ Skill 不保存当前业务数据或凭据。Agent 只能先从当前任务匹�
 
 当前 Twenty executor 使用委托用户 OAuth 身份查询公司。公司枚举通过 `pageInfo.endCursor` 和 `starting_after` 进行有页数、记录数与响应一致性上限的 cursor 扫描；cursor 不前进、记录重复、总数变化、缺失分页信息、响应异常或达到上限都会产生带原因的部分结果，不能对用户宣称为完整清单。OAuth token 刷新使用进程内锁与 POSIX 文件锁串行化，在获得锁后重新读取 token，若其他执行者已经替换被拒绝的 token 就直接复用；新 token 以 `0600` 临时文件、`fsync` 和原子替换落盘。创建公司时，它在提案前和 dispatch 前检查重复项，且只有完整扫描当前集合才继续；随后执行一次创建请求，并用同一用户读取新记录。响应或回读无法确定时返回不确定写入，不自动重试。
 
-Twenty Adapter 还可以通过 `/metadata` 查询 `currentUser` 与 `currentWorkspace`，并与可信应用宿主提供的页面 session 身份断言逐字段匹配。只有 application、tenant/workspace 和 actor 全部一致才会生成 `PrincipalContext`。页面 DOM、自报用户 id 或 capability 的持有本身都不能证明 Twenty 登录身份；宿主必须从 Twenty 的服务端认证边界产生页面身份断言。
+Twenty Adapter 通过 `/metadata` 查询 `currentUser` 与 `currentWorkspace`，并将页面 session 身份与 delegated OAuth 身份逐字段匹配。只有 application、tenant/workspace 和 actor 全部一致才会生成 `PrincipalContext`。页面 DOM、自报 user id 或 capability 的持有本身都不能证明 Twenty 登录身份。当前 Playwright demo 只把严格匹配 host、根路径、Secure 语义和有效期的 `twenty-session` 或 `__Host-twenty-session` HttpOnly cookie 直接发送到固定 Twenty origin，不跟随重定向、不发送 analytics cookie 或 localStorage，并限制 storage state 与响应大小；普通第一方嵌入部署应由应用服务端登录边界产生等价断言。
 
 ### 6.4 App Skill 与源码 Provider
 
@@ -324,7 +324,7 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 - 多个 session 可以共享一个 Gateway，并通过独立 capability 和 channel 隔离；Remote Session registry、事件序列、消息队列和 lease 仍在单个 Python 进程内存中，进程重启后不能恢复会话。
 - Conversation Host 使用进程内线程、队列和有界引用上下文，没有加密的持久会话、外部任务队列、跨实例调度、背压或服务级高可用。进程崩溃会丢失对话引用；当前同步 Python 调用栈也无法从 ReAct 中间步骤安全续跑。
 - Session Ledger 是本机 append-only JSONL，逐条 flush 与 fsync；它不是集中式审计存储，也没有跨进程事务。
-- capability、Origin、短期 principal、turn、业务工具 scope、审批和 mutation proposal 绑定已经实现；Twenty API 写 proposal 的 dispatch 状态可以持久化。可信页面身份解析、完整的持久会话、组织级策略和跨进程撤销尚未完成。
+- capability、Origin、短期 principal、turn、业务工具 scope、审批和 mutation proposal 绑定已经实现；Twenty demo 会匹配页面 session 与 OAuth 身份，并在浏览器 cookie 变化时终止 session；Twenty API 写 proposal 的 dispatch 状态可以持久化。普通嵌入部署的应用服务端身份断言、principal 续期、完整的持久会话、组织级策略和跨进程撤销尚未完成。
 - 浏览器 sessionStorage 可以处理同一标签页内的刷新恢复，不能替代服务端持久幂等存储。
 - 模型调用、页面动作和确认有局部超时，消息级取消已覆盖审批、业务工具和未认领页面动作；provider 请求的主动中断、跨进程取消、完整 deadline 传播和资源回收仍不完整。
 - 目前只有一个窄业务 Adapter 和少量 Skill/API 工具，覆盖面不能代表复杂企业应用的完整操作集。

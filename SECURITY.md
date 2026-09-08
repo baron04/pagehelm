@@ -48,7 +48,7 @@ Reports are especially valuable for flaws that could cause:
 
 ## Operational limitations
 
-The current code does not yet provide complete production identity binding, tenant isolation, durable session storage, horizontal scaling, rate limiting, or comprehensive operational monitoring. Browser actions do not provide database transaction or rollback guarantees.
+The current code does not yet provide complete production identity binding, tenant isolation, durable session storage, horizontal scaling, rate limiting, or comprehensive operational monitoring. The Twenty demo binds its configured browser session to the delegated OAuth actor and closes on cookie replacement, but other embedded applications still need a trusted server-side session assertion and no distributed revocation or principal renewal service exists. Browser actions do not provide database transaction or rollback guarantees.
 
 Do not connect this version to production accounts, customer data, payments, email, messaging, or other consequential systems. Keep test applications isolated, use least-privilege delegated test users, leave mutations disabled unless the test requires them, and restore fixture state after each write scenario.
 

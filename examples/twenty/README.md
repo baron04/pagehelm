@@ -2,6 +2,8 @@
 
 This example embeds the thin browser runtime in a Chromium session connected to an already provisioned Twenty CRM instance. One server-side Agent handles sequential messages from the assistant panel. It can query current company data and follow API-returned company routes.
 
+Startup fails unless the configured Playwright storage state contains exactly one live, host-matching Twenty HttpOnly session cookie and Twenty resolves that session to the same actor and workspace as the delegated OAuth token. The cookie stays inside the trusted host and is never sent to the Runtime, model, audit ledger, or output files. While the browser is open, the host compares a one-way binding of the active browser cookie with the startup binding; removal or replacement closes the Agent session and requires a fresh launch. The principal expires after one hour, so a longer interactive session must also be restarted.
+
 Use an isolated Twenty workspace with synthetic records. Supply every application-specific location explicitly:
 
 ```bash

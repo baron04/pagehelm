@@ -20,10 +20,10 @@ Web Operation Agent 是一个早期阶段的框架，用于在第一方 Web 应�
 | 多轮会话承载 | 会话 Host 按顺序处理面板消息、隔离普通单轮失败，并在内存中保留最多 4 轮或 32 KiB 的引用上下文。历史业务事实可以帮助理解“第二家公司”等指代，但 Agent 必须重新读取当前 API 或页面，历史路由不会获得权限。 |
 | 共享本地网关 | 有容量上限的 server composition 可以在一个网关中承载多个可独立撤销的 session capability；50 会话确定性隔离测试覆盖 token 与 channel 分离。状态仍只存在于当前进程。 |
 | 任务控制 | 面板可通过当前已认证 Runtime lease 停止精确绑定的活动消息。尚未被浏览器认领的动作和等待确认的写入不会再下发；已经认领的动作仍会结算为确定结果或 `indeterminate`。 |
-| 身份绑定基础能力 | 应用宿主可以把短期 actor/tenant/workspace 主体绑定到 Runtime capability、Agent turn、类型化工具 scope、审批、mutation proposal 和脱敏审计事件。绑定会话会拒绝身份不匹配、过期和跨操作 proposal 复用。 |
+| 身份绑定 | 应用宿主可以把短期 actor/tenant/workspace 主体绑定到 Runtime capability、Agent turn、类型化工具 scope、审批、mutation proposal 和脱敏审计事件。Twenty demo 会在启动前通过 Twenty 解析准确的 HttpOnly 浏览器 session，要求其与委托 OAuth 的 actor/workspace 一致，并在浏览器 cookie 被替换或删除时关闭 Agent session。 |
 | Provider 数据边界 | 模型请求在发送前经过结构、数量、字节、凭据形态和有限 JSON 检查。审计账本只记录 payload 摘要与数据类别，不复制页面、工具、源码或用户内容。远程 provider 必须使用 HTTPS，本机 loopback 开发端点除外。 |
 | 审计与回放基础能力 | 服务端事件可以写入追加式账本，并转换成脱敏回放。 |
-| Twenty CRM 纵切 | 已打包的适配器支持通过有界 cursor 分页查询公司、显式标记不完整扫描、把 API 找到的公司路由交给浏览器，以及在显式开启后经确认创建一家公司并使用同一委托 token 回读。OAuth 刷新会在本机线程和进程间串行化。适配器可以通过 Twenty Metadata API 解析 OAuth actor，供可信应用宿主与页面 session 身份匹配。 |
+| Twenty CRM 纵切 | 已打包的适配器支持通过有界 cursor 分页查询公司、显式标记不完整扫描、把 API 找到的公司路由交给浏览器，以及在显式开启后经确认创建一家公司并使用同一委托 token 回读。OAuth 刷新会在本机线程和进程间串行化，身份解析遇到 GraphQL `UNAUTHENTICATED` 时也会进入受控刷新。 |
 
 这些结论只覆盖已经实现的路径。项目还没有规模足够的公开评测，不能据此宣称通用任务成功率、源码检索收益，或优于 PageAgent 等浏览器 Agent。
 
@@ -125,7 +125,7 @@ python src/web_operation_agent/tests/run_all.py -k test_product.py
 
 ## 已知限制
 
-- 共享网关、session registry、事件 journal、会话上下文和账本仍是本地进程组件；重启恢复、水平扩展和持久租户隔离尚未完成。已确认的 Twenty API 写入拥有持久的一次性 SQLite journal，但 dispatch 之后发生崩溃仍会标记为 `indeterminate`，必须核对而不能自动重试。身份绑定已有可选的 fail-closed 合同，但公开 Twenty demo 还不能从 Twenty 服务端集成取得可信页面 session 身份，因此尚未开启生产身份强制门。
+- 共享网关、session registry、事件 journal、会话上下文和账本仍是本地进程组件；重启恢复、水平扩展和持久租户隔离尚未完成。已确认的 Twenty API 写入拥有持久的一次性 SQLite journal，但 dispatch 之后发生崩溃仍会标记为 `indeterminate`，必须核对而不能自动重试。Twenty demo 已通过可信 Playwright 宿主强制身份绑定；普通嵌入式应用仍需从自身登录边界提供服务端认证的身份断言，principal 续期和分布式撤销也尚未实现。
 - 单轮截止时间已限制每次 provider 请求不得超过剩余墙钟预算。消息级主动取消会阻止后续工具下发并解除审批等待，但当前 provider HTTP transport 还不能中断正在进行的 socket 请求，其迟到结果会被丢弃。已有初始页面观察绑定，以及 claim 前对目标控件、关联表单和路由的新鲜度检查；目标元素之外的依赖、更广泛的并发、崩溃恢复和运行监控仍未完成。
 - 唯一打包的业务适配器是范围有限的 Twenty CRM Companies 纵切。
 - 尚未实现任意第三方网站支持和浏览器扩展。
