@@ -47,6 +47,7 @@ flowchart LR
 
 | 模块 | 职责 |
 | --- | --- |
+| `web_operation_agent.application` | 校验版本化应用描述，并把精确的 Skill/tool catalog 绑定到产品会话。 |
 | `web_operation_agent.product` | 校验一条用户消息，将它绑定到最新页面观察，并执行一次与具体应用无关的 Agent turn。 |
 | `web_operation_agent.live` | 管理网关和顺序执行的会话生命周期。 |
 | `web_operation_agent.remote` | 定义受能力凭据约束的远程浏览器通道和客户端。 |
@@ -55,7 +56,7 @@ flowchart LR
 | `web_operation_agent.twenty` | 提供当前 Twenty CRM Companies 适配器。 |
 | `web_operation_agent.session` | 实现有步数和时间限制的服务端 Agent 循环。 |
 
-软件包 API 仍在演进，稳定版本发布前不承诺向后兼容。
+Application Adapter 暴露版本化、无敏感信息的描述，以及由摘要绑定的 Skill 和 typed-tool catalog。自然语言目标直接进入通用 Agent 循环，Adapter 不会先把目标分类成固定的产品意图枚举。软件包 API 仍在演进，稳定版本发布前不承诺向后兼容。
 
 ## 开发环境
 

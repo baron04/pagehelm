@@ -184,7 +184,9 @@ Application Adapter 是应用专有事实进入通用 Agent 的组合边界。�
 - 带固定 schema 的业务 API executor；
 - 应用专有的结果展示和确定性验证。
 
-Adapter 不拥有 ReAct 循环，也不应把具体应用路由写入 Agent 核心。当前仓库中的 `TwentyApplicationAdapter` 是一条窄纵切：它接入公司查询与创建，验证 Origin，把 OAuth 凭据保留在服务端，并构造 `BusinessToolRuntime`。它证明了组合边界可行，但还不是成熟的通用 Adapter SDK。
+每个 Adapter 必须先通过版本化 `ApplicationDescriptor` 绑定。Descriptor 固定应用 ID、Origin、导航模式、同源 PageController URL，以及当前 Skill/tool catalog 的 SHA-256。会话组合在接收用户任务前重新计算 catalog 摘要；Descriptor 与实际 catalog 不一致时拒绝启动。自然语言目标不经过应用专有的正则分类器或有限意图枚举，而是直接交给通用 Agent，由候选 Skill、typed tool 和页面观察逐步收敛。
+
+Adapter 不拥有 ReAct 循环，也不应把具体应用路由写入 Agent 核心。当前仓库中的 `TwentyApplicationAdapter` 是一条窄纵切：它接入公司查询与创建，验证 Origin，把 OAuth 凭据保留在服务端，并构造 `BusinessToolRuntime`。测试中的第二个发票 Adapter 使用相同绑定暴露不同 Skill 和工具，Agent 核心没有应用名或任务类型分支。这证明了最小 SPI 的组合边界，但健康检查、身份握手、应用级验证和生命周期接口仍需继续完善。
 
 ### 6.2 Business Skill
 

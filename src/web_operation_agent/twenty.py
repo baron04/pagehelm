@@ -10,7 +10,6 @@ import json
 import os
 import re
 import time
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
@@ -22,6 +21,8 @@ from web_operation_agent.business import (BusinessMutationIndeterminate,
                                           BusinessMutationSpec, BusinessSkill,
                                           BusinessToolError, BusinessToolResult,
                                           BusinessToolRuntime)
+from web_operation_agent.application import (APPLICATION_ADAPTER_VERSION,
+                                             ApplicationDescriptor)
 
 
 QUERY_COMPANIES_SCHEMA = {
@@ -84,9 +85,6 @@ _UUID = re.compile(
 _DOMAIN = re.compile(
     r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
     r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?", re.I)
-_TASK_DOMAIN = re.compile(
-    r"(?=.{1,253}(?:\s|$|[，,。]))(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
-    r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?", re.I)
 _SKILL_RESOURCE_ROOT = ("skills", "twenty")
 _QUERY_SKILL_RESOURCE = "companies-query.json"
 _MUTATION_SKILL_RESOURCE = "companies-create.json"
@@ -105,76 +103,8 @@ def _packaged_skill(filename: str) -> BusinessSkill:
     return BusinessSkill.from_bytes(raw, artifact_uri=artifact_uri)
 
 
-@dataclass(frozen=True)
-class TwentyCompanyIntent:
-    """Deterministic intent accepted by the current Companies integration."""
-
-    kind: str
-    company: dict | None = None
-    requested_name: str = ""
-    requested_domain: str = ""
-
-
-def active_twenty_companies(state: dict) -> list[dict]:
-    return [row for row in state["projection"]["companies"]
-            if row.get("deleted_at") is None]
-
-
 def normalize_twenty_domain(value: object) -> str:
     return re.sub(r"^https?://", "", str(value or ""), flags=re.I).rstrip("/").casefold()
-
-
-def _parse_create_task(task: str) -> tuple[str, str]:
-    domain_match = _TASK_DOMAIN.search(task)
-    domain = domain_match.group(0).casefold() if domain_match else ""
-    patterns = (
-        r"(?:创建|新建)(?:一家|一个)?公司(?:名(?:称)?为)?\s*[“\"']?"
-        r"(?P<name>[^”\"'，,。]+?)[”\"']?\s*(?:，|,|域名|domain)",
-        r"(?:create|add)(?:\s+a)?\s+company\s+[\"']?"
-        r"(?P<name>.+?)[\"']?\s*(?:,|with\s+)?(?:domain|域名)",
-    )
-    name = ""
-    for pattern in patterns:
-        match = re.search(pattern, task, re.I)
-        if match:
-            name = match.group("name").strip(" \t“”\"'：:")
-            break
-    if not name or not domain:
-        raise ValueError("创建公司需要同时提供明确的公司名称和裸域名")
-    return name, domain
-
-
-def classify_twenty_company_task(task: str, state: dict) -> TwentyCompanyIntent:
-    """Bind supported natural-language goals to deterministic postconditions.
-
-    This is an acceptance router, not the Agent planner.  It keeps write/read tool surfaces
-    separate and refuses goals for which the product cannot establish an exact evaluator.
-    """
-    folded = task.casefold()
-    company_word = any(word in folded for word in ("公司", "company", "companies"))
-    create_verb = any(word in folded for word in ("创建", "新建", "create", "add"))
-    if company_word and create_verb:
-        name, domain = _parse_create_task(task)
-        return TwentyCompanyIntent(
-            "create", requested_name=name, requested_domain=domain)
-
-    open_verb = any(word in folded for word in ("打开", "详情", "open", "detail"))
-    if open_verb:
-        matches = [row for row in active_twenty_companies(state)
-                   if str(row.get("name") or "").casefold() in folded]
-        if matches:
-            longest = max(len(str(row.get("name") or "")) for row in matches)
-            matches = [row for row in matches
-                       if len(str(row.get("name") or "")) == longest]
-        if len(matches) != 1:
-            raise ValueError("打开详情页需要在目标中写出一个当前存在的公司全名")
-        return TwentyCompanyIntent("open", company=matches[0])
-
-    query_words = ("哪些公司", "所有公司", "列出", "查询", "list", "which companies",
-                   "what companies")
-    if company_word and any(word in folded for word in query_words):
-        return TwentyCompanyIntent("query")
-    raise ValueError("当前支持查询公司、按公司全名打开详情，以及确认后创建公司")
 
 
 def _validated_origin(value: str) -> str:
@@ -529,8 +459,6 @@ class TwentyBusinessToolExecutor:
 class TwentyApplicationAdapter:
     """Application-owned facts and tools for the Twenty Companies integration."""
 
-    app_id = "twenty"
-
     def __init__(self, *, base_url: str, token_path: str | Path,
                  registration_path: str | Path,
                  skill_path: str | Path | None = None,
@@ -556,6 +484,15 @@ class TwentyApplicationAdapter:
                 if mutation_skill_path is not None
                 else _packaged_skill(_MUTATION_SKILL_RESOURCE))
         self.business_tools = BusinessToolRuntime(tuple(skills), executor)
+        self.descriptor = ApplicationDescriptor(
+            schema_version=APPLICATION_ADAPTER_VERSION,
+            application_id="twenty",
+            display_name="Twenty CRM",
+            origin=self.origin,
+            navigation_mode="spa",
+            page_controller_module=self.page_controller_module,
+            catalog_sha256=self.business_tools.catalog_sha256,
+        )
 
     def health(self) -> dict:
         try:

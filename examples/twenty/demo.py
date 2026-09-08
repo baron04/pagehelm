@@ -26,6 +26,7 @@ from web_operation_agent.model import ChatModel, SpendMeter, load_env
 from web_operation_agent.privacy import redact_sensitive_assignments, redact_session_handoffs
 from web_operation_agent.product import AgentTurnConfig, AgentTurnExecution, AgentTurnExecutor
 from web_operation_agent.twenty import TwentyApplicationAdapter
+from web_operation_agent.application import bind_application
 
 
 _MODEL_ENV_KEYS = (
@@ -369,11 +370,12 @@ def build_chat(
 def build_conversation(
         channel, *, config: TwentyDemoConfig, adapter: TwentyApplicationAdapter, chat,
         run_prefix: str) -> LiveConversationRunner:
+    application = bind_application(adapter)
     executor = AgentTurnExecutor(
         channel=channel,
         config=build_turn_config(config),
         chat=chat,
-        business_tools=adapter.business_tools,
+        business_tools=application.business_tools,
         control=ReadOnlyControl(),
         run_id_factory=lambda _message: f"{run_prefix}-{uuid.uuid4().hex[:12]}",
         attestation=None,
@@ -391,12 +393,15 @@ def build_live_session(
         conversation_holder["conversation"] = conversation
         return conversation
 
+    application = bind_application(adapter)
+    page_controller_module = application.descriptor.validate_page_controller(
+        config.page_controller_module)
     return LiveProductSession(
-        allowed_origin=adapter.origin,
-        page_controller_module=config.page_controller_module,
+        allowed_origin=application.descriptor.origin,
+        page_controller_module=page_controller_module,
         runner_factory=runner_factory,
         session_id=session_id or f"twenty-live-{uuid.uuid4().hex[:12]}",
-        navigation_mode="spa",
+        navigation_mode=application.descriptor.navigation_mode,
     )
 
 

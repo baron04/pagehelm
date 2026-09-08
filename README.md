@@ -47,6 +47,7 @@ The main reusable boundaries are:
 
 | Module | Responsibility |
 | --- | --- |
+| `web_operation_agent.application` | Validates a versioned application descriptor and binds its exact Skill/tool catalog to a product session. |
 | `web_operation_agent.product` | Validates and binds one user message to the latest observation, then runs one application-neutral agent turn. |
 | `web_operation_agent.live` | Owns the gateway and sequential conversation lifecycle. |
 | `web_operation_agent.remote` | Defines the capability-bound remote browser channel and client. |
@@ -55,7 +56,7 @@ The main reusable boundaries are:
 | `web_operation_agent.twenty` | Provides the current Twenty CRM Companies adapter. |
 | `web_operation_agent.session` | Implements the bounded server-side agent loop. |
 
-The package API is still evolving; no compatibility guarantee is made before a stable release.
+Application adapters expose a versioned, non-secret descriptor plus a digest-bound Skill and typed-tool catalog. Natural-language goals enter the generic Agent loop directly; an adapter does not preclassify them into a fixed product intent enum. The package API is still evolving; no compatibility guarantee is made before a stable release.
 
 ## Developer setup
 

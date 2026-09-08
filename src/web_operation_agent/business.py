@@ -332,6 +332,33 @@ class BusinessToolRuntime:
     def tool_names(self) -> frozenset[str]:
         return frozenset(self._schemas)
 
+    @property
+    def catalog_manifest(self) -> dict:
+        """Return a versioned, non-secret description of installed Skills and tools."""
+        skills = [{
+            "skill_id": skill.skill_id,
+            "artifact_sha256": skill.artifact_sha256,
+            "read_only": skill.read_only,
+            "tools": list(skill.tool_names),
+        } for skill in sorted(self._skills.values(), key=lambda item: item.skill_id)]
+        tools = [{
+            "name": name,
+            "effect": self._effects[name],
+            "schema_sha256": hashlib.sha256(json.dumps(
+                self._schemas[name], ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"), allow_nan=False,
+            ).encode("utf-8")).hexdigest(),
+        } for name in sorted(self._schemas)]
+        return {"schema_version": 1, "skills": skills, "tools": tools}
+
+    @property
+    def catalog_sha256(self) -> str:
+        encoded = json.dumps(
+            self.catalog_manifest, ensure_ascii=False, sort_keys=True,
+            separators=(",", ":"), allow_nan=False,
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
     def relevant(self, task: str, limit: int = 3) -> tuple[BusinessSkill, ...]:
         folded = task.casefold()
         ranked: list[tuple[int, str, BusinessSkill]] = []

@@ -1,4 +1,4 @@
-"""Twenty task acceptance routing stays deterministic and write-safe."""
+"""Twenty application adapter and business tools stay bounded and write-safe."""
 from __future__ import annotations
 
 import contextlib
@@ -9,20 +9,7 @@ from pathlib import Path
 
 from web_operation_agent.twenty import (TwentyApplicationAdapter,
                                         TwentyBusinessToolExecutor,
-                                        classify_twenty_company_task,
                                         normalize_twenty_domain)
-
-
-STATE = {"projection": {"companies": [
-    {"id": "company-1", "name": "Anthropic", "domain": "https://anthropic.com",
-     "deleted_at": None},
-    {"id": "company-2", "name": "Acme", "domain": "https://acme.example",
-     "deleted_at": None},
-    {"id": "company-3", "name": "Acme Labs", "domain": "https://labs.example",
-     "deleted_at": None},
-    {"id": "company-4", "name": "Deleted Co", "domain": "https://deleted.example",
-     "deleted_at": "2026-09-08"},
-]}}
 
 
 def _adapter(**kwargs) -> TwentyApplicationAdapter:
@@ -47,6 +34,12 @@ class TwentyPackagedSkillTests(unittest.TestCase):
         self.assertEqual(
             skills[0].artifact_uri,
             "package://web_operation_agent/skills/twenty/companies-query.json",
+        )
+        self.assertEqual(adapter.descriptor.application_id, "twenty")
+        self.assertEqual(adapter.descriptor.navigation_mode, "spa")
+        self.assertEqual(
+            adapter.descriptor.catalog_sha256,
+            adapter.business_tools.catalog_sha256,
         )
 
     def test_mutation_skill_requires_an_explicit_capability(self):
@@ -95,40 +88,7 @@ class TwentyPackagedSkillTests(unittest.TestCase):
                             for skill in relevant))
 
 
-class TwentyTaskRoutingTests(unittest.TestCase):
-    def test_query_is_read_intent(self):
-        self.assertEqual(
-            classify_twenty_company_task("当前有哪些公司？请列出名称和域名。", STATE).kind,
-            "query")
-
-    def test_open_binds_to_current_full_name(self):
-        intent = classify_twenty_company_task("打开 Acme Labs 公司详情", STATE)
-        self.assertEqual(intent.kind, "open")
-        self.assertEqual(intent.company["id"], "company-3")
-
-    def test_deleted_company_cannot_be_opened(self):
-        with self.assertRaisesRegex(ValueError, "当前存在"):
-            classify_twenty_company_task("打开 Deleted Co 公司详情", STATE)
-
-    def test_chinese_create_requires_and_extracts_exact_fields(self):
-        intent = classify_twenty_company_task(
-            "请创建公司“NovaForge Demo”，域名 novaforge-demo.example，然后打开详情。",
-            STATE)
-        self.assertEqual(
-            (intent.kind, intent.requested_name, intent.requested_domain),
-            ("create", "NovaForge Demo", "novaforge-demo.example"))
-
-    def test_english_create_requires_and_extracts_exact_fields(self):
-        intent = classify_twenty_company_task(
-            "Create a company 'Example Labs' with domain example-labs.test", STATE)
-        self.assertEqual(
-            (intent.kind, intent.requested_name, intent.requested_domain),
-            ("create", "Example Labs", "example-labs.test"))
-
-    def test_create_without_domain_is_rejected_before_agent_dispatch(self):
-        with self.assertRaisesRegex(ValueError, "公司名称和裸域名"):
-            classify_twenty_company_task("创建公司 Missing Domain", STATE)
-
+class TwentyNormalizationTests(unittest.TestCase):
     def test_domain_normalization_matches_api_and_database_shapes(self):
         self.assertEqual(normalize_twenty_domain("HTTPS://Example.COM/"), "example.com")
 
