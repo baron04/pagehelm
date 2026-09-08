@@ -1,0 +1,44 @@
+# Active private engineering notes and verified local recovery artifacts.
+.workbench/
+
+# Local upstream repositories and downloaded artifacts.
+.q0-cache/
+
+# Python caches and local environments
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+
+# Local experiment scratch. Reproducible public benchmarks belong in evals/.
+lab/
+
+.DS_Store
+
+# Node / frontend
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Java / Maven
+target/
+.mvn/repository/
+
+# Runtime output
+.artifacts/
+logs/
+downloads/
+*.log
+*.pid
+test-results/
+playwright-report/
+coverage/
+
+.env*
+!.env.example

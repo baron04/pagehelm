@@ -1,0 +1,356 @@
+from __future__ import annotations
+
+import json
+import tempfile
+import threading
+import time
+import unittest
+from dataclasses import dataclass
+from pathlib import Path
+
+from web_operation_agent.live import (LiveConversationRunner, LiveProductSession,
+                                      render_live_replay)
+from web_operation_agent.product import AgentTurnError, AgentTurnErrorCode
+from web_operation_agent.remote import RemoteSessionClosed, RemoteSessionRegistry
+from web_operation_agent.schemas import (SCHEMA_VERSIONS, ClientHello, ElementRef,
+                                          ObservationEnvelope, PageObservation)
+
+
+ORIGIN = "http://app.test"
+
+
+class _Runner:
+    def __init__(self, value=None, error: BaseException | None = None):
+        self.value = value
+        self.error = error
+
+    def run_once(self):
+        if self.error is not None:
+            raise self.error
+        return self.value
+
+
+class _TurnRunner:
+    def __init__(self, value=None, error=None):
+        self.value = value
+        self.error = error
+
+    def run_once(self, message=None):
+        if self.error:
+            raise self.error
+        return {"message": message["text"], "value": self.value}
+
+
+@dataclass(frozen=True)
+class _TurnResult:
+    status: str
+    terminal_reason: str
+
+
+class _RecordingExecutor:
+    def __init__(self, channel, *, failures=None, results=None):
+        self.channel = channel
+        self.failures = failures or {}
+        self.results = results or {}
+        self.calls = []
+
+    def execute(self, message):
+        latest = self.channel.latest_observation_envelope
+        assert latest is not None
+        self.calls.append({
+            "message": message,
+            "observation_id": latest.observation_id,
+            "page_epoch": latest.page_epoch,
+            "page_url": latest.observation.url,
+        })
+        error = self.failures.get(message["message_id"])
+        if error is not None:
+            raise error
+        return self.results.get(
+            message["message_id"], {"message_id": message["message_id"]})
+
+
+def _message(index: int) -> dict:
+    return {
+        "message_id": f"message-{index}",
+        "text": f"Task {index}",
+        "page_url": ORIGIN + "/companies",
+    }
+
+
+def _channel_with_observation():
+    registry = RemoteSessionRegistry()
+    grant, channel = registry.create(
+        allowed_origins=[ORIGIN], session_id="live-conversation-test")
+    hello = ClientHello(
+        schema_version=SCHEMA_VERSIONS["ClientHello"],
+        session_id=grant.session_id,
+        client_id="browser-tab-1",
+        runtime="test-runtime/1",
+        runtime_instance_id="document-1",
+        capabilities=("dom.observe", "dom.click", "dom.fill", "dom.select",
+                      "dom.submit", "page.goto", "page.back", "page.wait"),
+        page_origin=ORIGIN,
+    )
+    lease = channel.accept_hello(hello)["lease_id"]
+    page = PageObservation(
+        schema_version=SCHEMA_VERSIONS["PageObservation"],
+        epoch=1,
+        url=ORIGIN + "/companies",
+        title="Companies",
+        landmarks=["Companies"],
+        elements=[ElementRef(
+            ref="e0", role="button", name="New company", tag="button",
+            epoch=1, attrs={})],
+        content="[0]<button>New company</button>",
+    )
+    envelope = ObservationEnvelope(
+        schema_version=SCHEMA_VERSIONS["ObservationEnvelope"],
+        session_id=grant.session_id,
+        observation_id="observation-1",
+        page_epoch=1,
+        observation=page,
+    )
+    channel.accept_observation(envelope, lease_id=lease)
+    return channel, lease
+
+
+class LiveProductSessionTests(unittest.TestCase):
+    def _run_messages(self, messages, executor):
+        channel = executor.channel
+        lease = getattr(executor, "lease")
+        for message in messages:
+            channel.accept_message(message, lease_id=lease)
+        host = LiveConversationRunner(channel, executor=executor)
+        holder = {}
+
+        def target():
+            try:
+                holder["outcomes"] = host.run()
+            except BaseException as exc:  # surfaced on the test thread below
+                holder["error"] = exc
+
+        worker = threading.Thread(target=target, daemon=True)
+        worker.start()
+        recorded = [host.next_outcome(timeout_s=2) for _message in messages]
+        host.close("test_complete")
+        worker.join(2)
+        self.assertFalse(worker.is_alive(), "conversation host did not stop after close")
+        if "error" in holder:
+            raise holder["error"]
+        self.assertEqual(tuple(recorded), holder["outcomes"])
+        return host, holder["outcomes"]
+
+    def _executor(self, *, failures=None, results=None):
+        channel, lease = _channel_with_observation()
+        executor = _RecordingExecutor(
+            channel, failures=failures, results=results)
+        executor.lease = lease
+        return executor
+
+    def test_one_executor_instance_receives_three_real_wire_turns_in_order(self):
+        messages = [_message(1), _message(2), _message(3)]
+        executor = self._executor()
+        host, outcomes = self._run_messages(messages, executor)
+
+        self.assertEqual([call["message"] for call in executor.calls], messages)
+        self.assertEqual(
+            [(call["observation_id"], call["page_epoch"], call["page_url"])
+             for call in executor.calls],
+            [("observation-1", 1, ORIGIN + "/companies")] * 3,
+        )
+        self.assertEqual([outcome.turn for outcome in outcomes], [1, 2, 3])
+        self.assertEqual(host.turns_completed, 3)
+        self.assertEqual(
+            [outcome.result["message_id"] for outcome in outcomes],
+            [message["message_id"] for message in messages],
+        )
+
+    def test_second_turn_exception_is_isolated_and_third_turn_still_runs(self):
+        messages = [_message(1), _message(2), _message(3)]
+        executor = self._executor(
+            failures={"message-2": ValueError("broken turn")},
+        )
+        _, outcomes = self._run_messages(messages, executor)
+
+        self.assertEqual([call["message"]["message_id"] for call in executor.calls],
+                         ["message-1", "message-2", "message-3"])
+        self.assertEqual(len(outcomes), 3)
+        self.assertIsNone(outcomes[1].result)
+        self.assertIn("ValueError: broken turn", outcomes[1].error)
+        self.assertEqual(outcomes[2].result, {"message_id": "message-3"})
+        events = executor.channel.events_after("", lease_id=executor.lease)
+        failures = [event for event in events
+                    if event.kind == "progress"
+                    and event.payload.get("state") == "task_failed"]
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(
+            failures[0].payload["message"], "本次任务执行失败，请查看运行记录。")
+
+    def test_typed_retryable_turn_error_keeps_recovery_guidance(self):
+        messages = [_message(1), _message(2)]
+        executor = self._executor(failures={
+            "message-1": AgentTurnError(
+                AgentTurnErrorCode.STALE_MESSAGE,
+                "internal stale detail",
+                retryable=True,
+            ),
+        })
+        _, outcomes = self._run_messages(messages, executor)
+
+        self.assertIsNone(outcomes[0].result)
+        self.assertEqual(outcomes[1].result, {"message_id": "message-2"})
+        events = executor.channel.events_after("", lease_id=executor.lease)
+        failure = [event for event in events
+                   if event.kind == "progress"
+                   and event.payload.get("state") == "task_failed"][0]
+        self.assertEqual(failure.payload["error_code"], "stale_message")
+        self.assertTrue(failure.payload["retryable"])
+        self.assertEqual(
+            failure.payload["message"], "页面已发生变化，请检查当前页面后重新提交。")
+
+    def test_remote_session_close_normally_ends_the_host(self):
+        executor = self._executor()
+        host = LiveConversationRunner(executor.channel, executor=executor)
+        holder = {}
+        worker = threading.Thread(
+            target=lambda: holder.setdefault("outcomes", host.run()), daemon=True)
+        worker.start()
+        host.close("user_closed")
+        worker.join(2)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(holder["outcomes"], ())
+        self.assertEqual(executor.calls, [])
+        self.assertEqual(host.turns_completed, 0)
+
+    def test_indeterminate_result_is_returned_unchanged_and_never_retried(self):
+        result = _TurnResult(
+            status="indeterminate", terminal_reason="indeterminate_write")
+        executor = self._executor(results={"message-1": result})
+        _, outcomes = self._run_messages([_message(1)], executor)
+
+        self.assertEqual(len(executor.calls), 1)
+        self.assertEqual(len(outcomes), 1)
+        self.assertIs(outcomes[0].result, result)
+        self.assertEqual(outcomes[0].result.status, "indeterminate")
+        self.assertEqual(outcomes[0].result.terminal_reason, "indeterminate_write")
+        events = executor.channel.events_after("", lease_id=executor.lease)
+        self.assertFalse(any(
+            event.kind == "progress" and event.payload.get("state") == "task_failed"
+            for event in events))
+
+    def test_remote_session_close_from_executor_is_not_a_failed_turn(self):
+        executor = self._executor(
+            failures={"message-1": RemoteSessionClosed("panel closed")})
+        executor.channel.accept_message(_message(1), lease_id=executor.lease)
+        host = LiveConversationRunner(executor.channel, executor=executor)
+        holder = {}
+        worker = threading.Thread(
+            target=lambda: holder.setdefault("outcomes", host.run()), daemon=True)
+        worker.start()
+        worker.join(2)
+        host.close("test_complete")
+        worker.join(2)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(holder["outcomes"], ())
+        self.assertEqual(len(executor.calls), 1)
+        self.assertEqual(host.turns_completed, 0)
+        events = executor.channel.events_after("", lease_id=executor.lease)
+        self.assertFalse(any(
+            event.kind == "progress" and event.payload.get("state") == "task_failed"
+            for event in events))
+
+    def test_legacy_per_turn_factory_remains_a_thin_compatibility_path(self):
+        channel, lease = _channel_with_observation()
+        message = _message(1)
+        channel.accept_message(message, lease_id=lease)
+        calls = []
+
+        def factory(received, turn):
+            calls.append((received, turn))
+            return _TurnRunner(value=turn)
+
+        host = LiveConversationRunner(channel, runner_factory=factory)
+        holder = {}
+        worker = threading.Thread(
+            target=lambda: holder.setdefault("outcomes", host.run_once()), daemon=True)
+        worker.start()
+        recorded = host.next_outcome(timeout_s=2)
+        host.close("test_complete")
+        worker.join(2)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(calls, [(message, 1)])
+        self.assertEqual(holder["outcomes"], (recorded,))
+        self.assertEqual(recorded.result, {"message": "Task 1", "value": 1})
+
+    def test_owns_gateway_bootstrap_worker_and_status_without_exposing_token(self):
+        live = LiveProductSession(
+            allowed_origin=ORIGIN,
+            page_controller_module=ORIGIN + "/page-controller.js",
+            runner_factory=lambda _channel: _Runner({"ok": True}),
+            session_id="live-test",
+        )
+        with self.assertRaisesRegex(RuntimeError, "started"):
+            _ = live.bootstrap_script
+        try:
+            live.start()
+            source = live.bootstrap_script
+            result = live.wait(2)
+            status = live.status()
+            self.assertEqual(result, {"ok": True})
+            self.assertTrue(status.finished)
+            self.assertFalse(status.running)
+            self.assertFalse(status.failed)
+            self.assertNotIn(live.grant.client_token, repr(status))
+            self.assertIn(live.grant.client_token, source)
+            self.assertIn("startEmbeddedRuntime", source)
+        finally:
+            live.close()
+
+    def test_worker_failure_is_reported_at_the_product_boundary(self):
+        live = LiveProductSession(
+            allowed_origin=ORIGIN,
+            page_controller_module=ORIGIN + "/page-controller.js",
+            runner_factory=lambda _channel: _Runner(error=ValueError("broken runner")),
+        )
+        try:
+            live.start()
+            with self.assertRaisesRegex(RuntimeError, "ValueError: broken runner"):
+                live.wait(2)
+            self.assertTrue(live.status().failed)
+        finally:
+            live.close()
+
+    def test_live_result_can_be_projected_to_one_case_replay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            result = {
+                "product_run_id": "live-run", "task": "Open orders",
+                "product_success": True, "started_at": time.time() - 1,
+                "finished_at": time.time(),
+                "agent": {
+                    "page_actions": 1, "terminal_reason": "agent_finished",
+                    "agent_said": "Done", "spend": {"provider_calls": 1,
+                    "cost_cny": .01}, "control": {"permit_consumed": 0,
+                    "write_blocked": 0},
+                },
+            }
+            (root / "result.json").write_text(json.dumps(result))
+            (root / "session.jsonl").write_text(
+                json.dumps({
+                    "seq": 1, "t": result["started_at"], "run_id": "live-run",
+                    "event": "product_verification", "product_success": True,
+                }) + "\n")
+            bundle = render_live_replay(
+                result_path=root / "result.json", ledger_path=root / "session.jsonl",
+                output_path=root / "replay.html", label="Live", mode="embedded")
+            self.assertEqual(len(bundle["cases"]), 1)
+            self.assertTrue((root / "replay.html").exists())
+            self.assertTrue((root / "trace-data.json").exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,712 @@
+from __future__ import annotations
+
+import dataclasses
+import json
+import threading
+import time
+import unittest
+import urllib.error
+import urllib.request
+from unittest import mock
+
+from web_operation_agent.browser import TransportError
+from web_operation_agent.embedded_gateway import EmbeddedGateway
+from web_operation_agent.remote import (RemoteBrowserClient, RemoteProtocolError,
+                                         RemoteSessionRegistry)
+from web_operation_agent.schemas import (
+    SCHEMA_VERSIONS,
+    ActionCommand,
+    ActionEnvelope,
+    ActionReceipt,
+    ActionResultEnvelope,
+    ApprovalDecision,
+    ApprovalRequest,
+    ClientHello,
+    ElementRef,
+    ObservationEnvelope,
+    PageObservation,
+)
+
+
+ORIGIN = "http://app.test"
+DEFAULT_LEASE = object()
+
+
+def hello(session_id: str, *, cursor: str = "",
+          runtime_instance_id: str = "runtime-document-1") -> ClientHello:
+    return ClientHello(
+        schema_version=SCHEMA_VERSIONS["ClientHello"], session_id=session_id,
+        client_id="browser-tab-1", runtime="test-runtime/1",
+        runtime_instance_id=runtime_instance_id,
+        capabilities=("dom.observe", "dom.click", "dom.fill", "dom.select", "dom.submit",
+                      "page.goto", "page.back", "page.wait"), page_origin=ORIGIN,
+        last_event_id=cursor,
+    )
+
+
+def observation(session_id: str, epoch: int, *, caused_by: str = "",
+                url: str = ORIGIN + "/start") -> ObservationEnvelope:
+    page = PageObservation(
+        schema_version=SCHEMA_VERSIONS["PageObservation"], epoch=epoch,
+        url=url, title=f"Page {epoch}", landmarks=["Fixture"],
+        elements=[ElementRef(ref="e0", role="link", name="Next", tag="a",
+                             epoch=epoch, attrs={"href": "/next"})],
+        content=f"[0]<a href=/next>Next />\npage {epoch}",
+    )
+    return ObservationEnvelope(
+        schema_version=SCHEMA_VERSIONS["ObservationEnvelope"],
+        session_id=session_id, observation_id=f"o-{epoch}", page_epoch=epoch,
+        observation=page, caused_by_action_id=caused_by,
+    )
+
+
+def action_for(session_id: str, obs: ObservationEnvelope, *, action_id: str = "a-1",
+               deadline: int | None = None) -> ActionEnvelope:
+    command = ActionCommand(command_id=action_id, action="click", args={"ref": "e0"},
+                            expect_navigation=True)
+    return ActionEnvelope(
+        schema_version=SCHEMA_VERSIONS["ActionEnvelope"], session_id=session_id,
+        turn_id="t-1", action_id=action_id,
+        based_on_observation_id=obs.observation_id, page_epoch=obs.page_epoch,
+        deadline=deadline or int(time.time() * 1000) + 5000,
+        command_digest=command.content_digest, command=command,
+    )
+
+
+def completed(action: ActionEnvelope, after: ObservationEnvelope, *, elapsed_ms: int = 7,
+              url_before: str = ORIGIN + "/start"
+              ) -> ActionResultEnvelope:
+    receipt = ActionReceipt(
+        schema_version=SCHEMA_VERSIONS["ActionReceipt"], command_id=action.action_id,
+        action=action.command.action, args_echo={"ref": "e0"}, ok=True,
+        url_before=url_before, url_after=after.observation.url,
+        navigated=True, epoch_before=action.page_epoch, epoch_after=after.page_epoch,
+        elapsed_ms=elapsed_ms, observation=after.observation,
+    )
+    return ActionResultEnvelope(
+        schema_version=SCHEMA_VERSIONS["ActionResultEnvelope"],
+        session_id=action.session_id, turn_id=action.turn_id,
+        action_id=action.action_id,
+        based_on_observation_id=action.based_on_observation_id,
+        page_epoch=action.page_epoch, command_digest=action.command_digest,
+        status="completed",
+        observation_after=after, receipt=receipt,
+    )
+
+
+class ChannelTests(unittest.TestCase):
+    def setUp(self):
+        registry = RemoteSessionRegistry()
+        self.grant, self.channel = registry.create(allowed_origins=[ORIGIN],
+                                                   session_id="test-session")
+        reply = self.channel.accept_hello(hello(self.grant.session_id))
+        self.lease = reply["lease_id"]
+        self.first = observation(self.grant.session_id, 1)
+        self.channel.accept_observation(self.first, lease_id=self.lease)
+
+    def test_event_replay_is_same_action_and_result_is_idempotent(self):
+        action = action_for(self.grant.session_id, self.first)
+        event = self.channel.enqueue_action(action)
+        replay = self.channel.events_after("e00000001", lease_id=self.lease)
+        self.assertEqual([e.to_json() for e in replay], [event.to_json()])
+        self.assertEqual(replay[0].action().idempotency_key, action.idempotency_key)
+
+        after = observation(self.grant.session_id, 2, caused_by=action.action_id,
+                            url=ORIGIN + "/next")
+        result = completed(action, after)
+        self.assertFalse(self.channel.claim_action(
+            {"action_id": action.action_id}, lease_id=self.lease)["duplicate"])
+        self.assertFalse(self.channel.accept_result(
+            result, lease_id=self.lease)["duplicate"])
+        self.assertTrue(self.channel.accept_result(
+            result, lease_id=self.lease)["duplicate"])
+
+        conflict = completed(action, after, elapsed_ms=8)
+        with self.assertRaisesRegex(RemoteProtocolError, "conflicting result"):
+            self.channel.accept_result(conflict, lease_id=self.lease)
+
+    def test_approval_is_user_visible_idempotent_and_bound_to_this_session(self):
+        request = ApprovalRequest(
+            schema_version=1, approval_id="approval-1",
+            effect="Accept supplier quote", targets=("Quote Q-1042",),
+            expires_at=int(time.time() * 1000) + 5000)
+        event = self.channel.request_approval(request)
+        self.assertEqual(event.kind, "approval_required")
+        wire = json.dumps(event.to_json())
+        self.assertIn("Accept supplier quote", wire)
+        for hidden in ("ControlPlan", "createQuote", "permit"):
+            self.assertNotIn(hidden, wire)
+        self.assertEqual(self.channel.request_approval(request), event)
+
+        decision = ApprovalDecision(
+            schema_version=1, session_id=self.grant.session_id,
+            approval_id=request.approval_id, decision="approved")
+        reply = self.channel.accept_approval(decision, lease_id=self.lease)
+        self.assertFalse(reply["duplicate"])
+        self.assertTrue(self.channel.accept_approval(
+            decision, lease_id=self.lease)["duplicate"])
+        self.assertEqual(
+            self.channel.wait_for_approval(request.approval_id, timeout_s=0), decision)
+        conflict = dataclasses.replace(decision, decision="denied")
+        with self.assertRaisesRegex(RemoteProtocolError, "conflicts"):
+            self.channel.accept_approval(conflict, lease_id=self.lease)
+
+    def test_approval_unknown_expired_and_concurrent_requests_fail_closed(self):
+        now = int(time.time() * 1000)
+        first = ApprovalRequest(1, "approval-1", "Change a record", ("Record 1",), now + 5000)
+        self.channel.request_approval(first)
+        with self.assertRaisesRegex(RemoteProtocolError, "another approval"):
+            self.channel.request_approval(
+                ApprovalRequest(1, "approval-2", "Change another", ("Record 2",), now + 5000))
+        unknown = ApprovalDecision(1, self.grant.session_id, "missing", "denied")
+        with self.assertRaisesRegex(RemoteProtocolError, "unknown"):
+            self.channel.accept_approval(unknown, lease_id=self.lease)
+
+        registry = RemoteSessionRegistry()
+        grant, channel = registry.create(allowed_origins=[ORIGIN], session_id="expiry-session")
+        lease = channel.accept_hello(hello(grant.session_id))["lease_id"]
+        expired = ApprovalRequest(1, "late", "Change a record", ("Record 1",), now + 1)
+        with mock.patch("web_operation_agent.remote._now_ms", return_value=now):
+            channel.request_approval(expired)
+        decision = ApprovalDecision(1, grant.session_id, "late", "approved")
+        with mock.patch("web_operation_agent.remote._now_ms", return_value=now + 2):
+            with self.assertRaisesRegex(RemoteProtocolError, "expired"):
+                channel.accept_approval(decision, lease_id=lease)
+
+    def test_approval_card_cannot_carry_a_credential(self):
+        request = ApprovalRequest(
+            1, "approval-secret", "Open callback",
+            ("/callback?access_token=raw-secret",), int(time.time() * 1000) + 5000)
+        with self.assertRaisesRegex(RemoteProtocolError, "credential"):
+            self.channel.request_approval(request)
+
+    def test_stale_duplicate_and_second_in_flight_fail_closed(self):
+        self.assertTrue(self.channel.accept_observation(
+            self.first, lease_id=self.lease)["duplicate"])
+        changed = observation(self.grant.session_id, 1)
+        changed.observation.title = "different bytes"
+        with self.assertRaisesRegex(RemoteProtocolError, "different content"):
+            self.channel.accept_observation(changed, lease_id=self.lease)
+
+        first_action = action_for(self.grant.session_id, self.first)
+        self.channel.enqueue_action(first_action)
+        with self.assertRaisesRegex(RemoteProtocolError, "already in flight"):
+            self.channel.enqueue_action(action_for(self.grant.session_id, self.first,
+                                                   action_id="a-2"))
+
+    def test_old_observation_and_expired_action_are_never_enqueued(self):
+        newer = observation(self.grant.session_id, 2)
+        self.channel.accept_observation(newer, lease_id=self.lease)
+        with self.assertRaisesRegex(RemoteProtocolError, "stale observation"):
+            self.channel.enqueue_action(action_for(self.grant.session_id, self.first))
+        with self.assertRaisesRegex(RemoteProtocolError, "expired"):
+            self.channel.enqueue_action(action_for(
+                self.grant.session_id, newer, deadline=int(time.time() * 1000) - 1))
+        self.assertEqual(self.channel.events_after(
+            "e00000001", lease_id=self.lease), [])
+
+    def test_remote_browser_adapter_roundtrip_unblocks_on_fresh_result(self):
+        browser = RemoteBrowserClient(self.channel, timeout_s=2)
+        self.assertEqual(browser.start()["url"], self.first.observation.url)
+        answer = {}
+
+        def run_action():
+            try:
+                answer["receipt"] = browser.execute("click", {"ref": "e0"},
+                                                    expect_navigation=True)
+            except Exception as exc:  # surfaced in the assertion thread
+                answer["error"] = exc
+
+        worker = threading.Thread(target=run_action)
+        worker.start()
+        events = self.channel.events_after(
+            "e00000001", lease_id=self.lease, wait_s=1)
+        envelope = next(event.action() for event in events if event.kind == "action")
+        self.channel.claim_action({"action_id": envelope.action_id},
+                                  lease_id=self.lease)
+        after = observation(self.grant.session_id, 2, caused_by=envelope.action_id,
+                            url=ORIGIN + "/next")
+        self.channel.accept_result(completed(envelope, after), lease_id=self.lease)
+        worker.join(timeout=2)
+        self.assertFalse(worker.is_alive())
+        self.assertNotIn("error", answer)
+        self.assertEqual(answer["receipt"].observation.url, ORIGIN + "/next")
+
+    def test_async_observation_is_feedback_not_a_ref_rebinding(self):
+        browser = RemoteBrowserClient(self.channel, timeout_s=2)
+        self.assertEqual(browser.start()["url"], self.first.observation.url)
+        newer = observation(self.grant.session_id, 2, url=ORIGIN + "/new-page")
+        self.channel.accept_observation(newer, lease_id=self.lease)
+
+        secret = "predispatch-fill-secret"
+        stale = browser.execute("fill", {"ref": "e0", "value": secret})
+        self.assertFalse(stale.ok)
+        self.assertEqual(stale.error_code, "stale_observation")
+        self.assertEqual(stale.epoch_before, 1)
+        self.assertEqual(stale.observation.url, ORIGIN + "/new-page")
+        self.assertEqual(stale.args_echo["value"], "[redacted]")
+        self.assertNotIn(secret, json.dumps(stale.to_json()))
+        self.assertIsNone(self.channel.pending_action)
+        self.assertEqual(self.channel.events_after(
+            "e00000001", lease_id=self.lease), [])
+
+        answer = {}
+
+        def run_replanned_action():
+            try:
+                answer["receipt"] = browser.execute(
+                    "click", {"ref": "e0"}, expect_navigation=True)
+            except Exception as exc:
+                answer["error"] = exc
+
+        worker = threading.Thread(target=run_replanned_action)
+        worker.start()
+        event = self.channel.events_after(
+            "e00000001", lease_id=self.lease, wait_s=1)[0]
+        rebound = event.action()
+        self.assertEqual(rebound.based_on_observation_id, newer.observation_id)
+        self.assertEqual(rebound.page_epoch, newer.page_epoch)
+        self.channel.claim_action(
+            {"action_id": rebound.action_id}, lease_id=self.lease)
+        after = observation(self.grant.session_id, 3,
+                            caused_by=rebound.action_id, url=ORIGIN + "/done")
+        self.channel.accept_result(
+            completed(rebound, after, url_before=newer.observation.url),
+            lease_id=self.lease)
+        worker.join(timeout=2)
+        self.assertFalse(worker.is_alive())
+        self.assertNotIn("error", answer)
+
+    def test_receipt_cannot_change_command_arguments_or_start_url(self):
+        action = action_for(self.grant.session_id, self.first)
+        self.channel.enqueue_action(action)
+        self.channel.claim_action({"action_id": action.action_id}, lease_id=self.lease)
+        after = observation(self.grant.session_id, 2, caused_by=action.action_id,
+                            url=ORIGIN + "/next")
+        valid = completed(action, after)
+        bad_receipts = (
+            dataclasses.replace(valid.receipt, args_echo={"ref": "e99"}),
+            dataclasses.replace(valid.receipt, url_before=ORIGIN + "/invented"),
+        )
+        for receipt in bad_receipts:
+            with self.subTest(receipt=receipt), self.assertRaises(RemoteProtocolError):
+                self.channel.accept_result(
+                    dataclasses.replace(valid, receipt=receipt), lease_id=self.lease)
+
+    def test_remote_pre_dispatch_code_and_redaction_reach_agent_unchanged(self):
+        browser = RemoteBrowserClient(self.channel, timeout_s=2)
+        browser.start()
+        answer = {}
+
+        def run_action():
+            try:
+                answer["receipt"] = browser.execute(
+                    "fill", {"ref": "e0", "value": "must-not-return"})
+            except Exception as exc:
+                answer["error"] = exc
+
+        worker = threading.Thread(target=run_action)
+        worker.start()
+        envelope = next(event.action() for event in self.channel.events_after(
+            "e00000001", lease_id=self.lease, wait_s=1) if event.kind == "action")
+        after = observation(self.grant.session_id, 2, caused_by=envelope.action_id)
+        rejected = ActionResultEnvelope(
+            schema_version=SCHEMA_VERSIONS["ActionResultEnvelope"],
+            session_id=envelope.session_id, turn_id=envelope.turn_id,
+            action_id=envelope.action_id,
+            based_on_observation_id=envelope.based_on_observation_id,
+            page_epoch=envelope.page_epoch, command_digest=envelope.command_digest,
+            status="rejected", observation_after=after, receipt=None,
+            error_code="deadline_expired", error_detail="not dispatched",
+        )
+        self.channel.accept_result(rejected, lease_id=self.lease)
+        worker.join(timeout=2)
+        self.assertNotIn("error", answer)
+        self.assertEqual(answer["receipt"].error_code, "deadline_expired")
+        self.assertEqual(answer["receipt"].args_echo["value"], "[redacted]")
+        self.assertNotIn("must-not-return", json.dumps(answer["receipt"].to_json()))
+
+    def test_indeterminate_result_is_transport_failure_and_not_retried(self):
+        browser = RemoteBrowserClient(self.channel, timeout_s=2)
+        browser.start()
+        answer = {}
+
+        def run_action():
+            try:
+                browser.execute("click", {"ref": "e0"})
+            except Exception as exc:
+                answer["error"] = exc
+
+        worker = threading.Thread(target=run_action)
+        worker.start()
+        envelope = next(event.action() for event in
+                        self.channel.events_after(
+                            "e00000001", lease_id=self.lease, wait_s=1)
+                        if event.kind == "action")
+        self.channel.claim_action({"action_id": envelope.action_id},
+                                  lease_id=self.lease)
+        result = ActionResultEnvelope(
+            schema_version=SCHEMA_VERSIONS["ActionResultEnvelope"],
+            session_id=envelope.session_id, turn_id=envelope.turn_id,
+            action_id=envelope.action_id,
+            based_on_observation_id=envelope.based_on_observation_id,
+            page_epoch=envelope.page_epoch,
+            command_digest=envelope.command_digest, status="indeterminate",
+            observation_after=None, error_code="execution_state_unknown",
+            error_detail="the old document ended before it could record a receipt",
+        )
+        self.channel.accept_result(result, lease_id=self.lease)
+        worker.join(timeout=2)
+        self.assertIsInstance(answer.get("error"), TransportError)
+        action_events = [event for event in self.channel.events_after(
+            "e00000001", lease_id=self.lease)
+                         if event.kind == "action"]
+        self.assertEqual(len(action_events), 1)
+
+    def test_runtime_takeover_preserves_old_claim_for_same_client_result(self):
+        action = action_for(self.grant.session_id, self.first)
+        self.channel.enqueue_action(action)
+        first_claim = self.channel.claim_action(
+            {"action_id": action.action_id}, lease_id=self.lease)
+        self.assertFalse(first_claim["duplicate"])
+        self.assertTrue(self.channel.claim_action(
+            {"action_id": action.action_id}, lease_id=self.lease)["duplicate"])
+
+        takeover = self.channel.accept_hello(hello(
+            self.grant.session_id, cursor="e00000002",
+            runtime_instance_id="runtime-document-2"))
+        new_lease = takeover["lease_id"]
+        self.assertNotEqual(new_lease, self.lease)
+        with self.assertRaisesRegex(RemoteProtocolError, "replaced"):
+            self.channel.validate_active_lease(self.lease)
+        refused_claim = self.channel.claim_action(
+            {"action_id": action.action_id}, lease_id=new_lease)
+        self.assertEqual(refused_claim,
+                         {"claimed": False, "reason": "already_claimed"})
+        with self.assertRaisesRegex(RemoteProtocolError, "replaced"):
+            self.channel.accept_hello(hello(
+                self.grant.session_id,
+                runtime_instance_id="runtime-document-1"))
+
+        after = observation(self.grant.session_id, 2, caused_by=action.action_id,
+                            url=ORIGIN + "/next")
+        reply = self.channel.accept_result(completed(action, after),
+                                           lease_id=new_lease)
+        self.assertFalse(reply["duplicate"])
+
+    def test_same_lease_claim_retry_survives_deadline_after_response_loss(self):
+        action = action_for(self.grant.session_id, self.first)
+        self.channel.enqueue_action(action)
+        self.assertFalse(self.channel.claim_action(
+            {"action_id": action.action_id}, lease_id=self.lease)["duplicate"])
+        with mock.patch("web_operation_agent.remote._now_ms",
+                        return_value=action.deadline + 1):
+            retry = self.channel.claim_action(
+                {"action_id": action.action_id}, lease_id=self.lease)
+        self.assertEqual(retry, {"claimed": True, "duplicate": True})
+
+    def test_hello_rejects_cursor_ahead_of_server_journal(self):
+        repeated = self.channel.accept_hello(hello(self.grant.session_id))
+        self.assertEqual(repeated["lease_id"], self.lease)
+        with self.assertRaisesRegex(RemoteProtocolError, "ahead"):
+            self.channel.accept_hello(hello(
+                self.grant.session_id, cursor="e00000002"))
+
+    def test_channel_detaches_mutable_wire_values(self):
+        action = action_for(self.grant.session_id, self.first)
+        returned_event = self.channel.enqueue_action(action)
+        action.command.args["ref"] = "caller-mutated"
+        returned_event.payload["command"]["args"]["ref"] = "return-mutated"
+        self.first.observation.elements[0].attrs["href"] = "/caller-mutated"
+
+        pending = self.channel.pending_action
+        self.assertEqual(pending.command.args["ref"], "e0")
+        replay = self.channel.events_after(
+            "e00000001", lease_id=self.lease)
+        self.assertEqual(replay[0].payload["command"]["args"]["ref"], "e0")
+        self.assertEqual(
+            self.channel.latest_observation_envelope.observation.elements[0].attrs["href"],
+            "/next",
+        )
+
+    def test_arrived_result_wins_close_race(self):
+        action = action_for(self.grant.session_id, self.first)
+        self.channel.enqueue_action(action)
+        self.channel.claim_action({"action_id": action.action_id},
+                                  lease_id=self.lease)
+        after = observation(self.grant.session_id, 2, caused_by=action.action_id,
+                            url=ORIGIN + "/next")
+        expected = completed(action, after)
+        self.channel.accept_result(expected, lease_id=self.lease)
+        self.channel.close()
+        actual = self.channel.wait_for_result(action.action_id, timeout_s=0)
+        self.assertEqual(actual.to_json(), expected.to_json())
+        self.assertTrue(self.channel.accept_result(
+            expected, lease_id=self.lease)["duplicate"])
+
+        conflict = completed(action, after, elapsed_ms=8)
+        with self.assertRaisesRegex(RemoteProtocolError, "conflicting result"):
+            self.channel.accept_result(conflict, lease_id=self.lease)
+        wrong_command = expected.to_json()
+        wrong_command["command_digest"] = "0" * 64
+        with self.assertRaisesRegex(RemoteProtocolError, "command_digest"):
+            self.channel.accept_result(
+                ActionResultEnvelope.from_json(wrong_command), lease_id=self.lease)
+
+    def test_terminal_event_remains_replayable_after_close(self):
+        self.channel.close("done")
+        events = self.channel.events_after(
+            "e00000001", lease_id=self.lease)
+        self.assertEqual([event.kind for event in events], ["terminal"])
+        self.assertEqual(events[0].payload["reason"], "done")
+        with self.assertRaisesRegex(RemoteProtocolError, "closed"):
+            self.channel.events_after(events[0].event_id, lease_id=self.lease)
+
+
+class GatewayTests(unittest.TestCase):
+    def setUp(self):
+        self.registry = RemoteSessionRegistry()
+        self.grant, self.channel = self.registry.create(allowed_origins=[ORIGIN],
+                                                        session_id="http-session")
+        self.gateway = EmbeddedGateway(self.registry, sse_wait_s=0.05).start()
+        self.lease = ""
+
+    def tearDown(self):
+        self.gateway.close()
+
+    def request(self, method: str, path: str, body=None, *, token: str | None = None,
+                origin: str = ORIGIN, headers=None, lease=DEFAULT_LEASE):
+        payload = None if body is None else json.dumps(body).encode()
+        request_headers = {"Origin": origin,
+                           "Authorization": "Bearer " + (token or self.grant.client_token)}
+        selected_lease = self.lease if lease is DEFAULT_LEASE else lease
+        if selected_lease:
+            request_headers["X-WOA-Lease"] = selected_lease
+        if body is not None:
+            request_headers["Content-Type"] = "application/json"
+        request_headers.update(headers or {})
+        request = urllib.request.Request(self.gateway.base_url + path, data=payload,
+                                         method=method, headers=request_headers)
+        try:
+            with urllib.request.urlopen(request, timeout=2) as response:
+                return response.status, dict(response.headers), response.read()
+        except urllib.error.HTTPError as exc:
+            return exc.code, dict(exc.headers), exc.read()
+
+    def test_authenticated_http_sse_action_roundtrip_and_duplicate_result(self):
+        sid = self.grant.session_id
+        status, headers, raw_hello = self.request(
+            "POST", f"/v1/sessions/{sid}/hello", hello(sid).to_json())
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Access-Control-Allow-Origin"], ORIGIN)
+        self.lease = json.loads(raw_hello)["lease_id"]
+        first = observation(sid, 1)
+        self.assertEqual(self.request("POST", f"/v1/sessions/{sid}/observations",
+                                      first.to_json())[0], 200)
+
+        action = action_for(sid, first)
+        self.channel.enqueue_action(action)
+        status, headers, raw = self.request(
+            "GET", f"/v1/sessions/{sid}/events", headers={"Last-Event-Id": "e00000001"})
+        self.assertEqual(status, 200)
+        self.assertTrue(headers["Content-Type"].startswith("text/event-stream"))
+        self.assertIn(f"id: e00000002".encode(), raw)
+        self.assertIn(action.action_id.encode(), raw)
+        claim_reply = json.loads(self.request(
+            "POST", f"/v1/sessions/{sid}/claims",
+            {"action_id": action.action_id})[2])
+        self.assertFalse(claim_reply["duplicate"])
+
+        after = observation(sid, 2, caused_by=action.action_id, url=ORIGIN + "/next")
+        result = completed(action, after)
+        first_reply = json.loads(self.request("POST", f"/v1/sessions/{sid}/results",
+                                              result.to_json())[2])
+        retry_reply = json.loads(self.request("POST", f"/v1/sessions/{sid}/results",
+                                              result.to_json())[2])
+        self.assertFalse(first_reply["duplicate"])
+        self.assertTrue(retry_reply["duplicate"])
+
+    def test_authenticated_approval_endpoint_roundtrip(self):
+        sid = self.grant.session_id
+        _, _, raw_hello = self.request(
+            "POST", f"/v1/sessions/{sid}/hello", hello(sid).to_json())
+        self.lease = json.loads(raw_hello)["lease_id"]
+        request = ApprovalRequest(
+            1, "approval-http", "Update the quote", ("Quote Q-1042",),
+            int(time.time() * 1000) + 5000)
+        self.channel.request_approval(request)
+        body = ApprovalDecision(1, sid, request.approval_id, "approved").to_json()
+        status, _, raw = self.request(
+            "POST", f"/v1/sessions/{sid}/approvals", body)
+        self.assertEqual(status, 200)
+        self.assertFalse(json.loads(raw)["duplicate"])
+        status, _, raw = self.request(
+            "POST", f"/v1/sessions/{sid}/approvals", body)
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(raw)["duplicate"])
+
+    def test_token_origin_cors_and_static_runtime_boundary(self):
+        sid = self.grant.session_id
+        self.assertEqual(self.request("POST", f"/v1/sessions/{sid}/hello",
+                                      hello(sid).to_json(), token="wrong")[0], 401)
+        self.assertEqual(self.request("POST", f"/v1/sessions/{sid}/hello",
+                                      hello(sid).to_json(), origin="http://evil.test")[0], 403)
+        status, headers, body = self.request("GET", "/v1/runtime/embedded.js")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Access-Control-Allow-Origin"], "*")
+        self.assertIn(b"class EmbeddedWebRuntime", body)
+        self.assertNotIn(b"OPENAI_API_KEY", body)
+        self.assertNotIn(b"ControlPlan", body)
+
+    def test_gateway_builds_one_ephemeral_first_party_bootstrap(self):
+        source = self.gateway.bootstrap_script(
+            self.grant, page_controller_module=ORIGIN + "/page-controller.js")
+        self.assertIn(self.gateway.runtime_url, source)
+        self.assertIn(self.grant.session_id, source)
+        self.assertIn("startEmbeddedRuntime", source)
+        self.assertIn("__WOA_RUNTIME_READY__", source)
+        self.assertIn("location.origin", source)
+        self.assertIn(ORIGIN, source)
+        self.assertNotIn("ControlPlan", source)
+        with self.assertRaisesRegex(ValueError, "allowed session origin"):
+            self.gateway.bootstrap_script(
+                self.grant, page_controller_module="http://other.test/controller.js")
+
+    def test_hello_page_origin_must_match_browser_origin_header(self):
+        registry = RemoteSessionRegistry()
+        grant, _ = registry.create(
+            allowed_origins=[ORIGIN, "http://other.test"],
+            session_id="multi-origin-session",
+        )
+        with EmbeddedGateway(registry, sse_wait_s=0.01) as gateway:
+            body = hello(grant.session_id).to_json()
+            body["page_origin"] = "http://other.test"
+            payload = json.dumps(body).encode()
+            request = urllib.request.Request(
+                gateway.base_url + f"/v1/sessions/{grant.session_id}/hello",
+                data=payload,
+                method="POST",
+                headers={"Origin": ORIGIN,
+                         "Authorization": "Bearer " + grant.client_token,
+                         "Content-Type": "application/json"},
+            )
+            with self.assertRaises(urllib.error.HTTPError) as raised:
+                urllib.request.urlopen(request, timeout=2)
+            self.assertEqual(raised.exception.code, 403)
+            self.assertEqual(json.loads(raised.exception.read())["code"],
+                             "origin_refused")
+
+    def test_privacy_boundary_rejects_session_and_generic_credentials(self):
+        sid = self.grant.session_id
+        _, _, raw = self.request("POST", f"/v1/sessions/{sid}/hello",
+                                 hello(sid).to_json())
+        self.lease = json.loads(raw)["lease_id"]
+        handoff = observation(
+            sid, 1, url=ORIGIN + "/?externalLoginKey=secret-value")
+        raw_token = observation(
+            sid, 1, url=ORIGIN + "/callback?access_token=raw-secret&next=1")
+        encoded_token = observation(
+            sid, 1,
+            url=ORIGIN + "/callback?access_token%253Dencoded-secret%2526next%253D1")
+        triple_encoded_key_token = observation(
+            sid, 1, url=(ORIGIN +
+                "/callback?access%25255Ftoken%25253Dtriple-secret%252526next%25253D1"))
+        triple_encoded_handoff = observation(
+            sid, 1, url=(ORIGIN +
+                "/callback?external%25254CoginKey%25253Dhandoff-secret%252526next%25253D1"))
+        structured = observation(sid, 1)
+        structured.observation.elements[0].attrs.update(
+            {"name": "access_token", "value": "structured-secret"})
+        direct = ObservationEnvelope(
+            schema_version=SCHEMA_VERSIONS["ObservationEnvelope"],
+            session_id=sid, observation_id="o-direct", page_epoch=1,
+            observation=observation(sid, 1).observation,
+            events=({"api_key": "direct-secret"},),
+        )
+        for leaked in (handoff, raw_token, encoded_token, triple_encoded_key_token,
+                       triple_encoded_handoff, structured, direct):
+            with self.subTest(leaked=leaked.observation_id):
+                status, _, body = self.request(
+                    "POST", f"/v1/sessions/{sid}/observations", leaked.to_json())
+                self.assertEqual(status, 400)
+                self.assertEqual(json.loads(body)["code"], "privacy_boundary")
+
+        redacted = observation(
+            sid, 1,
+            url=ORIGIN + "/callback?access_token%253D%255Bredacted%255D")
+        redacted.observation.elements[0].attrs.update(
+            {"name": "access_token", "value": "[redacted]"})
+        self.assertEqual(self.request(
+            "POST", f"/v1/sessions/{sid}/observations", redacted.to_json())[0], 200)
+
+    def test_session_endpoints_require_current_runtime_lease(self):
+        sid = self.grant.session_id
+        _, _, raw = self.request("POST", f"/v1/sessions/{sid}/hello",
+                                 hello(sid).to_json())
+        first_lease = json.loads(raw)["lease_id"]
+        self.lease = first_lease
+        first = observation(sid, 1)
+
+        status, _, body = self.request(
+            "POST", f"/v1/sessions/{sid}/observations", first.to_json(), lease="")
+        self.assertEqual(status, 401)
+        self.assertEqual(json.loads(body)["code"], "invalid_lease")
+        status, _, body = self.request(
+            "POST", f"/v1/sessions/{sid}/observations", first.to_json(),
+            lease="fabricated-lease")
+        self.assertEqual(status, 409)
+        self.assertEqual(json.loads(body)["code"], "runtime_replaced")
+        self.assertEqual(self.request(
+            "POST", f"/v1/sessions/{sid}/observations", first.to_json())[0], 200)
+
+        _, _, takeover_raw = self.request(
+            "POST", f"/v1/sessions/{sid}/hello",
+            hello(sid, runtime_instance_id="runtime-document-2").to_json(), lease="")
+        self.lease = json.loads(takeover_raw)["lease_id"]
+        status, _, body = self.request(
+            "GET", f"/v1/sessions/{sid}/events", lease=first_lease)
+        self.assertEqual(status, 409)
+        self.assertEqual(json.loads(body)["code"], "runtime_replaced")
+
+    def test_cors_preflight_advertises_lease_header(self):
+        sid = self.grant.session_id
+        status, headers, _ = self.request(
+            "OPTIONS", f"/v1/sessions/{sid}/observations")
+        self.assertEqual(status, 204)
+        self.assertIn("X-WOA-Lease", headers["Access-Control-Allow-Headers"])
+
+    def test_bootstrap_requires_loadable_page_controller_url(self):
+        with self.assertRaises(TypeError):
+            self.gateway.bootstrap_config(self.grant)
+        for invalid in ("@page-agent/page-controller", "/assets/page-controller.js",
+                        "javascript:alert(1)", "https://user:pass@example.test/module.js"):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "absolute"):
+                self.gateway.bootstrap_config(
+                    self.grant, page_controller_module=invalid)
+        with self.assertRaisesRegex(ValueError, "allowed session origin"):
+            self.gateway.bootstrap_config(
+                self.grant,
+                page_controller_module="https://cdn.example.test/page-controller.js?v=1",
+            )
+        module_url = ORIGIN + "/page-controller.js?v=1"
+        config = self.gateway.bootstrap_config(
+            self.grant, page_controller_module=module_url)
+        self.assertEqual(config["pageControllerModule"], module_url)
+        self.assertEqual(config["navigationMode"], "document")
+        spa = self.gateway.bootstrap_config(
+            self.grant, page_controller_module=module_url, navigation_mode="spa")
+        self.assertEqual(spa["navigationMode"], "spa")
+        with self.assertRaisesRegex(ValueError, "navigation_mode"):
+            self.gateway.bootstrap_config(
+                self.grant, page_controller_module=module_url,
+                navigation_mode="invented")
+        normalized = self.gateway.bootstrap_config(
+            self.grant,
+            page_controller_module="http://APP.TEST:80/page-controller.js",
+        )
+        self.assertEqual(normalized["pageControllerModule"],
+                         "http://APP.TEST:80/page-controller.js")
+
+
+if __name__ == "__main__":
+    unittest.main()

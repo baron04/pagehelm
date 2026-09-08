@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "skill_id": "twenty.crm.companies-create",
+  "title": "Create a Twenty company",
+  "intent": "Create exactly one company from a user-supplied name and domain, after checking duplicates and receiving explicit confirmation.",
+  "triggers": [
+    "创建公司",
+    "新建公司",
+    "create company",
+    "add company"
+  ],
+  "instructions": [
+    "Use query_companies when useful to inspect current delegated-user facts before proposing a write.",
+    "Call create_company with the exact company name and bare domain supplied by the user.",
+    "The server will normalize the proposal, check duplicates, show the exact effect for confirmation, execute at most once, and read it back.",
+    "After a successful result, open only the returned ui_path and observe the page before finishing.",
+    "If confirmation is denied or a write outcome is uncertain, stop; never retry the mutation."
+  ],
+  "tool_names": [
+    "query_companies",
+    "create_company"
+  ],
+  "provenance": [
+    "twenty:v2.39.0:/rest/open-api/core#/paths/~1companies/post",
+    "twenty:v2.39.0:/rest/open-api/core#/paths/~1companies~1{id}/get"
+  ],
+  "read_only": false
+}

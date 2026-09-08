@@ -1,0 +1,168 @@
+import unittest
+
+from web_operation_agent import schemas as S
+
+
+class TerminalReasonContract(unittest.TestCase):
+    """Every emitted terminal reason must have one shared classification."""
+
+    def test_every_reason_the_runner_emits_is_classified(self):
+        from web_operation_agent.session import ServerAgentSession
+        emitted = _reasons_emitted_by(ServerAgentSession)
+        self.assertTrue(emitted, "could not find any terminal reason in the session source")
+        S.assert_terminal_reason_contract(emitted, set(S.SCORABLE_TERMINAL_REASONS))
+
+    def test_classification_is_total_and_disjoint(self):
+        groups = [S.SCORABLE_TERMINAL_REASONS, S.INVALIDATING_TERMINAL_REASONS,
+                  S.INDETERMINATE_TERMINAL_REASONS]
+        for i, a in enumerate(groups):
+            for b in groups[i + 1:]:
+                self.assertEqual(a & b, set(), "a reason may not be in two classes")
+        for r in S.TERMINAL_REASONS:
+            self.assertIn(S.classify_terminal(r), ("scorable", "invalid", "indeterminate"))
+
+    def test_an_unclassified_reason_is_rejected(self):
+        with self.assertRaises(S.SchemaError):
+            S.assert_terminal_reason_contract({"something_new"}, set())
+        with self.assertRaises(S.SchemaError):
+            S.classify_terminal("something_new")
+
+
+def _reasons_emitted_by(cls) -> set[str]:
+    """Read the terminal reasons out of the session's own source.
+
+    Comparing a hand-written list against another hand-written list proves nothing; the
+    point is to catch the runner learning a new reason that the analyser has never heard
+    of, so the runner's code is the source of truth.
+    """
+    import inspect
+    import re
+    src = inspect.getsource(inspect.getmodule(cls))
+    found = set()
+    for m in re.finditer(r'_finish\(\s*result,\s*t0,\s*("[a-z_]+"|[a-z_]+\s+if)', src):
+        token = m.group(1)
+        if token.startswith('"'):
+            found.add(token.strip('"'))
+    found |= set(re.findall(r'"(agent_finished|agent_refused|step_budget|wall_clock_budget|'
+                            r'token_budget|action_policy_budget|provider_error|transport_error|'
+                            r'indeterminate_write|'
+                            r'planning_failed|attestation_failed|control_plane_error)"', src))
+    return found
+
+
+class WireTypes(unittest.TestCase):
+    def test_approval_request_and_decision_are_strict_wire_types(self):
+        request = S.ApprovalRequest(
+            schema_version=1, approval_id="approval-1",
+            effect="Accept supplier quote", targets=("Quote Q-1042",),
+            expires_at=2_000_000_000_000)
+        self.assertEqual(S.ApprovalRequest.from_json(request.to_json()), request)
+        decision = S.ApprovalDecision(
+            schema_version=1, session_id="session-1",
+            approval_id=request.approval_id, decision="approved")
+        self.assertEqual(S.ApprovalDecision.from_json(decision.to_json()), decision)
+        with self.assertRaises(S.SchemaError):
+            S.ApprovalDecision(schema_version=1, session_id="session-1",
+                               approval_id="approval-1", decision="maybe")
+        smuggled = request.to_json(); smuggled["request"] = "hiddenBackendEndpoint"
+        with self.assertRaises(S.SchemaError):
+            S.ApprovalRequest.from_json(smuggled)
+
+    def test_action_name_survives_its_arguments(self):
+        """Argument keys cannot overwrite the command's explicit action name."""
+        cmd = S.ActionCommand(command_id="c1", action="fill",
+                              args={"click": "not the action", "ref": "e1", "value": "x"})
+        back = S.ActionCommand.from_json(cmd.to_json())
+        self.assertEqual(back.action, "fill")
+        self.assertEqual(back.args["click"], "not the action")
+
+    def test_unknown_action_is_refused(self):
+        with self.assertRaises(S.SchemaError):
+            S.ActionCommand(command_id="c1", action="drag", args={})
+
+    def test_version_mismatch_is_refused(self):
+        d = S.ActionCommand(command_id="c1", action="observe").to_json()
+        d["schema_version"] = 99
+        with self.assertRaises(S.SchemaError):
+            S.ActionCommand.from_json(d)
+
+    def test_receipt_round_trips_every_field(self):
+        obs = S.PageObservation(schema_version=1, epoch=3, url="http://x/y", title="T",
+                                landmarks=["A"], elements=[S.ElementRef("e1", "link", "n", "a", 3)])
+        r = S.ActionReceipt(schema_version=1, command_id="c9", action="click",
+                            args_echo={"ref": "e1"}, ok=False, error_code="stale_ref",
+                            error_detail="d", url_before="a", url_after="b", navigated=True,
+                            epoch_before=2, epoch_after=3, elapsed_ms=17, relogin=True,
+                            observation=obs)
+        back = S.ActionReceipt.from_json(r.to_json())
+        self.assertEqual(back.to_json(), r.to_json())
+        self.assertTrue(back.relogin)
+        self.assertEqual(back.observation.elements[0].ref, "e1")
+
+    def test_receipt_error_codes_are_a_closed_set(self):
+        self.assertIn("stale_ref", S.RECEIPT_ERRORS)
+        self.assertIn("", S.RECEIPT_ERRORS)
+
+
+class Evidence(unittest.TestCase):
+    def test_traversal_and_absolute_paths_are_refused(self):
+        for bad in ("/etc/passwd", "a/../../secret.xml"):
+            with self.assertRaises(S.SchemaError):
+                S.EvidenceRef("r", "v", bad, 1, 2, "0" * 64)
+
+    def test_line_span_must_be_ordered(self):
+        with self.assertRaises(S.SchemaError):
+            S.EvidenceRef("r", "v", "a.xml", 9, 2, "0" * 64)
+
+    def test_unknown_fields_are_refused(self):
+        d = S.EvidenceRef("r", "v", "a.xml", 1, 2, "0" * 64).to_json()
+        d["comment"] = "smuggled"
+        with self.assertRaises(S.SchemaError):
+            S.EvidenceRef.from_json(d)
+
+    def test_a_relation_without_evidence_is_refused(self):
+        with self.assertRaises(S.SchemaError):
+            S.SourceRelation(kind="menu_link", subject="a", object="b")
+
+    def test_an_invented_relation_kind_is_refused(self):
+        ref = S.EvidenceRef("r", "v", "a.xml", 1, 2, "0" * 64)
+        with self.assertRaises(S.SchemaError):
+            S.SourceRelation(kind="calls_into", subject="a", object="b", evidence=(ref,))
+
+
+class Contract(unittest.TestCase):
+    def test_unknown_fields_are_refused(self):
+        with self.assertRaises(S.SchemaError):
+            S.OperationContract.from_json({"schema_version": 1, "task_ref": "t", "summary": "s",
+                                           "confidence": 0.9})
+
+    def test_citations_are_collected_from_every_level(self):
+        c = S.OperationContract.from_json({
+            "schema_version": 1, "task_ref": "t", "summary": "s",
+            "entry_candidates": [{"intent": "i", "webapp": "w", "request": "r",
+                                  "citations": ["a.xml:1-2"]}],
+            "steps": [{"intent": "i", "webapp": "w", "request": "r", "citations": ["b.xml:3-4"]}],
+            "mutation": {"webapp": "w", "request": "r", "citations": ["c.xml:5-6"]},
+            "citations": ["d.xml:7-8"]})
+        self.assertEqual(c.cited_keys(),
+                         {"a.xml:1-2", "b.xml:3-4", "c.xml:5-6", "d.xml:7-8"})
+
+    def test_empty_contract_is_valid_and_says_nothing(self):
+        c = S.empty_contract("t")
+        self.assertEqual(c.cited_keys(), set())
+        self.assertTrue(c.unknowns)
+
+
+class ControlPlanRedaction(unittest.TestCase):
+    def test_redaction_leaks_no_ticket_content(self):
+        plan = S.ControlPlan(plan_id="p", task_ref="t", tickets=(
+            S.ControlTicket(webapp="accounting", request="createSomething",
+                            targets=({"widgetId": "SECRET-42"},), changes={"amount": "20"}),))
+        blob = S.canonical_json(plan.redacted())
+        for leak in ("accounting", "createSomething", "SECRET-42", "amount", "20"):
+            self.assertNotIn(leak, blob, f"{leak!r} leaked into the ledger-safe view")
+        self.assertEqual(plan.redacted()["ticket_count"], 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

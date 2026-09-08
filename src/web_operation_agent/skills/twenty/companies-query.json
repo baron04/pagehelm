@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "skill_id": "twenty.crm.companies-query",
+  "title": "Query current CRM companies",
+  "intent": "Read the companies currently visible to the signed-in Twenty user.",
+  "triggers": [
+    "company",
+    "companies",
+    "account",
+    "accounts",
+    "公司",
+    "客户"
+  ],
+  "instructions": [
+    "Call query_companies to obtain current workspace data; do not answer from this Skill or page text.",
+    "Use name_contains only when the user supplied a company-name filter.",
+    "When the user asks to open one company, call query_companies with their name, require exactly one match, then call goto with that result's exact ui_path.",
+    "After goto, if the requested company name and domain are not visible yet, call wait_for once for bounded SPA loading before reporting completion.",
+    "If the company query has zero or multiple matches, ask for clarification; never invent a record path.",
+    "Treat the ToolResult as runtime truth and report when it says results were truncated."
+  ],
+  "tool_names": [
+    "query_companies"
+  ],
+  "provenance": [
+    "twenty/v2.39.0:packages/twenty-docs/developers/extend/oauth.mdx",
+    "twenty/v2.39.0:packages/twenty-server/src/engine/core-modules/application/application-oauth/oauth.service.ts",
+    "Twenty self-hosted /rest/companies API"
+  ],
+  "read_only": true
+}

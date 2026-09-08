@@ -1,0 +1,671 @@
+"""Business Skill loading and read-only runtime-tool transitions."""
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+
+from web_operation_agent.business import (BusinessSkill, BusinessToolError,
+                                          BusinessMutationIndeterminate,
+                                          BusinessMutationSpec,
+                                          BusinessToolResult, BusinessToolRuntime)
+from web_operation_agent.embedded_agent import ReadOnlyControl
+from web_operation_agent.ledger import SessionLedger
+from web_operation_agent.schemas import ActionReceipt, PageObservation
+from web_operation_agent.session import ServerAgentSession, TaskSpec
+from web_operation_agent.twenty import TwentyBusinessToolExecutor
+
+
+SCHEMA = {"type": "function", "function": {
+    "name": "query_companies", "description": "Read companies.",
+    "parameters": {"type": "object", "properties": {},
+                   "additionalProperties": False}}}
+WRITE_SCHEMA = {"type": "function", "function": {
+    "name": "create_company", "description": "Create one company.",
+    "parameters": {"type": "object", "properties": {
+        "name": {"type": "string"}}, "required": ["name"],
+        "additionalProperties": False}}}
+
+
+class _Executor:
+    @staticmethod
+    def tool_schemas():
+        return (SCHEMA,)
+
+    @staticmethod
+    def tool_effects():
+        return {"query_companies": "read"}
+
+    @staticmethod
+    def execute(name, args):
+        if name != "query_companies" or args:
+            raise BusinessToolError("unexpected call")
+        return BusinessToolResult(
+            content={"companies": [{"name": "Acme", "domain": "acme.test",
+                                     "ui_path": "/object/company/company-1"}],
+                     "matched_count": 1, "source_total": 1,
+                     "scope": "current_delegated_workspace",
+                     "observed_at": "2026-09-08T05:00:00+00:00",
+                     "completeness": {"source_total_known": True,
+                                      "source_complete": True,
+                                      "result_truncated": False}},
+            audit={"application": "fixture", "operation": name,
+                   "oauth_actor": "delegated_user", "returned_count": 1,
+                   "scope": "current_delegated_workspace",
+                   "source_complete": True},
+            allowed_routes=("/object/company/company-1",))
+
+
+def _skill(path: Path) -> BusinessSkill:
+    path.write_text(json.dumps({
+        "schema_version": 1,
+        "skill_id": "fixture.companies-query",
+        "title": "Query companies",
+        "intent": "Read current companies.",
+        "triggers": ["companies", "公司"],
+        "instructions": ["Call query_companies and trust its current result."],
+        "tool_names": ["query_companies"],
+        "provenance": ["fixture:companies"],
+        "read_only": True,
+    }) + "\n")
+    return BusinessSkill.load(path)
+
+
+def _write_skill(path: Path) -> BusinessSkill:
+    path.write_text(json.dumps({
+        "schema_version": 1,
+        "skill_id": "fixture.companies-create",
+        "title": "Create company",
+        "intent": "Create one current company.",
+        "triggers": ["create company", "创建公司"],
+        "instructions": ["Propose one company and wait for approval."],
+        "tool_names": ["create_company"],
+        "provenance": ["fixture:companies:create"],
+        "read_only": False,
+    }) + "\n")
+    return BusinessSkill.load(path)
+
+
+class _MutationExecutor:
+    def __init__(self, *, indeterminate=False):
+        self.executions = 0
+        self.indeterminate = indeterminate
+
+    @staticmethod
+    def tool_schemas():
+        return (WRITE_SCHEMA,)
+
+    @staticmethod
+    def tool_effects():
+        return {"create_company": "write"}
+
+    @staticmethod
+    def execute(_name, _args):
+        raise AssertionError("write tools must not use the read dispatch path")
+
+    @staticmethod
+    def prepare_mutation(name, args):
+        if name != "create_company" or set(args) != {"name"}:
+            raise BusinessToolError("invalid create request")
+        return BusinessMutationSpec(
+            args={"name": str(args["name"]).strip()},
+            effect="Create one company", targets=(str(args["name"]).strip(),))
+
+    def execute_mutation(self, name, args):
+        self.executions += 1
+        if self.indeterminate:
+            raise BusinessMutationIndeterminate("fixture acknowledgement was lost")
+        return BusinessToolResult(
+            content={"created": True, "name": args["name"],
+                     "ui_path": "/object/company/company-2"},
+            audit={"operation": name, "records_created": 1},
+            allowed_routes=("/object/company/company-2",))
+
+
+def _observation(epoch: int, url: str = "http://app.test/companies") -> PageObservation:
+    return PageObservation(
+        schema_version=1, epoch=epoch, url=url,
+        title="Companies", landmarks=["Companies"], elements=[],
+        content="Companies page")
+
+
+class _Browser:
+    def __init__(self):
+        self.epoch = 1
+        self.actions = []
+        self.url = "http://app.test/companies"
+
+    def observe(self):
+        return _observation(self.epoch, self.url)
+
+    def execute(self, action, args=None, expect_navigation=False):
+        self.actions.append(action)
+        before = self.url
+        if action == "goto":
+            self.url = "http://app.test" + str((args or {}).get("url") or "")
+        self.epoch += 1
+        return ActionReceipt(
+            schema_version=1, command_id=f"c{len(self.actions)}", action=action,
+            args_echo=dict(args or {}), ok=True,
+            url_before=before,
+            url_after=self.url, navigated=self.url != before,
+            epoch_before=self.epoch - 1, epoch_after=self.epoch,
+            observation=_observation(self.epoch, self.url))
+
+    @staticmethod
+    def console():
+        return []
+
+
+class _Chat:
+    def __init__(self, script):
+        self.script = list(script)
+        self.tool_names = []
+        self.messages = []
+
+        class _Meter:
+            @staticmethod
+            def report():
+                return {"provider_calls": 0, "cost_cny": 0.0}
+
+        self.meter = _Meter()
+
+    def complete(self, messages, tools, _run_id, **_kwargs):
+        self.messages.append([dict(message) for message in messages])
+        self.tool_names.append({tool["function"]["name"] for tool in tools})
+        name, args = self.script.pop(0)
+        if name is None:
+            return {"content": args["content"]}
+        return {"tool_calls": [{"id": str(len(self.messages)), "function": {
+            "name": name, "arguments": json.dumps(args)}}]}
+
+
+class BusinessRuntimeValidation(unittest.TestCase):
+    def test_skill_can_load_from_bytes_with_a_logical_artifact_uri(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "skill.json"
+            from_path = _skill(path)
+            raw = path.read_bytes()
+            from_bytes = BusinessSkill.from_bytes(
+                raw, artifact_uri="memory://fixture/companies-query.json")
+
+            self.assertEqual(from_bytes.loaded_card(), from_path.loaded_card())
+            self.assertEqual(from_bytes.artifact_sha256, from_path.artifact_sha256)
+            self.assertEqual(
+                from_bytes.artifact_uri, "memory://fixture/companies-query.json")
+            self.assertEqual(from_bytes.artifact_path, from_bytes.artifact_uri)
+            with self.assertRaisesRegex(TypeError, "must be bytes"):
+                BusinessSkill.from_bytes(  # type: ignore[arg-type]
+                    raw.decode(), artifact_uri="memory://fixture/skill.json")
+            with self.assertRaisesRegex(ValueError, "artifact_uri"):
+                BusinessSkill.from_bytes(raw, artifact_uri="")
+
+    def test_tool_is_unavailable_until_relevant_skill_is_loaded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _skill(Path(tmp) / "skill.json")
+            runtime = BusinessToolRuntime((skill,), _Executor())
+            relevant = runtime.relevant("Which companies are in this workspace?")
+            self.assertEqual([item.skill_id for item in relevant], [skill.skill_id])
+            self.assertEqual(runtime.schemas_for(set()), [])
+            with self.assertRaisesRegex(BusinessToolError, "load the matching"):
+                runtime.execute("query_companies", {}, set())
+            loaded, error = runtime.load(skill.skill_id, {skill.skill_id})
+            self.assertEqual(error, "")
+            self.assertEqual(loaded, skill)
+            self.assertEqual(
+                [item["function"]["name"] for item in runtime.schemas_for({skill.skill_id})],
+                ["query_companies"])
+
+    def test_result_rejects_credential_shaped_fields(self):
+        with self.assertRaisesRegex(ValueError, "credential-shaped"):
+            BusinessToolResult(content={"access_token": "leak"}, audit={})
+
+    def test_result_routes_are_safe_and_must_be_visible_to_the_model(self):
+        with self.assertRaisesRegex(ValueError, "safe relative"):
+            BusinessToolResult(
+                content={"ui_path": "https://other.test/record/1"}, audit={},
+                allowed_routes=("https://other.test/record/1",))
+        with self.assertRaisesRegex(ValueError, "safe relative"):
+            BusinessToolResult(
+                content={"ui_path": "/\\other.test/record/1"}, audit={},
+                allowed_routes=("/\\other.test/record/1",))
+        with self.assertRaisesRegex(ValueError, "must appear"):
+            BusinessToolResult(
+                content={"companies": []}, audit={},
+                allowed_routes=("/object/company/company-1",))
+
+    def test_skill_and_executor_must_declare_the_same_tools(self):
+        class EmptyExecutor:
+            @staticmethod
+            def tool_schemas():
+                return ()
+
+            @staticmethod
+            def tool_effects():
+                return {}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, "same tools"):
+                BusinessToolRuntime((_skill(Path(tmp) / "skill.json"),), EmptyExecutor())
+
+    def test_read_only_skill_cannot_expose_a_write_tool(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "skill.json"
+            data = json.loads(Path(_skill(path).artifact_path).read_text())
+            data["tool_names"] = ["create_company"]
+            path.write_text(json.dumps(data))
+            with self.assertRaisesRegex(ValueError, "read-only"):
+                BusinessToolRuntime((BusinessSkill.load(path),), _MutationExecutor())
+
+    def test_mutation_requires_exact_approval_and_is_single_use(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _write_skill(Path(tmp) / "write-skill.json")
+            executor = _MutationExecutor()
+            runtime = BusinessToolRuntime((skill,), executor)
+            loaded = {skill.skill_id}
+            with self.assertRaisesRegex(BusinessToolError, "explicit approval"):
+                runtime.execute("create_company", {"name": " Acme "}, loaded)
+            proposal = runtime.prepare_mutation(
+                "create_company", {"name": " Acme "}, loaded)
+            self.assertEqual(proposal.args, {"name": "Acme"})
+            with self.assertRaisesRegex(BusinessToolError, "does not match"):
+                runtime.execute_mutation(proposal, "0" * 64, loaded)
+            self.assertEqual(executor.executions, 0)
+            result = runtime.execute_mutation(
+                proposal, proposal.content_digest, loaded)
+            self.assertTrue(result.content["created"])
+            self.assertEqual(executor.executions, 1)
+            with self.assertRaisesRegex(BusinessToolError, "already consumed"):
+                runtime.execute_mutation(proposal, proposal.content_digest, loaded)
+            self.assertEqual(executor.executions, 1)
+
+    def test_indeterminate_mutation_is_consumed_and_cannot_be_retried(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _write_skill(Path(tmp) / "write-skill.json")
+            executor = _MutationExecutor(indeterminate=True)
+            runtime = BusinessToolRuntime((skill,), executor)
+            proposal = runtime.prepare_mutation(
+                "create_company", {"name": "Acme"}, {skill.skill_id})
+            with self.assertRaises(BusinessMutationIndeterminate):
+                runtime.execute_mutation(
+                    proposal, proposal.content_digest, {skill.skill_id})
+            with self.assertRaisesRegex(BusinessToolError, "already consumed"):
+                runtime.execute_mutation(
+                    proposal, proposal.content_digest, {skill.skill_id})
+            self.assertEqual(executor.executions, 1)
+
+    def test_twenty_adapter_projects_only_valid_returned_record_routes(self):
+        class FixtureTwenty(TwentyBusinessToolExecutor):
+            def __init__(self):
+                pass
+
+            @staticmethod
+            def _get_companies():
+                return ({"totalCount": 2, "data": {"companies": [
+                    {"id": "f45ee421-8a3e-4aa5-a1cf-7207cc6754e1",
+                     "name": "Anthropic", "domainName": {
+                         "primaryLinkUrl": "anthropic.com"}},
+                    {"id": "not-a-record-id", "name": "Other",
+                     "domainName": {"primaryLinkUrl": "other.test"}},
+                ]}}, 200, False)
+
+        result = FixtureTwenty().execute(
+            "query_companies", {"name_contains": "Anthropic", "limit": 2})
+
+        self.assertEqual(result.content["matched_count"], 1)
+        self.assertEqual(result.content["companies"], [{
+            "name": "Anthropic", "domain": "anthropic.com",
+            "ui_path": "/object/company/f45ee421-8a3e-4aa5-a1cf-7207cc6754e1",
+        }])
+        self.assertEqual(result.allowed_routes, (
+            "/object/company/f45ee421-8a3e-4aa5-a1cf-7207cc6754e1",))
+
+    def test_twenty_create_normalizes_checks_and_reads_back_same_user(self):
+        class Tokens:
+            @staticmethod
+            def access_token():
+                return "test-token"
+
+        class FixtureTwenty(TwentyBusinessToolExecutor):
+            def __init__(self):
+                self.allow_mutations = True
+                self.tokens = Tokens()
+                self.posts = 0
+
+            @staticmethod
+            def _get_companies():
+                return ({"totalCount": 1, "data": {"companies": [
+                    {"name": "Existing", "domainName": {
+                        "primaryLinkLabel": "existing.example"}},
+                ]}}, 200, False)
+
+            def _authorized_mutation_json(self, path, token, body):
+                self.posts += 1
+                self.asserted = (path, token, body)
+                return ({"data": {"createCompany": {
+                    "id": "f45ee421-8a3e-4aa5-a1cf-7207cc6754e1"}}}, 201)
+
+            @staticmethod
+            def _authorized_json(path, token):
+                if path != "/rest/companies/f45ee421-8a3e-4aa5-a1cf-7207cc6754e1":
+                    raise AssertionError(path)
+                if token != "test-token":
+                    raise AssertionError("wrong actor token")
+                return {"data": {"company": {
+                    "id": "f45ee421-8a3e-4aa5-a1cf-7207cc6754e1",
+                    "name": "NovaForge Labs", "domainName": {
+                        "primaryLinkLabel": "novaforge.example"}}}}
+
+        executor = FixtureTwenty()
+        proposal = executor.prepare_mutation(
+            "create_company", {"name": " NovaForge Labs ",
+                               "domain": "NOVAFORGE.EXAMPLE."})
+        self.assertEqual(proposal.args, {
+            "name": "NovaForge Labs", "domain": "novaforge.example"})
+        result = executor.execute_mutation("create_company", proposal.args)
+        self.assertEqual(executor.posts, 1)
+        self.assertEqual(executor.asserted[2]["domainName"]["primaryLinkUrl"],
+                         "https://novaforge.example")
+        self.assertTrue(result.content["readback_verified"])
+        self.assertEqual(result.audit["oauth_actor"], "delegated_user")
+
+    def test_twenty_create_refuses_duplicate_or_non_domain_before_post(self):
+        class FixtureTwenty(TwentyBusinessToolExecutor):
+            def __init__(self):
+                self.allow_mutations = True
+
+            @staticmethod
+            def _get_companies():
+                return ({"totalCount": 1, "data": {"companies": [
+                    {"name": "NovaForge Labs", "domainName": {
+                        "primaryLinkLabel": "novaforge.example"}},
+                ]}}, 200, False)
+
+        executor = FixtureTwenty()
+        with self.assertRaisesRegex(BusinessToolError, "already exists"):
+            executor.prepare_mutation(
+                "create_company", {"name": "novaforge labs",
+                                   "domain": "other.example"})
+        with self.assertRaisesRegex(BusinessToolError, "bare DNS"):
+            executor.prepare_mutation(
+                "create_company", {"name": "Other",
+                                   "domain": "https://other.example/path"})
+
+
+class BusinessReActTransition(unittest.TestCase):
+    def test_denied_server_mutation_is_terminal_and_never_executes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _write_skill(Path(tmp) / "write-skill.json")
+            executor = _MutationExecutor()
+            runtime = BusinessToolRuntime((skill,), executor)
+            chat = _Chat([
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("create_company", {"name": "Acme"}),
+            ])
+            ledger = SessionLedger(Path(tmp) / "session.jsonl", "write-denied")
+
+            def deny(proposal):
+                return SimpleNamespace(
+                    approval_id="approval-1", decision="denied",
+                    plan_digest=proposal.content_digest)
+
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="Create company Acme.",
+                              supported_scope="Create exactly one company."),
+                arm="U", chat=chat, browser=_Browser(), control=ReadOnlyControl(),
+                ledger=ledger, attestation=None, source_contract=False,
+                step_budget=3, wall_budget_s=30, run_id="write-denied",
+                business_tools=runtime, business_mutation_approval=deny)
+            session.entry_observation = _observation(1)
+            session.plan()
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "approval_denied")
+            self.assertEqual(executor.executions, 0)
+            self.assertEqual(result.business_control["approval_denied"], 1)
+            self.assertEqual(result.business_control["mutation_execution_started"], 0)
+            self.assertEqual(len(ledger.of_kind("business_mutation_denied")), 1)
+
+    def test_approved_server_mutation_returns_route_to_react_loop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _write_skill(Path(tmp) / "write-skill.json")
+            executor = _MutationExecutor()
+            runtime = BusinessToolRuntime((skill,), executor)
+            chat = _Chat([
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("create_company", {"name": "Acme"}),
+                ("goto", {"url": "/object/company/company-2"}),
+                (None, {"content": "Created and opened Acme."}),
+            ])
+            ledger = SessionLedger(Path(tmp) / "session.jsonl", "write-approved")
+
+            def approve(proposal):
+                return SimpleNamespace(
+                    approval_id="approval-1", decision="approved",
+                    plan_digest=proposal.content_digest)
+
+            browser = _Browser()
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="Create company Acme.",
+                              supported_scope="Create exactly one company."),
+                arm="U", chat=chat, browser=browser, control=ReadOnlyControl(),
+                ledger=ledger, attestation=None, source_contract=False,
+                step_budget=4, wall_budget_s=30, run_id="write-approved",
+                business_tools=runtime, business_mutation_approval=approve,
+                plain_business_answer_min_page_actions=1)
+            session.entry_observation = _observation(1)
+            session.plan()
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "agent_finished")
+            self.assertEqual(executor.executions, 1)
+            self.assertEqual(result.business_control["mutation_completed"], 1)
+            self.assertEqual(browser.url, "http://app.test/object/company/company-2")
+            self.assertEqual(len(ledger.of_kind("business_mutation_result")), 1)
+
+    def test_indeterminate_server_mutation_stops_without_model_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _write_skill(Path(tmp) / "write-skill.json")
+            executor = _MutationExecutor(indeterminate=True)
+            runtime = BusinessToolRuntime((skill,), executor)
+            chat = _Chat([
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("create_company", {"name": "Acme"}),
+                ("create_company", {"name": "Acme"}),
+            ])
+            ledger = SessionLedger(Path(tmp) / "session.jsonl", "write-unknown")
+
+            def approve(proposal):
+                return SimpleNamespace(
+                    approval_id="approval-1", decision="approved",
+                    plan_digest=proposal.content_digest)
+
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="Create company Acme.",
+                              supported_scope="Create exactly one company."),
+                arm="U", chat=chat, browser=_Browser(), control=ReadOnlyControl(),
+                ledger=ledger, attestation=None, source_contract=False,
+                step_budget=4, wall_budget_s=30, run_id="write-unknown",
+                business_tools=runtime, business_mutation_approval=approve)
+            session.entry_observation = _observation(1)
+            session.plan()
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "indeterminate_write")
+            self.assertEqual(result.steps_used, 2)
+            self.assertEqual(executor.executions, 1)
+            self.assertEqual(result.business_control["mutation_indeterminate"], 1)
+            self.assertEqual(len(chat.messages), 2,
+                             "the model must not receive a chance to retry")
+            self.assertEqual(len(ledger.of_kind("business_mutation_indeterminate")), 1)
+
+    def test_load_query_and_finish_each_use_one_turn_and_fresh_page(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _skill(Path(tmp) / "skill.json")
+            runtime = BusinessToolRuntime((skill,), _Executor())
+            chat = _Chat([
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("query_companies", {}),
+                ("finish", {"done": True, "why": "Acme is the current company."}),
+            ])
+            browser = _Browser()
+            ledger = SessionLedger(Path(tmp) / "session.jsonl", "business-react")
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="Which companies are in this workspace?",
+                              supported_scope="Read current business data only."),
+                arm="U", chat=chat, browser=browser, control=ReadOnlyControl(),
+                ledger=ledger, attestation=None, source_contract=False,
+                step_budget=4, wall_budget_s=30, run_id="business-react",
+                business_tools=runtime)
+            session.entry_observation = _observation(1)
+            session.plan()
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "agent_finished")
+            self.assertEqual(result.steps_used, 3)
+            self.assertIn("load_skill", chat.tool_names[0])
+            self.assertNotIn("query_companies", chat.tool_names[0])
+            self.assertIn("query_companies", chat.tool_names[1])
+            self.assertEqual(browser.actions, ["observe", "observe"])
+            facts = [message["content"] for turn in chat.messages for message in turn
+                     if message.get("role") == "tool"]
+            self.assertTrue(any("BUSINESS SKILL LOADED" in text for text in facts))
+            self.assertTrue(any('"name":"Acme"' in text for text in facts))
+            self.assertEqual(len(ledger.of_kind("business_skill_loaded")), 1)
+            rows = ledger.of_kind("business_tool_result")
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["audit"]["oauth_actor"], "delegated_user")
+            self.assertNotIn("Acme", json.dumps(rows[0]),
+                             "the tool audit stores a digest and projection, not raw rows")
+
+    def test_plain_answer_after_successful_read_tool_is_terminal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _skill(Path(tmp) / "skill.json")
+            runtime = BusinessToolRuntime((skill,), _Executor())
+            chat = _Chat([
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("query_companies", {}),
+                (None, {"content": "Acme (acme.test)"}),
+            ])
+            ledger = SessionLedger(Path(tmp) / "session.jsonl", "plain-business-answer")
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="Which companies are in this workspace?",
+                              supported_scope="Read current business data only."),
+                arm="U", chat=chat, browser=_Browser(), control=ReadOnlyControl(),
+                ledger=ledger, attestation=None, source_contract=False,
+                step_budget=3, wall_budget_s=30, run_id="plain-business-answer",
+                business_tools=runtime,
+                plain_business_answer_min_page_actions=0)
+            session.entry_observation = _observation(1)
+            session.plan()
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "agent_finished")
+            self.assertEqual(result.agent_said, "Acme (acme.test)")
+            self.assertEqual(session.latest_business_tool_result.content["companies"], [{
+                "name": "Acme", "domain": "acme.test",
+                "ui_path": "/object/company/company-1",
+            }])
+            self.assertNotIn("latest_business_tool_result", result.to_json(),
+                             "bounded data stays in server memory unless the product renders it")
+            self.assertEqual(result.steps_used, 3)
+            self.assertEqual(result.spend["provider_calls"], 0)
+            self.assertEqual(len(ledger.of_kind("business_answer")), 1)
+            self.assertEqual(len(ledger.of_kind("no_tool_call")), 0)
+
+    def test_exact_tool_result_route_can_open_a_record_read_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _skill(Path(tmp) / "skill.json")
+            runtime = BusinessToolRuntime((skill,), _Executor())
+            chat = _Chat([
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("query_companies", {}),
+                ("goto", {"url": "/object/company/company-1"}),
+                (None, {"content": "Opened Acme."}),
+            ])
+            browser = _Browser()
+            ledger = SessionLedger(Path(tmp) / "session.jsonl", "business-route")
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="Open Acme from companies.",
+                              supported_scope="Read and open one company record."),
+                arm="U", chat=chat, browser=browser, control=ReadOnlyControl(),
+                ledger=ledger, attestation=None, source_contract=False,
+                step_budget=4, wall_budget_s=30, run_id="business-route",
+                business_tools=runtime,
+                plain_business_answer_min_page_actions=1)
+            session.entry_observation = _observation(1)
+            session.plan()
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "agent_finished")
+            self.assertEqual(result.agent_said, "Opened Acme.")
+            self.assertEqual(result.page_actions, 1)
+            self.assertEqual(browser.actions, ["observe", "observe", "goto"])
+            self.assertEqual(browser.url, "http://app.test/object/company/company-1")
+            opened = ledger.of_kind("business_route_opened")
+            self.assertEqual(len(opened), 1)
+            self.assertNotIn("company-1", json.dumps(opened[0]))
+
+    def test_unreturned_business_route_is_not_opened(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _skill(Path(tmp) / "skill.json")
+            runtime = BusinessToolRuntime((skill,), _Executor())
+            chat = _Chat([
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("query_companies", {}),
+                ("goto", {"url": "/object/company/invented"}),
+                ("finish", {"done": False, "why": "No verified route."}),
+            ])
+            browser = _Browser()
+            ledger = SessionLedger(Path(tmp) / "session.jsonl", "route-refusal")
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="Open the requested item from companies.",
+                              supported_scope="Read and open one company record."),
+                arm="U", chat=chat, browser=browser, control=ReadOnlyControl(),
+                ledger=ledger, attestation=None, source_contract=False,
+                step_budget=4, wall_budget_s=30, run_id="route-refusal",
+                business_tools=runtime,
+                plain_business_answer_min_page_actions=1)
+            session.entry_observation = _observation(1)
+            session.plan()
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "agent_refused")
+            self.assertEqual(browser.actions, ["observe", "observe"])
+            self.assertEqual(len(ledger.of_kind("page_route_rejected")), 1)
+            self.assertEqual(len(ledger.of_kind("business_route_opened")), 0)
+
+    def test_plain_answer_waits_for_required_page_action(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _skill(Path(tmp) / "skill.json")
+            runtime = BusinessToolRuntime((skill,), _Executor())
+            chat = _Chat([
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("query_companies", {}),
+                (None, {"content": "Opened Acme."}),
+                ("goto", {"url": "/object/company/company-1"}),
+                (None, {"content": "Opened Acme."}),
+            ])
+            ledger = SessionLedger(Path(tmp) / "session.jsonl", "route-before-answer")
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="Open Acme from companies.",
+                              supported_scope="Read and open one company record."),
+                arm="U", chat=chat, browser=_Browser(), control=ReadOnlyControl(),
+                ledger=ledger, attestation=None, source_contract=False,
+                step_budget=5, wall_budget_s=30, run_id="route-before-answer",
+                business_tools=runtime,
+                plain_business_answer_min_page_actions=1)
+            session.entry_observation = _observation(1)
+            session.plan()
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "agent_finished")
+            self.assertEqual(result.page_actions, 1)
+            self.assertEqual(len(ledger.of_kind("no_tool_call")), 1)
+            self.assertEqual(len(ledger.of_kind("business_answer")), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
