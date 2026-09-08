@@ -74,7 +74,7 @@ flowchart TB
     Evaluator[隐藏 Evaluator] -.执行结束后只读.-> Truth[隔离的业务真值]
 ```
 
-浏览器到服务端的页面观察、动作结果、用户消息和确认决定通过认证的 POST 返回；服务端到浏览器的动作与进度通过 SSE 事件发送。当前 Gateway 只监听本机回环地址，协议和组件边界可以继续复用，但它还不是生产网络入口。
+浏览器到服务端的页面观察、动作结果、用户消息和确认决定通过认证的 POST 返回；服务端到浏览器的动作与进度通过 SSE 事件发送。`LiveProductServer` 可以让多个隔离 session 共享一个有容量上限的 Gateway，并独立撤销 capability 和释放 channel 状态。当前 Gateway 只监听本机回环地址，状态仍在单进程内存中，因此它还不是生产网络入口。
 
 ## 3. 组件职责
 
@@ -99,7 +99,7 @@ Runtime 运行在业务页面的同源脚本环境中。因此当前安全模型
 
 ### 3.2 Embedded Gateway 与 Remote Session
 
-Gateway 为每个会话签发随机 capability，并绑定允许的页面 Origin。Registry 只保存 token 哈希，产品宿主在会话存续期间保留用于生成 bootstrap 的原始 grant。Runtime 建立连接后还会取得活动 lease；整页导航产生的新 Runtime 会替换旧 lease，旧页面不能继续提交观察或结果。
+Gateway 为每个会话签发随机 capability，并绑定允许的页面 Origin。Registry 只保存 token 哈希，产品宿主在会话存续期间保留用于生成 bootstrap 的原始 grant。Runtime 建立连接后还会取得活动 lease；整页导航产生的新 Runtime 会替换旧 lease，旧页面不能继续提交观察或结果。共享 server 对活动 session 数量执行准入上限；关闭一个 session 会原子移除其 token 哈希与 channel，使旧 capability 立即失效而不影响其他 session。
 
 应用宿主还可以在创建 session 前提供短期不可变 `PrincipalContext`。它包含 application、tenant、workspace、actor、delegation 和 scopes，但原始标识只存在于可信服务端内存中；bootstrap、Runtime hello 和跨浏览器协议只携带 application id 与主体摘要。启用 `require_identity` 后，缺少主体、主体过期或应用不匹配会在建立 turn 前拒绝。当前公开 Twenty demo 尚未取得可信的页面 session 身份，因此这个生产门默认未开启。
 
@@ -315,7 +315,7 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 
 当前代码是一条可运行的本地产品纵切，距离工业级部署仍有明确差距：
 
-- Gateway、Remote Session registry、事件序列、消息队列和 lease 都在单个 Python 进程内存中；进程重启后不能恢复会话。
+- 多个 session 可以共享一个 Gateway，并通过独立 capability 和 channel 隔离；Remote Session registry、事件序列、消息队列和 lease 仍在单个 Python 进程内存中，进程重启后不能恢复会话。
 - Conversation Host 使用进程内线程和队列，没有外部任务队列、跨实例调度、背压或服务级高可用。
 - Session Ledger 是本机 append-only JSONL，逐条 flush 与 fsync；它不是集中式审计存储，也没有跨进程事务。
 - capability、Origin、短期 principal、turn、业务工具 scope、审批和 mutation proposal 的内存绑定已经实现；可信页面身份解析、持久身份会话、组织级策略和跨进程撤销尚未完成。

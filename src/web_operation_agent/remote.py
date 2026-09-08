@@ -829,6 +829,26 @@ class RemoteSessionRegistry:
             channel = self._channels.get(session_id)
         return channel is not None and origin in channel.allowed_origins
 
+    @property
+    def session_count(self) -> int:
+        with self._lock:
+            return len(self._channels)
+
+    def retire(self, session_id: str, reason: str = "session_retired") -> bool:
+        """Revoke one capability and release its in-memory channel state."""
+        with self._lock:
+            channel = self._channels.pop(session_id, None)
+            self._token_hashes.pop(session_id, None)
+        if channel is None:
+            return False
+        channel.close(reason)
+        return True
+
+    def retire_all(self, reason: str = "registry_closed") -> int:
+        with self._lock:
+            session_ids = tuple(self._channels)
+        return sum(self.retire(session_id, reason) for session_id in session_ids)
+
 
 class RemoteBrowserClient:
     """Synchronous browser interface consumed unchanged by ``ServerAgentSession``."""

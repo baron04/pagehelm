@@ -8,10 +8,11 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 
-from web_operation_agent.live import (LiveConversationRunner, LiveProductSession,
-                                      render_live_replay)
+from web_operation_agent.live import (LiveConversationRunner, LiveProductServer,
+                                      LiveProductSession, render_live_replay)
 from web_operation_agent.product import AgentTurnError, AgentTurnErrorCode
-from web_operation_agent.remote import RemoteSessionClosed, RemoteSessionRegistry
+from web_operation_agent.remote import (RemoteProtocolError, RemoteSessionClosed,
+                                         RemoteSessionRegistry)
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ClientHello, ElementRef,
                                           ObservationEnvelope, PageObservation)
 
@@ -323,6 +324,95 @@ class LiveProductSessionTests(unittest.TestCase):
             self.assertTrue(live.status().failed)
         finally:
             live.close()
+
+    def test_shared_server_hosts_and_revokes_independent_sessions(self):
+        server = LiveProductServer(max_sessions=2, sse_wait_s=.01)
+        try:
+            first = server.create_session(
+                allowed_origin=ORIGIN,
+                page_controller_module=ORIGIN + "/page-controller.js",
+                runner_factory=lambda _channel: _Runner({"session": 1}),
+                session_id="shared-1")
+            second = server.create_session(
+                allowed_origin=ORIGIN,
+                page_controller_module=ORIGIN + "/page-controller.js",
+                runner_factory=lambda _channel: _Runner({"session": 2}),
+                session_id="shared-2")
+            first.start()
+            second.start()
+
+            self.assertIs(first.gateway, second.gateway)
+            self.assertEqual(first.gateway.base_url, second.gateway.base_url)
+            self.assertEqual(server.session_count, 2)
+            self.assertEqual(server.registry.session_count, 2)
+            self.assertEqual(first.wait(2), {"session": 1})
+            self.assertEqual(second.wait(2), {"session": 2})
+            first.close()
+            self.assertEqual(server.session_count, 1)
+            self.assertEqual(server.registry.session_count, 1)
+            with self.assertRaisesRegex(Exception, "unknown session"):
+                server.registry.authenticate(
+                    first.grant.session_id, first.grant.client_token, ORIGIN)
+            self.assertIs(
+                server.registry.authenticate(
+                    second.grant.session_id, second.grant.client_token, ORIGIN),
+                second.channel)
+        finally:
+            server.close()
+        self.assertEqual(server.session_count, 0)
+        self.assertEqual(server.registry.session_count, 0)
+
+    def test_shared_server_enforces_session_capacity(self):
+        server = LiveProductServer(max_sessions=1, sse_wait_s=.01)
+        try:
+            first = server.create_session(
+                allowed_origin=ORIGIN,
+                page_controller_module=ORIGIN + "/page-controller.js",
+                runner_factory=lambda _channel: _Runner(),
+                session_id="capacity-1")
+            with self.assertRaisesRegex(RuntimeError, "capacity"):
+                server.create_session(
+                    allowed_origin=ORIGIN,
+                    page_controller_module=ORIGIN + "/page-controller.js",
+                    runner_factory=lambda _channel: _Runner(),
+                    session_id="capacity-2")
+            first.close()
+            replacement = server.create_session(
+                allowed_origin=ORIGIN,
+                page_controller_module=ORIGIN + "/page-controller.js",
+                runner_factory=lambda _channel: _Runner(),
+                session_id="capacity-2")
+            self.assertEqual(replacement.grant.session_id, "capacity-2")
+        finally:
+            server.close()
+
+    def test_fifty_shared_sessions_keep_capabilities_and_channels_isolated(self):
+        server = LiveProductServer(max_sessions=50, sse_wait_s=.01)
+        try:
+            sessions = [server.create_session(
+                allowed_origin=ORIGIN,
+                page_controller_module=ORIGIN + "/page-controller.js",
+                runner_factory=lambda _channel: _Runner(),
+                session_id=f"isolation-{index}") for index in range(50)]
+            self.assertEqual(len({item.grant.client_token for item in sessions}), 50)
+            for index, session in enumerate(sessions):
+                self.assertIs(server.registry.authenticate(
+                    session.grant.session_id, session.grant.client_token, ORIGIN),
+                    session.channel)
+                wrong = sessions[(index + 1) % len(sessions)].grant.client_token
+                with self.assertRaisesRegex(RemoteProtocolError, "invalid session credential"):
+                    server.registry.authenticate(
+                        session.grant.session_id, wrong, ORIGIN)
+            for session in sessions[::2]:
+                session.close()
+            self.assertEqual(server.session_count, 25)
+            self.assertEqual(server.registry.session_count, 25)
+            for session in sessions[1::2]:
+                self.assertIs(server.registry.authenticate(
+                    session.grant.session_id, session.grant.client_token, ORIGIN),
+                    session.channel)
+        finally:
+            server.close()
 
     def test_live_result_can_be_projected_to_one_case_replay(self):
         with tempfile.TemporaryDirectory() as tmp:

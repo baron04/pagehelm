@@ -169,6 +169,19 @@ class ChannelTests(unittest.TestCase):
                 application_id="twenty", principal_digest="0" * 64))
         self.assertEqual(caught.exception.code, "principal_mismatch")
 
+    def test_registry_retirement_revokes_capability_and_releases_state(self):
+        registry = RemoteSessionRegistry()
+        grant, channel = registry.create(
+            allowed_origins=[ORIGIN], session_id="retired-session")
+        self.assertEqual(registry.session_count, 1)
+        self.assertTrue(registry.retire(grant.session_id, "test_retired"))
+        self.assertEqual(registry.session_count, 0)
+        self.assertFalse(registry.retire(grant.session_id))
+        with self.assertRaisesRegex(RemoteProtocolError, "unknown session"):
+            registry.authenticate(grant.session_id, grant.client_token, ORIGIN)
+        with self.assertRaises(RemoteSessionClosed):
+            channel.validate_live()
+
     def test_expired_principal_rejects_authenticated_and_server_operations(self):
         now = int(time.time() * 1000)
         expected = principal(now)

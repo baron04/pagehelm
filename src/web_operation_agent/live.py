@@ -1,8 +1,8 @@
-"""Product composition for one live, first-party embedded Agent session.
+"""Product composition for first-party embedded Agent sessions.
 
 Application adapters supply a runner and decide how their page includes the returned
-bootstrap script.  This module owns the common registry, capability grant, loopback gateway,
-server worker lifecycle and optional replay projection.  It has no knowledge of OFBiz, lab
+bootstrap script. This module owns the common registry, capability grant, shared loopback
+gateway, server worker lifecycle and optional replay projection. It has no knowledge of OFBiz, lab
 tasks, hidden evaluator data or browser automation.
 """
 from __future__ import annotations
@@ -185,9 +185,17 @@ class LiveProductSession:
                  runner_factory: Callable[[RemoteSessionChannel], ProductRunner],
                  session_id: str | None = None, sse_wait_s: float = .2,
                  navigation_mode: str = "document",
-                 principal: PrincipalContext | None = None):
-        self.registry = RemoteSessionRegistry()
-        self.gateway = EmbeddedGateway(self.registry, sse_wait_s=sse_wait_s)
+                 principal: PrincipalContext | None = None,
+                 registry: RemoteSessionRegistry | None = None,
+                 gateway: EmbeddedGateway | None = None,
+                 on_close: Callable[[str], None] | None = None):
+        if (registry is None) != (gateway is None):
+            raise ValueError("registry and gateway must be supplied together")
+        self._owns_gateway = registry is None
+        self.registry = registry or RemoteSessionRegistry()
+        self.gateway = gateway or EmbeddedGateway(self.registry, sse_wait_s=sse_wait_s)
+        if self.gateway.registry is not self.registry:
+            raise ValueError("shared gateway must use the supplied session registry")
         self.grant, self.channel = self.registry.create(
             allowed_origins=[allowed_origin],
             session_id=session_id or f"live-{uuid.uuid4().hex}",
@@ -195,12 +203,24 @@ class LiveProductSession:
         )
         self.page_controller_module = page_controller_module
         if navigation_mode not in {"document", "spa"}:
+            self.registry.retire(self.grant.session_id, "invalid_session_configuration")
+            if self._owns_gateway:
+                self.gateway.close()
             raise ValueError("navigation_mode must be document or spa")
         self.navigation_mode = navigation_mode
-        self.runner = runner_factory(self.channel)
+        try:
+            self.runner = runner_factory(self.channel)
+        except BaseException:
+            self.registry.retire(self.grant.session_id, "runner_setup_failed")
+            if self._owns_gateway:
+                self.gateway.close()
+            raise
         self._thread: threading.Thread | None = None
         self._result = None
         self._error: BaseException | None = None
+        self._closed = False
+        self._close_lock = threading.Lock()
+        self._on_close = on_close
 
     @property
     def bootstrap_script(self) -> str:
@@ -249,10 +269,108 @@ class LiveProductSession:
         )
 
     def close(self) -> None:
-        self.channel.close("host_stopped")
-        self.gateway.close()
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+        self.registry.retire(self.grant.session_id, "host_stopped")
+        if self._owns_gateway:
+            self.gateway.close()
+        if self._on_close is not None:
+            self._on_close(self.grant.session_id)
 
     def __enter__(self) -> "LiveProductSession":
+        return self.start()
+
+    def __exit__(self, *_exc) -> None:
+        self.close()
+
+
+class LiveProductServer:
+    """Bounded shared gateway and registry for multiple local product sessions.
+
+    This removes the one-listener-per-session topology while keeping the existing channel
+    protocol. State remains in memory; durable restart recovery is a later M8.3d slice.
+    """
+
+    def __init__(self, *, max_sessions: int = 100, sse_wait_s: float = .2,
+                 host: str = "127.0.0.1", port: int = 0):
+        if (isinstance(max_sessions, bool) or not isinstance(max_sessions, int)
+                or not 1 <= max_sessions <= 10_000):
+            raise ValueError("max_sessions must be an integer from 1 to 10000")
+        self.max_sessions = max_sessions
+        self.registry = RemoteSessionRegistry()
+        self.gateway = EmbeddedGateway(
+            self.registry, host=host, port=port, sse_wait_s=sse_wait_s)
+        self._sessions: dict[str, LiveProductSession] = {}
+        self._lock = threading.RLock()
+        self._closed = False
+
+    @property
+    def base_url(self) -> str:
+        return self.gateway.base_url
+
+    @property
+    def session_count(self) -> int:
+        with self._lock:
+            return len(self._sessions)
+
+    def start(self) -> "LiveProductServer":
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("live product server is closed")
+        self.gateway.start()
+        return self
+
+    def _session_closed(self, session_id: str) -> None:
+        with self._lock:
+            self._sessions.pop(session_id, None)
+
+    def create_session(self, *, allowed_origin: str, page_controller_module: str,
+                       runner_factory: Callable[[RemoteSessionChannel], ProductRunner],
+                       session_id: str | None = None,
+                       navigation_mode: str = "document",
+                       principal: PrincipalContext | None = None) -> LiveProductSession:
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("live product server is closed")
+            if len(self._sessions) >= self.max_sessions:
+                raise RuntimeError("live product server session capacity is exhausted")
+            session = LiveProductSession(
+                allowed_origin=allowed_origin,
+                page_controller_module=page_controller_module,
+                runner_factory=runner_factory,
+                session_id=session_id,
+                navigation_mode=navigation_mode,
+                principal=principal,
+                registry=self.registry,
+                gateway=self.gateway,
+                on_close=self._session_closed,
+            )
+            self._sessions[session.grant.session_id] = session
+            self.gateway.start()
+            return session
+
+    def close_session(self, session_id: str) -> bool:
+        with self._lock:
+            session = self._sessions.get(session_id)
+        if session is None:
+            return False
+        session.close()
+        return True
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            sessions = tuple(self._sessions.values())
+        for session in sessions:
+            session.close()
+        self.registry.retire_all("server_stopped")
+        self.gateway.close()
+
+    def __enter__(self) -> "LiveProductServer":
         return self.start()
 
     def __exit__(self, *_exc) -> None:

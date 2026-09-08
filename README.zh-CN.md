@@ -18,6 +18,7 @@ Web Operation Agent 是一个早期阶段的框架，用于在第一方 Web 应�
 | Skill 与业务工具 | Skill 描述何时、如何调用类型化工具；实时数据来自应用 API，而不是 Skill 文本。 |
 | 受控写入 | 业务写入默认关闭。启用后仍需页面中的明确确认；结果不确定时标记为 `indeterminate`，不会自动重试。 |
 | 多轮会话承载 | 会话 Host 按顺序处理面板消息，并隔离普通单轮失败，使后续任务仍可继续。 |
+| 共享本地网关 | 有容量上限的 server composition 可以在一个网关中承载多个可独立撤销的 session capability；50 会话确定性隔离测试覆盖 token 与 channel 分离。状态仍只存在于当前进程。 |
 | 任务控制 | 面板可通过当前已认证 Runtime lease 停止精确绑定的活动消息。尚未被浏览器认领的动作和等待确认的写入不会再下发；已经认领的动作仍会结算为确定结果或 `indeterminate`。 |
 | 身份绑定基础能力 | 应用宿主可以把短期 actor/tenant/workspace 主体绑定到 Runtime capability、Agent turn、类型化工具 scope、审批、mutation proposal 和脱敏审计事件。绑定会话会拒绝身份不匹配、过期和跨操作 proposal 复用。 |
 | 审计与回放基础能力 | 服务端事件可以写入追加式账本，并转换成脱敏回放。 |
@@ -118,7 +119,7 @@ python src/web_operation_agent/tests/run_all.py -k test_product.py
 
 ## 已知限制
 
-- 服务端状态、账本和会话注册表目前是本地进程组件；持久化、水平扩展和持久租户隔离尚未完成。身份绑定已有可选的 fail-closed 合同，但公开 Twenty demo 还不能从 Twenty 服务端集成取得可信页面 session 身份，因此尚未开启生产身份强制门。
+- 共享网关、session registry、事件 journal 和账本仍是本地进程组件；重启恢复、水平扩展和持久租户隔离尚未完成。身份绑定已有可选的 fail-closed 合同，但公开 Twenty demo 还不能从 Twenty 服务端集成取得可信页面 session 身份，因此尚未开启生产身份强制门。
 - 单轮截止时间已限制每次 provider 请求不得超过剩余墙钟预算。消息级主动取消会阻止后续工具下发并解除审批等待，但当前 provider HTTP transport 还不能中断正在进行的 socket 请求，其迟到结果会被丢弃。已有初始页面观察绑定，以及 claim 前对目标控件、关联表单和路由的新鲜度检查；目标元素之外的依赖、更广泛的并发、崩溃恢复和运行监控仍未完成。
 - 唯一打包的业务适配器是范围有限的 Twenty CRM Companies 纵切。
 - 尚未实现任意第三方网站支持和浏览器扩展。
