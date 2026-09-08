@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
 from .browser import TransportError, TurnCancelled
+from .identity import PrincipalContext, PrincipalError
 from .privacy import (SESSION_HANDOFF_QUERY_KEYS, SENSITIVE_CREDENTIAL_NAME,
                       has_unredacted_sensitive_assignment,
                       has_unredacted_session_handoff,
@@ -122,14 +123,19 @@ class SessionGrant:
     session_id: str
     client_token: str = field(repr=False)
     allowed_origins: tuple[str, ...]
+    application_id: str = ""
+    principal_digest: str = ""
+    expires_at: int = 0
 
 
 class RemoteSessionChannel:
     """Thread-safe journal and rendezvous point for one server-owned Agent session."""
 
-    def __init__(self, session_id: str, allowed_origins: tuple[str, ...]):
+    def __init__(self, session_id: str, allowed_origins: tuple[str, ...],
+                 principal: PrincipalContext | None = None):
         self.session_id = session_id
         self.allowed_origins = frozenset(allowed_origins)
+        self.principal = principal
         self._condition = threading.Condition(threading.RLock())
         self._hello: ClientHello | None = None
         self._active_lease_id = ""
@@ -155,7 +161,11 @@ class RemoteSessionChannel:
         self._approval_decisions: dict[str, ApprovalDecision] = {}
         self._pending_approval_id = ""
         self._closed = False
-        self._append_event("session_started", {"state": "waiting_for_runtime"})
+        self._append_event("session_started", {
+            "state": "waiting_for_runtime",
+            "application_id": (principal.application_id if principal else ""),
+            "principal_digest": (principal.binding_digest if principal else ""),
+        })
 
     @property
     def latest_event_id(self) -> str:
@@ -177,6 +187,15 @@ class RemoteSessionChannel:
     def _ensure_open(self) -> None:
         if self._closed:
             raise RemoteSessionClosed()
+        if self.principal is not None:
+            try:
+                self.principal.require_live(now_ms=_now_ms())
+            except PrincipalError as exc:
+                raise RemoteSessionClosed("session principal is no longer valid") from exc
+
+    def validate_live(self) -> None:
+        with self._condition:
+            self._ensure_open()
 
     def _append_event(self, kind: str, payload: dict, *, turn_id: str = "") -> TaskEvent:
         with self._condition:
@@ -217,6 +236,16 @@ class RemoteSessionChannel:
                 raise RemoteProtocolError("hello belongs to another session", status=400)
             if _origin(hello.page_origin) not in self.allowed_origins:
                 raise RemoteProtocolError("page origin is outside this session", code="origin_refused", status=403)
+            if self.principal is None:
+                if hello.application_id or hello.principal_digest:
+                    raise RemoteProtocolError(
+                        "session has no principal binding",
+                        code="principal_mismatch", status=403)
+            elif (hello.application_id != self.principal.application_id
+                  or hello.principal_digest != self.principal.binding_digest):
+                raise RemoteProtocolError(
+                    "runtime principal binding does not match the session",
+                    code="principal_mismatch", status=403)
             cursor = _event_sequence(hello.last_event_id)
             if cursor > len(self._events):
                 raise RemoteProtocolError("Last-Event-ID is ahead of this session")
@@ -237,7 +266,8 @@ class RemoteSessionChannel:
                     )
                 prior = self._hello
                 stable = ("session_id", "client_id", "runtime", "runtime_instance_id",
-                          "capabilities", "page_origin")
+                          "capabilities", "page_origin", "application_id",
+                          "principal_digest")
                 if prior is not None and any(getattr(prior, name) != getattr(hello, name)
                                              for name in stable):
                     raise RemoteProtocolError("runtime instance changed its hello contract")
@@ -448,6 +478,9 @@ class RemoteSessionChannel:
                         session_id=self.session_id,
                         approval_id=approval_id,
                         decision="denied",
+                        principal_digest=self._approvals[approval_id].principal_digest,
+                        turn_id=self._approvals[approval_id].turn_id,
+                        operation_id=self._approvals[approval_id].operation_id,
                     )
                     self._pending_approval_id = ""
                 self._append_event("progress", {
@@ -485,6 +518,14 @@ class RemoteSessionChannel:
                     code="unknown_approval",
                     status=404,
                 )
+            if (decision.principal_digest != request.principal_digest
+                    or decision.turn_id != request.turn_id
+                    or decision.operation_id != request.operation_id):
+                raise RemoteProtocolError(
+                    "approval response does not match its operation context",
+                    code="approval_context_mismatch",
+                    status=403,
+                )
             previous = self._approval_decisions.get(decision.approval_id)
             if previous is not None:
                 if previous.content_digest != decision.content_digest:
@@ -509,7 +550,7 @@ class RemoteSessionChannel:
                 "state": "approval_recorded",
                 "approval_id": decision.approval_id,
                 "decision": decision.decision,
-            })
+            }, turn_id=request.turn_id)
             self._condition.notify_all()
             return {"accepted": True, "duplicate": False}
 
@@ -520,6 +561,10 @@ class RemoteSessionChannel:
             action = _copy_wire(action)
             if action.session_id != self.session_id:
                 raise RemoteProtocolError("action belongs to another session", status=400)
+            if self.principal is not None and action.turn_id != self._active_message_id:
+                raise RemoteProtocolError(
+                    "action does not belong to the active principal-bound turn",
+                    code="turn_mismatch", status=403)
             if action.turn_id in self._cancelled_message_ids:
                 raise RemoteProtocolError(
                     "the task was cancelled before action dispatch",
@@ -575,6 +620,18 @@ class RemoteSessionChannel:
             self._ensure_open()
             request = _copy_wire(request)
             _safe_payload(request.to_json())
+            if self.principal is None:
+                if request.principal_digest or request.turn_id or request.operation_id:
+                    raise RemoteProtocolError(
+                        "session has no principal-bound approval context",
+                        code="approval_context_mismatch", status=403)
+            elif (request.principal_digest != self.principal.binding_digest
+                  or request.turn_id != self._active_message_id
+                  or not request.operation_id
+                  or request.expires_at > self.principal.expires_at):
+                raise RemoteProtocolError(
+                    "approval context does not match the active principal and turn",
+                    code="approval_context_mismatch", status=403)
             if request.expires_at <= _now_ms():
                 raise RemoteProtocolError(
                     "cannot publish an already expired approval",
@@ -597,7 +654,8 @@ class RemoteSessionChannel:
                 )
             self._approvals[request.approval_id] = request
             self._pending_approval_id = request.approval_id
-            return self._append_event("approval_required", request.to_json())
+            return self._append_event(
+                "approval_required", request.to_json(), turn_id=request.turn_id)
 
     def events_after(self, event_id: str = "", *, lease_id: str,
                      wait_s: float = 0) -> list[TaskEvent]:
@@ -724,21 +782,32 @@ class RemoteSessionRegistry:
         self._token_hashes: dict[str, bytes] = {}
 
     def create(self, *, allowed_origins: list[str] | tuple[str, ...],
-               session_id: str | None = None) -> tuple[SessionGrant, RemoteSessionChannel]:
+               session_id: str | None = None,
+               principal: PrincipalContext | None = None
+               ) -> tuple[SessionGrant, RemoteSessionChannel]:
         sid = session_id or f"s-{uuid.uuid4().hex}"
         if not sid or len(sid) > 128 or any(not (c.isalnum() or c in "-_") for c in sid):
             raise ValueError("session_id must contain only letters, digits, '-' and '_'")
         origins = tuple(dict.fromkeys(_origin(value) for value in allowed_origins))
         if not origins:
             raise ValueError("at least one allowed origin is required")
+        if principal is not None:
+            if not isinstance(principal, PrincipalContext):
+                raise TypeError("principal must be a PrincipalContext or None")
+            principal.require_live(now_ms=_now_ms())
         token = secrets.token_urlsafe(32)
-        channel = RemoteSessionChannel(sid, origins)
+        channel = RemoteSessionChannel(sid, origins, principal)
         with self._lock:
             if sid in self._channels:
                 raise ValueError(f"session {sid!r} already exists")
             self._channels[sid] = channel
             self._token_hashes[sid] = hashlib.sha256(token.encode()).digest()
-        return SessionGrant(sid, token, origins), channel
+        return SessionGrant(
+            sid, token, origins,
+            application_id=(principal.application_id if principal else ""),
+            principal_digest=(principal.binding_digest if principal else ""),
+            expires_at=(principal.expires_at if principal else 0),
+        ), channel
 
     def authenticate(self, session_id: str, bearer: str, origin: str) -> RemoteSessionChannel:
         with self._lock:
@@ -752,6 +821,7 @@ class RemoteSessionRegistry:
         if origin not in channel.allowed_origins:
             raise RemoteProtocolError("request origin is outside this session",
                                       code="origin_refused", status=403)
+        channel.validate_live()
         return channel
 
     def origin_allowed(self, session_id: str, origin: str) -> bool:

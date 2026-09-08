@@ -19,8 +19,9 @@ The repository currently verifies these behaviors with local automated tests and
 | Guarded writes | Business mutations are disabled by default. Enabled integrations require an explicit page confirmation and treat uncertain outcomes as `indeterminate` instead of retrying. |
 | Multi-turn hosting | A conversation host processes panel messages sequentially and isolates an ordinary turn failure from later turns. |
 | Task control | The panel can stop its exact active message through the current authenticated runtime lease. Cancellation prevents unclaimed actions and pending approved writes from dispatching; already claimed actions still settle to a definite or indeterminate result. |
+| Identity binding primitives | A host can bind a short-lived actor/tenant/workspace principal to the runtime capability, Agent turn, typed-tool scope, approval, mutation proposal, and redacted audit events. Bound sessions reject mismatch, expiry, and cross-operation proposal reuse. |
 | Audit and replay primitives | Server events can be written to an append-only ledger and projected into a redacted replay. |
-| Twenty CRM vertical | The packaged adapter can query companies, hand an API-discovered company route to the browser, and opt in to creating one company with confirmation and same-user readback. |
+| Twenty CRM vertical | The packaged adapter can query companies, hand an API-discovered company route to the browser, and opt in to creating one company with confirmation and delegated-token readback. It can resolve the OAuth actor through Twenty's Metadata API for a trusted application host to match against its page-session identity. |
 
 These claims describe the implemented paths only. The project does not yet have a public benchmark large enough to establish general task success, a source-retrieval advantage, or superiority over PageAgent or other browser agents.
 
@@ -120,7 +121,7 @@ Results use four distinct states: `PASS`, `FAIL`, `INDETERMINATE` for an uncerta
 
 ## Known limitations
 
-- The server state, ledger, and session registry are local-process components; durable storage, horizontal scaling, tenant isolation, and production identity binding are not complete.
+- The server state, ledger, and session registry are local-process components; durable storage, horizontal scaling, and durable tenant isolation are not complete. Identity binding is available as an opt-in fail-closed contract, but the public Twenty demo does not yet obtain a trusted page-session identity from a Twenty server integration and therefore does not enable the production identity requirement.
 - Turn deadlines cap each provider request by the remaining wall budget. Message-bound user cancellation prevents later tool dispatch and releases approval waits, but the current provider HTTP transport cannot interrupt an in-flight socket request; its late result is discarded. Initial observation binding and claim-before-execution target/form/route freshness checks exist, while dependencies outside the target element, broader concurrency, crash recovery, and operational observability remain incomplete.
 - The only packaged business adapter is a narrow Twenty CRM Companies vertical.
 - Arbitrary third-party websites and a browser extension are not implemented.

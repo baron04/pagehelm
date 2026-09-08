@@ -11,6 +11,7 @@ from unittest.mock import patch
 from web_operation_agent import product
 from web_operation_agent.business import BusinessToolRuntime
 from web_operation_agent.embedded_agent import ReadOnlyControl
+from web_operation_agent.identity import PrincipalContext
 from web_operation_agent.product import (
     AgentTurnConfig,
     AgentTurnError,
@@ -35,12 +36,14 @@ from web_operation_agent.tests.test_business import (
 class _Channel:
     def __init__(self, *, page_url: str = "http://app.test/companies",
                  observation: bool = True, decision: str = "approved",
-                 cancelled: bool = False):
+                 cancelled: bool = False,
+                 principal: PrincipalContext | None = None):
         self.session_id = "product-session"
         self.published = []
         self.approvals = []
         self.decision = decision
         self.cancelled = cancelled
+        self.principal = principal
         self.latest_observation_envelope = (
             self.envelope(1, page_url) if observation else None)
 
@@ -64,11 +67,16 @@ class _Channel:
 
     def wait_for_approval(self, approval_id: str, *, timeout_s: float):
         self.last_approval_timeout = timeout_s
+        request = next(item for item in self.approvals
+                       if item.approval_id == approval_id)
         return ApprovalDecision(
             schema_version=1,
             session_id=self.session_id,
             approval_id=approval_id,
             decision=self.decision,
+            principal_digest=request.principal_digest,
+            turn_id=request.turn_id,
+            operation_id=request.operation_id,
         )
 
 
@@ -122,6 +130,15 @@ def _message(page_url: str = "http://app.test/companies") -> dict:
     }
 
 
+def _principal(*, application_id: str = "fixture") -> PrincipalContext:
+    now = int(__import__("time").time() * 1000)
+    return PrincipalContext(
+        1, application_id, "tenant-private", "workspace-private", "actor-private",
+        "delegation-private", now - 1_000, now + 60_000,
+        ("companies:read", "companies:write", "page:operate"),
+    )
+
+
 class AgentTurnConfigTests(unittest.TestCase):
     def test_config_is_immutable(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -144,6 +161,7 @@ class AgentTurnConfigTests(unittest.TestCase):
                 {"scope_first_policy": 1},
                 {"allow_application_entry": "yes"},
                 {"allow_business_mutations": 1},
+                {"require_identity": 1},
                 {"plain_business_answer_min_page_actions": -1},
             ):
                 with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
@@ -202,6 +220,23 @@ class AgentTurnBoundaryTests(unittest.TestCase):
                 executor.run_once(_message("http://app.test/old"))
         self.assertEqual(caught.exception.code, AgentTurnErrorCode.STALE_MESSAGE)
         self.assertEqual(called, [])
+
+    def test_identity_required_rejects_an_unbound_channel_before_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            executor = AgentTurnExecutor(
+                channel=_Channel(),
+                config=AgentTurnConfig(
+                    supported_scope="Read company data.",
+                    ledger_path=root / "session.jsonl", require_identity=True),
+                chat=_Chat([]), business_tools=None, control=ReadOnlyControl(),
+                run_id_factory=lambda _message: "must-not-run",
+            )
+            with self.assertRaises(AgentTurnError) as caught:
+                executor.run_once(_message())
+            self.assertEqual(
+                caught.exception.code, AgentTurnErrorCode.IDENTITY_UNAVAILABLE)
+            self.assertFalse((root / "session.jsonl").exists())
 
     def test_page_change_during_browser_start_is_rejected_before_planning(self):
         channel = _Channel()
@@ -295,6 +330,49 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 [item[1]["state"] for item in channel.published],
                 ["agent_started", "finished"],
             )
+
+    def test_principal_context_reaches_tool_and_redacted_audit(self):
+        class ContextExecutor(_Executor):
+            def __init__(self):
+                self.context = None
+
+            def execute(self, name, args, *, context=None):
+                self.context = context
+                return super().execute(name, args)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = _skill(root / "query-skill.json")
+            tool_executor = ContextExecutor()
+            tools = BusinessToolRuntime(
+                (skill,), tool_executor, application_id="fixture",
+                required_scopes={"query_companies": "companies:read"})
+            channel = _Channel(principal=_principal())
+            executor = AgentTurnExecutor(
+                channel=channel,
+                config=AgentTurnConfig(
+                    supported_scope="Read company data.",
+                    ledger_path=root / "session.jsonl", require_identity=True,
+                    plain_business_answer_min_page_actions=0),
+                chat=_Chat([
+                    ("load_skill", {"skill_id": skill.skill_id}),
+                    ("query_companies", {}),
+                    (None, {"content": "Acme"}),
+                ]),
+                business_tools=tools, control=ReadOnlyControl(),
+                run_id_factory=lambda _message: "turn-principal-bound",
+            )
+            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+                result = executor.run_once(_message())
+
+            self.assertEqual(result.status, AgentTurnStatus.FINISHED)
+            self.assertIsNotNone(tool_executor.context)
+            self.assertEqual(tool_executor.context.turn_id, "message-1")
+            ledger_text = (root / "session.jsonl").read_text()
+            self.assertIn(channel.principal.binding_digest, ledger_text)
+            for raw in ("tenant-private", "workspace-private", "actor-private",
+                        "delegation-private"):
+                self.assertNotIn(raw, ledger_text)
 
     def test_injected_ledger_factory_returns_the_same_audit_to_the_composition(self):
         with tempfile.TemporaryDirectory() as tmp:

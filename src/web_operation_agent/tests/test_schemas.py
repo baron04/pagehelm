@@ -64,6 +64,17 @@ class WireTypes(unittest.TestCase):
         with self.assertRaises(S.SchemaError):
             S.ApprovalDecision(schema_version=1, session_id="session-1",
                                approval_id="approval-1", decision="maybe")
+        bound = S.ApprovalRequest(
+            schema_version=1, approval_id="approval-bound",
+            effect="Create company", targets=("Acme",),
+            expires_at=2_000_000_000_000,
+            principal_digest="a" * 64, turn_id="message-1", operation_id="op-1")
+        self.assertEqual(S.ApprovalRequest.from_json(bound.to_json()), bound)
+        with self.assertRaises(S.SchemaError):
+            S.ApprovalDecision(
+                schema_version=1, session_id="session-1",
+                approval_id="approval-bound", decision="approved",
+                principal_digest="a" * 64)
         smuggled = request.to_json(); smuggled["request"] = "hiddenBackendEndpoint"
         with self.assertRaises(S.SchemaError):
             S.ApprovalRequest.from_json(smuggled)

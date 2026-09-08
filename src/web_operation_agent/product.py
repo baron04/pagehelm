@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 from .browser import TransportError
 from .business import BusinessToolResult, BusinessToolRuntime
 from .embedded_agent import ApprovalGate
+from .identity import OperationContext, PrincipalError
 from .ledger import SessionLedger
 from .privacy import redact_sensitive_assignments, redact_session_handoffs
 from .remote import (RemoteBrowserClient, RemoteProtocolError,
@@ -44,6 +45,7 @@ class AgentTurnErrorCode(str, Enum):
     OBSERVATION_UNAVAILABLE = "observation_unavailable"
     STALE_MESSAGE = "stale_message"
     INVALID_RUN_ID = "invalid_run_id"
+    IDENTITY_UNAVAILABLE = "identity_unavailable"
     RUNTIME_UNAVAILABLE = "runtime_unavailable"
     EXECUTION_FAILED = "execution_failed"
 
@@ -122,6 +124,7 @@ class AgentTurnConfig:
     keep_observations: int = 3
     allow_application_entry: bool = False
     allow_business_mutations: bool = False
+    require_identity: bool = False
     max_user_answer_chars: int = 4_000
 
     def __post_init__(self) -> None:
@@ -130,7 +133,8 @@ class AgentTurnConfig:
             raise ValueError("supported_scope must be a non-empty string")
         if (not isinstance(self.scope_first_policy, bool)
                 or not isinstance(self.allow_application_entry, bool)
-                or not isinstance(self.allow_business_mutations, bool)):
+                or not isinstance(self.allow_business_mutations, bool)
+                or not isinstance(self.require_identity, bool)):
             raise ValueError("turn policy flags must be booleans")
         for name in ("step_budget", "wall_budget_s", "approval_ttl_s",
                      "keep_observations", "max_user_answer_chars"):
@@ -266,6 +270,25 @@ class AgentTurnExecutor:
 
     def execute(self, message: dict) -> AgentTurnExecution:
         turn_message = AgentTurnMessage.from_wire(message)
+        principal = getattr(self.channel, "principal", None)
+        if principal is None and self.config.require_identity:
+            raise AgentTurnError(
+                AgentTurnErrorCode.IDENTITY_UNAVAILABLE,
+                "this application requires a verified session identity",
+                retryable=False,
+            )
+        if principal is not None:
+            try:
+                principal.require_live()
+                application_id = (self.business_tools.application_id
+                                  if self.business_tools is not None else "")
+                principal.require_live(application_id=application_id or None)
+            except PrincipalError as exc:
+                raise AgentTurnError(
+                    AgentTurnErrorCode.IDENTITY_UNAVAILABLE,
+                    "the session identity is invalid, expired, or belongs to another application",
+                    retryable=False,
+                ) from exc
         entry = self.channel.latest_observation_envelope
         if entry is None:
             raise AgentTurnError(
@@ -289,6 +312,12 @@ class AgentTurnExecutor:
             )
         started_at = time.time()
         ledger = self.ledger_factory(self.config.ledger_path, run_id)
+        if principal is not None:
+            ledger.append(
+                "turn_identity_bound",
+                message_id=turn_message.message_id,
+                identity=principal.audit_projection(),
+            )
         approval_gate = ApprovalGate(self.channel, ledger)
         browser = RemoteBrowserClient(
             self.channel, timeout_s=self.config.transport_timeout_s,
@@ -328,12 +357,14 @@ class AgentTurnExecutor:
             supported_scope=self.config.supported_scope,
         )
 
-        def approve_business_mutation(proposal):
+        def approve_business_mutation(
+                proposal, *, context: OperationContext | None = None):
             return approval_gate.decide_plan(
                 proposal,
                 effect=proposal.effect,
                 targets=proposal.targets,
                 ttl_s=self.config.approval_ttl_s,
+                context=context,
             )
 
         session = ServerAgentSession(
@@ -360,6 +391,9 @@ class AgentTurnExecutor:
                 self.config.plain_business_answer_min_page_actions),
             allow_application_entry=self.config.allow_application_entry,
             cancelled=lambda: self.channel.message_cancelled(turn_message.message_id),
+            principal=principal,
+            session_id=(self.channel.session_id if principal is not None else ""),
+            turn_id=(turn_message.message_id if principal is not None else ""),
         )
         session.entry_observation = current.observation
         try:

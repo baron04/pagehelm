@@ -278,6 +278,9 @@ class EmbeddedGateway:
             "clientToken": grant.client_token,
             "pageControllerModule": page_controller_module,
             "navigationMode": navigation_mode,
+            "applicationId": grant.application_id,
+            "principalBinding": grant.principal_digest,
+            "principalExpiresAt": grant.expires_at,
         }
 
     def bootstrap_script(self, grant: SessionGrant, *,

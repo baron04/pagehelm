@@ -23,6 +23,8 @@ from web_operation_agent.business import (BusinessMutationIndeterminate,
                                           BusinessToolRuntime)
 from web_operation_agent.application import (APPLICATION_ADAPTER_VERSION,
                                              ApplicationDescriptor)
+from web_operation_agent.identity import (IdentityAssertion, OperationContext,
+                                          PrincipalContext, bind_matching_identity)
 
 
 QUERY_COMPANIES_SCHEMA = {
@@ -88,6 +90,7 @@ _DOMAIN = re.compile(
 _SKILL_RESOURCE_ROOT = ("skills", "twenty")
 _QUERY_SKILL_RESOURCE = "companies-query.json"
 _MUTATION_SKILL_RESOURCE = "companies-create.json"
+_IDENTITY_QUERY = "query WoaIdentity { currentUser { id } currentWorkspace { id } }"
 
 
 def _packaged_skill(filename: str) -> BusinessSkill:
@@ -199,7 +202,48 @@ class TwentyBusinessToolExecutor:
             effects["create_company"] = "write"
         return effects
 
-    def execute(self, name: str, args: dict) -> BusinessToolResult:
+    def resolve_delegated_identity(self, *, lifetime_s: int = 300,
+                                   now_ms: int | None = None) -> IdentityAssertion:
+        """Resolve the OAuth actor and workspace from Twenty's Metadata API."""
+        if isinstance(lifetime_s, bool) or not isinstance(lifetime_s, int) \
+                or not 1 <= lifetime_s <= 3_600:
+            raise ValueError("identity lifetime_s must be an integer from 1 to 3600")
+        token = self.tokens.access_token()
+        try:
+            payload = self._authorized_metadata_json(token)
+        except BusinessToolError as exc:
+            if str(exc) != "Twenty API authorization expired":
+                raise
+            token = self.tokens.refresh(self.base_url, self.timeout_s)
+            payload = self._authorized_metadata_json(token)
+        data = payload.get("data") if isinstance(payload, dict) else None
+        user = data.get("currentUser") if isinstance(data, dict) else None
+        workspace = data.get("currentWorkspace") if isinstance(data, dict) else None
+        actor_id = user.get("id") if isinstance(user, dict) else None
+        workspace_id = workspace.get("id") if isinstance(workspace, dict) else None
+        if not isinstance(actor_id, str) or not isinstance(workspace_id, str):
+            raise BusinessToolError("Twenty Metadata identity response is incomplete")
+        issued_at = int(time.time() * 1000) if now_ms is None else now_ms
+        return IdentityAssertion(
+            schema_version=1,
+            source="delegated_api",
+            application_id="twenty",
+            tenant_id=workspace_id,
+            workspace_id=workspace_id,
+            actor_id=actor_id,
+            issued_at=issued_at,
+            expires_at=issued_at + lifetime_s * 1000,
+        )
+
+    @staticmethod
+    def _identity_audit(context: OperationContext | None) -> dict:
+        if context is None:
+            return {"identity_binding": "unverified"}
+        return {"identity_binding": "principal_bound",
+                "identity": context.audit_projection()}
+
+    def execute(self, name: str, args: dict, *,
+                context: OperationContext | None = None) -> BusinessToolResult:
         if name != "query_companies":
             raise BusinessToolError("unknown Twenty business tool")
         unknown = set(args) - {"name_contains", "limit"}
@@ -275,13 +319,15 @@ class TwentyBusinessToolExecutor:
                 "result_truncated": result_truncated,
                 "scope": "current_delegated_workspace",
                 "observed_at": observed_at,
-                "oauth_actor": "delegated_user",
                 "oauth_refreshed": refreshed,
+                **self._identity_audit(context),
             },
             allowed_routes=allowed_routes,
         )
 
-    def prepare_mutation(self, name: str, args: dict) -> BusinessMutationSpec:
+    def prepare_mutation(self, name: str, args: dict, *,
+                         context: OperationContext | None = None
+                         ) -> BusinessMutationSpec:
         if not self.allow_mutations or name != "create_company":
             raise BusinessToolError("unknown Twenty business mutation")
         normalized = self._normalize_company(args)
@@ -292,7 +338,9 @@ class TwentyBusinessToolExecutor:
             targets=(f"公司：{normalized['name']}", f"域名：{normalized['domain']}"),
         )
 
-    def execute_mutation(self, name: str, args: dict) -> BusinessToolResult:
+    def execute_mutation(self, name: str, args: dict, *,
+                         context: OperationContext | None = None
+                         ) -> BusinessToolResult:
         if not self.allow_mutations or name != "create_company":
             raise BusinessToolError("unknown Twenty business mutation")
         normalized = self._normalize_company(args)
@@ -356,8 +404,8 @@ class TwentyBusinessToolExecutor:
                 "readback_verified": True,
                 "scope": "current_delegated_workspace",
                 "observed_at": observed_at,
-                "oauth_actor": "delegated_user",
                 "oauth_refreshed": False,
+                **self._identity_audit(context),
             },
             allowed_routes=(ui_path,),
         )
@@ -431,6 +479,29 @@ class TwentyBusinessToolExecutor:
             raise BusinessToolError("Twenty API returned an invalid response")
         return payload
 
+    def _authorized_metadata_json(self, token: str) -> dict:
+        request = Request(
+            self.base_url + "/metadata",
+            data=json.dumps({"query": _IDENTITY_QUERY}).encode("utf-8"),
+            method="POST",
+            headers={"Authorization": "Bearer " + token,
+                     "Accept": "application/json", "Content-Type": "application/json"})
+        try:
+            with urlopen(request, timeout=self.timeout_s) as response:
+                status = response.status
+                payload = json.load(response)
+        except HTTPError as exc:
+            if exc.code == 401:
+                raise BusinessToolError("Twenty API authorization expired") from exc
+            raise BusinessToolError(
+                f"Twenty Metadata API returned HTTP {exc.code}") from exc
+        except (URLError, TimeoutError, json.JSONDecodeError) as exc:
+            raise BusinessToolError("Twenty Metadata identity read failed") from exc
+        if (status != 200 or not isinstance(payload, dict)
+                or payload.get("errors")):
+            raise BusinessToolError("Twenty Metadata identity response is invalid")
+        return payload
+
     def _authorized_mutation_json(self, path: str, token: str,
                                   body: dict) -> tuple[dict, int]:
         request = Request(
@@ -483,7 +554,14 @@ class TwentyApplicationAdapter:
                 BusinessSkill.load(mutation_skill_path)
                 if mutation_skill_path is not None
                 else _packaged_skill(_MUTATION_SKILL_RESOURCE))
-        self.business_tools = BusinessToolRuntime(tuple(skills), executor)
+        required_scopes = {"query_companies": "companies:read"}
+        if allow_mutations:
+            required_scopes["create_company"] = "companies:write"
+        self.business_tools = BusinessToolRuntime(
+            tuple(skills), executor, application_id="twenty",
+            required_scopes=required_scopes)
+        self._executor = executor
+        self._principal_scopes = tuple(sorted(required_scopes.values()))
         self.descriptor = ApplicationDescriptor(
             schema_version=APPLICATION_ADAPTER_VERSION,
             application_id="twenty",
@@ -502,3 +580,17 @@ class TwentyApplicationAdapter:
                         "http_status": response.status}
         except Exception:
             return {"passed": False, "http_status": 0}
+
+    def bind_principal(self, page_identity: IdentityAssertion, *,
+                       delegation_id: str, lifetime_s: int = 300,
+                       now_ms: int | None = None) -> PrincipalContext:
+        """Match a trusted Twenty page-session assertion to the delegated OAuth actor.
+
+        The application host must obtain ``page_identity`` from Twenty's authenticated
+        server session. DOM text or a browser-provided user id is not trusted evidence.
+        """
+        delegated = self._executor.resolve_delegated_identity(
+            lifetime_s=lifetime_s, now_ms=now_ms)
+        return bind_matching_identity(
+            page_identity, delegated, delegation_id=delegation_id,
+            scopes=self._principal_scopes, now_ms=now_ms)

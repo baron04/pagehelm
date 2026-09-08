@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlsplit
 
+from .identity import OperationContext, PrincipalError
+
 
 _SKILL_ID = re.compile(r"^[a-z][a-z0-9_.-]{2,79}$")
 _TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
@@ -113,11 +115,16 @@ class BusinessToolExecutor(Protocol):
 
     def tool_effects(self) -> dict[str, str]: ...
 
-    def execute(self, name: str, args: dict) -> BusinessToolResult: ...
+    def execute(self, name: str, args: dict, *,
+                context: OperationContext | None = None) -> BusinessToolResult: ...
 
-    def prepare_mutation(self, name: str, args: dict) -> "BusinessMutationSpec": ...
+    def prepare_mutation(self, name: str, args: dict, *,
+                         context: OperationContext | None = None
+                         ) -> "BusinessMutationSpec": ...
 
-    def execute_mutation(self, name: str, args: dict) -> BusinessToolResult: ...
+    def execute_mutation(self, name: str, args: dict, *,
+                         context: OperationContext | None = None
+                         ) -> BusinessToolResult: ...
 
 
 @dataclass(frozen=True)
@@ -162,6 +169,7 @@ class BusinessMutationProposal:
     effect: str
     targets: tuple[str, ...]
     nonce: str
+    operation_context_digest: str = ""
 
     def __post_init__(self) -> None:
         if not isinstance(self.tool, str) or not _TOOL_NAME.fullmatch(self.tool):
@@ -172,6 +180,9 @@ class BusinessMutationProposal:
         object.__setattr__(self, "targets", validated.targets)
         if not isinstance(self.nonce, str) or not re.fullmatch(r"[0-9a-f]{32}", self.nonce):
             raise ValueError("mutation nonce is invalid")
+        if self.operation_context_digest and not re.fullmatch(
+                r"[0-9a-f]{64}", self.operation_context_digest):
+            raise ValueError("mutation operation context digest is invalid")
 
     @property
     def content_digest(self) -> str:
@@ -182,6 +193,7 @@ class BusinessMutationProposal:
             "effect": self.effect,
             "targets": list(self.targets),
             "nonce": self.nonce,
+            "operation_context_digest": self.operation_context_digest,
         }, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
             allow_nan=False).encode("utf-8")
         return hashlib.sha256(raw).hexdigest()
@@ -193,6 +205,7 @@ class BusinessMutationProposal:
             "argument_names": sorted(self.args),
             "target_count": len(self.targets),
             "digest": self.content_digest,
+            "operation_context_digest": self.operation_context_digest,
         }
 
 
@@ -289,7 +302,9 @@ class BusinessSkill:
 class BusinessToolRuntime:
     """Validate a Skill catalog and dispatch only tools from loaded relevant Skills."""
 
-    def __init__(self, skills: tuple[BusinessSkill, ...], executor: BusinessToolExecutor):
+    def __init__(self, skills: tuple[BusinessSkill, ...], executor: BusinessToolExecutor,
+                 *, application_id: str = "",
+                 required_scopes: dict[str, str] | None = None):
         skill_ids = [skill.skill_id for skill in skills]
         if len(skill_ids) != len(set(skill_ids)):
             raise ValueError("Business Skill IDs must be unique")
@@ -316,10 +331,20 @@ class BusinessToolRuntime:
         for skill in skills:
             if skill.read_only and any(effects[name] == "write" for name in skill.tool_names):
                 raise ValueError("read-only Business Skills may not declare write tools")
+        if application_id and not re.fullmatch(r"[a-z][a-z0-9.-]{2,79}", application_id):
+            raise ValueError("business tool application_id is invalid")
+        scopes = dict(required_scopes or {})
+        if scopes and set(scopes) != set(schemas):
+            raise ValueError("required_scopes must declare every business tool")
+        if any(not isinstance(scope, str) or not re.fullmatch(
+                r"[a-z][a-z0-9:._-]{1,99}", scope) for scope in scopes.values()):
+            raise ValueError("business tool required scope is invalid")
         self._skills = {skill.skill_id: skill for skill in skills}
         self._schemas = schemas
         self._effects = dict(effects)
         self._executor = executor
+        self.application_id = application_id
+        self._required_scopes = scopes
         self._prepared_mutations: dict[str, BusinessMutationProposal] = {}
         self._consumed_mutations: set[str] = set()
 
@@ -344,6 +369,7 @@ class BusinessToolRuntime:
         tools = [{
             "name": name,
             "effect": self._effects[name],
+            "required_scope": self._required_scopes.get(name, ""),
             "schema_sha256": hashlib.sha256(json.dumps(
                 self._schemas[name], ensure_ascii=False, sort_keys=True,
                 separators=(",", ":"), allow_nan=False,
@@ -385,7 +411,8 @@ class BusinessToolRuntime:
         return self._effects.get(name) == "write"
 
     def _validate_call(self, name: str, args: object,
-                       loaded_ids: set[str]) -> dict:
+                       loaded_ids: set[str],
+                       context: OperationContext | None = None) -> dict:
         if name not in self._schemas:
             raise BusinessToolError("unknown business tool")
         allowed = {tool for skill_id in loaded_ids
@@ -394,15 +421,28 @@ class BusinessToolRuntime:
             raise BusinessToolError("load the matching Business Skill before calling this tool")
         if not isinstance(args, dict):
             raise BusinessToolError("business tool arguments must be an object")
+        if context is not None:
+            if not isinstance(context, OperationContext):
+                raise BusinessToolError("business tool operation context is invalid")
+            try:
+                context.require_live(
+                    application_id=self.application_id or None,
+                    required_scope=self._required_scopes.get(name),
+                )
+            except PrincipalError as exc:
+                raise BusinessToolError(str(exc)) from exc
         return args
 
     def execute(self, name: str, args: object,
-                loaded_ids: set[str]) -> BusinessToolResult:
-        args = self._validate_call(name, args, loaded_ids)
+                loaded_ids: set[str], *,
+                context: OperationContext | None = None) -> BusinessToolResult:
+        args = self._validate_call(name, args, loaded_ids, context)
         if self.is_mutation(name):
             raise BusinessToolError("business mutation requires explicit approval")
         try:
-            result = self._executor.execute(name, args)
+            result = (self._executor.execute(name, args)
+                      if context is None
+                      else self._executor.execute(name, args, context=context))
         except BusinessToolError:
             raise
         except Exception as exc:
@@ -413,12 +453,17 @@ class BusinessToolRuntime:
         return result
 
     def prepare_mutation(self, name: str, args: object,
-                         loaded_ids: set[str]) -> BusinessMutationProposal:
-        args = self._validate_call(name, args, loaded_ids)
+                         loaded_ids: set[str], *,
+                         context: OperationContext | None = None
+                         ) -> BusinessMutationProposal:
+        args = self._validate_call(name, args, loaded_ids, context)
         if not self.is_mutation(name):
             raise BusinessToolError("business tool is read-only")
         try:
-            spec = self._executor.prepare_mutation(name, args)
+            spec = (self._executor.prepare_mutation(name, args)
+                    if context is None
+                    else self._executor.prepare_mutation(
+                        name, args, context=context))
         except BusinessToolError:
             raise
         except Exception as exc:
@@ -428,20 +473,25 @@ class BusinessToolRuntime:
             raise BusinessToolError("business mutation preparation returned an invalid result")
         proposal = BusinessMutationProposal(
             tool=name, args=spec.args, effect=spec.effect, targets=spec.targets,
-            nonce=uuid.uuid4().hex)
+            nonce=uuid.uuid4().hex,
+            operation_context_digest=(context.binding_digest if context else ""))
         self._prepared_mutations[proposal.content_digest] = proposal
         return proposal
 
     def execute_mutation(self, proposal: BusinessMutationProposal,
                          approved_digest: str,
-                         loaded_ids: set[str]) -> BusinessToolResult:
+                         loaded_ids: set[str], *,
+                         context: OperationContext | None = None) -> BusinessToolResult:
         if not isinstance(proposal, BusinessMutationProposal):
             raise BusinessToolError("business mutation proposal is invalid")
         digest = proposal.content_digest
         prepared = self._prepared_mutations.get(digest)
         if prepared != proposal or approved_digest != digest:
             raise BusinessToolError("business mutation approval does not match the proposal")
-        self._validate_call(proposal.tool, proposal.args, loaded_ids)
+        self._validate_call(proposal.tool, proposal.args, loaded_ids, context)
+        context_digest = context.binding_digest if context is not None else ""
+        if proposal.operation_context_digest != context_digest:
+            raise BusinessToolError("business mutation belongs to another operation context")
         if not self.is_mutation(proposal.tool):
             raise BusinessToolError("business mutation proposal names a read-only tool")
         if digest in self._consumed_mutations:
@@ -450,7 +500,10 @@ class BusinessToolRuntime:
         # same proposal eligible for a second write.
         self._consumed_mutations.add(digest)
         try:
-            result = self._executor.execute_mutation(proposal.tool, proposal.args)
+            result = (self._executor.execute_mutation(proposal.tool, proposal.args)
+                      if context is None
+                      else self._executor.execute_mutation(
+                          proposal.tool, proposal.args, context=context))
         except (BusinessToolError, BusinessMutationIndeterminate):
             raise
         except Exception as exc:

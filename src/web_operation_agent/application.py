@@ -121,6 +121,8 @@ def bind_application(adapter: ApplicationAdapter) -> BoundApplication:
     tools = adapter.business_tools
     if not isinstance(tools, BusinessToolRuntime):
         raise TypeError("application adapter business_tools is invalid")
+    if tools.application_id and tools.application_id != descriptor.application_id:
+        raise ValueError("application descriptor and business tools use different identities")
     if descriptor.catalog_sha256 != tools.catalog_sha256:
         raise ValueError("application descriptor is stale for its Skill and tool catalog")
     return BoundApplication(

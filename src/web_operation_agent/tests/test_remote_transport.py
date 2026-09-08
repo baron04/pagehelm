@@ -11,8 +11,9 @@ from unittest import mock
 
 from web_operation_agent.browser import TransportError, TurnCancelled
 from web_operation_agent.embedded_gateway import EmbeddedGateway
+from web_operation_agent.identity import OperationContext, PrincipalContext
 from web_operation_agent.remote import (RemoteBrowserClient, RemoteProtocolError,
-                                         RemoteSessionRegistry)
+                                         RemoteSessionClosed, RemoteSessionRegistry)
 from web_operation_agent.schemas import (
     SCHEMA_VERSIONS,
     ActionCommand,
@@ -34,14 +35,24 @@ DEFAULT_LEASE = object()
 
 
 def hello(session_id: str, *, cursor: str = "",
-          runtime_instance_id: str = "runtime-document-1") -> ClientHello:
+          runtime_instance_id: str = "runtime-document-1",
+          application_id: str = "", principal_digest: str = "") -> ClientHello:
     return ClientHello(
         schema_version=SCHEMA_VERSIONS["ClientHello"], session_id=session_id,
         client_id="browser-tab-1", runtime="test-runtime/1",
         runtime_instance_id=runtime_instance_id,
         capabilities=("dom.observe", "dom.click", "dom.fill", "dom.select", "dom.submit",
                       "page.goto", "page.back", "page.wait"), page_origin=ORIGIN,
+        application_id=application_id, principal_digest=principal_digest,
         last_event_id=cursor,
+    )
+
+
+def principal(now_ms: int, *, actor_id: str = "actor-1") -> PrincipalContext:
+    return PrincipalContext(
+        1, "twenty", "tenant-1", "workspace-1", actor_id,
+        "delegation-1", now_ms, now_ms + 60_000,
+        ("companies:read", "page:operate"),
     )
 
 
@@ -125,6 +136,85 @@ class ChannelTests(unittest.TestCase):
         conflict = completed(action, after, elapsed_ms=8)
         with self.assertRaisesRegex(RemoteProtocolError, "conflicting result"):
             self.channel.accept_result(conflict, lease_id=self.lease)
+
+    def test_principal_bound_session_requires_exact_runtime_binding(self):
+        now = int(time.time() * 1000)
+        expected = principal(now)
+        registry = RemoteSessionRegistry()
+        grant, channel = registry.create(
+            allowed_origins=[ORIGIN], session_id="principal-session",
+            principal=expected)
+
+        self.assertIs(channel.principal, expected)
+        self.assertEqual(grant.application_id, "twenty")
+        self.assertEqual(grant.principal_digest, expected.binding_digest)
+        self.assertEqual(grant.expires_at, expected.expires_at)
+        self.assertNotIn(expected.actor_id, repr(grant))
+        with self.assertRaisesRegex(RemoteProtocolError, "principal binding") as missing:
+            channel.accept_hello(hello(grant.session_id))
+        self.assertEqual(missing.exception.code, "principal_mismatch")
+        with self.assertRaisesRegex(RemoteProtocolError, "principal binding"):
+            channel.accept_hello(hello(
+                grant.session_id, application_id="twenty",
+                principal_digest="0" * 64))
+        reply = channel.accept_hello(hello(
+            grant.session_id, application_id="twenty",
+            principal_digest=expected.binding_digest))
+        self.assertTrue(reply["lease_id"])
+
+    def test_unbound_session_rejects_a_runtime_declared_principal(self):
+        with self.assertRaisesRegex(RemoteProtocolError, "no principal") as caught:
+            self.channel.accept_hello(dataclasses.replace(
+                hello(self.grant.session_id, runtime_instance_id="another-document"),
+                application_id="twenty", principal_digest="0" * 64))
+        self.assertEqual(caught.exception.code, "principal_mismatch")
+
+    def test_expired_principal_rejects_authenticated_and_server_operations(self):
+        now = int(time.time() * 1000)
+        expected = principal(now)
+        registry = RemoteSessionRegistry()
+        grant, channel = registry.create(
+            allowed_origins=[ORIGIN], session_id="expiring-session",
+            principal=expected)
+        with mock.patch("web_operation_agent.remote._now_ms",
+                        return_value=expected.expires_at):
+            with self.assertRaisesRegex(RemoteSessionClosed, "principal"):
+                registry.authenticate(
+                    grant.session_id, grant.client_token, ORIGIN)
+            with self.assertRaisesRegex(RemoteSessionClosed, "principal"):
+                channel.validate_live()
+
+    def test_bound_approval_cannot_cross_principal_turn_or_operation(self):
+        now = int(time.time() * 1000)
+        expected = principal(now)
+        registry = RemoteSessionRegistry()
+        grant, channel = registry.create(
+            allowed_origins=[ORIGIN], session_id="bound-approval",
+            principal=expected)
+        lease = channel.accept_hello(hello(
+            grant.session_id, application_id="twenty",
+            principal_digest=expected.binding_digest))["lease_id"]
+        message = {"message_id": "message-1", "text": "Create Acme",
+                   "page_url": ORIGIN + "/start"}
+        channel.accept_message(message, lease_id=lease)
+        channel.wait_for_message(timeout_s=0)
+        context = OperationContext.create(
+            expected, session_id=grant.session_id, turn_id="message-1",
+            operation_id="op-create-1", deadline_ms=now + 30_000, now_ms=now)
+        request = ApprovalRequest(
+            1, "approval-bound", "Create company", ("Acme",),
+            context.expires_at, expected.binding_digest,
+            context.turn_id, context.operation_id)
+        channel.request_approval(request)
+
+        with self.assertRaisesRegex(RemoteProtocolError, "operation context") as mismatch:
+            channel.accept_approval(ApprovalDecision(
+                1, grant.session_id, request.approval_id, "approved"), lease_id=lease)
+        self.assertEqual(mismatch.exception.code, "approval_context_mismatch")
+        decision = ApprovalDecision(
+            1, grant.session_id, request.approval_id, "approved",
+            request.principal_digest, request.turn_id, request.operation_id)
+        self.assertFalse(channel.accept_approval(decision, lease_id=lease)["duplicate"])
 
     def test_approval_is_user_visible_idempotent_and_bound_to_this_session(self):
         request = ApprovalRequest(

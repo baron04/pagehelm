@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +14,7 @@ from web_operation_agent.business import (BusinessSkill, BusinessToolError,
                                           BusinessToolResult, BusinessToolRuntime)
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.ledger import SessionLedger
+from web_operation_agent.identity import OperationContext, PrincipalContext
 from web_operation_agent.schemas import ActionReceipt, PageObservation
 from web_operation_agent.session import ServerAgentSession, TaskSpec
 from web_operation_agent.twenty import TwentyBusinessToolExecutor
@@ -39,7 +41,7 @@ class _Executor:
         return {"query_companies": "read"}
 
     @staticmethod
-    def execute(name, args):
+    def execute(name, args, *, context=None):
         if name != "query_companies" or args:
             raise BusinessToolError("unexpected call")
         return BusinessToolResult(
@@ -102,19 +104,20 @@ class _MutationExecutor:
         return {"create_company": "write"}
 
     @staticmethod
-    def execute(_name, _args):
+    def execute(_name, _args, *, context=None):
         raise AssertionError("write tools must not use the read dispatch path")
 
     @staticmethod
-    def prepare_mutation(name, args):
+    def prepare_mutation(name, args, *, context=None):
         if name != "create_company" or set(args) != {"name"}:
             raise BusinessToolError("invalid create request")
         return BusinessMutationSpec(
             args={"name": str(args["name"]).strip()},
             effect="Create one company", targets=(str(args["name"]).strip(),))
 
-    def execute_mutation(self, name, args):
+    def execute_mutation(self, name, args, *, context=None):
         self.executions += 1
+        self.context = context
         if self.indeterminate:
             raise BusinessMutationIndeterminate("fixture acknowledgement was lost")
         return BusinessToolResult(
@@ -122,6 +125,17 @@ class _MutationExecutor:
                      "ui_path": "/object/company/company-2"},
             audit={"operation": name, "records_created": 1},
             allowed_routes=("/object/company/company-2",))
+
+
+def _operation_context(*, scopes=("companies:read", "companies:write"),
+                       operation_id="op-1", application_id="fixture"):
+    now = int(time.time() * 1000)
+    principal = PrincipalContext(
+        1, application_id, "tenant-1", "workspace-1", "actor-1", "delegation-1",
+        now - 1_000, now + 60_000, tuple(scopes))
+    return OperationContext.create(
+        principal, session_id="session-1", turn_id="message-1",
+        operation_id=operation_id, deadline_ms=now + 30_000, now_ms=now)
 
 
 def _observation(epoch: int, url: str = "http://app.test/companies") -> PageObservation:
@@ -183,6 +197,45 @@ class _Chat:
 
 
 class BusinessRuntimeValidation(unittest.TestCase):
+    def test_bound_tool_requires_application_and_declared_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _skill(Path(tmp) / "query-skill.json")
+            runtime = BusinessToolRuntime(
+                (skill,), _Executor(), application_id="fixture",
+                required_scopes={"query_companies": "companies:read"})
+            loaded = {skill.skill_id}
+            result = runtime.execute(
+                "query_companies", {}, loaded,
+                context=_operation_context(scopes=("companies:read",)))
+            self.assertEqual(result.content["matched_count"], 1)
+            with self.assertRaisesRegex(BusinessToolError, "required operation scope"):
+                runtime.execute(
+                    "query_companies", {}, loaded,
+                    context=_operation_context(scopes=("companies:write",)))
+            with self.assertRaisesRegex(BusinessToolError, "another application"):
+                runtime.execute(
+                    "query_companies", {}, loaded,
+                    context=_operation_context(application_id="another-app"))
+
+    def test_mutation_proposal_cannot_cross_operation_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _write_skill(Path(tmp) / "write-skill.json")
+            executor = _MutationExecutor()
+            runtime = BusinessToolRuntime(
+                (skill,), executor, application_id="fixture",
+                required_scopes={"create_company": "companies:write"})
+            loaded = {skill.skill_id}
+            first = _operation_context(operation_id="op-1")
+            second = _operation_context(operation_id="op-2")
+            proposal = runtime.prepare_mutation(
+                "create_company", {"name": "Acme"}, loaded, context=first)
+            self.assertEqual(
+                proposal.operation_context_digest, first.binding_digest)
+            with self.assertRaisesRegex(BusinessToolError, "another operation context"):
+                runtime.execute_mutation(
+                    proposal, proposal.content_digest, loaded, context=second)
+            self.assertEqual(executor.executions, 0)
+
     def test_skill_can_load_from_bytes_with_a_logical_artifact_uri(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "skill.json"
@@ -369,7 +422,34 @@ class BusinessRuntimeValidation(unittest.TestCase):
         self.assertEqual(executor.asserted[2]["domainName"]["primaryLinkUrl"],
                          "https://novaforge.example")
         self.assertTrue(result.content["readback_verified"])
-        self.assertEqual(result.audit["oauth_actor"], "delegated_user")
+        self.assertEqual(result.audit["identity_binding"], "unverified")
+        self.assertNotIn("oauth_actor", result.audit)
+
+    def test_twenty_resolves_delegated_actor_from_metadata_api(self):
+        class Tokens:
+            @staticmethod
+            def access_token():
+                return "test-token"
+
+        class FixtureTwenty(TwentyBusinessToolExecutor):
+            def _authorized_metadata_json(self, token):
+                self.seen_token = token
+                return {"data": {
+                    "currentUser": {"id": "actor-1"},
+                    "currentWorkspace": {"id": "workspace-1"},
+                }}
+
+        executor = FixtureTwenty(
+            base_url="http://127.0.0.1:3000", tokens=Tokens())
+        assertion = executor.resolve_delegated_identity(
+            lifetime_s=60, now_ms=1_000_000)
+
+        self.assertEqual(executor.seen_token, "test-token")
+        self.assertEqual(assertion.source, "delegated_api")
+        self.assertEqual(assertion.actor_id, "actor-1")
+        self.assertEqual(assertion.workspace_id, "workspace-1")
+        self.assertEqual(assertion.tenant_id, "workspace-1")
+        self.assertEqual(assertion.expires_at, 1_060_000)
 
     def test_twenty_create_refuses_duplicate_or_non_domain_before_post(self):
         class FixtureTwenty(TwentyBusinessToolExecutor):

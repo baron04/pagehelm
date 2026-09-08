@@ -218,7 +218,8 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         self.assertEqual(result["posts"][0], {
             "path": "/approvals",
             "body": {"schema_version": 1, "session_id": "session-1",
-                     "approval_id": "approval-1", "decision": "approved"},
+                     "approval_id": "approval-1", "decision": "approved",
+                     "principal_digest": "", "turn_id": "", "operation_id": ""},
         })
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
@@ -388,6 +389,36 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                      "message_id": "message-retry"},
         }])
         self.assertTrue(result["stored"]["cancellationPending"])
+
+    @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
+    def test_hello_echoes_only_the_server_supplied_principal_binding(self):
+        source = base64.b64encode(RUNTIME.read_bytes()).decode()
+        script = f"""
+          const mod = await import('data:text/javascript;base64,{source}');
+          globalThis.location = {{origin:'https://app.example.test'}};
+          const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
+          runtime.sessionId = 'session-1';
+          runtime.applicationId = 'twenty';
+          runtime.principalBinding = '{'a' * 64}';
+          runtime.runtimeInstanceId = 'document-1';
+          runtime.stored = {{clientId:'client-1', lastEventId:''}};
+          runtime.leaseId = '';
+          let sent;
+          runtime._post = async (path, body, options) => {{
+            sent = {{path, body, options}};
+            return {{lease_id:'lease-1'}};
+          }};
+          await runtime._hello();
+          process.stdout.write(JSON.stringify({{sent, leaseId:runtime.leaseId}}));
+        """
+        proc = subprocess.run(["node", "--input-type=module", "-e", script],
+                              text=True, capture_output=True, timeout=10, check=True)
+        result = json.loads(proc.stdout)
+        self.assertEqual(result["sent"]["path"], "/hello")
+        self.assertEqual(result["sent"]["body"]["application_id"], "twenty")
+        self.assertEqual(result["sent"]["body"]["principal_digest"], "a" * 64)
+        self.assertEqual(result["sent"]["options"], {"includeLease": False})
+        self.assertEqual(result["leaseId"], "lease-1")
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_goto_uses_opt_in_spa_navigation_and_keeps_document_default(self):

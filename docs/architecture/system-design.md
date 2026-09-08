@@ -101,6 +101,8 @@ Runtime 运行在业务页面的同源脚本环境中。因此当前安全模型
 
 Gateway 为每个会话签发随机 capability，并绑定允许的页面 Origin。Registry 只保存 token 哈希，产品宿主在会话存续期间保留用于生成 bootstrap 的原始 grant。Runtime 建立连接后还会取得活动 lease；整页导航产生的新 Runtime 会替换旧 lease，旧页面不能继续提交观察或结果。
 
+应用宿主还可以在创建 session 前提供短期不可变 `PrincipalContext`。它包含 application、tenant、workspace、actor、delegation 和 scopes，但原始标识只存在于可信服务端内存中；bootstrap、Runtime hello 和跨浏览器协议只携带 application id 与主体摘要。启用 `require_identity` 后，缺少主体、主体过期或应用不匹配会在建立 turn 前拒绝。当前公开 Twenty demo 尚未取得可信的页面 session 身份，因此这个生产门默认未开启。
+
 Remote Session 维护严格 schema 的消息、观察、动作、结果、确认和事件序列。每个页面动作必须：
 
 1. 基于当前 observation id 和 page epoch；
@@ -115,6 +117,8 @@ Remote Session 维护严格 schema 的消息、观察、动作、结果、确认
 `LiveConversationRunner` 顺序消费同一面板中的多轮消息，并复用同一个 Turn Executor。单轮异常会形成独立 outcome，后续消息仍可继续；关闭页面或会话是正常生命周期，不被伪装成任务失败。
 
 每条活动消息具有唯一 `message_id`。页面内停止操作通过当前 Runtime lease 提交严格 schema 的 `CancellationRequest`，服务端只接受同一 session 中已登记的消息。页面动作的 `turn_id` 与该 `message_id` 相同，因此取消请求、模型轮次、审批和动作可以在同一消息边界内关联。Conversation Host 在成功、普通异常、会话关闭和非预期退出路径中统一完成消息生命周期，完成后的消息不能重新进入取消状态。
+
+主体绑定会话中的每次业务工具调用还会创建一个不可变 `OperationContext`，把 principal、session、turn、operation 和有效期固定在一起。Business Tool 逐次校验 application 与 required scope；mutation proposal 的摘要包含 operation context 摘要，审批请求与决定必须匹配同一 principal、turn 和 operation。原始身份字段不会进入浏览器或 Ledger，审计只记录稳定摘要。
 
 取消和动作认领共享同一把会话锁。如果取消先发生，尚未认领的动作从 pending 状态移除，等待结果的 Agent 被立即唤醒并以 `user_cancelled` 结束；如果浏览器先认领动作，取消不会伪造“未执行”，该动作必须返回确定回执，或在结果无法判定时进入 `INDETERMINATE`。等待中的业务写入确认会自动形成拒绝决定并唤醒 Agent；即使批准与取消同时到达，业务 mutation 在实际 dispatch 前仍会再次检查取消状态。
 
@@ -223,6 +227,8 @@ Skill 不保存当前业务数据或凭据。Agent 只能先从当前任务匹�
 
 当前 Twenty executor 使用委托用户 OAuth 身份查询公司。创建公司时，它在提案前和 dispatch 前检查重复项，执行一次创建请求，并用同一用户读取新记录；响应或回读无法确定时返回不确定写入，而不是重试。
 
+Twenty Adapter 还可以通过 `/metadata` 查询 `currentUser` 与 `currentWorkspace`，并与可信应用宿主提供的页面 session 身份断言逐字段匹配。只有 application、tenant/workspace 和 actor 全部一致才会生成 `PrincipalContext`。页面 DOM、自报用户 id 或 capability 的持有本身都不能证明 Twenty 登录身份；宿主必须从 Twenty 的服务端认证边界产生页面身份断言。
+
 ### 6.4 App Skill 与源码 Provider
 
 App Skill 适合描述当前菜单不可见、但已审核的只读页面入口。路由模板和 provenance 留在服务端；Agent 只拿到有限的 Skill 卡片，通过当前页面的真实应用入口进入目标应用，再由服务端验证参数并组装同源只读路径。
@@ -312,7 +318,7 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 - Gateway、Remote Session registry、事件序列、消息队列和 lease 都在单个 Python 进程内存中；进程重启后不能恢复会话。
 - Conversation Host 使用进程内线程和队列，没有外部任务队列、跨实例调度、背压或服务级高可用。
 - Session Ledger 是本机 append-only JSONL，逐条 flush 与 fsync；它不是集中式审计存储，也没有跨进程事务。
-- capability 与 Origin 绑定已经实现，但最终用户身份、组织、租户和会话 capability 之间还没有一等的持久绑定。
+- capability、Origin、短期 principal、turn、业务工具 scope、审批和 mutation proposal 的内存绑定已经实现；可信页面身份解析、持久身份会话、组织级策略和跨进程撤销尚未完成。
 - 浏览器 sessionStorage 可以处理同一标签页内的刷新恢复，不能替代服务端持久幂等存储。
 - 模型调用、页面动作和确认有局部超时，消息级取消已覆盖审批、业务工具和未认领页面动作；provider 请求的主动中断、跨进程取消、完整 deadline 传播和资源回收仍不完整。
 - 目前只有一个窄业务 Adapter 和少量 Skill/API 工具，覆盖面不能代表复杂企业应用的完整操作集。
@@ -325,7 +331,7 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 以下内容是后续架构方向，不是当前已实现能力：
 
 1. 把 session、事件 cursor、动作 claim、确认和幂等结果迁移到可恢复的持久存储，同时保持现有 wire schema。
-2. 建立用户、组织、租户、委托应用身份和 capability 的服务端绑定，并在每个工具调用中强制传播。
+2. 将现有短期 principal/operation 绑定接入可信应用登录会话，补充组织策略、持久撤销和跨进程强制执行。
 3. 将 Conversation Host 迁移到有租约、取消、deadline、背压和故障隔离的 worker 执行模型。
 4. 把 Application Adapter 抽成稳定 SDK，增加契约测试、能力声明、统一错误语义和同身份验证接口。
 5. 将源码、产品文档和其他知识源统一为可开关 Provider，保留运行时事实优先和版本 provenance。
@@ -344,3 +350,4 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 - 浏览器 Runtime：[embedded.js](../../src/web_operation_agent/web_runtime/embedded.js)
 - 会话协议与幂等通道：[remote.py](../../src/web_operation_agent/remote.py)
 - 版本化 wire schema：[schemas.py](../../src/web_operation_agent/schemas.py)
+- 主体与操作上下文：[identity.py](../../src/web_operation_agent/identity.py)

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Callable, Protocol, cast
 
 from .embedded_gateway import EmbeddedGateway
+from .identity import PrincipalContext
 from .privacy import redact_sensitive_assignments, redact_session_handoffs
 from .product import AgentTurnError
 from .remote import RemoteSessionChannel, RemoteSessionClosed, RemoteSessionRegistry
@@ -183,12 +184,14 @@ class LiveProductSession:
     def __init__(self, *, allowed_origin: str, page_controller_module: str,
                  runner_factory: Callable[[RemoteSessionChannel], ProductRunner],
                  session_id: str | None = None, sse_wait_s: float = .2,
-                 navigation_mode: str = "document"):
+                 navigation_mode: str = "document",
+                 principal: PrincipalContext | None = None):
         self.registry = RemoteSessionRegistry()
         self.gateway = EmbeddedGateway(self.registry, sse_wait_s=sse_wait_s)
         self.grant, self.channel = self.registry.create(
             allowed_origins=[allowed_origin],
             session_id=session_id or f"live-{uuid.uuid4().hex}",
+            principal=principal,
         )
         self.page_controller_module = page_controller_module
         if navigation_mode not in {"document", "spa"}:

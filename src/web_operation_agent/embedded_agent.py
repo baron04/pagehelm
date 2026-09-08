@@ -10,6 +10,7 @@ import uuid
 from dataclasses import dataclass
 
 from .controlplane import ControlPlaneClient
+from .identity import OperationContext, PrincipalError
 from .ledger import SessionLedger
 from .remote import RemoteSessionChannel, ensure_safe_browser_payload
 from .schemas import ApprovalDecision, ApprovalRequest, ControlPlan
@@ -59,6 +60,7 @@ class ApprovalGrant:
     decision: str
     plan_digest: str
     decided_at: float
+    operation_context_digest: str = ""
 
 
 class ApprovalGate:
@@ -74,20 +76,40 @@ class ApprovalGate:
         self.ledger = ledger
 
     def decide_plan(self, plan, *, effect: str, targets: tuple[str, ...],
-                    ttl_s: int = 120) -> ApprovalGrant:
+                    ttl_s: int = 120,
+                    context: OperationContext | None = None) -> ApprovalGrant:
         """Return the authenticated decision without treating denial as an exception."""
         if isinstance(ttl_s, bool) or not isinstance(ttl_s, int) or ttl_s < 1 or ttl_s > 600:
             raise ValueError("approval ttl_s must be an integer from 1 to 600")
         if (not isinstance(getattr(plan, "content_digest", None), str)
                 or not callable(getattr(plan, "redacted", None))):
             raise ValueError("approval plan must expose content_digest and redacted()")
+        principal = getattr(self.channel, "principal", None)
+        if principal is None and context is not None:
+            raise ValueError("an unbound session cannot approve a principal-bound operation")
+        if principal is not None:
+            if not isinstance(context, OperationContext):
+                raise ValueError("a principal-bound session requires an operation context")
+            try:
+                context.require_live(application_id=principal.application_id)
+            except PrincipalError as exc:
+                raise ValueError(str(exc)) from exc
+            if (context.principal.binding_digest != principal.binding_digest
+                    or context.session_id != self.channel.session_id):
+                raise ValueError("approval operation context does not match the session")
         approval_id = f"approval-{uuid.uuid4().hex}"
+        expires_at = int(time.time() * 1000) + ttl_s * 1000
+        if context is not None:
+            expires_at = min(expires_at, context.expires_at)
         request = ApprovalRequest(
             schema_version=1,
             approval_id=approval_id,
             effect=effect,
             targets=targets,
-            expires_at=int(time.time() * 1000) + ttl_s * 1000,
+            expires_at=expires_at,
+            principal_digest=(context.principal.binding_digest if context else ""),
+            turn_id=(context.turn_id if context else ""),
+            operation_id=(context.operation_id if context else ""),
         )
         ensure_safe_browser_payload(request.to_json())
         self.ledger.append(
@@ -97,6 +119,7 @@ class ApprovalGate:
             targets=list(targets),
             expires_at=request.expires_at,
             control_plan=plan.redacted(),
+            identity=(context.audit_projection() if context else {}),
         )
         self.channel.request_approval(request)
         decision: ApprovalDecision = self.channel.wait_for_approval(
@@ -107,19 +130,22 @@ class ApprovalGate:
             approval_id=approval_id,
             decision=decision.decision,
             control_plan_digest=plan.content_digest,
+            operation_context_digest=(context.binding_digest if context else ""),
         )
         grant = ApprovalGrant(
             approval_id=approval_id,
             decision=decision.decision,
             plan_digest=plan.content_digest,
             decided_at=decided_at,
+            operation_context_digest=(context.binding_digest if context else ""),
         )
         return grant
 
     def approve_plan(self, plan: ControlPlan, *, effect: str, targets: tuple[str, ...],
-                     ttl_s: int = 120) -> ApprovalGrant:
+                     ttl_s: int = 120,
+                     context: OperationContext | None = None) -> ApprovalGrant:
         grant = self.decide_plan(
-            plan, effect=effect, targets=targets, ttl_s=ttl_s)
+            plan, effect=effect, targets=targets, ttl_s=ttl_s, context=context)
         if grant.decision != "approved":
             raise ApprovalDenied(grant)
         return grant

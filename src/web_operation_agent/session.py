@@ -35,6 +35,7 @@ from .contract import (ContractPlanner, EvidenceBundle, PlanningFailed, SourceRe
 from .controlplane import ControlPlaneClient, ControlPlaneError
 from .grounding import (NOT_APPLICABLE, REFUTED, WRITE_MIXED, WRITE_PERMITTED, WRITE_REFUSED,
                         WRITE_UNKNOWN, PlanState, route_of)
+from .identity import OperationContext, PrincipalContext
 from .knowledge import KnowledgeRouter
 from .ledger import SessionLedger
 from .model import BudgetExhausted, ProviderError
@@ -309,7 +310,9 @@ class ServerAgentSession:
                  business_tools: BusinessToolRuntime | None = None,
                  business_mutation_approval=None,
                  plain_business_answer_min_page_actions: int | None = None,
-                 cancelled: Callable[[], bool] | None = None):
+                 cancelled: Callable[[], bool] | None = None,
+                 principal: PrincipalContext | None = None,
+                 session_id: str = "", turn_id: str = ""):
         if not isinstance(source_affordance_mode, str):
             raise ValueError("source_affordance_mode must be off, auto or empty")
         if source_affordance_mode not in ("off", "auto", "empty"):
@@ -341,6 +344,12 @@ class ServerAgentSession:
                 "plain business answer minimum page actions must be nonnegative or None")
         if cancelled is not None and not callable(cancelled):
             raise ValueError("cancelled must be callable or None")
+        if principal is not None and not isinstance(principal, PrincipalContext):
+            raise ValueError("principal must be a PrincipalContext or None")
+        if principal is not None and (not session_id or not turn_id):
+            raise ValueError("principal-bound sessions require session_id and turn_id")
+        if principal is None and (session_id or turn_id):
+            raise ValueError("session_id and turn_id require a principal")
         self.task = task
         self.arm = arm
         self.chat = chat
@@ -391,6 +400,10 @@ class ServerAgentSession:
         self.plain_business_answer_min_page_actions = \
             plain_business_answer_min_page_actions
         self.cancelled = cancelled or (lambda: False)
+        self.principal = principal
+        self.session_id = session_id
+        self.turn_id = turn_id
+        self._turn_deadline_ms = 0
         if business_tools is not None:
             reserved = set(BROWSER_ACTIONS) | {
                 "finish", "load_skill", "lookup_source", "open_source_route",
@@ -477,6 +490,21 @@ class ServerAgentSession:
             self.ledger.append("planning_failed", detail=self.planning_error)
             return self.contract
 
+    def _operation_context(self, step: int, tool: str) -> OperationContext | None:
+        """Bind a server tool call to the immutable principal and current turn."""
+        if self.principal is None:
+            return None
+        if not self._turn_deadline_ms:
+            raise RuntimeError("operation context cannot be created before the turn starts")
+        operation_seed = f"{self.run_id}\0{step}\0{tool}".encode("utf-8")
+        return OperationContext.create(
+            self.principal,
+            session_id=self.session_id,
+            turn_id=self.turn_id,
+            operation_id="op-" + hashlib.sha256(operation_seed).hexdigest()[:32],
+            deadline_ms=self._turn_deadline_ms,
+        )
+
     def _plan(self) -> OperationContract:
         source_contract = getattr(self, "source_contract", self.source_map is not None)
         if self.oracle_contract is not None:
@@ -538,6 +566,7 @@ class ServerAgentSession:
     # -- the loop ----------------------------------------------------------------------
     def run(self) -> RunResult:
         t0 = time.time()
+        self._turn_deadline_ms = int((t0 + self.wall_budget_s) * 1000)
         result = RunResult(run_id=self.run_id, task_ref=self.task.task_ref, arm=self.arm,
                            terminal_reason="agent_finished",
                            contract_digest=self.contract.content_digest,
@@ -785,15 +814,20 @@ class ServerAgentSession:
 
             if (getattr(self, "business_tools", None) is not None
                     and name in self.business_tools.tool_names):
+                operation_context = self._operation_context(step, name)
+                operation_identity = (operation_context.audit_projection()
+                                      if operation_context is not None else {})
                 if self.business_tools.is_mutation(name):
                     try:
                         proposal = self.business_tools.prepare_mutation(
-                            name, args, self._loaded_business_skill_ids)
+                            name, args, self._loaded_business_skill_ids,
+                            context=operation_context)
                     except BusinessToolError as exc:
                         detail = str(exc)[:500]
                         self.ledger.append(
                             "business_mutation_rejected", step=step, tool=name,
-                            reason=detail, dispatched=False, side_effect_possible=False)
+                            reason=detail, dispatched=False, side_effect_possible=False,
+                            identity=operation_identity)
                         try:
                             receipt, write, fresh = self._observe_after_server_tool(
                                 obs, step, name)
@@ -826,7 +860,7 @@ class ServerAgentSession:
                         "business_mutation_proposed", step=step, tool=name,
                         proposal=proposal.redacted(), effect=proposal.effect,
                         targets=list(proposal.targets), dispatched=False,
-                        side_effect_possible=False)
+                        side_effect_possible=False, identity=operation_identity)
                     if self.business_mutation_approval is None:
                         self.ledger.append(
                             "business_mutation_approval_unavailable", step=step,
@@ -841,7 +875,10 @@ class ServerAgentSession:
                             result, t0, "user_cancelled",
                             "the user stopped this task before approval", steps=step)
                     try:
-                        grant = self.business_mutation_approval(proposal)
+                        grant = (self.business_mutation_approval(proposal)
+                                 if operation_context is None
+                                 else self.business_mutation_approval(
+                                     proposal, context=operation_context))
                     except Exception as exc:
                         self.ledger.append(
                             "business_mutation_approval_failed", step=step,
@@ -863,6 +900,8 @@ class ServerAgentSession:
                             steps=step)
                     decision = getattr(grant, "decision", "")
                     approved_digest = getattr(grant, "plan_digest", "")
+                    approved_context_digest = getattr(
+                        grant, "operation_context_digest", "")
                     approval_id = str(getattr(grant, "approval_id", ""))[:200]
                     if decision != "approved":
                         self._business_control["approval_denied"] += 1
@@ -883,6 +922,18 @@ class ServerAgentSession:
                         return self._finish(
                             result, t0, "approval_failed",
                             "business mutation approval did not match the proposal", steps=step)
+                    if (operation_context is not None
+                            and approved_context_digest != operation_context.binding_digest):
+                        self.ledger.append(
+                            "business_mutation_approval_context_mismatch", step=step,
+                            tool=name, approval_id=approval_id,
+                            proposal_digest=proposal.content_digest,
+                            operation_context_digest=operation_context.binding_digest,
+                            dispatched=False, side_effect_possible=False)
+                        return self._finish(
+                            result, t0, "approval_failed",
+                            "business mutation approval belongs to another operation context",
+                            steps=step)
                     self._business_control["approval_granted"] += 1
                     if self._cancel_requested():
                         self.ledger.append(
@@ -899,17 +950,18 @@ class ServerAgentSession:
                         "business_mutation_execution_started", step=step, tool=name,
                         approval_id=approval_id,
                         proposal_digest=proposal.content_digest,
-                        side_effect_possible=True)
+                        side_effect_possible=True, identity=operation_identity)
                     try:
                         tool_result = self.business_tools.execute_mutation(
-                            proposal, approved_digest, self._loaded_business_skill_ids)
+                            proposal, approved_digest, self._loaded_business_skill_ids,
+                            context=operation_context)
                     except BusinessMutationIndeterminate as exc:
                         self._business_control["mutation_indeterminate"] += 1
                         detail = str(exc)[:500]
                         self.ledger.append(
                             "business_mutation_indeterminate", step=step, tool=name,
                             approval_id=approval_id, reason=detail,
-                            side_effect_possible=True)
+                            side_effect_possible=True, identity=operation_identity)
                         return self._finish(
                             result, t0, "indeterminate_write", detail, steps=step)
                     except BusinessToolError as exc:
@@ -917,7 +969,7 @@ class ServerAgentSession:
                         self.ledger.append(
                             "business_mutation_failed", step=step, tool=name,
                             approval_id=approval_id, reason=detail,
-                            side_effect_possible=False)
+                            side_effect_possible=False, identity=operation_identity)
                         return self._finish(
                             result, t0, "business_mutation_failed", detail, steps=step)
                     self._business_control["mutation_completed"] += 1
@@ -928,7 +980,8 @@ class ServerAgentSession:
                         result_digest=tool_result.content_digest,
                         audit=tool_result.audit,
                         route_count=len(tool_result.allowed_routes),
-                        side_effect_possible=True, completed=True)
+                        side_effect_possible=True, completed=True,
+                        identity=operation_identity)
                     self._business_routes.update(tool_result.allowed_routes)
                     self.latest_business_tool_result = tool_result
                     successful_business_tools += 1
@@ -969,13 +1022,14 @@ class ServerAgentSession:
                         "the user stopped this task before tool dispatch", steps=step)
                 try:
                     tool_result = self.business_tools.execute(
-                        name, args, self._loaded_business_skill_ids)
+                        name, args, self._loaded_business_skill_ids,
+                        context=operation_context)
                     self.ledger.append(
                         "business_tool_result", step=step, tool=name,
                         result_digest=tool_result.content_digest,
                         audit=tool_result.audit,
                         route_count=len(tool_result.allowed_routes),
-                        side_effect_possible=False)
+                        side_effect_possible=False, identity=operation_identity)
                     self._business_routes.update(tool_result.allowed_routes)
                     self.latest_business_tool_result = tool_result
                     successful_business_tools += 1
@@ -985,7 +1039,8 @@ class ServerAgentSession:
                     detail = str(exc)[:500]
                     self.ledger.append(
                         "business_tool_rejected", step=step, tool=name,
-                        reason=detail, side_effect_possible=False)
+                        reason=detail, side_effect_possible=False,
+                        identity=operation_identity)
                     feedback = "BUSINESS TOOL FAILED: " + detail
                 try:
                     receipt, write, fresh = self._observe_after_server_tool(obs, step, name)

@@ -484,6 +484,11 @@ export class EmbeddedWebRuntime {
     this.endpoint = String(config.endpoint).replace(/\/$/, '')
     this.sessionId = String(config.sessionId)
     this.token = String(config.clientToken)
+    this.applicationId = String(config.applicationId || '')
+    this.principalBinding = String(config.principalBinding || '')
+    if (Boolean(this.applicationId) !== Boolean(this.principalBinding)) {
+      throw new Error('applicationId and principalBinding must be supplied together')
+    }
     window.__WOA_DOCUMENT_ID__ ||= crypto.randomUUID()
     this.documentId = window.__WOA_DOCUMENT_ID__
     this.runtimeInstanceId = crypto.randomUUID()
@@ -755,6 +760,8 @@ export class EmbeddedWebRuntime {
         'page.goto', 'page.back', 'page.wait',
       ],
       page_origin: location.origin,
+      application_id: this.applicationId,
+      principal_digest: this.principalBinding,
       last_event_id: this.stored.lastEventId,
     }, {includeLease: false})
     if (!reply.lease_id) throw new Error('hello response did not include a runtime lease')
@@ -981,6 +988,9 @@ export class EmbeddedWebRuntime {
         session_id: this.sessionId,
         approval_id: event.payload.approval_id,
         decision,
+        principal_digest: String(event.payload.principal_digest || ''),
+        turn_id: String(event.payload.turn_id || ''),
+        operation_id: String(event.payload.operation_id || ''),
       })
       this.panel?.add(decision === 'approved' ? '已确认执行' : '已取消操作')
       this.panel?.status(decision === 'approved' ? '执行中' : '已取消')

@@ -727,6 +727,8 @@ class ClientHello:
     runtime: str
     capabilities: tuple[str, ...]
     page_origin: str
+    application_id: str = ""
+    principal_digest: str = ""
     last_event_id: str = ""
 
     def __post_init__(self) -> None:
@@ -738,6 +740,12 @@ class ClientHello:
         object.__setattr__(self, "capabilities",
                            _string_sequence(self.capabilities, "capabilities"))
         _page_origin(self.page_origin)
+        _str(self.application_id, "application_id", allow_empty=True)
+        _str(self.principal_digest, "principal_digest", allow_empty=True)
+        _require(bool(self.application_id) == bool(self.principal_digest),
+                 "application_id and principal_digest must be supplied together")
+        if self.principal_digest:
+            _sha256(self.principal_digest, "principal_digest")
         parse_event_id(self.last_event_id, name="last_event_id", allow_empty=True)
 
     def to_json(self) -> dict:
@@ -745,13 +753,16 @@ class ClientHello:
                 "client_id": self.client_id, "runtime_instance_id": self.runtime_instance_id,
                 "runtime": self.runtime,
                 "capabilities": list(self.capabilities), "page_origin": self.page_origin,
+                "application_id": self.application_id,
+                "principal_digest": self.principal_digest,
                 "last_event_id": self.last_event_id}
 
     @staticmethod
     def from_json(d: dict) -> "ClientHello":
         allowed = {"schema_version", "session_id", "client_id", "runtime_instance_id",
-                   "runtime", "capabilities", "page_origin", "last_event_id"}
-        required = allowed - {"last_event_id"}
+                   "runtime", "capabilities", "page_origin", "application_id",
+                   "principal_digest", "last_event_id"}
+        required = allowed - {"application_id", "principal_digest", "last_event_id"}
         d = _strict_object(d, "ClientHello", allowed=allowed, required=required)
         _require(isinstance(d["capabilities"], list), "capabilities must be an array")
         return ClientHello(schema_version=d["schema_version"], session_id=d["session_id"],
@@ -759,6 +770,8 @@ class ClientHello:
                            runtime=d["runtime"],
                            capabilities=d["capabilities"],
                            page_origin=d["page_origin"],
+                           application_id=d.get("application_id", ""),
+                           principal_digest=d.get("principal_digest", ""),
                            last_event_id=d.get("last_event_id", ""))
 
 
@@ -1050,6 +1063,9 @@ class ApprovalRequest:
     effect: str
     targets: tuple[str, ...]
     expires_at: int
+    principal_digest: str = ""
+    turn_id: str = ""
+    operation_id: str = ""
 
     def __post_init__(self) -> None:
         _schema_version(self.schema_version, "ApprovalRequest")
@@ -1059,20 +1075,35 @@ class ApprovalRequest:
         _require(bool(self.targets), "targets must contain at least one user-visible target")
         _require(_non_negative_int(self.expires_at, "expires_at") > 0,
                  "expires_at must be a positive Unix timestamp in milliseconds")
+        for name in ("principal_digest", "turn_id", "operation_id"):
+            _str(getattr(self, name), name, allow_empty=True)
+        bound = (bool(self.principal_digest), bool(self.turn_id), bool(self.operation_id))
+        _require(len(set(bound)) == 1,
+                 "principal_digest, turn_id, and operation_id must be supplied together")
+        if self.principal_digest:
+            _sha256(self.principal_digest, "principal_digest")
 
     def to_json(self) -> dict:
         return {"schema_version": self.schema_version, "approval_id": self.approval_id,
                 "effect": self.effect, "targets": list(self.targets),
-                "expires_at": self.expires_at}
+                "expires_at": self.expires_at,
+                "principal_digest": self.principal_digest,
+                "turn_id": self.turn_id,
+                "operation_id": self.operation_id}
 
     @staticmethod
     def from_json(d: dict) -> "ApprovalRequest":
-        allowed = {"schema_version", "approval_id", "effect", "targets", "expires_at"}
-        d = _strict_object(d, "ApprovalRequest", allowed=allowed, required=allowed)
+        allowed = {"schema_version", "approval_id", "effect", "targets", "expires_at",
+                   "principal_digest", "turn_id", "operation_id"}
+        required = allowed - {"principal_digest", "turn_id", "operation_id"}
+        d = _strict_object(d, "ApprovalRequest", allowed=allowed, required=required)
         _require(isinstance(d["targets"], list), "targets must be an array")
         return ApprovalRequest(schema_version=d["schema_version"],
                                approval_id=d["approval_id"], effect=d["effect"],
-                               targets=d["targets"], expires_at=d["expires_at"])
+                               targets=d["targets"], expires_at=d["expires_at"],
+                               principal_digest=d.get("principal_digest", ""),
+                               turn_id=d.get("turn_id", ""),
+                               operation_id=d.get("operation_id", ""))
 
     @property
     def content_digest(self) -> str:
@@ -1087,6 +1118,9 @@ class ApprovalDecision:
     session_id: str
     approval_id: str
     decision: str
+    principal_digest: str = ""
+    turn_id: str = ""
+    operation_id: str = ""
 
     def __post_init__(self) -> None:
         _schema_version(self.schema_version, "ApprovalDecision")
@@ -1094,18 +1128,33 @@ class ApprovalDecision:
         _str(self.approval_id, "approval_id")
         _require(self.decision in {"approved", "denied"},
                  "decision must be approved or denied")
+        for name in ("principal_digest", "turn_id", "operation_id"):
+            _str(getattr(self, name), name, allow_empty=True)
+        bound = (bool(self.principal_digest), bool(self.turn_id), bool(self.operation_id))
+        _require(len(set(bound)) == 1,
+                 "principal_digest, turn_id, and operation_id must be supplied together")
+        if self.principal_digest:
+            _sha256(self.principal_digest, "principal_digest")
 
     def to_json(self) -> dict:
         return {"schema_version": self.schema_version, "session_id": self.session_id,
-                "approval_id": self.approval_id, "decision": self.decision}
+                "approval_id": self.approval_id, "decision": self.decision,
+                "principal_digest": self.principal_digest,
+                "turn_id": self.turn_id,
+                "operation_id": self.operation_id}
 
     @staticmethod
     def from_json(d: dict) -> "ApprovalDecision":
-        allowed = {"schema_version", "session_id", "approval_id", "decision"}
-        d = _strict_object(d, "ApprovalDecision", allowed=allowed, required=allowed)
+        allowed = {"schema_version", "session_id", "approval_id", "decision",
+                   "principal_digest", "turn_id", "operation_id"}
+        required = allowed - {"principal_digest", "turn_id", "operation_id"}
+        d = _strict_object(d, "ApprovalDecision", allowed=allowed, required=required)
         return ApprovalDecision(schema_version=d["schema_version"],
                                 session_id=d["session_id"],
-                                approval_id=d["approval_id"], decision=d["decision"])
+                                approval_id=d["approval_id"], decision=d["decision"],
+                                principal_digest=d.get("principal_digest", ""),
+                                turn_id=d.get("turn_id", ""),
+                                operation_id=d.get("operation_id", ""))
 
     @property
     def content_digest(self) -> str:

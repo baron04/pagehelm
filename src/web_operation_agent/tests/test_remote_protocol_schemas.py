@@ -113,6 +113,23 @@ class ClientHandshake(unittest.TestCase):
                           runtime_instance_id="document-1", runtime="web",
                           capabilities=("observe", "observe"), page_origin="https://example.test")
 
+    def test_principal_binding_fields_are_paired_and_digest_checked(self):
+        base = dict(
+            schema_version=1, session_id="session-1", client_id="client-1",
+            runtime_instance_id="document-1", runtime="embedded_web",
+            capabilities=("observe",), page_origin="https://app.example.test",
+        )
+        bound = S.ClientHello(
+            **base, application_id="twenty", principal_digest="a" * 64)
+        self.assertEqual(S.ClientHello.from_json(bound.to_json()), bound)
+        for fields in (
+            {"application_id": "twenty"},
+            {"principal_digest": "a" * 64},
+            {"application_id": "twenty", "principal_digest": "not-a-digest"},
+        ):
+            with self.subTest(fields=fields), self.assertRaises(S.SchemaError):
+                S.ClientHello(**base, **fields)
+
     def test_resume_cursor_has_one_canonical_shape(self):
         base = dict(
             schema_version=1, session_id="s", client_id="c",
