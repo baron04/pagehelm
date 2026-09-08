@@ -114,6 +114,10 @@ Remote Session 维护严格 schema 的消息、观察、动作、结果、确认
 
 `LiveConversationRunner` 顺序消费同一面板中的多轮消息，并复用同一个 Turn Executor。单轮异常会形成独立 outcome，后续消息仍可继续；关闭页面或会话是正常生命周期，不被伪装成任务失败。
 
+每条活动消息具有唯一 `message_id`。页面内停止操作通过当前 Runtime lease 提交严格 schema 的 `CancellationRequest`，服务端只接受同一 session 中已登记的消息。页面动作的 `turn_id` 与该 `message_id` 相同，因此取消请求、模型轮次、审批和动作可以在同一消息边界内关联。Conversation Host 在成功、普通异常、会话关闭和非预期退出路径中统一完成消息生命周期，完成后的消息不能重新进入取消状态。
+
+取消和动作认领共享同一把会话锁。如果取消先发生，尚未认领的动作从 pending 状态移除，等待结果的 Agent 被立即唤醒并以 `user_cancelled` 结束；如果浏览器先认领动作，取消不会伪造“未执行”，该动作必须返回确定回执，或在结果无法判定时进入 `INDETERMINATE`。等待中的业务写入确认会自动形成拒绝决定并唤醒 Agent；即使批准与取消同时到达，业务 mutation 在实际 dispatch 前仍会再次检查取消状态。
+
 `AgentTurnExecutor` 是应用无关的单轮入口。它负责：
 
 - 严格校验 `message_id`、目标文本和页面 URL；
@@ -129,7 +133,7 @@ Remote Session 维护严格 schema 的消息、观察、动作、结果、确认
 
 `ServerAgentSession` 是系统中唯一进行动态决策的 Agent。它持有当前任务、模型上下文、页面观察、预算、已加载 Skill、业务工具、可选知识先验、控制状态和审计记录。
 
-每个 turn 有独立的步数与墙钟预算。每次 provider 请求的 socket timeout 不得超过该 turn 当时剩余的墙钟预算；provider 在截止后才返回时，结果被丢弃并以 `wall_clock_budget` 结束，不能继续触发工具。模型只能通过结构化工具调用行动，不能直接访问浏览器对象、任意网络、数据库或 shell。上下文仅保留有限数量的完整页面观察，较早结果会被压缩，避免上下文随步骤数失控增长。
+每个 turn 有独立的步数与墙钟预算。每次 provider 请求的 socket timeout 不得超过该 turn 当时剩余的墙钟预算；provider 在截止后才返回时，结果被丢弃并以 `wall_clock_budget` 结束，不能继续触发工具。取消在模型返回后、审批前后、业务工具前和页面动作前重复检查，迟到的模型输出不能触发工具。当前标准库 HTTP transport 不能主动打断已经阻塞的 socket 请求，因此停止的 UI 响应会先进入“正在停止”，终态可能要等该请求返回或自然超时。模型只能通过结构化工具调用行动，不能直接访问浏览器对象、任意网络、数据库或 shell。上下文仅保留有限数量的完整页面观察，较早结果会被压缩，避免上下文随步骤数失控增长。
 
 ## 4. ReAct 执行循环
 
@@ -310,7 +314,7 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 - Session Ledger 是本机 append-only JSONL，逐条 flush 与 fsync；它不是集中式审计存储，也没有跨进程事务。
 - capability 与 Origin 绑定已经实现，但最终用户身份、组织、租户和会话 capability 之间还没有一等的持久绑定。
 - 浏览器 sessionStorage 可以处理同一标签页内的刷新恢复，不能替代服务端持久幂等存储。
-- 模型调用、页面动作和确认有局部超时；完整的协作取消、全链路 deadline 传播和资源回收仍不完整。
+- 模型调用、页面动作和确认有局部超时，消息级取消已覆盖审批、业务工具和未认领页面动作；provider 请求的主动中断、跨进程取消、完整 deadline 传播和资源回收仍不完整。
 - 目前只有一个窄业务 Adapter 和少量 Skill/API 工具，覆盖面不能代表复杂企业应用的完整操作集。
 - 源码能力存在于 Session 层，但默认产品 Turn Executor 尚未将它作为可配置 Provider 接入。
 - 页面内助手可以完成基本对话、进度和确认，交互与可访问性仍需系统化打磨。

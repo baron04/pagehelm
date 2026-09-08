@@ -34,13 +34,18 @@ from web_operation_agent.tests.test_business import (
 
 class _Channel:
     def __init__(self, *, page_url: str = "http://app.test/companies",
-                 observation: bool = True, decision: str = "approved"):
+                 observation: bool = True, decision: str = "approved",
+                 cancelled: bool = False):
         self.session_id = "product-session"
         self.published = []
         self.approvals = []
         self.decision = decision
+        self.cancelled = cancelled
         self.latest_observation_envelope = (
             self.envelope(1, page_url) if observation else None)
+
+    def message_cancelled(self, _message_id: str) -> bool:
+        return self.cancelled
 
     def envelope(self, epoch: int, page_url: str) -> ObservationEnvelope:
         return ObservationEnvelope(
@@ -70,10 +75,11 @@ class _Channel:
 class _RemoteBrowser(_Browser):
     instances = []
 
-    def __init__(self, channel, *, timeout_s):
+    def __init__(self, channel, *, timeout_s, turn_id=""):
         super().__init__()
         self.channel = channel
         self.timeout_s = timeout_s
+        self.turn_id = turn_id
         self.started = False
         self.closed = False
         self.__class__.instances.append(self)
@@ -364,6 +370,28 @@ class AgentTurnExecutorTests(unittest.TestCase):
             self.assertEqual(channel.last_approval_timeout, 17)
             self.assertEqual(execution.agent.business_control["approval_denied"], 1)
             self.assertNotIn("verified", channel.published[-1][1])
+
+    def test_cancelled_message_stops_before_model_or_browser_dispatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            chat = _Chat([("finish", {"done": True, "why": "should not run"})])
+            channel = _Channel(cancelled=True)
+            executor = AgentTurnExecutor(
+                channel=channel,
+                config=AgentTurnConfig(
+                    supported_scope="Read current company data.",
+                    ledger_path=root / "session.jsonl"),
+                chat=chat, business_tools=None, control=ReadOnlyControl(),
+                run_id_factory=lambda _message: "turn-user-cancelled",
+            )
+            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+                execution = executor.run_once(_message())
+
+            self.assertEqual(execution.status, AgentTurnStatus.CANCELLED)
+            self.assertEqual(execution.terminal_reason, "user_cancelled")
+            self.assertEqual(chat.messages, [])
+            self.assertEqual(_RemoteBrowser.instances[-1].actions, [])
+            self.assertEqual(channel.published[-1][1]["state"], "cancelled")
 
     def test_indeterminate_write_is_preserved_and_never_presented_as_failure(self):
         with tempfile.TemporaryDirectory() as tmp:

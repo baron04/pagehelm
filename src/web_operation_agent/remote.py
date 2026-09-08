@@ -18,7 +18,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
-from .browser import TransportError
+from .browser import TransportError, TurnCancelled
 from .privacy import (SESSION_HANDOFF_QUERY_KEYS, SENSITIVE_CREDENTIAL_NAME,
                       has_unredacted_sensitive_assignment,
                       has_unredacted_session_handoff,
@@ -31,6 +31,7 @@ from .schemas import (
     ActionResultEnvelope,
     ApprovalDecision,
     ApprovalRequest,
+    CancellationRequest,
     ClientHello,
     ObservationEnvelope,
     PageObservation,
@@ -146,6 +147,10 @@ class RemoteSessionChannel:
         self._events: list[TaskEvent] = []
         self._messages: deque[dict] = deque()
         self._message_digests: dict[str, str] = {}
+        self._cancelled_message_ids: set[str] = set()
+        self._completed_message_ids: set[str] = set()
+        self._cancelled_action_ids: set[str] = set()
+        self._active_message_id = ""
         self._approvals: dict[str, ApprovalRequest] = {}
         self._approval_decisions: dict[str, ApprovalDecision] = {}
         self._pending_approval_id = ""
@@ -365,6 +370,11 @@ class RemoteSessionChannel:
             if action_id in self._results:
                 raise RemoteProtocolError(
                     "action already has a result", code="action_completed")
+            if action.turn_id in self._cancelled_message_ids:
+                raise RemoteProtocolError(
+                    "the task was cancelled before action claim",
+                    code="turn_cancelled",
+                )
             if self._pending_action_id != action_id:
                 raise RemoteProtocolError(
                     "action is no longer pending", code="action_not_pending")
@@ -406,6 +416,59 @@ class RemoteSessionChannel:
             self._messages.append(_copy_json(message))
             self._condition.notify_all()
             return {"accepted": True, "duplicate": False}
+
+    def accept_cancellation(self, request: CancellationRequest, *, lease_id: str) -> dict:
+        with self._condition:
+            self._ensure_open()
+            self._require_active_lease(lease_id)
+            request = _copy_wire(request)
+            if request.session_id != self.session_id:
+                raise RemoteProtocolError(
+                    "cancellation belongs to another session", status=400)
+            if request.message_id not in self._message_digests:
+                raise RemoteProtocolError(
+                    "cancellation names an unknown message",
+                    code="unknown_message", status=404)
+            if request.message_id in self._completed_message_ids:
+                return {"accepted": False, "duplicate": False, "completed": True}
+            duplicate = request.message_id in self._cancelled_message_ids
+            if not duplicate:
+                self._cancelled_message_ids.add(request.message_id)
+                pending = self._actions.get(self._pending_action_id)
+                if (pending is not None
+                        and pending.turn_id == request.message_id
+                        and pending.action_id not in self._action_claims):
+                    self._cancelled_action_ids.add(pending.action_id)
+                    self._pending_action_id = ""
+                if self._active_message_id == request.message_id \
+                        and self._pending_approval_id:
+                    approval_id = self._pending_approval_id
+                    self._approval_decisions[approval_id] = ApprovalDecision(
+                        schema_version=SCHEMA_VERSIONS["ApprovalDecision"],
+                        session_id=self.session_id,
+                        approval_id=approval_id,
+                        decision="denied",
+                    )
+                    self._pending_approval_id = ""
+                self._append_event("progress", {
+                    "state": "cancelling",
+                    "message": "Stopping this task safely.",
+                    "message_id": request.message_id,
+                }, turn_id=request.message_id)
+                self._condition.notify_all()
+            return {"accepted": True, "duplicate": duplicate}
+
+    def message_cancelled(self, message_id: str) -> bool:
+        with self._condition:
+            return message_id in self._cancelled_message_ids
+
+    def complete_message(self, message_id: str) -> None:
+        with self._condition:
+            if message_id:
+                self._completed_message_ids.add(message_id)
+            if self._active_message_id == message_id:
+                self._active_message_id = ""
+            self._condition.notify_all()
 
     def accept_approval(self, decision: ApprovalDecision, *, lease_id: str) -> dict:
         """Accept one idempotent response from the currently authenticated page session."""
@@ -457,6 +520,11 @@ class RemoteSessionChannel:
             action = _copy_wire(action)
             if action.session_id != self.session_id:
                 raise RemoteProtocolError("action belongs to another session", status=400)
+            if action.turn_id in self._cancelled_message_ids:
+                raise RemoteProtocolError(
+                    "the task was cancelled before action dispatch",
+                    code="turn_cancelled",
+                )
             _safe_payload(action.to_json())
             if self._hello is None:
                 raise RemoteProtocolError("cannot act before the embedded runtime hello")
@@ -579,11 +647,17 @@ class RemoteSessionChannel:
     def wait_for_result(self, action_id: str, *, timeout_s: float) -> ActionResultEnvelope:
         with self._condition:
             ready = self._condition.wait_for(
-                lambda: self._closed or action_id in self._results,
+                lambda: (self._closed or action_id in self._results
+                         or action_id in self._cancelled_action_ids),
                 timeout=timeout_s,
             )
             if action_id in self._results:
                 return _copy_wire(self._results[action_id])
+            if action_id in self._cancelled_action_ids:
+                raise RemoteProtocolError(
+                    "the task was cancelled before browser execution",
+                    code="turn_cancelled",
+                )
             self._ensure_open()
             if not ready:
                 raise TimeoutError(f"timed out waiting for result of {action_id}")
@@ -591,10 +665,15 @@ class RemoteSessionChannel:
 
     def wait_for_message(self, *, timeout_s: float | None = None) -> dict:
         with self._condition:
-            ready = self._condition.wait_for(lambda: self._closed or bool(self._messages),
-                                             timeout=timeout_s)
-            if self._messages:
-                return _copy_json(self._messages.popleft())
+            ready = self._condition.wait_for(
+                lambda: self._closed or (bool(self._messages)
+                                         and not self._active_message_id),
+                timeout=timeout_s,
+            )
+            if self._messages and not self._active_message_id:
+                message = _copy_json(self._messages.popleft())
+                self._active_message_id = message["message_id"]
+                return message
             self._ensure_open()
             if not ready:
                 raise TimeoutError("timed out waiting for a user message")
@@ -684,9 +763,11 @@ class RemoteSessionRegistry:
 class RemoteBrowserClient:
     """Synchronous browser interface consumed unchanged by ``ServerAgentSession``."""
 
-    def __init__(self, channel: RemoteSessionChannel, *, timeout_s: float = 90):
+    def __init__(self, channel: RemoteSessionChannel, *, timeout_s: float = 90,
+                 turn_id: str = ""):
         self.channel = channel
         self.timeout_s = timeout_s
+        self.turn_id = turn_id
         self.command_count = 0
         self.relogins = 0
         self._delivered_observation: ObservationEnvelope | None = None
@@ -742,7 +823,7 @@ class RemoteBrowserClient:
             raise TransportError("no page observation has been delivered to the server Agent")
         self.command_count += 1
         action_id = f"a-{uuid.uuid4().hex}"
-        turn_id = f"t-{self.command_count:06d}"
+        turn_id = self.turn_id or f"t-{self.command_count:06d}"
         command = ActionCommand(command_id=action_id, action=action, args=args or {},
                                 expect_navigation=expect_navigation)
         envelope = ActionEnvelope(
@@ -767,6 +848,8 @@ class RemoteBrowserClient:
             self.channel.enqueue_action(envelope)
             result = self.channel.wait_for_result(action_id, timeout_s=self.timeout_s)
         except (TimeoutError, RemoteProtocolError) as exc:
+            if isinstance(exc, RemoteProtocolError) and exc.code == "turn_cancelled":
+                raise TurnCancelled(str(exc)) from exc
             if isinstance(exc, RemoteProtocolError) and exc.code == "stale_observation":
                 fresh = self.channel.latest_observation_envelope
                 if fresh is not None:

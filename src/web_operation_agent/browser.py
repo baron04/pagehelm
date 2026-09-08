@@ -25,6 +25,10 @@ class TransportError(Exception):
     """Any failure of the channel itself. Callers map this to terminal reason `transport_error`."""
 
 
+class TurnCancelled(TransportError):
+    """The authenticated user cancelled before the browser claimed the next action."""
+
+
 class ThinBrowserClient:
     def __init__(self, base_url: str, *, python: str | PathLike[str] | None = None,
                  headless: bool = True, env: Mapping[str, str] | None = None):

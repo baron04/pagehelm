@@ -340,12 +340,14 @@ class StrictWireParsing(unittest.TestCase):
         action = _action()
         result = _completed_result()
         event = S.TaskEvent.for_action(event_id="e00000001", sequence=1, action=action)
+        cancellation = S.CancellationRequest(1, "session-1", "message-1")
         cases = [
             (S.ClientHello, hello.to_json()),
             (S.ObservationEnvelope, observation.to_json()),
             (S.ActionEnvelope, action.to_json()),
             (S.ActionResultEnvelope, result.to_json()),
             (S.TaskEvent, event.to_json()),
+            (S.CancellationRequest, cancellation.to_json()),
         ]
         for cls, payload in cases:
             with self.subTest(cls=cls.__name__, failure="unknown field"):

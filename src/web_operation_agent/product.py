@@ -291,7 +291,8 @@ class AgentTurnExecutor:
         ledger = self.ledger_factory(self.config.ledger_path, run_id)
         approval_gate = ApprovalGate(self.channel, ledger)
         browser = RemoteBrowserClient(
-            self.channel, timeout_s=self.config.transport_timeout_s)
+            self.channel, timeout_s=self.config.transport_timeout_s,
+            turn_id=turn_message.message_id)
         try:
             browser.start()
         except TransportError as exc:
@@ -358,6 +359,7 @@ class AgentTurnExecutor:
             plain_business_answer_min_page_actions=(
                 self.config.plain_business_answer_min_page_actions),
             allow_application_entry=self.config.allow_application_entry,
+            cancelled=lambda: self.channel.message_cancelled(turn_message.message_id),
         )
         session.entry_observation = current.observation
         try:
@@ -443,7 +445,7 @@ def _status_for(terminal_reason: str) -> AgentTurnStatus:
         return AgentTurnStatus.FINISHED
     if terminal_reason == "agent_refused":
         return AgentTurnStatus.REFUSED
-    if terminal_reason == "approval_denied":
+    if terminal_reason in {"approval_denied", "user_cancelled"}:
         return AgentTurnStatus.CANCELLED
     if terminal_reason == "indeterminate_write":
         return AgentTurnStatus.INDETERMINATE

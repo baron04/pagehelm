@@ -68,6 +68,16 @@ class WireTypes(unittest.TestCase):
         with self.assertRaises(S.SchemaError):
             S.ApprovalRequest.from_json(smuggled)
 
+    def test_cancellation_is_strict_and_bound_to_one_message(self):
+        request = S.CancellationRequest(
+            schema_version=1, session_id="session-1", message_id="message-1")
+        self.assertEqual(S.CancellationRequest.from_json(request.to_json()), request)
+        with self.assertRaises(S.SchemaError):
+            S.CancellationRequest.from_json({**request.to_json(), "reason": "skip"})
+        with self.assertRaises(S.SchemaError):
+            S.CancellationRequest(
+                schema_version=1, session_id="session-1", message_id="x" * 201)
+
     def test_action_name_survives_its_arguments(self):
         """Argument keys cannot overwrite the command's explicit action name."""
         cmd = S.ActionCommand(command_id="c1", action="fill",

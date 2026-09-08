@@ -23,10 +23,11 @@ import re
 import time
 import uuid
 from dataclasses import dataclass, field
+from typing import Callable
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit
 
 from .affordance import SourceAffordance, resolve_source_affordances
-from .browser import ThinBrowserClient, TransportError
+from .browser import ThinBrowserClient, TransportError, TurnCancelled
 from .business import (BusinessMutationIndeterminate, BusinessToolError,
                        BusinessToolResult, BusinessToolRuntime)
 from .contract import (ContractPlanner, EvidenceBundle, PlanningFailed, SourceRetriever,
@@ -307,7 +308,8 @@ class ServerAgentSession:
                  allow_application_entry: bool = False,
                  business_tools: BusinessToolRuntime | None = None,
                  business_mutation_approval=None,
-                 plain_business_answer_min_page_actions: int | None = None):
+                 plain_business_answer_min_page_actions: int | None = None,
+                 cancelled: Callable[[], bool] | None = None):
         if not isinstance(source_affordance_mode, str):
             raise ValueError("source_affordance_mode must be off, auto or empty")
         if source_affordance_mode not in ("off", "auto", "empty"):
@@ -337,6 +339,8 @@ class ServerAgentSession:
                      or plain_business_answer_min_page_actions < 0)):
             raise ValueError(
                 "plain business answer minimum page actions must be nonnegative or None")
+        if cancelled is not None and not callable(cancelled):
+            raise ValueError("cancelled must be callable or None")
         self.task = task
         self.arm = arm
         self.chat = chat
@@ -386,6 +390,7 @@ class ServerAgentSession:
         self.latest_business_tool_result: BusinessToolResult | None = None
         self.plain_business_answer_min_page_actions = \
             plain_business_answer_min_page_actions
+        self.cancelled = cancelled or (lambda: False)
         if business_tools is not None:
             reserved = set(BROWSER_ACTIONS) | {
                 "finish", "load_skill", "lookup_source", "open_source_route",
@@ -522,6 +527,14 @@ class ServerAgentSession:
         self.ledger.append("control_plan_installed", plan=plan.redacted(),
                            tickets_installed=len(installed))
 
+    def _cancel_requested(self) -> bool:
+        try:
+            return bool(self.cancelled())
+        except Exception as exc:
+            self.ledger.append(
+                "cancellation_check_failed", error_type=type(exc).__name__)
+            return True
+
     # -- the loop ----------------------------------------------------------------------
     def run(self) -> RunResult:
         t0 = time.time()
@@ -530,12 +543,16 @@ class ServerAgentSession:
                            contract_digest=self.contract.content_digest,
                            contract_source=self.contract_source,
                            citations=len(self.contract.cited_keys()))
+        if self._cancel_requested():
+            return self._finish(
+                result, t0, "user_cancelled", "the user stopped this task")
         if self.planning_error:
             return self._finish(result, t0, "planning_failed", self.planning_error)
         try:
             obs = self.entry_observation or self.browser.observe()
         except TransportError as e:
-            return self._finish(result, t0, "transport_error", str(e))
+            reason = "user_cancelled" if self._cancel_requested() else "transport_error"
+            return self._finish(result, t0, reason, str(e))
         self.ledger.append("observation", epoch=obs.epoch, url=obs.url,
                            elements=len(obs.elements), digest=obs.content_digest)
 
@@ -562,6 +579,10 @@ class ServerAgentSession:
         step = 0
         successful_business_tools = 0
         while True:
+            if self._cancel_requested():
+                return self._finish(
+                    result, t0, "user_cancelled", "the user stopped this task",
+                    steps=step)
             if step >= self.step_budget:
                 return self._finish(result, t0, "step_budget", f"used all {self.step_budget} steps",
                                     steps=step)
@@ -575,9 +596,19 @@ class ServerAgentSession:
                     timeout_s=max(0.001, self.wall_budget_s - elapsed),
                 )
             except BudgetExhausted as e:
+                if self._cancel_requested():
+                    return self._finish(
+                        result, t0, "user_cancelled",
+                        "the user stopped this task while the provider was working",
+                        steps=step)
                 return self._finish(result, t0, "token_budget" if e.kind == "token_budget"
                                     else "wall_clock_budget", str(e), steps=step)
             except ProviderError as e:
+                if self._cancel_requested():
+                    return self._finish(
+                        result, t0, "user_cancelled",
+                        "the user stopped this task while the provider was working",
+                        steps=step)
                 reason = ("wall_clock_budget"
                           if time.time() - t0 >= self.wall_budget_s
                           else "provider_error")
@@ -587,6 +618,12 @@ class ServerAgentSession:
                 return self._finish(
                     result, t0, "wall_clock_budget",
                     f"provider returned after the {self.wall_budget_s}s deadline",
+                    steps=step,
+                )
+            if self._cancel_requested():
+                return self._finish(
+                    result, t0, "user_cancelled",
+                    "the user stopped this task while the provider was working",
                     steps=step,
                 )
 
@@ -669,6 +706,10 @@ class ServerAgentSession:
                         call, "query must be a nonempty string of at most 1000 characters")]
                     continue
                 bundle = self.lookup_source(query, obs)
+                if self._cancel_requested():
+                    return self._finish(
+                        result, t0, "user_cancelled",
+                        "the user stopped this task after source retrieval", steps=step)
                 try:
                     receipt = self.browser.execute("observe", {})
                     self._browser_attempts += 1
@@ -795,6 +836,10 @@ class ServerAgentSession:
                             result, t0, "approval_unavailable",
                             "business mutation requires an authenticated user decision",
                             steps=step)
+                    if self._cancel_requested():
+                        return self._finish(
+                            result, t0, "user_cancelled",
+                            "the user stopped this task before approval", steps=step)
                     try:
                         grant = self.business_mutation_approval(proposal)
                     except Exception as exc:
@@ -806,6 +851,16 @@ class ServerAgentSession:
                         return self._finish(
                             result, t0, "approval_failed",
                             "business mutation approval was unavailable", steps=step)
+                    if self._cancel_requested():
+                        self.ledger.append(
+                            "business_mutation_cancelled_before_dispatch", step=step,
+                            tool=name, approval_id="",
+                            proposal_digest=proposal.content_digest,
+                            dispatched=False, side_effect_possible=False)
+                        return self._finish(
+                            result, t0, "user_cancelled",
+                            "the user stopped this task while approval was pending",
+                            steps=step)
                     decision = getattr(grant, "decision", "")
                     approved_digest = getattr(grant, "plan_digest", "")
                     approval_id = str(getattr(grant, "approval_id", ""))[:200]
@@ -829,6 +884,16 @@ class ServerAgentSession:
                             result, t0, "approval_failed",
                             "business mutation approval did not match the proposal", steps=step)
                     self._business_control["approval_granted"] += 1
+                    if self._cancel_requested():
+                        self.ledger.append(
+                            "business_mutation_cancelled_before_dispatch", step=step,
+                            tool=name, approval_id=approval_id,
+                            proposal_digest=proposal.content_digest,
+                            dispatched=False, side_effect_possible=False)
+                        return self._finish(
+                            result, t0, "user_cancelled",
+                            "the user stopped this task before mutation dispatch",
+                            steps=step)
                     self._business_control["mutation_execution_started"] += 1
                     self.ledger.append(
                         "business_mutation_execution_started", step=step, tool=name,
@@ -898,6 +963,10 @@ class ServerAgentSession:
                     continue
 
                 tool_result = None
+                if self._cancel_requested():
+                    return self._finish(
+                        result, t0, "user_cancelled",
+                        "the user stopped this task before tool dispatch", steps=step)
                 try:
                     tool_result = self.business_tools.execute(
                         name, args, self._loaded_business_skill_ids)
@@ -1286,10 +1355,20 @@ class ServerAgentSession:
             expect_nav = bool(args.pop("expect_navigation", False))
             if "ref" in args:
                 args["epoch"] = obs.epoch
+            if self._cancel_requested():
+                return self._finish(
+                    result, t0, "user_cancelled",
+                    "the user stopped this task before browser dispatch", steps=step)
             try:
                 self._browser_attempts += 1
                 self._awaiting_control = action_may_write
                 receipt = self.browser.execute(name, args, expect_navigation=expect_nav)
+            except TurnCancelled as exc:
+                self.ledger.append(
+                    "browser_action_cancelled_before_dispatch", step=step, tool=name,
+                    dispatched=False, side_effect_possible=False)
+                return self._finish(
+                    result, t0, "user_cancelled", str(exc), steps=step)
             except TransportError as e:
                 return self._finish(result, t0,
                                     self._transport_terminal(name, may_write=action_may_write), str(e),
@@ -1440,6 +1519,8 @@ class ServerAgentSession:
     def _observe_after_source_rejection(self, obs: PageObservation, step: int,
                                         after_tool: str) -> tuple[ActionReceipt, dict, bool]:
         """Ground a server-side refusal in a real fresh page without dispatching it."""
+        if self._cancel_requested():
+            raise TurnCancelled("the user stopped this task before page observation")
         prior_epoch = obs.epoch
         self._browser_attempts += 1
         receipt = self.browser.execute("observe", {})
@@ -1463,6 +1544,8 @@ class ServerAgentSession:
     def _observe_after_server_tool(self, obs: PageObservation, step: int,
                                    server_tool: str) -> tuple[ActionReceipt, dict, bool]:
         """Return a fresh page after a server-side Skill or read-only business tool."""
+        if self._cancel_requested():
+            raise TurnCancelled("the user stopped this task before page observation")
         prior_epoch = obs.epoch
         self._browser_attempts += 1
         receipt = self.browser.execute("observe", {})
@@ -1688,6 +1771,8 @@ class ServerAgentSession:
         # A readable empty trace is not evidence that a lost click never dispatched, and
         # observing after a permit does not clear the earlier unconfirmed write.
         action_may_write = action in self.WRITE_CAPABLE if may_write is None else may_write
+        if self._cancel_requested() and not self.pending_write and not action_may_write:
+            return "user_cancelled"
         return ("indeterminate_write" if self.pending_write or action_may_write
                 else "transport_error")
 

@@ -16,13 +16,13 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .remote import RemoteProtocolError, RemoteSessionRegistry, SessionGrant
-from .schemas import (ActionResultEnvelope, ApprovalDecision, ClientHello,
+from .schemas import (ActionResultEnvelope, ApprovalDecision, CancellationRequest, ClientHello,
                       ObservationEnvelope, SchemaError, canonical_json)
 
 MAX_BODY_BYTES = 1024 * 1024
 SESSION_PATH = re.compile(
     r"^/v1/sessions/([A-Za-z0-9_-]{1,128})/"
-    r"(hello|observations|claims|results|messages|approvals|events)$"
+    r"(hello|observations|claims|results|messages|approvals|cancellations|events)$"
 )
 RUNTIME_PATH = Path(__file__).resolve().parent / "web_runtime" / "embedded.js"
 
@@ -166,6 +166,9 @@ def _handler(registry: RemoteSessionRegistry, *, sse_wait_s: float):
                 elif endpoint == "approvals":
                     reply = channel.accept_approval(
                         ApprovalDecision.from_json(body), lease_id=lease_id)
+                elif endpoint == "cancellations":
+                    reply = channel.accept_cancellation(
+                        CancellationRequest.from_json(body), lease_id=lease_id)
                 else:
                     reply = channel.accept_message(body, lease_id=lease_id)
                 self._json(200, reply, session_id=session_id)

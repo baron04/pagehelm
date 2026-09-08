@@ -18,6 +18,7 @@ The repository currently verifies these behaviors with local automated tests and
 | Skills and business tools | A Skill describes when and how to use typed tools. Current data comes from the application API rather than the Skill text. |
 | Guarded writes | Business mutations are disabled by default. Enabled integrations require an explicit page confirmation and treat uncertain outcomes as `indeterminate` instead of retrying. |
 | Multi-turn hosting | A conversation host processes panel messages sequentially and isolates an ordinary turn failure from later turns. |
+| Task control | The panel can stop its exact active message through the current authenticated runtime lease. Cancellation prevents unclaimed actions and pending approved writes from dispatching; already claimed actions still settle to a definite or indeterminate result. |
 | Audit and replay primitives | Server events can be written to an append-only ledger and projected into a redacted replay. |
 | Twenty CRM vertical | The packaged adapter can query companies, hand an API-discovered company route to the browser, and opt in to creating one company with confirmation and same-user readback. |
 
@@ -120,7 +121,7 @@ Results use four distinct states: `PASS`, `FAIL`, `INDETERMINATE` for an uncerta
 ## Known limitations
 
 - The server state, ledger, and session registry are local-process components; durable storage, horizontal scaling, tenant isolation, and production identity binding are not complete.
-- Turn deadlines cap each provider request by the remaining wall budget. Initial observation binding and claim-before-execution target/form/route freshness checks exist, but user-driven cancellation, dependencies outside the target element, broader concurrency, crash recovery, and operational observability are incomplete.
+- Turn deadlines cap each provider request by the remaining wall budget. Message-bound user cancellation prevents later tool dispatch and releases approval waits, but the current provider HTTP transport cannot interrupt an in-flight socket request; its late result is discarded. Initial observation binding and claim-before-execution target/form/route freshness checks exist, while dependencies outside the target element, broader concurrency, crash recovery, and operational observability remain incomplete.
 - The only packaged business adapter is a narrow Twenty CRM Companies vertical.
 - Arbitrary third-party websites and a browser extension are not implemented.
 - Browser actions do not provide database transaction or rollback semantics.

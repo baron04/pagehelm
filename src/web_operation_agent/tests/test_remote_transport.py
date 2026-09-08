@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 from unittest import mock
 
-from web_operation_agent.browser import TransportError
+from web_operation_agent.browser import TransportError, TurnCancelled
 from web_operation_agent.embedded_gateway import EmbeddedGateway
 from web_operation_agent.remote import (RemoteBrowserClient, RemoteProtocolError,
                                          RemoteSessionRegistry)
@@ -21,6 +21,7 @@ from web_operation_agent.schemas import (
     ActionResultEnvelope,
     ApprovalDecision,
     ApprovalRequest,
+    CancellationRequest,
     ClientHello,
     ElementRef,
     ObservationEnvelope,
@@ -179,6 +180,119 @@ class ChannelTests(unittest.TestCase):
             ("/callback?access_token=raw-secret",), int(time.time() * 1000) + 5000)
         with self.assertRaisesRegex(RemoteProtocolError, "credential"):
             self.channel.request_approval(request)
+
+    def test_cancellation_rejects_an_unclaimed_action_and_wakes_the_server(self):
+        message = {"message_id": "message-1", "text": "Open the next page",
+                   "page_url": ORIGIN + "/start"}
+        self.channel.accept_message(message, lease_id=self.lease)
+        self.assertEqual(self.channel.wait_for_message(timeout_s=0), message)
+        action = dataclasses.replace(
+            action_for(self.grant.session_id, self.first), turn_id="message-1")
+        self.channel.enqueue_action(action)
+
+        request = CancellationRequest(1, self.grant.session_id, "message-1")
+        reply = self.channel.accept_cancellation(request, lease_id=self.lease)
+        self.assertEqual(reply, {"accepted": True, "duplicate": False})
+        self.assertTrue(self.channel.message_cancelled("message-1"))
+        with self.assertRaisesRegex(RemoteProtocolError, "before browser execution") as caught:
+            self.channel.wait_for_result(action.action_id, timeout_s=0)
+        self.assertEqual(caught.exception.code, "turn_cancelled")
+        with self.assertRaisesRegex(RemoteProtocolError, "before action claim"):
+            self.channel.claim_action(
+                {"action_id": action.action_id}, lease_id=self.lease)
+        self.assertIsNone(self.channel.pending_action)
+        self.assertTrue(self.channel.accept_cancellation(
+            request, lease_id=self.lease)["duplicate"])
+
+        self.channel.complete_message("message-1")
+        self.assertEqual(self.channel.accept_cancellation(
+            request, lease_id=self.lease),
+            {"accepted": False, "duplicate": False, "completed": True})
+
+    def test_remote_browser_surfaces_pre_claim_cancellation_as_typed_terminal(self):
+        message = {"message_id": "message-browser", "text": "Open the next page",
+                   "page_url": ORIGIN + "/start"}
+        self.channel.accept_message(message, lease_id=self.lease)
+        self.channel.wait_for_message(timeout_s=0)
+        browser = RemoteBrowserClient(
+            self.channel, timeout_s=2, turn_id="message-browser")
+        browser.start()
+        answer = {}
+
+        def run_action():
+            try:
+                browser.execute("click", {"ref": "e0"})
+            except Exception as exc:
+                answer["error"] = exc
+
+        worker = threading.Thread(target=run_action)
+        worker.start()
+        events = self.channel.events_after(
+            "e00000001", lease_id=self.lease, wait_s=1)
+        self.assertTrue(any(event.kind == "action" for event in events))
+        self.channel.accept_cancellation(
+            CancellationRequest(1, self.grant.session_id, "message-browser"),
+            lease_id=self.lease)
+        worker.join(timeout=2)
+
+        self.assertFalse(worker.is_alive())
+        self.assertIsInstance(answer.get("error"), TurnCancelled)
+
+    def test_cancellation_denies_a_pending_approval_but_not_a_claimed_action(self):
+        message = {"message_id": "message-2", "text": "Update the quote",
+                   "page_url": ORIGIN + "/start"}
+        self.channel.accept_message(message, lease_id=self.lease)
+        self.channel.wait_for_message(timeout_s=0)
+        approval = ApprovalRequest(
+            1, "approval-cancel", "Update quote", ("Quote Q-1042",),
+            int(time.time() * 1000) + 5000)
+        self.channel.request_approval(approval)
+        request = CancellationRequest(1, self.grant.session_id, "message-2")
+        self.channel.accept_cancellation(request, lease_id=self.lease)
+        decision = self.channel.wait_for_approval(approval.approval_id, timeout_s=0)
+        self.assertEqual(decision.decision, "denied")
+
+        self.channel.complete_message("message-2")
+        message = {"message_id": "message-3", "text": "Open the next page",
+                   "page_url": ORIGIN + "/start"}
+        self.channel.accept_message(message, lease_id=self.lease)
+        self.channel.wait_for_message(timeout_s=0)
+        action = dataclasses.replace(
+            action_for(self.grant.session_id, self.first, action_id="a-claimed"),
+            turn_id="message-3")
+        self.channel.enqueue_action(action)
+        self.channel.claim_action({"action_id": action.action_id}, lease_id=self.lease)
+        self.channel.accept_cancellation(
+            CancellationRequest(1, self.grant.session_id, "message-3"),
+            lease_id=self.lease)
+        after = observation(self.grant.session_id, 2, caused_by=action.action_id,
+                            url=ORIGIN + "/next")
+        expected = completed(action, after)
+        self.channel.accept_result(expected, lease_id=self.lease)
+        self.assertEqual(
+            self.channel.wait_for_result(action.action_id, timeout_s=0), expected)
+
+    def test_cancellation_requires_current_lease_known_message_and_same_session(self):
+        message = {"message_id": "message-security", "text": "Open next",
+                   "page_url": ORIGIN + "/start"}
+        self.channel.accept_message(message, lease_id=self.lease)
+        with self.assertRaisesRegex(RemoteProtocolError, "unknown message"):
+            self.channel.accept_cancellation(
+                CancellationRequest(1, self.grant.session_id, "missing"),
+                lease_id=self.lease)
+        with self.assertRaisesRegex(RemoteProtocolError, "another session"):
+            self.channel.accept_cancellation(
+                CancellationRequest(1, "other-session", "message-security"),
+                lease_id=self.lease)
+        new_lease = self.channel.accept_hello(hello(
+            self.grant.session_id, runtime_instance_id="runtime-document-2"))["lease_id"]
+        with self.assertRaisesRegex(RemoteProtocolError, "lease"):
+            self.channel.accept_cancellation(
+                CancellationRequest(1, self.grant.session_id, "message-security"),
+                lease_id=self.lease)
+        self.assertTrue(self.channel.accept_cancellation(
+            CancellationRequest(1, self.grant.session_id, "message-security"),
+            lease_id=new_lease)["accepted"])
 
     def test_stale_duplicate_and_second_in_flight_fail_closed(self):
         self.assertTrue(self.channel.accept_observation(
@@ -544,6 +658,23 @@ class GatewayTests(unittest.TestCase):
             "POST", f"/v1/sessions/{sid}/approvals", body)
         self.assertEqual(status, 200)
         self.assertTrue(json.loads(raw)["duplicate"])
+
+    def test_authenticated_cancellation_endpoint_is_message_bound(self):
+        sid = self.grant.session_id
+        _, _, raw_hello = self.request(
+            "POST", f"/v1/sessions/{sid}/hello", hello(sid).to_json())
+        self.lease = json.loads(raw_hello)["lease_id"]
+        message = {"message_id": "message-http", "text": "Open next",
+                   "page_url": ORIGIN + "/start"}
+        self.assertEqual(self.request(
+            "POST", f"/v1/sessions/{sid}/messages", message)[0], 200)
+        self.channel.wait_for_message(timeout_s=0)
+        body = CancellationRequest(1, sid, "message-http").to_json()
+        status, _, raw = self.request(
+            "POST", f"/v1/sessions/{sid}/cancellations", body)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(raw), {"accepted": True, "duplicate": False})
+        self.assertTrue(self.channel.message_cancelled("message-http"))
 
     def test_token_origin_cors_and_static_runtime_boundary(self):
         sid = self.grant.session_id

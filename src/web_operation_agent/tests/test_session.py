@@ -213,6 +213,49 @@ def _session(tmp, chat, browser, control, contract=None):
     return session
 
 
+class ActiveCancellation(unittest.TestCase):
+    def test_provider_result_is_discarded_when_the_user_cancels_mid_turn(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            chat = _Chat([("click", {"ref": "e1"})])
+            browser = _Browser([_page(1), _page(2)])
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="Open the next page"),
+                arm="U", chat=chat, browser=browser, control=_Control([[]]),
+                ledger=SessionLedger(Path(tmp) / "cancel.jsonl", "cancel-provider"),
+                attestation=None, source_contract=False, step_budget=3,
+                wall_budget_s=30, run_id="cancel-provider",
+                cancelled=lambda: bool(chat.seen),
+            )
+            session.entry_observation = browser.pages[0]
+            session.plan()
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "user_cancelled")
+            self.assertEqual(browser.done, [])
+            self.assertEqual(len(chat.seen), 1)
+
+    def test_cancellation_callback_failure_stops_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            browser = _Browser([_page(1)])
+
+            def broken_check():
+                raise RuntimeError("cancellation store unavailable")
+
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="Observe"), arm="U",
+                chat=_Chat([]), browser=browser, control=_Control([[]]),
+                ledger=SessionLedger(Path(tmp) / "cancel.jsonl", "cancel-closed"),
+                attestation=None, source_contract=False, step_budget=2,
+                wall_budget_s=30, run_id="cancel-closed", cancelled=broken_check,
+            )
+            session.entry_observation = browser.pages[0]
+            session.plan()
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "user_cancelled")
+            self.assertEqual(len(session.ledger.of_kind("cancellation_check_failed")), 1)
+
+
 CONTRACT = OperationContract.from_json({
     "schema_version": 1, "task_ref": "T", "summary": "go via the invoice",
     "steps": [{"intent": "open the invoice", "webapp": "accounting", "request": "viewInvoice",

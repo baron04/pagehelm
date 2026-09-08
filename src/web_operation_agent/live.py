@@ -97,48 +97,53 @@ class LiveConversationRunner:
             except RemoteSessionClosed:
                 return tuple(outcomes)
             turn = self.turns_completed + 1
+            message_id = str(message.get("message_id") or "")
             try:
-                result = self._execute_turn(message, turn)
-                outcome = LiveTurnOutcome(
-                    turn=turn, result=result, task=str(message.get("text") or ""))
-            except RemoteSessionClosed:
-                # Closing the panel/session is normal lifecycle completion, including
-                # when it interrupts an in-flight executor.
-                return tuple(outcomes)
-            except Exception as exc:
-                detail = redact_sensitive_assignments(redact_session_handoffs(
-                    f"{type(exc).__name__}: {exc}"))[:800]
-                outcome = LiveTurnOutcome(
-                    turn=turn, result=None, task=str(message.get("text") or ""), error=detail)
+                try:
+                    result = self._execute_turn(message, turn)
+                    outcome = LiveTurnOutcome(
+                        turn=turn, result=result, task=str(message.get("text") or ""))
+                except RemoteSessionClosed:
+                    # Closing the panel/session is normal lifecycle completion, including
+                    # when it interrupts an in-flight executor.
+                    return tuple(outcomes)
+                except Exception as exc:
+                    detail = redact_sensitive_assignments(redact_session_handoffs(
+                        f"{type(exc).__name__}: {exc}"))[:800]
+                    outcome = LiveTurnOutcome(
+                        turn=turn, result=None, task=str(message.get("text") or ""),
+                        error=detail)
+                    outcomes.append(outcome)
+                    self._record(outcome)
+                    if isinstance(exc, AgentTurnError):
+                        error_code = exc.code.value
+                        retryable = exc.retryable
+                        user_message = {
+                            "observation_unavailable": "页面状态暂不可用，请稍后重新提交。",
+                            "stale_message": "页面已发生变化，请检查当前页面后重新提交。",
+                            "runtime_unavailable": "页面连接暂不可用，请稍后重试。",
+                            "invalid_message": "请求格式无效，请重新输入。",
+                        }.get(error_code, "本次任务执行失败，请查看运行记录。")
+                    else:
+                        error_code = "unexpected_error"
+                        retryable = False
+                        user_message = "本次任务执行失败，请查看运行记录。"
+                    try:
+                        self.channel.publish("progress", {
+                            "state": "task_failed",
+                            "message": user_message,
+                            "error_code": error_code,
+                            "retryable": retryable,
+                        })
+                    except RemoteSessionClosed:
+                        # The outcome is already durable to this host.  The next dequeue
+                        # observes closure after any messages already accepted by the channel.
+                        pass
+                    continue
                 outcomes.append(outcome)
                 self._record(outcome)
-                if isinstance(exc, AgentTurnError):
-                    error_code = exc.code.value
-                    retryable = exc.retryable
-                    user_message = {
-                        "observation_unavailable": "页面状态暂不可用，请稍后重新提交。",
-                        "stale_message": "页面已发生变化，请检查当前页面后重新提交。",
-                        "runtime_unavailable": "页面连接暂不可用，请稍后重试。",
-                        "invalid_message": "请求格式无效，请重新输入。",
-                    }.get(error_code, "本次任务执行失败，请查看运行记录。")
-                else:
-                    error_code = "unexpected_error"
-                    retryable = False
-                    user_message = "本次任务执行失败，请查看运行记录。"
-                try:
-                    self.channel.publish("progress", {
-                        "state": "task_failed",
-                        "message": user_message,
-                        "error_code": error_code,
-                        "retryable": retryable,
-                    })
-                except RemoteSessionClosed:
-                    # The outcome is already durable to this host.  The next dequeue
-                    # observes closure after any messages already accepted by the channel.
-                    pass
-                continue
-            outcomes.append(outcome)
-            self._record(outcome)
+            finally:
+                self.channel.complete_message(message_id)
 
     def run_once(self) -> tuple[LiveTurnOutcome, ...]:
         """Compatibility alias for callers that treated the session loop as one run."""

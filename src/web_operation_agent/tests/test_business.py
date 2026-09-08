@@ -428,6 +428,75 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertEqual(result.business_control["mutation_execution_started"], 0)
             self.assertEqual(len(ledger.of_kind("business_mutation_denied")), 1)
 
+    def test_cancellation_after_approval_never_dispatches_the_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _write_skill(Path(tmp) / "write-skill.json")
+            executor = _MutationExecutor()
+            runtime = BusinessToolRuntime((skill,), executor)
+            chat = _Chat([
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("create_company", {"name": "Acme"}),
+            ])
+            cancelled = {"value": False}
+
+            def approve_then_cancel(proposal):
+                cancelled["value"] = True
+                return SimpleNamespace(
+                    approval_id="approval-cancel", decision="approved",
+                    plan_digest=proposal.content_digest)
+
+            ledger = SessionLedger(Path(tmp) / "session.jsonl", "write-cancelled")
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="Create company Acme.",
+                              supported_scope="Create exactly one company."),
+                arm="U", chat=chat, browser=_Browser(), control=ReadOnlyControl(),
+                ledger=ledger, attestation=None, source_contract=False,
+                step_budget=3, wall_budget_s=30, run_id="write-cancelled",
+                business_tools=runtime, business_mutation_approval=approve_then_cancel,
+                cancelled=lambda: cancelled["value"])
+            session.entry_observation = _observation(1)
+            session.plan()
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "user_cancelled")
+            self.assertEqual(executor.executions, 0)
+            self.assertEqual(result.business_control["approval_granted"], 0)
+            event = ledger.of_kind("business_mutation_cancelled_before_dispatch")[-1]
+            self.assertFalse(event["dispatched"])
+            self.assertFalse(event["side_effect_possible"])
+
+    def test_cancellation_during_read_tool_skips_followup_page_dispatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cancelled = {"value": False}
+
+            class CancellingExecutor(_Executor):
+                @staticmethod
+                def execute(name, args):
+                    result = _Executor.execute(name, args)
+                    cancelled["value"] = True
+                    return result
+
+            skill = _skill(Path(tmp) / "query-skill.json")
+            browser = _Browser()
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="List companies",
+                              supported_scope="Read current companies."),
+                arm="U", chat=_Chat([
+                    ("load_skill", {"skill_id": skill.skill_id}),
+                    ("query_companies", {}),
+                ]), browser=browser, control=ReadOnlyControl(),
+                ledger=SessionLedger(Path(tmp) / "session.jsonl", "read-cancelled"),
+                attestation=None, source_contract=False, step_budget=3,
+                wall_budget_s=30, run_id="read-cancelled",
+                business_tools=BusinessToolRuntime((skill,), CancellingExecutor()),
+                cancelled=lambda: cancelled["value"])
+            session.entry_observation = _observation(1)
+            session.plan()
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "user_cancelled")
+            self.assertEqual(browser.actions, ["observe"])
+
     def test_approved_server_mutation_returns_route_to_react_loop(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill = _write_skill(Path(tmp) / "write-skill.json")

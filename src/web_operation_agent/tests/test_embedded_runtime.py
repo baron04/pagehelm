@@ -307,6 +307,89 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         self.assertTrue(all(row["taskInFlight"] is False for row in rows))
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
+    def test_stop_posts_the_exact_active_message_and_waits_for_terminal(self):
+        source = base64.b64encode(RUNTIME.read_bytes()).decode()
+        script = f"""
+          const mod = await import('data:text/javascript;base64,{source}');
+          const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
+          runtime.stopped = false;
+          runtime.sessionId = 'session-1';
+          runtime.stored = {{taskInFlight:true, activeMessageId:'message-7',
+            cancellationPending:false}};
+          let saves = 0;
+          runtime._save = () => {{ saves += 1; }};
+          const statuses = [];
+          const notes = [];
+          let approvalCancelled = 0;
+          let stopping = false;
+          let busy = true;
+          runtime.panel = {{
+            add(value) {{ notes.push(value); }},
+            status(value) {{ statuses.push(value); }},
+            setBusy(value) {{ busy = value; }},
+            setStopping(value) {{ stopping = value; }},
+            cancelApproval() {{ approvalCancelled += 1; }},
+          }};
+          const posts = [];
+          runtime._post = async (path, body) => {{ posts.push({{path, body}}); }};
+          await runtime.cancelTask();
+          await runtime.cancelTask();
+          const pending = {{busy, stopping,
+            taskInFlight:runtime.stored.taskInFlight,
+            activeMessageId:runtime.stored.activeMessageId,
+            cancellationPending:runtime.stored.cancellationPending}};
+          await runtime._handleEvent({{kind:'progress', payload:{{
+            state:'cancelled', message:'Stopped'}}}});
+          process.stdout.write(JSON.stringify({{posts, pending, approvalCancelled,
+            statuses, notes, saves, busy, stopping, stored:runtime.stored}}));
+        """
+        proc = subprocess.run(["node", "--input-type=module", "-e", script],
+                              text=True, capture_output=True, timeout=10, check=True)
+        result = json.loads(proc.stdout)
+        self.assertEqual(result["posts"], [{
+            "path": "/cancellations",
+            "body": {"schema_version": 1, "session_id": "session-1",
+                     "message_id": "message-7"},
+        }])
+        self.assertEqual(result["approvalCancelled"], 1)
+        self.assertEqual(result["pending"], {
+            "busy": True, "stopping": True, "taskInFlight": True,
+            "activeMessageId": "message-7", "cancellationPending": True})
+        self.assertEqual(result["statuses"], ["正在停止", "已取消"])
+        self.assertEqual(result["notes"], ["正在安全停止当前任务", "Stopped"])
+        self.assertFalse(result["busy"])
+        self.assertFalse(result["stored"]["taskInFlight"])
+        self.assertEqual(result["stored"]["activeMessageId"], "")
+        self.assertFalse(result["stored"]["cancellationPending"])
+
+    @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
+    def test_pending_stop_retries_idempotently_after_runtime_restart(self):
+        source = base64.b64encode(RUNTIME.read_bytes()).decode()
+        script = f"""
+          const mod = await import('data:text/javascript;base64,{source}');
+          const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
+          runtime.stopped = false;
+          runtime.sessionId = 'session-1';
+          runtime.stored = {{taskInFlight:true, activeMessageId:'message-retry',
+            cancellationPending:true}};
+          runtime._save = () => {{}};
+          runtime.panel = {{cancelApproval() {{}}, status() {{}}, setStopping() {{}}, add() {{}}}};
+          const posts = [];
+          runtime._post = async (path, body) => {{ posts.push({{path, body}}); }};
+          await runtime.cancelTask({{retry:true}});
+          process.stdout.write(JSON.stringify({{posts, stored:runtime.stored}}));
+        """
+        proc = subprocess.run(["node", "--input-type=module", "-e", script],
+                              text=True, capture_output=True, timeout=10, check=True)
+        result = json.loads(proc.stdout)
+        self.assertEqual(result["posts"], [{
+            "path": "/cancellations",
+            "body": {"schema_version": 1, "session_id": "session-1",
+                     "message_id": "message-retry"},
+        }])
+        self.assertTrue(result["stored"]["cancellationPending"])
+
+    @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_goto_uses_opt_in_spa_navigation_and_keeps_document_default(self):
         source = base64.b64encode(RUNTIME.read_bytes()).decode()
         script = f"""

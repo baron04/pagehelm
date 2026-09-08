@@ -379,14 +379,20 @@ function buildPanel() {
     <section><header><strong>AI 助手</strong><output aria-live="polite">正在连接</output></header>
       <ol aria-label="执行进度"></ol>
       <form><input maxlength="2000" aria-label="描述目标" placeholder="描述你想完成的目标" />
+        <button type="button" class="stop" disabled>停止</button>
         <button type="submit">开始</button></form></section>`
   document.documentElement.appendChild(host)
+  let cancelPendingApproval = () => {}
   return {
     host,
     status: value => { shadow.querySelector('output').textContent = value },
     setBusy: value => {
       shadow.querySelector('input').disabled = Boolean(value)
       shadow.querySelector('button[type="submit"]').disabled = Boolean(value)
+      shadow.querySelector('button.stop').disabled = !Boolean(value)
+    },
+    setStopping: value => {
+      shadow.querySelector('button.stop').disabled = Boolean(value)
     },
     add: value => {
       const item = document.createElement('li')
@@ -404,6 +410,9 @@ function buildPanel() {
       input.value = ''
       await handler(value)
     }),
+    onCancel: handler => shadow.querySelector('button.stop').addEventListener(
+      'click', () => { void Promise.resolve(handler()).catch(() => {}) }),
+    cancelApproval: () => cancelPendingApproval(),
     requestApproval: request => new Promise(resolve => {
       shadow.querySelector('.approval')?.remove()
       const card = document.createElement('div')
@@ -432,8 +441,10 @@ function buildPanel() {
         settled = true
         clearTimeout(timer)
         card.remove()
+        cancelPendingApproval = () => {}
         resolve(decision)
       }
+      cancelPendingApproval = () => finish('denied')
       deny.addEventListener('click', () => finish('denied'), {once: true})
       approve.addEventListener('click', () => finish('approved'), {once: true})
       const remaining = Math.max(0, Number(request.expires_at || 0) - Date.now())
@@ -485,6 +496,8 @@ export class EmbeddedWebRuntime {
     this.stored.cachedResult ||= null
     this.stored.approvals ||= {}
     this.stored.taskInFlight = Boolean(this.stored.taskInFlight)
+    this.stored.activeMessageId = String(this.stored.activeMessageId || '')
+    this.stored.cancellationPending = Boolean(this.stored.cancellationPending)
     writeStored(this.sessionId, this.stored)
     this.currentObservation = null
     this.observationFingerprints = new Map()
@@ -598,8 +611,14 @@ export class EmbeddedWebRuntime {
       }
     }
     this.panel?.onTask(text => this.submitTask(text))
+    this.panel?.onCancel?.(() => this.cancelTask())
     this.panel?.setBusy?.(this.stored.taskInFlight)
-    this.panel?.status(resultDeferred ? '正在重连' : '已连接')
+    this.panel?.setStopping?.(this.stored.cancellationPending)
+    this.panel?.status(
+      resultDeferred ? '正在重连' : (this.stored.cancellationPending ? '正在停止' : '已连接'))
+    if (this.stored.cancellationPending) {
+      void this.cancelTask({retry: true}).catch(() => {})
+    }
     if (resultDeferred) {
       void this._resumeAfterDeferredResult()
     } else {
@@ -615,7 +634,10 @@ export class EmbeddedWebRuntime {
     if (!goal || goal.length > 2000) {
       throw new Error('task must contain 1-2000 characters')
     }
+    const messageId = crypto.randomUUID()
     this.stored.taskInFlight = true
+    this.stored.activeMessageId = messageId
+    this.stored.cancellationPending = false
     this._save()
     this.panel?.setBusy?.(true)
     this.panel?.status('已提交')
@@ -627,13 +649,40 @@ export class EmbeddedWebRuntime {
       const observation = await this.observe()
       await this._post('/observations', observation)
       return await this._post('/messages', {
-        message_id: crypto.randomUUID(), text: redactString(goal),
+        message_id: messageId, text: redactString(goal),
         page_url: observation.observation.url,
       })
     } catch (error) {
       this.stored.taskInFlight = false
+      this.stored.activeMessageId = ''
+      this.stored.cancellationPending = false
       this._save()
       this.panel?.setBusy?.(false)
+      throw error
+    }
+  }
+
+  async cancelTask({retry = false} = {}) {
+    if (this.stopped || !this.stored.taskInFlight || !this.stored.activeMessageId) return
+    if (this.stored.cancellationPending && !retry) return
+    this.panel?.cancelApproval?.()
+    this.panel?.status('正在停止')
+    if (!retry) this.panel?.add('正在安全停止当前任务')
+    this.stored.cancellationPending = true
+    this._save()
+    this.panel?.setStopping?.(true)
+    try {
+      await this._post('/cancellations', {
+        schema_version: WIRE_VERSION,
+        session_id: this.sessionId,
+        message_id: this.stored.activeMessageId,
+      })
+    } catch (error) {
+      this.stored.cancellationPending = false
+      this._save()
+      this.panel?.setStopping?.(false)
+      this.panel?.status('停止请求失败')
+      this.panel?.add('停止请求未送达，请重试')
       throw error
     }
   }
@@ -893,6 +942,8 @@ export class EmbeddedWebRuntime {
         .includes(event.payload.state)
       if (finished) {
         this.stored.taskInFlight = false
+        this.stored.activeMessageId = ''
+        this.stored.cancellationPending = false
         this._save()
         this.panel?.setBusy?.(false)
       }
@@ -900,11 +951,13 @@ export class EmbeddedWebRuntime {
         finished: '已结束', refused: '无法执行', cancelled: '已取消',
         indeterminate: '结果不确定', failed: '任务失败',
         verified: '已完成', needs_input: '等待补充', not_verified: '未通过验证', approval_denied: '已取消',
-        task_failed: '任务失败', knowledge_used: '使用知识',
+        task_failed: '任务失败', knowledge_used: '使用知识', cancelling: '正在停止',
       }
       this.panel?.status(statuses[event.payload.state] || '执行中')
     } else if (event.kind === 'terminal') {
       this.stored.taskInFlight = false
+      this.stored.activeMessageId = ''
+      this.stored.cancellationPending = false
       this._save()
       this.panel?.setBusy?.(false)
       this.panel?.add(event.payload.message || event.payload.reason || '任务结束')

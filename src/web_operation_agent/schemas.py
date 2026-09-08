@@ -34,6 +34,7 @@ SCHEMA_VERSIONS = {
     "TaskEvent": 1,
     "ApprovalRequest": 1,
     "ApprovalDecision": 1,
+    "CancellationRequest": 1,
     "ControlPlan": 1,
 }
 
@@ -148,6 +149,7 @@ SCORABLE_TERMINAL_REASONS = frozenset({
     "agent_refused",          # the agent stopped and said it could not proceed
     "planning_failed",        # the source arm could not produce a valid contract
     "approval_denied",        # the authenticated user declined the proposed effect
+    "user_cancelled",         # the authenticated user stopped the active task
     "business_mutation_failed",  # a known-safe server write refusal was returned
 })
 
@@ -1104,6 +1106,35 @@ class ApprovalDecision:
         return ApprovalDecision(schema_version=d["schema_version"],
                                 session_id=d["session_id"],
                                 approval_id=d["approval_id"], decision=d["decision"])
+
+    @property
+    def content_digest(self) -> str:
+        return digest(self.to_json())
+
+
+@dataclass(frozen=True)
+class CancellationRequest:
+    """Authenticated request to stop one exact user message in the current session."""
+
+    schema_version: int
+    session_id: str
+    message_id: str
+
+    def __post_init__(self) -> None:
+        _schema_version(self.schema_version, "CancellationRequest")
+        _str(self.session_id, "session_id")
+        _str(self.message_id, "message_id")
+        _require(len(self.message_id) <= 200, "message_id exceeds 200 characters")
+
+    def to_json(self) -> dict:
+        return {"schema_version": self.schema_version, "session_id": self.session_id,
+                "message_id": self.message_id}
+
+    @staticmethod
+    def from_json(d: dict) -> "CancellationRequest":
+        allowed = {"schema_version", "session_id", "message_id"}
+        d = _strict_object(d, "CancellationRequest", allowed=allowed, required=allowed)
+        return CancellationRequest(**d)
 
     @property
     def content_digest(self) -> str:
