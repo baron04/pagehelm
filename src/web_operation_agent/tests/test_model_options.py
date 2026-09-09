@@ -6,7 +6,10 @@ live in policy data keyed by model name rather than in model-specific code branc
 import json
 import io
 import tempfile
+import threading
+import time
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
@@ -225,6 +228,129 @@ class NativeCompletionTransport(unittest.TestCase):
 
 
 class ProviderRuntimeProtection(unittest.TestCase):
+    def test_cancellation_aborts_an_inflight_socket_and_releases_the_guard(self):
+        request_started = threading.Event()
+        release_handler = threading.Event()
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("content-length", "0")))
+                request_started.set()
+                release_handler.wait(5)
+                try:
+                    self.send_response(200)
+                    self.send_header("content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(b'{}')
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
+            def log_message(self, *_args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                guard = M.ProviderRuntimeGuard(max_concurrent_requests=1)
+                chat = M.ChatModel(
+                    M.SpendMeter(ledger=Path(directory) / "spend.jsonl"),
+                    env={"AGENT_OPENAI_BASE_URL": f"http://127.0.0.1:{server.server_port}/v1",
+                         "AGENT_OPENAI_API_KEY": "key",
+                         "AGENT_OPENAI_MODEL_PRO": "MiniMax-M3"},
+                    runtime_guard=guard,
+                )
+                cancelled = threading.Event()
+                outcome = []
+
+                def call():
+                    try:
+                        chat.complete_cancellable(
+                            [{"role": "user", "content": "test"}], None, "run",
+                            cancelled=cancelled.is_set, timeout_s=5)
+                    except Exception as exc:
+                        outcome.append(exc)
+
+                worker = threading.Thread(target=call)
+                worker.start()
+                self.assertTrue(request_started.wait(2))
+                started = time.monotonic()
+                cancelled.set()
+                worker.join(1)
+                self.assertFalse(worker.is_alive())
+                self.assertLess(time.monotonic() - started, 1)
+                self.assertEqual(len(outcome), 1)
+                self.assertIsInstance(outcome[0], M.ProviderError)
+                self.assertEqual(outcome[0].code, "provider_cancelled")
+                self.assertEqual(guard.status()["in_flight"], 0)
+                self.assertFalse(guard.status()["circuit_open"])
+                row = json.loads((Path(directory) / "spend.jsonl").read_text())
+                self.assertEqual(row["accounting_status"], "usage_unavailable")
+                self.assertEqual(row["error_code"], "provider_cancelled")
+        finally:
+            release_handler.set()
+            server.shutdown()
+            server.server_close()
+            server_thread.join(2)
+
+    def test_cancellable_deadline_releases_the_guard_for_the_next_call(self):
+        calls = 0
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                nonlocal calls
+                calls += 1
+                self.rfile.read(int(self.headers.get("content-length", "0")))
+                if calls == 1:
+                    time.sleep(.3)
+                payload = {"usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                           "choices": [{"finish_reason": "stop",
+                                        "message": {"content": "done"}}]}
+                try:
+                    encoded = json.dumps(payload).encode()
+                    self.send_response(200)
+                    self.send_header("content-length", str(len(encoded)))
+                    self.end_headers()
+                    self.wfile.write(encoded)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
+            def log_message(self, *_args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                guard = M.ProviderRuntimeGuard(max_concurrent_requests=1)
+                chat = M.ChatModel(
+                    M.SpendMeter(ledger=Path(directory) / "spend.jsonl"),
+                    env={"AGENT_OPENAI_BASE_URL": f"http://127.0.0.1:{server.server_port}/v1",
+                         "AGENT_OPENAI_API_KEY": "key",
+                         "AGENT_OPENAI_MODEL_PRO": "MiniMax-M3"},
+                    runtime_guard=guard,
+                )
+                with self.assertRaises(M.ProviderError) as timed_out:
+                    chat.complete_cancellable(
+                        [{"role": "user", "content": "first"}], None, "first",
+                        cancelled=lambda: False, timeout_s=.05)
+                self.assertEqual(timed_out.exception.code, "provider_transport")
+                self.assertEqual(guard.status()["in_flight"], 0)
+
+                reply = chat.complete_cancellable(
+                    [{"role": "user", "content": "second"}], None, "second",
+                    cancelled=lambda: False, timeout_s=1)
+                self.assertEqual(reply["content"], "done")
+                self.assertEqual(guard.status()["in_flight"], 0)
+                self.assertEqual(chat.meter.run_report("first")["usage_unavailable_calls"], 1)
+                self.assertEqual(chat.meter.run_report("second")["model_calls"], 1)
+        finally:
+            server.shutdown()
+            server.server_close()
+            server_thread.join(2)
+
     def test_capacity_wait_is_bounded_and_does_not_change_circuit_health(self):
         guard = M.ProviderRuntimeGuard(max_concurrent_requests=1)
         guard.acquire(1)

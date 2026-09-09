@@ -4,6 +4,8 @@ import dataclasses
 import inspect
 import json
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -13,6 +15,7 @@ from web_operation_agent.business import BusinessToolResult, BusinessToolRuntime
 from web_operation_agent.conversation import ConversationState
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.identity import PrincipalContext
+from web_operation_agent.model import ProviderError
 from web_operation_agent.product import (
     AgentTurnConfig,
     AgentTurnError,
@@ -583,6 +586,70 @@ class AgentTurnExecutorTests(unittest.TestCase):
             self.assertEqual(chat.messages, [])
             self.assertEqual(_RemoteBrowser.instances[-1].actions, [])
             self.assertEqual(channel.published[-1][1]["state"], "cancelled")
+
+    def test_cancellation_reaches_an_inflight_cancellable_provider(self):
+        class MessageCancellationChannel(_Channel):
+            def __init__(self):
+                super().__init__()
+                self.cancelled_messages = set()
+
+            def message_cancelled(self, message_id):
+                return message_id in self.cancelled_messages
+
+        class BlockingChat:
+            def __init__(self):
+                self.started = threading.Event()
+                self.calls = 0
+
+            def complete(self, *_args, **_kwargs):
+                raise AssertionError("the blocking fallback must not be used")
+
+            def complete_cancellable(self, *_args, cancelled, **_kwargs):
+                self.calls += 1
+                self.started.set()
+                if self.calls == 1:
+                    while not cancelled():
+                        time.sleep(.01)
+                    raise ProviderError(
+                        "provider call cancelled", code="provider_cancelled", retryable=False)
+                return {"tool_calls": [{"id": "finish-recovery", "function": {
+                    "name": "finish",
+                    "arguments": json.dumps({"done": True, "why": "recovered"}),
+                }}]}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            chat = BlockingChat()
+            channel = MessageCancellationChannel()
+            executor = AgentTurnExecutor(
+                channel=channel,
+                config=AgentTurnConfig(
+                    supported_scope="Read current company data.",
+                    ledger_path=Path(tmp) / "session.jsonl"),
+                chat=chat, business_tools=None, control=ReadOnlyControl(),
+                run_id_factory=lambda _message: "turn-cancel-provider",
+            )
+            outcome = []
+            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+                worker = threading.Thread(
+                    target=lambda: outcome.append(executor.run_once(_message())))
+                worker.start()
+                self.assertTrue(chat.started.wait(1))
+                channel.cancelled_messages.add("message-1")
+                worker.join(1)
+
+                recovered = executor.run_once({
+                    "message_id": "message-2",
+                    "text": "continue after cancellation",
+                    "page_url": "http://app.test/companies",
+                })
+
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(outcome[0].status, AgentTurnStatus.CANCELLED)
+            self.assertEqual(outcome[0].terminal_reason, "user_cancelled")
+            self.assertEqual(recovered.status, AgentTurnStatus.FINISHED)
+            self.assertEqual(recovered.terminal_reason, "agent_finished")
+            self.assertEqual(chat.calls, 2)
+            self.assertEqual(channel.published[-1][1]["state"], "finished")
 
     def test_indeterminate_write_is_preserved_and_never_presented_as_failure(self):
         with tempfile.TemporaryDirectory() as tmp:

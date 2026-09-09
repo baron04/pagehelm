@@ -734,10 +734,18 @@ class ServerAgentSession:
                 return self._finish(result, t0, "wall_clock_budget",
                                     f"exceeded {self.wall_budget_s}s", steps=step)
             try:
-                reply = self.chat.complete(
-                    messages, self.tool_schemas(), self.run_id,
-                    timeout_s=max(0.001, self.wall_budget_s - elapsed),
-                )
+                complete_cancellable = getattr(self.chat, "complete_cancellable", None)
+                if callable(complete_cancellable):
+                    reply = complete_cancellable(
+                        messages, self.tool_schemas(), self.run_id,
+                        timeout_s=max(0.001, self.wall_budget_s - elapsed),
+                        cancelled=self._cancel_requested,
+                    )
+                else:
+                    reply = self.chat.complete(
+                        messages, self.tool_schemas(), self.run_id,
+                        timeout_s=max(0.001, self.wall_budget_s - elapsed),
+                    )
             except BudgetExhausted as e:
                 if self._cancel_requested():
                     return self._finish(

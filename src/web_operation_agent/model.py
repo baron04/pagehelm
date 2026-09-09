@@ -9,8 +9,10 @@ also fingerprints the configured real file before and after the suite as a final
 """
 from __future__ import annotations
 
+import base64
 import fcntl
 import hashlib
+import http.client
 import ipaddress
 import json
 import math
@@ -53,6 +55,12 @@ class ProviderError(Exception):
         self.code = code
         self.retryable = retryable
         self.request_id = request_id
+
+
+class _ProviderHTTPStatus(Exception):
+    def __init__(self, status: int):
+        super().__init__(f"provider returned HTTP {status}")
+        self.status = status
 
 
 class ProviderRuntimeGuard:
@@ -557,6 +565,24 @@ class ChatModel:
     def complete(self, messages: list[dict], tools: list[dict] | None, run_id: str,
                  max_tokens: int | None = None, options: dict | None = None,
                  timeout_s: float | None = None) -> dict:
+        return self._complete(
+            messages, tools, run_id, max_tokens=max_tokens, options=options,
+            timeout_s=timeout_s, cancelled=None)
+
+    def complete_cancellable(
+            self, messages: list[dict], tools: list[dict] | None, run_id: str,
+            *, cancelled, max_tokens: int | None = None, options: dict | None = None,
+            timeout_s: float | None = None) -> dict:
+        """Complete one call while allowing the owning turn to abort its socket."""
+        if not callable(cancelled):
+            raise TypeError("cancelled must be callable")
+        return self._complete(
+            messages, tools, run_id, max_tokens=max_tokens, options=options,
+            timeout_s=timeout_s, cancelled=cancelled)
+
+    def _complete(self, messages: list[dict], tools: list[dict] | None, run_id: str,
+                  *, max_tokens: int | None, options: dict | None,
+                  timeout_s: float | None, cancelled) -> dict:
         """`max_tokens` overrides the per-call ceiling for this one request.
 
         The action loop's 2,048 is frozen: one structured tool call never needs more, and a
@@ -585,7 +611,7 @@ class ChatModel:
             body["tools"] = tools
             body["tool_choice"] = "auto"
         data, request_id = self._request_completion_with_receipt(
-            body, run_id, timeout_s=timeout_s)
+            body, run_id, timeout_s=timeout_s, cancelled=cancelled)
         choices = data.get("choices") or []
         if not isinstance(choices, list) or not choices:
             raise ProviderError("provider returned no choices", request_id=request_id)
@@ -615,7 +641,7 @@ class ChatModel:
 
     def _request_completion_with_receipt(
             self, body: dict, run_id: str,
-            *, timeout_s: float | None = None) -> tuple[dict, str]:
+            *, timeout_s: float | None = None, cancelled=None) -> tuple[dict, str]:
         if timeout_s is not None and (
                 isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float))
                 or not math.isfinite(timeout_s) or timeout_s <= 0):
@@ -651,21 +677,26 @@ class ChatModel:
                     code="provider_capacity",
                 )
             request_id = uuid.uuid4().hex
-            req = urllib.request.Request(
-                f"{self.base}/chat/completions", data=payload, method="POST",
-                headers={"content-type": "application/json",
-                         "authorization": f"Bearer {self._key}",
-                         "x-woa-request-id": request_id})
+            url = f"{self.base}/chat/completions"
+            headers = {"content-type": "application/json",
+                       "authorization": f"Bearer {self._key}",
+                       "x-woa-request-id": request_id}
             try:
-                with urllib.request.urlopen(req, timeout=socket_timeout) as r:
-                    raw_response = r.read(MAX_PROVIDER_RESPONSE_BYTES + 1)
-                    if len(raw_response) > MAX_PROVIDER_RESPONSE_BYTES:
-                        raise ProviderError(
-                            "provider response exceeds the 4 MiB limit",
-                            code="provider_response",
-                            request_id=request_id,
-                        )
-                    data = json.loads(raw_response)
+                if cancelled is None:
+                    req = urllib.request.Request(
+                        url, data=payload, method="POST", headers=headers)
+                    with urllib.request.urlopen(req, timeout=socket_timeout) as r:
+                        raw_response = r.read(MAX_PROVIDER_RESPONSE_BYTES + 1)
+                else:
+                    raw_response = self._cancellable_post(
+                        url, payload, headers, socket_timeout, cancelled)
+                if len(raw_response) > MAX_PROVIDER_RESPONSE_BYTES:
+                    raise ProviderError(
+                        "provider response exceeds the 4 MiB limit",
+                        code="provider_response",
+                        request_id=request_id,
+                    )
+                data = json.loads(raw_response)
             except urllib.error.HTTPError as e:
                 transient = e.code in {408, 425, 429} or 500 <= e.code <= 599
                 if guard is not None:
@@ -680,9 +711,19 @@ class ChatModel:
                     retryable=transient,
                     request_id=request_id,
                 ) from e
+            except _ProviderHTTPStatus as e:
+                transient = e.status in {408, 425, 429} or 500 <= e.status <= 599
+                if guard is not None:
+                    guard.record_failure(transient=transient)
+                self.meter.record_unmetered(
+                    provider=self.provider, model=self.model, run_id=run_id,
+                    request_id=request_id, error_code="provider_http")
+                raise ProviderError(
+                    f"provider returned HTTP {e.status}", code="provider_http",
+                    retryable=transient, request_id=request_id) from e
             except ProviderError as exc:
                 if guard is not None:
-                    guard.record_failure(transient=True)
+                    guard.record_failure(transient=bool(exc.retryable))
                 exc.request_id = exc.request_id or request_id
                 self.meter.record_unmetered(
                     provider=self.provider, model=self.model, run_id=run_id,
@@ -744,3 +785,80 @@ class ChatModel:
                 "provider usage is invalid",
                 code="provider_usage", request_id=request_id) from exc
         return data, request_id
+
+    @staticmethod
+    def _cancellable_post(url: str, payload: bytes, headers: dict[str, str],
+                          timeout_s: float, cancelled) -> bytes:
+        """POST through a closeable stdlib connection and abort it on turn cancellation."""
+        parsed = urllib.parse.urlsplit(url)
+        target_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        path = parsed.path or "/"
+        if parsed.query:
+            path += "?" + parsed.query
+        proxy_url = urllib.request.getproxies().get(parsed.scheme, "")
+        use_proxy = bool(proxy_url and not urllib.request.proxy_bypass(parsed.hostname or ""))
+        if use_proxy:
+            proxy = urllib.parse.urlsplit(proxy_url)
+            if proxy.scheme != "http" or not proxy.hostname:
+                raise ProviderError(
+                    "cancellable provider transport requires an HTTP CONNECT proxy",
+                    code="provider_configuration", retryable=False)
+            proxy_headers = {}
+            if proxy.username is not None:
+                credential = (urllib.parse.unquote(proxy.username) + ":"
+                              + urllib.parse.unquote(proxy.password or ""))
+                proxy_headers["Proxy-Authorization"] = "Basic " + base64.b64encode(
+                    credential.encode()).decode()
+            if parsed.scheme == "https":
+                connection = http.client.HTTPSConnection(
+                    proxy.hostname, proxy.port or 80, timeout=max(0.001, timeout_s))
+                connection.set_tunnel(
+                    parsed.hostname, target_port, headers=proxy_headers)
+            else:
+                connection = http.client.HTTPConnection(
+                    proxy.hostname, proxy.port or 80, timeout=max(0.001, timeout_s))
+                path = url
+                headers = {**headers, **proxy_headers}
+        else:
+            connection_type = (http.client.HTTPSConnection if parsed.scheme == "https"
+                               else http.client.HTTPConnection)
+            connection = connection_type(
+                parsed.hostname, parsed.port, timeout=max(0.001, timeout_s))
+        finished = threading.Event()
+        was_cancelled = threading.Event()
+
+        def watch() -> None:
+            while not finished.wait(.05):
+                if cancelled():
+                    was_cancelled.set()
+                    sock = connection.sock
+                    if sock is not None:
+                        try:
+                            sock.shutdown(2)
+                        except OSError:
+                            pass
+                    connection.close()
+                    return
+
+        if cancelled():
+            raise ProviderError(
+                "provider call cancelled before dispatch", code="provider_cancelled",
+                retryable=False)
+        watcher = threading.Thread(target=watch, name="woa-provider-cancel", daemon=True)
+        watcher.start()
+        try:
+            connection.request("POST", path, body=payload, headers=headers)
+            response = connection.getresponse()
+            if not 200 <= response.status <= 299:
+                raise _ProviderHTTPStatus(response.status)
+            return response.read(MAX_PROVIDER_RESPONSE_BYTES + 1)
+        except Exception as exc:
+            if was_cancelled.is_set() or cancelled():
+                raise ProviderError(
+                    "provider call cancelled", code="provider_cancelled",
+                    retryable=False) from exc
+            raise
+        finally:
+            finished.set()
+            connection.close()
+            watcher.join(timeout=1)

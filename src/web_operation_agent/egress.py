@@ -177,3 +177,12 @@ class AuditedChat:
         report = self.policy.inspect(messages, tools)
         self._ledger.append("provider_egress", **report.audit_projection())
         return self._delegate.complete(messages, tools, run_id, **kwargs)
+
+    def complete_cancellable(self, messages: list[dict], tools: list[dict] | None,
+                             run_id: str, *, cancelled, **kwargs) -> dict:
+        report = self.policy.inspect(messages, tools)
+        self._ledger.append("provider_egress", **report.audit_projection())
+        complete = getattr(self._delegate, "complete_cancellable", None)
+        if callable(complete):
+            return complete(messages, tools, run_id, cancelled=cancelled, **kwargs)
+        return self._delegate.complete(messages, tools, run_id, **kwargs)
