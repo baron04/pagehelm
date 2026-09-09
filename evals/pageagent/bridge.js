@@ -116,7 +116,7 @@ function providerFetch(runToken, metrics) {
     const url = typeof input === 'string' ? input : input?.url
     const method = String(init.method || 'POST').toUpperCase()
     const body = typeof init.body === 'string' ? init.body : ''
-    if (typeof url !== 'string' || !url.startsWith('https://provider.invalid/') || method !== 'POST') throw new Error('PageAgent attempted an unexpected provider request')
+    if (url !== 'https://provider.invalid/v1/chat/completions' || method !== 'POST') throw new Error('PageAgent attempted an unexpected provider request')
     if (!body || new TextEncoder().encode(body).length > MAX_PROVIDER_REQUEST_BYTES) throw new Error('provider request body is empty or oversized')
     JSON.parse(body)
     metrics.provider_calls += 1

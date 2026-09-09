@@ -114,3 +114,5 @@ jobs:
       - name: Verify deterministic PageAgent baseline bundle
         working-directory: evals/pageagent
         run: npm test
+      - name: Test PageAgent server host
+        run: python -m unittest evals.pageagent.test_host -v

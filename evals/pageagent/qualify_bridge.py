@@ -9,6 +9,7 @@ from typing import Any
 
 from playwright.sync_api import Page, sync_playwright
 
+from evals.pageagent.host import PageAgentProviderContract, PageAgentProviderProxy
 from evals.twenty.fixture import atomic_write_json
 
 
@@ -70,39 +71,80 @@ def _config(*, prompt: str, capability: str, tools: list[dict[str, Any]]) -> dic
     }
 
 
-def _prepare_page(browser, bundle: Path, provider_actions: list[dict[str, Any]],
-                  business_calls: list[dict[str, Any]]) -> tuple[Page, list[dict[str, Any]]]:
-    page = browser.new_page()
-    requests: list[dict[str, Any]] = []
-    responses = [
-        _completion(action, sequence=index + 1)
-        for index, action in enumerate(provider_actions)
-    ]
+class _ScriptedMeter:
+    def __init__(self, client: "_ScriptedClient"):
+        self.client = client
 
-    def provider(payload: dict[str, Any]) -> dict[str, Any]:
-        if not isinstance(payload, dict) or set(payload) != {"run_token", "url", "method", "body"}:
-            raise ValueError("provider bridge payload is invalid")
-        body = json.loads(payload["body"])
-        if (payload["run_token"] != "qualification-run-token"
-                or payload["method"] != "POST"
-                or not payload["url"].startswith("https://provider.invalid/")
-                or body.get("model") != "pageagent-qualification-model"
-                or body.get("parallel_tool_calls") is not False
-                or body.get("temperature") != 0
-                or body.get("top_p") != 1
-                or body.get("max_completion_tokens") != 512):
-            raise ValueError("provider bridge changed the frozen request contract")
+    def run_report(self, _run_id: str) -> dict[str, Any]:
+        used = self.client.responses[:len(self.client.requests)]
+        usages = [item["usage"] for item in used]
+        request_digests = [hashlib.sha256(json.dumps(
+            item, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")).hexdigest() for item in self.client.requests]
+        evidence_digest = (
+            "sha256:" + hashlib.sha256(json.dumps(
+                request_digests, separators=(",", ":")).encode("utf-8")).hexdigest()
+            if request_digests else None)
+        return {
+            "model_calls": len(used),
+            "usage_unavailable_calls": 0,
+            "provider_reported_models": sorted({item["model"] for item in used}),
+            "provider_request_ids_digest": evidence_digest,
+            "known_input_tokens": sum(item["prompt_tokens"] for item in usages),
+            "known_output_tokens": sum(item["completion_tokens"] for item in usages),
+            "known_cached_tokens": sum(
+                item.get("prompt_tokens_details", {}).get("cached_tokens", 0)
+                for item in usages),
+            "known_reasoning_tokens": sum(
+                item.get("completion_tokens_details", {}).get("reasoning_tokens", 0)
+                for item in usages),
+            "known_cost_cny": 0.0,
+            "total_cost_cny": 0.0,
+            "spend_ledger_slice_digest": evidence_digest,
+        }
+
+
+class _ScriptedClient:
+    model = "pageagent-qualification-model"
+
+    def __init__(self, responses: list[dict[str, Any]]):
+        self.responses = responses
+        self.requests: list[dict[str, Any]] = []
+        self.meter = _ScriptedMeter(self)
+
+    def request_completion(self, body: dict[str, Any], _run_id: str,
+                           *, timeout_s: float) -> dict[str, Any]:
+        if not 0 < timeout_s <= 10:
+            raise ValueError("qualification provider deadline is invalid")
         encoded_body = json.dumps(body, ensure_ascii=False, sort_keys=True)
-        requests.append({
+        self.requests.append({
             "model": body["model"],
             "tool_names": sorted(tool["function"]["name"] for tool in body["tools"]),
             "contains_ask_user": "ask_user" in encoded_body,
             "contains_execute_javascript": "execute_javascript" in encoded_body,
             "contains_query_companies": "query_companies" in encoded_body,
         })
-        if len(requests) > len(responses):
+        if len(self.requests) > len(self.responses):
             raise ValueError("PageAgent made an unplanned provider call")
-        return {"status": 200, "body": responses[len(requests) - 1]}
+        return self.responses[len(self.requests) - 1]
+
+
+def _prepare_page(browser, bundle: Path, provider_actions: list[dict[str, Any]],
+                  business_calls: list[dict[str, Any]]) -> tuple[
+                      Page, list[dict[str, Any]], PageAgentProviderProxy]:
+    page = browser.new_page()
+    responses = [
+        json.loads(_completion(action, sequence=index + 1))
+        for index, action in enumerate(provider_actions)
+    ]
+    client = _ScriptedClient(responses)
+    proxy = PageAgentProviderProxy(
+        run_token="qualification-run-token", run_id="qualification-run",
+        client=client,
+        contract=PageAgentProviderContract(
+            model=client.model, temperature=0, top_p=1,
+            max_completion_tokens=512, max_model_calls=len(responses), wall_time_s=10),
+    )
 
     def business(payload: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(payload, dict) or set(payload) != {"run_token", "name", "args"}:
@@ -110,7 +152,7 @@ def _prepare_page(browser, bundle: Path, provider_actions: list[dict[str, Any]],
         business_calls.append(payload)
         return {"complete": True, "companies": [{"name": "Synthetic Acme", "domain": "acme.example.com"}]}
 
-    page.expose_function("__WOA_PAGEAGENT_PROVIDER_FETCH__", provider)
+    page.expose_function("__WOA_PAGEAGENT_PROVIDER_FETCH__", proxy.handle)
     page.expose_function("__WOA_PAGEAGENT_BUSINESS_TOOL__", business)
     page.set_content("""
 <!doctype html>
@@ -123,7 +165,7 @@ def _prepare_page(browser, bundle: Path, provider_actions: list[dict[str, Any]],
 </html>
 """)
     page.add_script_tag(path=str(bundle))
-    return page, requests
+    return page, client.requests, proxy
 
 
 def qualify(bundle: Path) -> dict[str, Any]:
@@ -134,7 +176,7 @@ def qualify(bundle: Path) -> dict[str, Any]:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
-            dom_page, dom_requests = _prepare_page(
+            dom_page, dom_requests, dom_proxy = _prepare_page(
                 browser, bundle,
                 [{"click_element_by_index": {"index": 0}},
                  {"done": {"text": "Clicked the target.", "success": True}}],
@@ -144,6 +186,7 @@ def qualify(bundle: Path) -> dict[str, Any]:
                 "config => globalThis.__WOA_PAGEAGENT_BASELINE__.execute(config)",
                 _config(prompt="Click the only button.", capability="browser_only", tools=[]),
             )
+            dom_host = dom_proxy.report()
             dom_state = dom_page.locator("#state").text_content()
             dom_page.close()
 
@@ -161,7 +204,7 @@ def qualify(bundle: Path) -> dict[str, Any]:
                     "additionalProperties": False,
                 },
             }
-            tool_page, tool_requests = _prepare_page(
+            tool_page, tool_requests, tool_proxy = _prepare_page(
                 browser, bundle,
                 [{"query_companies": {"name_contains": "Synthetic", "limit": 20}},
                  {"done": {"text": "Synthetic Acme — acme.example.com", "success": True}}],
@@ -171,6 +214,7 @@ def qualify(bundle: Path) -> dict[str, Any]:
                 "config => globalThis.__WOA_PAGEAGENT_BASELINE__.execute(config)",
                 _config(prompt="List the companies.", capability="skill_api", tools=[tool_schema]),
             )
+            tool_host = tool_proxy.report()
             tool_page.close()
             browser_version = browser.version
         finally:
@@ -188,6 +232,10 @@ def qualify(bundle: Path) -> dict[str, Any]:
             "retries": 0, "steps": 2,
         },
         "dom_provider_calls_exact": len(dom_requests) == 2,
+        "dom_host_accounting_exact": (
+            dom_host["provider_attempts"] == 2
+            and dom_host["provider_responses"] == 2
+            and dom_host["accounting"]["model_calls"] == 2),
         "dom_tool_boundary_exact": all(
             not request["contains_ask_user"]
             and not request["contains_execute_javascript"]
@@ -200,6 +248,10 @@ def qualify(bundle: Path) -> dict[str, Any]:
             "retries": 0, "steps": 2,
         },
         "business_provider_calls_exact": len(tool_requests) == 2,
+        "business_host_accounting_exact": (
+            tool_host["provider_attempts"] == 2
+            and tool_host["provider_responses"] == 2
+            and tool_host["accounting"]["model_calls"] == 2),
         "business_tool_boundary_exact": all(
             not request["contains_ask_user"]
             and not request["contains_execute_javascript"]
