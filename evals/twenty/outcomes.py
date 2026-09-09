@@ -15,11 +15,14 @@ _ENGINE_BUSINESS_CODES = frozenset({
 _IDENTITY_BUSINESS_CODES = frozenset({
     "business_authentication", "business_identity",
 })
-_WOA_BOUNDARY_IDENTITY_CODES = frozenset({"identity_unavailable"})
+_WOA_BOUNDARY_IDENTITY_CODES = frozenset({
+    "identity_unavailable", "identity_binding", "session_changed",
+})
 _WOA_TRANSPORT_TERMINALS = frozenset({"control_plane_error", "transport_error"})
 _WOA_ENGINE_TERMINALS = frozenset({
-    "agent_finished", "agent_refused", "approval_denied", "indeterminate_write",
-    "step_budget", "token_budget", "user_cancelled", "wall_clock_budget",
+    "action_policy_budget", "agent_finished", "agent_refused", "approval_denied",
+    "indeterminate_write", "step_budget", "token_budget", "user_cancelled",
+    "wall_clock_budget",
 })
 
 

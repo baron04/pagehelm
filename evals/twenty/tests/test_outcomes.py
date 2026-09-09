@@ -64,6 +64,12 @@ class SharedOutcomeProjectionTests(unittest.TestCase):
         self.assertEqual(classify_woa_outcome(
             terminal_reason="", boundary_error_code="identity_unavailable",
         ), ("credential_or_identity", "identity_unavailable"))
+        for code in ("identity_binding", "session_changed"):
+            self.assertEqual(classify_woa_outcome(
+                terminal_reason="", boundary_error_code=code,
+            ), ("credential_or_identity", code))
+        self.assertEqual(classify_woa_outcome(
+            terminal_reason="action_policy_budget"), (None, "action_policy_budget"))
         self.assertEqual(classify_woa_outcome(
             terminal_reason="", boundary_error_code="stale_message",
         ), ("transport_contract", "stale_message"))

@@ -16,8 +16,10 @@ from evals.pageagent.scripted import (
 )
 from evals.pageagent.twenty_runner import (
     PageAgentTwentyConfig, PageAgentTwentyRunnerError, _bridge_reports_match,
-    _business_apparatus_code, _classify_host_errors, _execution_case,
-    _provider_apparatus_code, open_evidence, query_evidence, run_case,
+    _business_apparatus_code, _classify_host_errors, _provider_apparatus_code, run_case,
+)
+from evals.twenty.evidence import (
+    EvidenceContractError, open_evidence, query_evidence, validate_execution_case,
 )
 from web_operation_agent.business import (
     BusinessToolIdentityError, BusinessToolRequestError,
@@ -77,7 +79,7 @@ class EvidenceContractTests(unittest.TestCase):
 
     def test_query_answer_rejects_repairs_markdown_and_duplicate_rows(self):
         results = _results(self.companies)
-        with self.assertRaisesRegex(PageAgentTwentyRunnerError, "strict JSON"):
+        with self.assertRaisesRegex(EvidenceContractError, "strict JSON"):
             query_evidence("```json\n" + query_answer(self.companies) + "\n```", results)
         duplicate = json.dumps({
             "artifact_version": 1, "execution_status": "completed", "complete": True,
@@ -87,22 +89,22 @@ class EvidenceContractTests(unittest.TestCase):
                  "domain": self.companies[0]["domain"].upper()},
             ],
         })
-        with self.assertRaisesRegex(PageAgentTwentyRunnerError, "duplicate"):
+        with self.assertRaisesRegex(EvidenceContractError, "duplicate"):
             query_evidence(duplicate, results)
 
     def test_query_answer_must_restate_the_business_results_exactly(self):
         results = _results(self.companies)
-        with self.assertRaisesRegex(PageAgentTwentyRunnerError, "restate"):
+        with self.assertRaisesRegex(EvidenceContractError, "restate"):
             query_evidence(query_answer(self.companies[:1]), results)
         invented = [*self.companies, {"name": "Invented Company", "domain": "invented.example"}]
-        with self.assertRaisesRegex(PageAgentTwentyRunnerError, "restate"):
+        with self.assertRaisesRegex(EvidenceContractError, "restate"):
             query_evidence(query_answer(invented), results)
-        with self.assertRaisesRegex(PageAgentTwentyRunnerError, "completeness"):
+        with self.assertRaisesRegex(EvidenceContractError, "completeness"):
             query_evidence(query_answer(self.companies, complete=False), results)
-        with self.assertRaisesRegex(PageAgentTwentyRunnerError, "completeness"):
+        with self.assertRaisesRegex(EvidenceContractError, "completeness"):
             query_evidence(query_answer(self.companies),
                            _results(self.companies, complete=False))
-        with self.assertRaisesRegex(PageAgentTwentyRunnerError, "no business result"):
+        with self.assertRaisesRegex(EvidenceContractError, "no business result"):
             query_evidence(query_answer(self.companies), [])
         # A union of two partial disclosures is still a faithful restatement.
         split = [*_results(self.companies[:1], complete=False),
@@ -120,24 +122,24 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertEqual(evidence["page"], {
             "path": path, "name": target["name"], "domain": target["domain"]})
 
-        with self.assertRaisesRegex(PageAgentTwentyRunnerError, "not visible"):
+        with self.assertRaisesRegex(EvidenceContractError, "not visible"):
             open_evidence(path=path, visible_projection="Loading…",
                           business_results=results, permitted_routes=[path])
-        with self.assertRaisesRegex(PageAgentTwentyRunnerError, "route Host"):
+        with self.assertRaisesRegex(EvidenceContractError, "route Host"):
             open_evidence(path=path, visible_projection=visible,
                           business_results=results, permitted_routes=[])
         other = company_ui_path(self.companies[1])
-        with self.assertRaisesRegex(PageAgentTwentyRunnerError, "route Host"):
+        with self.assertRaisesRegex(EvidenceContractError, "route Host"):
             open_evidence(path=path, visible_projection=visible,
                           business_results=results, permitted_routes=[other])
         undisclosed = "/object/company/22222222-2222-4222-8222-222222222222"
-        with self.assertRaisesRegex(PageAgentTwentyRunnerError, "disclosed"):
+        with self.assertRaisesRegex(EvidenceContractError, "disclosed"):
             open_evidence(path=undisclosed, visible_projection=visible,
                           business_results=results, permitted_routes=[undisclosed])
 
     def test_create_case_is_rejected_before_any_browser_or_model_work(self):
-        with self.assertRaisesRegex(PageAgentTwentyRunnerError, "query and open only"):
-            _execution_case(_case("create"))
+        with self.assertRaisesRegex(EvidenceContractError, "query and open only"):
+            validate_execution_case(_case("create"))
 
 
 class RunnerBoundaryTests(unittest.TestCase):
