@@ -87,6 +87,15 @@ def _configured(env: Mapping[str, str], name: str) -> str | None:
     return value if value and value.strip() else None
 
 
+def configuration_environment(
+        environ: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Merge the optional dotenv file with process values taking precedence."""
+    process_env = dict(os.environ if environ is None else environ)
+    model_env = _configured(process_env, "WOA_MODEL_ENV")
+    loaded = load_env(Path(model_env).expanduser()) if model_env else {}
+    return {**loaded, **process_env}
+
+
 def _origin(value) -> tuple[str, str | None, int | None]:
     default_port = 80 if value.scheme.casefold() == "http" else 443
     return value.scheme.casefold(), value.hostname, value.port or default_port
@@ -195,10 +204,11 @@ class TwentyDemoConfig:
 
 
 def build_parser(environ: Mapping[str, str] | None = None) -> argparse.ArgumentParser:
-    env = os.environ if environ is None else environ
+    env = configuration_environment(environ)
     parser = argparse.ArgumentParser(
         prog="web-operation-agent-twenty-demo",
         description="Run the embedded Agent against an already provisioned Twenty CRM.",
+        epilog="Run ./demo.sh --check first to diagnose prerequisites without launching.",
     )
     _add_configured_argument(
         parser, "--base-url", env, "WOA_TWENTY_BASE_URL",

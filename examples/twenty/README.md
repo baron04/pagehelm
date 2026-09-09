@@ -22,7 +22,11 @@ export WOA_MODEL_ENV="$HOME/.config/web-operation-agent/model.env"
 ./demo.sh
 ```
 
-The model environment file contains `AGENT_OPENAI_BASE_URL`, `AGENT_OPENAI_API_KEY`, and `AGENT_OPENAI_MODEL_PRO`. Keep it outside the repository and restrict it to the local user.
+Before opening the browser, run `./demo.sh --check` for read-only mode or `./demo.sh --check --allow-mutations` for mutation-enabled mode. The preflight opens no browser, calls no model, performs no business write, and reports every failed prerequisite without printing credentials or configured paths. A `READY` result means the configured environment is eligible to start; it does not certify task success.
+
+If preflight reports that the browser session is missing or expired, run `./demo.sh --login`. It opens a visible Twenty window for manual sign-in and replaces the configured storage-state file only after the expected live HttpOnly session appears. It does not receive or store the password itself. Run preflight again after the window closes.
+
+The environment file may contain the `WOA_*` locations above together with `AGENT_OPENAI_BASE_URL`, `AGENT_OPENAI_API_KEY`, and `AGENT_OPENAI_MODEL_PRO`; explicit process values take precedence. Keep the file outside the repository and restrict it to the local user. When a repository-local `.env` exists, `demo.sh` selects it automatically and parses assignments as data rather than executing it as a shell script.
 
 The application files may also be passed as command-line options; run `./demo.sh --help` for the complete list. Command-line values take precedence over their `WOA_*` counterparts.
 

@@ -23,6 +23,17 @@ if [ -z "${WOA_MODEL_ENV:-}" ] && [ -f "$REPO_DIR/.env" ]; then
   export WOA_MODEL_ENV
 fi
 
-PYTHONPATH="$REPO_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
+PYTHONPATH="$REPO_DIR:$REPO_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONPATH
+
+if [ "${1:-}" = "--check" ]; then
+  shift
+  exec "$DEMO_PYTHON" "$REPO_DIR/examples/twenty/preflight.py" "$@"
+fi
+
+if [ "${1:-}" = "--login" ]; then
+  shift
+  exec "$DEMO_PYTHON" "$REPO_DIR/examples/twenty/login.py" "$@"
+fi
+
 exec "$DEMO_PYTHON" "$REPO_DIR/examples/twenty/demo.py" "$@"

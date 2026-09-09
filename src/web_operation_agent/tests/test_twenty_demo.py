@@ -3,17 +3,18 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import sys
 import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 
-from examples.twenty import demo
+from examples.twenty import demo, login, preflight
 from web_operation_agent.identity import PrincipalContext
 from web_operation_agent.live import LiveConversationRunner, LiveTurnOutcome
 from web_operation_agent.product import (AgentTurnExecution, AgentTurnMessage,
@@ -60,6 +61,25 @@ class TwentyDemoArgumentsTests(unittest.TestCase):
         self.assertEqual(enabled.base_url, "http://localhost:3021")
         self.assertEqual(enabled.page_controller_module,
                          "http://localhost:3021/controller.js")
+
+    def test_safe_dotenv_can_hold_demo_locations_and_process_values_win(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dotenv = Path(tmp) / "demo.env"
+            dotenv.write_text(
+                "\n".join(f"{key}={value}" for key, value in BASE_ENV.items())
+                + "\nWOA_TWENTY_BASE_URL=http://from-file.test\n",
+                encoding="utf-8",
+            )
+            config = demo.parse_config([], {
+                "WOA_MODEL_ENV": str(dotenv),
+                "WOA_TWENTY_BASE_URL": "http://127.0.0.1:3020",
+            })
+
+        self.assertEqual(config.base_url, "http://127.0.0.1:3020")
+        self.assertEqual(
+            config.oauth_token_path,
+            Path(BASE_ENV["WOA_TWENTY_OAUTH_TOKEN"]).resolve(),
+        )
 
     def test_missing_required_locations_fail_in_argument_parsing(self):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
@@ -145,6 +165,96 @@ class TwentyDemoArgumentsTests(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
             demo.parse_config([], invalid_env)
         self.assertEqual(caught.exception.code, 2)
+
+
+class TwentyDemoPreflightTests(unittest.TestCase):
+    def test_missing_configuration_reports_every_requirement_without_secrets(self):
+        code, report = preflight.run(["--offline"], {})
+
+        self.assertEqual(code, 2)
+        self.assertEqual(report["status"], "BLOCKED")
+        required = report["checks"][0]
+        self.assertEqual(required["name"], "required_configuration")
+        for _field, env_name in preflight._REQUIRED_LOCATIONS:
+            self.assertIn(env_name, required["detail"])
+        self.assertEqual(report["model_calls"], 0)
+        self.assertFalse(report["browser_launched"])
+        self.assertEqual(report["business_writes"], 0)
+
+    def test_offline_check_accepts_a_complete_read_only_configuration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("storage.json", "token.json", "client.json"):
+                (root / name).write_text("{}", encoding="utf-8")
+            env = {
+                **BASE_ENV,
+                "WOA_TWENTY_STORAGE_STATE": str(root / "storage.json"),
+                "WOA_TWENTY_OAUTH_TOKEN": str(root / "token.json"),
+                "WOA_TWENTY_OAUTH_REGISTRATION": str(root / "client.json"),
+                "WOA_AUDIT_LEDGER": str(root / "audit.jsonl"),
+                "WOA_SPEND_LEDGER": str(root / "spend.jsonl"),
+                "WOA_OUTPUT_DIR": str(root / "output"),
+                "AGENT_OPENAI_BASE_URL": "https://provider.example/v1",
+                "AGENT_OPENAI_API_KEY": "test-key-not-a-secret",
+                "AGENT_OPENAI_MODEL_PRO": "test-model",
+            }
+            code, report = preflight.run(["--offline"], env)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(report["status"], "READY")
+        self.assertTrue(all(row["status"] == "PASS" for row in report["checks"]))
+
+    def test_write_check_requires_a_durable_mutation_journal(self):
+        namespace = preflight.build_parser().parse_args([
+            "--offline", "--allow-mutations",
+        ])
+        checks, _values = preflight.inspect_local(namespace, BASE_ENV)
+        mutation = next(check for check in checks if check.name == "mutation_mode")
+
+        self.assertTrue(mutation.passed)
+        env = {key: value for key, value in BASE_ENV.items()
+               if key != "WOA_MUTATION_JOURNAL"}
+        checks, _values = preflight.inspect_local(namespace, env)
+        mutation = next(check for check in checks if check.name == "mutation_mode")
+        self.assertFalse(mutation.passed)
+
+    def test_cookie_failure_has_actionable_guidance_without_exposing_the_error(self):
+        config = object()
+        adapter = Mock()
+        adapter.health.return_value = {"passed": True}
+        adapter.page_session_binding.side_effect = RuntimeError("private-cookie-value")
+        with patch.object(preflight.demo, "build_adapter", return_value=adapter):
+            checks = preflight.inspect_twenty(config)
+
+        identity = next(check for check in checks if check.name == "identity_binding")
+        self.assertFalse(identity.passed)
+        self.assertIn("./demo.sh --login", identity.detail)
+        self.assertNotIn("private-cookie-value", identity.detail)
+
+
+class TwentyDemoLoginTests(unittest.TestCase):
+    def test_login_parser_reads_safe_dotenv_configuration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dotenv = root / "demo.env"
+            dotenv.write_text(
+                "WOA_TWENTY_BASE_URL=http://127.0.0.1:3020\n"
+                f"WOA_TWENTY_STORAGE_STATE={root / 'state.json'}\n",
+                encoding="utf-8",
+            )
+            namespace = login.build_parser({"WOA_MODEL_ENV": str(dotenv)}).parse_args([])
+
+        self.assertEqual(namespace.base_url, "http://127.0.0.1:3020")
+        self.assertTrue(namespace.storage_state.endswith("state.json"))
+
+    def test_storage_state_replace_is_private_and_atomic(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "private" / "state.json"
+            login._write_storage_state(path, {"cookies": [], "origins": []})
+
+            self.assertEqual(json.loads(path.read_text()), {"cookies": [], "origins": []})
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(list(path.parent.glob(".*.tmp")), [])
 
 
 class TwentyDemoCompositionTests(unittest.TestCase):
