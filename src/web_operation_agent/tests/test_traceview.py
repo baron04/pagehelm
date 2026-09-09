@@ -85,6 +85,9 @@ class TraceViewTests(unittest.TestCase):
             self.assertIn("每一步都留下证据", page)
             self.assertIn('id="trace-data"', page)
             self.assertNotIn("__WOA_TRACE_BUNDLE__", page)
+            self.assertNotIn("__WOA_ASSISTANT_COMPONENT__", page)
+            self.assertIn("class AssistantPanel", page)
+            self.assertIn("createAssistantPanel", page)
             self.assertNotIn("answer-secret", page)
             self.assertNotIn("docs/demo", page)
             self.assertEqual(json.loads((root / "trace.json").read_text()), bundle)
@@ -136,6 +139,64 @@ class TraceViewTests(unittest.TestCase):
                 ["node", "--check", str(script)], text=True, capture_output=True,
                 check=False)
         self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_rendered_replay_and_shared_panel_work_from_local_file(self):
+        try:
+            from playwright.sync_api import Error as PlaywrightError
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            self.skipTest("Playwright is not installed")
+        case = {
+            "id": "read", "label": "Read companies", "mode": "typed API + page",
+            "task": "List companies and open Acme", "success": True,
+            "summary": {"duration_s": 1.2, "model_calls": 1, "page_actions": 1,
+                        "cost_cny": 0.01, "permit_consumed": 0, "write_blocked": 0,
+                        "terminal_reason": "verified"},
+            "answer": "Acme opened.",
+            "events": [
+                {"seq": 1, "at_ms": 0, "kind": "tool_call", "tone": "decision",
+                 "title": "query_companies", "detail": "Read current data"},
+                {"seq": 2, "at_ms": 400, "kind": "action_receipt", "tone": "action",
+                 "title": "Page opened", "detail": "/companies/acme"},
+                {"seq": 3, "at_ms": 900, "kind": "product_verification", "tone": "verify",
+                 "title": "Verified", "detail": "Route and record match"},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "replay.html"
+            render_trace_html({"schema_version": 1, "product": "Web Operation Agent",
+                               "cases": [case]}, output)
+            with sync_playwright() as playwright:
+                try:
+                    browser = playwright.chromium.launch(headless=True)
+                except PlaywrightError as error:
+                    if "Executable doesn't exist" in str(error):
+                        self.skipTest("Playwright Chromium is not installed")
+                    raise
+                context = browser.new_context(viewport={"width": 1280, "height": 800},
+                                              reduced_motion="reduce")
+                page = context.new_page()
+                errors = []
+                page.on("pageerror", lambda error: errors.append(str(error)))
+                page.goto(output.as_uri(), wait_until="load")
+                page.locator("#woa-assistant").wait_for()
+                panel = page.locator("#woa-assistant")
+                self.assertEqual(panel.locator(".panel").get_attribute("data-mode"), "replay")
+                self.assertIn("Acme", panel.locator(".entry").first.inner_text())
+                self.assertEqual(panel.locator("form").evaluate("node => getComputedStyle(node).display"),
+                                 "none")
+                page.locator("#play").click()
+                self.assertEqual(panel.locator(".panel").get_attribute("data-state"), "acting")
+                animation = panel.locator(".panel").evaluate(
+                    "node => getComputedStyle(node, '::before').animationName")
+                self.assertEqual(animation, "none")
+                page.locator("#reset").click()
+                self.assertEqual(errors, [])
+                screenshot = Path(tmp) / "replay-shared-panel.png"
+                page.screenshot(path=str(screenshot), full_page=True)
+                self.assertGreater(screenshot.stat().st_size, 1000)
+                context.close()
+                browser.close()
 
     def test_bundle_requires_unique_case_ids(self):
         with tempfile.TemporaryDirectory() as tmp:

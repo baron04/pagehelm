@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+from collections.abc import Mapping
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -25,6 +26,32 @@ SESSION_PATH = re.compile(
     r"(hello|observations|claims|results|messages|approvals|cancellations|events)$"
 )
 RUNTIME_PATH = Path(__file__).resolve().parent / "web_runtime" / "embedded.js"
+ASSISTANT_PANEL_PATH = Path(__file__).resolve().parent / "web_runtime" / "assistant_panel.js"
+PANEL_LABEL_KEYS = frozenset({
+    "assistant", "product", "timeline", "emptyTitle", "emptyDetail", "input",
+    "placeholder", "send", "stop", "collapse", "expand", "keyHint", "approvalTitle",
+    "approvalEffect", "approvalTargets", "deny", "approve", "approvalHint", "retry",
+    "dismiss",
+})
+
+
+def _panel_labels(value: Mapping[str, str] | None) -> dict[str, str]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise TypeError("panel_labels must be a string mapping")
+    if not all(isinstance(key, str) for key in value):
+        raise TypeError("panel_labels keys must be strings")
+    unknown = set(value) - PANEL_LABEL_KEYS
+    if unknown:
+        raise ValueError(f"unknown panel label: {sorted(unknown)[0]}")
+    labels = {}
+    for key, label in value.items():
+        if (not isinstance(label, str) or not label.strip() or len(label) > 200
+                or any(ord(character) < 32 for character in label)):
+            raise ValueError(f"panel label {key} must contain 1-200 display characters")
+        labels[key] = label
+    return labels
 
 
 def _normalized_origin(value: str) -> str:
@@ -180,9 +207,13 @@ def _handler(registry: RemoteSessionRegistry, *, sse_wait_s: float):
             if path == "/healthz":
                 self._json(200, {"ok": True, "protocol": 1})
                 return
-            if path == "/v1/runtime/embedded.js":
+            runtime_assets = {
+                "/v1/runtime/embedded.js": RUNTIME_PATH,
+                "/v1/runtime/assistant_panel.js": ASSISTANT_PANEL_PATH,
+            }
+            if path in runtime_assets:
                 try:
-                    body = RUNTIME_PATH.read_bytes()
+                    body = runtime_assets[path].read_bytes()
                 except OSError as exc:
                     self._error(exc)
                     return
@@ -256,7 +287,8 @@ class EmbeddedGateway:
 
     def bootstrap_config(self, grant: SessionGrant, *,
                          page_controller_module: str,
-                         navigation_mode: str = "document") -> dict:
+                         navigation_mode: str = "document",
+                         panel_labels: Mapping[str, str] | None = None) -> dict:
         """Return data for the first-party shell to place in ``window.__WOA_EMBED_CONFIG__``."""
         if not isinstance(page_controller_module, str):
             raise ValueError("page_controller_module must be an absolute http(s) URL")
@@ -272,7 +304,7 @@ class EmbeddedGateway:
                 "page_controller_module origin must be an allowed session origin")
         if navigation_mode not in {"document", "spa"}:
             raise ValueError("navigation_mode must be document or spa")
-        return {
+        config = {
             "endpoint": self.base_url,
             "sessionId": grant.session_id,
             "clientToken": grant.client_token,
@@ -283,10 +315,15 @@ class EmbeddedGateway:
             "principalExpiresAt": grant.expires_at,
             "sessionExpiresAt": grant.session_expires_at,
         }
+        labels = _panel_labels(panel_labels)
+        if labels:
+            config["panelLabels"] = labels
+        return config
 
     def bootstrap_script(self, grant: SessionGrant, *,
                          page_controller_module: str,
-                         navigation_mode: str = "document") -> str:
+                         navigation_mode: str = "document",
+                         panel_labels: Mapping[str, str] | None = None) -> str:
         """Build the two-tag first-party shell integration as one ephemeral script.
 
         The returned source contains the session capability and must be injected directly
@@ -296,7 +333,7 @@ class EmbeddedGateway:
         """
         config = self.bootstrap_config(
             grant, page_controller_module=page_controller_module,
-            navigation_mode=navigation_mode)
+            navigation_mode=navigation_mode, panel_labels=panel_labels)
         runtime_url = json.dumps(self.runtime_url)
         allowed_origins = json.dumps(sorted(grant.allowed_origins), separators=(",", ":"))
         safe_config = json.dumps(config, separators=(",", ":")).replace("</", "<\\/")

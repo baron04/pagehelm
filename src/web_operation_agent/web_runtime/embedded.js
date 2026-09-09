@@ -7,6 +7,14 @@
  * result without repeating the page action.
  */
 
+import {
+  AssistantPanel, AssistantPanelViewModel, PANEL_STATES, createAssistantPanel,
+  panelErrorMessage, setPanelState,
+} from './assistant_panel.js'
+export {
+  AssistantPanel, AssistantPanelViewModel, createAssistantPanel, panelErrorMessage,
+}
+
 const WIRE_VERSION = 1
 const MAX_WAIT_MS = 10_000
 const PAGE_CONTROLLER_ANNOTATION_STYLE_ID = 'woa-hide-page-controller-annotations'
@@ -341,118 +349,6 @@ function safeErrorDetail(detail, command) {
   return out.slice(0, 800)
 }
 
-function buildPanel() {
-  const host = document.createElement('aside')
-  host.id = 'woa-assistant'
-  host.setAttribute('data-page-agent-not-interactive', 'true')
-  host.setAttribute('aria-label', 'AI 助手')
-  // The host is already excluded from PageController observations. An open root makes the
-  // confirmation surface testable and inspectable by the trusted first-party application;
-  // the shadow mode is not an authorization boundary.
-  const shadow = host.attachShadow({mode: 'open'})
-  shadow.innerHTML = `
-    <style>
-      :host { all: initial; position: fixed; right: 20px; bottom: 20px; z-index: 2147483000;
-        width: min(360px, calc(100vw - 32px)); color: #eaf0ff; font: 14px/1.45 ui-sans-serif,
-        system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      section { border: 1px solid rgba(130,154,210,.28); border-radius: 16px; overflow: hidden;
-        background: linear-gradient(145deg, #111a31, #0a1020); box-shadow: 0 20px 55px rgba(0,0,0,.38); }
-      header { display:flex; align-items:center; justify-content:space-between; padding:14px 16px 10px; }
-      strong { font-size: 14px; letter-spacing:.02em; }
-      output { color:#91a5cf; font-size:12px; }
-      ol { margin:0; padding:0 16px 8px 34px; max-height:180px; overflow:auto; color:#c7d2ed; }
-      li { margin:5px 0; white-space:pre-wrap; }
-      .approval { margin:0 12px 12px; padding:12px; border:1px solid #526a9e;
-        border-radius:12px; background:#111d38; }
-      .approval p { margin:0 0 8px; }
-      .approval ul { margin:0 0 10px; padding-left:20px; }
-      .approval menu { display:flex; justify-content:flex-end; gap:8px; margin:0; padding:0; }
-      .approval .deny { background:#263554; color:#eaf0ff; }
-      form { display:flex; gap:8px; padding:12px; border-top:1px solid rgba(130,154,210,.18); }
-      input { min-width:0; flex:1; border:1px solid #35466e; border-radius:10px; padding:9px 10px;
-        background:#0b1327; color:#f5f7ff; outline:none; }
-      input:focus { border-color:#7999e9; box-shadow:0 0 0 3px rgba(85,121,216,.18); }
-      button { border:0; border-radius:10px; padding:9px 13px; background:#d8e2ff; color:#10182b;
-        font-weight:650; cursor:pointer; }
-      button:disabled, input:disabled { cursor:not-allowed; opacity:.58; }
-    </style>
-    <section><header><strong>AI 助手</strong><output aria-live="polite">正在连接</output></header>
-      <ol aria-label="执行进度"></ol>
-      <form><input maxlength="2000" aria-label="描述目标" placeholder="描述你想完成的目标" />
-        <button type="button" class="stop" disabled>停止</button>
-        <button type="submit">开始</button></form></section>`
-  document.documentElement.appendChild(host)
-  let cancelPendingApproval = () => {}
-  return {
-    host,
-    status: value => { shadow.querySelector('output').textContent = value },
-    setBusy: value => {
-      shadow.querySelector('input').disabled = Boolean(value)
-      shadow.querySelector('button[type="submit"]').disabled = Boolean(value)
-      shadow.querySelector('button.stop').disabled = !Boolean(value)
-    },
-    setStopping: value => {
-      shadow.querySelector('button.stop').disabled = Boolean(value)
-    },
-    add: value => {
-      const item = document.createElement('li')
-      item.textContent = String(value).slice(0, 300)
-      const list = shadow.querySelector('ol')
-      list.appendChild(item)
-      while (list.children.length > 30) list.firstElementChild.remove()
-      list.scrollTop = list.scrollHeight
-    },
-    onTask: handler => shadow.querySelector('form').addEventListener('submit', async event => {
-      event.preventDefault()
-      const input = shadow.querySelector('input')
-      const value = input.value.trim()
-      if (!value) return
-      input.value = ''
-      await handler(value)
-    }),
-    onCancel: handler => shadow.querySelector('button.stop').addEventListener(
-      'click', () => { void Promise.resolve(handler()).catch(() => {}) }),
-    cancelApproval: () => cancelPendingApproval(),
-    requestApproval: request => new Promise(resolve => {
-      shadow.querySelector('.approval')?.remove()
-      const card = document.createElement('div')
-      card.className = 'approval'
-      card.setAttribute('role', 'group')
-      card.setAttribute('aria-label', '操作确认')
-      const effect = document.createElement('p')
-      effect.textContent = `将执行：${String(request.effect).slice(0, 300)}`
-      const targets = document.createElement('ul')
-      for (const value of request.targets || []) {
-        const item = document.createElement('li')
-        item.textContent = String(value).slice(0, 300)
-        targets.appendChild(item)
-      }
-      const menu = document.createElement('menu')
-      const deny = document.createElement('button')
-      deny.type = 'button'; deny.className = 'deny'; deny.textContent = '取消'
-      const approve = document.createElement('button')
-      approve.type = 'button'; approve.textContent = '确认执行'
-      menu.append(deny, approve)
-      card.append(effect, targets, menu)
-      shadow.querySelector('section').insertBefore(card, shadow.querySelector('form'))
-      let settled = false
-      const finish = decision => {
-        if (settled) return
-        settled = true
-        clearTimeout(timer)
-        card.remove()
-        cancelPendingApproval = () => {}
-        resolve(decision)
-      }
-      cancelPendingApproval = () => finish('denied')
-      deny.addEventListener('click', () => finish('denied'), {once: true})
-      approve.addEventListener('click', () => finish('approved'), {once: true})
-      const remaining = Math.max(0, Number(request.expires_at || 0) - Date.now())
-      const timer = setTimeout(() => finish('denied'), Math.min(remaining, 2_147_483_647))
-    }),
-  }
-}
-
 function suppressPageControllerAnnotations() {
   if (document.getElementById(PAGE_CONTROLLER_ANNOTATION_STYLE_ID)) return
   const style = document.createElement('style')
@@ -513,7 +409,7 @@ export class EmbeddedWebRuntime {
     this.stopped = false
     this.eventAbortController = null
     this.controller = null
-    this.panel = config.panel === false ? null : buildPanel()
+    this.panel = config.panel === false ? null : createAssistantPanel({labels: config.panelLabels || {}})
     this._onPageShow = event => {
       if (!event?.persisted || this.stopped) return
       // A BFCache restore resumes the suspended JavaScript heap, whose runtime lease may have
@@ -619,8 +515,9 @@ export class EmbeddedWebRuntime {
     this.panel?.onCancel?.(() => this.cancelTask())
     this.panel?.setBusy?.(this.stored.taskInFlight)
     this.panel?.setStopping?.(this.stored.cancellationPending)
-    this.panel?.status(
-      resultDeferred ? '正在重连' : (this.stored.cancellationPending ? '正在停止' : '已连接'))
+    const connectedState = resultDeferred ? 'reconnecting'
+      : (this.stored.cancellationPending ? 'stopping' : 'ready')
+    setPanelState(this.panel, connectedState, connectedState === 'ready' ? '已连接' : '')
     if (this.stored.cancellationPending) {
       void this.cancelTask({retry: true}).catch(() => {})
     }
@@ -645,18 +542,20 @@ export class EmbeddedWebRuntime {
     this.stored.cancellationPending = false
     this._save()
     this.panel?.setBusy?.(true)
-    this.panel?.status('已提交')
-    this.panel?.add(`目标：${goal}`)
+    setPanelState(this.panel, 'observing', '正在读取当前页面')
+    this.panel?.add(`目标：${goal}`, {kind: 'goal'})
     try {
       // A first-party SPA can change route without replacing this JavaScript runtime. Bind
       // every new task to a fresh observation before posting the message, so the server does
       // not plan from the document/route that happened to be current at bootstrap time.
       const observation = await this.observe()
       await this._post('/observations', observation)
-      return await this._post('/messages', {
+      const response = await this._post('/messages', {
         message_id: messageId, text: redactString(goal),
         page_url: observation.observation.url,
       })
+      setPanelState(this.panel, 'queued')
+      return response
     } catch (error) {
       this.stored.taskInFlight = false
       this.stored.activeMessageId = ''
@@ -671,8 +570,8 @@ export class EmbeddedWebRuntime {
     if (this.stopped || !this.stored.taskInFlight || !this.stored.activeMessageId) return
     if (this.stored.cancellationPending && !retry) return
     this.panel?.cancelApproval?.()
-    this.panel?.status('正在停止')
-    if (!retry) this.panel?.add('正在安全停止当前任务')
+    setPanelState(this.panel, 'stopping')
+    if (!retry) this.panel?.add('正在安全停止当前任务', {tone: 'warning'})
     this.stored.cancellationPending = true
     this._save()
     this.panel?.setStopping?.(true)
@@ -686,8 +585,8 @@ export class EmbeddedWebRuntime {
       this.stored.cancellationPending = false
       this._save()
       this.panel?.setStopping?.(false)
-      this.panel?.status('停止请求失败')
-      this.panel?.add('停止请求未送达，请重试')
+      setPanelState(this.panel, 'error', '停止请求失败')
+      this.panel?.add('停止请求未送达，请重试', {tone: 'error'})
       throw error
     }
   }
@@ -701,10 +600,10 @@ export class EmbeddedWebRuntime {
       } catch (error) {
         if (['runtime_replaced', 'session_closed'].includes(error?.code)) {
           this.stopped = true
-          this.panel?.status(error.code === 'session_closed' ? '已结束' : '已由另一页面接管')
+          setPanelState(this.panel, error.code === 'session_closed' ? 'ended' : 'replaced')
           return false
         }
-        this.panel?.status('正在重连')
+        setPanelState(this.panel, 'reconnecting')
         await sleep(backoff)
         backoff = Math.min(backoff * 2, 4000)
       }
@@ -721,23 +620,23 @@ export class EmbeddedWebRuntime {
       try {
         const observation = await this.observe(this.stored.inFlight?.action_id || '')
         await this._post('/observations', observation)
-        this.panel?.status('已连接')
+        setPanelState(this.panel, 'ready', '已连接')
         if (!this.stopped) void this._eventLoop()
         return
       } catch (error) {
         if (['runtime_replaced', 'session_closed'].includes(error?.code)) {
           this.stopped = true
-          this.panel?.status(error.code === 'session_closed' ? '已结束' : '已由另一页面接管')
+          setPanelState(this.panel, error.code === 'session_closed' ? 'ended' : 'replaced')
           return
         }
-        this.panel?.status('正在重连')
+        setPanelState(this.panel, 'reconnecting')
         await sleep(backoff)
         backoff = Math.min(backoff * 2, 4000)
       }
     }
   }
 
-  stop() {
+  stop({removePanel = true} = {}) {
     this.stopped = true
     this.eventAbortController?.abort()
     this.eventAbortController = null
@@ -745,7 +644,7 @@ export class EmbeddedWebRuntime {
     this.controller?.dispose()
     this.domMutationObserver?.disconnect()
     this.domMutationObserver = null
-    this.panel?.host.remove()
+    if (removePanel) this.panel?.host.remove()
   }
 
   async _hello() {
@@ -875,7 +774,7 @@ export class EmbeddedWebRuntime {
           const payload = await response.json().catch(() => ({}))
           if (payload.code === 'runtime_replaced' || payload.code === 'session_closed') {
             this.stopped = true
-            this.panel?.status(payload.code === 'session_closed' ? '已结束' : '已由另一页面接管')
+            setPanelState(this.panel, payload.code === 'session_closed' ? 'ended' : 'replaced')
             return
           }
           throw new Error(payload.error || `event stream returned ${response.status}`)
@@ -885,11 +784,11 @@ export class EmbeddedWebRuntime {
       } catch (error) {
         if (['runtime_replaced', 'session_closed'].includes(error?.code)) {
           this.stopped = true
-          this.panel?.status(error.code === 'session_closed' ? '已结束' : '已由另一页面接管')
+          setPanelState(this.panel, error.code === 'session_closed' ? 'ended' : 'replaced')
           return
         }
         if (this.stopped) return
-        this.panel?.status('正在重连')
+        setPanelState(this.panel, 'reconnecting')
         await sleep(backoff)
         backoff = Math.min(backoff * 2, 4000)
       } finally {
@@ -941,7 +840,7 @@ export class EmbeddedWebRuntime {
     if (event.kind === 'action') {
       await this._handleAction(event.payload)
     } else if (event.kind === 'progress') {
-      this.panel?.add(event.payload.message || '正在执行')
+      const progressState = String(event.payload.state || '')
       const finished = [
         'finished', 'refused', 'cancelled', 'indeterminate', 'failed',
         'verified', 'needs_input', 'not_verified', 'approval_denied', 'task_failed',
@@ -960,21 +859,32 @@ export class EmbeddedWebRuntime {
         verified: '已完成', needs_input: '等待补充', not_verified: '未通过验证', approval_denied: '已取消',
         task_failed: '任务失败', knowledge_used: '使用知识', cancelling: '正在停止',
       }
-      this.panel?.status(statuses[event.payload.state] || '执行中')
+      const panelStates = {
+        finished: 'ended', refused: 'refused', cancelled: 'cancelled',
+        indeterminate: 'indeterminate', failed: 'error', verified: 'success',
+        needs_input: 'needs_input', not_verified: 'indeterminate', approval_denied: 'cancelled',
+        task_failed: 'error', knowledge_used: 'knowledge', cancelling: 'stopping',
+      }
+      const panelState = panelStates[progressState] || 'acting'
+      const tone = PANEL_STATES[panelState].tone
+      this.panel?.add(event.payload.message || '正在执行', {
+        kind: finished ? 'result' : 'progress', tone,
+      })
+      setPanelState(this.panel, panelState, statuses[progressState] || '执行中')
     } else if (event.kind === 'terminal') {
       this.stored.taskInFlight = false
       this.stored.activeMessageId = ''
       this.stored.cancellationPending = false
       this._save()
       this.panel?.setBusy?.(false)
-      this.panel?.add(event.payload.message || event.payload.reason || '任务结束')
-      this.panel?.status('已结束')
+      this.panel?.add(event.payload.message || event.payload.reason || '任务结束', {kind: 'result'})
+      setPanelState(this.panel, 'ended')
       // The terminal cursor is durable after this handler returns.  A closed server session
       // has no future events, so another GET would only turn the final UI into a reconnect loop.
       this.stopped = true
     } else if (event.kind === 'approval_required') {
-      this.panel?.add('需要确认后才能继续')
-      this.panel?.status('等待确认')
+      this.panel?.add('需要确认后才能继续', {tone: 'warning'})
+      setPanelState(this.panel, 'awaiting_confirmation')
       let decision = this.stored.approvals[event.payload.approval_id]
       if (!decision) {
         decision = this.panel
@@ -992,8 +902,10 @@ export class EmbeddedWebRuntime {
         turn_id: String(event.payload.turn_id || ''),
         operation_id: String(event.payload.operation_id || ''),
       })
-      this.panel?.add(decision === 'approved' ? '已确认执行' : '已取消操作')
-      this.panel?.status(decision === 'approved' ? '执行中' : '已取消')
+      this.panel?.add(decision === 'approved' ? '已确认执行' : '已取消操作', {
+        tone: decision === 'approved' ? 'neutral' : 'warning',
+      })
+      setPanelState(this.panel, decision === 'approved' ? 'acting' : 'cancelled')
     }
   }
 
@@ -1083,8 +995,8 @@ export class EmbeddedWebRuntime {
     executing.phase = 'claimed'
     this.stored.inFlight.phase = 'claimed'
     this._save()
-    this.panel?.add(describeAction(action.command))
-    this.panel?.status('执行中')
+    this.panel?.add(describeAction(action.command), {kind: 'action'})
+    setPanelState(this.panel, 'acting', '执行中')
 
     let success = true
     let code = ''
@@ -1368,7 +1280,7 @@ export class EmbeddedWebRuntime {
         after.page_epoch >= this.currentObservation.page_epoch)) {
       this.currentObservation = after
     }
-    this.panel?.status('已连接')
+    setPanelState(this.panel, 'observing', '正在核对结果')
   }
 }
 
@@ -1377,8 +1289,9 @@ export async function startEmbeddedRuntime(config) {
   window.__WOA_EMBEDDED_RUNTIME_STARTED__ = true
   const runtime = new EmbeddedWebRuntime(config)
   try { return await runtime.start() } catch (error) {
-    runtime.panel?.status('连接失败')
-    runtime.stop()
+    runtime.stop({removePanel: false})
+    setPanelState(runtime.panel, 'error', '连接失败')
+    runtime.panel?.showError?.(panelErrorMessage(error, 'connect'), () => location.reload())
     window.__WOA_EMBEDDED_RUNTIME_STARTED__ = false
     throw error
   }
@@ -1393,5 +1306,5 @@ export const runtimeInternals = Object.freeze({
 })
 
 if (typeof window !== 'undefined' && window.__WOA_EMBED_CONFIG__) {
-  void startEmbeddedRuntime(window.__WOA_EMBED_CONFIG__)
+  void startEmbeddedRuntime(window.__WOA_EMBED_CONFIG__).catch(() => {})
 }

@@ -332,7 +332,7 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 - 模型调用、页面动作和确认有局部超时，消息级取消已覆盖审批、业务工具和未认领页面动作；provider 请求的主动中断、跨进程取消、完整 deadline 传播和资源回收仍不完整。
 - 目前只有一个窄业务 Adapter 和少量 Skill/API 工具，覆盖面不能代表复杂企业应用的完整操作集。
 - 源码能力存在于 Session 层，但默认产品 Turn Executor 尚未将它作为可配置 Provider 接入。
-- 页面内助手可以完成基本对话、进度和确认，交互与可访问性仍需系统化打磨。
+- 页面内助手已从 Runtime 的内联渲染中抽出独立的 `AssistantPanelViewModel` 与 `AssistantPanel`。同一组件用于嵌入页面和脱敏回放，状态驱动进度、光谱边缘、停止、错误恢复和确认；确认被拒绝时恢复原始目标供用户修改后重新规划。组件支持响应式布局、深浅色、键盘焦点、live region、Esc 拒绝确认和 `prefers-reduced-motion`。发布前仍需完成 VoiceOver/NVDA 与支持浏览器矩阵测试。
 - 当前嵌入模式假定第一方页面可信；面向第三方页面的隔离执行形态尚未实现。
 
 ## 12. 演进方向
@@ -358,6 +358,7 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 - 当前 Application Adapter 示例：[twenty.py](../../src/web_operation_agent/twenty.py)
 - Embedded Gateway：[embedded_gateway.py](../../src/web_operation_agent/embedded_gateway.py)
 - 浏览器 Runtime：[embedded.js](../../src/web_operation_agent/web_runtime/embedded.js)
+- 助手 UI 与状态模型：[assistant_panel.js](../../src/web_operation_agent/web_runtime/assistant_panel.js)
 - 会话协议与幂等通道：[remote.py](../../src/web_operation_agent/remote.py)
 - 版本化 wire schema：[schemas.py](../../src/web_operation_agent/schemas.py)
 - 主体与操作上下文：[identity.py](../../src/web_operation_agent/identity.py)

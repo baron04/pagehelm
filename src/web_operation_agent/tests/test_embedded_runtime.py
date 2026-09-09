@@ -21,14 +21,22 @@ from web_operation_agent.tests.test_session import _Chat, _Control
 
 
 RUNTIME = Path(__file__).resolve().parents[1] / "web_runtime" / "embedded.js"
+PANEL = Path(__file__).resolve().parents[1] / "web_runtime" / "assistant_panel.js"
 _PAGE_CONTROLLER_PATH = os.environ.get("WOA_PAGE_CONTROLLER_MODULE", "")
 PAGE_CONTROLLER = Path(_PAGE_CONTROLLER_PATH).expanduser() if _PAGE_CONTROLLER_PATH else None
+
+
+def _runtime_source_b64() -> str:
+    panel_url = "data:text/javascript;base64," + base64.b64encode(PANEL.read_bytes()).decode()
+    source = RUNTIME.read_text(encoding="utf-8")
+    source = source.replace("./assistant_panel.js", panel_url)
+    return base64.b64encode(source.encode()).decode()
 
 
 class EmbeddedRuntimeTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute DOM freshness tests")
     def test_action_fingerprint_rejects_target_or_route_changes_only(self):
-        source = base64.b64encode(RUNTIME.read_bytes()).decode()
+        source = _runtime_source_b64()
         script = f"""
           const mod = await import('data:text/javascript;base64,{source}');
           const h = mod.runtimeInternals;
@@ -118,7 +126,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_action_progress_is_readable_and_never_echoes_fill_value(self):
-        source = base64.b64encode(RUNTIME.read_bytes()).decode()
+        source = _runtime_source_b64()
         script = f"""
           const mod = await import('data:text/javascript;base64,{source}');
           const rows = [
@@ -133,6 +141,139 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         rows = json.loads(proc.stdout)
         self.assertEqual(rows, ["打开页面：/orders", "填写页面字段：e12", "提交页面表单：e15"])
         self.assertNotIn("private-value", proc.stdout)
+
+    @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the panel state model")
+    def test_panel_state_model_and_error_guidance_are_deterministic(self):
+        source = _runtime_source_b64()
+        script = f"""
+          const mod = await import('data:text/javascript;base64,{source}');
+          const snapshots = [];
+          const model = new mod.AssistantPanelViewModel(value => snapshots.push(value));
+          model.transition('acting');
+          model.setBusy(true);
+          model.setStopping(true);
+          model.setBusy(false);
+          let invalid = '';
+          try {{ model.transition('invented'); }} catch (error) {{ invalid = error.message; }}
+          const errors = [
+            mod.panelErrorMessage({{code:'backpressure'}}),
+            mod.panelErrorMessage({{code:'runtime_replaced'}}),
+            mod.panelErrorMessage({{code:'unauthorized'}}),
+            mod.panelErrorMessage({{}}, 'cancel'),
+          ];
+          process.stdout.write(JSON.stringify({{snapshots, final:model.snapshot(), invalid, errors}}));
+        """
+        proc = subprocess.run(["node", "--input-type=module", "-e", script],
+                              text=True, capture_output=True, timeout=10, check=True)
+        result = json.loads(proc.stdout)
+        self.assertEqual(result["snapshots"][0]["state"], "acting")
+        self.assertEqual(result["snapshots"][0]["tone"], "active")
+        self.assertTrue(result["snapshots"][1]["busy"])
+        self.assertTrue(result["snapshots"][2]["stopping"])
+        self.assertFalse(result["final"]["busy"])
+        self.assertFalse(result["final"]["stopping"])
+        self.assertIn("unknown assistant panel state", result["invalid"])
+        self.assertEqual(len(set(result["errors"])), 4)
+
+    def test_panel_primary_flows_are_keyboard_accessible_and_responsive(self):
+        try:
+            from playwright.sync_api import Error as PlaywrightError
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            self.skipTest("Playwright is not installed")
+        source = _runtime_source_b64()
+        html = f"""<!doctype html><html><body><main><h1>Fixture application</h1></main>
+          <script type="module">
+            const mod = await import('data:text/javascript;base64,{source}');
+            const panel = mod.createAssistantPanel({{labels:{{assistant:'Operations Copilot'}}}});
+            panel.onTask(async value => {{
+              if (value === 'retry this') {{ const error = new Error('busy'); error.code = 'backpressure'; throw error; }}
+              panel.setBusy(true); panel.state('acting'); panel.add('Inspecting current page');
+            }});
+            panel.onCancel(async () => {{ panel.state('stopping'); }});
+            window.testPanel = panel; window.panelReady = true;
+          </script></body></html>"""
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch(headless=True)
+            except PlaywrightError as error:
+                if "Executable doesn't exist" in str(error):
+                    self.skipTest("Playwright Chromium is not installed")
+                raise
+            context = browser.new_context(viewport={"width": 390, "height": 844},
+                                          reduced_motion="reduce")
+            page = context.new_page()
+            page.set_content(html, wait_until="load")
+            page.wait_for_function("window.panelReady === true")
+            host = page.locator("#woa-assistant")
+            self.assertEqual(host.locator("strong").inner_text(), "Operations Copilot")
+            composer = host.locator("textarea")
+            composer.fill("retry this")
+            composer.press("Enter")
+            host.locator(".notice[data-visible=true]").wait_for()
+            self.assertEqual(composer.input_value(), "retry this")
+            self.assertIn("稍后重试", host.locator(".notice p").inner_text())
+            self.assertEqual(host.locator(".panel").get_attribute("data-state"), "error")
+
+            page.evaluate("""() => {
+              window.testPanel.clearError(); window.testPanel.state('acting');
+              window.testPanel.setBusy(true); window.testPanel.add('A'.repeat(500));
+            }""")
+            self.assertEqual(host.locator(".entry").last.inner_text().splitlines()[0], "A" * 300)
+            animation = host.locator(".panel").evaluate(
+                "node => getComputedStyle(node, '::before').animationName")
+            self.assertEqual(animation, "none")
+            box = host.bounding_box()
+            self.assertIsNotNone(box)
+            self.assertGreaterEqual(box["x"], 0)
+            self.assertLessEqual(box["x"] + box["width"], 390)
+            stop = host.locator(".stop")
+            stop.focus()
+            stop.press("Enter")
+            self.assertEqual(host.locator(".panel").get_attribute("data-state"), "stopping")
+
+            page.evaluate("""() => {
+              window.testPanel.setBusy(false);
+              window.approvalDecision = '';
+              window.testPanel.requestApproval({approval_id:'approval-ui', effect:'Create company',
+                targets:['Acme · acme.example'], expires_at:Date.now()+10000})
+                .then(value => { window.approvalDecision = value });
+            }""")
+            approval = host.locator(".approval")
+            approval.wait_for()
+            self.assertEqual(approval.get_attribute("role"), "alertdialog")
+            self.assertEqual(host.locator(".deny").evaluate("node => node === node.getRootNode().activeElement"),
+                             True)
+            host.locator(".deny").press("Escape")
+            page.wait_for_function("window.approvalDecision === 'denied'")
+            self.assertEqual(composer.input_value(), "retry this")
+            page.evaluate("""() => {
+              window.approvalDecision = '';
+              window.testPanel.requestApproval({approval_id:'approval-ui-2', effect:'Create company',
+                targets:['Acme · acme.example'], expires_at:Date.now()+10000})
+                .then(value => { window.approvalDecision = value });
+            }""")
+            host.locator(".approval").wait_for()
+            host.locator(".approval button:not(.deny)").press("Enter")
+            page.wait_for_function("window.approvalDecision === 'approved'")
+            page.evaluate("window.testPanel.state('success')")
+            self.assertEqual(host.locator(".panel").get_attribute("data-tone"), "success")
+            page.evaluate("window.testPanel.state('indeterminate')")
+            self.assertEqual(host.locator(".panel").get_attribute("data-tone"), "warning")
+
+            collapse = host.locator(".collapse")
+            collapse.focus()
+            collapse.press("Enter")
+            self.assertEqual(collapse.get_attribute("aria-expanded"), "false")
+            collapse.press("Enter")
+            self.assertEqual(collapse.get_attribute("aria-expanded"), "true")
+            self.assertEqual(host.locator(".timeline").get_attribute("role"), "log")
+            with tempfile.TemporaryDirectory() as tmp:
+                screenshot = Path(tmp) / "panel-mobile-reduced-motion.png"
+                page.screenshot(path=str(screenshot))
+                self.assertGreater(screenshot.stat().st_size, 1000)
+            context.close()
+            browser.close()
 
     @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
                          "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
@@ -184,7 +325,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_approval_decision_is_persisted_before_idempotent_post(self):
-        source = base64.b64encode(RUNTIME.read_bytes()).decode()
+        source = _runtime_source_b64()
         script = f"""
           const mod = await import('data:text/javascript;base64,{source}');
           const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
@@ -224,7 +365,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_first_party_shell_can_submit_through_the_same_panel_api(self):
-        source = base64.b64encode(RUNTIME.read_bytes()).decode()
+        source = _runtime_source_b64()
         script = f"""
           const mod = await import('data:text/javascript;base64,{source}');
           globalThis.location = {{href:'https://app.test/home'}};
@@ -273,7 +414,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_product_turn_terminal_states_release_the_panel(self):
-        source = base64.b64encode(RUNTIME.read_bytes()).decode()
+        source = _runtime_source_b64()
         script = f"""
           const mod = await import('data:text/javascript;base64,{source}');
           const expected = {{
@@ -309,7 +450,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_stop_posts_the_exact_active_message_and_waits_for_terminal(self):
-        source = base64.b64encode(RUNTIME.read_bytes()).decode()
+        source = _runtime_source_b64()
         script = f"""
           const mod = await import('data:text/javascript;base64,{source}');
           const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
@@ -365,7 +506,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_pending_stop_retries_idempotently_after_runtime_restart(self):
-        source = base64.b64encode(RUNTIME.read_bytes()).decode()
+        source = _runtime_source_b64()
         script = f"""
           const mod = await import('data:text/javascript;base64,{source}');
           const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
@@ -392,7 +533,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_hello_echoes_only_the_server_supplied_principal_binding(self):
-        source = base64.b64encode(RUNTIME.read_bytes()).decode()
+        source = _runtime_source_b64()
         script = f"""
           const mod = await import('data:text/javascript;base64,{source}');
           globalThis.location = {{origin:'https://app.example.test'}};
@@ -422,7 +563,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_goto_uses_opt_in_spa_navigation_and_keeps_document_default(self):
-        source = base64.b64encode(RUNTIME.read_bytes()).decode()
+        source = _runtime_source_b64()
         script = f"""
           const mod = await import('data:text/javascript;base64,{source}');
           const pageLocation = {{href:'https://app.test/start', origin:'https://app.test',
@@ -464,7 +605,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the browser module helpers")
     def test_redaction_and_pagecontroller_index_adapter(self):
-        source = base64.b64encode(RUNTIME.read_bytes()).decode()
+        source = _runtime_source_b64()
         script = f"""
           const mod = await import('data:text/javascript;base64,{source}');
           const h = mod.runtimeInternals;
@@ -577,7 +718,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed for runtime fault injection")
     def test_runtime_recovery_security_and_deadline_faults(self):
-        source = base64.b64encode(RUNTIME.read_bytes()).decode()
+        source = _runtime_source_b64()
         script = """
           const mod = await import('data:text/javascript;base64,__SOURCE__');
           const h = mod.runtimeInternals;
