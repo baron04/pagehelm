@@ -31,31 +31,33 @@ from evals.woa.scripted import ScriptedWoaChat, SimulatedRuntime, SyntheticPageM
 
 
 QUALIFICATION_VERSION = 1
-#: The frozen protocol requires every held-out task to be scheduled, and a held-out-shaped
-#: task set must contain create tasks. This qualification is read-only, so its seed is chosen
-#: to place six query/open pairs before the first create pair; the driver then runs that
-#: prefix. Choosing a seed is legitimate for an apparatus artifact and is recorded here, but
-#: the real benchmark seed must be preregistered independently of any outcome.
-QUALIFICATION_SEED = "a934b1c81054e2bb949b8822e81d103d"
-READ_ONLY_PREFIX_PAIRS = 6
+#: This seed controls only the model-free apparatus qualification. A formal benchmark seed
+#: must be preregistered independently of this fixture and every observed result.
+QUALIFICATION_SEED = "00000000000000000000000000000004"
 DEVELOPMENT_TASKSET = (
     Path(__file__).resolve().parents[1] / "twenty" / "tasksets"
     / "twenty-companies-development-v1.json")
 
 
 class InMemoryFixture:
-    """Capture an unchanging synthetic business projection without a database."""
+    """Capture and restore one shared synthetic business projection without a database."""
 
-    def __init__(self, companies: Sequence[Mapping[str, str]]):
-        self.projection = evaluator_projection([dict(company) for company in companies])
+    def __init__(self, companies: list[dict[str, str]]):
+        self.companies = companies
+        self.baseline = [dict(company) for company in companies]
         self.captures = 0
 
     def capture(self, *, role: str) -> dict[str, Any]:
         self.captures += 1
+        projection = evaluator_projection(self.companies)
         return make_state(
-            fixture=SYNTHETIC_FIXTURE, companies=self.projection["companies"],
-            guards=self.projection["guards"], captured_at="2026-09-09T00:00:00+00:00",
+            fixture=SYNTHETIC_FIXTURE, companies=projection["companies"],
+            guards=projection["guards"], captured_at="2026-09-09T00:00:00+00:00",
             role=role)
+
+    def restore(self) -> dict[str, Any]:
+        self.companies[:] = [dict(company) for company in self.baseline]
+        return {"status": "PASS"}
 
 
 def _digest(character: str) -> str:
@@ -85,43 +87,56 @@ def qualification_protocol(task_ids: Sequence[str], *, seal: Mapping[str, Any],
         {"arm_id": "pageagent-browser", "engine": "pageagent",
          "engine_release": "pageagent@1.12.4", "implementation_digest": _digest("6"),
          "capability_profile": "browser_only", "source_mode": "off",
+         "source_interface": "absent",
          "source_policy_digest": None, "skill_digest": None, "tool_catalog_digest": None},
         {"arm_id": "woa-browser", "engine": "web_operation_agent",
          "engine_release": "web-operation-agent@0.1.0",
          "implementation_digest": woa_implementation,
          "capability_profile": "browser_only", "source_mode": "off",
+         "source_interface": "absent",
          "source_policy_digest": None, "skill_digest": None, "tool_catalog_digest": None},
         {"arm_id": "pageagent-skill", "engine": "pageagent_core",
          "engine_release": "pageagent@1.12.4", "implementation_digest": _digest("7"),
          "capability_profile": "skill_api", "source_mode": "off",
+         "source_interface": "absent",
          "source_policy_digest": None, "skill_digest": shared_skill,
          "tool_catalog_digest": shared_tools},
-        {"arm_id": "woa-skill-source-off", "engine": "web_operation_agent",
+        {"arm_id": "woa-skill", "engine": "web_operation_agent",
          "engine_release": "web-operation-agent@0.1.0",
          "implementation_digest": woa_implementation,
          "capability_profile": "skill_api", "source_mode": "off",
+         "source_interface": "absent",
+         "source_policy_digest": None, "skill_digest": shared_skill,
+         "tool_catalog_digest": shared_tools},
+        {"arm_id": "woa-source-off", "engine": "web_operation_agent",
+         "engine_release": "web-operation-agent@0.1.0",
+         "implementation_digest": woa_implementation,
+         "capability_profile": "skill_api", "source_mode": "off",
+         "source_interface": "paired",
          "source_policy_digest": None, "skill_digest": shared_skill,
          "tool_catalog_digest": shared_tools},
         {"arm_id": "woa-skill-source-on", "engine": "web_operation_agent",
          "engine_release": "web-operation-agent@0.1.0",
          "implementation_digest": woa_implementation,
          "capability_profile": "skill_api", "source_mode": "on",
+         "source_interface": "paired",
          "source_policy_digest": digest_json(source_policy), "skill_digest": shared_skill,
          "tool_catalog_digest": shared_tools},
     ]
     selected = sorted(task_ids)
+    read_only = selected[:8]
     comparisons = [
         {"comparison_id": "h1-browser", "comparison_type": "browser_execution",
          "left_arm": "pageagent-browser", "right_arm": "woa-browser",
-         "eligible_task_ids": selected[:1], "minimum_useful_effect_pp": 10,
+         "eligible_task_ids": read_only, "minimum_useful_effect_pp": 10,
          "success_noninferiority_margin_pp": -5, "efficiency_improvement_percent": 25},
         {"comparison_id": "h2-skill", "comparison_type": "skill_api",
-         "left_arm": "pageagent-skill", "right_arm": "woa-skill-source-off",
+         "left_arm": "pageagent-skill", "right_arm": "woa-skill",
          "eligible_task_ids": selected, "minimum_useful_effect_pp": 10,
          "success_noninferiority_margin_pp": -5, "efficiency_improvement_percent": 25},
         {"comparison_id": "h3-source", "comparison_type": "source_runtime",
-         "left_arm": "woa-skill-source-off", "right_arm": "woa-skill-source-on",
-         "eligible_task_ids": selected[-1:], "minimum_useful_effect_pp": 10,
+         "left_arm": "woa-source-off", "right_arm": "woa-skill-source-on",
+         "eligible_task_ids": [read_only[4]], "minimum_useful_effect_pp": 10,
          "success_noninferiority_margin_pp": -5, "efficiency_improvement_percent": 25},
     ]
     eligibility = []
@@ -137,6 +152,7 @@ def qualification_protocol(task_ids: Sequence[str], *, seal: Mapping[str, Any],
         "artifact_version": 1,
         "kind": "twenty_evaluation_protocol",
         "status": "DRAFT",
+        "purpose": "apparatus_qualification",
         "protocol_id": "twenty-driver-qualification-v1",
         "task_sets": {
             "development_seal": development_seal["seal_digest"],
@@ -184,18 +200,6 @@ def qualification_protocol(task_ids: Sequence[str], *, seal: Mapping[str, Any],
         },
     }
     return draft
-
-
-def read_only_prefix(protocol: Mapping[str, Any],
-                     task_set: Mapping[str, Any]) -> int:
-    """Return how many scheduled pairs precede the first create task."""
-    kinds = {task["task_id"]: task["kind"] for task in task_set["tasks"]}
-    prefix = 0
-    for pair in protocol["schedule"]:
-        if kinds[pair["task_id"]] == "create":
-            break
-        prefix += 1
-    return prefix
 
 
 def opaque_task_set(source: Mapping[str, Any], *, set_id: str) -> dict[str, Any]:

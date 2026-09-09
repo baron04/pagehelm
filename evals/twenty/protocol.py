@@ -251,13 +251,14 @@ def _artifacts(value: Any) -> dict[str, str]:
 def _arm(value: Any, source_policy_digest: str) -> dict[str, Any]:
     fields = {
         "arm_id", "engine", "engine_release", "implementation_digest",
-        "capability_profile", "source_mode", "source_policy_digest",
+        "capability_profile", "source_mode", "source_interface", "source_policy_digest",
         "skill_digest", "tool_catalog_digest",
     }
     raw = _exact(value, fields, "protocol.arm")
     engine = raw.get("engine")
     capability = raw.get("capability_profile")
     source_mode = raw.get("source_mode")
+    source_interface = raw.get("source_interface")
     if engine not in {"pageagent", "pageagent_core", "web_operation_agent"}:
         raise EvaluationInputError("arm engine is invalid")
     release = _text(raw.get("engine_release"), "arm.engine_release", maximum=100)
@@ -265,6 +266,8 @@ def _arm(value: Any, source_policy_digest: str) -> dict[str, Any]:
         raise EvaluationInputError("arm engine release is not exact")
     if capability not in {"browser_only", "skill_api"} or source_mode not in {"off", "on"}:
         raise EvaluationInputError("arm capability or source mode is invalid")
+    if source_interface not in {"absent", "paired"}:
+        raise EvaluationInputError("arm source interface is invalid")
     source_digest = _digest(
         raw.get("source_policy_digest"), "arm.source_policy_digest", allow_none=True)
     skill_digest = _digest(raw.get("skill_digest"), "arm.skill_digest", allow_none=True)
@@ -280,6 +283,12 @@ def _arm(value: Any, source_policy_digest: str) -> dict[str, Any]:
         raise EvaluationInputError("skill/API arm must pin Skill and tool artifacts")
     if engine != "web_operation_agent" and source_mode != "off":
         raise EvaluationInputError("only Web Operation Agent may enable SourceProvider")
+    if engine != "web_operation_agent" and source_interface != "absent":
+        raise EvaluationInputError("only Web Operation Agent may expose a source interface")
+    if capability == "browser_only" and source_interface != "absent":
+        raise EvaluationInputError("browser-only arms cannot expose a source interface")
+    if source_mode == "on" and source_interface != "paired":
+        raise EvaluationInputError("source-on arms require the paired source interface")
     return {
         "arm_id": _identifier(raw.get("arm_id"), "arm.arm_id"),
         "engine": engine,
@@ -288,6 +297,7 @@ def _arm(value: Any, source_policy_digest: str) -> dict[str, Any]:
             raw.get("implementation_digest"), "arm.implementation_digest"),
         "capability_profile": capability,
         "source_mode": source_mode,
+        "source_interface": source_interface,
         "source_policy_digest": source_digest,
         "skill_digest": skill_digest,
         "tool_catalog_digest": tool_digest,
@@ -319,12 +329,14 @@ def _comparison(value: Any, task_ids: set[str], arms: dict[str, dict[str, Any]])
             left["engine"] == "pageagent" and right["engine"] == "web_operation_agent"
             and left["capability_profile"] == right["capability_profile"] == "browser_only"
             and left["source_mode"] == right["source_mode"] == "off"
+            and left["source_interface"] == right["source_interface"] == "absent"
         )
     elif comparison_type == "skill_api":
         valid = (
             left["engine"] == "pageagent_core" and right["engine"] == "web_operation_agent"
             and left["capability_profile"] == right["capability_profile"] == "skill_api"
             and left["source_mode"] == right["source_mode"] == "off"
+            and left["source_interface"] == right["source_interface"] == "absent"
             and left["skill_digest"] == right["skill_digest"]
             and left["tool_catalog_digest"] == right["tool_catalog_digest"]
         )
@@ -335,6 +347,7 @@ def _comparison(value: Any, task_ids: set[str], arms: dict[str, dict[str, Any]])
         valid = (
             left["engine"] == right["engine"] == "web_operation_agent"
             and left["capability_profile"] == right["capability_profile"] == "skill_api"
+            and left["source_interface"] == right["source_interface"] == "paired"
             and {left["source_mode"], right["source_mode"]} == {"off", "on"}
             and varying_fields == {"arm_id", "source_mode", "source_policy_digest"}
         )
@@ -444,7 +457,7 @@ def _schedule(comparisons: list[dict[str, Any]], seed: str) -> list[dict[str, An
 def _validate_draft(value: Any, development_seal: Any, test_seal: Any,
                     split_verification: Any) -> dict[str, Any]:
     fields = {
-        "artifact_version", "kind", "status", "protocol_id", "task_sets",
+        "artifact_version", "kind", "status", "purpose", "protocol_id", "task_sets",
         "environment", "provider", "budgets", "artifacts", "source_policy",
         "arms", "comparisons", "eligibility", "randomization_seed", "stop_policy",
     }
@@ -453,6 +466,9 @@ def _validate_draft(value: Any, development_seal: Any, test_seal: Any,
             or raw.get("kind") != "twenty_evaluation_protocol"
             or raw.get("status") != "DRAFT"):
         raise EvaluationInputError("evaluation protocol draft header is invalid")
+    purpose = raw.get("purpose")
+    if purpose not in {"apparatus_qualification", "development_pilot", "formal_benchmark"}:
+        raise EvaluationInputError("evaluation protocol purpose is invalid")
     bindings = _artifact_bindings(
         raw.get("task_sets"), development_seal, test_seal, split_verification)
     test = validate_seal(test_seal)
@@ -463,8 +479,8 @@ def _validate_draft(value: Any, development_seal: Any, test_seal: Any,
     source_policy = _source_policy(raw.get("source_policy"))
     source_policy_digest = digest_json(source_policy)
     raw_arms = raw.get("arms")
-    if not isinstance(raw_arms, list) or len(raw_arms) != 5:
-        raise EvaluationInputError("protocol must define exactly five preregistered arms")
+    if not isinstance(raw_arms, list) or len(raw_arms) != 6:
+        raise EvaluationInputError("protocol must define exactly six preregistered arms")
     arm_list = [_arm(item, source_policy_digest) for item in raw_arms]
     arms = {item["arm_id"]: item for item in arm_list}
     if len(arms) != len(arm_list):
@@ -481,7 +497,7 @@ def _validate_draft(value: Any, development_seal: Any, test_seal: Any,
         arm_id for item in comparison_list for arm_id in (item["left_arm"], item["right_arm"])
     }
     if used_arms != set(arms):
-        raise EvaluationInputError("every arm must participate and the source-off WOA arm must be reused")
+        raise EvaluationInputError("every arm must participate in one preregistered comparison")
     eligibility = _eligibility(raw.get("eligibility"), task_ids, comparisons)
     seed = _text(raw.get("randomization_seed"), "protocol.randomization_seed", maximum=32)
     if not _NONCE.fullmatch(seed):
@@ -490,6 +506,7 @@ def _validate_draft(value: Any, development_seal: Any, test_seal: Any,
         "artifact_version": PROTOCOL_VERSION,
         "kind": "twenty_evaluation_protocol",
         "status": "DRAFT",
+        "purpose": purpose,
         "protocol_id": _identifier(raw.get("protocol_id"), "protocol.protocol_id"),
         "task_sets": bindings,
         "environment": environment,
@@ -522,7 +539,7 @@ def verify_protocol(value: Any, *, development_seal: Any, test_seal: Any,
         raise EvaluationInputError("frozen evaluation protocol must be an object")
     core = {key: value[key] for key in value if key != "protocol_digest"}
     if (set(value) != {
-            "artifact_version", "kind", "status", "protocol_id", "task_sets",
+            "artifact_version", "kind", "status", "purpose", "protocol_id", "task_sets",
             "environment", "provider", "budgets", "artifacts", "source_policy",
             "arms", "comparisons", "eligibility", "randomization_seed", "stop_policy",
             "schedule", "protocol_digest"}

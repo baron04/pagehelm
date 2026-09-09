@@ -19,8 +19,9 @@ from .protocol import verify_protocol
 
 
 REPORT_VERSION = 1
-#: A batch this small qualifies the apparatus. It cannot support a success rate, a comparison
-#: between engines, or a source-retrieval conclusion, so the report labels itself.
+#: Minimum sample-size policy retained for later comparative estimators. Batch purpose is an
+#: explicit preregistered protocol field; completing a large scripted qualification must not
+#: silently relabel it as a product benchmark.
 MINIMUM_COMPARATIVE_TRIALS_PER_ARM = 30
 _OUTCOMES = ("PASS", "FAIL", "INDETERMINATE", "INVALID")
 _SAFETY = (
@@ -30,6 +31,7 @@ _SAFETY = (
 _AGGREGATE_FIELDS = {"count", "total", "median", "maximum"}
 _ARM_FIELDS = {
     "arm_id", "engine", "engine_release", "capability_profile", "source_mode",
+    "source_interface",
     "trials", "valid_trials", "apparatus_invalid_trials", "outcomes",
     "terminal_reasons", "page_actions", "business_calls", "model_calls",
     "known_input_tokens", "known_output_tokens", "usage_unavailable_calls",
@@ -57,20 +59,6 @@ def _has_fields(value: Any, fields: set[str] | frozenset[str]) -> bool:
     return isinstance(value, dict) and set(value) == set(fields)
 
 
-def _purpose(records: list[dict[str, Any]], expected: int) -> str:
-    """Name what this batch can support, never what it proves about an engine."""
-    if not records:
-        return "apparatus_qualification"
-    per_arm: dict[str, int] = {}
-    for record in records:
-        per_arm[record["arm_id"]] = per_arm.get(record["arm_id"], 0) + 1
-    if len(records) < expected:
-        return "apparatus_qualification"
-    if min(per_arm.values()) < MINIMUM_COMPARATIVE_TRIALS_PER_ARM:
-        return "development_pilot"
-    return "formal_benchmark"
-
-
 def _aggregate(values: list[int]) -> dict[str, Any]:
     if not values:
         return {"count": 0, "total": 0, "median": None, "maximum": None}
@@ -93,6 +81,7 @@ def _arm_summary(arm: Mapping[str, Any], records: list[dict[str, Any]]) -> dict[
         "engine_release": arm["engine_release"],
         "capability_profile": arm["capability_profile"],
         "source_mode": arm["source_mode"],
+        "source_interface": arm["source_interface"],
         "trials": len(selected),
         "valid_trials": len(valid),
         "apparatus_invalid_trials": len(selected) - len(valid),
@@ -137,7 +126,7 @@ def build_report(*, protocol: Mapping[str, Any], development_seal: Mapping[str, 
     core = {
         "artifact_version": REPORT_VERSION,
         "kind": "twenty_public_report",
-        "purpose": _purpose(records, header["expected_trials"]),
+        "purpose": protocol["purpose"],
         "comparative_claim_supported": False,
         "protocol_id": protocol["protocol_id"],
         "protocol_digest": protocol["protocol_digest"],

@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 from evals.pageagent.scripted import (
     ScriptedProviderClient, SyntheticCompanyExecutor, SyntheticTwentyAdapter,
     SyntheticTwentyPage, company_ui_path, development_case, evaluate_run, query_answer,
-    synthetic_business_runtime, synthetic_companies, write_storage_state,
+    synthetic_business_runtime, synthetic_companies, synthetic_state, write_storage_state,
 )
 from evals.pageagent.twenty_runner import PageAgentTwentyConfig, run_case
 from web_operation_agent.business import (
@@ -77,11 +77,12 @@ class RunnerBrowserQualificationTests(unittest.TestCase):
             bundle_path=BUNDLE, bundle_digest=self.bundle_digest,
             storage_state_path=self.state, wall_time_s=60, max_steps=6, **changes)
 
-    def _run(self, *, case, client, config=None, adapter=None, cancelled=None) -> dict:
+    def _run(self, *, case, client, config=None, adapter=None, cancelled=None,
+             approval_decider=None) -> dict:
         return run_case(
             case=case, adapter=adapter or self.adapter, client=client,
             config=config or self._config(), run_id="pageagent-browser-qualification",
-            cancelled=cancelled)
+            cancelled=cancelled, approval_decider=approval_decider)
 
     def _query_actions(self, answer: str | None = None) -> list[dict]:
         return [{"query_companies": {"limit": 50}},
@@ -118,6 +119,143 @@ class RunnerBrowserQualificationTests(unittest.TestCase):
         self.assertEqual(sorted(evidence["name"] for evidence in result["evidence"]["companies"]),
                          sorted(company["name"] for company in self.companies))
         self.assertEqual(evaluate_run(case, self.companies, result)["status"], "PASS")
+
+    def test_browser_only_query_uses_the_official_dom_surface_without_custom_tools(self):
+        case = development_case("dev-query-en-1", self.companies)
+        with SyntheticTwentyPage(self.companies, expose_company_list=True) as page:
+            state = write_storage_state(
+                Path(self.directory.name) / "browser-only-state.json", origin=page.origin)
+            adapter = SyntheticTwentyAdapter(origin=page.origin, runtime=self.runtime)
+            config = PageAgentTwentyConfig(
+                bundle_path=BUNDLE, bundle_digest=self.bundle_digest,
+                storage_state_path=state, wall_time_s=60, max_steps=4,
+                capability_profile="browser_only")
+            result = run_case(
+                case=case, adapter=adapter,
+                client=ScriptedProviderClient([
+                    {"done": {"text": query_answer(self.companies), "success": True}},
+                ]),
+                config=config, run_id="pageagent-browser-only-query")
+
+        self.assertEqual(result["status"], "completed", result)
+        self.assertEqual(result["engine"]["name"], "pageagent")
+        self.assertEqual(result["trial"]["business_calls"], 0)
+        self.assertIsNone(result["business"]["skill_digest"])
+        self.assertEqual(evaluate_run(case, self.companies, result)["status"], "PASS")
+
+    def test_browser_only_open_clicks_a_visible_record_link(self):
+        case, target = self._open_case()
+        with SyntheticTwentyPage(self.companies, expose_company_list=True) as page:
+            state = write_storage_state(
+                Path(self.directory.name) / "browser-open-state.json", origin=page.origin)
+            adapter = SyntheticTwentyAdapter(origin=page.origin, runtime=self.runtime)
+            config = PageAgentTwentyConfig(
+                bundle_path=BUNDLE, bundle_digest=self.bundle_digest,
+                storage_state_path=state, wall_time_s=60, max_steps=5,
+                capability_profile="browser_only")
+            result = run_case(
+                case=case, adapter=adapter,
+                client=ScriptedProviderClient([
+                    {"click_element_by_index": {"index": 0}},
+                    {"done": {"text": "Opened.", "success": True}},
+                ]),
+                config=config, run_id="pageagent-browser-only-open")
+
+        self.assertEqual(result["status"], "completed", result)
+        self.assertEqual(result["evidence"]["page"]["path"], company_ui_path(target))
+        self.assertIn(target["name"], result["evidence"]["page"]["visible_projection"])
+        self.assertEqual(result["trial"]["business_calls"], 0)
+        self.assertEqual(evaluate_run(case, self.companies, result)["status"], "PASS")
+
+    def test_create_shows_exact_approval_and_dispatches_once(self):
+        from evals.twenty.evaluator import evaluate
+
+        executor = SyntheticCompanyExecutor(self.companies, allow_mutations=True)
+        adapter = SyntheticTwentyAdapter(
+            origin=self.page.origin, runtime=synthetic_business_runtime(executor))
+        case = development_case("dev-create-zh-1", self.companies)
+        expected = case["evaluator_task"]
+        messages: list[str] = []
+        result = self._run(
+            case=case, adapter=adapter, config=self._config(allow_create=True),
+            client=ScriptedProviderClient([
+                {"create_company": {
+                    "name": expected["name"], "domain": expected["domain"]}},
+                {"done": {"text": "Created.", "success": True}},
+            ]),
+            approval_decider=lambda message: messages.append(message) or "approved")
+
+        self.assertEqual(result["status"], "completed", result)
+        self.assertEqual(executor.mutation_dispatches, 1)
+        self.assertEqual(result["trial"]["approvals_requested"], 1)
+        self.assertEqual(result["trial"]["approvals_approved"], 1)
+        self.assertEqual(len(messages), 1)
+        self.assertIn(expected["name"], messages[0])
+        self.assertIn(expected["domain"], messages[0])
+        verdict = evaluate(
+            task=expected,
+            before=synthetic_state(self.companies, role="baseline"),
+            after=synthetic_state(executor.companies, role="observation"),
+            evidence=result["evidence"])
+        self.assertEqual(verdict["status"], "PASS", verdict)
+
+    def test_create_is_denied_by_default_without_dispatch(self):
+        executor = SyntheticCompanyExecutor(self.companies, allow_mutations=True)
+        adapter = SyntheticTwentyAdapter(
+            origin=self.page.origin, runtime=synthetic_business_runtime(executor))
+        case = development_case("dev-create-zh-1", self.companies)
+        expected = case["evaluator_task"]
+        result = self._run(
+            case=case, adapter=adapter, config=self._config(allow_create=True),
+            client=ScriptedProviderClient([{"create_company": {
+                "name": expected["name"], "domain": expected["domain"]}}]))
+
+        self.assertEqual(result["status"], "failed", result)
+        self.assertEqual(result["error_code"], "approval_denied")
+        self.assertEqual(executor.mutation_dispatches, 0)
+        self.assertEqual(result["trial"]["approvals_denied"], 1)
+
+    def test_create_then_open_requires_the_created_route_and_visible_readback(self):
+        from evals.twenty.evaluator import evaluate
+
+        case = development_case("dev-create-en-1", self.companies)
+        expected = case["evaluator_task"]
+        created_id = "99999999-9999-4999-8999-999999999999"
+        created = {"id": created_id, "name": expected["name"],
+                   "domain": expected["domain"]}
+        executor = SyntheticCompanyExecutor(
+            self.companies, allow_mutations=True, id_factory=lambda: created_id)
+        with SyntheticTwentyPage([*self.companies, created]) as page:
+            state = write_storage_state(
+                Path(self.directory.name) / "create-open-state.json", origin=page.origin)
+            adapter = SyntheticTwentyAdapter(
+                origin=page.origin, runtime=synthetic_business_runtime(executor))
+            config = PageAgentTwentyConfig(
+                bundle_path=BUNDLE, bundle_digest=self.bundle_digest,
+                storage_state_path=state, wall_time_s=60, max_steps=6,
+                allow_create=True)
+            route = company_ui_path(created)
+            result = run_case(
+                case=case, adapter=adapter,
+                client=ScriptedProviderClient([
+                    {"create_company": {
+                        "name": expected["name"], "domain": expected["domain"]}},
+                    {"open_allowed_route": {"route": route}},
+                    {"done": {"text": "Created and opened.", "success": True}},
+                ]),
+                config=config, run_id="pageagent-create-open",
+                approval_decider=lambda _message: "approved")
+
+        self.assertEqual(result["status"], "completed", result)
+        self.assertEqual(result["evidence"]["page"], {
+            "path": route, "name": expected["name"], "domain": expected["domain"]})
+        self.assertEqual(result["business"]["route_permits"], 1)
+        verdict = evaluate(
+            task=expected,
+            before=synthetic_state(self.companies, role="baseline"),
+            after=synthetic_state(executor.companies, role="observation"),
+            evidence=result["evidence"])
+        self.assertEqual(verdict["status"], "PASS", verdict)
 
     def test_wrong_answer_fails_even_though_every_tool_call_succeeded(self):
         case = development_case("dev-query-en-1", self.companies)

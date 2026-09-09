@@ -295,15 +295,25 @@ def _open_checks(before: dict[str, Any], after: dict[str, Any], task: dict[str, 
     if set(evidence) != {"artifact_version", "execution_status", "page"}:
         raise EvaluationInputError("completed open evidence has unexpected fields")
     page = evidence.get("page")
-    if not isinstance(page, dict) or set(page) != {"path", "name", "domain"}:
+    if not isinstance(page, dict) or set(page) not in (
+            {"path", "name", "domain"}, {"path", "visible_projection"}):
         raise EvaluationInputError("completed open page evidence is invalid")
-    checks.update({
-        "final_route_matches_target": page.get("path") == f"/object/company/{target['id']}",
-        "visible_company_matches_target": (
+    if set(page) == {"path", "visible_projection"}:
+        visible = _text(page.get("visible_projection"), "evidence.page.visible_projection")
+        if len(visible.encode("utf-8")) > 512 * 1024:
+            raise EvaluationInputError("completed open visible projection is oversized")
+        folded = visible.casefold()
+        visible_match = (
+            target["name"].casefold() in folded
+            and (not target["domain"] or target["domain"] in folded))
+    else:
+        visible_match = (
             page.get("name") == target["name"]
             and _normalize_domain(page.get("domain"), allow_empty=True,
-                                  candidate_value=True) == target["domain"]
-        ),
+                                  candidate_value=True) == target["domain"])
+    checks.update({
+        "final_route_matches_target": page.get("path") == f"/object/company/{target['id']}",
+        "visible_company_matches_target": visible_match,
     })
     return checks
 

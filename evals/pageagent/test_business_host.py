@@ -69,6 +69,9 @@ class _ReadExecutor:
 
 
 class _WriteExecutor:
+    def __init__(self):
+        self.dispatches = 0
+
     @staticmethod
     def tool_schemas():
         return (WRITE_SCHEMA,)
@@ -82,16 +85,31 @@ class _WriteExecutor:
         raise AssertionError("write executed")
 
     @staticmethod
-    def prepare_mutation(*_args, **_kwargs):
-        return BusinessMutationSpec(args={"name": "x"}, effect="create", targets=("x",))
+    def prepare_mutation(name, args, **_kwargs):
+        if name != "create_company" or set(args) != {"name"}:
+            raise AssertionError("unexpected mutation proposal")
+        return BusinessMutationSpec(
+            args=dict(args), effect="Create one company", targets=(args["name"],))
+
+    def execute_mutation(self, name, args, **_kwargs):
+        if name != "create_company" or set(args) != {"name"}:
+            raise AssertionError("unexpected mutation dispatch")
+        self.dispatches += 1
+        route = "/objects/companies/created"
+        return BusinessToolResult(
+            content={"created": True, "readback_verified": True,
+                     "company": {"name": args["name"], "domain": "",
+                                 "ui_path": route}},
+            audit={"records_created": 1}, allowed_routes=(route,))
 
 
-def _context() -> OperationContext:
+def _context(*, write: bool = False) -> OperationContext:
     now = int(time.time() * 1000)
     principal = PrincipalContext(
         schema_version=1, application_id="fixture", tenant_id="tenant",
         workspace_id="workspace", actor_id="actor", delegation_id="delegation",
-        issued_at=now, expires_at=now + 60_000, scopes=("companies:read",))
+        issued_at=now, expires_at=now + 60_000,
+        scopes=(("companies:write",) if write else ("companies:read",)))
     return OperationContext.create(
         principal, session_id="session", turn_id="turn", operation_id="operation",
         deadline_ms=now + 30_000, now_ms=now)
@@ -223,6 +241,58 @@ class BusinessProxyTests(unittest.TestCase):
                 loaded_skill_ids=(write_skill.skill_id,), context=_context(),
                 expected_catalog_sha256=write_runtime.catalog_sha256,
                 max_business_calls=1, max_route_calls=1)
+
+    def test_mutation_requires_one_digest_bound_decision_and_cannot_replay(self):
+        runtime, skill = _runtime(write=True)
+        proxy = PageAgentBusinessProxy(
+            run_token="opaque-business-token", runtime=runtime,
+            loaded_skill_ids=(skill.skill_id,), context=_context(write=True),
+            expected_catalog_sha256=runtime.catalog_sha256,
+            max_business_calls=2, max_route_calls=1, allow_mutations=True)
+        proposal = proxy.handle({
+            "run_token": "opaque-business-token", "name": "create_company",
+            "args": {"name": "Synthetic Acme"},
+        })["__woa_mutation_approval__"]
+        self.assertEqual(proposal["effect"], "Create one company")
+        self.assertEqual(proposal["targets"], ["Synthetic Acme"])
+        result = proxy.handle_approval({
+            "run_token": "opaque-business-token",
+            "proposal_digest": proposal["proposal_digest"],
+            "decision": "approved",
+        })
+        self.assertTrue(result["created"])
+        self.assertEqual(runtime._executor.dispatches, 1)
+        with self.assertRaisesRegex(PageAgentBusinessHostError, "approval_replay"):
+            proxy.handle_approval({
+                "run_token": "opaque-business-token",
+                "proposal_digest": proposal["proposal_digest"],
+                "decision": "approved",
+            })
+        self.assertEqual(runtime._executor.dispatches, 1)
+        report = proxy.report()
+        self.assertEqual(report["approvals_requested"], 1)
+        self.assertEqual(report["approvals_approved"], 1)
+        self.assertEqual(report["mutation_dispatches"], 1)
+
+    def test_denied_mutation_is_consumed_without_dispatch(self):
+        runtime, skill = _runtime(write=True)
+        proxy = PageAgentBusinessProxy(
+            run_token="opaque-business-token", runtime=runtime,
+            loaded_skill_ids=(skill.skill_id,), context=_context(write=True),
+            expected_catalog_sha256=runtime.catalog_sha256,
+            max_business_calls=1, max_route_calls=0, allow_mutations=True)
+        proposal = proxy.handle({
+            "run_token": "opaque-business-token", "name": "create_company",
+            "args": {"name": "Synthetic Acme"},
+        })["__woa_mutation_approval__"]
+        with self.assertRaisesRegex(PageAgentBusinessHostError, "approval_denied"):
+            proxy.handle_approval({
+                "run_token": "opaque-business-token",
+                "proposal_digest": proposal["proposal_digest"],
+                "decision": "denied",
+            })
+        self.assertEqual(runtime._executor.dispatches, 0)
+        self.assertEqual(proxy.report()["approvals_denied"], 1)
 
 
 if __name__ == "__main__":

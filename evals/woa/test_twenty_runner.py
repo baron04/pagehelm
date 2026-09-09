@@ -23,6 +23,7 @@ from evals.woa.twenty_runner import WoaTwentyConfig, WoaTwentyRunnerError, run_c
 from web_operation_agent.business import (
     BusinessToolIdentityError, BusinessToolUnavailableError,
 )
+from web_operation_agent.schemas import SourceMap
 
 
 ORIGIN = "http://127.0.0.1:3020"
@@ -47,11 +48,13 @@ class WoaRunnerScenarioTests(unittest.TestCase):
             runtime.stop()
         self.directory.cleanup()
 
-    def _factory(self, *, replace_cookie_after_start: bool = False):
+    def _factory(self, *, replace_cookie_after_start: bool = False,
+                 approval_decision: str | None = None):
         def factory(*, channel, grant, registry, origin, entry_path):
             runtime = SimulatedRuntime(
                 channel, grant, origin=origin, entry_path=entry_path,
-                page_model=self.page_model, storage_state=self.storage_state)
+                page_model=self.page_model, storage_state=self.storage_state,
+                approval_decision=approval_decision)
             if replace_cookie_after_start:
                 runtime.replace_session_cookie()
             self.runtimes.append(runtime)
@@ -65,14 +68,17 @@ class WoaRunnerScenarioTests(unittest.TestCase):
         return content
 
     def _run(self, *, case, chat, adapter=None, cancelled=None,
-             replace_cookie_after_start=False, config=None):
+             replace_cookie_after_start=False, config=None, run_id="woa-offline-run",
+             source_map=None, approval_decision=None):
         return run_case(
             case=case, adapter=adapter or self.adapter, client=chat,
             config=config or WoaTwentyConfig(storage_state_path=self.state, wall_time_s=60),
             ledger_path=self.root / "audit.jsonl",
             runtime_factory=self._factory(
-                replace_cookie_after_start=replace_cookie_after_start),
-            page_sampler=self._sampler, run_id="woa-offline-run", cancelled=cancelled)
+                replace_cookie_after_start=replace_cookie_after_start,
+                approval_decision=approval_decision),
+            page_sampler=self._sampler, run_id=run_id, cancelled=cancelled,
+            source_map=source_map)
 
     def _query_replies(self, answer: str | None = None):
         return [
@@ -112,6 +118,157 @@ class WoaRunnerScenarioTests(unittest.TestCase):
         self.assertLess(result["turn"]["answer_chars"], ENGINE_ANSWER_CEILING)
         self.assertFalse(result["turn"]["answer_at_engine_ceiling"])
         self.assertEqual(evaluate_run(case, self.companies, result)["status"], "PASS")
+
+    def test_browser_only_query_reads_page_without_business_capabilities(self):
+        self.page_model = SyntheticPageModel(
+            self.companies, expose_company_list=True)
+        case = development_case("dev-query-en-1", self.companies)
+        chat = ScriptedWoaChat([
+            ("finish", {"done": True, "why": query_answer(self.companies)}),
+        ])
+        result = self._run(
+            case=case, chat=chat,
+            config=WoaTwentyConfig(
+                storage_state_path=self.state, capability_profile="browser_only",
+                wall_time_s=60))
+
+        self.assertEqual(result["status"], "completed", result)
+        self.assertEqual(result["trial"]["business_calls"], 0)
+        self.assertNotIn("load_skill", chat.requests[0]["tool_names"])
+        self.assertNotIn("query_companies", chat.requests[0]["tool_names"])
+        self.assertEqual(evaluate_run(case, self.companies, result)["status"], "PASS")
+
+    def test_browser_only_open_uses_an_exact_visible_link(self):
+        self.page_model = SyntheticPageModel(
+            self.companies, expose_company_list=True)
+        case = development_case("dev-open-en-1", self.companies)
+        target = next(company for company in self.companies
+                      if company["name"] in case["prompt"])
+        route = company_ui_path(target)
+        target_index = self.companies.index(target) + 1
+        chat = ScriptedWoaChat([
+            ("click", {"ref": f"company-{target_index}", "expect_navigation": True}),
+            ("finish", {"done": True, "why": "Opened."}),
+        ])
+        result = self._run(
+            case=case, chat=chat,
+            config=WoaTwentyConfig(
+                storage_state_path=self.state, capability_profile="browser_only",
+                wall_time_s=60))
+
+        self.assertEqual(result["status"], "completed", result)
+        self.assertEqual(result["trial"]["business_calls"], 0)
+        self.assertEqual(result["trial"]["page_actions"], 1)
+        self.assertEqual(result["evidence"]["page"]["path"], route)
+        self.assertIn(target["name"], result["evidence"]["page"]["visible_projection"])
+        self.assertEqual(evaluate_run(case, self.companies, result)["status"], "PASS")
+
+    def test_source_pair_exposes_the_same_tool_surface_and_binds_source_mode(self):
+        case = development_case("dev-query-en-1", self.companies)
+        off_chat = ScriptedWoaChat(self._query_replies())
+        on_chat = ScriptedWoaChat(self._query_replies())
+        paired = {"capability_profile": "skill_api", "source_interface": "paired",
+                  "wall_time_s": 60}
+        off = self._run(
+            case=case, chat=off_chat, run_id="woa-source-off",
+            config=WoaTwentyConfig(
+                storage_state_path=self.state, source_mode="off", **paired))
+        on = self._run(
+            case=case, chat=on_chat, run_id="woa-source-on",
+            config=WoaTwentyConfig(
+                storage_state_path=self.state, source_mode="on", **paired),
+            source_map=SourceMap(1, "synthetic-attestation", "synthetic/source", "v1", []))
+
+        self.assertEqual(off["status"], "completed", off)
+        self.assertEqual(on["status"], "completed", on)
+        self.assertEqual(off["engine"]["source_interface"], "paired")
+        self.assertEqual((off["engine"]["source_mode"], on["engine"]["source_mode"]),
+                         ("off", "on"))
+        self.assertEqual(off_chat.requests[0]["tool_names"], on_chat.requests[0]["tool_names"])
+        self.assertIn("open_source_candidate", on_chat.requests[0]["tool_names"])
+
+        events = [json.loads(line) for line in
+                  (self.root / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
+        delivered = {
+            run_id: [event for event in events
+                     if event["run_id"] == run_id
+                     and event["event"] == "source_affordances_delivered"]
+            for run_id in ("woa-source-off", "woa-source-on")
+        }
+        self.assertTrue(delivered["woa-source-off"])
+        self.assertTrue(delivered["woa-source-on"])
+        self.assertTrue(all(
+            event["candidates"] == []
+            for rows in delivered.values() for event in rows))
+
+    def test_create_requires_a_fresh_exact_effect_approval_and_dispatches_once(self):
+        before_companies = [dict(item) for item in self.companies]
+        executor = SyntheticCompanyExecutor(before_companies, allow_mutations=True)
+        adapter = SyntheticTwentyAdapter(
+            origin=ORIGIN, runtime=synthetic_business_runtime(executor))
+        case = development_case("dev-create-zh-1", before_companies)
+        task = case["evaluator_task"]
+        chat = ScriptedWoaChat([
+            ("load_skill", {"skill_id": "synthetic.companies-create"}),
+            ("create_company", {"name": task["name"], "domain": task["domain"]}),
+            ("finish", {"done": True, "why": "Created after approval."}),
+        ])
+        result = self._run(
+            case=case, chat=chat, adapter=adapter, approval_decision="approved",
+            config=WoaTwentyConfig(
+                storage_state_path=self.state, allow_create=True, wall_time_s=60),
+            run_id="woa-create-approved")
+
+        self.assertEqual(result["status"], "completed", result)
+        self.assertEqual(executor.mutation_dispatches, 1)
+        self.assertEqual(result["trial"]["approvals_requested"], 1)
+        self.assertEqual(result["trial"]["approvals_approved"], 1)
+        self.assertEqual(result["trial"]["approvals_denied"], 0)
+        self.assertEqual(result["evidence"]["write_receipt"], {
+            "dispatch_count": 1, "acknowledged": True, "same_actor_readback": True})
+        self.assertEqual(len(self.runtimes[-1].approval_requests), 1)
+        request = self.runtimes[-1].approval_requests[0]
+        self.assertEqual(request["effect"], "Create one company in Synthetic Twenty")
+        self.assertIn(task["name"], request["targets"][0])
+
+        from evals.twenty.evaluator import evaluate, make_state
+        from evals.pageagent.scripted import SYNTHETIC_FIXTURE, evaluator_projection
+        before = evaluator_projection(before_companies)
+        after = evaluator_projection(executor.companies)
+        evaluation = evaluate(
+            task=task,
+            before=make_state(
+                fixture=SYNTHETIC_FIXTURE, companies=before["companies"],
+                guards=before["guards"], captured_at="2026-09-09T00:00:00Z",
+                role="baseline"),
+            after=make_state(
+                fixture=SYNTHETIC_FIXTURE, companies=after["companies"],
+                guards=after["guards"], captured_at="2026-09-09T00:00:01Z",
+                role="observation"),
+            evidence=result["evidence"])
+        self.assertEqual(evaluation["status"], "PASS", evaluation)
+
+    def test_denied_create_is_a_valid_failure_and_never_dispatches(self):
+        executor = SyntheticCompanyExecutor(self.companies, allow_mutations=True)
+        adapter = SyntheticTwentyAdapter(
+            origin=ORIGIN, runtime=synthetic_business_runtime(executor))
+        case = development_case("dev-create-zh-1", self.companies)
+        task = case["evaluator_task"]
+        result = self._run(
+            case=case, adapter=adapter, approval_decision="denied",
+            chat=ScriptedWoaChat([
+                ("load_skill", {"skill_id": "synthetic.companies-create"}),
+                ("create_company", {"name": task["name"], "domain": task["domain"]}),
+            ]),
+            config=WoaTwentyConfig(
+                storage_state_path=self.state, allow_create=True, wall_time_s=60),
+            run_id="woa-create-denied")
+
+        self.assertEqual((result["status"], result["error_code"]),
+                         ("failed", "approval_denied"))
+        self.assertEqual(executor.mutation_dispatches, 0)
+        self.assertEqual(result["trial"]["approvals_requested"], 1)
+        self.assertEqual(result["trial"]["approvals_denied"], 1)
 
     def test_open_success_uses_a_disclosed_route_and_the_final_visible_page(self):
         case = development_case("dev-open-en-1", self.companies)
@@ -302,17 +459,21 @@ class WoaRunnerBoundaryTests(unittest.TestCase):
                 with self.subTest(path=path), self.assertRaisesRegex(
                         WoaTwentyRunnerError, "relative application path"):
                     WoaTwentyConfig(storage_state_path=state, entry_path=path)
-            with self.assertRaisesRegex(WoaTwentyRunnerError, "skill_api profile"):
+            with self.assertRaisesRegex(WoaTwentyRunnerError, "capability_profile"):
                 WoaTwentyConfig(storage_state_path=state, capability_profile="unknown")
-            with self.assertRaisesRegex(WoaTwentyRunnerError, "skill_api profile"):
+            self.assertEqual(
                 WoaTwentyConfig(storage_state_path=state, capability_profile="browser_only")
-            with self.assertRaisesRegex(WoaTwentyRunnerError, "SourceProvider"):
+                .capability_profile, "browser_only")
+            with self.assertRaisesRegex(WoaTwentyRunnerError, "paired source interface"):
                 WoaTwentyConfig(storage_state_path=state, source_mode="on")
+            paired_on = WoaTwentyConfig(
+                storage_state_path=state, source_mode="on", source_interface="paired")
+            self.assertEqual(paired_on.source_mode, "on")
             missing = WoaTwentyConfig(storage_state_path=Path(directory) / "absent.json")
             with self.assertRaisesRegex(WoaTwentyRunnerError, "storage state"):
                 missing.verify_files()
 
-    def test_create_cases_are_refused_before_any_model_or_browser_work(self):
+    def test_create_cases_require_explicit_write_configuration(self):
         companies = synthetic_companies(2)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -321,7 +482,7 @@ class WoaRunnerBoundaryTests(unittest.TestCase):
             adapter = SyntheticTwentyAdapter(
                 origin=ORIGIN, runtime=synthetic_business_runtime(executor))
             chat = ScriptedWoaChat([])
-            with self.assertRaisesRegex(ValueError, "query and open only"):
+            with self.assertRaisesRegex(ValueError, "allow_create"):
                 run_case(
                     case=development_case("dev-create-en-1", companies), adapter=adapter,
                     client=chat, config=WoaTwentyConfig(storage_state_path=state),

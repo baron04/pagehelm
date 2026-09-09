@@ -18,6 +18,7 @@ from evals.pageagent.scripted import (
     synthetic_business_runtime, synthetic_companies, write_storage_state,
 )
 from evals.twenty.driver import ScheduleDriverError, run_schedule
+from evals.twenty.evidence import create_evidence
 from evals.twenty.evaluator import EvaluationInputError
 from evals.twenty.protocol import freeze_protocol
 from evals.twenty.records import append_trial, initialize_batch, verify_batch
@@ -26,8 +27,7 @@ from evals.twenty.taskset import seal_task_set, verify_split_separation
 from evals.twenty.trial import project_trial_record
 from evals.woa.assembler import utc_now
 from evals.woa.qualify_schedule import (
-    DEVELOPMENT_TASKSET, READ_ONLY_PREFIX_PAIRS, InMemoryFixture, opaque_task_set,
-    qualification_protocol, read_only_prefix,
+    DEVELOPMENT_TASKSET, InMemoryFixture, opaque_task_set, qualification_protocol,
 )
 from evals.woa.scripted import ScriptedWoaChat, SimulatedRuntime, SyntheticPageModel
 from evals.woa.twenty_runner import WoaTwentyConfig
@@ -37,6 +37,8 @@ from evals.woa import twenty_runner as woa_runner
 ORIGIN = "http://127.0.0.1:3020"
 BATCH_ID = "driver-qualification-v1"
 SKILL_ID = "synthetic.companies-query"
+CREATE_SKILL_ID = "synthetic.companies-create"
+CREATED_ID = "99999999-9999-4999-8999-999999999999"
 
 
 def _development() -> dict:
@@ -52,10 +54,13 @@ class _Harness:
         self.protocol = protocol
         self.state = write_storage_state(root / "state.json", origin=ORIGIN)
         self.storage_state = json.loads(self.state.read_text(encoding="utf-8"))
-        self.executor = SyntheticCompanyExecutor(companies)
+        self.executor = SyntheticCompanyExecutor(
+            companies, allow_mutations=True, shared_state=True,
+            id_factory=lambda: CREATED_ID)
         self.adapter = SyntheticTwentyAdapter(
             origin=ORIGIN, runtime=synthetic_business_runtime(self.executor))
-        self.page_model = SyntheticPageModel(companies)
+        self.page_model = SyntheticPageModel(
+            companies, expose_company_list=True, shared_state=True)
         self.runtimes: list[SimulatedRuntime] = []
         self.calls: list[tuple[int, str, str]] = []
 
@@ -63,11 +68,12 @@ class _Harness:
         for runtime in self.runtimes:
             runtime.stop()
 
-    def _factory(self):
+    def _factory(self, *, approval_decision=None):
         def factory(*, channel, grant, registry, origin, entry_path):
             runtime = SimulatedRuntime(
                 channel, grant, origin=origin, entry_path=entry_path,
-                page_model=self.page_model, storage_state=self.storage_state)
+                page_model=self.page_model, storage_state=self.storage_state,
+                approval_decision=approval_decision)
             self.runtimes.append(runtime)
             return runtime
         return factory
@@ -79,10 +85,27 @@ class _Harness:
         company_id = case["evaluator_task"].get("company_id")
         return next(item for item in self.companies if item["id"] == company_id)
 
-    def _woa_replies(self, case):
+    def _woa_replies(self, case, arm):
         from evals.pageagent.scripted import query_answer
 
-        if case["evaluator_task"]["kind"] == "query":
+        kind = case["evaluator_task"]["kind"]
+        if arm["capability_profile"] == "browser_only":
+            if kind == "query":
+                return [("finish", {"done": True, "why": query_answer(self.companies)})]
+            target = self._target(case)
+            return [("goto", {"url": company_ui_path(target)}),
+                    ("finish", {"done": True, "why": "The requested record is open."})]
+        if kind == "create":
+            task = case["evaluator_task"]
+            replies = [
+                ("load_skill", {"skill_id": CREATE_SKILL_ID}),
+                ("create_company", {"name": task["name"], "domain": task["domain"]}),
+            ]
+            if task["require_open"]:
+                replies.append(("goto", {"url": f"/object/company/{CREATED_ID}"}))
+            replies.append(("finish", {"done": True, "why": "Created."}))
+            return replies
+        if kind == "query":
             return [("load_skill", {"skill_id": SKILL_ID}),
                     ("query_companies", {"limit": 50}),
                     (None, query_answer(self.companies))]
@@ -95,14 +118,27 @@ class _Harness:
     def woa(self, **overrides):
         def adapter(*, case, arm_id, task_id, schedule_position, run_id):
             self.calls.append((schedule_position, arm_id, task_id))
+            arm = next(item for item in self.protocol["arms"] if item["arm_id"] == arm_id)
             chat = ScriptedWoaChat(
-                overrides.get("replies", self._woa_replies)(case),
+                overrides.get("replies", lambda selected: self._woa_replies(selected, arm))(case),
                 failures=overrides.get("failures"))
+            source_map = None
+            if arm["source_mode"] == "on":
+                from web_operation_agent.schemas import SourceMap
+                source_map = SourceMap(
+                    1, "qualification-source", "synthetic/source", "v1", [])
+            create = case["evaluator_task"]["kind"] == "create"
             return woa_runner.run_case(
                 case=case, adapter=overrides.get("adapter", self.adapter), client=chat,
-                config=WoaTwentyConfig(storage_state_path=self.state, wall_time_s=60),
-                ledger_path=self.root / "audit.jsonl", runtime_factory=self._factory(),
-                page_sampler=self._sampler, run_id=run_id)
+                config=WoaTwentyConfig(
+                    storage_state_path=self.state, wall_time_s=60,
+                    capability_profile=arm["capability_profile"],
+                    source_mode=arm["source_mode"],
+                    source_interface=arm["source_interface"], allow_create=create),
+                ledger_path=self.root / "audit.jsonl",
+                runtime_factory=self._factory(
+                    approval_decision="approved" if create else None),
+                page_sampler=self._sampler, run_id=run_id, source_map=source_map)
         return adapter
 
     def pageagent(self):
@@ -113,30 +149,61 @@ class _Harness:
         reuses the PageAgent runner's own evidence contract without launching a browser.
         """
         from evals.pageagent.scripted import query_answer
-        from evals.twenty.evidence import open_evidence, query_evidence
+        from evals.twenty.evidence import (
+            browser_open_evidence, open_evidence, parse_query_evidence, query_evidence,
+        )
 
         def adapter(*, case, arm_id, task_id, schedule_position, run_id):
             self.calls.append((schedule_position, arm_id, task_id))
             started_at = utc_now()
             started = time.monotonic()
+            arm = next(item for item in self.protocol["arms"] if item["arm_id"] == arm_id)
+            browser_only = arm["capability_profile"] == "browser_only"
             results = [{
                 "companies": [{"name": item["name"], "domain": item["domain"],
                                "ui_path": company_ui_path(item)} for item in self.companies],
                 "completeness": {"source_complete": True, "result_truncated": False},
             }]
-            if case["evaluator_task"]["kind"] == "query":
-                evidence = query_evidence(query_answer(self.companies), results)
+            kind = case["evaluator_task"]["kind"]
+            if kind == "query":
+                evidence = (
+                    parse_query_evidence(query_answer(self.companies))
+                    if browser_only else query_evidence(query_answer(self.companies), results))
                 page_actions = 0
-            else:
+                business_calls = 0 if browser_only else 1
+                approvals = (0, 0, 0)
+            elif kind == "open":
                 target = self._target(case)
                 route = company_ui_path(target)
-                evidence = open_evidence(
-                    path=route,
-                    visible_projection=self.page_model.render(route)[1],
-                    business_results=results, permitted_routes=[route])
+                visible = self.page_model.render(route)[1]
+                evidence = (
+                    browser_open_evidence(path=route, visible_projection=visible)
+                    if browser_only else open_evidence(
+                        path=route, visible_projection=visible,
+                        business_results=results, permitted_routes=[route]))
                 page_actions = 1
+                business_calls = 0 if browser_only else 1
+                approvals = (0, 0, 0)
+            else:
+                task = case["evaluator_task"]
+                created = {"id": CREATED_ID, "name": task["name"],
+                           "domain": task["domain"]}
+                self.companies.append(created)
+                route = company_ui_path(created)
+                mutation_result = {
+                    "created": True, "readback_verified": True,
+                    "company": {**created, "ui_path": route},
+                }
+                evidence = create_evidence(
+                    business_results=[mutation_result], mutation_dispatch_count=1,
+                    approvals_requested=1, approvals_approved=1, approvals_denied=0,
+                    require_open=bool(task["require_open"]), path=route,
+                    visible_projection=self.page_model.render(route)[1],
+                    permitted_routes=[route] if task["require_open"] else [])
+                page_actions = 1 if task["require_open"] else 0
+                business_calls = 1
+                approvals = (1, 1, 0)
             digest = "sha256:" + "e" * 64
-            arm = next(item for item in self.protocol["arms"] if item["arm_id"] == arm_id)
             return {
                 "artifact_version": 1, "kind": "pageagent_twenty_run", "status": "completed",
                 "apparatus_code": None, "error_code": None, "run_id": run_id,
@@ -144,6 +211,7 @@ class _Harness:
                     "name": arm["engine"], "release": arm["engine_release"],
                     "capability_profile": arm["capability_profile"],
                     "source_mode": arm["source_mode"],
+                    "source_interface": arm["source_interface"],
                 },
                 "case": {**{key: case[key] for key in (
                     "set_id", "split", "task_id", "task_digest", "template_family_digest")},
@@ -161,8 +229,11 @@ class _Harness:
                         "known_cost_cny": 0.0, "total_cost_cny": 0.0,
                         "spend_ledger_slice_digest": digest,
                     },
-                    "page_actions": page_actions, "business_calls": 1,
-                    "approvals_requested": 0, "approvals_approved": 0, "approvals_denied": 0,
+                    "page_actions": page_actions,
+                    "business_calls": business_calls,
+                    "approvals_requested": approvals[0],
+                    "approvals_approved": approvals[1],
+                    "approvals_denied": approvals[2],
                     "automatic_retries": 0, "user_interventions": 0,
                     "safety": {"unauthorized_writes": 0, "duplicate_writes": 0,
                                "forbidden_state_changes": 0, "cross_identity_actions": 0},
@@ -191,10 +262,6 @@ class ScheduleDriverQualificationTests(unittest.TestCase):
                 development_seal=self.development_seal, split=self.split),
             development_seal=self.development_seal, test_seal=self.test_seal,
             split_verification=self.split)
-        self.assertEqual(
-            read_only_prefix(self.protocol, self.qualification_set),
-            READ_ONLY_PREFIX_PAIRS,
-            "the qualification seed must keep its read-only schedule prefix")
         self.fixture = InMemoryFixture(self.companies)
         self.harness = _Harness(self.root, self.companies, self.protocol)
         self.ledger = self.root / "batch.jsonl"
@@ -224,11 +291,12 @@ class ScheduleDriverQualificationTests(unittest.TestCase):
             test_seal=self.test_seal, split_verification=self.split,
             task_set=self.qualification_set, fixture=self.fixture,
             runners=runners or self._runners(), ledger_path=self.ledger,
-            batch_id=BATCH_ID, start_index=start_index, max_trials=max_trials)
+            batch_id=BATCH_ID, restore=self.fixture.restore,
+            start_index=start_index, max_trials=max_trials)
 
     def test_both_engines_pass_through_one_driver_evaluator_ledger_and_report(self):
-        expected_trials = READ_ONLY_PREFIX_PAIRS * 2
-        outcomes = self._drive(max_trials=expected_trials)
+        expected_trials = len(self.protocol["schedule"]) * 2
+        outcomes = self._drive()
 
         self.assertEqual(len(outcomes), expected_trials)
         self.assertEqual(
@@ -248,7 +316,7 @@ class ScheduleDriverQualificationTests(unittest.TestCase):
                  if task["task_id"] == outcome.task_id)
             for outcome in outcomes
         }
-        self.assertEqual(kinds, {"query", "open"})
+        self.assertEqual(kinds, {"query", "open", "create"})
 
         status = verify_batch(self.ledger, **self.kwargs)
         self.assertEqual(status["completed_trials"], expected_trials)
@@ -259,7 +327,7 @@ class ScheduleDriverQualificationTests(unittest.TestCase):
         self.assertEqual(report["purpose"], "apparatus_qualification")
         self.assertFalse(report["comparative_claim_supported"])
         self.assertEqual(report["outcomes"]["PASS"], expected_trials)
-        self.assertEqual(report["stop_reason"], "batch_open")
+        self.assertEqual(report["stop_reason"], "schedule_complete")
         self.assertEqual(report["total_cost_cny"], 0.0)
         rendered = json.dumps(report, ensure_ascii=False)
         for company in self.companies:
@@ -286,7 +354,11 @@ class ScheduleDriverQualificationTests(unittest.TestCase):
 
     def test_a_runner_bound_to_the_wrong_engine_is_rejected_before_append(self):
         pageagent = self.harness.pageagent()
-        runners = {arm["arm_id"]: pageagent for arm in self.protocol["arms"]}
+        woa = self.harness.woa()
+        runners = {
+            arm["arm_id"]: (pageagent if arm["engine"] == "web_operation_agent" else woa)
+            for arm in self.protocol["arms"]
+        }
         with self.assertRaisesRegex(EvaluationInputError, "scheduled engine"):
             self._drive(max_trials=2, runners=runners)
         self.assertEqual(verify_batch(self.ledger, **self.kwargs)["completed_trials"], 0)
@@ -358,7 +430,7 @@ class ScheduleDriverQualificationTests(unittest.TestCase):
                 # driver sees a read-only trial that did not leave the state it started from.
                 if role == "observation" and not self.drifted:
                     self.drifted = True
-                    self.projection["companies"] = self.projection["companies"][:1]
+                    self.companies[:] = self.companies[:1]
                 return super().capture(role=role)
 
         self.fixture = DriftingFixture(self.companies)
@@ -367,14 +439,18 @@ class ScheduleDriverQualificationTests(unittest.TestCase):
         self.assertEqual(outcomes[0].batch_status, "STOPPED_SAFETY")
         self.assertEqual(verify_batch(self.ledger, **self.kwargs)["completed_trials"], 1)
 
-    def test_the_read_only_qualification_stops_before_the_first_write_pair(self):
+    def test_the_qualification_covers_writes_and_restores_each_paired_baseline(self):
         kinds = {task["task_id"]: task["kind"]
                  for task in self.qualification_set["tasks"]}
-        prefix = self.protocol["schedule"][:READ_ONLY_PREFIX_PAIRS]
-        self.assertTrue(all(kinds[pair["task_id"]] != "create" for pair in prefix))
-        self.assertEqual(
-            kinds[self.protocol["schedule"][READ_ONLY_PREFIX_PAIRS]["task_id"]], "create",
-            "the prefix must end exactly at the first scheduled write task")
+        self.assertIn("create", {kinds[pair["task_id"]]
+                                 for pair in self.protocol["schedule"]})
+        outcomes = self._drive()
+        create_outcomes = [outcome for outcome in outcomes
+                           if kinds[outcome.task_id] == "create"]
+        self.assertTrue(create_outcomes)
+        self.assertTrue(all(item.evaluation_status == "PASS"
+                            for item in create_outcomes))
+        self.assertEqual(self.companies, self.fixture.baseline)
 
 
 def _instantiated(task_set, protocol, fixture):

@@ -47,6 +47,7 @@ def protocol_draft() -> dict:
             "implementation_digest": _digest("6"),
             "capability_profile": "browser_only",
             "source_mode": "off",
+            "source_interface": "absent",
             "source_policy_digest": None,
             "skill_digest": None,
             "tool_catalog_digest": None,
@@ -58,6 +59,7 @@ def protocol_draft() -> dict:
             "implementation_digest": woa_implementation,
             "capability_profile": "browser_only",
             "source_mode": "off",
+            "source_interface": "absent",
             "source_policy_digest": None,
             "skill_digest": None,
             "tool_catalog_digest": None,
@@ -69,17 +71,31 @@ def protocol_draft() -> dict:
             "implementation_digest": _digest("7"),
             "capability_profile": "skill_api",
             "source_mode": "off",
+            "source_interface": "absent",
             "source_policy_digest": None,
             "skill_digest": shared_skill,
             "tool_catalog_digest": shared_tools,
         },
         {
-            "arm_id": "woa-skill-source-off",
+            "arm_id": "woa-skill",
             "engine": "web_operation_agent",
             "engine_release": "web-operation-agent@0.1.0",
             "implementation_digest": woa_implementation,
             "capability_profile": "skill_api",
             "source_mode": "off",
+            "source_interface": "absent",
+            "source_policy_digest": None,
+            "skill_digest": shared_skill,
+            "tool_catalog_digest": shared_tools,
+        },
+        {
+            "arm_id": "woa-source-off",
+            "engine": "web_operation_agent",
+            "engine_release": "web-operation-agent@0.1.0",
+            "implementation_digest": woa_implementation,
+            "capability_profile": "skill_api",
+            "source_mode": "off",
+            "source_interface": "paired",
             "source_policy_digest": None,
             "skill_digest": shared_skill,
             "tool_catalog_digest": shared_tools,
@@ -91,6 +107,7 @@ def protocol_draft() -> dict:
             "implementation_digest": woa_implementation,
             "capability_profile": "skill_api",
             "source_mode": "on",
+            "source_interface": "paired",
             "source_policy_digest": source_policy_digest,
             "skill_digest": shared_skill,
             "tool_catalog_digest": shared_tools,
@@ -117,7 +134,7 @@ def protocol_draft() -> dict:
             "comparison_id": "h2-skill",
             "comparison_type": "skill_api",
             "left_arm": "pageagent-skill",
-            "right_arm": "woa-skill-source-off",
+            "right_arm": "woa-skill",
             "eligible_task_ids": comparison_tasks["h2-skill"],
             "minimum_useful_effect_pp": 10,
             "success_noninferiority_margin_pp": -5,
@@ -126,7 +143,7 @@ def protocol_draft() -> dict:
         {
             "comparison_id": "h3-source",
             "comparison_type": "source_runtime",
-            "left_arm": "woa-skill-source-off",
+            "left_arm": "woa-source-off",
             "right_arm": "woa-skill-source-on",
             "eligible_task_ids": comparison_tasks["h3-source"],
             "minimum_useful_effect_pp": 10,
@@ -150,6 +167,7 @@ def protocol_draft() -> dict:
         "artifact_version": 1,
         "kind": "twenty_evaluation_protocol",
         "status": "DRAFT",
+        "purpose": "apparatus_qualification",
         "protocol_id": "twenty-qualification-v1",
         "task_sets": {
             "development_seal": development["seal_digest"],
@@ -257,6 +275,20 @@ class ProtocolQualificationTests(unittest.TestCase):
         source_on["implementation_digest"] = _digest("0")
         development, test, split = artifacts()
         with self.assertRaisesRegex(EvaluationInputError, "fairness"):
+            freeze_protocol(
+                value, development_seal=development, test_seal=test,
+                split_verification=split)
+
+    def test_h2_control_cannot_be_reused_as_the_h3_source_off_arm(self):
+        value = protocol_draft()
+        value["arms"] = [
+            arm for arm in value["arms"] if arm["arm_id"] != "woa-source-off"]
+        source = next(
+            comparison for comparison in value["comparisons"]
+            if comparison["comparison_type"] == "source_runtime")
+        source["left_arm"] = "woa-skill"
+        development, test, split = artifacts()
+        with self.assertRaisesRegex(EvaluationInputError, "exactly six"):
             freeze_protocol(
                 value, development_seal=development, test_seal=test,
                 split_verification=split)

@@ -10,7 +10,7 @@ _ENGINE_PROVIDER_CODES = frozenset({
 })
 _ENGINE_BUSINESS_CODES = frozenset({
     "business_request", "business_call_budget", "route_call_budget",
-    "route_refused", "cancelled",
+    "route_refused", "approval_denied", "indeterminate_write", "cancelled",
 })
 _IDENTITY_BUSINESS_CODES = frozenset({
     "business_authentication", "business_identity",

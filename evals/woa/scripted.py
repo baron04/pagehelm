@@ -2,8 +2,8 @@
 
 ``ScriptedWoaChat`` answers the product Agent loop from a fixed script with content-free
 accounting. ``SimulatedRuntime`` plays the embedded browser runtime over the real remote
-session channel for a synthetic SPA whose list page exposes no company data, so a run
-exercises the real hello/lease, observation, claim and result protocol without Chromium.
+session channel for a synthetic SPA whose list page can expose company data for browser-only
+cases, so a run exercises the real hello/lease, observation, claim and result protocol without Chromium.
 Nothing here contacts a model, a spend ledger or a Twenty instance.
 """
 from __future__ import annotations
@@ -25,8 +25,8 @@ from web_operation_agent.privacy import (
 )
 from web_operation_agent.remote import RemoteProtocolError, RemoteSessionChannel, SessionGrant
 from web_operation_agent.schemas import (
-    SCHEMA_VERSIONS, ActionEnvelope, ActionReceipt, ActionResultEnvelope, CancellationRequest,
-    ClientHello, ObservationEnvelope, PageObservation,
+    SCHEMA_VERSIONS, ActionEnvelope, ActionReceipt, ActionResultEnvelope, ApprovalDecision,
+    CancellationRequest, ClientHello, ElementRef, ObservationEnvelope, PageObservation,
 )
 
 
@@ -136,12 +136,22 @@ class RecordingBusinessRuntime:
         self.results.append(json.loads(json.dumps(result.content, ensure_ascii=False)))
         return result
 
+    def execute_mutation(self, proposal: Any, approved_digest: str,
+                         loaded_ids: set[str], *, context: Any = None) -> Any:
+        result = self._inner.execute_mutation(
+            proposal, approved_digest, loaded_ids, context=context)
+        self.results.append(json.loads(json.dumps(result.content, ensure_ascii=False)))
+        return result
+
 
 class SyntheticPageModel:
-    """What the synthetic SPA shows at each path: no company data on the list page."""
+    """What the synthetic SPA shows at each path, optionally including the company list."""
 
-    def __init__(self, companies: Sequence[dict[str, str]]):
-        self.companies = [dict(company) for company in companies]
+    def __init__(self, companies: Sequence[dict[str, str]], *,
+                 expose_company_list: bool = False, shared_state: bool = False):
+        self.companies = (companies if shared_state
+                          else [dict(company) for company in companies])
+        self.expose_company_list = bool(expose_company_list)
 
     def render(self, path: str) -> tuple[str, str]:
         match = _RECORD_PATH.fullmatch(path)
@@ -151,7 +161,20 @@ class SyntheticPageModel:
             if company is None:
                 return "Record not found", "Record not found"
             return company["name"], f"{company['name']}\nDomain\n{company['domain']}"
+        if self.expose_company_list:
+            body = ["Companies"]
+            for company in self.companies:
+                body.extend((company["name"], company["domain"]))
+            return "Companies", "\n".join(body)
         return "Companies", "Companies\nCompany records are loaded through the workspace API."
+
+    def elements(self, path: str, epoch: int) -> list[ElementRef]:
+        if path != "/objects/companies" or not self.expose_company_list:
+            return []
+        return [ElementRef(
+            ref=f"company-{index}", role="link", name=company["name"], tag="a",
+            epoch=epoch, attrs={"href": f"/object/company/{company['id']}"})
+                for index, company in enumerate(self.companies, start=1)]
 
 
 def args_echo(value: Any, key: str = "") -> Any:
@@ -174,7 +197,8 @@ class SimulatedRuntime:
     def __init__(self, channel: RemoteSessionChannel, grant: SessionGrant, *, origin: str,
                  entry_path: str, page_model: SyntheticPageModel,
                  storage_state: dict[str, Any] | None = None,
-                 client_id: str = "simulated-runtime", poll_s: float = 0.01):
+                 client_id: str = "simulated-runtime", poll_s: float = 0.01,
+                 approval_decision: str | None = None):
         self.channel = channel
         self.grant = grant
         self.origin = origin
@@ -182,6 +206,9 @@ class SimulatedRuntime:
         self.page_model = page_model
         self.client_id = client_id
         self.poll_s = poll_s
+        if approval_decision not in {None, "approved", "denied"}:
+            raise ValueError("approval_decision must be approved, denied, or None")
+        self.approval_decision = approval_decision
         self.current_path = entry_path
         self.epoch = 0
         self.lease_id = ""
@@ -191,6 +218,8 @@ class SimulatedRuntime:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.errors: list[str] = []
+        self.approval_requests: list[dict[str, Any]] = []
+        self._last_event_id = ""
 
     @property
     def current_url(self) -> str:
@@ -199,9 +228,10 @@ class SimulatedRuntime:
     def _observation(self, caused_by_action_id: str = "") -> ObservationEnvelope:
         self.epoch += 1
         title, content = self.page_model.render(self.current_path)
+        elements = self.page_model.elements(self.current_path, self.epoch)
         observation = PageObservation(
             schema_version=SCHEMA_VERSIONS["PageObservation"], epoch=self.epoch,
-            url=self.current_url, title=title, landmarks=[], elements=[], content=content)
+            url=self.current_url, title=title, landmarks=[], elements=elements, content=content)
         return ObservationEnvelope(
             schema_version=SCHEMA_VERSIONS["ObservationEnvelope"],
             session_id=self.channel.session_id,
@@ -270,6 +300,28 @@ class SimulatedRuntime:
     def _loop(self) -> None:
         while not self._stop.is_set():
             try:
+                events = self.channel.events_after(
+                    self._last_event_id, lease_id=self.lease_id, wait_s=0)
+                for event in events:
+                    self._last_event_id = event.event_id
+                    if event.kind != "approval_required":
+                        continue
+                    self.approval_requests.append(json.loads(json.dumps(event.payload)))
+                    if self.approval_decision is not None:
+                        payload = event.payload
+                        self.channel.accept_approval(ApprovalDecision(
+                            schema_version=SCHEMA_VERSIONS["ApprovalDecision"],
+                            session_id=self.channel.session_id,
+                            approval_id=payload["approval_id"],
+                            decision=self.approval_decision,
+                            principal_digest=payload.get("principal_digest", ""),
+                            turn_id=payload.get("turn_id", ""),
+                            operation_id=payload.get("operation_id", ""),
+                        ), lease_id=self.lease_id)
+            except RemoteProtocolError as exc:
+                self.errors.append(exc.code)
+                return
+            try:
                 action = self.channel.pending_action
             except RemoteProtocolError:
                 return
@@ -299,6 +351,20 @@ class SimulatedRuntime:
             if (parsed is None or not target.startswith("/") or target.startswith("//")
                     or parsed.scheme or parsed.netloc):
                 ok, error_code, error_detail = False, "origin_refused", "route is not same-origin"
+            else:
+                self.current_path = parsed.path
+        elif command.action == "click":
+            ref = command.args.get("ref")
+            epoch = command.args.get("epoch")
+            element = next(
+                (item for item in self.page_model.elements(self.current_path, self.epoch)
+                 if item.ref == ref and item.epoch == epoch), None)
+            href = element.attrs.get("href") if element is not None else None
+            parsed = urlsplit(href) if isinstance(href, str) else None
+            if (parsed is None or not href.startswith("/") or href.startswith("//")
+                    or parsed.scheme or parsed.netloc):
+                ok, error_code = False, "element_not_actionable"
+                error_detail = "the referenced element is not a same-origin link"
             else:
                 self.current_path = parsed.path
         elif command.action not in {"observe", "wait_for"}:

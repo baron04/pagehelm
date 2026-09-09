@@ -7,6 +7,7 @@ const MAX_PROVIDER_REQUEST_BYTES = 2 * 1024 * 1024
 const MAX_PROVIDER_RESPONSE_BYTES = 4 * 1024 * 1024
 const MAX_PAGE_CONTENT_BYTES = 512 * 1024
 const MAX_TOOL_RESULT_BYTES = 256 * 1024
+const MAX_APPROVAL_TARGETS = 20
 const NAME = /^[a-z][a-z0-9_]{0,63}$/
 const BUILTIN_TOOLS = new Set([
   'ask_user',
@@ -90,6 +91,20 @@ function safeRelativeRoute(value) {
   return route
 }
 
+function mutationApproval(value) {
+  exactObject(value, ['proposal_digest', 'effect', 'targets'], 'mutation approval')
+  const proposalDigest = boundedString(value.proposal_digest, 'mutation approval digest', 64)
+  if (!/^[0-9a-f]{64}$/u.test(proposalDigest)) throw new Error('mutation approval digest is invalid')
+  const effect = boundedString(value.effect, 'mutation approval effect', 300)
+  if (!Array.isArray(value.targets) || !value.targets.length || value.targets.length > MAX_APPROVAL_TARGETS) throw new Error('mutation approval targets are invalid')
+  const targets = value.targets.map((target, index) => boundedString(target, `mutation approval target ${index}`, 300))
+  return { proposalDigest, effect, targets }
+}
+
+function approvalCard(effect, targets) {
+  return `Approval required\n\n${effect}\n\nTargets:\n${targets.map((target) => `• ${target}`).join('\n')}`
+}
+
 function compileTools(specifications, capabilityProfile, runToken, navigationMode, metrics, maxPageActions) {
   if (!Array.isArray(specifications) || specifications.length > 32) throw new Error('tools must be a bounded array')
   if (capabilityProfile === 'browser_only' && specifications.length) throw new Error('browser-only baseline cannot receive custom tools')
@@ -107,7 +122,19 @@ function compileTools(specifications, capabilityProfile, runToken, navigationMod
         signal.throwIfAborted()
         const invoke = globalThis.__WOA_PAGEAGENT_BUSINESS_TOOL__
         if (typeof invoke !== 'function') throw new Error('business-tool bridge is unavailable')
-        const value = await invoke({ run_token: runToken, name, args })
+        let value = await invoke({ run_token: runToken, name, args })
+        if (value && typeof value === 'object' && !Array.isArray(value) && Object.hasOwn(value, '__woa_mutation_approval__')) {
+          exactObject(value, ['__woa_mutation_approval__'], 'mutation proposal result')
+          const approval = mutationApproval(value.__woa_mutation_approval__)
+          const approved = globalThis.confirm(approvalCard(approval.effect, approval.targets)) === true
+          const decide = globalThis.__WOA_PAGEAGENT_BUSINESS_APPROVAL__
+          if (typeof decide !== 'function') throw new Error('business-approval bridge is unavailable')
+          value = await decide({
+            run_token: runToken,
+            proposal_digest: approval.proposalDigest,
+            decision: approved ? 'approved' : 'denied',
+          })
+        }
         signal.throwIfAborted()
         const rendered = typeof value === 'string' ? value : JSON.stringify(value)
         if (typeof rendered !== 'string' || new TextEncoder().encode(rendered).length > MAX_TOOL_RESULT_BYTES) throw new Error('business-tool result is invalid or oversized')

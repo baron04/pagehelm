@@ -239,15 +239,37 @@ class _FakePage:
         self.url = ""
         self.bindings: dict[str, object] = {}
         self.visible = ""
+        self.handlers: dict[str, object] = {}
 
-    def on(self, *_args):
-        return None
+    def on(self, event, callback):
+        self.handlers[event] = callback
+
+    def confirm(self, message: str) -> bool:
+        class Dialog:
+            type = "confirm"
+
+            def __init__(self):
+                self.message = message
+                self.accepted = False
+
+            def accept(self):
+                self.accepted = True
+
+            def dismiss(self):
+                self.accepted = False
+
+        dialog = Dialog()
+        callback = self.handlers.get("dialog")
+        if callback is not None:
+            callback(dialog)
+        return dialog.accepted
 
     def expose_function(self, name, callback):
         self.bindings[name] = callback
 
     def goto(self, url, **_kwargs):
         self.url = url
+        self.visible = self.session.visible_routes.get(urlsplit(url).path, "")
 
     def locator(self, _selector):
         return self
@@ -355,9 +377,28 @@ def _pageagent_like_bridge(page: _FakePage, bindings: dict, config: dict) -> dic
                 page.url = origin + permit["route"]
                 page.visible = page.session.visible_routes.get(permit["route"], "")
                 metrics["page_actions"] += 1
+            elif name == "click_element_by_index":
+                route = page.session.visible_links.get(str(args.get("index")))
+                if route is None:
+                    raise RuntimeError("visible link is unavailable")
+                page.url = origin + route
+                page.visible = page.session.visible_routes.get(route, "")
+                metrics["page_actions"] += 1
             elif name in business_names:
-                bindings["__WOA_PAGEAGENT_BUSINESS_TOOL__"]({
+                value = bindings["__WOA_PAGEAGENT_BUSINESS_TOOL__"]({
                     "run_token": token, "name": name, "args": args})
+                proposal = value.get("__woa_mutation_approval__") \
+                    if isinstance(value, dict) else None
+                if proposal is not None:
+                    card = "Approval required\n\n" + proposal["effect"] \
+                        + "\n\nTargets:\n" \
+                        + "\n".join(f"• {target}" for target in proposal["targets"])
+                    decision = "approved" if page.confirm(card) else "denied"
+                    bindings["__WOA_PAGEAGENT_BUSINESS_APPROVAL__"]({
+                        "run_token": token,
+                        "proposal_digest": proposal["proposal_digest"],
+                        "decision": decision,
+                    })
                 metrics["business_calls"] += 1
             else:
                 metrics["page_actions"] += 1
@@ -394,17 +435,109 @@ class RunnerScenarioTests(unittest.TestCase):
 
     def _run(self, *, case, client, config=None, adapter=None, storage_state=None,
              bridge=_pageagent_like_bridge, bridge_installed=True, cancelled=None,
-             visible_routes=None):
+             visible_routes=None, approval_decider=None):
         browser = _FakeBrowser(
             bridge=bridge, storage_state=storage_state or self.storage_state,
             bridge_installed=bridge_installed)
         browser.visible_routes = visible_routes or {}
+        browser.visible_links = {}
         with patch("playwright.sync_api.sync_playwright", return_value=browser):
             result = run_case(
                 case=case, adapter=adapter or self.adapter, client=client,
                 config=config or self._config(), run_id="pageagent-offline-run",
-                cancelled=cancelled)
+                cancelled=cancelled, approval_decider=approval_decider)
         return result, browser
+
+    def test_browser_only_query_has_no_skill_or_business_host(self):
+        case = development_case("dev-query-en-1", self.companies)
+        client = ScriptedProviderClient([
+            {"done": {"text": query_answer(self.companies), "success": True}},
+        ])
+        entry = "/objects/companies"
+        visible = "Companies\n" + "\n".join(
+            f"{item['name']}\n{item['domain']}" for item in self.companies)
+        config = self._config(capability_profile="browser_only")
+        result, browser = self._run(
+            case=case, client=client, config=config,
+            visible_routes={entry: visible})
+
+        self.assertEqual(result["status"], "completed", result)
+        self.assertEqual(result["engine"]["name"], "pageagent")
+        self.assertEqual(result["trial"]["business_calls"], 0)
+        self.assertIsNone(result["business"]["skill_digest"])
+        self.assertEqual(evaluate_run(case, self.companies, result)["status"], "PASS")
+
+    def test_create_uses_one_visible_bound_approval_and_one_dispatch(self):
+        executor = SyntheticCompanyExecutor(self.companies, allow_mutations=True)
+        adapter = SyntheticTwentyAdapter(
+            origin=self.origin, runtime=synthetic_business_runtime(executor))
+        case = development_case("dev-create-zh-1", self.companies)
+        expected = case["evaluator_task"]
+        client = ScriptedProviderClient([
+            {"create_company": {
+                "name": expected["name"], "domain": expected["domain"]}},
+            {"done": {"text": "Created.", "success": True}},
+        ])
+        messages: list[str] = []
+        result, _browser = self._run(
+            case=case, client=client, adapter=adapter,
+            config=self._config(allow_create=True),
+            approval_decider=lambda message: messages.append(message) or "approved")
+
+        self.assertEqual(result["status"], "completed", result)
+        self.assertEqual(executor.mutation_dispatches, 1)
+        self.assertEqual(result["trial"]["approvals_requested"], 1)
+        self.assertEqual(result["trial"]["approvals_approved"], 1)
+        self.assertEqual(result["trial"]["safety"]["duplicate_writes"], 0)
+        self.assertEqual(len(messages), 1)
+        self.assertIn("Create one company in Synthetic Twenty", messages[0])
+        self.assertIn(expected["name"], messages[0])
+        self.assertIn(expected["domain"], messages[0])
+
+    def test_create_is_denied_without_an_explicit_approval_decider(self):
+        executor = SyntheticCompanyExecutor(self.companies, allow_mutations=True)
+        adapter = SyntheticTwentyAdapter(
+            origin=self.origin, runtime=synthetic_business_runtime(executor))
+        case = development_case("dev-create-zh-1", self.companies)
+        expected = case["evaluator_task"]
+        result, _browser = self._run(
+            case=case, adapter=adapter, config=self._config(allow_create=True),
+            client=ScriptedProviderClient([{"create_company": {
+                "name": expected["name"], "domain": expected["domain"]}}]))
+
+        self.assertEqual(result["status"], "failed", result)
+        self.assertEqual(result["error_code"], "approval_denied")
+        self.assertEqual(executor.mutation_dispatches, 0)
+        self.assertEqual(result["trial"]["approvals_denied"], 1)
+
+    def test_browser_only_open_uses_dom_navigation_and_visible_evidence(self):
+        case = development_case("dev-open-en-1", self.companies)
+        target = next(company for company in self.companies
+                      if company["name"] in case["prompt"])
+        route = company_ui_path(target)
+        client = ScriptedProviderClient([
+            {"click_element_by_index": {"index": 1}},
+            {"done": {"text": "Opened.", "success": True}},
+        ])
+        browser = _FakeBrowser(
+            bridge=_pageagent_like_bridge, storage_state=self.storage_state)
+        browser.visible_routes = {
+            "/objects/companies": "Companies",
+            route: f"{target['name']}\nDomain\n{target['domain']}",
+        }
+        browser.visible_links = {"1": route}
+        with patch("playwright.sync_api.sync_playwright", return_value=browser):
+            result = run_case(
+                case=case, adapter=self.adapter, client=client,
+                config=self._config(capability_profile="browser_only"),
+                run_id="pageagent-browser-run")
+
+        self.assertEqual(result["status"], "completed", result)
+        self.assertEqual(result["trial"]["business_calls"], 0)
+        self.assertEqual(result["trial"]["page_actions"], 1)
+        self.assertEqual(result["evidence"]["page"]["path"], route)
+        self.assertIn(target["name"], result["evidence"]["page"]["visible_projection"])
+        self.assertEqual(evaluate_run(case, self.companies, result)["status"], "PASS")
 
     def _query_actions(self, answer: str | None = None) -> list[dict]:
         return [{"query_companies": {"limit": 50}},

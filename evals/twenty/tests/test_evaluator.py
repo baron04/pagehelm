@@ -67,6 +67,20 @@ class TwentyEvaluationTests(unittest.TestCase):
             },
         )
         self.assertEqual(result["status"], "PASS")
+
+        browser_result = evaluate(
+            task={"artifact_version": 1, "kind": "open", "company_id": COMPANY_ID},
+            before=state("baseline"), after=state("observation"),
+            evidence={
+                "artifact_version": 1,
+                "execution_status": "completed",
+                "page": {
+                    "path": f"/object/company/{COMPANY_ID}",
+                    "visible_projection": "Anthropic\nDomain\nanthropic.com",
+                },
+            },
+        )
+        self.assertEqual(browser_result["status"], "PASS")
         self.assertTrue(all(result["checks"].values()))
 
         result = evaluate(

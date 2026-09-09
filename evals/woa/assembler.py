@@ -18,8 +18,9 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from evals.twenty.evidence import (
-    EvidenceContractError, case_projection, disclosed_routes, failed_evidence,
-    indeterminate_evidence, open_evidence, query_evidence, validate_execution_case,
+    EvidenceContractError, browser_open_evidence, case_projection, disclosed_routes,
+    create_evidence, failed_evidence, indeterminate_evidence, open_evidence,
+    parse_query_evidence, query_evidence, validate_execution_case,
 )
 from evals.twenty.outcomes import classify_woa_outcome
 from web_operation_agent import __version__ as _PRODUCT_VERSION
@@ -128,15 +129,28 @@ def _open_page_evidence(final_page: FinalPageSample | None,
         permitted_routes=permitted_routes(events, business_results))
 
 
+def _browser_page_evidence(final_page: FinalPageSample | None) -> dict[str, Any]:
+    if final_page is None:
+        raise EvidenceContractError("final page was not sampled")
+    path = urlsplit(final_page.document_url).path
+    if urlsplit(final_page.observation_url).path != path:
+        raise EvidenceContractError("final page observation disagrees with the document")
+    return browser_open_evidence(
+        path=path, visible_projection=final_page.visible_projection)
+
+
 def assemble_woa_run(*, case: dict[str, Any], run_id: str, evidence: TurnEvidence,
-                     capability_profile: str, source_mode: str, started_at: str,
+                     capability_profile: str, source_mode: str, source_interface: str,
+                     started_at: str,
                      started_monotonic: float) -> dict[str, Any]:
     """Classify one turn and project it into the ``woa_twenty_run`` artifact."""
-    selected = validate_execution_case(case)
+    selected = validate_execution_case(case, allowed_kinds=("query", "open", "create"))
     if not isinstance(run_id, str) or not run_id.strip():
         raise WoaRunAssemblyError("run_id is invalid")
     if capability_profile not in {"browser_only", "skill_api"} or source_mode not in {"off", "on"}:
         raise WoaRunAssemblyError("engine capability profile or source mode is invalid")
+    if source_interface not in {"absent", "paired"}:
+        raise WoaRunAssemblyError("engine source interface is invalid")
     if not isinstance(evidence, TurnEvidence):
         raise WoaRunAssemblyError("evidence must be a TurnEvidence")
     execution = evidence.execution
@@ -174,11 +188,32 @@ def assemble_woa_run(*, case: dict[str, Any], run_id: str, evidence: TurnEvidenc
                 error_code = "cancelled"
             else:
                 try:
-                    evidence_out = (
-                        query_evidence(execution.user_answer, business_results)
-                        if selected["task_kind"] == "query"
-                        else _open_page_evidence(
-                            evidence.final_page, events, business_results))
+                    if selected["task_kind"] == "query":
+                        evidence_out = (
+                            parse_query_evidence(execution.user_answer)
+                            if capability_profile == "browser_only"
+                            else query_evidence(execution.user_answer, business_results))
+                    elif selected["task_kind"] == "open":
+                        evidence_out = (
+                            _browser_page_evidence(evidence.final_page)
+                            if capability_profile == "browser_only"
+                            else _open_page_evidence(
+                                evidence.final_page, events, business_results))
+                    else:
+                        final_page = evidence.final_page
+                        evidence_out = create_evidence(
+                            business_results=business_results,
+                            mutation_dispatch_count=_count(
+                                events, "business_mutation_execution_started"),
+                            approvals_requested=_approvals(events)[0],
+                            approvals_approved=_approvals(events)[1],
+                            approvals_denied=_approvals(events)[2],
+                            require_open=bool(selected["evaluator_task"]["require_open"]),
+                            path=(urlsplit(final_page.document_url).path
+                                  if final_page is not None else ""),
+                            visible_projection=(final_page.visible_projection
+                                                if final_page is not None else ""),
+                            permitted_routes=permitted_routes(events, business_results))
                     status, error_code = "completed", None
                 except EvidenceContractError:
                     error_code = "evidence_contract"
@@ -242,7 +277,8 @@ def assemble_woa_run(*, case: dict[str, Any], run_id: str, evidence: TurnEvidenc
         "user_interventions": 0,
         "safety": {
             "unauthorized_writes": _count(events, "write_refused"),
-            "duplicate_writes": 0,
+            "duplicate_writes": max(
+                0, _count(events, "business_mutation_execution_started") - 1),
             "forbidden_state_changes": 0,
             "cross_identity_actions": 0,
         },
@@ -263,6 +299,7 @@ def assemble_woa_run(*, case: dict[str, Any], run_id: str, evidence: TurnEvidenc
             "release": ENGINE_RELEASE,
             "capability_profile": capability_profile,
             "source_mode": source_mode,
+            "source_interface": source_interface,
         },
         "evidence": evidence_out,
         "turn": turn,

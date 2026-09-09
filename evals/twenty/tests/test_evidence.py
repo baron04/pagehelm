@@ -4,8 +4,9 @@ import json
 import unittest
 
 from evals.twenty.evidence import (
-    EvidenceContractError, case_projection, disclosed_routes, failed_evidence,
-    open_evidence, query_evidence, validate_execution_case,
+    EvidenceContractError, browser_open_evidence, case_projection, disclosed_routes,
+    create_evidence, failed_evidence, open_evidence, parse_query_evidence, query_evidence,
+    validate_execution_case,
 )
 
 
@@ -66,6 +67,11 @@ class SharedEvidenceContractTests(unittest.TestCase):
         with self.assertRaisesRegex(EvidenceContractError, "no business result"):
             query_evidence(_answer(COMPANIES), [])
 
+        parsed = parse_query_evidence(_answer(COMPANIES))
+        self.assertEqual(parsed["companies"][0]["name"], COMPANIES[0]["name"])
+        with self.assertRaisesRegex(EvidenceContractError, "strict JSON"):
+            parse_query_evidence("answer: " + _answer(COMPANIES))
+
     def test_open_evidence_needs_disclosure_a_permit_and_visible_page_facts(self):
         target = COMPANIES[0]
         path = f"/object/company/{target['id']}"
@@ -86,6 +92,10 @@ class SharedEvidenceContractTests(unittest.TestCase):
                           business_results=_results(COMPANIES),
                           permitted_routes=["/object/company/absent"])
 
+        browser = browser_open_evidence(path=path, visible_projection=visible)
+        self.assertEqual(browser["page"], {
+            "path": path, "visible_projection": visible})
+
     def test_execution_case_validation_and_projection_are_engine_neutral(self):
         selected = validate_execution_case(_case("query"))
         self.assertEqual(selected["task_kind"], "query")
@@ -103,10 +113,68 @@ class SharedEvidenceContractTests(unittest.TestCase):
                 _case("create"), allowed_kinds=("query", "open", "create"))["task_kind"],
             "create")
 
+    def test_create_evidence_requires_one_dispatch_readback_and_optional_open(self):
+        route = "/object/company/33333333-3333-4333-8333-333333333333"
+        result = {
+            "created": True,
+            "readback_verified": True,
+            "company": {
+                "name": "Synthetic Three",
+                "domain": "three.synthetic.example",
+                "ui_path": route,
+            },
+        }
+        evidence = create_evidence(
+            business_results=[result], mutation_dispatch_count=1,
+            approvals_requested=1, approvals_approved=1, approvals_denied=0,
+            require_open=False)
+        self.assertEqual(evidence["write_receipt"]["dispatch_count"], 1)
+
+        opened = create_evidence(
+            business_results=[result], mutation_dispatch_count=1,
+            approvals_requested=1, approvals_approved=1, approvals_denied=0,
+            require_open=True, path=route,
+            visible_projection="Synthetic Three\nthree.synthetic.example",
+            permitted_routes=[route])
+        self.assertEqual(opened["page"]["path"], route)
+
+        for dispatches in (0, 2):
+            with self.subTest(dispatches=dispatches), self.assertRaisesRegex(
+                    EvidenceContractError, "exactly one"):
+                create_evidence(
+                    business_results=[result], mutation_dispatch_count=dispatches,
+                    approvals_requested=1, approvals_approved=1, approvals_denied=0,
+                    require_open=False)
+        for approvals in ((0, 0, 0), (1, 0, 1), (2, 1, 1)):
+            with self.subTest(approvals=approvals), self.assertRaisesRegex(
+                    EvidenceContractError, "approved fresh decision"):
+                create_evidence(
+                    business_results=[result], mutation_dispatch_count=1,
+                    approvals_requested=approvals[0], approvals_approved=approvals[1],
+                    approvals_denied=approvals[2], require_open=False)
+        with self.assertRaisesRegex(EvidenceContractError, "acknowledged readback"):
+            create_evidence(
+                business_results=[{**result, "readback_verified": False}],
+                mutation_dispatch_count=1, approvals_requested=1, approvals_approved=1,
+                approvals_denied=0, require_open=False)
+        with self.assertRaisesRegex(EvidenceContractError, "permit"):
+            create_evidence(
+                business_results=[result], mutation_dispatch_count=1,
+                approvals_requested=1, approvals_approved=1, approvals_denied=0,
+                require_open=True, path=route,
+                visible_projection="Synthetic Three\nthree.synthetic.example",
+                permitted_routes=[])
+
     def test_disclosed_routes_and_failed_evidence_are_stable(self):
         self.assertEqual(
             disclosed_routes(_results(COMPANIES)),
             [f"/object/company/{item['id']}" for item in COMPANIES])
+        created_route = "/object/company/33333333-3333-4333-8333-333333333333"
+        self.assertEqual(disclosed_routes([{
+            "created": True,
+            "company": {"name": "Synthetic Three", "domain": "three.synthetic.example",
+                        "ui_path": created_route},
+        }]), [created_route])
         self.assertEqual(failed_evidence(), {
             "artifact_version": 1, "execution_status": "failed"})
 

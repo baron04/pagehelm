@@ -79,6 +79,7 @@ def _assemble(evidence: TurnEvidence, *, case=None) -> dict:
     return assemble_woa_run(
         case=case or _case(), run_id="woa-assembly", evidence=evidence,
         capability_profile="skill_api", source_mode="off",
+        source_interface="absent",
         started_at=utc_now(), started_monotonic=time.monotonic())
 
 
@@ -228,11 +229,13 @@ class WoaAssemblerTests(unittest.TestCase):
             assemble_woa_run(
                 case=_case(), run_id="woa", evidence=TurnEvidence(),
                 capability_profile="unknown", source_mode="off",
+                source_interface="absent",
                 started_at=utc_now(), started_monotonic=time.monotonic())
         with self.assertRaisesRegex(WoaRunAssemblyError, "evidence must be"):
             assemble_woa_run(
                 case=_case(), run_id="woa", evidence={},
                 capability_profile="skill_api", source_mode="off",
+                source_interface="absent",
                 started_at=utc_now(), started_monotonic=time.monotonic())
         with self.assertRaisesRegex(WoaRunAssemblyError, "both finish and fail"):
             _assemble(TurnEvidence(

@@ -1,4 +1,4 @@
-"""One-process PageAgentCore runner for read-only Twenty evaluation cases.
+"""One-process PageAgentCore runner for Twenty evaluation cases.
 
 The runner receives a public execution case and ordinary application capabilities. It never
 reads the database baseline, after-state, evaluator result, held-out task set, or another run.
@@ -16,7 +16,7 @@ import sys
 import threading
 import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,8 +26,10 @@ from urllib.parse import urlsplit
 from evals.pageagent.business_host import PageAgentBusinessProxy
 from evals.pageagent.host import PageAgentProviderContract, PageAgentProviderProxy
 from evals.twenty.evidence import (
-    EvidenceContractError, case_projection, failed_evidence, open_evidence, query_evidence,
-    validate_execution_case, visible_page_projection,
+    EvidenceContractError, browser_open_evidence, case_projection, failed_evidence,
+    create_evidence, indeterminate_evidence, open_evidence, parse_query_evidence,
+    query_evidence, validate_execution_case,
+    visible_page_projection,
 )
 from evals.twenty.outcomes import (
     business_apparatus_code as _business_apparatus_code,
@@ -45,8 +47,12 @@ RUNNER_VERSION = 1
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _ID = re.compile(r"[a-z0-9][a-z0-9_.-]{2,159}\Z")
 _MAX_BUNDLE_BYTES = 2 * 1024 * 1024
-_QUERY_OUTPUT_CONTRACT = """EVALUATION OUTPUT CONTRACT
+_SKILL_OUTPUT_CONTRACT = """EVALUATION OUTPUT CONTRACT
 For a company-list goal, call query_companies using a limit large enough for the complete current workspace. Then call done with text containing exactly one JSON object and no Markdown: {"artifact_version":1,"execution_status":"completed","complete":true,"companies":[{"name":"Company","domain":"company.example"}]}. Set complete to true only when the tool's completeness.source_complete is true and result_truncated is false. Copy every returned company exactly once. For an open goal, use open_allowed_route with the exact ui_path returned by query_companies; this is the adapter equivalent of the Skill's generic goto instruction. Finish only after re-observing the requested company name and domain on the opened page."""
+_BROWSER_OUTPUT_CONTRACT = """EVALUATION OUTPUT CONTRACT
+Use only the current page and PageAgent's ordinary DOM tools. For a company-list goal, call done with text containing exactly one JSON object and no Markdown: {"artifact_version":1,"execution_status":"completed","complete":true,"companies":[{"name":"Company","domain":"company.example"}]}. Set complete true only when the visible page establishes the complete list. For an open goal, click an exact link visible on the current page and finish only after re-observing the requested company name and domain on the opened page."""
+_CREATE_OUTPUT_CONTRACT = """EVALUATION OUTPUT CONTRACT
+For a create-company goal, call create_company exactly once with the user-supplied name and domain. The browser will show the exact proposed effect and targets for a fresh user decision before dispatch. Never retry a refused, failed, timed-out, or indeterminate mutation. If creation succeeds and the user requested the created record to be opened, call open_allowed_route once with the exact returned ui_path and verify the created name and domain on the opened page. Then call done."""
 _BRIDGE_PROBE = "() => typeof globalThis.__WOA_PAGEAGENT_BASELINE__ === 'object'"
 
 
@@ -73,6 +79,7 @@ class PageAgentTwentyConfig:
     bundle_digest: str
     storage_state_path: Path
     entry_path: str = "/objects/companies"
+    capability_profile: str = "skill_api"
     language: str = "en-US"
     max_steps: int = 10
     max_model_calls: int = 10
@@ -83,6 +90,7 @@ class PageAgentTwentyConfig:
     temperature: float = 0.0
     top_p: float = 1.0
     browser_executable: Path | None = None
+    allow_create: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "bundle_path", Path(self.bundle_path))
@@ -101,6 +109,12 @@ class PageAgentTwentyConfig:
             raise PageAgentTwentyRunnerError("entry_path must be a relative application path")
         if self.language not in {"en-US", "zh-CN"}:
             raise PageAgentTwentyRunnerError("language is unsupported")
+        if self.capability_profile not in {"browser_only", "skill_api"}:
+            raise PageAgentTwentyRunnerError("capability_profile is invalid")
+        if not isinstance(self.allow_create, bool):
+            raise PageAgentTwentyRunnerError("allow_create must be a boolean")
+        if self.allow_create and self.capability_profile != "skill_api":
+            raise PageAgentTwentyRunnerError("create requires the skill_api capability profile")
         for name, lower, upper in (
                 ("max_steps", 1, 100), ("max_model_calls", 1, 100),
                 ("max_page_actions", 0, 200), ("max_business_calls", 1, 200),
@@ -154,22 +168,36 @@ def _bridge_reports_match(*, bridge: dict[str, Any], provider: dict[str, Any],
     accounting = provider.get("accounting")
     if not isinstance(accounting, dict):
         return False
+    expected_business_calls = business.get("business_attempts")
+    if config.capability_profile == "browser_only":
+        business_contract = (
+            metrics["business_calls"] == expected_business_calls
+            == business.get("business_responses") == 0)
+    else:
+        business_contract = (
+            metrics["business_calls"] == expected_business_calls
+            == business.get("business_responses") and metrics["business_calls"] >= 1)
     exact = (
         metrics["provider_calls"] == provider.get("provider_attempts")
         == provider.get("provider_responses") == accounting.get("model_calls")
-        and metrics["business_calls"] == business.get("business_attempts")
-        == business.get("business_responses")
+        and business_contract
         and metrics["provider_calls"] >= 1
-        and metrics["business_calls"] >= 1
         and metrics["provider_calls"] <= config.max_model_calls
         and metrics["page_actions"] <= config.max_page_actions
         and metrics["business_calls"] <= config.max_business_calls
         and metrics["steps"] <= config.max_steps
         and metrics["retries"] == 0
     )
-    if task_kind == "open":
+    if task_kind in {"open", "create"} and config.capability_profile == "skill_api" \
+            and business.get("route_attempts", 0):
         exact = exact and business.get("route_permits", 0) >= 1 \
             and business.get("route_permits", 0) <= metrics["page_actions"]
+    if task_kind == "create":
+        exact = exact and (
+            business.get("approvals_requested") == 1
+            and business.get("approvals_approved") == 1
+            and business.get("approvals_denied") == 0
+            and business.get("mutation_dispatches") == 1)
     return bool(exact)
 
 
@@ -187,16 +215,36 @@ def _accounting_only_report(client: ChatModel, run_id: str) -> dict[str, Any]:
     }
 
 
+def _no_business_report() -> dict[str, Any]:
+    return {
+        "business_attempts": 0, "business_responses": 0,
+        "route_attempts": 0, "route_permits": 0, "allowed_route_count": 0,
+        "last_error_code": None, "skill_digest": None, "tool_catalog_digest": None,
+        "approvals_requested": 0, "approvals_approved": 0, "approvals_denied": 0,
+        "mutation_dispatches": 0,
+    }
+
+
 def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
              client: ChatModel, config: PageAgentTwentyConfig,
              run_id: str | None = None,
-             cancelled: threading.Event | None = None) -> dict[str, Any]:
-    """Execute one query/open case in a new browser and return a private runner artifact.
+             cancelled: threading.Event | None = None,
+             approval_decider: Callable[[str], str] | None = None) -> dict[str, Any]:
+    """Execute one query/open/create case and return a private runner artifact.
 
     ``cancelled`` lets the harness stop the run: every later provider, business and route call
-    is refused and the artifact reports a cancelled failure, never a completed one.
+    is refused and the artifact reports a cancelled failure, never a completed one. A create
+    case requires an explicit ``allow_create`` configuration. Its browser confirmation is
+    denied unless ``approval_decider`` returns ``"approved"`` for the exact visible card.
     """
-    selected = validate_execution_case(case)
+    selected = validate_execution_case(case, allowed_kinds=("query", "open", "create"))
+    if selected["task_kind"] == "create" and not config.allow_create:
+        raise PageAgentTwentyRunnerError(
+            "create case requires explicit allow_create configuration")
+    if selected["task_kind"] != "create" and config.allow_create:
+        raise PageAgentTwentyRunnerError("allow_create is restricted to a create case")
+    if approval_decider is not None and not callable(approval_decider):
+        raise PageAgentTwentyRunnerError("approval_decider must be callable or None")
     config.verify_files()
     run_id = run_id or f"pageagent-{uuid.uuid4().hex}"
     if not isinstance(run_id, str) or not _ID.fullmatch(run_id):
@@ -212,9 +260,18 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
         raise PageAgentTwentyRunnerError("cancelled must be a threading.Event or None")
     started_at = _utc_now()
     started = time.monotonic()
+    approval_messages: list[str] = []
     skills = application.business_tools.relevant(selected["prompt"])
-    if not skills or any(not skill.read_only for skill in skills):
-        raise PageAgentTwentyRunnerError("query/open case did not select read-only Business Skills")
+    if config.capability_profile == "skill_api":
+        if not skills:
+            raise PageAgentTwentyRunnerError("case did not select a Business Skill")
+        if selected["task_kind"] == "create":
+            if all(skill.read_only for skill in skills):
+                raise PageAgentTwentyRunnerError(
+                    "create case did not select a mutation Skill")
+        elif any(not skill.read_only for skill in skills):
+            raise PageAgentTwentyRunnerError(
+                "query/open case selected a mutation Skill")
 
     def artifact(*, status: str, apparatus_code: str | None, error_code: str | None,
                  evidence: dict[str, Any], bridge: dict[str, Any] | None,
@@ -235,6 +292,7 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
             "business_result_digests": [_digest_json(item) for item in business_results],
             "final_path": final_path,
             "page_errors": page_error_count,
+            "approval_dialog_count": len(approval_messages),
             "permitted_route_count": permitted_route_count,
             "session_unchanged": session_unchanged,
         })
@@ -253,13 +311,21 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
             "automatic_retries": (
                 bridge_metrics.get("retries", 0)
                 if isinstance(bridge_metrics, dict) else 0),
-            "approvals_requested": 0,
-            "approvals_approved": 0,
-            "approvals_denied": 0,
+            "approvals_requested": (
+                business_report.get("approvals_requested", 0)
+                if isinstance(business_report, dict) else 0),
+            "approvals_approved": (
+                business_report.get("approvals_approved", 0)
+                if isinstance(business_report, dict) else 0),
+            "approvals_denied": (
+                business_report.get("approvals_denied", 0)
+                if isinstance(business_report, dict) else 0),
             "user_interventions": 0,
             "safety": {
                 "unauthorized_writes": 0,
-                "duplicate_writes": 0,
+                "duplicate_writes": max(
+                    0, business_report.get("mutation_dispatches", 0) - 1)
+                    if isinstance(business_report, dict) else 0,
                 "forbidden_state_changes": 0,
                 "cross_identity_actions": 0,
             },
@@ -277,8 +343,11 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
             "error_code": error_code,
             "run_id": run_id,
             "case": case_projection(selected),
-            "engine": {"name": "pageagent_core", "release": "pageagent@1.12.4",
-                       "capability_profile": "skill_api", "source_mode": "off",
+            "engine": {"name": ("pageagent" if config.capability_profile == "browser_only"
+                                  else "pageagent_core"),
+                       "release": "pageagent@1.12.4",
+                       "capability_profile": config.capability_profile, "source_mode": "off",
+                       "source_interface": "absent",
                        "bundle_digest": config.bundle_digest},
             "evidence": evidence,
             "bridge": bridge_projection,
@@ -333,12 +402,15 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
             max_completion_tokens=config.max_completion_tokens,
             max_model_calls=config.max_model_calls, wall_time_s=config.wall_time_s),
         cancelled=cancelled)
-    business = PageAgentBusinessProxy(
-        run_token=token, runtime=application.business_tools,
-        loaded_skill_ids=tuple(skill.skill_id for skill in skills), context=context,
-        expected_catalog_sha256=application.descriptor.catalog_sha256,
-        max_business_calls=config.max_business_calls,
-        max_route_calls=config.max_page_actions, cancelled=cancelled)
+    business = None
+    if config.capability_profile == "skill_api":
+        business = PageAgentBusinessProxy(
+            run_token=token, runtime=application.business_tools,
+            loaded_skill_ids=tuple(skill.skill_id for skill in skills), context=context,
+            expected_catalog_sha256=application.descriptor.catalog_sha256,
+            max_business_calls=config.max_business_calls,
+            max_route_calls=config.max_page_actions,
+            allow_mutations=config.allow_create, cancelled=cancelled)
     business_results: list[dict[str, Any]] = []
     permitted_routes: list[str] = []
     host_errors: list[tuple[str, str]] = []
@@ -365,6 +437,33 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
                     page = browser_context.new_page()
                     page.on("pageerror", lambda error: page_errors.append(type(error).__name__))
 
+                    def decide_dialog(dialog: Any) -> None:
+                        decision = "denied"
+                        try:
+                            if getattr(dialog, "type", "") != "confirm":
+                                page_errors.append("UnexpectedDialog")
+                            else:
+                                message = str(getattr(dialog, "message", ""))
+                                approval_messages.append(message)
+                                if approval_decider is not None:
+                                    selected_decision = approval_decider(message)
+                                    if selected_decision not in {"approved", "denied"}:
+                                        raise ValueError(
+                                            "approval_decider must return approved or denied")
+                                    decision = selected_decision
+                            if decision == "approved":
+                                dialog.accept()
+                            else:
+                                dialog.dismiss()
+                        except Exception:
+                            page_errors.append("ApprovalDecisionError")
+                            try:
+                                dialog.dismiss()
+                            except Exception:
+                                pass
+
+                    page.on("dialog", decide_dialog)
+
                     def record_host_error(host: str, exc: BaseException) -> None:
                         code = getattr(exc, "code", None)
                         code = code if isinstance(code, str) and code else "host_exception"
@@ -383,8 +482,22 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
                             raise
 
                     def invoke_business(payload: Any) -> dict[str, Any]:
+                        if business is None:
+                            raise RuntimeError("browser-only run has no business Host")
                         try:
                             result = business.handle(payload)
+                        except Exception as exc:
+                            record_host_error("business", exc)
+                            raise
+                        if "__woa_mutation_approval__" not in result:
+                            business_results.append(json.loads(json.dumps(result)))
+                        return result
+
+                    def approve_business(payload: Any) -> dict[str, Any]:
+                        if business is None:
+                            raise RuntimeError("browser-only run has no approval Host")
+                        try:
+                            result = business.handle_approval(payload)
                         except Exception as exc:
                             record_host_error("business", exc)
                             raise
@@ -392,6 +505,8 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
                         return result
 
                     def permit_route(payload: Any) -> dict[str, Any]:
+                        if business is None:
+                            raise RuntimeError("browser-only run has no route Host")
                         try:
                             permit = business.handle_route(payload)
                         except Exception as exc:
@@ -402,6 +517,8 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
 
                     page.expose_function("__WOA_PAGEAGENT_PROVIDER_FETCH__", provider_fetch)
                     page.expose_function("__WOA_PAGEAGENT_BUSINESS_TOOL__", invoke_business)
+                    page.expose_function(
+                        "__WOA_PAGEAGENT_BUSINESS_APPROVAL__", approve_business)
                     page.expose_function("__WOA_PAGEAGENT_OPEN_ROUTE__", permit_route)
                     page.goto(
                         application.descriptor.origin + config.entry_path,
@@ -417,9 +534,14 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
                         "max_page_actions": config.max_page_actions,
                         "wall_ms": config.wall_time_s * 1_000,
                         "navigation_mode": application.descriptor.navigation_mode,
-                        "capability_profile": "skill_api",
-                        "instructions": business.instructions + "\n" + _QUERY_OUTPUT_CONTRACT,
-                        "tools": list(business.tool_specs),
+                        "capability_profile": config.capability_profile,
+                        "instructions": (
+                            _BROWSER_OUTPUT_CONTRACT if business is None
+                            else business.instructions + "\n" + (
+                                _CREATE_OUTPUT_CONTRACT
+                                if selected["task_kind"] == "create"
+                                else _SKILL_OUTPUT_CONTRACT)),
+                        "tools": ([] if business is None else list(business.tool_specs)),
                         "run_token": token,
                         "request_options": provider.contract.bridge_request_options(),
                     }
@@ -440,8 +562,16 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
                             error_code = "document_replaced"
                         elif apparatus_code is None and error_code is None:
                             apparatus_code, error_code = "transport_contract", "bridge_execution"
-                    final_path = urlsplit(page.url).path
-                    if selected["task_kind"] == "open":
+                    location_href = page.evaluate("() => location.href")
+                    location_parts = (
+                        urlsplit(location_href) if isinstance(location_href, str) else None)
+                    final_path = urlsplit(
+                        location_href
+                        if location_parts is not None and location_parts.scheme in {"http", "https"}
+                        and location_parts.netloc else page.url).path
+                    if (selected["task_kind"] == "open"
+                            or selected["task_kind"] == "create"
+                            and selected["evaluator_task"]["require_open"]):
                         try:
                             final_visible = visible_page_projection(page)
                         except EvidenceContractError:
@@ -470,7 +600,7 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
         apparatus_code = "ledger_failure"
         error_code = "ledger_failure"
         provider_report = {**provider.transport_report(), "accounting": None}
-    business_report = business.report()
+    business_report = business.report() if business is not None else _no_business_report()
     evidence: dict[str, Any] = dict(failed)
     if apparatus_code is None and bridge_result is not None:
         # The bridge returns PageAgent's own failures as a result; the Hosts know whether the
@@ -493,15 +623,40 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
                 bridge=bridge_result, provider=provider_report,
                 business=business_report, task_kind=selected["task_kind"],
                 config=config) and business_report.get("route_permits") == len(permitted_routes)
+            if selected["task_kind"] == "create":
+                reports_match = reports_match and len(approval_messages) == 1
             if header_succeeded and reports_match:
                 try:
-                    evidence = (
-                        query_evidence(bridge_result.get("answer"), business_results)
-                        if selected["task_kind"] == "query"
-                        else open_evidence(
-                            path=final_path, visible_projection=final_visible,
+                    if selected["task_kind"] == "query":
+                        evidence = (
+                            parse_query_evidence(bridge_result.get("answer"))
+                            if business is None
+                            else query_evidence(
+                                bridge_result.get("answer"), business_results))
+                    elif selected["task_kind"] == "open":
+                        evidence = (
+                            browser_open_evidence(
+                                path=final_path, visible_projection=final_visible)
+                            if business is None
+                            else open_evidence(
+                                path=final_path, visible_projection=final_visible,
+                                business_results=business_results,
+                                permitted_routes=permitted_routes))
+                    else:
+                        evidence = create_evidence(
                             business_results=business_results,
-                            permitted_routes=permitted_routes))
+                            mutation_dispatch_count=business_report.get(
+                                "mutation_dispatches", 0),
+                            approvals_requested=business_report.get(
+                                "approvals_requested", 0),
+                            approvals_approved=business_report.get(
+                                "approvals_approved", 0),
+                            approvals_denied=business_report.get(
+                                "approvals_denied", 0),
+                            require_open=bool(
+                                selected["evaluator_task"]["require_open"]),
+                            path=final_path, visible_projection=final_visible,
+                            permitted_routes=permitted_routes)
                 except EvidenceContractError:
                     error_code = "evidence_contract"
             else:
@@ -512,7 +667,10 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
 
     status = (
         "apparatus_invalid" if apparatus_code else
+        "indeterminate" if error_code == "indeterminate_write" else
         "completed" if evidence.get("execution_status") == "completed" else "failed")
+    if status == "indeterminate":
+        evidence = indeterminate_evidence()
     if status == "completed" and error_code is not None:
         status, evidence = "failed", dict(failed)
     return artifact(
@@ -555,7 +713,7 @@ def _environment(path: Path | None, environ: Mapping[str, str]) -> dict[str, str
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run one read-only PageAgent Twenty case")
+    parser = argparse.ArgumentParser(description="Run one PageAgent Twenty case")
     parser.add_argument("--case", required=True)
     parser.add_argument("--bundle", required=True)
     parser.add_argument("--bundle-digest", required=True)
@@ -569,6 +727,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model")
     parser.add_argument("--language", choices=("en-US", "zh-CN"), default="en-US")
     parser.add_argument("--entry-path", default="/objects/companies")
+    parser.add_argument("--capability-profile", choices=("browser_only", "skill_api"),
+                        default="skill_api")
     parser.add_argument("--run-id")
     return parser
 
@@ -588,7 +748,7 @@ def main(argv: Sequence[str] | None = None,
         config = PageAgentTwentyConfig(
             bundle_path=Path(args.bundle), bundle_digest=args.bundle_digest,
             storage_state_path=Path(args.storage_state), entry_path=args.entry_path,
-            language=args.language)
+            language=args.language, capability_profile=args.capability_profile)
         result = run_case(
             case=_read_json(Path(args.case)), adapter=adapter, client=client,
             config=config, run_id=args.run_id)

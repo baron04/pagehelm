@@ -92,6 +92,7 @@ class StubRunner:
                 "name": arm["engine"], "release": arm["engine_release"],
                 "capability_profile": arm["capability_profile"],
                 "source_mode": arm["source_mode"],
+                "source_interface": arm["source_interface"],
             },
             "run_id": run_id,
             "case": {**{key: case[key] for key in (

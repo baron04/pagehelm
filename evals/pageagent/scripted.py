@@ -19,12 +19,14 @@ from urllib.parse import urlsplit
 
 from web_operation_agent.application import APPLICATION_ADAPTER_VERSION, ApplicationDescriptor
 from web_operation_agent.business import (
-    BusinessSkill, BusinessToolError, BusinessToolRequestError,
+    BusinessMutationSpec, BusinessSkill, BusinessToolError, BusinessToolRequestError,
     BusinessToolResult, BusinessToolRuntime,
 )
 from web_operation_agent.identity import PRINCIPAL_CONTEXT_VERSION, PrincipalContext
 from web_operation_agent.model import ChatModel
-from web_operation_agent.twenty import QUERY_COMPANIES_SCHEMA, TwentyApplicationAdapter
+from web_operation_agent.twenty import (
+    CREATE_COMPANY_SCHEMA, QUERY_COMPANIES_SCHEMA, TwentyApplicationAdapter,
+)
 
 
 SCRIPTED_MODEL = "pageagent-scripted-model"
@@ -212,19 +214,28 @@ class SyntheticCompanyExecutor:
     """Serve ``query_companies`` from an in-memory synthetic set with the product result shape."""
 
     def __init__(self, companies: list[dict[str, str]], *, complete: bool = True,
-                 failure: BusinessToolError | None = None):
-        self.companies = [dict(company) for company in companies]
+                 failure: BusinessToolError | None = None,
+                 allow_mutations: bool = False, shared_state: bool = False,
+                 id_factory: Callable[[], str] | None = None):
+        self.companies = companies if shared_state else [dict(company) for company in companies]
         self.complete = complete
         self.failure = failure
+        self.allow_mutations = bool(allow_mutations)
+        self.id_factory = id_factory or (lambda: str(uuid.uuid4()))
         self.calls: list[dict[str, Any]] = []
+        self.mutation_dispatches = 0
 
-    @staticmethod
-    def tool_schemas() -> tuple[dict[str, Any], ...]:
-        return (json.loads(json.dumps(QUERY_COMPANIES_SCHEMA)),)
+    def tool_schemas(self) -> tuple[dict[str, Any], ...]:
+        schemas = [QUERY_COMPANIES_SCHEMA]
+        if self.allow_mutations:
+            schemas.append(CREATE_COMPANY_SCHEMA)
+        return tuple(json.loads(json.dumps(item)) for item in schemas)
 
-    @staticmethod
-    def tool_effects() -> dict[str, str]:
-        return {"query_companies": "read"}
+    def tool_effects(self) -> dict[str, str]:
+        effects = {"query_companies": "read"}
+        if self.allow_mutations:
+            effects["create_company"] = "write"
+        return effects
 
     def execute(self, name: str, args: dict[str, Any], *,
                 context: Any = None) -> BusinessToolResult:
@@ -267,9 +278,59 @@ class SyntheticCompanyExecutor:
             allowed_routes=tuple(row["ui_path"] for row in visible),
         )
 
+    def prepare_mutation(self, name: str, args: dict[str, Any], *,
+                         context: Any = None) -> BusinessMutationSpec:
+        if name != "create_company" or not self.allow_mutations:
+            raise BusinessToolRequestError("unknown synthetic mutation")
+        selected = self._normalize_company(args)
+        self._assert_unique(selected)
+        return BusinessMutationSpec(
+            args=selected, effect="Create one company in Synthetic Twenty",
+            targets=(f"Company: {selected['name']}", f"Domain: {selected['domain']}"))
+
+    def execute_mutation(self, name: str, args: dict[str, Any], *,
+                         context: Any = None) -> BusinessToolResult:
+        if name != "create_company" or not self.allow_mutations:
+            raise BusinessToolRequestError("unknown synthetic mutation")
+        selected = self._normalize_company(args)
+        self._assert_unique(selected)
+        created_id = self.id_factory()
+        if not isinstance(created_id, str) or not created_id:
+            raise BusinessToolRequestError("synthetic company id is invalid")
+        created = {"id": created_id, **selected}
+        self.companies.append(created)
+        self.mutation_dispatches += 1
+        route = company_ui_path(created)
+        return BusinessToolResult(
+            content={
+                "created": True, "readback_verified": True,
+                "company": {**created, "ui_path": route},
+                "scope": "synthetic_workspace",
+            },
+            audit={"operation": "create_company", "records_created": 1,
+                   "readback_verified": True},
+            allowed_routes=(route,))
+
+    @staticmethod
+    def _normalize_company(args: dict[str, Any]) -> dict[str, str]:
+        if not isinstance(args, dict) or set(args) != {"name", "domain"}:
+            raise BusinessToolRequestError("create_company requires name and domain")
+        name = args.get("name")
+        domain = args.get("domain")
+        if not isinstance(name, str) or not name.strip() or not isinstance(domain, str) \
+                or not domain.strip():
+            raise BusinessToolRequestError("company name and domain are required")
+        return {"name": name.strip(), "domain": domain.strip().casefold()}
+
+    def _assert_unique(self, selected: dict[str, str]) -> None:
+        if any(item["name"].casefold() == selected["name"].casefold()
+               or item["domain"].casefold() == selected["domain"]
+               for item in self.companies):
+            raise BusinessToolRequestError("company already exists")
+
 
 def synthetic_business_runtime(executor: SyntheticCompanyExecutor) -> BusinessToolRuntime:
-    skill = BusinessSkill.from_bytes(json.dumps({
+    skills = [BusinessSkill.from_bytes(json.dumps({
         "schema_version": 1,
         "skill_id": "synthetic.companies-query",
         "title": "Query synthetic companies",
@@ -283,10 +344,30 @@ def synthetic_business_runtime(executor: SyntheticCompanyExecutor) -> BusinessTo
         "tool_names": ["query_companies"],
         "provenance": ["synthetic:companies"],
         "read_only": True,
-    }).encode("utf-8"), artifact_uri="memory://synthetic/companies-query.json")
+    }).encode("utf-8"), artifact_uri="memory://synthetic/companies-query.json")]
+    required_scopes = {"query_companies": "companies:read"}
+    if executor.allow_mutations:
+        skills.append(BusinessSkill.from_bytes(json.dumps({
+            "schema_version": 1,
+            "skill_id": "synthetic.companies-create",
+            "title": "Create a synthetic company",
+            "intent": "Create exactly one company after explicit confirmation.",
+            "triggers": [
+                "create company", "create a company", "add company", "add a company", "创建公司",
+            ],
+            "instructions": [
+                "Call create_company with the exact user-supplied name and domain.",
+                "Wait for the server's exact-effect approval before the write.",
+                "After success, open the returned ui_path only when the user requested it.",
+            ],
+            "tool_names": ["create_company"],
+            "provenance": ["synthetic:companies:create"],
+            "read_only": False,
+        }).encode("utf-8"), artifact_uri="memory://synthetic/companies-create.json"))
+        required_scopes["create_company"] = "companies:write"
     return BusinessToolRuntime(
-        (skill,), executor, application_id="twenty",
-        required_scopes={"query_companies": "companies:read"})
+        tuple(skills), executor, application_id="twenty",
+        required_scopes=required_scopes)
 
 
 def session_binding(storage_state: str | Path | dict[str, Any]) -> str:
@@ -364,7 +445,9 @@ class SyntheticTwentyAdapter(TwentyApplicationAdapter):
             delegation_id=delegation_id,
             issued_at=now,
             expires_at=now + lifetime_s * 1_000,
-            scopes=("companies:read",),
+            scopes=(("companies:read", "companies:write")
+                    if "create_company" in self.business_tools.tool_names
+                    else ("companies:read",)),
         )
 
 
@@ -376,6 +459,7 @@ _PAGE_TEMPLATE = """<!doctype html>
     <script>
       const COMPANIES = __COMPANIES__
       const SESSION_COOKIE = __SESSION_COOKIE__
+      const EXPOSE_COMPANY_LIST = __EXPOSE_COMPANY_LIST__
       function node(tag, text) {
         const element = document.createElement(tag)
         element.textContent = text
@@ -395,6 +479,22 @@ _PAGE_TEMPLATE = """<!doctype html>
           return
         }
         view.append(node('h1', 'Companies'))
+        if (EXPOSE_COMPANY_LIST) {
+          for (const company of COMPANIES) {
+            const link = node('a', company.name)
+            link.href = `/object/company/${company.id}`
+            link.addEventListener('click', (event) => {
+              event.preventDefault()
+              history.pushState({}, '', link.getAttribute('href'))
+              render()
+            })
+            const domain = node('span', company.domain)
+            const row = document.createElement('p')
+            row.append(link, ' — ', domain)
+            view.append(row)
+          }
+          return
+        }
         const button = node('button', 'Switch session')
         button.type = 'button'
         button.id = 'switch-session'
@@ -413,12 +513,13 @@ _PAGE_TEMPLATE = """<!doctype html>
 
 
 class SyntheticTwentyPage:
-    """Serve one SPA document for every path on a loopback port, without company data on the list page."""
+    """Serve one SPA document per path, optionally exposing companies on the list page."""
 
-    def __init__(self, companies: list[dict[str, str]]):
+    def __init__(self, companies: list[dict[str, str]], *, expose_company_list: bool = False):
         document = _PAGE_TEMPLATE.replace(
             "__COMPANIES__", json.dumps(companies, ensure_ascii=False)
-        ).replace("__SESSION_COOKIE__", json.dumps(SESSION_COOKIE))
+        ).replace("__SESSION_COOKIE__", json.dumps(SESSION_COOKIE)).replace(
+            "__EXPOSE_COMPANY_LIST__", json.dumps(bool(expose_company_list)))
         self._document = document.encode("utf-8")
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None

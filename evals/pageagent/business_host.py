@@ -8,7 +8,10 @@ import re
 import threading
 from typing import Any
 
-from web_operation_agent.business import BusinessToolError, BusinessToolRuntime
+from web_operation_agent.business import (
+    BusinessMutationIndeterminate, BusinessMutationProposal, BusinessToolError,
+    BusinessToolRuntime,
+)
 from web_operation_agent.identity import OperationContext, PrincipalError
 
 
@@ -46,12 +49,13 @@ def _bridge_tool(schema: dict[str, Any]) -> dict[str, Any]:
 
 
 class PageAgentBusinessProxy:
-    """Expose selected read-only Skills through one principal-bound baseline run."""
+    """Expose selected Skills through one principal-bound baseline run."""
 
     def __init__(self, *, run_token: str, runtime: BusinessToolRuntime,
                  loaded_skill_ids: tuple[str, ...], context: OperationContext,
                  expected_catalog_sha256: str, max_business_calls: int,
                  max_route_calls: int,
+                 allow_mutations: bool = False,
                  cancelled: threading.Event | None = None):
         if not isinstance(run_token, str) or not _SAFE_TOKEN.fullmatch(run_token):
             raise ValueError("run_token is invalid")
@@ -74,6 +78,8 @@ class PageAgentBusinessProxy:
             raise ValueError("max_route_calls is invalid")
         if cancelled is not None and not isinstance(cancelled, threading.Event):
             raise TypeError("cancelled must be a threading.Event or None")
+        if not isinstance(allow_mutations, bool):
+            raise TypeError("allow_mutations must be a boolean")
         selected_ids = set(loaded_skill_ids)
         skills = []
         for skill_id in sorted(selected_ids):
@@ -84,7 +90,9 @@ class PageAgentBusinessProxy:
         schemas = runtime.schemas_for(selected_ids)
         if not schemas:
             raise ValueError("selected Skills expose no tools")
-        if any(runtime.is_mutation(schema["function"]["name"]) for schema in schemas):
+        contains_mutation = any(
+            runtime.is_mutation(schema["function"]["name"]) for schema in schemas)
+        if contains_mutation and not allow_mutations:
             raise ValueError("PageAgent baseline business tools must be read-only")
         cards = [skill.loaded_card() for skill in skills]
         instructions = "APP SKILLS\n" + json.dumps(
@@ -98,6 +106,7 @@ class PageAgentBusinessProxy:
         self.max_business_calls = max_business_calls
         self.max_route_calls = max_route_calls
         self.cancelled = cancelled or threading.Event()
+        self.allow_mutations = allow_mutations
         self._tool_specs = tuple(_bridge_tool(schema) for schema in schemas)
         self._tool_names = frozenset(item["name"] for item in self._tool_specs)
         self.instructions = instructions
@@ -110,6 +119,11 @@ class PageAgentBusinessProxy:
         self._route_permits = 0
         self._allowed_routes: set[str] = set()
         self._last_error_code = ""
+        self._proposals: dict[str, BusinessMutationProposal] = {}
+        self._approvals_requested = 0
+        self._approvals_approved = 0
+        self._approvals_denied = 0
+        self._mutation_dispatches = 0
 
     def handle(self, payload: Any) -> dict[str, Any]:
         if self.cancelled.is_set():
@@ -127,6 +141,20 @@ class PageAgentBusinessProxy:
                 raise PageAgentBusinessHostError("business_call_budget")
             self._attempts += 1
         try:
+            if self.runtime.is_mutation(name):
+                if not self.allow_mutations:
+                    raise PageAgentBusinessHostError("business_request")
+                proposal = self.runtime.prepare_mutation(
+                    name, payload.get("args"), self.loaded_skill_ids,
+                    context=self.context)
+                with self._lock:
+                    self._proposals[proposal.content_digest] = proposal
+                    self._approvals_requested += 1
+                return {"__woa_mutation_approval__": {
+                    "proposal_digest": proposal.content_digest,
+                    "effect": proposal.effect,
+                    "targets": list(proposal.targets),
+                }}
             result = self.runtime.execute(
                 name, payload.get("args"), self.loaded_skill_ids,
                 context=self.context)
@@ -144,6 +172,53 @@ class PageAgentBusinessProxy:
         except Exception:
             self._last_error_code = "business_tool"
             raise PageAgentBusinessHostError("business_tool") from None
+        with self._lock:
+            self._completed += 1
+            self._allowed_routes.update(result.allowed_routes)
+        return result.content
+
+    def handle_approval(self, payload: Any) -> dict[str, Any]:
+        """Consume one browser-visible decision and execute the bound proposal at most once."""
+        if self.cancelled.is_set():
+            raise PageAgentBusinessHostError("cancelled")
+        if not isinstance(payload, dict) or set(payload) != {
+                "run_token", "proposal_digest", "decision"}:
+            raise PageAgentBusinessHostError("approval_contract")
+        token = payload.get("run_token")
+        if not isinstance(token, str) or not hmac.compare_digest(token, self._run_token):
+            raise PageAgentBusinessHostError("approval_contract")
+        digest = payload.get("proposal_digest")
+        decision = payload.get("decision")
+        if not isinstance(digest, str) or decision not in {"approved", "denied"}:
+            raise PageAgentBusinessHostError("approval_contract")
+        with self._lock:
+            proposal = self._proposals.pop(digest, None)
+        if proposal is None:
+            raise PageAgentBusinessHostError("approval_replay")
+        if decision == "denied":
+            with self._lock:
+                self._approvals_denied += 1
+                self._last_error_code = "approval_denied"
+            raise PageAgentBusinessHostError("approval_denied")
+        with self._lock:
+            self._approvals_approved += 1
+            self._mutation_dispatches += 1
+        try:
+            result = self.runtime.execute_mutation(
+                proposal, digest, self.loaded_skill_ids, context=self.context)
+            if self.cancelled.is_set():
+                raise BusinessMutationIndeterminate(
+                    "mutation completed while the run was cancelled")
+        except BusinessMutationIndeterminate:
+            self._last_error_code = "indeterminate_write"
+            raise PageAgentBusinessHostError("indeterminate_write") from None
+        except BusinessToolError as exc:
+            code = getattr(exc, "code", "business_tool")
+            self._last_error_code = code
+            raise PageAgentBusinessHostError(code) from None
+        except Exception:
+            self._last_error_code = "indeterminate_write"
+            raise PageAgentBusinessHostError("indeterminate_write") from None
         with self._lock:
             self._completed += 1
             self._allowed_routes.update(result.allowed_routes)
@@ -202,4 +277,8 @@ class PageAgentBusinessProxy:
                 "last_error_code": self._last_error_code or None,
                 "skill_digest": self.skill_digest,
                 "tool_catalog_digest": self.tool_catalog_digest,
+                "approvals_requested": self._approvals_requested,
+                "approvals_approved": self._approvals_approved,
+                "approvals_denied": self._approvals_denied,
+                "mutation_dispatches": self._mutation_dispatches,
             }

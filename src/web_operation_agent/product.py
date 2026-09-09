@@ -127,6 +127,7 @@ class AgentTurnConfig:
     allow_business_mutations: bool = False
     require_identity: bool = False
     max_user_answer_chars: int = 4_000
+    source_affordance_mode: str = "off"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "ledger_path", Path(self.ledger_path))
@@ -154,6 +155,8 @@ class AgentTurnConfig:
         if not isinstance(self.disabled_actions, frozenset) \
                 or any(not isinstance(item, str) for item in self.disabled_actions):
             raise ValueError("disabled_actions must be a frozenset of tool names")
+        if self.source_affordance_mode not in {"off", "empty", "auto"}:
+            raise ValueError("source_affordance_mode must be off, empty, or auto")
         if self.policy_block_limit is not None and (
                 isinstance(self.policy_block_limit, bool)
                 or not isinstance(self.policy_block_limit, int)
@@ -250,6 +253,7 @@ class AgentTurnExecutor:
                  answer_renderer: AnswerRenderer = render_neutral_user_answer,
                  ledger_factory: LedgerFactory = SessionLedger,
                  attestation=None,
+                 source_map=None,
                  conversation_state: ConversationState | None = None):
         self.channel = channel
         self.config = config
@@ -260,6 +264,11 @@ class AgentTurnExecutor:
         self.answer_renderer = answer_renderer
         self.ledger_factory = ledger_factory
         self.attestation = attestation
+        self.source_map = source_map
+        if self.config.source_affordance_mode == "auto" and source_map is None:
+            raise ValueError("auto source affordances require a version-bound SourceMap")
+        if self.config.source_affordance_mode != "auto" and source_map is not None:
+            raise ValueError("a SourceMap is accepted only when source affordances are auto")
         if conversation_state is not None and not isinstance(
                 conversation_state, ConversationState):
             raise TypeError("conversation_state must be a ConversationState or None")
@@ -381,7 +390,9 @@ class AgentTurnExecutor:
             control=self.control,
             ledger=ledger,
             attestation=self.attestation,
+            source_map=self.source_map,
             source_contract=False,
+            source_affordance_mode=self.config.source_affordance_mode,
             step_budget=self.config.step_budget,
             wall_budget_s=self.config.wall_budget_s,
             run_id=run_id,

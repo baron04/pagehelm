@@ -7,7 +7,9 @@
     "创建公司",
     "新建公司",
     "create company",
-    "add company"
+    "create a company",
+    "add company",
+    "add a company"
   ],
   "instructions": [
     "Use query_companies when useful to inspect current delegated-user facts before proposing a write.",

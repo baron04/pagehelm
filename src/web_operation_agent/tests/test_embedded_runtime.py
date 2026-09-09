@@ -1126,6 +1126,15 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                 page.goto(app.origin + "/page1", wait_until="domcontentloaded")
 
                 remote = RemoteBrowserClient(channel, timeout_s=8)
+                receipts = []
+                execute = remote.execute
+
+                def record_execute(*args, **kwargs):
+                    receipt = execute(*args, **kwargs)
+                    receipts.append(receipt)
+                    return receipt
+
+                remote.execute = record_execute
                 started = remote.start()
                 first = remote.observe()
                 link = next(element for element in first.elements if element.role == "link")
@@ -1161,7 +1170,6 @@ class EmbeddedRuntimeTests(unittest.TestCase):
 
                 self.assertEqual(outcome.terminal_reason, "agent_finished")
                 self.assertEqual(remote.command_count, 2)
-                receipts = [item.receipt for item in channel._results.values()]
                 fill_receipt = next(item for item in receipts if item.action == "fill")
                 receipt = next(item for item in receipts if item.action == "click")
                 self.assertTrue(fill_receipt.ok)

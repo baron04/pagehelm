@@ -74,6 +74,7 @@ def _run(protocol: dict, test_seal: dict, index: int, kind: str) -> dict:
             "name": arm["engine"], "release": arm["engine_release"],
             "capability_profile": arm["capability_profile"],
             "source_mode": arm["source_mode"],
+            "source_interface": arm["source_interface"],
         },
         "case": {
             "task_id": pair["task_id"],

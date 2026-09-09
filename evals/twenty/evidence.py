@@ -129,18 +129,25 @@ def disclosed_routes(results: Sequence[dict[str, Any]]) -> list[str]:
     routes: list[str] = []
     for result in results:
         rows = result.get("companies") if isinstance(result, dict) else None
-        if not isinstance(rows, list):
-            continue
-        for row in rows:
-            if isinstance(row, dict) and isinstance(row.get("ui_path"), str):
-                if row["ui_path"] not in routes:
-                    routes.append(row["ui_path"])
+        if isinstance(rows, list):
+            for row in rows:
+                if isinstance(row, dict) and isinstance(row.get("ui_path"), str):
+                    if row["ui_path"] not in routes:
+                        routes.append(row["ui_path"])
+        company = result.get("company") if isinstance(result, dict) else None
+        if isinstance(company, dict) and isinstance(company.get("ui_path"), str):
+            if company["ui_path"] not in routes:
+                routes.append(company["ui_path"])
     return routes
 
 
-def query_evidence(answer: Any, business_results: Sequence[dict[str, Any]]) -> dict[str, Any]:
-    """Parse the user-visible answer without repairing or completing it, then require it to
-    restate exactly the companies and completeness that the business tools disclosed."""
+def parse_query_evidence(answer: Any) -> dict[str, Any]:
+    """Parse a user-visible company answer without repairing or completing it.
+
+    Browser-only runners have no business result against which to pre-check the answer.  They
+    use this schema-only projection and leave correctness to the isolated state evaluator.
+    Skill/API runners add the stricter same-run ToolResult check in :func:`query_evidence`.
+    """
     answer = bounded_text(answer, "public answer", 20_000)
     try:
         value = json.loads(answer)
@@ -165,6 +172,13 @@ def query_evidence(answer: Any, business_results: Sequence[dict[str, Any]]) -> d
     identities = [(row["name"].casefold(), row["domain"]) for row in companies]
     if len(identities) != len(set(identities)):
         raise EvidenceContractError("query answer contains duplicate companies")
+    return {**value, "companies": companies}
+
+
+def query_evidence(answer: Any, business_results: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """Require a parsed answer to restate the same-run business results exactly."""
+    value = parse_query_evidence(answer)
+    identities = [(row["name"].casefold(), row["domain"]) for row in value["companies"]]
     if not business_results:
         raise EvidenceContractError("query answer has no business result to be checked against")
     disclosed, disclosed_complete = disclosed_companies(business_results)
@@ -172,7 +186,71 @@ def query_evidence(answer: Any, business_results: Sequence[dict[str, Any]]) -> d
         raise EvidenceContractError("query answer does not restate the business results")
     if value["complete"] is not disclosed_complete:
         raise EvidenceContractError("query answer completeness contradicts the business results")
-    return {**value, "companies": companies}
+    return value
+
+
+def browser_open_evidence(*, path: Any, visible_projection: Any) -> dict[str, Any]:
+    """Project only facts a browser-only host can observe.
+
+    The runner deliberately does not receive the hidden target row.  It therefore preserves
+    the final visible page projection for the isolated evaluator, which checks the target and
+    discards the text when it projects the public trial row.
+    """
+    path = bounded_text(path, "final page path", 1_000)
+    if not path.startswith("/") or path.startswith("//") or "?" in path or "#" in path:
+        raise EvidenceContractError("final page path is not canonical")
+    visible = bounded_text(
+        visible_projection, "visible page projection", MAX_VISIBLE_BYTES)
+    return {
+        "artifact_version": 1,
+        "execution_status": "completed",
+        "page": {"path": path, "visible_projection": visible},
+    }
+
+
+def create_evidence(*, business_results: Sequence[dict[str, Any]],
+                    mutation_dispatch_count: int, approvals_requested: int,
+                    approvals_approved: int, approvals_denied: int, require_open: bool,
+                    path: Any = "", visible_projection: Any = "",
+                    permitted_routes: Sequence[str] = ()) -> dict[str, Any]:
+    """Project one acknowledged, same-actor mutation and optional rendered-page proof."""
+    if (approvals_requested, approvals_approved, approvals_denied) != (1, 1, 0):
+        raise EvidenceContractError("create evidence requires one approved fresh decision")
+    if type(mutation_dispatch_count) is not int or mutation_dispatch_count != 1:
+        raise EvidenceContractError("create evidence requires exactly one mutation dispatch")
+    created = []
+    for result in business_results:
+        company = result.get("company") if isinstance(result, dict) else None
+        if (isinstance(result, dict) and result.get("created") is True
+                and result.get("readback_verified") is True
+                and isinstance(company, dict)):
+            created.append(company)
+    if len(created) != 1:
+        raise EvidenceContractError("create evidence requires one acknowledged readback")
+    company = created[0]
+    name = bounded_text(company.get("name"), "created company name", 300)
+    domain = normalize_domain(company.get("domain"))
+    route = bounded_text(company.get("ui_path"), "created company route", 1_000)
+    result: dict[str, Any] = {
+        "artifact_version": 1,
+        "execution_status": "completed",
+        "write_receipt": {
+            "dispatch_count": 1,
+            "acknowledged": True,
+            "same_actor_readback": True,
+        },
+    }
+    if require_open:
+        selected_path = bounded_text(path, "final page path", 1_000)
+        visible = bounded_text(
+            visible_projection, "visible page projection", MAX_VISIBLE_BYTES)
+        if selected_path != route or route not in set(permitted_routes):
+            raise EvidenceContractError("created company route was not opened with a permit")
+        folded = visible.casefold()
+        if name.casefold() not in folded or (domain and domain not in folded):
+            raise EvidenceContractError("created company facts are not visible")
+        result["page"] = {"path": route, "name": name, "domain": domain}
+    return result
 
 
 def route_candidates(results: Sequence[dict[str, Any]], path: str) -> list[dict[str, str]]:

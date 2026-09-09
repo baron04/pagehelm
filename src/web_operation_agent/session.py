@@ -2032,7 +2032,7 @@ class ServerAgentSession:
         if mode not in ("auto", "empty"):
             return ""
         candidates: tuple[SourceAffordance, ...] = ()
-        if mode == "auto":
+        if mode == "auto" and self.served_webapps:
             candidates = resolve_source_affordances(
                 self.source_map, task=self.task.public_text(), query=query,
                 page_text=_render_observation(obs), served_webapps=self.served_webapps)

@@ -67,6 +67,7 @@ def project_trial_record(*, protocol: dict[str, Any], test_seal: dict[str, Any],
         "release": arm["engine_release"],
         "capability_profile": arm["capability_profile"],
         "source_mode": arm["source_mode"],
+        "source_interface": arm["source_interface"],
     }
     if (not isinstance(run_engine, dict)
             or any(run_engine.get(key) != value for key, value in expected_engine.items())):
