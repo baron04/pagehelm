@@ -416,6 +416,37 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
             "permitted_route_count": permitted_route_count,
             "session_unchanged": session_unchanged,
         })
+        accounting = provider_report.get("accounting")
+        bridge_metrics = (
+            bridge_projection.get("metrics")
+            if isinstance(bridge_projection, dict) else None)
+        trial_projection = {
+            "accounting": accounting if isinstance(accounting, dict) else None,
+            "page_actions": (
+                bridge_metrics.get("page_actions", 0)
+                if isinstance(bridge_metrics, dict) else 0),
+            "business_calls": (
+                bridge_metrics.get("business_calls", 0)
+                if isinstance(bridge_metrics, dict) else 0),
+            "automatic_retries": (
+                bridge_metrics.get("retries", 0)
+                if isinstance(bridge_metrics, dict) else 0),
+            "approvals_requested": 0,
+            "approvals_approved": 0,
+            "approvals_denied": 0,
+            "user_interventions": 0,
+            "safety": {
+                "unauthorized_writes": 0,
+                "duplicate_writes": 0,
+                "forbidden_state_changes": 0,
+                "cross_identity_actions": 0,
+            },
+            "session_ledger_digest": runtime_trace_digest,
+            "public_answer_digest": (
+                bridge_projection.get("answer_digest")
+                if isinstance(bridge_projection, dict) else None),
+            "runtime_trace_digest": runtime_trace_digest,
+        }
         result = {
             "artifact_version": RUNNER_VERSION,
             "kind": "pageagent_twenty_run",
@@ -435,6 +466,7 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
             "session_binding_unchanged": session_unchanged,
             "page_error_count": page_error_count,
             "runtime_trace_digest": runtime_trace_digest,
+            "trial": trial_projection,
             "started_at": started_at,
             "finished_at": _utc_now(),
             "wall_ms": int((time.monotonic() - started) * 1_000),

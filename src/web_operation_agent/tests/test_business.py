@@ -845,6 +845,35 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertEqual(len(ledger.of_kind("business_answer")), 1)
             self.assertEqual(len(ledger.of_kind("no_tool_call")), 0)
 
+    def test_read_failure_records_its_machine_code_for_external_scoring(self):
+        class UnavailableExecutor(_Executor):
+            @staticmethod
+            def execute(*_args, **_kwargs):
+                raise BusinessToolUnavailableError("private upstream detail")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _skill(Path(tmp) / "skill.json")
+            ledger = SessionLedger(Path(tmp) / "session.jsonl", "typed-read-failure")
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="List companies",
+                              supported_scope="Read current companies."),
+                arm="U", chat=_Chat([
+                    ("load_skill", {"skill_id": skill.skill_id}),
+                    ("query_companies", {}),
+                    ("finish", {"done": False, "why": "The data source failed."}),
+                ]), browser=_Browser(), control=ReadOnlyControl(), ledger=ledger,
+                attestation=None, source_contract=False, step_budget=4,
+                wall_budget_s=30, run_id="typed-read-failure",
+                business_tools=BusinessToolRuntime((skill,), UnavailableExecutor()))
+            session.entry_observation = _observation(1)
+            session.plan()
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "agent_refused")
+            rejected = ledger.of_kind("business_tool_rejected")
+            self.assertEqual(len(rejected), 1)
+            self.assertEqual(rejected[0]["error_code"], "business_unavailable")
+
     def test_exact_tool_result_route_can_open_a_record_read_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill = _skill(Path(tmp) / "skill.json")

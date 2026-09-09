@@ -425,6 +425,12 @@ class RunnerScenarioTests(unittest.TestCase):
         self.assertEqual(result["provider"]["accounting"]["model_calls"], 2)
         self.assertEqual(result["business"]["business_attempts"], 1)
         self.assertEqual(result["bridge"]["metrics"]["business_calls"], 1)
+        self.assertEqual(result["trial"]["business_calls"], 1)
+        self.assertEqual(result["trial"]["page_actions"], 0)
+        self.assertEqual(result["trial"]["accounting"],
+                         result["provider"]["accounting"])
+        self.assertEqual(result["trial"]["runtime_trace_digest"],
+                         result["runtime_trace_digest"])
         self.assertEqual(len(self.executor.calls[0]["operation_context_digest"]), 64)
         self.assertEqual(browser.closed, ["context", "browser"])
         self.assertEqual(evaluate_run(case, self.companies, result)["status"], "PASS")
@@ -461,6 +467,8 @@ class RunnerScenarioTests(unittest.TestCase):
             "path": route, "name": target["name"], "domain": target["domain"]})
         self.assertEqual(result["business"]["route_permits"], 1)
         self.assertEqual(result["bridge"]["metrics"]["page_actions"], 1)
+        self.assertEqual(result["trial"]["page_actions"], 1)
+        self.assertEqual(result["trial"]["business_calls"], 1)
         self.assertEqual(evaluate_run(case, self.companies, result)["status"], "PASS")
 
     def test_open_fails_when_the_visible_page_lacks_the_record_facts(self):

@@ -938,6 +938,7 @@ class ServerAgentSession:
                         detail = str(exc)[:500]
                         self.ledger.append(
                             "business_mutation_rejected", step=step, tool=name,
+                            error_code=getattr(exc, "code", "business_tool"),
                             reason=detail, dispatched=False, side_effect_possible=False,
                             identity=operation_identity)
                         try:
@@ -1080,7 +1081,8 @@ class ServerAgentSession:
                         detail = str(exc)[:500]
                         self.ledger.append(
                             "business_mutation_failed", step=step, tool=name,
-                            approval_id=approval_id, reason=detail,
+                            approval_id=approval_id,
+                            error_code=getattr(exc, "code", "business_tool"), reason=detail,
                             side_effect_possible=False, identity=operation_identity)
                         return self._finish(
                             result, t0, "business_mutation_failed", detail, steps=step)
@@ -1151,6 +1153,7 @@ class ServerAgentSession:
                     detail = str(exc)[:500]
                     self.ledger.append(
                         "business_tool_rejected", step=step, tool=name,
+                        error_code=getattr(exc, "code", "business_tool"),
                         reason=detail, side_effect_possible=False,
                         identity=operation_identity)
                     feedback = "BUSINESS TOOL FAILED: " + detail

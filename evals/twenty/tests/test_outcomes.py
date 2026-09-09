@@ -3,7 +3,8 @@ from __future__ import annotations
 import unittest
 
 from evals.twenty.outcomes import (
-    business_apparatus_code, classify_host_errors, provider_apparatus_code,
+    business_apparatus_code, classify_host_errors, classify_woa_outcome,
+    provider_apparatus_code,
 )
 
 
@@ -41,6 +42,34 @@ class SharedOutcomeProjectionTests(unittest.TestCase):
         self.assertEqual(classify_host_errors([
             ("business", "business_request"),
         ]), (None, "business_request"))
+
+    def test_woa_uses_the_same_typed_business_and_provider_classes(self):
+        self.assertEqual(classify_woa_outcome(
+            terminal_reason="agent_finished",
+            events=[{"event": "business_tool_rejected",
+                     "error_code": "business_unavailable"}],
+        ), ("transport_contract", "business_unavailable"))
+        self.assertEqual(classify_woa_outcome(
+            terminal_reason="provider_error",
+            events=[{"event": "provider_failed",
+                     "provider_error_code": "provider_http"}],
+        ), ("provider_outage", "provider_http"))
+        self.assertEqual(classify_woa_outcome(
+            terminal_reason="agent_refused",
+            events=[{"event": "business_tool_rejected",
+                     "error_code": "business_request"}],
+        ), (None, "agent_refused"))
+
+    def test_woa_boundary_and_transport_failures_are_apparatus_faults(self):
+        self.assertEqual(classify_woa_outcome(
+            terminal_reason="", boundary_error_code="identity_unavailable",
+        ), ("credential_or_identity", "identity_unavailable"))
+        self.assertEqual(classify_woa_outcome(
+            terminal_reason="", boundary_error_code="stale_message",
+        ), ("transport_contract", "stale_message"))
+        self.assertEqual(classify_woa_outcome(
+            terminal_reason="transport_error",
+        ), ("transport_contract", "transport_error"))
 
 
 if __name__ == "__main__":
