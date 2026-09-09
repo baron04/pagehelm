@@ -25,8 +25,14 @@ from urllib.request import Request, urlopen
 
 from web_operation_agent.business import (BusinessMutationIndeterminate,
                                           BusinessMutationSpec, BusinessSkill,
-                                          BusinessToolError, BusinessToolResult,
-                                          BusinessToolRuntime)
+                                          BusinessToolAuthenticationError,
+                                          BusinessToolContractError,
+                                          BusinessToolError,
+                                          BusinessToolIdentityError,
+                                          BusinessToolRequestError,
+                                          BusinessToolResult,
+                                          BusinessToolRuntime,
+                                          BusinessToolUnavailableError)
 from web_operation_agent.application import (APPLICATION_ADAPTER_VERSION,
                                              ApplicationDescriptor)
 from web_operation_agent.identity import (IdentityAssertion, OperationContext,
@@ -49,6 +55,7 @@ QUERY_COMPANIES_SCHEMA = {
             "properties": {
                 "name_contains": {
                     "type": "string",
+                    "maxLength": 100,
                     "description": "Optional case-insensitive company name substring.",
                 },
                 "limit": {
@@ -173,18 +180,20 @@ class TwentyPageSessionIdentityResolver:
                 descriptor = os.open(self.storage_state_path, flags)
                 metadata = os.fstat(descriptor)
                 if metadata.st_mode & 0o077:
-                    raise BusinessToolError(
+                    raise BusinessToolIdentityError(
                         "Twenty browser storage state must not be group/world accessible")
                 with os.fdopen(descriptor, "rb") as handle:
                     descriptor = -1
                     raw = handle.read(_MAX_STORAGE_STATE_BYTES + 1)
                 if len(raw) > _MAX_STORAGE_STATE_BYTES:
-                    raise BusinessToolError("Twenty browser storage state exceeds 2 MiB")
+                    raise BusinessToolIdentityError(
+                        "Twenty browser storage state exceeds 2 MiB")
                 payload = json.loads(raw)
             except BusinessToolError:
                 raise
             except (OSError, json.JSONDecodeError) as exc:
-                raise BusinessToolError("Twenty browser storage state is unavailable") from exc
+                raise BusinessToolIdentityError(
+                    "Twenty browser storage state is unavailable") from exc
             finally:
                 if descriptor >= 0:
                     os.close(descriptor)
@@ -194,20 +203,22 @@ class TwentyPageSessionIdentityResolver:
                     self._storage_state, ensure_ascii=False, sort_keys=True,
                     separators=(",", ":"), allow_nan=False).encode("utf-8")
                 if len(raw) > _MAX_STORAGE_STATE_BYTES:
-                    raise BusinessToolError("Twenty browser storage state exceeds 2 MiB")
+                    raise BusinessToolIdentityError(
+                        "Twenty browser storage state exceeds 2 MiB")
                 payload = json.loads(raw)
             except BusinessToolError:
                 raise
             except (TypeError, ValueError, OverflowError) as exc:
-                raise BusinessToolError("Twenty browser storage state is invalid") from exc
+                raise BusinessToolIdentityError(
+                    "Twenty browser storage state is invalid") from exc
         if not isinstance(payload, dict):
-            raise BusinessToolError("Twenty browser storage state is invalid")
+            raise BusinessToolIdentityError("Twenty browser storage state is invalid")
         return payload
 
     def _session_cookie(self, *, now_s: float) -> tuple[str, int | None]:
         cookies = self._load_storage_state().get("cookies")
         if not isinstance(cookies, list):
-            raise BusinessToolError("Twenty browser storage state is invalid")
+            raise BusinessToolIdentityError("Twenty browser storage state is invalid")
         parsed = urlsplit(self.base_url)
         host = (parsed.hostname or "").casefold()
         secure_request = parsed.scheme == "https"
@@ -231,7 +242,8 @@ class TwentyPageSessionIdentityResolver:
                     or isinstance(expires, bool)
                     or not isinstance(expires, (int, float))
                     or not math.isfinite(expires)):
-                raise BusinessToolError("Twenty browser session cookie is invalid")
+                raise BusinessToolIdentityError(
+                    "Twenty browser session cookie is invalid")
             cookie_domain = domain.lstrip(".").casefold()
             if host != cookie_domain:
                 continue
@@ -244,7 +256,7 @@ class TwentyPageSessionIdentityResolver:
                 continue
             matches.append((name, value, expires_at))
         if len(matches) != 1:
-            raise BusinessToolError(
+            raise BusinessToolIdentityError(
                 "Twenty browser storage state must contain one live session cookie")
         name, value, expires_at = matches[0]
         return f"{name}={value}", expires_at
@@ -281,28 +293,33 @@ class TwentyPageSessionIdentityResolver:
             response = connection.getresponse()
             raw = response.read(_MAX_IDENTITY_RESPONSE_BYTES + 1)
             if len(raw) > _MAX_IDENTITY_RESPONSE_BYTES:
-                raise BusinessToolError("Twenty page identity response exceeds 1 MiB")
+                raise BusinessToolIdentityError(
+                    "Twenty page identity response exceeds 1 MiB")
             payload = json.loads(raw)
         except BusinessToolError:
             raise
         except (OSError, TimeoutError, HTTPException, json.JSONDecodeError) as exc:
-            raise BusinessToolError("Twenty page session identity read failed") from exc
+            raise BusinessToolIdentityError(
+                "Twenty page session identity read failed") from exc
         finally:
             connection.close()
         if response.status != 200 or not isinstance(payload, dict) or payload.get("errors"):
-            raise BusinessToolError("Twenty page session identity response is invalid")
+            raise BusinessToolIdentityError(
+                "Twenty page session identity response is invalid")
         data = payload.get("data")
         user = data.get("currentUser") if isinstance(data, dict) else None
         workspace = data.get("currentWorkspace") if isinstance(data, dict) else None
         actor_id = user.get("id") if isinstance(user, dict) else None
         workspace_id = workspace.get("id") if isinstance(workspace, dict) else None
         if not isinstance(actor_id, str) or not isinstance(workspace_id, str):
-            raise BusinessToolError("Twenty page session identity response is incomplete")
+            raise BusinessToolIdentityError(
+                "Twenty page session identity response is incomplete")
         expires_at = issued_at + lifetime_s * 1000
         if cookie_expires_at is not None:
             expires_at = min(expires_at, cookie_expires_at)
         if expires_at <= issued_at:
-            raise BusinessToolError("Twenty browser session cookie has expired")
+            raise BusinessToolIdentityError(
+                "Twenty browser session cookie has expired")
         return IdentityAssertion(
             schema_version=1,
             source="page_session",
@@ -328,21 +345,24 @@ class TwentyOAuthTokenStore:
         try:
             value = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError) as exc:
-            raise BusinessToolError("Twenty OAuth state is unavailable") from exc
+            raise BusinessToolAuthenticationError(
+                "Twenty OAuth state is unavailable") from exc
         if not isinstance(value, dict):
-            raise BusinessToolError("Twenty OAuth state is invalid")
+            raise BusinessToolAuthenticationError("Twenty OAuth state is invalid")
         return value
 
     def access_token(self) -> str:
         value = self._read(self.token_path).get("access_token")
         if not isinstance(value, str) or not value:
-            raise BusinessToolError("Twenty OAuth access token is unavailable")
+            raise BusinessToolAuthenticationError(
+                "Twenty OAuth access token is unavailable")
         return value
 
     @contextmanager
     def _refresh_lock(self):
         if fcntl is None:
-            raise BusinessToolError("Twenty OAuth refresh requires a POSIX file lock")
+            raise BusinessToolAuthenticationError(
+                "Twenty OAuth refresh requires a POSIX file lock")
         key = str(self.token_path.resolve(strict=False))
         with self._locks_guard:
             thread_lock = self._thread_locks.setdefault(key, threading.Lock())
@@ -354,7 +374,8 @@ class TwentyOAuthTokenStore:
             try:
                 descriptor = os.open(lock_path, flags, 0o600)
             except OSError as exc:
-                raise BusinessToolError("Twenty OAuth refresh lock is unavailable") from exc
+                raise BusinessToolAuthenticationError(
+                    "Twenty OAuth refresh lock is unavailable") from exc
             try:
                 os.fchmod(descriptor, 0o600)
                 fcntl.flock(descriptor, fcntl.LOCK_EX)
@@ -379,7 +400,8 @@ class TwentyOAuthTokenStore:
             client_id = registration.get("client_id")
             if not isinstance(refresh, str) or not refresh or not isinstance(client_id, str) \
                     or not client_id:
-                raise BusinessToolError("Twenty OAuth refresh state is unavailable")
+                raise BusinessToolAuthenticationError(
+                    "Twenty OAuth refresh state is unavailable")
             body = urlencode({
                 "grant_type": "refresh_token",
                 "refresh_token": refresh,
@@ -392,10 +414,12 @@ class TwentyOAuthTokenStore:
                 with urlopen(request, timeout=timeout_s) as response:
                     updated = json.load(response)
             except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
-                raise BusinessToolError("Twenty OAuth refresh failed") from exc
+                raise BusinessToolAuthenticationError(
+                    "Twenty OAuth refresh failed") from exc
             access_token = updated.get("access_token") if isinstance(updated, dict) else None
             if not isinstance(access_token, str) or not access_token:
-                raise BusinessToolError("Twenty OAuth refresh returned no access token")
+                raise BusinessToolAuthenticationError(
+                    "Twenty OAuth refresh returned no access token")
             if not updated.get("refresh_token"):
                 updated["refresh_token"] = refresh
             updated["obtained_at"] = int(time.time())
@@ -455,9 +479,7 @@ class TwentyBusinessToolExecutor:
         token = self.tokens.access_token()
         try:
             payload = self._authorized_metadata_json(token)
-        except BusinessToolError as exc:
-            if str(exc) != "Twenty API authorization expired":
-                raise
+        except BusinessToolAuthenticationError:
             token = self.tokens.refresh(
                 self.base_url, self.timeout_s, rejected_access_token=token)
             payload = self._authorized_metadata_json(token)
@@ -467,7 +489,8 @@ class TwentyBusinessToolExecutor:
         actor_id = user.get("id") if isinstance(user, dict) else None
         workspace_id = workspace.get("id") if isinstance(workspace, dict) else None
         if not isinstance(actor_id, str) or not isinstance(workspace_id, str):
-            raise BusinessToolError("Twenty Metadata identity response is incomplete")
+            raise BusinessToolIdentityError(
+                "Twenty Metadata identity response is incomplete")
         issued_at = int(time.time() * 1000) if now_ms is None else now_ms
         return IdentityAssertion(
             schema_version=1,
@@ -490,22 +513,26 @@ class TwentyBusinessToolExecutor:
     def execute(self, name: str, args: dict, *,
                 context: OperationContext | None = None) -> BusinessToolResult:
         if name != "query_companies":
-            raise BusinessToolError("unknown Twenty business tool")
+            raise BusinessToolRequestError("unknown Twenty business tool")
         unknown = set(args) - {"name_contains", "limit"}
         if unknown:
-            raise BusinessToolError("query_companies received unknown arguments")
+            raise BusinessToolRequestError(
+                "query_companies received unknown arguments")
         needle = args.get("name_contains", "")
         if not isinstance(needle, str) or len(needle) > 100 \
                 or re.search(r"[\x00-\x1f\x7f]", needle):
-            raise BusinessToolError("name_contains must be a string of at most 100 characters")
+            raise BusinessToolRequestError(
+                "name_contains must be a string of at most 100 characters")
         limit = args.get("limit", 20)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
-            raise BusinessToolError("limit must be an integer from 1 to 50")
+            raise BusinessToolRequestError(
+                "limit must be an integer from 1 to 50")
         payload, status, refreshed = self._get_companies()
         data = payload.get("data") if isinstance(payload, dict) else None
         rows = data.get("companies") if isinstance(data, dict) else None
         if not isinstance(rows, list):
-            raise BusinessToolError("Twenty companies response has an unexpected shape")
+            raise BusinessToolContractError(
+                "Twenty companies response has an unexpected shape")
         projected = []
         folded = needle.casefold().strip()
         for row in rows:
@@ -726,17 +753,17 @@ class TwentyBusinessToolExecutor:
             path = "/rest/companies?" + urlencode(query)
             try:
                 page = self._authorized_json(path, token)
-            except BusinessToolError as exc:
-                if str(exc) != "Twenty API authorization expired":
-                    if rows:
-                        incomplete_reason = "upstream_read_failed"
-                        break
-                    raise
+            except BusinessToolAuthenticationError:
                 token = self.tokens.refresh(
                     self.base_url, self.timeout_s,
                     rejected_access_token=token)
                 refreshed = True
                 page = self._authorized_json(path, token)
+            except (BusinessToolUnavailableError, BusinessToolContractError):
+                if rows:
+                    incomplete_reason = "upstream_read_failed"
+                    break
+                raise
             pages_scanned += 1
             data = page.get("data") if isinstance(page, dict) else None
             page_rows = data.get("companies") if isinstance(data, dict) else None
@@ -746,7 +773,8 @@ class TwentyBusinessToolExecutor:
                 if rows:
                     incomplete_reason = "unexpected_page_shape"
                     break
-                raise BusinessToolError("Twenty companies response has an unexpected shape")
+                raise BusinessToolContractError(
+                    "Twenty companies response has an unexpected shape")
             if expected_total is None:
                 expected_total = total
             elif total != expected_total:
@@ -812,12 +840,18 @@ class TwentyBusinessToolExecutor:
                 payload = json.load(response)
         except HTTPError as exc:
             if exc.code == 401:
-                raise BusinessToolError("Twenty API authorization expired") from exc
-            raise BusinessToolError(f"Twenty API returned HTTP {exc.code}") from exc
-        except (URLError, TimeoutError, json.JSONDecodeError) as exc:
-            raise BusinessToolError("Twenty API read failed") from exc
+                raise BusinessToolAuthenticationError(
+                    "Twenty API authorization expired") from exc
+            raise BusinessToolUnavailableError(
+                f"Twenty API returned HTTP {exc.code}") from exc
+        except (URLError, TimeoutError) as exc:
+            raise BusinessToolUnavailableError("Twenty API read failed") from exc
+        except json.JSONDecodeError as exc:
+            raise BusinessToolContractError(
+                "Twenty API returned an invalid response") from exc
         if status != 200 or not isinstance(payload, dict):
-            raise BusinessToolError("Twenty API returned an invalid response")
+            raise BusinessToolContractError(
+                "Twenty API returned an invalid response")
         return payload
 
     def _authorized_metadata_json(self, token: str) -> dict:
@@ -833,22 +867,30 @@ class TwentyBusinessToolExecutor:
                 payload = json.load(response)
         except HTTPError as exc:
             if exc.code == 401:
-                raise BusinessToolError("Twenty API authorization expired") from exc
-            raise BusinessToolError(
+                raise BusinessToolAuthenticationError(
+                    "Twenty API authorization expired") from exc
+            raise BusinessToolUnavailableError(
                 f"Twenty Metadata API returned HTTP {exc.code}") from exc
-        except (URLError, TimeoutError, json.JSONDecodeError) as exc:
-            raise BusinessToolError("Twenty Metadata identity read failed") from exc
+        except (URLError, TimeoutError) as exc:
+            raise BusinessToolUnavailableError(
+                "Twenty Metadata identity read failed") from exc
+        except json.JSONDecodeError as exc:
+            raise BusinessToolContractError(
+                "Twenty Metadata identity response is invalid") from exc
         if status != 200 or not isinstance(payload, dict):
-            raise BusinessToolError("Twenty Metadata identity response is invalid")
+            raise BusinessToolContractError(
+                "Twenty Metadata identity response is invalid")
         errors = payload.get("errors")
         if isinstance(errors, list) and any(
                 isinstance(error, dict)
                 and isinstance(error.get("extensions"), dict)
                 and error["extensions"].get("code") == "UNAUTHENTICATED"
                 for error in errors):
-            raise BusinessToolError("Twenty API authorization expired")
+            raise BusinessToolAuthenticationError(
+                "Twenty API authorization expired")
         if errors:
-            raise BusinessToolError("Twenty Metadata identity response is invalid")
+            raise BusinessToolContractError(
+                "Twenty Metadata identity response is invalid")
         return payload
 
     def _authorized_mutation_json(self, path: str, token: str,

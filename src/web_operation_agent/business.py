@@ -33,6 +33,38 @@ _MAX_RESULT_BYTES = 64 * 1024
 class BusinessToolError(RuntimeError):
     """A safe, expected refusal or read failure that the Agent may reason about."""
 
+    code = "business_tool"
+
+
+class BusinessToolRequestError(BusinessToolError):
+    """The requested tool call is invalid or is not permitted for this turn."""
+
+    code = "business_request"
+
+
+class BusinessToolIdentityError(BusinessToolError):
+    """The application credential or bound principal cannot authorize the call."""
+
+    code = "business_identity"
+
+
+class BusinessToolAuthenticationError(BusinessToolIdentityError):
+    """The delegated application credential is missing, expired, or rejected."""
+
+    code = "business_authentication"
+
+
+class BusinessToolUnavailableError(BusinessToolError):
+    """A valid read could not reach the application service."""
+
+    code = "business_unavailable"
+
+
+class BusinessToolContractError(BusinessToolError):
+    """The application integration returned data outside its declared contract."""
+
+    code = "business_contract"
+
 
 class BusinessMutationIndeterminate(RuntimeError):
     """A dispatched mutation may have landed and therefore must never be retried."""
@@ -436,23 +468,25 @@ class BusinessToolRuntime:
                        loaded_ids: set[str],
                        context: OperationContext | None = None) -> dict:
         if name not in self._schemas:
-            raise BusinessToolError("unknown business tool")
+            raise BusinessToolRequestError("unknown business tool")
         allowed = {tool for skill_id in loaded_ids
                    for tool in self._skills[skill_id].tool_names}
         if name not in allowed:
-            raise BusinessToolError("load the matching Business Skill before calling this tool")
+            raise BusinessToolRequestError(
+                "load the matching Business Skill before calling this tool")
         if not isinstance(args, dict):
-            raise BusinessToolError("business tool arguments must be an object")
+            raise BusinessToolRequestError("business tool arguments must be an object")
         if context is not None:
             if not isinstance(context, OperationContext):
-                raise BusinessToolError("business tool operation context is invalid")
+                raise BusinessToolIdentityError(
+                    "business tool operation context is invalid")
             try:
                 context.require_live(
                     application_id=self.application_id or None,
                     required_scope=self._required_scopes.get(name),
                 )
             except PrincipalError as exc:
-                raise BusinessToolError(str(exc)) from exc
+                raise BusinessToolIdentityError(str(exc)) from exc
         return args
 
     def execute(self, name: str, args: object,
@@ -460,7 +494,8 @@ class BusinessToolRuntime:
                 context: OperationContext | None = None) -> BusinessToolResult:
         args = self._validate_call(name, args, loaded_ids, context)
         if self.is_mutation(name):
-            raise BusinessToolError("business mutation requires explicit approval")
+            raise BusinessToolRequestError(
+                "business mutation requires explicit approval")
         try:
             result = (self._executor.execute(name, args)
                       if context is None
@@ -468,10 +503,11 @@ class BusinessToolRuntime:
         except BusinessToolError:
             raise
         except Exception as exc:
-            raise BusinessToolError(
+            raise BusinessToolUnavailableError(
                 f"business tool failed: {type(exc).__name__}") from exc
         if not isinstance(result, BusinessToolResult):
-            raise BusinessToolError("business tool returned an invalid result")
+            raise BusinessToolContractError(
+                "business tool returned an invalid result")
         return result
 
     def prepare_mutation(self, name: str, args: object,
@@ -480,7 +516,7 @@ class BusinessToolRuntime:
                          ) -> BusinessMutationProposal:
         args = self._validate_call(name, args, loaded_ids, context)
         if not self.is_mutation(name):
-            raise BusinessToolError("business tool is read-only")
+            raise BusinessToolRequestError("business tool is read-only")
         try:
             spec = (self._executor.prepare_mutation(name, args)
                     if context is None
@@ -489,10 +525,11 @@ class BusinessToolRuntime:
         except BusinessToolError:
             raise
         except Exception as exc:
-            raise BusinessToolError(
+            raise BusinessToolUnavailableError(
                 f"business mutation preparation failed: {type(exc).__name__}") from exc
         if not isinstance(spec, BusinessMutationSpec):
-            raise BusinessToolError("business mutation preparation returned an invalid result")
+            raise BusinessToolContractError(
+                "business mutation preparation returned an invalid result")
         now_ms = int(time.time() * 1000)
         proposal = BusinessMutationProposal(
             tool=name, args=spec.args, effect=spec.effect, targets=spec.targets,

@@ -19,7 +19,10 @@ from evals.pageagent.twenty_runner import (
     _business_apparatus_code, _classify_host_errors, _execution_case,
     _provider_apparatus_code, open_evidence, query_evidence, run_case,
 )
-from web_operation_agent.business import BusinessToolError
+from web_operation_agent.business import (
+    BusinessToolIdentityError, BusinessToolRequestError,
+    BusinessToolUnavailableError,
+)
 
 
 PROVIDER_URL = "https://provider.invalid/v1/chat/completions"
@@ -202,11 +205,15 @@ class RunnerBoundaryTests(unittest.TestCase):
             self.assertEqual(_provider_apparatus_code(code), "provider_outage", code)
         self.assertEqual(_provider_apparatus_code("ledger_failure"), "ledger_failure")
         self.assertEqual(_provider_apparatus_code("transport_contract"), "transport_contract")
-        for code in ("business_call_budget", "route_call_budget", "route_refused",
-                     "cancelled", None):
+        for code in ("business_request", "business_call_budget", "route_call_budget",
+                     "route_refused", "cancelled", None):
             self.assertIsNone(_business_apparatus_code(code), code)
-        for code in ("business_tool", "tool_contract", "route_contract"):
+        for code in ("business_tool", "business_unavailable", "business_contract",
+                     "tool_contract", "route_contract"):
             self.assertEqual(_business_apparatus_code(code), "transport_contract", code)
+        for code in ("business_authentication", "business_identity"):
+            self.assertEqual(
+                _business_apparatus_code(code), "credential_or_identity", code)
         self.assertEqual(_classify_host_errors([]), (None, None))
         self.assertEqual(_classify_host_errors([("provider", "model_call_budget")]),
                          (None, "model_call_budget"))
@@ -486,7 +493,8 @@ class RunnerScenarioTests(unittest.TestCase):
         case = development_case("dev-query-en-1", self.companies)
         adapter = SyntheticTwentyAdapter(
             origin=self.origin, runtime=self.runtime,
-            identity_failure=BusinessToolError("page session and delegated API differ"))
+            identity_failure=BusinessToolIdentityError(
+                "page session and delegated API differ"))
         client = ScriptedProviderClient(self._query_actions())
         result, browser = self._run(case=case, client=client, adapter=adapter)
         self.assertEqual(result["status"], "apparatus_invalid")
@@ -561,16 +569,31 @@ class RunnerScenarioTests(unittest.TestCase):
         self.assertIsNone(accounting["total_cost_cny"])
         self.assertEqual(result["bridge"]["status"], "error")
 
-    def test_business_tool_failure_is_a_transport_apparatus_fault(self):
+    def test_business_tool_outage_is_a_transport_apparatus_fault(self):
         case = development_case("dev-query-en-1", self.companies)
-        executor = SyntheticCompanyExecutor(self.companies, failure="synthetic API outage")
+        executor = SyntheticCompanyExecutor(
+            self.companies,
+            failure=BusinessToolUnavailableError("synthetic API outage"))
         adapter = SyntheticTwentyAdapter(
             origin=self.origin, runtime=synthetic_business_runtime(executor))
         client = ScriptedProviderClient(self._query_actions())
         result, _browser = self._run(case=case, client=client, adapter=adapter)
         self.assertEqual(result["status"], "apparatus_invalid")
         self.assertEqual(result["apparatus_code"], "transport_contract")
-        self.assertEqual(result["error_code"], "business_tool")
+        self.assertEqual(result["error_code"], "business_unavailable")
+
+    def test_business_request_rejection_is_an_engine_failure(self):
+        case = development_case("dev-query-en-1", self.companies)
+        executor = SyntheticCompanyExecutor(
+            self.companies,
+            failure=BusinessToolRequestError("synthetic invalid request"))
+        adapter = SyntheticTwentyAdapter(
+            origin=self.origin, runtime=synthetic_business_runtime(executor))
+        client = ScriptedProviderClient(self._query_actions())
+        result, _browser = self._run(case=case, client=client, adapter=adapter)
+        self.assertEqual(result["status"], "failed")
+        self.assertIsNone(result["apparatus_code"])
+        self.assertEqual(result["error_code"], "business_request")
 
     def test_bridge_exceptions_distinguish_a_replaced_document_from_apparatus(self):
         case = development_case("dev-query-en-1", self.companies)

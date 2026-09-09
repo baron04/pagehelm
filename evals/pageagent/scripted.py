@@ -18,8 +18,10 @@ from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from web_operation_agent.application import APPLICATION_ADAPTER_VERSION, ApplicationDescriptor
-from web_operation_agent.business import (BusinessSkill, BusinessToolError, BusinessToolResult,
-                                          BusinessToolRuntime)
+from web_operation_agent.business import (
+    BusinessSkill, BusinessToolError, BusinessToolRequestError,
+    BusinessToolResult, BusinessToolRuntime,
+)
 from web_operation_agent.identity import PRINCIPAL_CONTEXT_VERSION, PrincipalContext
 from web_operation_agent.model import ChatModel
 from web_operation_agent.twenty import QUERY_COMPANIES_SCHEMA, TwentyApplicationAdapter
@@ -210,7 +212,7 @@ class SyntheticCompanyExecutor:
     """Serve ``query_companies`` from an in-memory synthetic set with the product result shape."""
 
     def __init__(self, companies: list[dict[str, str]], *, complete: bool = True,
-                 failure: str | None = None):
+                 failure: BusinessToolError | None = None):
         self.companies = [dict(company) for company in companies]
         self.complete = complete
         self.failure = failure
@@ -232,13 +234,14 @@ class SyntheticCompanyExecutor:
             "operation_context_digest": getattr(context, "binding_digest", None),
         })
         if name != "query_companies":
-            raise BusinessToolError("unknown synthetic business tool")
-        if self.failure:
-            raise BusinessToolError(self.failure)
+            raise BusinessToolRequestError("unknown synthetic business tool")
+        if self.failure is not None:
+            raise self.failure
         needle = str(args.get("name_contains", "")).casefold().strip()
         limit = args.get("limit", 20)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
-            raise BusinessToolError("limit must be an integer from 1 to 50")
+            raise BusinessToolRequestError(
+                "limit must be an integer from 1 to 50")
         rows = [{
             "name": company["name"], "domain": company["domain"],
             "ui_path": company_ui_path(company),

@@ -8,7 +8,11 @@ import unittest
 from evals.pageagent.business_host import (PageAgentBusinessHostError,
                                            PageAgentBusinessProxy)
 from web_operation_agent.business import (BusinessMutationSpec, BusinessSkill,
-                                          BusinessToolResult, BusinessToolRuntime)
+                                          BusinessToolContractError,
+                                          BusinessToolIdentityError,
+                                          BusinessToolRequestError,
+                                          BusinessToolResult, BusinessToolRuntime,
+                                          BusinessToolUnavailableError)
 from web_operation_agent.identity import OperationContext, PrincipalContext
 
 
@@ -141,6 +145,36 @@ class BusinessProxyTests(unittest.TestCase):
         self.assertEqual(report["route_attempts"], 1)
         self.assertEqual(report["route_permits"], 1)
         self.assertNotIn("Synthetic Acme", json.dumps(report))
+
+    def test_typed_tool_failures_cross_the_browser_boundary_as_content_free_codes(self):
+        cases = (
+            (BusinessToolRequestError("secret request detail"), "business_request"),
+            (BusinessToolIdentityError("secret identity detail"), "business_identity"),
+            (BusinessToolUnavailableError("secret outage detail"), "business_unavailable"),
+            (BusinessToolContractError("secret payload detail"), "business_contract"),
+        )
+        for failure, expected in cases:
+            with self.subTest(code=expected):
+                class FailingExecutor(_ReadExecutor):
+                    def execute(self, *_args, **_kwargs):
+                        raise failure
+
+                skill = _skill()
+                runtime = BusinessToolRuntime(
+                    (skill,), FailingExecutor(), application_id="fixture",
+                    required_scopes={"query_companies": "companies:read"})
+                proxy = PageAgentBusinessProxy(
+                    run_token="opaque-business-token", runtime=runtime,
+                    loaded_skill_ids=(skill.skill_id,), context=_context(),
+                    expected_catalog_sha256=runtime.catalog_sha256,
+                    max_business_calls=1, max_route_calls=0)
+                with self.assertRaises(PageAgentBusinessHostError) as raised:
+                    proxy.handle({
+                        "run_token": "opaque-business-token",
+                        "name": "query_companies", "args": {"limit": 20}})
+                self.assertEqual(raised.exception.code, expected)
+                self.assertNotIn("secret", str(raised.exception))
+                self.assertEqual(proxy.report()["last_error_code"], expected)
 
     def test_route_requires_a_fresh_tool_disclosure_and_has_its_own_budget(self):
         proxy = self._proxy()

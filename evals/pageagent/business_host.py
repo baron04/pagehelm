@@ -135,9 +135,12 @@ class PageAgentBusinessProxy:
         except PageAgentBusinessHostError as exc:
             self._last_error_code = exc.code
             raise
-        except BusinessToolError:
-            self._last_error_code = "business_tool"
-            raise PageAgentBusinessHostError("business_tool") from None
+        except BusinessToolError as exc:
+            code = getattr(exc, "code", "business_tool")
+            if not isinstance(code, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", code):
+                code = "business_tool"
+            self._last_error_code = code
+            raise PageAgentBusinessHostError(code) from None
         except Exception:
             self._last_error_code = "business_tool"
             raise PageAgentBusinessHostError("business_tool") from None

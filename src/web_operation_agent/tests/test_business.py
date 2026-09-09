@@ -8,10 +8,12 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from web_operation_agent.business import (BusinessSkill, BusinessToolError,
-                                          BusinessMutationIndeterminate,
-                                          BusinessMutationSpec,
-                                          BusinessToolResult, BusinessToolRuntime)
+from web_operation_agent.business import (
+    BusinessMutationIndeterminate, BusinessMutationSpec, BusinessSkill,
+    BusinessToolContractError, BusinessToolError, BusinessToolIdentityError,
+    BusinessToolRequestError, BusinessToolResult, BusinessToolRuntime,
+    BusinessToolUnavailableError,
+)
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.identity import OperationContext, PrincipalContext
@@ -198,6 +200,38 @@ class _Chat:
 
 
 class BusinessRuntimeValidation(unittest.TestCase):
+    def test_read_failures_have_stable_machine_classification(self):
+        class FailingExecutor(_Executor):
+            @staticmethod
+            def execute(*_args, **_kwargs):
+                raise OSError("private transport detail")
+
+        class InvalidResultExecutor(_Executor):
+            @staticmethod
+            def execute(*_args, **_kwargs):
+                return None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _skill(Path(tmp) / "query-skill.json")
+            loaded = {skill.skill_id}
+            runtime = BusinessToolRuntime((skill,), _Executor(), application_id="fixture")
+            with self.assertRaises(BusinessToolRequestError) as request:
+                runtime.execute("query_companies", {}, set())
+            self.assertEqual(request.exception.code, "business_request")
+            with self.assertRaises(BusinessToolIdentityError) as identity:
+                runtime.execute(
+                    "query_companies", {}, loaded,
+                    context=_operation_context(application_id="another-app"))
+            self.assertEqual(identity.exception.code, "business_identity")
+            unavailable_runtime = BusinessToolRuntime((skill,), FailingExecutor())
+            with self.assertRaises(BusinessToolUnavailableError) as unavailable:
+                unavailable_runtime.execute("query_companies", {}, loaded)
+            self.assertEqual(unavailable.exception.code, "business_unavailable")
+            contract_runtime = BusinessToolRuntime((skill,), InvalidResultExecutor())
+            with self.assertRaises(BusinessToolContractError) as contract:
+                contract_runtime.execute("query_companies", {}, loaded)
+            self.assertEqual(contract.exception.code, "business_contract")
+
     def test_bound_tool_requires_application_and_declared_scope(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill = _skill(Path(tmp) / "query-skill.json")

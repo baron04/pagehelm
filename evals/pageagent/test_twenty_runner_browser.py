@@ -22,7 +22,9 @@ from evals.pageagent.scripted import (
     synthetic_business_runtime, synthetic_companies, write_storage_state,
 )
 from evals.pageagent.twenty_runner import PageAgentTwentyConfig, run_case
-from web_operation_agent.business import BusinessToolError
+from web_operation_agent.business import (
+    BusinessToolIdentityError, BusinessToolUnavailableError,
+)
 
 
 BUNDLE = Path(os.environ.get("WOA_PAGEAGENT_BUNDLE") or (
@@ -163,7 +165,8 @@ class RunnerBrowserQualificationTests(unittest.TestCase):
         case = development_case("dev-query-en-1", self.companies)
         adapter = SyntheticTwentyAdapter(
             origin=self.page.origin, runtime=self.runtime,
-            identity_failure=BusinessToolError("page session and delegated API differ"))
+            identity_failure=BusinessToolIdentityError(
+                "page session and delegated API differ"))
         client = ScriptedProviderClient(self._query_actions())
         result = self._run(case=case, client=client, adapter=adapter)
         self.assertEqual(result["status"], "apparatus_invalid")
@@ -223,6 +226,20 @@ class RunnerBrowserQualificationTests(unittest.TestCase):
         self.assertEqual(result["provider"]["accounting"]["usage_unavailable_calls"], 1)
         self.assertIsNone(result["provider"]["accounting"]["total_cost_cny"])
         self.assertEqual(result["business"]["business_attempts"], 0)
+
+    def test_business_outage_invalidates_the_trial(self):
+        case = development_case("dev-query-en-1", self.companies)
+        executor = SyntheticCompanyExecutor(
+            self.companies,
+            failure=BusinessToolUnavailableError("synthetic API outage"))
+        adapter = SyntheticTwentyAdapter(
+            origin=self.page.origin, runtime=synthetic_business_runtime(executor))
+        result = self._run(
+            case=case, client=ScriptedProviderClient(self._query_actions()),
+            adapter=adapter)
+        self.assertEqual(result["status"], "apparatus_invalid")
+        self.assertEqual(result["apparatus_code"], "transport_contract")
+        self.assertEqual(result["error_code"], "business_unavailable")
 
     def test_artifact_is_schema_fixed_and_content_free(self):
         case, target = self._open_case()

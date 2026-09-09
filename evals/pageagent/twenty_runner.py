@@ -25,6 +25,11 @@ from urllib.parse import urlsplit
 
 from evals.pageagent.business_host import PageAgentBusinessProxy
 from evals.pageagent.host import PageAgentProviderContract, PageAgentProviderProxy
+from evals.twenty.outcomes import (
+    business_apparatus_code as _business_apparatus_code,
+    classify_host_errors as _classify_host_errors,
+    provider_apparatus_code as _provider_apparatus_code,
+)
 from web_operation_agent.application import bind_application
 from web_operation_agent.business import BusinessToolError
 from web_operation_agent.identity import OperationContext, PrincipalError
@@ -42,11 +47,6 @@ _MAX_BUNDLE_BYTES = 2 * 1024 * 1024
 _MAX_VISIBLE_BYTES = 512 * 1024
 _QUERY_OUTPUT_CONTRACT = """EVALUATION OUTPUT CONTRACT
 For a company-list goal, call query_companies using a limit large enough for the complete current workspace. Then call done with text containing exactly one JSON object and no Markdown: {"artifact_version":1,"execution_status":"completed","complete":true,"companies":[{"name":"Company","domain":"company.example"}]}. Set complete to true only when the tool's completeness.source_complete is true and result_truncated is false. Copy every returned company exactly once. For an open goal, use open_allowed_route with the exact ui_path returned by query_companies; this is the adapter equivalent of the Skill's generic goto instruction. Finish only after re-observing the requested company name and domain on the opened page."""
-# Host error codes that describe the compared engine's own behaviour. Every other Host error is an
-# apparatus fault: the trial cannot be scored for or against the engine.
-_PRODUCT_PROVIDER_CODES = frozenset({"model_call_budget", "provider_deadline", "cancelled"})
-_PRODUCT_BUSINESS_CODES = frozenset({
-    "business_call_budget", "route_call_budget", "route_refused", "cancelled"})
 _BRIDGE_PROBE = "() => typeof globalThis.__WOA_PAGEAGENT_BASELINE__ === 'object'"
 
 
@@ -349,52 +349,6 @@ def _bridge_reports_match(*, bridge: dict[str, Any], provider: dict[str, Any],
         exact = exact and business.get("route_permits", 0) >= 1 \
             and business.get("route_permits", 0) <= metrics["page_actions"]
     return bool(exact)
-
-
-def _provider_apparatus_code(code: Any) -> str | None:
-    """Map a provider Host error to an apparatus code, or None for the engine's own failure.
-
-    Any provider-side failure that is not explicitly a budget, deadline or cancellation is an
-    outage: a transport, HTTP, response, usage, capacity or circuit failure cannot be scored
-    against the compared engine.
-    """
-    if code in (None, ""):
-        return None
-    if code in {"ledger_failure", "transport_contract"}:
-        return str(code)
-    if code in _PRODUCT_PROVIDER_CODES:
-        return None
-    return "provider_outage"
-
-
-def _business_apparatus_code(code: Any) -> str | None:
-    """Map a business Host error to an apparatus code, or None for the engine's own failure.
-
-    The Host redacts the business tool's cause, so a failed read tool, a malformed bridge call
-    or a malformed route request is a transport fault rather than an engine failure.
-    """
-    if code in (None, ""):
-        return None
-    if code in _PRODUCT_BUSINESS_CODES:
-        return None
-    return "transport_contract"
-
-
-def _classify_host_errors(errors: Sequence[tuple[str, str]]) -> tuple[str | None, str | None]:
-    """Return (apparatus_code, error_code) for the Host refusals seen at the page bindings.
-
-    The Hosts raise budget, cancellation and contract refusals before they record a last error
-    code, so the runner keeps its own ordered record. The first apparatus fault invalidates the
-    run; otherwise the last refusal names the engine's own failure.
-    """
-    for host, code in errors:
-        apparatus = (_provider_apparatus_code(code) if host == "provider"
-                     else _business_apparatus_code(code))
-        if apparatus:
-            return apparatus, code
-    if errors:
-        return None, errors[-1][1]
-    return None, None
 
 
 def _accounting_only_report(client: ChatModel, run_id: str) -> dict[str, Any]:
