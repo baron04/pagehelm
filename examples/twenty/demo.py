@@ -374,7 +374,7 @@ def build_turn_config(config: TwentyDemoConfig) -> AgentTurnConfig:
         transport_timeout_s=config.transport_timeout_s,
         disabled_actions=_DISABLED_BROWSER_ACTIONS,
         scope_first_policy=True,
-        policy_block_limit=1,
+        policy_block_limit=2,
         plain_business_answer_min_page_actions=0,
         approval_ttl_s=config.approval_ttl_s,
         allow_business_mutations=config.allow_mutations,

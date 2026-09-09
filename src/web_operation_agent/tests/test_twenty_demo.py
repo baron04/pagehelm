@@ -284,6 +284,7 @@ class TwentyDemoCompositionTests(unittest.TestCase):
         self.assertFalse(turn.allow_business_mutations)
         self.assertTrue(turn.require_identity)
         self.assertTrue({"click", "fill", "select", "submit"} <= turn.disabled_actions)
+        self.assertEqual(turn.policy_block_limit, 2)
 
     def test_exact_opt_in_enables_create_skill_and_turn_mutations_together(self):
         with tempfile.TemporaryDirectory() as tmp:

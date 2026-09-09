@@ -41,6 +41,10 @@ class TwentyPackagedSkillTests(unittest.TestCase):
         skills = adapter.business_tools.relevant("Which companies are available?")
         self.assertEqual([skill.skill_id for skill in skills],
                          ["twenty.crm.companies-query"])
+        self.assertTrue(any(
+            "Companies list" in instruction and "exact href" in instruction
+            for instruction in skills[0].instructions
+        ))
         self.assertEqual(
             skills[0].artifact_uri,
             "package://web_operation_agent/skills/twenty/companies-query.json",
