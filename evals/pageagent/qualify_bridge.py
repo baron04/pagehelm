@@ -4,13 +4,18 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import time
 from pathlib import Path
 from typing import Any
 
 from playwright.sync_api import Page, sync_playwright
 
+from evals.pageagent.business_host import PageAgentBusinessProxy
 from evals.pageagent.host import PageAgentProviderContract, PageAgentProviderProxy
 from evals.twenty.fixture import atomic_write_json
+from web_operation_agent.business import (BusinessSkill, BusinessToolResult,
+                                          BusinessToolRuntime)
+from web_operation_agent.identity import OperationContext, PrincipalContext
 
 
 def _completion(action: dict[str, Any], *, sequence: int) -> str:
@@ -51,7 +56,8 @@ def _completion(action: dict[str, Any], *, sequence: int) -> str:
     })
 
 
-def _config(*, prompt: str, capability: str, tools: list[dict[str, Any]]) -> dict[str, Any]:
+def _config(*, prompt: str, capability: str, tools: list[dict[str, Any]],
+            instructions: str = "Operate only on the synthetic qualification fixture.") -> dict[str, Any]:
     return {
         "prompt": prompt,
         "model": "pageagent-qualification-model",
@@ -59,7 +65,7 @@ def _config(*, prompt: str, capability: str, tools: list[dict[str, Any]]) -> dic
         "max_steps": 4,
         "wall_ms": 10_000,
         "capability_profile": capability,
-        "instructions": "Operate only on the synthetic qualification fixture.",
+        "instructions": instructions,
         "tools": tools,
         "run_token": "qualification-run-token",
         "request_options": {
@@ -129,9 +135,86 @@ class _ScriptedClient:
         return self.responses[len(self.requests) - 1]
 
 
+class _QualificationExecutor:
+    def __init__(self, calls: list[dict[str, Any]]):
+        self.calls = calls
+
+    @staticmethod
+    def tool_schemas() -> tuple[dict[str, Any], ...]:
+        return ({
+            "type": "function",
+            "function": {
+                "name": "query_companies",
+                "description": "Return current synthetic companies.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name_contains": {
+                            "type": "string", "description": "Optional company filter."},
+                        "limit": {
+                            "type": "integer", "minimum": 1, "maximum": 50,
+                            "description": "Maximum result count."},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+        },)
+
+    @staticmethod
+    def tool_effects() -> dict[str, str]:
+        return {"query_companies": "read"}
+
+    def execute(self, name: str, args: dict[str, Any], *,
+                context: OperationContext) -> BusinessToolResult:
+        self.calls.append({
+            "name": name,
+            "args": args,
+            "operation_context_digest": context.binding_digest,
+        })
+        return BusinessToolResult(
+            content={
+                "complete": True,
+                "companies": [{"name": "Synthetic Acme", "domain": "acme.example.com"}],
+            },
+            audit={"returned_count": 1},
+        )
+
+
+def _business_proxy(calls: list[dict[str, Any]]) -> PageAgentBusinessProxy:
+    skill = BusinessSkill.from_bytes(json.dumps({
+        "schema_version": 1,
+        "skill_id": "fixture.companies-query",
+        "title": "Query synthetic companies",
+        "intent": "Read current synthetic company data.",
+        "triggers": ["companies"],
+        "instructions": ["Call query_companies and use its current result."],
+        "tool_names": ["query_companies"],
+        "provenance": ["fixture:companies"],
+        "read_only": True,
+    }).encode("utf-8"), artifact_uri="memory://fixture/companies-query.json")
+    runtime = BusinessToolRuntime(
+        (skill,), _QualificationExecutor(calls), application_id="fixture",
+        required_scopes={"query_companies": "companies:read"})
+    now = int(time.time() * 1000)
+    principal = PrincipalContext(
+        schema_version=1, application_id="fixture", tenant_id="synthetic-tenant",
+        workspace_id="synthetic-workspace", actor_id="synthetic-actor",
+        delegation_id="synthetic-delegation", issued_at=now,
+        expires_at=now + 30_000, scopes=("companies:read",))
+    context = OperationContext.create(
+        principal, session_id="qualification-session", turn_id="qualification-turn",
+        operation_id="qualification-operation", deadline_ms=now + 10_000,
+        now_ms=now)
+    return PageAgentBusinessProxy(
+        run_token="qualification-run-token", runtime=runtime,
+        loaded_skill_ids=(skill.skill_id,), context=context,
+        expected_catalog_sha256=runtime.catalog_sha256, max_business_calls=1)
+
+
 def _prepare_page(browser, bundle: Path, provider_actions: list[dict[str, Any]],
                   business_calls: list[dict[str, Any]]) -> tuple[
-                      Page, list[dict[str, Any]], PageAgentProviderProxy]:
+                      Page, list[dict[str, Any]], PageAgentProviderProxy,
+                      PageAgentBusinessProxy]:
     page = browser.new_page()
     responses = [
         json.loads(_completion(action, sequence=index + 1))
@@ -145,15 +228,10 @@ def _prepare_page(browser, bundle: Path, provider_actions: list[dict[str, Any]],
             model=client.model, temperature=0, top_p=1,
             max_completion_tokens=512, max_model_calls=len(responses), wall_time_s=10),
     )
-
-    def business(payload: dict[str, Any]) -> dict[str, Any]:
-        if not isinstance(payload, dict) or set(payload) != {"run_token", "name", "args"}:
-            raise ValueError("business bridge payload is invalid")
-        business_calls.append(payload)
-        return {"complete": True, "companies": [{"name": "Synthetic Acme", "domain": "acme.example.com"}]}
+    business_proxy = _business_proxy(business_calls)
 
     page.expose_function("__WOA_PAGEAGENT_PROVIDER_FETCH__", proxy.handle)
-    page.expose_function("__WOA_PAGEAGENT_BUSINESS_TOOL__", business)
+    page.expose_function("__WOA_PAGEAGENT_BUSINESS_TOOL__", business_proxy.handle)
     page.set_content("""
 <!doctype html>
 <html lang="en">
@@ -165,7 +243,7 @@ def _prepare_page(browser, bundle: Path, provider_actions: list[dict[str, Any]],
 </html>
 """)
     page.add_script_tag(path=str(bundle))
-    return page, client.requests, proxy
+    return page, client.requests, proxy, business_proxy
 
 
 def qualify(bundle: Path) -> dict[str, Any]:
@@ -176,7 +254,7 @@ def qualify(bundle: Path) -> dict[str, Any]:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
-            dom_page, dom_requests, dom_proxy = _prepare_page(
+            dom_page, dom_requests, dom_proxy, dom_business_proxy = _prepare_page(
                 browser, bundle,
                 [{"click_element_by_index": {"index": 0}},
                  {"done": {"text": "Clicked the target.", "success": True}}],
@@ -190,21 +268,7 @@ def qualify(bundle: Path) -> dict[str, Any]:
             dom_state = dom_page.locator("#state").text_content()
             dom_page.close()
 
-            tool_schema = {
-                "name": "query_companies",
-                "description": "Return current synthetic companies.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "name_contains": {"type": "string", "description": "Optional company filter."},
-                        "limit": {"type": "integer", "minimum": 1, "maximum": 50,
-                                  "description": "Maximum result count."},
-                    },
-                    "required": [],
-                    "additionalProperties": False,
-                },
-            }
-            tool_page, tool_requests, tool_proxy = _prepare_page(
+            tool_page, tool_requests, tool_proxy, tool_business_proxy = _prepare_page(
                 browser, bundle,
                 [{"query_companies": {"name_contains": "Synthetic", "limit": 20}},
                  {"done": {"text": "Synthetic Acme — acme.example.com", "success": True}}],
@@ -212,18 +276,21 @@ def qualify(bundle: Path) -> dict[str, Any]:
             )
             tool_result = tool_page.evaluate(
                 "config => globalThis.__WOA_PAGEAGENT_BASELINE__.execute(config)",
-                _config(prompt="List the companies.", capability="skill_api", tools=[tool_schema]),
+                _config(
+                    prompt="List the companies.", capability="skill_api",
+                    tools=list(tool_business_proxy.tool_specs),
+                    instructions=tool_business_proxy.instructions),
             )
             tool_host = tool_proxy.report()
+            tool_business_host = tool_business_proxy.report()
             tool_page.close()
             browser_version = browser.version
         finally:
             browser.close()
-    expected_business = [{
-        "run_token": "qualification-run-token",
+    expected_business = {
         "name": "query_companies",
         "args": {"name_contains": "Synthetic", "limit": 20},
-    }]
+    }
     checks = {
         "dom_action_changed_page": dom_state == "clicked",
         "dom_result_succeeded": dom_result.get("success_claim") is True,
@@ -241,7 +308,16 @@ def qualify(bundle: Path) -> dict[str, Any]:
             and not request["contains_execute_javascript"]
             and not request["contains_query_companies"]
             for request in dom_requests),
-        "business_arguments_exact": business_calls == expected_business,
+        "browser_only_business_unavailable": dom_business_proxy.report()["business_attempts"] == 0,
+        "business_arguments_exact": (
+            len(business_calls) == 1
+            and {key: business_calls[0][key] for key in expected_business} == expected_business
+            and len(business_calls[0]["operation_context_digest"]) == 64),
+        "business_host_exact": (
+            tool_business_host["business_attempts"] == 1
+            and tool_business_host["business_responses"] == 1
+            and tool_business_host["allowed_route_count"] == 0
+            and tool_business_host["last_error_code"] is None),
         "business_result_succeeded": tool_result.get("success_claim") is True,
         "business_metrics_exact": tool_result.get("metrics") == {
             "provider_calls": 2, "page_actions": 0, "business_calls": 1,
