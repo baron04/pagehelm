@@ -398,6 +398,7 @@ export class EmbeddedWebRuntime {
     this.stored.approvals ||= {}
     this.stored.taskInFlight = Boolean(this.stored.taskInFlight)
     this.stored.activeMessageId = String(this.stored.activeMessageId || '')
+    this.stored.visibleObserveTurnId = String(this.stored.visibleObserveTurnId || '')
     this.stored.cancellationPending = Boolean(this.stored.cancellationPending)
     writeStored(this.sessionId, this.stored)
     this.currentObservation = null
@@ -995,7 +996,7 @@ export class EmbeddedWebRuntime {
     executing.phase = 'claimed'
     this.stored.inFlight.phase = 'claimed'
     this._save()
-    this.panel?.add(describeAction(action.command), {kind: 'action'})
+    this._showActionProgress(action)
     setPanelState(this.panel, 'acting', '执行中')
 
     let success = true
@@ -1028,6 +1029,16 @@ export class EmbeddedWebRuntime {
     this.stored.cachedResult = result
     this._save()
     await this._sendResult(result)
+  }
+
+  _showActionProgress(action) {
+    if (action.command?.action === 'observe') {
+      const turnId = String(action.turn_id || '')
+      if (turnId && this.stored.visibleObserveTurnId === turnId) return
+      this.stored.visibleObserveTurnId = turnId
+      this._save()
+    }
+    this.panel?.add(describeAction(action.command), {kind: 'action'})
   }
 
   async _execute(command) {

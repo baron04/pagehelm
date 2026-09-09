@@ -34,6 +34,38 @@ def _runtime_source_b64() -> str:
 
 
 class EmbeddedRuntimeTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("node"), "Node is needed to execute runtime presentation tests")
+    def test_observe_progress_is_shown_once_per_user_turn(self):
+        source = _runtime_source_b64()
+        script = f"""
+          const mod = await import('data:text/javascript;base64,{source}');
+          const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
+          const entries = [];
+          runtime.stored = {{visibleObserveTurnId:''}};
+          runtime._save = () => {{}};
+          runtime.panel = {{add(text, options) {{ entries.push({{text, kind:options.kind}}); }}}};
+
+          runtime._showActionProgress({{turn_id:'message-1',
+            command:{{action:'observe', args:{{}}}}}});
+          runtime.panel.add('使用知识', {{kind:'progress'}});
+          runtime._showActionProgress({{turn_id:'message-1',
+            command:{{action:'observe', args:{{}}}}}});
+          runtime._showActionProgress({{turn_id:'message-1',
+            command:{{action:'goto', args:{{url:'https://app.test/companies'}}}}}});
+          runtime._showActionProgress({{turn_id:'message-2',
+            command:{{action:'observe', args:{{}}}}}});
+
+          process.stdout.write(JSON.stringify(entries));
+        """
+        proc = subprocess.run(["node", "--input-type=module", "-e", script],
+                              text=True, capture_output=True, timeout=10, check=True)
+        self.assertEqual(json.loads(proc.stdout), [
+            {"text": "重新检查当前页面", "kind": "action"},
+            {"text": "使用知识", "kind": "progress"},
+            {"text": "打开页面：https://app.test/companies", "kind": "action"},
+            {"text": "重新检查当前页面", "kind": "action"},
+        ])
+
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute DOM freshness tests")
     def test_action_fingerprint_rejects_target_or_route_changes_only(self):
         source = _runtime_source_b64()
