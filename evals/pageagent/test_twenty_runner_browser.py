@@ -1,8 +1,9 @@
 """Real-Chromium qualification of the PageAgent Twenty runner without a model call.
 
 The built bundle runs in headless Chromium against a loopback synthetic page; provider calls are
-answered by a scripted client and business calls by a synthetic Business Runtime. The tests skip
-when the bundle has not been built or Chromium cannot launch.
+answered by a scripted client and business calls by a synthetic Business Runtime. Local runs skip
+when the bundle has not been built or Chromium cannot launch. Set
+``WOA_REQUIRE_PAGEAGENT_BROWSER=1`` in qualification environments to make either condition fail.
 """
 from __future__ import annotations
 
@@ -41,11 +42,17 @@ def _chromium_launches() -> bool:
     return True
 
 
-@unittest.skipUnless(BUNDLE.is_file(), "PageAgent baseline bundle is not built")
 class RunnerBrowserQualificationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        required = os.environ.get("WOA_REQUIRE_PAGEAGENT_BROWSER") == "1"
+        if not BUNDLE.is_file():
+            if required:
+                raise RuntimeError("PageAgent baseline bundle is not built")
+            raise unittest.SkipTest("PageAgent baseline bundle is not built")
         if not _chromium_launches():
+            if required:
+                raise RuntimeError("Chromium is unavailable")
             raise unittest.SkipTest("Chromium is unavailable")
         cls.bundle_digest = "sha256:" + hashlib.sha256(BUNDLE.read_bytes()).hexdigest()
 

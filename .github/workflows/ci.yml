@@ -114,5 +114,12 @@ jobs:
       - name: Verify deterministic PageAgent baseline bundle
         working-directory: evals/pageagent
         run: npm test
-      - name: Test PageAgent server host
+      - name: Build pinned PageAgent baseline bundle
+        working-directory: evals/pageagent
+        run: npm run build
+      - name: Install Chromium for PageAgent qualification
+        run: python -m playwright install --with-deps chromium
+      - name: Test and qualify PageAgent server host
+        env:
+          WOA_REQUIRE_PAGEAGENT_BROWSER: "1"
         run: python -m unittest evals.pageagent.test_host evals.pageagent.test_business_host evals.pageagent.test_twenty_runner evals.pageagent.test_twenty_runner_browser -v
