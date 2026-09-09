@@ -111,18 +111,11 @@ python src/web_operation_agent/tests/run_all.py -k test_product.py
 
 公司枚举使用 Twenty 的 `pageInfo.endCursor` 和 `starting_after` 翻页，并设置页数与记录数硬上限，同时检测重复记录、cursor 停滞、总数变化和畸形响应。扫描被有界中断时，工具会明确返回部分结果，不会把它表示成完整公司清单。创建公司的重复项检查只有在完整扫描当前集合后才会继续。Cursor 分页不是数据库快照；如果扫描期间工作区正在变化，结果仍可能被标记为不完整，需要等数据稳定后重试。
 
-根目录 [`demo.sh`](demo.sh) 会启动 [`examples/twenty`](examples/twenty/README.md)
-中的公开装配。它要求已有一个只包含合成数据的 Twenty 实例，并显式提供浏览器登录状态、
-委托 OAuth 状态、同源 PageController 模块、审计输出和费用账本的本地路径。这个进程不读取
-数据库真值、不复位应用，也不会把 Agent 结束当成确定性的业务验收。可由全新 clone 一键
-部署的公开 Twenty 环境仍属于发布前工作。
+根目录 [`demo.sh`](demo.sh) 会启动 [`examples/twenty`](examples/twenty/README.md) 中的公开装配。它要求已有一个只包含合成数据的 Twenty 实例，并显式提供浏览器登录状态、委托 OAuth 状态、同源 PageController 模块、审计输出和费用账本的本地路径。这个进程不读取数据库真值、不复位应用，也不会把 Agent 结束当成确定性的业务验收。可由全新 clone 一键部署的公开 Twenty 环境仍属于发布前工作。
 
 ## 独立 Twenty evaluator
 
-独立的 [`evals/twenty`](evals/twenty/README.md) 基础设施把确定性的应用验收放在产品与 Agent
-进程之外。它覆盖三类 Companies 任务：查询全部活跃公司的准确名称和域名且业务状态不变；
-打开基线中的指定公司且业务状态不变；创建且仅创建一个指定公司，同时要求已确认的同一用户
-回读，并检查禁止变化的状态。
+独立的 [`evals/twenty`](evals/twenty/README.md) 基础设施把确定性的应用验收放在产品与 Agent 进程之外。它覆盖三类 Companies 任务：查询全部活跃公司的准确名称和域名且业务状态不变；打开基线中的指定公司且业务状态不变；创建且仅创建一个指定公司，同时要求已确认的同一用户回读，并检查禁止变化的状态。
 
 结果明确区分四种状态：`PASS`、`FAIL`、表示终态或写入结果不确定的 `INDETERMINATE`，以及表示任务或证据无法支撑该次试验的 `INVALID`。离线测试使用注入的假命令执行器；采集、schema 快照、受控变化、恢复和恢复后摘要核对也已在本地 Docker 合成 Twenty fixture 上通过。这套基础设施还不是 benchmark，不能据此给出成功率、基线对比或源码检索收益结论。公开仓库仍需提供可复现的 fixture 部署，其他开发者才能重复这项真实装置资格验证。
 

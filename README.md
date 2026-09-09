@@ -111,21 +111,11 @@ Read access is the default. Creating a company requires opting in at both the Tw
 
 Company enumeration follows Twenty's `pageInfo.endCursor` with `starting_after`, with hard page and record ceilings plus repeated-record, stalled-cursor, changing-total, and malformed-page detection. A bounded interruption is returned as an explicit partial result; it is never represented as a complete company list. Duplicate checks for company creation fail closed unless the complete active set was scanned. Cursor pagination does not provide a database snapshot, so a workspace changing during a scan can still force an incomplete result and a retry after the data settles.
 
-The root [`demo.sh`](demo.sh) launches the public composition in
-[`examples/twenty`](examples/twenty/README.md). It requires an externally provisioned,
-synthetic Twenty instance and explicit local paths for browser state, delegated OAuth state,
-the same-origin PageController module, audit output, and spend accounting. It does not read
-database truth, reset the application, or present an Agent completion as deterministic
-business verification. Provisioning a reproducible public Twenty environment remains release
-work.
+The root [`demo.sh`](demo.sh) launches the public composition in [`examples/twenty`](examples/twenty/README.md). It requires an externally provisioned, synthetic Twenty instance and explicit local paths for browser state, delegated OAuth state, the same-origin PageController module, audit output, and spend accounting. It does not read database truth, reset the application, or present an Agent completion as deterministic business verification. Provisioning a reproducible public Twenty environment remains release work.
 
 ## Independent Twenty evaluator
 
-The separate [`evals/twenty`](evals/twenty/README.md) foundation keeps deterministic
-application verification outside the product and Agent process. It covers three Companies
-task shapes: querying the exact active name/domain set without changing business state,
-opening one baseline company without changing business state, and creating exactly one
-requested company with acknowledged same-actor readback and forbidden-change checks.
+The separate [`evals/twenty`](evals/twenty/README.md) foundation keeps deterministic application verification outside the product and Agent process. It covers three Companies task shapes: querying the exact active name/domain set without changing business state, opening one baseline company without changing business state, and creating exactly one requested company with acknowledged same-actor readback and forbidden-change checks.
 
 Results use four distinct states: `PASS`, `FAIL`, `INDETERMINATE` for an uncertain final state or write outcome, and `INVALID` when the task or evidence cannot support a trial. Its offline tests use an injected command runner. Capture, schema snapshot, controlled mutation, restore, and post-restore digest checks have also passed against a local Docker-backed synthetic Twenty fixture. This foundation is not a benchmark and does not establish a success rate, a baseline comparison, or a source-retrieval benefit. The public repository still needs reproducible fixture provisioning before others can repeat the live qualification.
 
