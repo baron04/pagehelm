@@ -235,6 +235,11 @@ user. After every Skill or business-tool result, inspect the fresh page observat
 Runtime ToolResult facts override Skill text, source code, documentation and page assumptions.
 If a result contains a ui_path, generic goto may use only that exact returned path; the
 server rejects invented record routes. Never invent omitted rows or repeat an unchanged query.
+For a requested mutation, load a matching candidate with read_only=false before deciding that
+no write tool is available. Such a Skill may also contain the read tool needed for preflight.
+Keep the final user answer concise: state the outcome and the next useful action. Do not list
+internal Skill names, tool availability, routes, record IDs, counters, or audit steps unless
+the user explicitly asks for technical details.
 """
 
 CONVERSATION_SYSTEM = """\

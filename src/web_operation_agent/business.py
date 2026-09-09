@@ -323,6 +323,8 @@ class BusinessSkill:
             "skill_id": self.skill_id,
             "title": self.title,
             "intent": self.intent,
+            "read_only": self.read_only,
+            "tools": list(self.tool_names),
             "loaded": loaded,
         }
 
@@ -442,7 +444,20 @@ class BusinessToolRuntime:
             score = sum(1 for trigger in skill.triggers if trigger.casefold() in folded)
             if score:
                 ranked.append((-score, skill.skill_id, skill))
-        return tuple(row[2] for row in sorted(ranked)[:limit])
+        selected = [row[2] for row in sorted(ranked)]
+        # A mutation Skill often contains the read tools needed for duplicate checks and
+        # verification.  In that case a broader read-only Skill adds a second, ambiguous
+        # route to a strict subset of the same tools.  Remove only that redundant candidate;
+        # unrelated read Skills remain available for mixed-intent tasks.
+        mutation_toolsets = [set(skill.tool_names) for skill in selected
+                             if not skill.read_only]
+        if mutation_toolsets:
+            selected = [
+                skill for skill in selected
+                if (not skill.read_only or not any(
+                    set(skill.tool_names) < tools for tools in mutation_toolsets))
+            ]
+        return tuple(selected[:limit])
 
     def load(self, skill_id: object, allowed_ids: set[str]) -> tuple[BusinessSkill | None, str]:
         if not isinstance(skill_id, str) or skill_id not in allowed_ids:

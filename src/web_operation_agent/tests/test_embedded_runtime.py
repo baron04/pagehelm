@@ -220,6 +220,17 @@ class EmbeddedRuntimeTests(unittest.TestCase):
               window.testPanel.setBusy(true); window.testPanel.add('A'.repeat(500));
             }""")
             self.assertEqual(host.locator(".entry").last.inner_text().splitlines()[0], "A" * 300)
+            entries_before_repeat = host.locator(".entry").count()
+            page.evaluate("""() => {
+              window.testPanel.add('重新检查当前页面');
+              window.testPanel.add('重新检查当前页面');
+              window.testPanel.add('重新检查当前页面');
+            }""")
+            self.assertEqual(host.locator(".entry").count(), entries_before_repeat + 1)
+            self.assertEqual(
+                host.locator(".entry").last.locator("span").inner_text(),
+                "重新检查当前页面",
+            )
             animation = host.locator(".panel").evaluate(
                 "node => getComputedStyle(node, '::before').animationName")
             self.assertEqual(animation, "none")

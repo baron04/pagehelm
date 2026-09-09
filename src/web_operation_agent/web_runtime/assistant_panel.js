@@ -414,12 +414,25 @@ export class AssistantPanel {
 
   add(value, {kind = 'progress', tone = 'neutral', timestamp: timeLabel = ''} = {}) {
     this.shadow.querySelector('[data-empty]')?.remove()
+    const message = String(value).slice(0, 300)
+    const list = this.shadow.querySelector('.timeline')
+    const previous = list.lastElementChild
+    if (kind === 'progress' && previous?.dataset.kind === 'progress'
+        && previous.querySelector('span')?.textContent === message) {
+      const previousTime = previous.querySelector('time')
+      const now = new Date()
+      previousTime.dateTime = now.toISOString()
+      previousTime.textContent = String(timeLabel || '') || new Intl.DateTimeFormat(undefined, {
+        hour: '2-digit', minute: '2-digit', hour12: false,
+      }).format(now)
+      return
+    }
     const item = this.document.createElement('li')
     item.className = 'entry'
     item.dataset.kind = kind
     item.dataset.tone = tone
     const content = this.document.createElement('span')
-    content.textContent = String(value).slice(0, 300)
+    content.textContent = message
     const timestamp = this.document.createElement('time')
     const now = new Date()
     timestamp.dateTime = now.toISOString()
@@ -427,7 +440,6 @@ export class AssistantPanel {
       hour: '2-digit', minute: '2-digit', hour12: false,
     }).format(now)
     item.append(content, timestamp)
-    const list = this.shadow.querySelector('.timeline')
     list.appendChild(item)
     while (list.children.length > 30) list.firstElementChild.remove()
     list.scrollTop = list.scrollHeight

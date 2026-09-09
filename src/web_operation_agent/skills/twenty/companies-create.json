@@ -5,9 +5,17 @@
   "intent": "Create exactly one company from a user-supplied name and domain, after checking duplicates and receiving explicit confirmation.",
   "triggers": [
     "创建公司",
+    "创建名为",
+    "创建一个公司",
+    "创建一个名为",
     "新建公司",
+    "新增公司",
+    "添加公司",
     "create company",
     "create a company",
+    "create a new company",
+    "create named",
+    "new company",
     "add company",
     "add a company"
   ],

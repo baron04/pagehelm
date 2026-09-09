@@ -72,8 +72,19 @@ class TwentyPackagedSkillTests(unittest.TestCase):
             frozenset({"query_companies", "create_company"}),
         )
         relevant = adapter.business_tools.relevant("create company", limit=3)
-        self.assertIn("twenty.crm.companies-create",
-                      {skill.skill_id for skill in relevant})
+        self.assertEqual(
+            [skill.skill_id for skill in relevant],
+            ["twenty.crm.companies-create"],
+        )
+        chinese = adapter.business_tools.relevant(
+            "创建名为 tom 的公司，域名 tom.com", limit=3)
+        self.assertEqual(
+            [skill.skill_id for skill in chinese],
+            ["twenty.crm.companies-create"],
+        )
+        card = chinese[0].candidate_card()
+        self.assertFalse(card["read_only"])
+        self.assertEqual(card["tools"], ["query_companies", "create_company"])
         self.assertTrue(all(
             skill.artifact_uri.startswith(
                 "package://web_operation_agent/skills/twenty/")
