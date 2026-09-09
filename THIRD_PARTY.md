@@ -64,6 +64,19 @@ The other shipped frontend resource,
 standalone HTML/CSS/JavaScript template with no external scripts, stylesheets,
 fonts, or images.
 
+## Evaluation-only PageAgent baseline
+
+The independent baseline under `evals/pageagent/` has its own npm lock and is not included in the Python wheel or product Runtime. It builds an ignored browser artifact for paired evaluation from exact MIT-licensed releases:
+
+| Component | Locked version | npm integrity | Use |
+| --- | ---: | --- | --- |
+| `@page-agent/core` | 1.12.4 | `sha512-Ixiv3xtjBF9ystUadNtHcmt4DDPbIis9gphxe3DB36a3Kt93K8lxDMyVltIJx986KkBJ4RGjNZ4/Dv63hJdDlg==` | Official PageAgent planning loop and custom-tool surface |
+| `@page-agent/page-controller` | 1.12.4 | `sha512-I8se6/QMhg1wMZp52fkX37xbv/lkUnBihtadcoZKOQ9xvL562/sd141mu5ANPGvaCosPlXxJQ3HGIwA2VM4bwQ==` | Official DOM observation and actions for the baseline |
+| `zod` | 4.5.4 | `sha512-sC95tT5iHHH9gtpj6A81kh+NEaRAUFN+qlUPDUbRfOMvNf5QCBqsb3WgvnpVtK5Y+4UfA6KqufotuTvMGiTlsA==` | Peer schema runtime required by PageAgentCore |
+| `esbuild` | 0.28.2 | `sha512-HKVLS8dvII+xoKW9kmqxbRKrnWEXfJJr/FZhhJmiqIB0e053QNYFqOBouTMO/k5sID4MvCiUCvv8b9M4h32wIA==` | Evaluation bundle build only |
+
+The tracked bridge imports these packages and delegates provider and custom business-tool calls to harness-owned bindings; it does not copy upstream implementation source into this repository. Generated bundles, `node_modules`, raw traces and provider payloads remain outside Git. Anyone redistributing the generated baseline bundle must include the PageAgent, ai-motion, chalk, Zod and other exact lockfile notices required by that distribution; the current manifest check covers the four direct qualification components and is not yet a complete generated SBOM.
+
 ## Build and CI tools
 
 These tools are not included in the wheel:
@@ -71,7 +84,8 @@ These tools are not included in the wheel:
 | Tool | Constraint | License/source | Use |
 | --- | --- | --- | --- |
 | [setuptools](https://github.com/pypa/setuptools) | `>=77`; exact version not locked | MIT | PEP 517 build backend |
-| [Node.js](https://github.com/nodejs/node) | Version not pinned by project metadata | Node.js is MIT; each distribution carries additional third-party notices | Executes browser Runtime tests; the product has no npm dependency manifest |
+| [Node.js](https://github.com/nodejs/node) | CI uses major version 22; exact patch not locked | Node.js is MIT; each distribution carries additional third-party notices | Executes browser Runtime tests and builds the isolated PageAgent evaluation baseline |
+| [actions/setup-node](https://github.com/actions/setup-node) | `v4` tag | Exact revision and license files must be captured at the release gate | CI Node setup and npm cache |
 | [actions/checkout](https://github.com/actions/checkout) | `v4` tag | Exact revision and license files must be captured at the release gate | CI checkout action |
 | [actions/setup-python](https://github.com/actions/setup-python) | `v5` tag | Exact revision and license files must be captured at the release gate | CI Python setup action |
 
@@ -103,8 +117,7 @@ Before publishing a wheel, container, or hosted demo:
    `LICENSE*`, and `NOTICE*`.
 2. Inspect the final wheel and source distribution for undeclared vendored code,
    test applications, credentials, generated screenshots, and cache content.
-3. Pin the PageController asset by version and digest and include its exact MIT
-   notice anywhere that asset is served or redistributed.
+3. Pin the product PageController asset by version and digest and include its exact MIT notice anywhere that asset is served or redistributed; independently generate a complete license inventory before redistributing the PageAgent evaluation bundle.
 4. Include the exact Playwright driver, browser, base-image, and operating-system
    notices when any of those artifacts are bundled.
 5. Replace floating CI action tags with reviewed commit SHAs and record the

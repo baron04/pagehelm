@@ -18,6 +18,11 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: evals/pageagent/package-lock.json
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -103,3 +108,9 @@ jobs:
         run: python src/web_operation_agent/tests/run_all.py
       - name: Run Twenty evaluator foundation tests
         run: python -m unittest discover -s evals/twenty/tests -v
+      - name: Install pinned PageAgent baseline
+        working-directory: evals/pageagent
+        run: npm ci
+      - name: Verify deterministic PageAgent baseline bundle
+        working-directory: evals/pageagent
+        run: npm test
