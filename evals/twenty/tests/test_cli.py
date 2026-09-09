@@ -119,6 +119,43 @@ class TwentyCliTests(unittest.TestCase):
             self.assertEqual(rejected.returncode, 2)
             self.assertEqual(seal_path.read_bytes(), original_seal)
 
+    def test_protocol_freeze_and_verify_are_file_only(self):
+        from evals.twenty.tests.test_protocol import artifacts, protocol_draft
+
+        development, test, split = artifacts()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            values = {
+                "draft.json": protocol_draft(),
+                "development.seal.json": development,
+                "test.seal.json": test,
+                "split.json": split,
+            }
+            for name, value in values.items():
+                (root / name).write_text(json.dumps(value), encoding="utf-8")
+            frozen_path = root / "frozen.json"
+            common = [
+                "--development-seal", str(root / "development.seal.json"),
+                "--test-seal", str(root / "test.seal.json"),
+                "--split-verification", str(root / "split.json"),
+            ]
+            frozen = subprocess.run(
+                [sys.executable, "-m", "evals.twenty", "freeze-protocol",
+                 "--protocol", str(root / "draft.json"), *common,
+                 "--output", str(frozen_path)],
+                cwd=ROOT, capture_output=True, text=True, timeout=10, check=False,
+            )
+            self.assertEqual(frozen.returncode, 0, frozen.stderr)
+            self.assertEqual(json.loads(frozen.stdout)["status"], "FROZEN")
+
+            verified = subprocess.run(
+                [sys.executable, "-m", "evals.twenty", "verify-protocol",
+                 "--protocol", str(frozen_path), *common],
+                cwd=ROOT, capture_output=True, text=True, timeout=10, check=False,
+            )
+            self.assertEqual(verified.returncode, 0, verified.stderr)
+            self.assertEqual(json.loads(verified.stdout)["status"], "READY")
+
 
 if __name__ == "__main__":
     unittest.main()

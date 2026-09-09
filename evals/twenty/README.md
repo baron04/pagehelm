@@ -47,6 +47,31 @@ python -m evals.twenty instantiate-task \
 
 The execution case contains the user prompt and deterministic evaluator input. Keep the full held-out task set, execution cases, provider payloads, database dumps, browser state, and raw traces in ignored private storage. Product code must receive only the prompt and ordinary application capabilities; it must never read task-set metadata, evaluator input, seals, baseline state, or prior outcomes.
 
+## Machine-checked run protocol
+
+[`protocol.py`](protocol.py) validates the preregistration boundary before a paired run. A draft must bind the exact development/test seals and split verification; application, browser, fixture/reset, evaluator, harness, policy and implementation digests; provider sampling and token limits; a common per-case budget with zero automatic retries or user interventions; complete source exclusions; five concrete arms; three comparison-specific eligibility lists; and fail-fast stop rules.
+
+The five configurations are official PageAgent browser-only, Web Operation Agent browser-only, PageAgentCore with the shared Skill/API contract, Web Operation Agent with that same contract and SourceProvider off, and the identical Web Operation Agent configuration with SourceProvider on. The Source OFF configuration is reused in both the Skill/API and source comparisons, so an unrecorded implementation difference cannot masquerade as a source effect. The validator also requires the two Skill/API systems to receive equal Skill and tool-catalog digests and requires SourceProvider configuration to be the only H3 difference.
+
+Freezing derives a deterministic, pair-order-balanced schedule from a preregistered 128-bit seed and seals the canonical protocol. Every held-out task must have one eligibility row, every scheduled pair must appear exactly once, and source eligibility must agree with a pre-outcome static-knowledge reason. The code can prove structural consistency; a reviewer must still judge whether task templates and source-eligibility reasons represent the intended business population.
+
+```bash
+python -m evals.twenty freeze-protocol \
+  --protocol protocol-draft.json \
+  --development-seal evals/twenty/tasksets/twenty-companies-development-v1.seal.json \
+  --test-seal evals/twenty/tasksets/twenty-companies-test-v1.seal.json \
+  --split-verification evals/twenty/tasksets/twenty-companies-split-v1.json \
+  --output protocol-frozen.json
+
+python -m evals.twenty verify-protocol \
+  --protocol protocol-frozen.json \
+  --development-seal evals/twenty/tasksets/twenty-companies-development-v1.seal.json \
+  --test-seal evals/twenty/tasksets/twenty-companies-test-v1.seal.json \
+  --split-verification evals/twenty/tasksets/twenty-companies-split-v1.json
+```
+
+The repository currently ships the validator, not a frozen formal-run protocol. Actual engine bundles, PageAgent adapter, provider snapshot policy, fixture qualification, source allowlist and harness must be qualified and hashed before creating that artifact. Model runs performed before those fields are frozen remain exploratory and cannot support benchmark claims.
+
 ## Qualify a fixture
 
 Before collecting a trial, run `qualify` with the exact synthetic fixture identity. The command captures the business projection, creates an in-memory schema dump, captures again, and returns `READY` only when the two digests match. Its output contains fixture identity, counts, the baseline digest, and snapshot metadata; it does not contain people or opportunity rows.

@@ -10,11 +10,15 @@ from .evaluator import (ARTIFACT_VERSION, EvaluationInputError, evaluate,
 from .fixture import (FixtureUnavailable, TwentyPostgresFixture, atomic_write_json,
                       load_json, prepare_snapshot, qualify_fixture, restore_snapshot,
                       utc_now)
+from .protocol import freeze_protocol, verify_protocol
 from .taskset import (instantiate_task, seal_task_set, verify_split_separation,
                       verify_task_set)
 
 
-_EXIT = {"PASS": 0, "READY": 0, "FAIL": 1, "INVALID": 2, "INDETERMINATE": 3}
+_EXIT = {
+    "PASS": 0, "READY": 0, "FROZEN": 0, "FAIL": 1, "INVALID": 2,
+    "INDETERMINATE": 3,
+}
 
 
 def _fixture(args: argparse.Namespace) -> TwentyPostgresFixture:
@@ -108,6 +112,14 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--task-id", required=True)
     command.add_argument("--baseline", required=True)
     command.add_argument("--output", required=True)
+
+    for name in ("freeze-protocol", "verify-protocol"):
+        command = commands.add_parser(name)
+        command.add_argument("--protocol", required=True)
+        command.add_argument("--development-seal", required=True)
+        command.add_argument("--test-seal", required=True)
+        command.add_argument("--split-verification", required=True)
+        command.add_argument("--output", required=name == "freeze-protocol")
     return parser
 
 
@@ -162,6 +174,20 @@ def main(argv: list[str] | None = None) -> int:
                 load_json(Path(args.test_seal)),
             )
             return _emit(value, args.output)
+        if args.command in {"freeze-protocol", "verify-protocol"}:
+            _validate_distinct_output(
+                args, "protocol", "development_seal", "test_seal",
+                "split_verification")
+            inputs = {
+                "development_seal": load_json(Path(args.development_seal)),
+                "test_seal": load_json(Path(args.test_seal)),
+                "split_verification": load_json(Path(args.split_verification)),
+            }
+            if args.command == "freeze-protocol":
+                value = freeze_protocol(load_json(Path(args.protocol)), **inputs)
+            else:
+                value = verify_protocol(load_json(Path(args.protocol)), **inputs)
+            return _emit(value, args.output)
         _validate_distinct_output(args, "taskset", "baseline")
         value = instantiate_task(
             load_json(Path(args.taskset)), args.task_id,
@@ -170,7 +196,8 @@ def main(argv: list[str] | None = None) -> int:
         return _emit(value, args.output)
     except (EvaluationInputError, FixtureUnavailable) as exc:
         if args.command in {
-                "seal-taskset", "verify-taskset", "verify-splits", "instantiate-task"}:
+                "seal-taskset", "verify-taskset", "verify-splits", "instantiate-task",
+                "freeze-protocol", "verify-protocol"}:
             args.output = None
         return _emit({
             "artifact_version": ARTIFACT_VERSION,
