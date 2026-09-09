@@ -83,6 +83,42 @@ class TwentyCliTests(unittest.TestCase):
             self.assertEqual(json.loads(process.stdout)["status"], "INVALID")
             self.assertFalse(record.exists())
 
+    def test_taskset_seal_and_verify_are_file_only_and_preserve_the_seal_on_failure(self):
+        from evals.twenty.tests.test_taskset import task_set
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            taskset_path = root / "development.json"
+            seal_path = root / "development.seal.json"
+            taskset_path.write_text(json.dumps(task_set()), encoding="utf-8")
+            sealed = subprocess.run(
+                [sys.executable, "-m", "evals.twenty", "seal-taskset",
+                 "--taskset", str(taskset_path), "--output", str(seal_path)],
+                cwd=ROOT, capture_output=True, text=True, timeout=10, check=False,
+            )
+            self.assertEqual(sealed.returncode, 0, sealed.stderr)
+            original_seal = seal_path.read_bytes()
+
+            verified = subprocess.run(
+                [sys.executable, "-m", "evals.twenty", "verify-taskset",
+                 "--taskset", str(taskset_path), "--seal", str(seal_path)],
+                cwd=ROOT, capture_output=True, text=True, timeout=10, check=False,
+            )
+            self.assertEqual(verified.returncode, 0, verified.stderr)
+            self.assertEqual(json.loads(verified.stdout)["status"], "READY")
+
+            value = json.loads(taskset_path.read_text())
+            value["tasks"][0]["prompt_template"] += " tampered"
+            taskset_path.write_text(json.dumps(value), encoding="utf-8")
+            rejected = subprocess.run(
+                [sys.executable, "-m", "evals.twenty", "verify-taskset",
+                 "--taskset", str(taskset_path), "--seal", str(seal_path),
+                 "--output", str(seal_path)],
+                cwd=ROOT, capture_output=True, text=True, timeout=10, check=False,
+            )
+            self.assertEqual(rejected.returncode, 2)
+            self.assertEqual(seal_path.read_bytes(), original_seal)
+
 
 if __name__ == "__main__":
     unittest.main()

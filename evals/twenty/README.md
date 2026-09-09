@@ -17,6 +17,36 @@ The evaluator currently covers only three Companies tasks:
 This is fixture infrastructure, not a complete benchmark. It does not measure planning
 quality, latency, model cost, source-retrieval benefit, or PageAgent performance.
 
+## Frozen qualification task sets
+
+[`tasksets/twenty-companies-development-v1.json`](tasksets/twenty-companies-development-v1.json) is a public six-case development set for the three supported Companies task shapes. The twelve-case held-out test set stays outside public Git, while [`tasksets/twenty-companies-test-v1.seal.json`](tasksets/twenty-companies-test-v1.seal.json) commits its opaque task IDs, nonce-salted per-task digests, template-family digests, counts, release, and complete-set digest. The nonce remains inside the private full test set until unsealing, which prevents practical dictionary guessing of short prompts from their public task digests. [`tasksets/twenty-companies-split-v1.json`](tasksets/twenty-companies-split-v1.json) records that the development and test seals use disjoint task IDs, task digests, and template-family digests.
+
+These 6 development cases and 12 held-out cases qualify the task/evaluator pipeline; they are not statistically powered and do not represent the planned breadth benchmark. Rephrased prompts and changed company values do not create independent workflow units, so these files cannot support a general success-rate, PageAgent, or source-benefit claim.
+
+Seal and verify a task set before using it:
+
+```bash
+python -m evals.twenty seal-taskset \
+  --taskset evals/twenty/tasksets/twenty-companies-development-v1.json \
+  --output evals/twenty/tasksets/twenty-companies-development-v1.seal.json
+
+python -m evals.twenty verify-taskset \
+  --taskset evals/twenty/tasksets/twenty-companies-development-v1.json \
+  --seal evals/twenty/tasksets/twenty-companies-development-v1.seal.json
+```
+
+Before a run, bind an open task to the exact frozen baseline and emit an evaluator task without exposing database truth to the Agent:
+
+```bash
+python -m evals.twenty instantiate-task \
+  --taskset evals/twenty/tasksets/twenty-companies-development-v1.json \
+  --task-id dev-open-en-1 \
+  --baseline .artifacts/evals/twenty/before.json \
+  --output .artifacts/evals/twenty/case.json
+```
+
+The execution case contains the user prompt and deterministic evaluator input. Keep the full held-out task set, execution cases, provider payloads, database dumps, browser state, and raw traces in ignored private storage. Product code must receive only the prompt and ordinary application capabilities; it must never read task-set metadata, evaluator input, seals, baseline state, or prior outcomes.
+
 ## Qualify a fixture
 
 Before collecting a trial, run `qualify` with the exact synthetic fixture identity. The command captures the business projection, creates an in-memory schema dump, captures again, and returns `READY` only when the two digests match. Its output contains fixture identity, counts, the baseline digest, and snapshot metadata; it does not contain people or opportunity rows.

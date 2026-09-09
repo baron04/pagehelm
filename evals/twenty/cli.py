@@ -10,6 +10,8 @@ from .evaluator import (ARTIFACT_VERSION, EvaluationInputError, evaluate,
 from .fixture import (FixtureUnavailable, TwentyPostgresFixture, atomic_write_json,
                       load_json, prepare_snapshot, qualify_fixture, restore_snapshot,
                       utc_now)
+from .taskset import (instantiate_task, seal_task_set, verify_split_separation,
+                      verify_task_set)
 
 
 _EXIT = {"PASS": 0, "READY": 0, "FAIL": 1, "INVALID": 2, "INDETERMINATE": 3}
@@ -45,6 +47,15 @@ def _validate_recovery_paths(args: argparse.Namespace) -> None:
         raise EvaluationInputError("snapshot, recovery record, and output paths must differ")
 
 
+def _validate_distinct_output(args: argparse.Namespace, *input_names: str) -> None:
+    if not getattr(args, "output", None):
+        return
+    output = Path(args.output).resolve()
+    if any(output == Path(getattr(args, name)).resolve() for name in input_names):
+        args.output = None
+        raise EvaluationInputError("evaluation output must not overwrite an input artifact")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m evals.twenty",
@@ -77,6 +88,26 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--snapshot", required=True)
     command.add_argument("--record", required=True)
     command.add_argument("--output")
+
+    command = commands.add_parser("seal-taskset")
+    command.add_argument("--taskset", required=True)
+    command.add_argument("--output", required=True)
+
+    command = commands.add_parser("verify-taskset")
+    command.add_argument("--taskset", required=True)
+    command.add_argument("--seal", required=True)
+    command.add_argument("--output")
+
+    command = commands.add_parser("verify-splits")
+    command.add_argument("--development-seal", required=True)
+    command.add_argument("--test-seal", required=True)
+    command.add_argument("--output")
+
+    command = commands.add_parser("instantiate-task")
+    command.add_argument("--taskset", required=True)
+    command.add_argument("--task-id", required=True)
+    command.add_argument("--baseline", required=True)
+    command.add_argument("--output", required=True)
     return parser
 
 
@@ -109,13 +140,38 @@ def main(argv: list[str] | None = None) -> int:
                 record_path=Path(args.record),
             )
             return _emit(value, args.output)
-        _validate_recovery_paths(args)
-        value = restore_snapshot(
-            fixture=_fixture(args), expected_digest=args.expected_digest,
-            snapshot_path=Path(args.snapshot), record_path=Path(args.record),
+        if args.command == "restore":
+            _validate_recovery_paths(args)
+            value = restore_snapshot(
+                fixture=_fixture(args), expected_digest=args.expected_digest,
+                snapshot_path=Path(args.snapshot), record_path=Path(args.record),
+            )
+            return _emit(value, args.output)
+        if args.command == "seal-taskset":
+            _validate_distinct_output(args, "taskset")
+            return _emit(seal_task_set(load_json(Path(args.taskset))), args.output)
+        if args.command == "verify-taskset":
+            _validate_distinct_output(args, "taskset", "seal")
+            value = verify_task_set(
+                load_json(Path(args.taskset)), load_json(Path(args.seal)))
+            return _emit(value, args.output)
+        if args.command == "verify-splits":
+            _validate_distinct_output(args, "development_seal", "test_seal")
+            value = verify_split_separation(
+                load_json(Path(args.development_seal)),
+                load_json(Path(args.test_seal)),
+            )
+            return _emit(value, args.output)
+        _validate_distinct_output(args, "taskset", "baseline")
+        value = instantiate_task(
+            load_json(Path(args.taskset)), args.task_id,
+            load_json(Path(args.baseline)),
         )
         return _emit(value, args.output)
     except (EvaluationInputError, FixtureUnavailable) as exc:
+        if args.command in {
+                "seal-taskset", "verify-taskset", "verify-splits", "instantiate-task"}:
+            args.output = None
         return _emit({
             "artifact_version": ARTIFACT_VERSION,
             "kind": f"twenty_{args.command}",

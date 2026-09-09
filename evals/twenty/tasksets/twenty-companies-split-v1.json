@@ -1,0 +1,11 @@
+{
+  "application_release": "twenty@2.39.0",
+  "artifact_version": 1,
+  "development_seal": "sha256:76ea426e37915b6b9d8b0f7d337883b87f95a4f47eabf135361f50081411ba14",
+  "development_tasks": 6,
+  "kind": "twenty_split_verification",
+  "status": "READY",
+  "template_families_disjoint": true,
+  "test_seal": "sha256:349efadca196eca74ffd4afcaa025e9e8965b0e4f3382f931f380f95523c3078",
+  "test_tasks": 12
+}

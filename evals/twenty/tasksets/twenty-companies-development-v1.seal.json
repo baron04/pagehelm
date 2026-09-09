@@ -1,0 +1,32 @@
+{
+  "application_release": "twenty@2.39.0",
+  "artifact_version": 1,
+  "kind": "twenty_task_set_seal",
+  "seal_digest": "sha256:76ea426e37915b6b9d8b0f7d337883b87f95a4f47eabf135361f50081411ba14",
+  "set_id": "twenty-companies-development-v1",
+  "split": "development",
+  "status": "READY",
+  "task_count": 6,
+  "task_digests": {
+    "dev-create-en-1": "sha256:f73785308e955a3bda8a1100d420fbc66bd8e1f8574862ea574e83e0e935e3aa",
+    "dev-create-zh-1": "sha256:4327b6d56b4873eac487ee9c9fd1f025feaa5e177825d05a9a66ffd598b47b70",
+    "dev-open-en-1": "sha256:8451d5a7a8e20cf99bf3b9b1bda52268029aa2942797e04943f5c0ab71eb785d",
+    "dev-open-zh-1": "sha256:1b45d3f740856f4027e53a99668543da652b21e8394934ceb8df60da9fd11e57",
+    "dev-query-en-1": "sha256:c9c4112caf66e3f4d62f3b7ef0ec84abe40f36250da2b03f342f4ff090506e57",
+    "dev-query-zh-1": "sha256:c08e5997a2d268d64100a4d50a20a75303ec071903d2d45947bcdff4532a08bd"
+  },
+  "task_kind_counts": {
+    "create": 2,
+    "open": 2,
+    "query": 2
+  },
+  "task_set_digest": "sha256:4e91c88fa697e9a562ab6349e6f18064cb7816e2d5d1160a9fc294c120f6e107",
+  "template_family_digests": [
+    "sha256:10c4c09a6684d248b6aa3b2581e534378d601f99dea19e68b5fb5640e2cd7791",
+    "sha256:2e70ef2e1200b74c97b3daf600cce3be2656d677185bb4b5bcf266ccec1a7118",
+    "sha256:3e7e4471b22b442b835f8b364d74aa21015bcbbd8444c20c8c0f5143a52ebef8",
+    "sha256:65294e8c782f8e829d1f9853a98dc1d148c46b09c2fafdae783dea7db8f00fcc",
+    "sha256:9230b2e2a914eb61de790cd313cd70c7ea9874e5c0be3d10b70bbb3fb9146445",
+    "sha256:9b73f2955ead8514403f098aa30c3ad45386b85c33c60a6b375c58d0a8d9b79e"
+  ]
+}
