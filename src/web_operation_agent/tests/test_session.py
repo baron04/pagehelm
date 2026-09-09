@@ -252,6 +252,31 @@ class ControlRunLifecycle(unittest.TestCase):
         self.assertEqual(control.begun, ["r1"])
         self.assertEqual(control.ended, ["r1"])
 
+    def test_provider_failure_records_safe_correlation_fields(self):
+        from web_operation_agent.model import ProviderError
+
+        class FailedChat(_Chat):
+            def complete(self, *args, **kwargs):
+                raise ProviderError(
+                    "provider unavailable",
+                    code="provider_circuit_open",
+                    retryable=True,
+                    request_id="a" * 32,
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            session = _session(
+                tmp, FailedChat([]), _Browser([_obs()]), _Control([[]]))
+            result = session.run()
+            rows = [json.loads(line) for line in
+                    (Path(tmp) / "l.jsonl").read_text().splitlines()]
+
+        failure = next(row for row in rows if row.get("event") == "provider_failed")
+        self.assertEqual(result.terminal_reason, "provider_error")
+        self.assertEqual(failure["provider_request_id"], "a" * 32)
+        self.assertEqual(failure["provider_error_code"], "provider_circuit_open")
+        self.assertTrue(failure["retryable"])
+
     def test_failed_control_cleanup_changes_a_read_only_terminal_to_control_error(self):
         class CleanupFailure(_Control):
             def end_run(self, run_id):

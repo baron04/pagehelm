@@ -23,7 +23,7 @@ Web Operation Agent 是一个早期阶段的框架，用于在第一方 Web 应�
 | 任务控制 | 面板可通过当前已认证 Runtime lease 停止精确绑定的活动消息。尚未被浏览器认领的动作和等待确认的写入不会再下发；已经认领的动作仍会结算为确定结果或 `indeterminate`。 |
 | 助手交互 | 基于显式状态模型的复用面板同时支持页面内嵌和独立回放。提交失败会保留用户输入，确认被拒绝后会恢复原目标供修改；成功、错误和不确定状态有独立表现，并支持响应式布局、键盘焦点、屏幕阅读器 live region、深色模式和减弱动画。 |
 | 身份绑定 | 应用宿主可以把短期 actor/tenant/workspace 主体绑定到 Runtime capability、Agent turn、类型化工具 scope、审批、mutation proposal 和脱敏审计事件。Twenty demo 会在启动前通过 Twenty 解析准确的 HttpOnly 浏览器 session，要求其与委托 OAuth 的 actor/workspace 一致，并在浏览器 cookie 被替换或删除时关闭 Agent session。 |
-| Provider 数据边界 | 模型请求在发送前经过结构、数量、字节、凭据形态和有限 JSON 检查。审计账本只记录 payload 摘要与数据类别，不复制页面、工具、源码或用户内容。远程 provider 必须使用 HTTPS，本机 loopback 开发端点除外。 |
+| Provider 边界 | 模型请求在发送前经过结构、数量、字节、凭据形态和有限 JSON 检查。进程内共享 guard 限制并发请求，把排队时间计入请求截止时间，并在连续瞬时故障后进入冷却短路。每个已发送请求都有相关 ID；成功调用记录 provider 报告的 usage，无法获得可信 usage 的调用会把费用明确标为未知而不是零，失败还会把安全的关联字段写入 Session Ledger。远程 provider 必须使用 HTTPS，本机 loopback 开发端点除外。 |
 | 审计与回放基础能力 | 服务端事件可以写入追加式账本，并转换成脱敏回放。 |
 | Twenty CRM 纵切 | 已打包的适配器支持通过有界 cursor 分页查询公司、显式标记不完整扫描、把 API 找到的公司路由交给浏览器，以及在显式开启后经确认创建一家公司并使用同一委托 token 回读。OAuth 刷新会在本机线程和进程间串行化，身份解析遇到 GraphQL `UNAUTHENTICATED` 时也会进入受控刷新。 |
 
@@ -128,7 +128,7 @@ python src/web_operation_agent/tests/run_all.py -k test_product.py
 ## 已知限制
 
 - 共享 Runtime 网关、session registry、有界事件 journal、消息队列、会话上下文和账本仍是本地进程组件；重启恢复、水平扩展和持久租户隔离尚未完成。Session TTL 与硬配额可以防止无限保留，但不能恢复状态。已确认的 Twenty API 写入拥有持久的一次性 SQLite journal，但 dispatch 之后发生崩溃仍会标记为 `indeterminate`，必须核对而不能自动重试。Twenty demo 已通过可信 Playwright 宿主强制身份绑定；普通嵌入式应用仍需从自身登录边界提供服务端认证的身份断言，principal 续期和分布式撤销也尚未实现。独立的旧页面控制网关仍使用全局许可与 trace：协作客户端会串行执行完整 run，并在前后边界清空状态，但并发页面写入前仍需在网关内部实现 tenant/session/turn scope。
-- 单轮截止时间已限制每次 provider 请求不得超过剩余墙钟预算。消息级主动取消会阻止后续工具下发并解除审批等待，但当前 provider HTTP transport 还不能中断正在进行的 socket 请求，其迟到结果会被丢弃。已有初始页面观察绑定，以及 claim 前对目标控件、关联表单和路由的新鲜度检查；目标元素之外的依赖、更广泛的并发、崩溃恢复和运行监控仍未完成。
+- 单轮截止时间同时覆盖 provider 排队和 socket 调用。当前进程还会限制 provider 并发，并在连续瞬时故障后暂时短路，不会自动重试已经发出的付费请求。消息级主动取消会阻止后续工具下发并解除审批等待，但当前 provider HTTP transport 还不能中断正在进行的 socket 请求，其迟到结果会被丢弃。Provider guard 只在单进程内生效，还没有分布式租户速率配额。已有初始页面观察绑定，以及 claim 前对目标控件、关联表单和路由的新鲜度检查；目标元素之外的依赖、崩溃恢复和更完整的运行监控仍未完成。
 - 唯一打包的业务适配器是范围有限的 Twenty CRM Companies 纵切。
 - 尚未实现任意第三方网站支持和浏览器扩展。
 - 浏览器操作不具备数据库事务或回滚语义。

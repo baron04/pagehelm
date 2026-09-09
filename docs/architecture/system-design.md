@@ -305,6 +305,8 @@ App Skill 适合描述当前菜单不可见、但已审核的只读页面入口�
 
 发送给模型的页面观察、业务工具结果、Skill 与源码证据都标记为不可信应用数据。模型可以使用其事实，但不能据此扩大任务范围、获得授权、请求凭据或重新定义工具；最终约束仍由确定性工具 schema、动作策略、principal scope 和确认通道执行。每次 provider 请求在网络调用前经过结构、数量、总字节、有限 JSON 和已知凭据形态检查，并向 Session Ledger 写入模型输入摘要、字节数、角色计数和数据类别，不写入原始 payload。传输层再次验证完整请求体并限制为 2 MiB。远程 provider endpoint 必须使用 HTTPS，只有 loopback 开发端点可以使用 HTTP；返回体有 4 MiB 上限，HTTP 错误正文不会进入异常或日志。
 
+同一服务进程中的会话必须共享 provider guard。默认最多同时发送 4 个请求；等待槽位的时间会从该次请求的剩余 deadline 中扣除。连续 3 次 HTTP 408、425、429、5xx、传输异常、畸形 JSON 或超大响应会打开 30 秒冷却电路，在电路打开期间请求不会触网。非瞬时 HTTP 错误或一次成功响应会重置连续故障计数。系统不自动重试已经发送的请求，因为断线或超时无法证明供应商没有完成并计费。每个请求使用随机相关 ID；有可信 usage 的成功调用把 ID、token 和费用写入 spend ledger，无法获得可信 usage 的已发送调用写入 `usage_unavailable` 与未知 token/费用，不能按零成本处理。失败调用还把 ID、类型和可重试属性写入 Session Ledger，不记录错误正文或请求内容。Guard 暴露不含内容的进程内状态，但它不是分布式限流器，也不能主动中断正在阻塞的 socket。
+
 这些通用检查不能决定某个应用的普通业务字段是否允许发送到某个模型服务。部署方仍需提供字段级分类、provider/区域策略、保留期和必要的加密或 DLP 边界；在这些策略完成前，不应把包含真实客户数据的页面接入当前 Alpha。
 
 ## 10. 产品执行与 Evaluator 隔离
@@ -329,7 +331,7 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 - capability、Origin、短期 principal、turn、业务工具 scope、审批和 mutation proposal 绑定已经实现；Twenty demo 会匹配页面 session 与 OAuth 身份，并在浏览器 cookie 变化时终止 session；Twenty API 写 proposal 的 dispatch 状态可以持久化。普通嵌入部署的应用服务端身份断言、principal 续期、完整的持久会话、组织级策略和跨进程撤销尚未完成。
 - 旧外部页面控制网关仍是全局状态，当前客户端只能通过跨进程独占和双边界 reset 安全地串行运行；网关原生的租户/会话/轮次隔离与崩溃后 TTL 尚未实现。
 - 浏览器 sessionStorage 可以处理同一标签页内的刷新恢复，不能替代服务端持久幂等存储。
-- 模型调用、页面动作和确认有局部超时，消息级取消已覆盖审批、业务工具和未认领页面动作；provider 请求的主动中断、跨进程取消、完整 deadline 传播和资源回收仍不完整。
+- 模型调用、页面动作和确认有局部超时；provider 排队和 socket 调用共用剩余 deadline，并受进程内并发槽与瞬时故障短路保护。消息级取消已覆盖审批、业务工具和未认领页面动作；provider 请求的主动中断、跨进程取消、分布式租户配额和完整资源回收仍不完整。
 - 目前只有一个窄业务 Adapter 和少量 Skill/API 工具，覆盖面不能代表复杂企业应用的完整操作集。
 - 源码能力存在于 Session 层，但默认产品 Turn Executor 尚未将它作为可配置 Provider 接入。
 - 页面内助手已从 Runtime 的内联渲染中抽出独立的 `AssistantPanelViewModel` 与 `AssistantPanel`。同一组件用于嵌入页面和脱敏回放，状态驱动进度、光谱边缘、停止、错误恢复和确认；确认被拒绝时恢复原始目标供用户修改后重新规划。组件支持响应式布局、深浅色、键盘焦点、live region、Esc 拒绝确认和 `prefers-reduced-motion`。发布前仍需完成 VoiceOver/NVDA 与支持浏览器矩阵测试。

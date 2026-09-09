@@ -741,6 +741,15 @@ class ServerAgentSession:
                         result, t0, "user_cancelled",
                         "the user stopped this task while the provider was working",
                         steps=step)
+                request_id = getattr(e, "request_id", "")
+                if request_id:
+                    self.ledger.append(
+                        "provider_failed",
+                        step=step,
+                        provider_request_id=request_id,
+                        provider_error_code=getattr(e, "code", "provider_error"),
+                        retryable=bool(getattr(e, "retryable", False)),
+                    )
                 reason = ("wall_clock_budget"
                           if time.time() - t0 >= self.wall_budget_s
                           else "provider_error")

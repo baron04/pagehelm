@@ -114,7 +114,7 @@ class ProviderDeadline(unittest.TestCase):
         return chat
 
     def test_turn_deadline_caps_the_provider_socket_timeout(self):
-        payload = {"usage": {}, "choices": [{
+        payload = {"usage": {"prompt_tokens": 0, "completion_tokens": 0}, "choices": [{
             "finish_reason": "stop", "message": {"content": "done"}}]}
         response = io.BytesIO(json.dumps(payload).encode("utf-8"))
         response.__enter__ = lambda stream=response: stream
@@ -131,6 +131,138 @@ class ProviderDeadline(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "positive finite"):
                 self._chat().complete([], None, "run", timeout_s=float("inf"))
         opened.assert_not_called()
+
+
+class ProviderRuntimeProtection(unittest.TestCase):
+    def test_capacity_wait_is_bounded_and_does_not_change_circuit_health(self):
+        guard = M.ProviderRuntimeGuard(max_concurrent_requests=1)
+        guard.acquire(1)
+        try:
+            with self.assertRaises(M.ProviderError) as caught:
+                guard.acquire(.01)
+            self.assertEqual(caught.exception.code, "provider_capacity")
+            self.assertEqual(guard.status()["in_flight"], 1)
+            self.assertFalse(guard.status()["circuit_open"])
+        finally:
+            guard.release()
+        self.assertEqual(guard.status()["in_flight"], 0)
+
+    def test_circuit_opens_after_consecutive_transient_failures_and_recovers(self):
+        now = [10.0]
+        guard = M.ProviderRuntimeGuard(
+            failure_threshold=2, cooldown_s=5, clock=lambda: now[0])
+        for _ in range(2):
+            guard.acquire(1)
+            guard.record_failure(transient=True)
+            guard.release()
+        self.assertTrue(guard.status()["circuit_open"])
+        self.assertEqual(guard.status()["retry_after_s"], 5)
+        with self.assertRaises(M.ProviderError) as caught:
+            guard.acquire(1)
+        self.assertEqual(caught.exception.code, "provider_circuit_open")
+        now[0] += 5
+        guard.acquire(1)
+        guard.record_success()
+        guard.release()
+        self.assertFalse(guard.status()["circuit_open"])
+        self.assertEqual(guard.status()["consecutive_transient_failures"], 0)
+
+    def test_http_failures_trip_shared_guard_without_hidden_retries(self):
+        now = [10.0]
+        guard = M.ProviderRuntimeGuard(
+            failure_threshold=2, cooldown_s=5, clock=lambda: now[0])
+        with tempfile.TemporaryDirectory() as directory:
+            chat = M.ChatModel(
+                M.SpendMeter(ledger=Path(directory) / "spend.jsonl"),
+                env={"AGENT_OPENAI_BASE_URL": "https://provider.example/v1",
+                     "AGENT_OPENAI_API_KEY": "key",
+                     "AGENT_OPENAI_MODEL_PRO": "MiniMax-M3"},
+                runtime_guard=guard,
+            )
+
+            def unavailable(request, timeout):
+                raise M.urllib.error.HTTPError(
+                    request.full_url, 503, "unavailable", {}, io.BytesIO(b"ignored"))
+
+            with patch.object(M.urllib.request, "urlopen", side_effect=unavailable) as opened:
+                for _ in range(2):
+                    with self.assertRaises(M.ProviderError) as caught:
+                        chat.complete([{"role": "user", "content": "test"}], None, "run")
+                    self.assertEqual(caught.exception.code, "provider_http")
+                    self.assertTrue(caught.exception.retryable)
+                with self.assertRaises(M.ProviderError) as caught:
+                    chat.complete([{"role": "user", "content": "test"}], None, "run")
+                self.assertEqual(caught.exception.code, "provider_circuit_open")
+            self.assertEqual(opened.call_count, 2)
+            self.assertEqual(chat.meter.calls, 2)
+            self.assertEqual(chat.meter.unmetered_calls, 2)
+            rows = [json.loads(line) for line in
+                    (Path(directory) / "spend.jsonl").read_text().splitlines()]
+            self.assertEqual(
+                [row["accounting_status"] for row in rows],
+                ["usage_unavailable", "usage_unavailable"],
+            )
+
+    def test_request_id_is_unique_and_slot_wait_reduces_socket_budget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            class GuardWithMeasuredWait(M.ProviderRuntimeGuard):
+                def acquire(self, timeout_s):
+                    super().acquire(timeout_s)
+                    return .25
+
+            chat = M.ChatModel(
+                M.SpendMeter(ledger=Path(directory) / "spend.jsonl"),
+                env={"AGENT_OPENAI_BASE_URL": "https://provider.example/v1",
+                     "AGENT_OPENAI_API_KEY": "key",
+                     "AGENT_OPENAI_MODEL_PRO": "MiniMax-M3"},
+                runtime_guard=GuardWithMeasuredWait(max_concurrent_requests=1),
+            )
+            payload = {"usage": {"prompt_tokens": 0, "completion_tokens": 0}, "choices": [{
+                "finish_reason": "stop", "message": {"content": "done"}}]}
+            replies = []
+
+            def respond(request, timeout):
+                replies.append((request.get_header("X-woa-request-id"), timeout))
+                response = io.BytesIO(json.dumps(payload).encode())
+                response.__enter__ = lambda stream=response: stream
+                response.__exit__ = lambda stream=response, *_args: None
+                return response
+
+            with patch.object(M.urllib.request, "urlopen", side_effect=respond):
+                chat.complete([{"role": "user", "content": "one"}], None, "run", timeout_s=2)
+                chat.complete([{"role": "user", "content": "two"}], None, "run", timeout_s=2)
+            self.assertEqual(len(replies), 2)
+            self.assertTrue(all(value and len(value) == 32 for value, _timeout in replies))
+            self.assertNotEqual(replies[0][0], replies[1][0])
+            self.assertEqual([timeout for _value, timeout in replies], [1.75, 1.75])
+            records = [json.loads(line) for line in
+                       (Path(directory) / "spend.jsonl").read_text().splitlines()]
+            self.assertEqual(
+                [record["provider_request_id"] for record in records],
+                [value for value, _timeout in replies],
+            )
+
+    def test_missing_usage_is_unknown_cost_and_cannot_be_reported_as_zero(self):
+        with tempfile.TemporaryDirectory() as directory:
+            chat = M.ChatModel(
+                M.SpendMeter(ledger=Path(directory) / "spend.jsonl"),
+                env={"AGENT_OPENAI_BASE_URL": "https://provider.example/v1",
+                     "AGENT_OPENAI_API_KEY": "key",
+                     "AGENT_OPENAI_MODEL_PRO": "MiniMax-M3"},
+            )
+            payload = {"choices": [{
+                "finish_reason": "stop", "message": {"content": "done"}}]}
+            response = io.BytesIO(json.dumps(payload).encode())
+            response.__enter__ = lambda stream=response: stream
+            response.__exit__ = lambda stream=response, *_args: None
+            with patch.object(M.urllib.request, "urlopen", return_value=response):
+                with self.assertRaises(M.ProviderError) as caught:
+                    chat.complete([{"role": "user", "content": "test"}], None, "run")
+
+            self.assertEqual(caught.exception.code, "provider_usage")
+            row = json.loads((Path(directory) / "spend.jsonl").read_text())
+            self.assertEqual(row["accounting_status"], "usage_unavailable")
+            self.assertIsNone(row["call_cost_cny"])
 
 
 class PlannerAllowance(unittest.TestCase):

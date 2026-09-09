@@ -20,6 +20,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 
 from .egress import DEFAULT_PROVIDER_EGRESS_POLICY, ProviderEgressPolicy
@@ -44,6 +45,114 @@ def load_env(path: str | Path | None = None) -> dict:
 
 class ProviderError(Exception):
     """Callers map this to terminal reason `provider_error`."""
+
+    def __init__(self, message: str, *, code: str = "provider_error", retryable: bool = True,
+                 request_id: str = ""):
+        super().__init__(message)
+        self.code = code
+        self.retryable = retryable
+        self.request_id = request_id
+
+
+class ProviderRuntimeGuard:
+    """Bound concurrent provider calls and stop a transient-failure stampede.
+
+    The guard is intentionally in-process and content-free. A deployment can share one
+    instance across multiple ``ChatModel`` objects that use the same endpoint. It never retries
+    a paid request because an acknowledgement loss cannot prove that the provider did no work.
+    """
+
+    def __init__(self, *, max_concurrent_requests: int = 4,
+                 failure_threshold: int = 3, cooldown_s: float = 30,
+                 clock=None):
+        integer_limits = {
+            "max_concurrent_requests": (max_concurrent_requests, 1, 1_000),
+            "failure_threshold": (failure_threshold, 1, 100),
+        }
+        for name, (value, minimum, maximum) in integer_limits.items():
+            if (isinstance(value, bool) or not isinstance(value, int)
+                    or not minimum <= value <= maximum):
+                raise ValueError(f"{name} must be an integer from {minimum} to {maximum}")
+        if (isinstance(cooldown_s, bool) or not isinstance(cooldown_s, (int, float))
+                or not math.isfinite(cooldown_s) or not 0 < cooldown_s <= 3_600):
+            raise ValueError("cooldown_s must be a finite number from 0 to 3600")
+        if clock is not None and not callable(clock):
+            raise TypeError("clock must be callable or None")
+        self.max_concurrent_requests = max_concurrent_requests
+        self.failure_threshold = failure_threshold
+        self.cooldown_s = float(cooldown_s)
+        self._clock = clock or time.monotonic
+        self._slots = threading.BoundedSemaphore(max_concurrent_requests)
+        self._lock = threading.Lock()
+        self._in_flight = 0
+        self._consecutive_transient_failures = 0
+        self._open_until = 0.0
+
+    def _require_closed_circuit(self) -> None:
+        now = self._clock()
+        if now < self._open_until:
+            raise ProviderError(
+                "provider circuit is temporarily open after repeated transient failures",
+                code="provider_circuit_open",
+            )
+        if self._open_until:
+            self._open_until = 0.0
+            self._consecutive_transient_failures = 0
+
+    def acquire(self, timeout_s: float) -> float:
+        """Acquire one request slot and return seconds spent waiting for it."""
+        if (isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float))
+                or not math.isfinite(timeout_s) or timeout_s <= 0):
+            raise ValueError("provider guard timeout must be a positive finite number")
+        started = self._clock()
+        with self._lock:
+            self._require_closed_circuit()
+        if not self._slots.acquire(timeout=float(timeout_s)):
+            raise ProviderError(
+                "provider concurrency limit was not available before the request deadline",
+                code="provider_capacity",
+            )
+        try:
+            with self._lock:
+                self._require_closed_circuit()
+                self._in_flight += 1
+        except BaseException:
+            self._slots.release()
+            raise
+        return max(0.0, self._clock() - started)
+
+    def release(self) -> None:
+        with self._lock:
+            if self._in_flight <= 0:
+                raise RuntimeError("provider request slot was released without an acquisition")
+            self._in_flight -= 1
+        self._slots.release()
+
+    def record_success(self) -> None:
+        with self._lock:
+            self._consecutive_transient_failures = 0
+            self._open_until = 0.0
+
+    def record_failure(self, *, transient: bool) -> None:
+        with self._lock:
+            if not transient:
+                self._consecutive_transient_failures = 0
+                self._open_until = 0.0
+                return
+            self._consecutive_transient_failures += 1
+            if self._consecutive_transient_failures >= self.failure_threshold:
+                self._open_until = self._clock() + self.cooldown_s
+
+    def status(self) -> dict:
+        with self._lock:
+            now = self._clock()
+            return {
+                "max_concurrent_requests": self.max_concurrent_requests,
+                "in_flight": self._in_flight,
+                "consecutive_transient_failures": self._consecutive_transient_failures,
+                "circuit_open": now < self._open_until,
+                "retry_after_s": round(max(0.0, self._open_until - now), 3),
+            }
 
 
 #: Per-model prices, per million tokens. Registered rather than assumed: a wrong price does
@@ -154,6 +263,7 @@ class SpendMeter:
         self.batch_cost_stop = batch_cost_stop
         self._lock = threading.Lock()
         self.calls = 0
+        self.unmetered_calls = 0
         self.total_in = self.total_out = self.total_cached = self.total_reasoning = 0
         self.batch_in = self.batch_out = self.batch_cached = 0
         self.run_in: dict[str, int] = {}
@@ -165,9 +275,12 @@ class SpendMeter:
     def batch_cost(self) -> float:
         return self.cost_of(self.batch_in, self.batch_out, self.batch_cached)
 
-    def record(self, *, provider: str, model: str, run_id: str, usage: dict) -> dict:
+    def record(self, *, provider: str, model: str, run_id: str, usage: dict,
+               request_id: str = "") -> dict:
         if not isinstance(usage, dict):
             raise ValueError("provider usage must be an object")
+        if request_id and not re.fullmatch(r"[0-9a-f]{32}", request_id):
+            raise ValueError("provider request_id must be a 32-character lowercase hex value")
         prompt_details = usage.get("prompt_tokens_details")
         completion_details = usage.get("completion_tokens_details")
         prompt_details = {} if prompt_details is None else prompt_details
@@ -205,29 +318,15 @@ class SpendMeter:
             self.run_in[run_id] = self.run_in.get(run_id, 0) + i
             rec = {"t": time.time(), "provider": provider, "model": model,
                    "batch_id": self.batch_id, "logical_run_id": run_id,
+                   "accounting_status": "reported",
                    "in": i, "out": o, "cached": c, "reasoning": r,
                    "cum_in": self.total_in, "cum_out": self.total_out,
                    "call_cost_cny": round(call_cost, 6),
                    "batch_cost_cny": round(self.batch_cost(), 4),
                    "run_in_tokens": self.run_in[run_id], "calls": self.calls}
-            with open(self.ledger, "a", encoding="utf-8") as fh:
-                # The lock is between processes, not threads: sharding a batch across
-                # isolated environments runs one harness process per worker and they all
-                # account to the one ledger. A torn line there is not a slow ledger, it is a
-                # cost figure nobody can reconstruct.
-                try:
-                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-                except OSError:
-                    pass                      # no locking on this filesystem; single writer
-                try:
-                    fh.write(json.dumps(rec) + "\n")
-                    fh.flush()
-                    os.fsync(fh.fileno())
-                finally:
-                    try:
-                        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-                    except OSError:
-                        pass
+            if request_id:
+                rec["provider_request_id"] = request_id
+            self._append_record(rec)
         if self.run_in[run_id] > self.run_input_token_abort:
             raise BudgetExhausted("token_budget",
                                   f"run {run_id} consumed {self.run_in[run_id]} input tokens, "
@@ -238,8 +337,58 @@ class SpendMeter:
                                   f"{self.batch_cost_stop:.4f} stop line")
         return rec
 
+    def record_unmetered(self, *, provider: str, model: str, run_id: str,
+                         request_id: str, error_code: str) -> dict:
+        """Record a dispatched call whose response supplied no trustworthy usage.
+
+        A timeout or broken response can still be billed. Recording zero tokens or omitting
+        the call would understate both traffic and uncertainty, so this row uses explicit null
+        usage and cost fields for later provider-side reconciliation.
+        """
+        if not re.fullmatch(r"[0-9a-f]{32}", request_id):
+            raise ValueError("provider request_id must be a 32-character lowercase hex value")
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", error_code):
+            raise ValueError("provider error_code must be a bounded lowercase identifier")
+        with self._lock:
+            self.calls += 1
+            self.unmetered_calls += 1
+            rec = {
+                "t": time.time(), "provider": provider, "model": model,
+                "batch_id": self.batch_id, "logical_run_id": run_id,
+                "provider_request_id": request_id,
+                "accounting_status": "usage_unavailable",
+                "error_code": error_code,
+                "in": None, "out": None, "cached": None, "reasoning": None,
+                "call_cost_cny": None,
+                "batch_cost_cny": round(self.batch_cost(), 4),
+                "run_in_tokens": self.run_in.get(run_id, 0), "calls": self.calls,
+            }
+            self._append_record(rec)
+        return rec
+
+    def _append_record(self, rec: dict) -> None:
+        with open(self.ledger, "a", encoding="utf-8") as fh:
+            # The lock is between processes, not threads: sharding a batch across isolated
+            # environments runs one harness process per worker and they all account to the one
+            # ledger. A torn line there is a cost figure nobody can reconstruct.
+            try:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            except OSError:
+                pass                      # no locking on this filesystem; single writer
+            try:
+                fh.write(json.dumps(rec) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            finally:
+                try:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    pass
+
     def report(self) -> dict:
-        return {"provider_calls": self.calls, "input_tokens": self.total_in,
+        return {"provider_calls": self.calls,
+                "unmetered_provider_calls": self.unmetered_calls,
+                "input_tokens": self.total_in,
                 "output_tokens": self.total_out, "cached_tokens": self.total_cached,
                 "reasoning_tokens": self.total_reasoning,
                 "cost_cny": round(self.cost_of(self.total_in, self.total_out, self.total_cached), 4),
@@ -256,7 +405,8 @@ class ChatModel:
                  max_completion_tokens: int = 2048, temperature: float = 0.0,
                  timeout: int = 180, provider: str | None = None,
                  options: dict | None = None,
-                 egress_policy: ProviderEgressPolicy | None = None):
+                 egress_policy: ProviderEgressPolicy | None = None,
+                 runtime_guard: ProviderRuntimeGuard | None = None):
         env = env if env is not None else load_env()
         raw_base = env.get("AGENT_OPENAI_BASE_URL") or ""
         self._key = env.get("AGENT_OPENAI_API_KEY") or ""
@@ -291,6 +441,10 @@ class ChatModel:
         self.temperature = temperature
         self.timeout = timeout
         self.egress_policy = egress_policy or DEFAULT_PROVIDER_EGRESS_POLICY
+        self.runtime_guard = (ProviderRuntimeGuard()
+                              if runtime_guard is None else runtime_guard)
+        if not isinstance(self.runtime_guard, ProviderRuntimeGuard):
+            raise TypeError("runtime_guard must be ProviderRuntimeGuard or None")
         if options is not None and not isinstance(options, dict):
             raise ValueError("provider options must be an object or None")
         self.options = ({k: v for k, v in options.items() if k not in _RESERVED_BODY}
@@ -341,42 +495,111 @@ class ChatModel:
             raise ProviderError("provider request body must be finite JSON") from exc
         if len(payload) > MAX_PROVIDER_REQUEST_BYTES:
             raise ProviderError("provider request body exceeds the 2 MiB limit")
-        req = urllib.request.Request(f"{self.base}/chat/completions", data=payload, method="POST",
-                                     headers={"content-type": "application/json",
-                                              "authorization": f"Bearer {self._key}"})
+        guard = getattr(self, "runtime_guard", None)
+        acquired = False
+        request_id = ""
         try:
-            with urllib.request.urlopen(req, timeout=request_timeout) as r:
-                raw_response = r.read(MAX_PROVIDER_RESPONSE_BYTES + 1)
-                if len(raw_response) > MAX_PROVIDER_RESPONSE_BYTES:
-                    raise ProviderError("provider response exceeds the 4 MiB limit")
-                data = json.loads(raw_response)
-        except urllib.error.HTTPError as e:
-            e.close()
-            raise ProviderError(f"provider returned HTTP {e.code}") from e
-        except ProviderError:
-            raise
-        except Exception as e:
-            raise ProviderError(f"provider call failed: {type(e).__name__}") from e
+            waited_s = guard.acquire(request_timeout) if guard is not None else 0.0
+            acquired = guard is not None
+            socket_timeout = request_timeout - waited_s
+            if socket_timeout <= 0:
+                raise ProviderError(
+                    "provider concurrency wait exhausted the request deadline",
+                    code="provider_capacity",
+                )
+            request_id = uuid.uuid4().hex
+            req = urllib.request.Request(
+                f"{self.base}/chat/completions", data=payload, method="POST",
+                headers={"content-type": "application/json",
+                         "authorization": f"Bearer {self._key}",
+                         "x-woa-request-id": request_id})
+            try:
+                with urllib.request.urlopen(req, timeout=socket_timeout) as r:
+                    raw_response = r.read(MAX_PROVIDER_RESPONSE_BYTES + 1)
+                    if len(raw_response) > MAX_PROVIDER_RESPONSE_BYTES:
+                        raise ProviderError(
+                            "provider response exceeds the 4 MiB limit",
+                            code="provider_response",
+                            request_id=request_id,
+                        )
+                    data = json.loads(raw_response)
+            except urllib.error.HTTPError as e:
+                transient = e.code in {408, 425, 429} or 500 <= e.code <= 599
+                if guard is not None:
+                    guard.record_failure(transient=transient)
+                e.close()
+                self.meter.record_unmetered(
+                    provider=self.provider, model=self.model, run_id=run_id,
+                    request_id=request_id, error_code="provider_http")
+                raise ProviderError(
+                    f"provider returned HTTP {e.code}",
+                    code="provider_http",
+                    retryable=transient,
+                    request_id=request_id,
+                ) from e
+            except ProviderError as exc:
+                if guard is not None:
+                    guard.record_failure(transient=True)
+                exc.request_id = exc.request_id or request_id
+                self.meter.record_unmetered(
+                    provider=self.provider, model=self.model, run_id=run_id,
+                    request_id=request_id, error_code=exc.code)
+                raise
+            except Exception as e:
+                if guard is not None:
+                    guard.record_failure(transient=True)
+                self.meter.record_unmetered(
+                    provider=self.provider, model=self.model, run_id=run_id,
+                    request_id=request_id, error_code="provider_transport")
+                raise ProviderError(
+                    f"provider call failed: {type(e).__name__}",
+                    code="provider_transport",
+                    request_id=request_id,
+                ) from e
+            else:
+                if guard is not None:
+                    guard.record_success()
+        finally:
+            if acquired:
+                guard.release()
         if not isinstance(data, dict):
-            raise ProviderError("provider response must be a JSON object")
+            self.meter.record_unmetered(
+                provider=self.provider, model=self.model, run_id=run_id,
+                request_id=request_id, error_code="provider_response")
+            raise ProviderError(
+                "provider response must be a JSON object",
+                code="provider_response", request_id=request_id)
         usage = data.get("usage") or {}
-        if not isinstance(usage, dict):
-            raise ProviderError("provider usage must be an object")
+        if (not isinstance(usage, dict)
+                or "prompt_tokens" not in usage
+                or "completion_tokens" not in usage):
+            self.meter.record_unmetered(
+                provider=self.provider, model=self.model, run_id=run_id,
+                request_id=request_id, error_code="provider_usage")
+            raise ProviderError(
+                "provider usage must report prompt_tokens and completion_tokens",
+                code="provider_usage", request_id=request_id)
         # Record before inspecting the answer: a malformed reply still cost money.
         try:
             self.meter.record(
-                provider=self.provider, model=self.model, run_id=run_id, usage=usage)
+                provider=self.provider, model=self.model, run_id=run_id, usage=usage,
+                request_id=request_id)
         except ValueError as exc:
-            raise ProviderError("provider usage is invalid") from exc
+            self.meter.record_unmetered(
+                provider=self.provider, model=self.model, run_id=run_id,
+                request_id=request_id, error_code="provider_usage")
+            raise ProviderError(
+                "provider usage is invalid",
+                code="provider_usage", request_id=request_id) from exc
         choices = data.get("choices") or []
         if not isinstance(choices, list) or not choices:
-            raise ProviderError("provider returned no choices")
+            raise ProviderError("provider returned no choices", request_id=request_id)
         choice = choices[0]
         if not isinstance(choice, dict):
-            raise ProviderError("provider choice must be an object")
+            raise ProviderError("provider choice must be an object", request_id=request_id)
         message = choice.get("message") or {}
         if not isinstance(message, dict):
-            raise ProviderError("provider message must be an object")
+            raise ProviderError("provider message must be an object", request_id=request_id)
         # Two provider-neutral signals lifted to the top of the message so callers never have
         # to know which vendor produced it:
         #  * finish_reason distinguishes "the answer was cut off" (a budget problem the caller

@@ -71,6 +71,26 @@ class Ledger(unittest.TestCase):
         self.assertEqual(rec["provider"], "p")
         self.assertEqual(rec["in"], 100)
 
+    def test_provider_request_id_is_optional_but_strict_when_present(self):
+        m = self._meter()
+        request_id = "a" * 32
+        rec = m.record(provider="p", model="m", run_id="r1", usage={},
+                       request_id=request_id)
+        self.assertEqual(rec["provider_request_id"], request_id)
+        with self.assertRaisesRegex(ValueError, "request_id"):
+            m.record(provider="p", model="m", run_id="r1", usage={}, request_id="unsafe")
+
+    def test_a_dispatched_call_without_usage_is_recorded_as_unknown_not_zero(self):
+        m = self._meter()
+        rec = m.record_unmetered(
+            provider="p", model="m", run_id="r1", request_id="b" * 32,
+            error_code="provider_transport")
+        self.assertEqual(rec["accounting_status"], "usage_unavailable")
+        self.assertIsNone(rec["call_cost_cny"])
+        self.assertIsNone(rec["in"])
+        self.assertEqual(m.report()["provider_calls"], 1)
+        self.assertEqual(m.report()["unmetered_provider_calls"], 1)
+
     def test_cached_tokens_are_read_from_the_provider_reply(self):
         m = self._meter()
         m.record(provider="p", model="m", run_id="r1",
