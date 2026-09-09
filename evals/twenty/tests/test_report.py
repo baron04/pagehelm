@@ -127,6 +127,19 @@ class PublicReportTests(unittest.TestCase):
         with self.assertRaisesRegex(EvaluationInputError, "comparative claim"):
             verify_report(claimed)
 
+        leaked = {**report, "private_prompt": "held-out content"}
+        leaked.pop("report_digest")
+        leaked["report_digest"] = digest_json(leaked)
+        with self.assertRaisesRegex(EvaluationInputError, "unexpected fields"):
+            verify_report(leaked)
+
+        nested = {**report, "arms": [dict(arm) for arm in report["arms"]]}
+        nested["arms"][0]["run_id"] = "private-run"
+        nested.pop("report_digest")
+        nested["report_digest"] = digest_json(nested)
+        with self.assertRaisesRegex(EvaluationInputError, "arm schema"):
+            verify_report(nested)
+
 
 if __name__ == "__main__":
     unittest.main()

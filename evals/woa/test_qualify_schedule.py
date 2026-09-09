@@ -46,9 +46,10 @@ def _development() -> dict:
 class _Harness:
     """Build both engine runner adapters over one synthetic company set."""
 
-    def __init__(self, root: Path, companies: list[dict]):
+    def __init__(self, root: Path, companies: list[dict], protocol: dict):
         self.root = root
         self.companies = companies
+        self.protocol = protocol
         self.state = write_storage_state(root / "state.json", origin=ORIGIN)
         self.storage_state = json.loads(self.state.read_text(encoding="utf-8"))
         self.executor = SyntheticCompanyExecutor(companies)
@@ -135,9 +136,15 @@ class _Harness:
                     business_results=results, permitted_routes=[route])
                 page_actions = 1
             digest = "sha256:" + "e" * 64
+            arm = next(item for item in self.protocol["arms"] if item["arm_id"] == arm_id)
             return {
                 "artifact_version": 1, "kind": "pageagent_twenty_run", "status": "completed",
                 "apparatus_code": None, "error_code": None, "run_id": run_id,
+                "engine": {
+                    "name": arm["engine"], "release": arm["engine_release"],
+                    "capability_profile": arm["capability_profile"],
+                    "source_mode": arm["source_mode"],
+                },
                 "case": {**{key: case[key] for key in (
                     "set_id", "split", "task_id", "task_digest", "template_family_digest")},
                     "evaluator_task": {"kind": case["evaluator_task"]["kind"]}},
@@ -189,7 +196,7 @@ class ScheduleDriverQualificationTests(unittest.TestCase):
             READ_ONLY_PREFIX_PAIRS,
             "the qualification seed must keep its read-only schedule prefix")
         self.fixture = InMemoryFixture(self.companies)
-        self.harness = _Harness(self.root, self.companies)
+        self.harness = _Harness(self.root, self.companies, self.protocol)
         self.ledger = self.root / "batch.jsonl"
         self.kwargs = {
             "protocol": self.protocol, "development_seal": self.development_seal,
@@ -220,11 +227,14 @@ class ScheduleDriverQualificationTests(unittest.TestCase):
             batch_id=BATCH_ID, start_index=start_index, max_trials=max_trials)
 
     def test_both_engines_pass_through_one_driver_evaluator_ledger_and_report(self):
-        outcomes = self._drive(max_trials=6)
+        expected_trials = READ_ONLY_PREFIX_PAIRS * 2
+        outcomes = self._drive(max_trials=expected_trials)
 
-        self.assertEqual(len(outcomes), 6)
-        self.assertEqual([outcome.evaluation_status for outcome in outcomes], ["PASS"] * 6)
-        self.assertEqual([outcome.trial_status for outcome in outcomes], ["valid"] * 6)
+        self.assertEqual(len(outcomes), expected_trials)
+        self.assertEqual(
+            [outcome.evaluation_status for outcome in outcomes], ["PASS"] * expected_trials)
+        self.assertEqual(
+            [outcome.trial_status for outcome in outcomes], ["valid"] * expected_trials)
         engines = {
             outcome.arm_id: next(
                 arm["engine"] for arm in self.protocol["arms"]
@@ -241,14 +251,14 @@ class ScheduleDriverQualificationTests(unittest.TestCase):
         self.assertEqual(kinds, {"query", "open"})
 
         status = verify_batch(self.ledger, **self.kwargs)
-        self.assertEqual(status["completed_trials"], 6)
-        self.assertEqual(status["outcomes"]["PASS"], 6)
+        self.assertEqual(status["completed_trials"], expected_trials)
+        self.assertEqual(status["outcomes"]["PASS"], expected_trials)
 
         report = build_report(ledger_path=self.ledger, **self.kwargs)
         self.assertEqual(verify_report(report)["status"], "READY")
         self.assertEqual(report["purpose"], "apparatus_qualification")
         self.assertFalse(report["comparative_claim_supported"])
-        self.assertEqual(report["outcomes"]["PASS"], 6)
+        self.assertEqual(report["outcomes"]["PASS"], expected_trials)
         self.assertEqual(report["stop_reason"], "batch_open")
         self.assertEqual(report["total_cost_cny"], 0.0)
         rendered = json.dumps(report, ensure_ascii=False)
@@ -352,8 +362,10 @@ class ScheduleDriverQualificationTests(unittest.TestCase):
                 return super().capture(role=role)
 
         self.fixture = DriftingFixture(self.companies)
-        with self.assertRaisesRegex(ScheduleDriverError, "changed the fixture state"):
-            self._drive(max_trials=2)
+        outcomes = self._drive(max_trials=2)
+        self.assertEqual(len(outcomes), 1)
+        self.assertEqual(outcomes[0].batch_status, "STOPPED_SAFETY")
+        self.assertEqual(verify_batch(self.ledger, **self.kwargs)["completed_trials"], 1)
 
     def test_the_read_only_qualification_stops_before_the_first_write_pair(self):
         kinds = {task["task_id"]: task["kind"]

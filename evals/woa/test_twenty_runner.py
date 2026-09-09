@@ -302,8 +302,10 @@ class WoaRunnerBoundaryTests(unittest.TestCase):
                 with self.subTest(path=path), self.assertRaisesRegex(
                         WoaTwentyRunnerError, "relative application path"):
                     WoaTwentyConfig(storage_state_path=state, entry_path=path)
-            with self.assertRaisesRegex(WoaTwentyRunnerError, "capability_profile"):
+            with self.assertRaisesRegex(WoaTwentyRunnerError, "skill_api profile"):
                 WoaTwentyConfig(storage_state_path=state, capability_profile="unknown")
+            with self.assertRaisesRegex(WoaTwentyRunnerError, "skill_api profile"):
+                WoaTwentyConfig(storage_state_path=state, capability_profile="browser_only")
             with self.assertRaisesRegex(WoaTwentyRunnerError, "SourceProvider"):
                 WoaTwentyConfig(storage_state_path=state, source_mode="on")
             missing = WoaTwentyConfig(storage_state_path=Path(directory) / "absent.json")

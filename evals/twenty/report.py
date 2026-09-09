@@ -27,6 +27,34 @@ _SAFETY = (
     "unauthorized_writes", "duplicate_writes", "forbidden_state_changes",
     "cross_identity_actions",
 )
+_AGGREGATE_FIELDS = {"count", "total", "median", "maximum"}
+_ARM_FIELDS = {
+    "arm_id", "engine", "engine_release", "capability_profile", "source_mode",
+    "trials", "valid_trials", "apparatus_invalid_trials", "outcomes",
+    "terminal_reasons", "page_actions", "business_calls", "model_calls",
+    "known_input_tokens", "known_output_tokens", "usage_unavailable_calls",
+    "known_cost_cny", "total_cost_cny", "safety",
+}
+_REPORT_FIELDS = {
+    "artifact_version", "kind", "purpose", "comparative_claim_supported",
+    "protocol_id", "protocol_digest", "development_seal_digest", "test_seal_digest",
+    "application_release", "browser_release", "requested_model", "scheduled_pairs",
+    "expected_trials", "completed_trials", "batch_status", "stop_reason", "outcomes",
+    "valid_trials", "apparatus_invalid_trials", "apparatus_codes",
+    "provider_reported_models", "model_calls", "usage_unavailable_calls",
+    "known_input_tokens", "known_output_tokens", "known_cost_cny", "total_cost_cny",
+    "safety_events", "safety", "arms", "interpretation", "report_digest",
+}
+_INTERPRETATION = (
+    "This report recomputes one batch from its verified ledger. It qualifies the "
+    "execution and evaluation apparatus only. It does not establish a task success "
+    "rate, an advantage or disadvantage against PageAgent, a source-retrieval effect, "
+    "or a no-gain conclusion."
+)
+
+
+def _has_fields(value: Any, fields: set[str] | frozenset[str]) -> bool:
+    return isinstance(value, dict) and set(value) == set(fields)
 
 
 def _purpose(records: list[dict[str, Any]], expected: int) -> str:
@@ -145,12 +173,7 @@ def build_report(*, protocol: Mapping[str, Any], development_seal: Mapping[str, 
         "safety_events": safety_events,
         "safety": {name: sum(record["safety"][name] for record in records) for name in _SAFETY},
         "arms": arms,
-        "interpretation": (
-            "This report recomputes one batch from its verified ledger. It qualifies the "
-            "execution and evaluation apparatus only. It does not establish a task success "
-            "rate, an advantage or disadvantage against PageAgent, a source-retrieval effect, "
-            "or a no-gain conclusion."
-        ),
+        "interpretation": _INTERPRETATION,
     }
     if unknown_calls and core["total_cost_cny"] is not None:
         raise EvaluationInputError("unknown provider usage cannot report a total cost")
@@ -162,6 +185,24 @@ def verify_report(value: Any) -> dict[str, Any]:
     if (not isinstance(value, dict) or value.get("artifact_version") != REPORT_VERSION
             or value.get("kind") != "twenty_public_report"):
         raise EvaluationInputError("public report header is invalid")
+    if set(value) != _REPORT_FIELDS:
+        raise EvaluationInputError("public report has unexpected fields")
+    if (value.get("purpose") not in {
+            "apparatus_qualification", "development_pilot", "formal_benchmark"}
+            or value.get("interpretation") != _INTERPRETATION):
+        raise EvaluationInputError("public report labels are invalid")
+    if not _has_fields(value.get("outcomes"), frozenset(_OUTCOMES)) \
+            or not _has_fields(value.get("safety"), frozenset(_SAFETY)):
+        raise EvaluationInputError("public report counters have unexpected fields")
+    arms = value.get("arms")
+    if not isinstance(arms, list) or any(
+            not isinstance(arm, dict) or set(arm) != _ARM_FIELDS
+            or not _has_fields(arm.get("outcomes"), frozenset(_OUTCOMES))
+            or not _has_fields(arm.get("safety"), frozenset(_SAFETY))
+            or any(not _has_fields(arm.get(name), frozenset(_AGGREGATE_FIELDS))
+                   for name in ("page_actions", "business_calls", "model_calls"))
+            for arm in arms):
+        raise EvaluationInputError("public report arm schema is invalid")
     core = {key: value[key] for key in value if key != "report_digest"}
     if value.get("report_digest") != digest_json(core):
         raise EvaluationInputError("public report digest does not match its content")

@@ -68,6 +68,7 @@ class StubRunner:
         started = datetime(2026, 9, 9, tzinfo=timezone.utc) + timedelta(
             seconds=2 * (sequence - 1))
         task_kind = case["evaluator_task"]["kind"]
+        arm = next(item for item in self.protocol["arms"] if item["arm_id"] == arm_id)
         if self.status == "completed" and task_kind == "query":
             evidence = {
                 "artifact_version": 1, "execution_status": "completed", "complete": True,
@@ -87,6 +88,11 @@ class StubRunner:
             "status": self.status,
             "apparatus_code": None,
             "error_code": None if self.status == "completed" else "agent_refused",
+            "engine": {
+                "name": arm["engine"], "release": arm["engine_release"],
+                "capability_profile": arm["capability_profile"],
+                "source_mode": arm["source_mode"],
+            },
             "run_id": run_id,
             "case": {**{key: case[key] for key in (
                 "set_id", "split", "task_id", "task_digest", "template_family_digest")},
@@ -225,6 +231,24 @@ class ScheduleDriverTests(unittest.TestCase):
         with self.assertRaisesRegex(ScheduleDriverError, "baseline is unavailable"):
             self._drive(max_trials=1, fixture=UnavailableFixture())
 
+    def test_an_unavailable_after_state_seals_the_trial_as_apparatus_invalid(self):
+        class UnavailableAfterFixture(StubFixture):
+            def capture(self, *, role: str) -> dict:
+                if role == "observation":
+                    from evals.twenty.evaluator import make_unavailable_state
+
+                    return make_unavailable_state(
+                        fixture=FIXTURE, captured_at="2026-09-09T00:00:00+00:00",
+                        role=role)
+                return super().capture(role=role)
+
+        outcomes, _runner = self._drive(
+            max_trials=1, fixture=UnavailableAfterFixture())
+        self.assertEqual(len(outcomes), 1)
+        self.assertEqual(outcomes[0].trial_status, "apparatus_invalid")
+        self.assertEqual(outcomes[0].apparatus_code, "fixture_state_unavailable")
+        self.assertEqual(outcomes[0].batch_status, "SEALED_INVALID")
+
     def test_a_read_only_trial_that_changes_state_stops_the_driver(self):
         class DriftingFixture(StubFixture):
             def capture(self, *, role: str) -> dict:
@@ -232,8 +256,19 @@ class ScheduleDriverTests(unittest.TestCase):
                     self.companies = []
                 return super().capture(role=role)
 
-        with self.assertRaisesRegex(ScheduleDriverError, "changed the fixture state"):
-            self._drive(max_trials=1, fixture=DriftingFixture())
+        outcomes, _runner = self._drive(max_trials=1, fixture=DriftingFixture())
+        self.assertEqual(len(outcomes), 1)
+        self.assertEqual(outcomes[0].batch_status, "STOPPED_SAFETY")
+        status = verify_batch(self.ledger, **self.kwargs)
+        self.assertEqual(status["completed_trials"], 1)
+        self.assertEqual(status["safety_events"], 1)
+
+    def test_a_resumed_second_arm_requires_the_same_pair_baseline(self):
+        self._drive(max_trials=1)
+        self.fixture.companies = []
+        with self.assertRaisesRegex(ScheduleDriverError, "paired trial baseline"):
+            self._drive(max_trials=1, start_index=1)
+        self.assertEqual(verify_batch(self.ledger, **self.kwargs)["completed_trials"], 1)
 
     def test_a_write_task_without_a_successful_restore_stops_the_driver(self):
         # Read-only pairs need no restore; the first scheduled create task does.
@@ -245,15 +280,39 @@ class ScheduleDriverTests(unittest.TestCase):
         with self.assertRaisesRegex(ScheduleDriverError, "explicit restore"):
             self._drive(max_trials=1, start_index=before_write)
         self.assertEqual(
-            verify_batch(self.ledger, **self.kwargs)["completed_trials"], before_write + 1)
-
-        with self.assertRaisesRegex(ScheduleDriverError, "did not return to the baseline"):
-            self._drive(max_trials=1, start_index=before_write + 1,
-                        restore=lambda: {"status": "INDETERMINATE"})
+            verify_batch(self.ledger, **self.kwargs)["completed_trials"], before_write)
 
         outcomes, _runner = self._drive(
-            max_trials=1, start_index=before_write + 2, restore=lambda: {"status": "PASS"})
+            max_trials=1, start_index=before_write, restore=lambda: {"status": "PASS"})
         self.assertEqual(len(outcomes), 1)
+
+    def test_a_failed_restore_seals_the_trial_with_its_accounting(self):
+        before_write = _first_write_pair(self.protocol, self.tasks) * 2
+        self._drive(max_trials=before_write)
+        outcomes, _runner = self._drive(
+            max_trials=1, start_index=before_write,
+            restore=lambda: {"status": "INDETERMINATE"})
+        self.assertEqual(len(outcomes), 1)
+        self.assertEqual(outcomes[0].trial_status, "apparatus_invalid")
+        self.assertEqual(outcomes[0].apparatus_code, "fixture_reset_mismatch")
+        status = verify_batch(self.ledger, **self.kwargs)
+        self.assertEqual(status["status"], "SEALED_INVALID")
+        self.assertEqual(status["completed_trials"], before_write + 1)
+
+    def test_a_claimed_restore_must_reproduce_the_captured_baseline(self):
+        before_write = _first_write_pair(self.protocol, self.tasks) * 2
+        self._drive(max_trials=before_write)
+
+        def false_restore():
+            self.fixture.companies = []
+            return {"status": "PASS"}
+
+        outcomes, _runner = self._drive(
+            max_trials=1, start_index=before_write, restore=false_restore)
+        self.assertEqual(outcomes[0].apparatus_code, "fixture_reset_mismatch")
+        self.assertEqual(outcomes[0].batch_status, "SEALED_INVALID")
+        self.assertEqual(
+            verify_batch(self.ledger, **self.kwargs)["completed_trials"], before_write + 1)
 
     def test_a_terminal_batch_can_never_be_continued(self):
         class SealingRunner(StubRunner):

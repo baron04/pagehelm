@@ -98,8 +98,8 @@ class WoaTwentyConfig:
                 or len(self.entry_path) > 1_000
                 or re.search(r"[\x00-\x20\x7f]", self.entry_path)):
             raise WoaTwentyRunnerError("entry_path must be a relative application path")
-        if self.capability_profile not in {"browser_only", "skill_api"}:
-            raise WoaTwentyRunnerError("capability_profile is invalid")
+        if self.capability_profile != "skill_api":
+            raise WoaTwentyRunnerError("this runner supports the skill_api profile only")
         if self.source_mode not in {"off", "on"}:
             raise WoaTwentyRunnerError("source_mode is invalid")
         if self.source_mode == "on":

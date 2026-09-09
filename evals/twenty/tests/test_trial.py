@@ -48,6 +48,7 @@ def _arm(protocol: dict, index: int) -> str:
 
 def _run(protocol: dict, test_seal: dict, index: int, kind: str) -> dict:
     pair = protocol["schedule"][index // 2]
+    arm = next(item for item in protocol["arms"] if item["arm_id"] == _arm(protocol, index))
     started = datetime(2026, 9, 9, tzinfo=timezone.utc) + timedelta(seconds=index * 2)
     accounting = {
         "model_calls": 1,
@@ -69,6 +70,11 @@ def _run(protocol: dict, test_seal: dict, index: int, kind: str) -> dict:
         "status": "completed",
         "apparatus_code": None,
         "error_code": None,
+        "engine": {
+            "name": arm["engine"], "release": arm["engine_release"],
+            "capability_profile": arm["capability_profile"],
+            "source_mode": arm["source_mode"],
+        },
         "case": {
             "task_id": pair["task_id"],
             "task_digest": test_seal["task_digests"][pair["task_id"]],
@@ -158,6 +164,27 @@ class TrialProjectionTests(unittest.TestCase):
                 protocol=protocol, test_seal=test_seal,
                 batch_id="qualification-batch-v1", schedule_index=index,
                 arm_id=_arm(protocol, index), run=run, evaluation=evaluation,
+                before=before, after=after)
+
+    def test_runner_capabilities_must_match_the_frozen_arm(self):
+        protocol, _development, test_seal, _split = frozen_artifacts()
+        before, after = _state("baseline"), _state("observation")
+        evaluation = {
+            "artifact_version": 1, "kind": "twenty_evaluation",
+            "status": "PASS", "task_kind": "query", "checks": {"passed": True},
+            "before_digest": before["digest"], "after_digest": after["digest"],
+        }
+        index = 0
+        arm_id = _arm(protocol, index)
+        engine = next(arm["engine"] for arm in protocol["arms"] if arm["arm_id"] == arm_id)
+        kind = "woa_twenty_run" if engine == "web_operation_agent" else "pageagent_twenty_run"
+        run = _run(protocol, test_seal, index, kind)
+        run["engine"]["source_mode"] = "on" if run["engine"]["source_mode"] == "off" else "off"
+        with self.assertRaisesRegex(ValueError, "frozen arm"):
+            project_trial_record(
+                protocol=protocol, test_seal=test_seal,
+                batch_id="qualification-batch-v1", schedule_index=index,
+                arm_id=arm_id, run=run, evaluation=evaluation,
                 before=before, after=after)
 
     def test_evaluation_must_be_bound_to_the_same_fixture_states(self):

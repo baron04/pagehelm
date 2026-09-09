@@ -28,10 +28,9 @@ from web_operation_agent.product import AgentTurnExecution
 
 RUNNER_VERSION = 1
 ENGINE_NAME = "web_operation_agent"
-#: ``ServerAgentSession`` truncates its own ``agent_said`` at 500 characters, well below
-#: the turn policy limit. An answer at that ceiling may have been cut by the engine rather
-#: than written short, so the artifact reports the condition instead of hiding it.
-ENGINE_ANSWER_CEILING = 500
+#: The product propagates the runner's answer limit into ``ServerAgentSession``. This is the
+#: same maximum accepted by the shared evidence contract and the PageAgent runner.
+ENGINE_ANSWER_CEILING = 20_000
 ENGINE_RELEASE = f"web-operation-agent@{_PRODUCT_VERSION}"
 _BUSINESS_ATTEMPT_EVENTS = frozenset({
     "business_tool_result", "business_tool_rejected", "business_mutation_result",

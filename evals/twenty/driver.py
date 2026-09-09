@@ -80,6 +80,26 @@ def _ready_state(value: Any, *, role: str, what: str) -> dict[str, Any]:
     return state
 
 
+def _apparatus_fault(run: dict[str, Any], code: str) -> dict[str, Any]:
+    """Preserve run accounting while making a driver-observed apparatus fault terminal."""
+    return {
+        **run,
+        "status": "apparatus_invalid",
+        "apparatus_code": code,
+        "error_code": code,
+        "evidence": {"artifact_version": 1, "execution_status": "failed"},
+        "run_digest": None,
+    }
+
+
+def _forbidden_state_change(run: dict[str, Any]) -> dict[str, Any]:
+    """Record a read-only state mutation in the common safety projection."""
+    trial = dict(run.get("trial") or {})
+    safety = dict(trial.get("safety") or {})
+    safety["forbidden_state_changes"] = safety.get("forbidden_state_changes", 0) + 1
+    return {**run, "trial": {**trial, "safety": safety}, "run_digest": None}
+
+
 def run_schedule(*, protocol: Mapping[str, Any], development_seal: Mapping[str, Any],
                  test_seal: Mapping[str, Any], split_verification: Mapping[str, Any],
                  task_set: Mapping[str, Any], fixture: FixtureController,
@@ -119,43 +139,65 @@ def run_schedule(*, protocol: Mapping[str, Any], development_seal: Mapping[str, 
             raise ScheduleDriverError("no runner is bound to the next scheduled arm")
         before = fixture.capture(role="baseline")
         before_state = _ready_state(before, role="baseline", what="trial baseline")
+        if arm_order == 2:
+            pair_baseline = status.get("open_pair_baseline_digest")
+            if not isinstance(pair_baseline, str) or before_state["digest"] != pair_baseline:
+                raise ScheduleDriverError("paired trial baseline does not match the first arm")
         case = instantiate_task(tasks, pair["task_id"], before)
         task_kind = case["evaluator_task"]["kind"]
+        if _reset_required(task_kind) and restore is None:
+            raise ScheduleDriverError("a write task requires an explicit restore")
         run_id = f"{batch_id}-{index + 1:04d}"
         run = runner(case=case, arm_id=arm_id, task_id=pair["task_id"],
                      schedule_position=pair["position"], run_id=run_id)
         after = fixture.capture(role="observation")
         if not isinstance(run, dict):
             raise ScheduleDriverError("runner did not return a run artifact")
+        after_state = validate_state(after, expected_role="observation")
         evaluation = evaluate(
             task=case["evaluator_task"], before=before, after=after,
             evidence=run.get("evidence"))
+        selected_run = run
+        after_unavailable = after_state.get("status") != "READY"
+        if _reset_required(task_kind):
+            assert restore is not None
+            reset_failed = False
+            try:
+                outcome = restore()
+                restored = validate_state(
+                    fixture.capture(role="baseline"), expected_role="baseline")
+                reset_failed = bool(
+                    not isinstance(outcome, dict) or outcome.get("status") != "PASS"
+                    or restored.get("status") != "READY"
+                    or restored.get("digest") != before_state["digest"])
+            except Exception:
+                reset_failed = True
+            if reset_failed:
+                selected_run = _apparatus_fault(run, "fixture_reset_mismatch")
+            elif after_unavailable:
+                selected_run = _apparatus_fault(run, "fixture_state_unavailable")
+        elif after_unavailable:
+            selected_run = _apparatus_fault(run, "fixture_state_unavailable")
+        elif after_state["digest"] != before_state["digest"]:
+            selected_run = _forbidden_state_change(run)
         record = project_trial_record(
             protocol=protocol, test_seal=test_seal, batch_id=batch_id,
-            schedule_index=index, arm_id=arm_id, run=run, evaluation=evaluation,
+            schedule_index=index, arm_id=arm_id, run=selected_run, evaluation=evaluation,
             before=before, after=after)
+        # Append a normal record only after the next arm's state is known to be clean. A failed
+        # reset or read-only mutation is instead recorded as terminal, preserving accounting
+        # while preventing continuation against contaminated or unknown state.
         summary = append_trial(ledger_path, record, **ledger_kwargs)
+        status = summary
         outcomes.append(TrialOutcome(
             schedule_position=pair["position"], arm_order=arm_order, arm_id=arm_id,
             task_id=pair["task_id"], trial_status=record["trial_status"],
             evaluation_status=record["evaluation_status"],
             terminal_reason=record["terminal_reason"],
             apparatus_code=record["apparatus_code"],
-            run_digest=run.get("run_digest") if isinstance(run.get("run_digest"), str) else None,
+            run_digest=(selected_run.get("run_digest")
+                        if isinstance(selected_run.get("run_digest"), str) else None),
             batch_status=summary["status"]))
-        if _reset_required(task_kind):
-            if restore is None:
-                raise ScheduleDriverError("a write task requires an explicit restore")
-            outcome = restore()
-            if not isinstance(outcome, dict) or outcome.get("status") != "PASS":
-                raise ScheduleDriverError("fixture restore did not return to the baseline")
-        else:
-            # A read-only trial must leave the business state it started from. The evaluator
-            # already consumed this observation, so the check needs no extra capture.
-            after_state = validate_state(after, expected_role="observation")
-            if (after_state.get("status") == "READY"
-                    and after_state["digest"] != before_state["digest"]):
-                raise ScheduleDriverError("read-only trial changed the fixture state")
         if summary["status"] in _TERMINAL_BATCH_STATUSES:
             break
     return outcomes

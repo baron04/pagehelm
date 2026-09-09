@@ -328,6 +328,7 @@ class ServerAgentSession:
                  business_tools: BusinessToolRuntime | None = None,
                  business_mutation_approval=None,
                  plain_business_answer_min_page_actions: int | None = None,
+                 max_agent_said_chars: int = 500,
                  cancelled: Callable[[], bool] | None = None,
                  principal: PrincipalContext | None = None,
                  session_id: str = "", turn_id: str = "",
@@ -361,6 +362,10 @@ class ServerAgentSession:
                      or plain_business_answer_min_page_actions < 0)):
             raise ValueError(
                 "plain business answer minimum page actions must be nonnegative or None")
+        if (isinstance(max_agent_said_chars, bool)
+                or not isinstance(max_agent_said_chars, int)
+                or not 1 <= max_agent_said_chars <= 20_000):
+            raise ValueError("max_agent_said_chars must be between 1 and 20000")
         if cancelled is not None and not callable(cancelled):
             raise ValueError("cancelled must be callable or None")
         if principal is not None and not isinstance(principal, PrincipalContext):
@@ -456,6 +461,7 @@ class ServerAgentSession:
         self.latest_business_tool_result: BusinessToolResult | None = None
         self.plain_business_answer_min_page_actions = \
             plain_business_answer_min_page_actions
+        self.max_agent_said_chars = max_agent_said_chars
         self.cancelled = cancelled or (lambda: False)
         self.principal = principal
         self.session_id = session_id
@@ -784,7 +790,7 @@ class ServerAgentSession:
                         "business_answer", step=step, said=said[:300],
                         successful_business_tools=successful_business_tools,
                         success_claim="unverified")
-                    result.agent_said = said[:500]
+                    result.agent_said = said[:self.max_agent_said_chars]
                     return self._finish(
                         result, t0, "agent_finished", result.agent_said, steps=step)
                 # No tool call is not a terminal event by itself: nudge once per step, the
@@ -1467,7 +1473,7 @@ class ServerAgentSession:
 
             if name == "finish":
                 done = bool(args.get("done"))
-                result.agent_said = str(args.get("why") or "")[:500]
+                result.agent_said = str(args.get("why") or "")[:self.max_agent_said_chars]
                 if done and self._should_challenge_completion():
                     # The agent believes it is finished, and the application refused the only
                     # write it attempted. Ending here would record a claim the control plane

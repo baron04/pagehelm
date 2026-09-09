@@ -23,7 +23,7 @@ _CODE = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _APPARATUS_CODES = {
     "credential_or_identity", "evaluator_crash", "fixture_reset_mismatch",
-    "ledger_failure", "pair_window_exceeded", "privacy_boundary",
+    "fixture_state_unavailable", "ledger_failure", "pair_window_exceeded", "privacy_boundary",
     "provider_outage", "transport_contract",
 }
 _MAX_LEDGER_BYTES = 64 * 1024 * 1024
@@ -522,6 +522,9 @@ def _summary(header: dict[str, Any], records: list[dict[str, Any]], chain_head: 
         "known_cost_cny": known_cost,
         "usage_unavailable_calls": unknown_calls,
         "total_cost_cny": None if unknown_calls else known_cost,
+        "open_pair_baseline_digest": (
+            records[-1]["evidence"]["before_state_digest"]
+            if len(records) % 2 == 1 and _status(header, records) == "OPEN" else None),
         "chain_head": chain_head,
     }
 

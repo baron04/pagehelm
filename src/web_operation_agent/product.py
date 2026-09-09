@@ -395,6 +395,7 @@ class AgentTurnExecutor:
                 if self.config.allow_business_mutations else None),
             plain_business_answer_min_page_actions=(
                 self.config.plain_business_answer_min_page_actions),
+            max_agent_said_chars=self.config.max_user_answer_chars,
             allow_application_entry=self.config.allow_application_entry,
             cancelled=lambda: self.channel.message_cancelled(turn_message.message_id),
             principal=principal,
@@ -481,7 +482,7 @@ class AgentTurnExecutor:
             self.channel.publish("progress", {
                 "state": status.value,
                 "terminal_reason": agent.terminal_reason,
-                "message": user_answer[:800],
+                "message": user_answer,
             })
         except Exception as exc:
             # The browser or event transport may disappear after a write or after the

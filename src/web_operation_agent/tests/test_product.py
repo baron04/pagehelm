@@ -332,6 +332,37 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 ["agent_started", "finished"],
             )
 
+    def test_turn_answer_limit_reaches_the_session_before_product_rendering(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = _skill(root / "query-skill.json")
+            long_answer = "A" * 1_200
+            chat = _Chat([
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("query_companies", {}),
+                (None, {"content": long_answer}),
+            ])
+            channel = _Channel()
+            executor = AgentTurnExecutor(
+                channel=channel,
+                config=AgentTurnConfig(
+                    supported_scope="Read company data only.",
+                    ledger_path=root / "session.jsonl",
+                    plain_business_answer_min_page_actions=0,
+                    max_user_answer_chars=2_000,
+                ),
+                chat=chat,
+                business_tools=BusinessToolRuntime((skill,), _Executor()),
+                control=ReadOnlyControl(),
+                run_id_factory=lambda _message: "turn-long-answer-001",
+            )
+            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+                execution = executor.run_once(_message())
+
+            self.assertEqual(execution.user_answer, long_answer)
+            self.assertEqual(execution.agent.agent_said, long_answer)
+            self.assertEqual(channel.published[-1][1]["message"], long_answer)
+
     def test_second_turn_resolves_reference_but_must_refresh_before_opening(self):
         class TwoCompanyExecutor(_Executor):
             @staticmethod

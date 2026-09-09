@@ -48,11 +48,12 @@ def project_trial_record(*, protocol: dict[str, Any], test_seal: dict[str, Any],
     if arm_id != expected_arm:
         raise EvaluationInputError("runner arm does not match the frozen schedule")
     try:
-        engine = next(
-            item["engine"] for item in protocol["arms"]
+        arm = next(
+            item for item in protocol["arms"]
             if item["arm_id"] == expected_arm)
     except (KeyError, StopIteration, TypeError) as exc:
         raise EvaluationInputError("scheduled runner engine is unavailable") from exc
+    engine = arm["engine"]
     if not isinstance(run, dict) or run.get("artifact_version") != 1:
         raise EvaluationInputError("runner artifact header is invalid")
     expected_kind = (
@@ -60,6 +61,16 @@ def project_trial_record(*, protocol: dict[str, Any], test_seal: dict[str, Any],
         else "pageagent_twenty_run")
     if run.get("kind") != expected_kind:
         raise EvaluationInputError("runner artifact does not match the scheduled engine")
+    run_engine = run.get("engine")
+    expected_engine = {
+        "name": arm["engine"],
+        "release": arm["engine_release"],
+        "capability_profile": arm["capability_profile"],
+        "source_mode": arm["source_mode"],
+    }
+    if (not isinstance(run_engine, dict)
+            or any(run_engine.get(key) != value for key, value in expected_engine.items())):
+        raise EvaluationInputError("runner artifact does not match the frozen arm")
     case = run.get("case")
     trial = run.get("trial")
     if not isinstance(case, dict) or not isinstance(trial, dict):
