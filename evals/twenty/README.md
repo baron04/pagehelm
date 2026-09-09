@@ -70,13 +70,27 @@ python -m evals.twenty verify-protocol \
   --split-verification evals/twenty/tasksets/twenty-companies-split-v1.json
 ```
 
-The repository currently ships the validator, not a frozen formal-run protocol. The official PageAgent bundle and read-only runner are qualified; the Web Operation Agent run-artifact assembler, common schedule driver, provider snapshot policy, source allowlist and remaining environment manifests must be qualified and hashed before creating that artifact. Model runs performed before those fields are frozen remain exploratory and cannot support benchmark claims.
+The repository currently ships the validator, not a frozen formal-run protocol. The official PageAgent bundle, both read-only runners, the common schedule driver and the public report generator are qualified without a model call; the provider snapshot policy, source allowlist and remaining environment manifests must still be qualified and hashed before creating that artifact. Model runs performed before those fields are frozen remain exploratory and cannot support benchmark claims.
 
 ## Shared outcome and trial projection
 
 [`outcomes.py`](outcomes.py) is the common failure classifier for both engines. Model-call limits, deadlines, invalid tool arguments, route refusal and cancellation remain scorable engine outcomes. Stable identity/authentication codes become `credential_or_identity`; provider failures become `provider_outage`; API, response-contract and browser-transport failures become `transport_contract`. Web Operation Agent writes the same typed business code to its private audit event that the PageAgent Business Host returns, so the classifier does not inspect exception text.
 
-[`trial.py`](trial.py) converts an engine runner's bounded `trial` projection into the canonical record validated by [`records.py`](records.py). It binds the artifact to the scheduled task, digest, arm and engine, then copies only accounting, action counts, safety counters and evidence digests. The same projector and append-only ledger test cover PageAgent and Web Operation Agent artifacts across a complete frozen schedule. The PageAgent runner emits this projection today; formal batch execution still needs the Web Operation Agent run-artifact assembler and one schedule driver.
+[`trial.py`](trial.py) converts an engine runner's bounded `trial` projection into the canonical record validated by [`records.py`](records.py). It binds the artifact to the scheduled task, digest, arm and engine, then copies only accounting, action counts, safety counters and evidence digests. The same projector and append-only ledger cover PageAgent and Web Operation Agent artifacts across a complete frozen schedule.
+
+[`evidence.py`](evidence.py) is the one evidence contract both engines use. It validates an execution case, projects the part of it a runner artifact may carry, and builds completed evidence: a query answer must be one strict JSON object that restates exactly the companies and completeness its own business results disclosed, and open evidence requires a route disclosed by a current business result, a server permit for that exact route, and the record's name and domain visible on the final rendered page. It never repairs prose, Markdown, omissions or duplicate rows, never reads database truth, and never accepts a model's tool arguments in place of an observed fact.
+
+## Common schedule driver
+
+[`driver.py`](driver.py) executes one frozen protocol serially. For each scheduled pair it captures the before state, instantiates the task against that baseline, calls the arm's runner, captures the after state, evaluates with the independent evaluator, projects the common trial record and appends it to the batch ledger. It cannot select, reorder, parallelize or silently retry a trial: it resumes only at the exact next ledger position, refuses an arm outside the frozen protocol or without a bound runner, and stops as soon as the batch becomes terminal. A create task requires an explicit restore that returns `PASS`; a read-only task must leave the state digest it started from. An interrupted trial is never recorded as completed, because the record is written only after the evaluator has scored it.
+
+The driver contains no PageAgent or Web Operation Agent special case. An engine appears only as a runner adapter that returns the shared artifact, so both engines are bound to the same reset, evaluator, projector and ledger by construction.
+
+## Public redacted report
+
+[`report.py`](report.py) recomputes a schema-fixed public report from a verified ledger and its frozen protocol, both re-verified on every call. It reports sample counts, `PASS`/`FAIL`/`INDETERMINATE`/`INVALID` tallies, per-arm outcome and terminal-reason counts, page/business action and model-call aggregates, token and cost completeness, safety counters and the batch stop reason. It emits no prompt, company data, per-trial timing, request ID, run ID, credential, raw trace or held-out task content.
+
+The report labels its own purpose. A batch smaller than its schedule is `apparatus_qualification`; a complete batch with fewer than thirty trials per arm is `development_pilot`; only a larger complete batch is `formal_benchmark`. `comparative_claim_supported` is always false, and `verify_report` refuses a report that sets it. These artifacts cannot support a success rate, a PageAgent comparison, a source-retrieval effect, or a no-gain conclusion.
 
 ## Append-only batch ledger
 
