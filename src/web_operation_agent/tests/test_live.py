@@ -11,11 +11,16 @@ from unittest import mock
 
 from web_operation_agent.live import (LiveConversationRunner, LiveProductServer,
                                       LiveProductSession, render_live_replay)
-from web_operation_agent.product import AgentTurnError, AgentTurnErrorCode
+from web_operation_agent.embedded_agent import ReadOnlyControl
+from web_operation_agent.model import ProviderError
+from web_operation_agent.product import (AgentTurnConfig, AgentTurnError,
+                                         AgentTurnErrorCode, AgentTurnExecutor,
+                                         AgentTurnStatus)
 from web_operation_agent.remote import (RemoteProtocolError, RemoteSessionClosed,
                                          RemoteSessionLimits, RemoteSessionRegistry)
-from web_operation_agent.schemas import (SCHEMA_VERSIONS, ClientHello, ElementRef,
-                                          ObservationEnvelope, PageObservation)
+from web_operation_agent.schemas import (SCHEMA_VERSIONS, CancellationRequest,
+                                         ClientHello, ElementRef, ObservationEnvelope,
+                                         PageObservation)
 
 
 ORIGIN = "http://app.test"
@@ -118,6 +123,75 @@ def _channel_with_observation():
 
 
 class LiveProductSessionTests(unittest.TestCase):
+    def test_cancel_and_deadline_release_host_for_following_messages(self):
+        class Chat:
+            def __init__(self):
+                self.calls = 0
+                self.started = threading.Event()
+
+            def complete(self, *_args, **_kwargs):
+                raise AssertionError("cancellable completion was bypassed")
+
+            def complete_cancellable(self, *_args, cancelled, timeout_s, **_kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    self.started.set()
+                    while not cancelled():
+                        time.sleep(.01)
+                    raise ProviderError(
+                        "cancelled", code="provider_cancelled", retryable=False)
+                if self.calls == 3:
+                    time.sleep(timeout_s + .02)
+                    raise ProviderError("late", code="provider_transport")
+                return {"tool_calls": [{"id": "finish-2", "function": {
+                    "name": "finish",
+                    "arguments": json.dumps({"done": True, "why": "recovered"}),
+                }}]}
+
+        channel, lease = _channel_with_observation()
+        chat = Chat()
+        with tempfile.TemporaryDirectory() as directory:
+            executor = AgentTurnExecutor(
+                channel=channel,
+                config=AgentTurnConfig(
+                    supported_scope="Read the current page.",
+                    ledger_path=Path(directory) / "session.jsonl",
+                    wall_budget_s=1),
+                chat=chat, business_tools=None, control=ReadOnlyControl(),
+                run_id_factory=lambda message: "live-" + message.message_id,
+            )
+            host = LiveConversationRunner(channel, executor=executor)
+            worker = threading.Thread(target=host.run, daemon=True)
+            worker.start()
+            channel.accept_message(_message(1), lease_id=lease)
+            self.assertTrue(chat.started.wait(1))
+            channel.accept_cancellation(
+                CancellationRequest(1, channel.session_id, "message-1"),
+                lease_id=lease)
+            cancelled = host.next_outcome(timeout_s=1)
+            channel.accept_message(_message(2), lease_id=lease)
+            recovered = host.next_outcome(timeout_s=1)
+            channel.accept_message(_message(3), lease_id=lease)
+            timed_out = host.next_outcome(timeout_s=2)
+            channel.accept_message(_message(4), lease_id=lease)
+            recovered_after_timeout = host.next_outcome(timeout_s=1)
+            host.close("test_complete")
+            worker.join(2)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(cancelled.result.status, AgentTurnStatus.CANCELLED)
+        self.assertEqual(cancelled.result.terminal_reason, "user_cancelled")
+        self.assertEqual(recovered.result.status, AgentTurnStatus.FINISHED)
+        self.assertEqual(recovered.result.terminal_reason, "agent_finished")
+        self.assertEqual(timed_out.result.status, AgentTurnStatus.FAILED)
+        self.assertEqual(timed_out.result.terminal_reason, "wall_clock_budget")
+        self.assertEqual(recovered_after_timeout.result.status, AgentTurnStatus.FINISHED)
+        self.assertEqual(chat.calls, 4)
+        states = [event.payload.get("state") for event in
+                  channel.events_after("", lease_id=lease) if event.kind == "progress"]
+        self.assertIn("cancelled", states)
+        self.assertIn("finished", states)
+
     def _run_messages(self, messages, executor):
         channel = executor.channel
         lease = getattr(executor, "lease")
