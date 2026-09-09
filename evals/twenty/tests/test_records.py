@@ -181,6 +181,26 @@ class BatchRecordTests(unittest.TestCase):
             **self.kwargs)
         self.assertEqual(stopped["status"], "STOPPED_SAFETY")
 
+    def test_provider_outage_can_be_sealed_without_an_impossible_model_snapshot(self):
+        record = trial(self.protocol, self.test, 0, status="apparatus_invalid")
+        record["metrics"].update({
+            "model_calls": 1,
+            "usage_unavailable_calls": 1,
+            "provider_reported_models": [],
+            "provider_request_ids_digest": "sha256:" + "c" * 64,
+            "total_cost_cny": None,
+        })
+        result = append_trial(self.path, record, **self.kwargs)
+        self.assertEqual(result["status"], "SEALED_INVALID")
+        self.assertEqual(result["usage_unavailable_calls"], 1)
+        self.assertIsNone(result["total_cost_cny"])
+
+    def test_valid_trial_cannot_omit_its_provider_model_snapshot(self):
+        record = trial(self.protocol, self.test, 0, unknown_usage=True)
+        record["metrics"]["provider_reported_models"] = []
+        with self.assertRaisesRegex(EvaluationInputError, "reported-model"):
+            append_trial(self.path, record, **self.kwargs)
+
     def test_existing_batch_is_never_overwritten(self):
         before = self.path.read_bytes()
         with self.assertRaisesRegex(EvaluationInputError, "already exists"):

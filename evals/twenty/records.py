@@ -121,8 +121,12 @@ def _metrics(value: Any, protocol: dict[str, Any], trial_status: str) -> dict[st
         allow_none=True)
     if model_calls == 0 and (models or request_digest is not None):
         raise EvaluationInputError("zero-call trial cannot report provider models or request ids")
-    if model_calls > 0 and (not models or request_digest is None):
-        raise EvaluationInputError("dispatched model calls require reported model and request-id evidence")
+    if model_calls > 0 and request_digest is None:
+        raise EvaluationInputError("dispatched model calls require request-id evidence")
+    if (model_calls > 0 and not models
+            and not (trial_status == "apparatus_invalid" and unavailable == model_calls)):
+        raise EvaluationInputError(
+            "a trial with provider responses requires reported-model evidence")
     known_input = _integer(
         raw.get("known_input_tokens"), "metrics.known_input_tokens", maximum=4_000_000)
     known_output = _integer(

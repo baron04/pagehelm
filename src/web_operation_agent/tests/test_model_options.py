@@ -355,6 +355,29 @@ class ProviderRuntimeProtection(unittest.TestCase):
             self.assertEqual(row["accounting_status"], "usage_unavailable")
             self.assertIsNone(row["call_cost_cny"])
 
+    def test_missing_usage_still_retains_a_valid_provider_model_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            chat = M.ChatModel(
+                M.SpendMeter(ledger=Path(directory) / "spend.jsonl"),
+                env={"AGENT_OPENAI_BASE_URL": "https://provider.example/v1",
+                     "AGENT_OPENAI_API_KEY": "key",
+                     "AGENT_OPENAI_MODEL_PRO": "MiniMax-M3"},
+            )
+            payload = {"model": "snapshot-without-usage", "choices": [{
+                "finish_reason": "stop", "message": {"content": "done"}}]}
+            response = io.BytesIO(json.dumps(payload).encode())
+            response.__enter__ = lambda stream=response: stream
+            response.__exit__ = lambda stream=response, *_args: None
+            with patch.object(M.urllib.request, "urlopen", return_value=response):
+                with self.assertRaises(M.ProviderError):
+                    chat.complete([{"role": "user", "content": "test"}], None, "run")
+
+            report = chat.meter.run_report("run")
+            self.assertEqual(report["usage_unavailable_calls"], 1)
+            self.assertEqual(report["provider_reported_models"],
+                             ["snapshot-without-usage"])
+            self.assertIsNone(report["total_cost_cny"])
+
 
 class PlannerAllowance(unittest.TestCase):
     def test_the_planner_asks_for_a_multiple_of_what_the_model_declares(self):

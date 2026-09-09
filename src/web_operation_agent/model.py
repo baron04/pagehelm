@@ -716,9 +716,15 @@ class ChatModel:
         if (not isinstance(usage, dict)
                 or "prompt_tokens" not in usage
                 or "completion_tokens" not in usage):
+            reported_model = data.get("model")
+            try:
+                reported_model = SpendMeter._reported_model(reported_model)
+            except ValueError:
+                reported_model = ""
             self.meter.record_unmetered(
                 provider=self.provider, model=self.model, run_id=run_id,
-                request_id=request_id, error_code="provider_usage")
+                request_id=request_id, error_code="provider_usage",
+                reported_model=reported_model or None)
             raise ProviderError(
                 "provider usage must report prompt_tokens and completion_tokens",
                 code="provider_usage", request_id=request_id)
