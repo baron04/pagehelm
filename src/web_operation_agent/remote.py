@@ -58,13 +58,22 @@ class RemoteSessionClosed(RemoteProtocolError):
         super().__init__(message, code="session_closed", status=410)
 
 
+_MAX_EVENT_BYTES = 256 * 1024
+_MAX_MESSAGE_ID_LENGTH = 128
+_MAX_ORIGIN_LENGTH = 2048
+_MAX_PAGE_URL_LENGTH = 4096
+
+
 def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
 def _origin(value: str) -> str:
+    if not isinstance(value, str) or len(value) > _MAX_ORIGIN_LENGTH:
+        raise RemoteProtocolError("expected a bounded absolute http(s) origin", status=400)
     parsed = urlsplit(value)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+    if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+            or parsed.username is not None or parsed.password is not None):
         raise RemoteProtocolError("expected an absolute http(s) origin", status=400)
     return f"{parsed.scheme}://{parsed.netloc}"
 
@@ -126,16 +135,58 @@ class SessionGrant:
     application_id: str = ""
     principal_digest: str = ""
     expires_at: int = 0
+    session_expires_at: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class RemoteSessionLimits:
+    """Hard per-session bounds for the in-process transport state."""
+
+    session_ttl_s: int = 3600
+    max_events: int = 2048
+    max_messages: int = 128
+    max_queued_messages: int = 8
+    max_observations: int = 2048
+    max_actions: int = 512
+    max_approvals: int = 128
+    max_runtime_instances: int = 64
+
+    def __post_init__(self) -> None:
+        ranges = {
+            "session_ttl_s": (1, 86_400),
+            "max_events": (3, 100_000),
+            "max_messages": (1, 10_000),
+            "max_queued_messages": (1, 1_000),
+            "max_observations": (1, 100_000),
+            "max_actions": (1, 10_000),
+            "max_approvals": (1, 10_000),
+            "max_runtime_instances": (1, 10_000),
+        }
+        for name, (minimum, maximum) in ranges.items():
+            value = getattr(self, name)
+            if (isinstance(value, bool) or not isinstance(value, int)
+                    or not minimum <= value <= maximum):
+                raise ValueError(f"{name} must be an integer from {minimum} to {maximum}")
+        if self.max_queued_messages > self.max_messages:
+            raise ValueError("max_queued_messages cannot exceed max_messages")
 
 
 class RemoteSessionChannel:
     """Thread-safe journal and rendezvous point for one server-owned Agent session."""
 
     def __init__(self, session_id: str, allowed_origins: tuple[str, ...],
-                 principal: PrincipalContext | None = None):
+                 principal: PrincipalContext | None = None,
+                 limits: RemoteSessionLimits | None = None):
         self.session_id = session_id
         self.allowed_origins = frozenset(allowed_origins)
         self.principal = principal
+        self.limits = limits or RemoteSessionLimits()
+        if not isinstance(self.limits, RemoteSessionLimits):
+            raise TypeError("limits must be RemoteSessionLimits or None")
+        created_at = _now_ms()
+        limit_expiry = created_at + self.limits.session_ttl_s * 1000
+        self.expires_at = (min(limit_expiry, principal.expires_at)
+                           if principal is not None else limit_expiry)
         self._condition = threading.Condition(threading.RLock())
         self._hello: ClientHello | None = None
         self._active_lease_id = ""
@@ -148,6 +199,7 @@ class RemoteSessionChannel:
         self._actions: dict[str, ActionEnvelope] = {}
         self._action_observations: dict[str, ObservationEnvelope] = {}
         self._results: dict[str, ActionResultEnvelope] = {}
+        self._result_digests: dict[str, str] = {}
         self._action_claims: dict[str, str] = {}
         self._pending_action_id = ""
         self._events: list[TaskEvent] = []
@@ -161,6 +213,7 @@ class RemoteSessionChannel:
         self._approval_decisions: dict[str, ApprovalDecision] = {}
         self._pending_approval_id = ""
         self._closed = False
+        self._close_reason = ""
         self._append_event("session_started", {
             "state": "waiting_for_runtime",
             "application_id": (principal.application_id if principal else ""),
@@ -186,12 +239,65 @@ class RemoteSessionChannel:
 
     def _ensure_open(self) -> None:
         if self._closed:
-            raise RemoteSessionClosed()
+            detail = (f": {self._close_reason}" if self._close_reason else "")
+            raise RemoteSessionClosed(f"remote session is closed{detail}")
+        now_ms = _now_ms()
+        if self.principal is not None and now_ms >= self.principal.expires_at:
+            self._terminate("principal_expired")
+            raise RemoteSessionClosed("session principal is no longer valid")
+        if now_ms >= self.expires_at:
+            self._terminate("session_expired")
+            raise RemoteSessionClosed("remote session expired")
         if self.principal is not None:
             try:
-                self.principal.require_live(now_ms=_now_ms())
+                self.principal.require_live(now_ms=now_ms)
             except PrincipalError as exc:
+                self._terminate("principal_expired")
                 raise RemoteSessionClosed("session principal is no longer valid") from exc
+
+    @property
+    def expired(self) -> bool:
+        return _now_ms() >= self.expires_at
+
+    def _remaining_lifetime_s(self) -> float:
+        return max(0.0, (self.expires_at - _now_ms()) / 1000)
+
+    def _bounded_wait(self, timeout_s: float) -> float:
+        return min(timeout_s, self._remaining_lifetime_s())
+
+    def _new_event(self, kind: str, payload: dict, *, turn_id: str = "") -> TaskEvent:
+        sequence = len(self._events) + 1
+        event = TaskEvent(
+            schema_version=SCHEMA_VERSIONS["TaskEvent"],
+            event_id=f"e{sequence:08d}",
+            session_id=self.session_id,
+            sequence=sequence,
+            kind=kind,
+            turn_id=turn_id,
+            payload=_copy_json(payload),
+        )
+        if len(canonical_json(event.to_json()).encode("utf-8")) > _MAX_EVENT_BYTES:
+            raise RemoteProtocolError(
+                "task event exceeds 256 KiB", code="payload_too_large", status=413)
+        self._events.append(event)
+        self._condition.notify_all()
+        return _copy_wire(event)
+
+    def _terminate(self, reason: str) -> None:
+        if self._closed:
+            return
+        if (not isinstance(reason, str) or not reason or len(reason) > 100
+                or any(not (char.isalnum() or char in "-_") for char in reason)):
+            reason = "session_closed"
+        self._close_reason = reason
+        if len(self._events) < self.limits.max_events:
+            self._new_event("terminal", {"reason": reason})
+        self._closed = True
+        self._condition.notify_all()
+
+    def _capacity_exhausted(self, resource: str) -> None:
+        self._terminate(f"{resource}_capacity_exhausted")
+        raise RemoteSessionClosed(f"remote session {resource} capacity exhausted")
 
     def validate_live(self) -> None:
         with self._condition:
@@ -199,19 +305,11 @@ class RemoteSessionChannel:
 
     def _append_event(self, kind: str, payload: dict, *, turn_id: str = "") -> TaskEvent:
         with self._condition:
-            sequence = len(self._events) + 1
-            event = TaskEvent(
-                schema_version=SCHEMA_VERSIONS["TaskEvent"],
-                event_id=f"e{sequence:08d}",
-                session_id=self.session_id,
-                sequence=sequence,
-                kind=kind,
-                turn_id=turn_id,
-                payload=_copy_json(payload),
-            )
-            self._events.append(event)
-            self._condition.notify_all()
-            return _copy_wire(event)
+            if kind != "terminal" and len(self._events) >= self.limits.max_events - 1:
+                self._capacity_exhausted("event")
+            if len(self._events) >= self.limits.max_events:
+                self._capacity_exhausted("event")
+            return self._new_event(kind, payload, turn_id=turn_id)
 
     def _require_active_lease(self, lease_id: str) -> None:
         if not isinstance(lease_id, str) or not lease_id:
@@ -275,6 +373,8 @@ class RemoteSessionChannel:
                 return {"accepted": True, "lease_id": existing_lease,
                         "server_event_id": self.latest_event_id}
 
+            if len(self._runtime_leases) >= self.limits.max_runtime_instances:
+                self._capacity_exhausted("runtime_instance")
             if self._active_runtime_instance_id:
                 self._retired_runtime_instances.add(self._active_runtime_instance_id)
             lease_id = secrets.token_urlsafe(24)
@@ -305,6 +405,8 @@ class RemoteSessionChannel:
                 f"observation epoch {envelope.page_epoch} is not newer than {latest.page_epoch}",
                 code="stale_observation",
             )
+        if len(self._observation_digests) >= self.limits.max_observations:
+            self._capacity_exhausted("observation")
         return False, fingerprint
 
     def _record_observation(self, envelope: ObservationEnvelope) -> bool:
@@ -337,6 +439,11 @@ class RemoteSessionChannel:
                           "command_digest"):
                 if getattr(result, field) != getattr(action, field):
                     raise RemoteProtocolError(f"result {field} does not match its action")
+            prior_digest = self._result_digests.get(result.action_id)
+            if prior_digest is not None:
+                if prior_digest != result.content_digest:
+                    raise RemoteProtocolError("action_id was replayed with a conflicting result")
+                return {"accepted": True, "duplicate": True}
             if result.receipt is not None:
                 if result.receipt.action != action.command.action:
                     raise RemoteProtocolError("receipt action does not match its command")
@@ -348,11 +455,6 @@ class RemoteSessionChannel:
                     raise RemoteProtocolError(
                         "receipt url_before does not match its based-on observation")
             _safe_payload(result.to_json())
-            prior = self._results.get(result.action_id)
-            if prior is not None:
-                if prior.content_digest != result.content_digest:
-                    raise RemoteProtocolError("action_id was replayed with a conflicting result")
-                return {"accepted": True, "duplicate": True}
             self._ensure_open()
             claimed_lease = self._action_claims.get(result.action_id)
             if result.status in {"completed", "indeterminate"}:
@@ -373,6 +475,8 @@ class RemoteSessionChannel:
             if result.observation_after is not None:
                 self._record_observation(result.observation_after)
             self._results[result.action_id] = result
+            self._result_digests[result.action_id] = result.content_digest
+            self._action_observations.pop(result.action_id, None)
             if self._pending_action_id == result.action_id:
                 self._pending_action_id = ""
             self._condition.notify_all()
@@ -397,7 +501,7 @@ class RemoteSessionChannel:
             if action is None:
                 raise RemoteProtocolError(
                     "claim names an unknown action", code="unknown_action", status=404)
-            if action_id in self._results:
+            if action_id in self._result_digests:
                 raise RemoteProtocolError(
                     "action already has a result", code="action_completed")
             if action.turn_id in self._cancelled_message_ids:
@@ -429,10 +533,18 @@ class RemoteSessionChannel:
             if not isinstance(message, dict) or set(message) != allowed:
                 raise RemoteProtocolError("message requires exactly message_id, text, and page_url", status=400)
             message_id, text = message["message_id"], message["text"]
-            if not isinstance(message_id, str) or not message_id:
-                raise RemoteProtocolError("message_id must be a non-empty string", status=400)
+            if (not isinstance(message_id, str) or not message_id
+                    or len(message_id) > _MAX_MESSAGE_ID_LENGTH
+                    or any(not (char.isalnum() or char in "-_") for char in message_id)):
+                raise RemoteProtocolError(
+                    "message_id must contain 1-128 letters, digits, '-' or '_'",
+                    status=400,
+                )
             if not isinstance(text, str) or not text.strip() or len(text) > 2000:
                 raise RemoteProtocolError("message text must contain 1-2000 characters", status=400)
+            if (not isinstance(message["page_url"], str)
+                    or len(message["page_url"]) > _MAX_PAGE_URL_LENGTH):
+                raise RemoteProtocolError("message page_url exceeds 4096 characters", status=400)
             if _origin(message["page_url"]) not in self.allowed_origins:
                 raise RemoteProtocolError("message page URL is outside this session", status=403)
             _safe_payload(message)
@@ -442,6 +554,14 @@ class RemoteSessionChannel:
                 if prior != fingerprint:
                     raise RemoteProtocolError("message_id was reused with different content")
                 return {"accepted": True, "duplicate": True}
+            if len(self._message_digests) >= self.limits.max_messages:
+                self._capacity_exhausted("message")
+            if len(self._messages) >= self.limits.max_queued_messages:
+                raise RemoteProtocolError(
+                    "session message queue is full",
+                    code="backpressure",
+                    status=429,
+                )
             self._message_digests[message_id] = fingerprint
             self._messages.append(_copy_json(message))
             self._condition.notify_all()
@@ -493,6 +613,10 @@ class RemoteSessionChannel:
 
     def message_cancelled(self, message_id: str) -> bool:
         with self._condition:
+            try:
+                self._ensure_open()
+            except RemoteSessionClosed:
+                return True
             return message_id in self._cancelled_message_ids
 
     def complete_message(self, message_id: str) -> None:
@@ -591,6 +715,8 @@ class RemoteSessionChannel:
                              if event.kind == "action"
                              and event.payload["action_id"] == action.action_id)
                 return _copy_wire(event)
+            if len(self._actions) >= self.limits.max_actions:
+                self._capacity_exhausted("action")
             if self._pending_action_id:
                 raise RemoteProtocolError("another action is already in flight", code="action_in_flight")
             observation = self._latest_observation
@@ -601,10 +727,11 @@ class RemoteSessionChannel:
                 raise RemoteProtocolError("action is based on a stale observation", code="stale_observation")
             if action.deadline <= _now_ms():
                 raise RemoteProtocolError("action deadline has already expired", code="deadline_expired")
+            event = self._append_event("action", action.to_json(), turn_id=action.turn_id)
             self._actions[action.action_id] = action
             self._action_observations[action.action_id] = _copy_wire(observation)
             self._pending_action_id = action.action_id
-            return self._append_event("action", action.to_json(), turn_id=action.turn_id)
+            return event
 
     def publish(self, kind: str, payload: dict, *, turn_id: str = "") -> TaskEvent:
         if kind == "action":
@@ -647,15 +774,18 @@ class RemoteSessionChannel:
                 return next(_copy_wire(event) for event in self._events
                             if event.kind == "approval_required"
                             and event.payload["approval_id"] == request.approval_id)
+            if len(self._approvals) >= self.limits.max_approvals:
+                self._capacity_exhausted("approval")
             if self._pending_approval_id:
                 raise RemoteProtocolError(
                     "another approval is already pending",
                     code="approval_in_flight",
                 )
+            event = self._append_event(
+                "approval_required", request.to_json(), turn_id=request.turn_id)
             self._approvals[request.approval_id] = request
             self._pending_approval_id = request.approval_id
-            return self._append_event(
-                "approval_required", request.to_json(), turn_id=request.turn_id)
+            return event
 
     def events_after(self, event_id: str = "", *, lease_id: str,
                      wait_s: float = 0) -> list[TaskEvent]:
@@ -668,7 +798,7 @@ class RemoteSessionChannel:
                 self._condition.wait_for(
                     lambda: (self._closed or len(self._events) > after
                              or lease_id != self._active_lease_id),
-                    timeout=wait_s,
+                    timeout=self._bounded_wait(wait_s),
                 )
             self._require_active_lease(lease_id)
             if len(self._events) <= after:
@@ -679,8 +809,9 @@ class RemoteSessionChannel:
     def wait_for_client(self, timeout_s: float) -> ClientHello:
         with self._condition:
             ready = self._condition.wait_for(lambda: self._closed or self._hello is not None,
-                                             timeout=timeout_s)
+                                             timeout=self._bounded_wait(timeout_s))
             if self._hello is not None:
+                self._ensure_open()
                 return _copy_wire(self._hello)
             self._ensure_open()
             if not ready:
@@ -692,10 +823,11 @@ class RemoteSessionChannel:
             ready = self._condition.wait_for(
                 lambda: self._closed or (self._latest_observation is not None
                                          and self._latest_observation.page_epoch > newer_than),
-                timeout=timeout_s,
+                timeout=self._bounded_wait(timeout_s),
             )
             if (self._latest_observation is not None
                     and self._latest_observation.page_epoch > newer_than):
+                self._ensure_open()
                 return _copy_wire(self._latest_observation)
             self._ensure_open()
             if not ready:
@@ -707,10 +839,10 @@ class RemoteSessionChannel:
             ready = self._condition.wait_for(
                 lambda: (self._closed or action_id in self._results
                          or action_id in self._cancelled_action_ids),
-                timeout=timeout_s,
+                timeout=self._bounded_wait(timeout_s),
             )
             if action_id in self._results:
-                return _copy_wire(self._results[action_id])
+                return _copy_wire(self._results.pop(action_id))
             if action_id in self._cancelled_action_ids:
                 raise RemoteProtocolError(
                     "the task was cancelled before browser execution",
@@ -723,12 +855,16 @@ class RemoteSessionChannel:
 
     def wait_for_message(self, *, timeout_s: float | None = None) -> dict:
         with self._condition:
+            remaining_lifetime = self._remaining_lifetime_s()
+            effective_timeout = (remaining_lifetime if timeout_s is None
+                                 else min(timeout_s, remaining_lifetime))
             ready = self._condition.wait_for(
                 lambda: self._closed or (bool(self._messages)
                                          and not self._active_message_id),
-                timeout=timeout_s,
+                timeout=effective_timeout,
             )
             if self._messages and not self._active_message_id:
+                self._ensure_open()
                 message = _copy_json(self._messages.popleft())
                 self._active_message_id = message["message_id"]
                 return message
@@ -749,7 +885,7 @@ class RemoteSessionChannel:
             remaining = max(0.0, (request.expires_at - _now_ms()) / 1000)
             ready = self._condition.wait_for(
                 lambda: self._closed or approval_id in self._approval_decisions,
-                timeout=min(timeout_s, remaining),
+                timeout=min(self._bounded_wait(timeout_s), remaining),
             )
             decision = self._approval_decisions.get(approval_id)
             if decision is not None:
@@ -766,17 +902,16 @@ class RemoteSessionChannel:
 
     def close(self, reason: str = "session_closed") -> None:
         with self._condition:
-            if self._closed:
-                return
-            self._append_event("terminal", {"reason": reason})
-            self._closed = True
-            self._condition.notify_all()
+            self._terminate(reason)
 
 
 class RemoteSessionRegistry:
     """Own capability-token hashes and session channels; raw tokens are never retained."""
 
-    def __init__(self):
+    def __init__(self, *, limits: RemoteSessionLimits | None = None):
+        self.limits = limits or RemoteSessionLimits()
+        if not isinstance(self.limits, RemoteSessionLimits):
+            raise TypeError("limits must be RemoteSessionLimits or None")
         self._lock = threading.RLock()
         self._channels: dict[str, RemoteSessionChannel] = {}
         self._token_hashes: dict[str, bytes] = {}
@@ -796,7 +931,8 @@ class RemoteSessionRegistry:
                 raise TypeError("principal must be a PrincipalContext or None")
             principal.require_live(now_ms=_now_ms())
         token = secrets.token_urlsafe(32)
-        channel = RemoteSessionChannel(sid, origins, principal)
+        self.reap_expired()
+        channel = RemoteSessionChannel(sid, origins, principal, self.limits)
         with self._lock:
             if sid in self._channels:
                 raise ValueError(f"session {sid!r} already exists")
@@ -807,6 +943,7 @@ class RemoteSessionRegistry:
             application_id=(principal.application_id if principal else ""),
             principal_digest=(principal.binding_digest if principal else ""),
             expires_at=(principal.expires_at if principal else 0),
+            session_expires_at=channel.expires_at,
         ), channel
 
     def authenticate(self, session_id: str, bearer: str, origin: str) -> RemoteSessionChannel:
@@ -821,18 +958,34 @@ class RemoteSessionRegistry:
         if origin not in channel.allowed_origins:
             raise RemoteProtocolError("request origin is outside this session",
                                       code="origin_refused", status=403)
-        channel.validate_live()
+        try:
+            channel.validate_live()
+        except RemoteSessionClosed:
+            self.retire(session_id, "session_expired")
+            raise
         return channel
 
     def origin_allowed(self, session_id: str, origin: str) -> bool:
         with self._lock:
             channel = self._channels.get(session_id)
+        if channel is not None and channel.expired:
+            self.retire(session_id, "session_expired")
+            return False
         return channel is not None and origin in channel.allowed_origins
 
     @property
     def session_count(self) -> int:
+        self.reap_expired()
         with self._lock:
             return len(self._channels)
+
+    def reap_expired(self) -> int:
+        with self._lock:
+            session_ids = tuple(
+                session_id for session_id, channel in self._channels.items()
+                if channel.expired)
+        return sum(self.retire(session_id, "session_expired")
+                   for session_id in session_ids)
 
     def retire(self, session_id: str, reason: str = "session_retired") -> bool:
         """Revoke one capability and release its in-memory channel state."""

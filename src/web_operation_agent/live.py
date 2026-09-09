@@ -18,7 +18,8 @@ from .embedded_gateway import EmbeddedGateway
 from .identity import PrincipalContext
 from .privacy import redact_sensitive_assignments, redact_session_handoffs
 from .product import AgentTurnError
-from .remote import RemoteSessionChannel, RemoteSessionClosed, RemoteSessionRegistry
+from .remote import (RemoteSessionChannel, RemoteSessionClosed, RemoteSessionLimits,
+                     RemoteSessionRegistry)
 from .traceview import build_trace_case, render_trace_html, write_trace_bundle
 
 
@@ -186,13 +187,16 @@ class LiveProductSession:
                  session_id: str | None = None, sse_wait_s: float = .2,
                  navigation_mode: str = "document",
                  principal: PrincipalContext | None = None,
+                 session_limits: RemoteSessionLimits | None = None,
                  registry: RemoteSessionRegistry | None = None,
                  gateway: EmbeddedGateway | None = None,
                  on_close: Callable[[str], None] | None = None):
         if (registry is None) != (gateway is None):
             raise ValueError("registry and gateway must be supplied together")
+        if registry is not None and session_limits is not None:
+            raise ValueError("session_limits belong to the shared registry")
         self._owns_gateway = registry is None
-        self.registry = registry or RemoteSessionRegistry()
+        self.registry = registry or RemoteSessionRegistry(limits=session_limits)
         self.gateway = gateway or EmbeddedGateway(self.registry, sse_wait_s=sse_wait_s)
         if self.gateway.registry is not self.registry:
             raise ValueError("shared gateway must use the supplied session registry")
@@ -226,6 +230,7 @@ class LiveProductSession:
     def bootstrap_script(self) -> str:
         if self._thread is None:
             raise RuntimeError("live session must be started before requesting bootstrap")
+        self.channel.validate_live()
         return self.gateway.bootstrap_script(
             self.grant, page_controller_module=self.page_controller_module,
             navigation_mode=self.navigation_mode)
@@ -233,6 +238,7 @@ class LiveProductSession:
     def start(self) -> "LiveProductSession":
         if self._thread is not None:
             return self
+        self.channel.validate_live()
         self.gateway.start()
 
         def target() -> None:
@@ -268,12 +274,12 @@ class LiveProductSession:
             failed=self._error is not None,
         )
 
-    def close(self) -> None:
+    def close(self, reason: str = "host_stopped") -> None:
         with self._close_lock:
             if self._closed:
                 return
             self._closed = True
-        self.registry.retire(self.grant.session_id, "host_stopped")
+        self.registry.retire(self.grant.session_id, reason)
         if self._owns_gateway:
             self.gateway.close()
         if self._on_close is not None:
@@ -294,12 +300,13 @@ class LiveProductServer:
     """
 
     def __init__(self, *, max_sessions: int = 100, sse_wait_s: float = .2,
-                 host: str = "127.0.0.1", port: int = 0):
+                 host: str = "127.0.0.1", port: int = 0,
+                 session_limits: RemoteSessionLimits | None = None):
         if (isinstance(max_sessions, bool) or not isinstance(max_sessions, int)
                 or not 1 <= max_sessions <= 10_000):
             raise ValueError("max_sessions must be an integer from 1 to 10000")
         self.max_sessions = max_sessions
-        self.registry = RemoteSessionRegistry()
+        self.registry = RemoteSessionRegistry(limits=session_limits)
         self.gateway = EmbeddedGateway(
             self.registry, host=host, port=port, sse_wait_s=sse_wait_s)
         self._sessions: dict[str, LiveProductSession] = {}
@@ -312,8 +319,17 @@ class LiveProductServer:
 
     @property
     def session_count(self) -> int:
+        self._reap_expired()
         with self._lock:
             return len(self._sessions)
+
+    def _reap_expired(self) -> int:
+        with self._lock:
+            expired = tuple(session for session in self._sessions.values()
+                            if session.channel.expired)
+        for session in expired:
+            session.close("session_expired")
+        return len(expired)
 
     def start(self) -> "LiveProductServer":
         with self._lock:
@@ -334,6 +350,7 @@ class LiveProductServer:
         with self._lock:
             if self._closed:
                 raise RuntimeError("live product server is closed")
+            self._reap_expired()
             if len(self._sessions) >= self.max_sessions:
                 raise RuntimeError("live product server session capacity is exhausted")
             session = LiveProductSession(

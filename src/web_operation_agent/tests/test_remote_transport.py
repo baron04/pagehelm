@@ -13,7 +13,8 @@ from web_operation_agent.browser import TransportError, TurnCancelled
 from web_operation_agent.embedded_gateway import EmbeddedGateway
 from web_operation_agent.identity import OperationContext, PrincipalContext
 from web_operation_agent.remote import (RemoteBrowserClient, RemoteProtocolError,
-                                         RemoteSessionClosed, RemoteSessionRegistry)
+                                         RemoteSessionClosed, RemoteSessionLimits,
+                                         RemoteSessionRegistry)
 from web_operation_agent.schemas import (
     SCHEMA_VERSIONS,
     ActionCommand,
@@ -130,6 +131,11 @@ class ChannelTests(unittest.TestCase):
             {"action_id": action.action_id}, lease_id=self.lease)["duplicate"])
         self.assertFalse(self.channel.accept_result(
             result, lease_id=self.lease)["duplicate"])
+        self.assertEqual(
+            self.channel.wait_for_result(action.action_id, timeout_s=0).content_digest,
+            result.content_digest,
+        )
+        self.assertNotIn(action.action_id, self.channel._results)
         self.assertTrue(self.channel.accept_result(
             result, lease_id=self.lease)["duplicate"])
 
@@ -181,6 +187,144 @@ class ChannelTests(unittest.TestCase):
             registry.authenticate(grant.session_id, grant.client_token, ORIGIN)
         with self.assertRaises(RemoteSessionClosed):
             channel.validate_live()
+
+    def test_unbound_session_ttl_revokes_capability_and_registry_state(self):
+        limits = RemoteSessionLimits(session_ttl_s=60)
+        with mock.patch("web_operation_agent.remote._now_ms", return_value=1_000):
+            registry = RemoteSessionRegistry(limits=limits)
+            grant, channel = registry.create(
+                allowed_origins=[ORIGIN], session_id="ttl-session")
+        self.assertEqual(grant.expires_at, 0)
+        self.assertEqual(grant.session_expires_at, 61_000)
+
+        with mock.patch("web_operation_agent.remote._now_ms", return_value=61_000):
+            self.assertTrue(channel.message_cancelled("not-yet-cancelled"))
+            with self.assertRaisesRegex(RemoteSessionClosed, "expired"):
+                registry.authenticate(
+                    grant.session_id, grant.client_token, ORIGIN)
+            self.assertEqual(registry.session_count, 0)
+            with self.assertRaises(RemoteSessionClosed):
+                channel.validate_live()
+
+    def test_message_queue_applies_backpressure_without_losing_the_first_message(self):
+        registry = RemoteSessionRegistry(limits=RemoteSessionLimits(
+            max_messages=2, max_queued_messages=1))
+        grant, channel = registry.create(
+            allowed_origins=[ORIGIN], session_id="backpressure-session")
+        lease = channel.accept_hello(hello(grant.session_id))["lease_id"]
+        first = {"message_id": "m-1", "text": "First", "page_url": ORIGIN + "/start"}
+        second = {"message_id": "m-2", "text": "Second", "page_url": ORIGIN + "/start"}
+
+        channel.accept_message(first, lease_id=lease)
+        with self.assertRaisesRegex(RemoteProtocolError, "queue is full") as caught:
+            channel.accept_message(second, lease_id=lease)
+        self.assertEqual(caught.exception.code, "backpressure")
+        self.assertEqual(caught.exception.status, 429)
+        self.assertEqual(channel.wait_for_message(timeout_s=0), first)
+        channel.complete_message("m-1")
+        self.assertFalse(channel.accept_message(second, lease_id=lease)["duplicate"])
+
+    def test_message_lifetime_capacity_ends_the_session(self):
+        registry = RemoteSessionRegistry(limits=RemoteSessionLimits(
+            max_messages=1, max_queued_messages=1))
+        grant, channel = registry.create(
+            allowed_origins=[ORIGIN], session_id="message-capacity-session")
+        lease = channel.accept_hello(hello(grant.session_id))["lease_id"]
+        first = {"message_id": "m-1", "text": "First", "page_url": ORIGIN + "/start"}
+        channel.accept_message(first, lease_id=lease)
+        channel.wait_for_message(timeout_s=0)
+        channel.complete_message("m-1")
+
+        with self.assertRaisesRegex(RemoteSessionClosed, "message capacity"):
+            channel.accept_message(
+                {"message_id": "m-2", "text": "Second",
+                 "page_url": ORIGIN + "/start"},
+                lease_id=lease,
+            )
+
+    def test_event_capacity_reserves_a_terminal_event(self):
+        registry = RemoteSessionRegistry(limits=RemoteSessionLimits(max_events=3))
+        grant, channel = registry.create(
+            allowed_origins=[ORIGIN], session_id="event-capacity-session")
+        lease = channel.accept_hello(hello(grant.session_id))["lease_id"]
+        channel.publish("progress", {"state": "working"})
+
+        with self.assertRaisesRegex(RemoteSessionClosed, "event capacity"):
+            channel.publish("progress", {"state": "still_working"})
+        events = channel.events_after("", lease_id=lease)
+        self.assertEqual([event.sequence for event in events], [1, 2, 3])
+        self.assertEqual(events[-1].kind, "terminal")
+        self.assertEqual(events[-1].payload["reason"], "event_capacity_exhausted")
+
+    def test_session_limit_values_are_strict_and_coherent(self):
+        for changes in (
+                {"session_ttl_s": 0}, {"max_events": 2},
+                {"max_messages": True}, {"max_runtime_instances": 10_001},
+                {"max_messages": 1, "max_queued_messages": 2}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                RemoteSessionLimits(**changes)
+
+    def test_oversized_event_is_rejected_without_poisoning_the_journal(self):
+        with self.assertRaisesRegex(RemoteProtocolError, "256 KiB") as caught:
+            self.channel.publish("progress", {"state": "working", "detail": "x" * 300_000})
+        self.assertEqual(caught.exception.code, "payload_too_large")
+        event = self.channel.publish("progress", {"state": "working"})
+        self.assertEqual(event.sequence, 2)
+
+    def test_oversized_action_does_not_leave_a_phantom_in_flight_action(self):
+        command = ActionCommand(
+            command_id="large-action", action="fill",
+            args={"ref": "e0", "value": "x" * 300_000},
+        )
+        oversized = ActionEnvelope(
+            schema_version=SCHEMA_VERSIONS["ActionEnvelope"],
+            session_id=self.grant.session_id, turn_id="t-1",
+            action_id="large-action",
+            based_on_observation_id=self.first.observation_id,
+            page_epoch=self.first.page_epoch,
+            deadline=int(time.time() * 1000) + 5_000,
+            command_digest=command.content_digest,
+            command=command,
+        )
+        with self.assertRaisesRegex(RemoteProtocolError, "256 KiB"):
+            self.channel.enqueue_action(oversized)
+        self.assertIsNone(self.channel.pending_action)
+
+        accepted = self.channel.enqueue_action(
+            action_for(self.grant.session_id, self.first, action_id="small-action"))
+        self.assertEqual(accepted.kind, "action")
+
+    def test_message_identifiers_and_origins_are_bounded(self):
+        with self.assertRaisesRegex(RemoteProtocolError, "message_id"):
+            self.channel.accept_message({
+                "message_id": "x" * 129,
+                "text": "Task",
+                "page_url": ORIGIN + "/start",
+            }, lease_id=self.lease)
+        with self.assertRaisesRegex(RemoteProtocolError, "absolute"):
+            RemoteSessionRegistry().create(
+                allowed_origins=["http://user:password@app.test"],
+                session_id="credential-origin",
+            )
+
+    def test_an_idle_host_wait_ends_at_the_session_ttl(self):
+        registry = RemoteSessionRegistry(
+            limits=RemoteSessionLimits(session_ttl_s=1))
+        _, channel = registry.create(
+            allowed_origins=[ORIGIN], session_id="idle-ttl-session")
+        outcome = {}
+
+        def wait() -> None:
+            try:
+                channel.wait_for_message(timeout_s=None)
+            except Exception as exc:
+                outcome["error"] = exc
+
+        waiter = threading.Thread(target=wait, daemon=True)
+        waiter.start()
+        waiter.join(2)
+        self.assertFalse(waiter.is_alive())
+        self.assertIsInstance(outcome.get("error"), RemoteSessionClosed)
 
     def test_expired_principal_rejects_authenticated_and_server_operations(self):
         now = int(time.time() * 1000)
@@ -927,6 +1071,8 @@ class GatewayTests(unittest.TestCase):
             self.grant, page_controller_module=module_url)
         self.assertEqual(config["pageControllerModule"], module_url)
         self.assertEqual(config["navigationMode"], "document")
+        self.assertEqual(config["principalExpiresAt"], 0)
+        self.assertEqual(config["sessionExpiresAt"], self.grant.session_expires_at)
         spa = self.gateway.bootstrap_config(
             self.grant, page_controller_module=module_url, navigation_mode="spa")
         self.assertEqual(spa["navigationMode"], "spa")

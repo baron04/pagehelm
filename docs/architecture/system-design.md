@@ -99,7 +99,7 @@ Runtime 运行在业务页面的同源脚本环境中。因此当前安全模型
 
 ### 3.2 Embedded Gateway 与 Remote Session
 
-Gateway 为每个会话签发随机 capability，并绑定允许的页面 Origin。Registry 只保存 token 哈希，产品宿主在会话存续期间保留用于生成 bootstrap 的原始 grant。Runtime 建立连接后还会取得活动 lease；整页导航产生的新 Runtime 会替换旧 lease，旧页面不能继续提交观察或结果。共享 server 对活动 session 数量执行准入上限；关闭一个 session 会原子移除其 token 哈希与 channel，使旧 capability 立即失效而不影响其他 session。
+Gateway 为每个会话签发随机 capability，并绑定允许的页面 Origin。Registry 只保存 token 哈希，产品宿主在会话存续期间保留用于生成 bootstrap 的原始 grant。Runtime 建立连接后还会取得活动 lease；整页导航产生的新 Runtime 会替换旧 lease，旧页面不能继续提交观察或结果。共享 server 对活动 session 数量执行准入上限；关闭一个 session 会原子移除其 token 哈希与 channel，使旧 capability 立即失效而不影响其他 session。每个 session 默认最多存活一小时，并对事件、已接受消息、待处理消息、观察标识、动作、审批和 Runtime 实例分别设置硬上限。消息队列达到瞬时上限时返回可重试的 429；生命周期状态达到硬上限时保留最后一个 terminal 事件并关闭 session。无限等待消息的 Host 也会在 TTL 到达时被唤醒，因此空闲会话不会永久占用线程和准入名额。
 
 应用宿主还可以在创建 session 前提供短期不可变 `PrincipalContext`。它包含 application、tenant、workspace、actor、delegation 和 scopes，但原始标识只存在于可信服务端内存中；bootstrap、Runtime hello 和跨浏览器协议只携带 application id 与主体摘要。启用 `require_identity` 后，缺少主体、主体过期或应用不匹配会在建立 turn 前拒绝。公开 Twenty demo 已从可信 Playwright 宿主读取即将用于浏览器的 HttpOnly session cookie，由 Twenty `/metadata` 解析页面 actor/workspace，再与 delegated OAuth 身份严格匹配；cookie 不进入 Runtime、模型或日志。浏览器运行期间宿主轮询 cookie 单向摘要，删除或替换会关闭 Agent session。
 
@@ -323,8 +323,8 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 
 当前代码是一条可运行的本地产品纵切，距离工业级部署仍有明确差距：
 
-- 多个 session 可以共享一个 Gateway，并通过独立 capability 和 channel 隔离；Remote Session registry、事件序列、消息队列和 lease 仍在单个 Python 进程内存中，进程重启后不能恢复会话。
-- Conversation Host 使用进程内线程、队列和有界引用上下文，没有加密的持久会话、外部任务队列、跨实例调度、背压或服务级高可用。进程崩溃会丢失对话引用；当前同步 Python 调用栈也无法从 ReAct 中间步骤安全续跑。
+- 多个 session 可以共享一个 Gateway，并通过独立 capability 和 channel 隔离；TTL、队列背压和逐类硬配额已经限制单 session 资源占用，但 Remote Session registry、事件序列、消息队列和 lease 仍在单个 Python 进程内存中，进程重启后不能恢复会话。
+- Conversation Host 使用进程内线程、队列和有界引用上下文，没有加密的持久会话、外部任务队列、跨实例调度或服务级高可用。进程崩溃会丢失对话引用；当前同步 Python 调用栈也无法从 ReAct 中间步骤安全续跑。
 - Session Ledger 是本机 append-only JSONL，逐条 flush 与 fsync；它不是集中式审计存储，也没有跨进程事务。
 - capability、Origin、短期 principal、turn、业务工具 scope、审批和 mutation proposal 绑定已经实现；Twenty demo 会匹配页面 session 与 OAuth 身份，并在浏览器 cookie 变化时终止 session；Twenty API 写 proposal 的 dispatch 状态可以持久化。普通嵌入部署的应用服务端身份断言、principal 续期、完整的持久会话、组织级策略和跨进程撤销尚未完成。
 - 旧外部页面控制网关仍是全局状态，当前客户端只能通过跨进程独占和双边界 reset 安全地串行运行；网关原生的租户/会话/轮次隔离与崩溃后 TTL 尚未实现。

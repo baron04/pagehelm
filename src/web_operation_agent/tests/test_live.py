@@ -7,12 +7,13 @@ import time
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
+from unittest import mock
 
 from web_operation_agent.live import (LiveConversationRunner, LiveProductServer,
                                       LiveProductSession, render_live_replay)
 from web_operation_agent.product import AgentTurnError, AgentTurnErrorCode
 from web_operation_agent.remote import (RemoteProtocolError, RemoteSessionClosed,
-                                         RemoteSessionRegistry)
+                                         RemoteSessionLimits, RemoteSessionRegistry)
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ClientHello, ElementRef,
                                           ObservationEnvelope, PageObservation)
 
@@ -383,6 +384,30 @@ class LiveProductSessionTests(unittest.TestCase):
                 runner_factory=lambda _channel: _Runner(),
                 session_id="capacity-2")
             self.assertEqual(replacement.grant.session_id, "capacity-2")
+        finally:
+            server.close()
+
+    def test_expired_sessions_release_shared_server_capacity(self):
+        limits = RemoteSessionLimits(session_ttl_s=60)
+        with mock.patch("web_operation_agent.remote._now_ms", return_value=1_000):
+            server = LiveProductServer(
+                max_sessions=1, sse_wait_s=.01, session_limits=limits)
+            first = server.create_session(
+                allowed_origin=ORIGIN,
+                page_controller_module=ORIGIN + "/page-controller.js",
+                runner_factory=lambda _channel: _Runner(),
+                session_id="expiring-capacity")
+        try:
+            self.assertEqual(first.grant.expires_at, 0)
+            self.assertEqual(first.grant.session_expires_at, 61_000)
+            with mock.patch("web_operation_agent.remote._now_ms", return_value=61_000):
+                self.assertEqual(server.session_count, 0)
+                replacement = server.create_session(
+                    allowed_origin=ORIGIN,
+                    page_controller_module=ORIGIN + "/page-controller.js",
+                    runner_factory=lambda _channel: _Runner(),
+                    session_id="replacement-capacity")
+                self.assertEqual(replacement.grant.session_id, "replacement-capacity")
         finally:
             server.close()
 

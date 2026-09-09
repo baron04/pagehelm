@@ -281,6 +281,7 @@ class EmbeddedGateway:
             "applicationId": grant.application_id,
             "principalBinding": grant.principal_digest,
             "principalExpiresAt": grant.expires_at,
+            "sessionExpiresAt": grant.session_expires_at,
         }
 
     def bootstrap_script(self, grant: SessionGrant, *,
