@@ -14,6 +14,7 @@ const BUILTIN_TOOLS = new Set([
   'done',
   'execute_javascript',
   'input_text',
+  'open_allowed_route',
   'scroll',
   'scroll_horizontally',
   'select_dropdown_option',
@@ -81,7 +82,15 @@ function compileInputSchema(value, name) {
   return z.strictObject(shape)
 }
 
-function compileTools(specifications, capabilityProfile, runToken) {
+function safeRelativeRoute(value) {
+  const route = boundedString(value, 'route', 1000)
+  if (!route.startsWith('/') || route.startsWith('//') || /[\\\u0000-\u0020\u007f]/u.test(route)) throw new Error('route must be a safe relative path')
+  const parsed = new URL(route, location.href)
+  if (parsed.origin !== location.origin || parsed.hash || `${parsed.pathname}${parsed.search}` !== route || parsed.pathname.split('/').includes('..') || parsed.pathname.includes('%')) throw new Error('route must be a safe same-origin path')
+  return route
+}
+
+function compileTools(specifications, capabilityProfile, runToken, navigationMode, metrics, maxPageActions) {
   if (!Array.isArray(specifications) || specifications.length > 32) throw new Error('tools must be a bounded array')
   if (capabilityProfile === 'browser_only' && specifications.length) throw new Error('browser-only baseline cannot receive custom tools')
   if (capabilityProfile === 'skill_api' && !specifications.length) throw new Error('Skill/API baseline requires custom tools')
@@ -103,6 +112,27 @@ function compileTools(specifications, capabilityProfile, runToken) {
         const rendered = typeof value === 'string' ? value : JSON.stringify(value)
         if (typeof rendered !== 'string' || new TextEncoder().encode(rendered).length > MAX_TOOL_RESULT_BYTES) throw new Error('business-tool result is invalid or oversized')
         return rendered
+      },
+    })
+  }
+  if (capabilityProfile === 'skill_api') {
+    result.open_allowed_route = tool({
+      description: 'Open only an exact ui_path returned by a business tool in this run. Never invent or alter a route.',
+      inputSchema: z.strictObject({ route: z.string().min(1).max(1000) }),
+      execute: async ({ route }, { signal }) => {
+        signal.throwIfAborted()
+        if (metrics.page_actions >= maxPageActions) throw new Error('page-action budget is exhausted')
+        const selected = safeRelativeRoute(route)
+        const invoke = globalThis.__WOA_PAGEAGENT_OPEN_ROUTE__
+        if (typeof invoke !== 'function') throw new Error('route bridge is unavailable')
+        const permit = await invoke({ run_token: runToken, route: selected })
+        exactObject(permit, ['allowed', 'route'], 'route permit')
+        if (permit.allowed !== true || permit.route !== selected) throw new Error('route was not authorized')
+        signal.throwIfAborted()
+        if (navigationMode !== 'spa') throw new Error('route bridge currently requires SPA navigation')
+        history.pushState({}, '', selected)
+        window.dispatchEvent(new PopStateEvent('popstate'))
+        return JSON.stringify({ opened: true, route: selected })
       },
     })
   }
@@ -130,13 +160,16 @@ function providerFetch(runToken, metrics) {
 }
 
 async function execute(config) {
-  exactObject(config, ['prompt', 'model', 'language', 'max_steps', 'wall_ms', 'capability_profile', 'instructions', 'tools', 'run_token', 'request_options'], 'baseline config')
+  exactObject(config, ['prompt', 'model', 'language', 'max_steps', 'max_page_actions', 'wall_ms', 'navigation_mode', 'capability_profile', 'instructions', 'tools', 'run_token', 'request_options'], 'baseline config')
   const prompt = boundedString(config.prompt, 'prompt', 20000)
   const model = boundedString(config.model, 'model', 120)
   const language = config.language
   if (!['en-US', 'zh-CN'].includes(language)) throw new Error('language is unsupported')
   const maxSteps = boundedInteger(config.max_steps, 'max_steps', 1, 100)
+  const maxPageActions = boundedInteger(config.max_page_actions, 'max_page_actions', 0, 200)
   const wallMs = boundedInteger(config.wall_ms, 'wall_ms', 1000, 3600000)
+  const navigationMode = config.navigation_mode
+  if (!['document', 'spa'].includes(navigationMode)) throw new Error('navigation_mode is unsupported')
   const capabilityProfile = config.capability_profile
   if (!['browser_only', 'skill_api'].includes(capabilityProfile)) throw new Error('capability_profile is unsupported')
   const instructions = config.instructions === '' ? '' : boundedString(config.instructions, 'instructions', 100000)
@@ -147,7 +180,7 @@ async function execute(config) {
   boundedInteger(requestOptions.max_completion_tokens, 'max_completion_tokens', 1, 131072)
   if (requestOptions.parallel_tool_calls !== false) throw new Error('parallel tool calls must be disabled')
   const metrics = { provider_calls: 0, page_actions: 0, business_calls: 0, retries: 0, steps: 0 }
-  const customTools = compileTools(config.tools, capabilityProfile, runToken)
+  const customTools = compileTools(config.tools, capabilityProfile, runToken, navigationMode, metrics, maxPageActions)
   const businessNames = new Set(config.tools.map((item) => item.name))
   const pageController = new PageController({ enableMask: false })
   const agent = new PageAgentCore({
@@ -181,11 +214,13 @@ async function execute(config) {
   const timer = setTimeout(() => { void agent.stop() }, wallMs)
   try {
     const result = await agent.execute(prompt)
+    const pageBudgetExceeded = metrics.page_actions > maxPageActions
     return {
-      bridge_version: 1,
+      bridge_version: 2,
       upstream_version: VERSION,
-      status: agent.status,
-      success_claim: result.success === true,
+      status: pageBudgetExceeded ? 'stopped' : agent.status,
+      success_claim: result.success === true && !pageBudgetExceeded,
+      terminal_reason: pageBudgetExceeded ? 'page_action_budget' : null,
       answer: typeof result.data === 'string' ? result.data.slice(0, 20000) : '',
       metrics,
     }
@@ -197,7 +232,7 @@ async function execute(config) {
 
 if (Object.hasOwn(globalThis, '__WOA_PAGEAGENT_BASELINE__')) throw new Error('PageAgent baseline bridge is already installed')
 Object.defineProperty(globalThis, '__WOA_PAGEAGENT_BASELINE__', {
-  value: Object.freeze({ bridge_version: 1, upstream_version: VERSION, execute }),
+  value: Object.freeze({ bridge_version: 2, upstream_version: VERSION, execute }),
   configurable: false,
   enumerable: false,
   writable: false,

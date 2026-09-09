@@ -9,7 +9,7 @@ import threading
 from typing import Any
 
 from web_operation_agent.business import BusinessToolError, BusinessToolRuntime
-from web_operation_agent.identity import OperationContext
+from web_operation_agent.identity import OperationContext, PrincipalError
 
 
 _SAFE_TOKEN = re.compile(r"[^\x00-\x1f\x7f]{16,128}\Z")
@@ -51,6 +51,7 @@ class PageAgentBusinessProxy:
     def __init__(self, *, run_token: str, runtime: BusinessToolRuntime,
                  loaded_skill_ids: tuple[str, ...], context: OperationContext,
                  expected_catalog_sha256: str, max_business_calls: int,
+                 max_route_calls: int,
                  cancelled: threading.Event | None = None):
         if not isinstance(run_token, str) or not _SAFE_TOKEN.fullmatch(run_token):
             raise ValueError("run_token is invalid")
@@ -68,6 +69,9 @@ class PageAgentBusinessProxy:
         if (isinstance(max_business_calls, bool) or not isinstance(max_business_calls, int)
                 or not 1 <= max_business_calls <= 200):
             raise ValueError("max_business_calls is invalid")
+        if (isinstance(max_route_calls, bool) or not isinstance(max_route_calls, int)
+                or not 0 <= max_route_calls <= 200):
+            raise ValueError("max_route_calls is invalid")
         if cancelled is not None and not isinstance(cancelled, threading.Event):
             raise TypeError("cancelled must be a threading.Event or None")
         selected_ids = set(loaded_skill_ids)
@@ -92,6 +96,7 @@ class PageAgentBusinessProxy:
         self.loaded_skill_ids = frozenset(selected_ids)
         self.context = context
         self.max_business_calls = max_business_calls
+        self.max_route_calls = max_route_calls
         self.cancelled = cancelled or threading.Event()
         self._tool_specs = tuple(_bridge_tool(schema) for schema in schemas)
         self._tool_names = frozenset(item["name"] for item in self._tool_specs)
@@ -101,6 +106,8 @@ class PageAgentBusinessProxy:
         self._lock = threading.Lock()
         self._attempts = 0
         self._completed = 0
+        self._route_attempts = 0
+        self._route_permits = 0
         self._allowed_routes: set[str] = set()
         self._last_error_code = ""
 
@@ -139,6 +146,39 @@ class PageAgentBusinessProxy:
             self._allowed_routes.update(result.allowed_routes)
         return result.content
 
+    def handle_route(self, payload: Any) -> dict[str, Any]:
+        """Authorize one SPA navigation only after a current tool result disclosed its route."""
+        if self.cancelled.is_set():
+            raise PageAgentBusinessHostError("cancelled")
+        if not isinstance(payload, dict) or set(payload) != {"run_token", "route"}:
+            raise PageAgentBusinessHostError("route_contract")
+        token = payload.get("run_token")
+        if not isinstance(token, str) or not hmac.compare_digest(token, self._run_token):
+            raise PageAgentBusinessHostError("route_contract")
+        route = payload.get("route")
+        if not isinstance(route, str):
+            raise PageAgentBusinessHostError("route_contract")
+        with self._lock:
+            if self._route_attempts >= self.max_route_calls:
+                self._last_error_code = "route_call_budget"
+                raise PageAgentBusinessHostError("route_call_budget")
+            self._route_attempts += 1
+            allowed = route in self._allowed_routes
+        if not allowed:
+            self._last_error_code = "route_refused"
+            raise PageAgentBusinessHostError("route_refused")
+        try:
+            self.context.require_live(application_id=self.runtime.application_id or None)
+        except PrincipalError:
+            self._last_error_code = "route_refused"
+            raise PageAgentBusinessHostError("route_refused") from None
+        if self.cancelled.is_set():
+            self._last_error_code = "cancelled"
+            raise PageAgentBusinessHostError("cancelled")
+        with self._lock:
+            self._route_permits += 1
+        return {"allowed": True, "route": route}
+
     @property
     def tool_specs(self) -> tuple[dict[str, Any], ...]:
         return tuple(json.loads(json.dumps(item)) for item in self._tool_specs)
@@ -153,6 +193,8 @@ class PageAgentBusinessProxy:
             return {
                 "business_attempts": self._attempts,
                 "business_responses": self._completed,
+                "route_attempts": self._route_attempts,
+                "route_permits": self._route_permits,
                 "allowed_route_count": len(self._allowed_routes),
                 "last_error_code": self._last_error_code or None,
                 "skill_digest": self.skill_digest,

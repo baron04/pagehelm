@@ -110,7 +110,7 @@ class BusinessProxyTests(unittest.TestCase):
             run_token="opaque-business-token", runtime=runtime,
             loaded_skill_ids=(skill.skill_id,), context=_context(),
             expected_catalog_sha256=runtime.catalog_sha256,
-            max_business_calls=max_calls, cancelled=cancelled)
+            max_business_calls=max_calls, max_route_calls=1, cancelled=cancelled)
 
     def test_configuration_comes_from_the_exact_runtime_skill_and_schema(self):
         proxy = self._proxy()
@@ -129,10 +129,33 @@ class BusinessProxyTests(unittest.TestCase):
         })
         self.assertEqual(result["companies"][0]["name"], "Synthetic Acme")
         self.assertEqual(proxy.allowed_routes, frozenset({"/objects/companies/acme"}))
+        permit = proxy.handle_route({
+            "run_token": "opaque-business-token",
+            "route": "/objects/companies/acme",
+        })
+        self.assertEqual(permit, {
+            "allowed": True, "route": "/objects/companies/acme"})
         report = proxy.report()
         self.assertEqual(report["business_attempts"], 1)
         self.assertEqual(report["business_responses"], 1)
+        self.assertEqual(report["route_attempts"], 1)
+        self.assertEqual(report["route_permits"], 1)
         self.assertNotIn("Synthetic Acme", json.dumps(report))
+
+    def test_route_requires_a_fresh_tool_disclosure_and_has_its_own_budget(self):
+        proxy = self._proxy()
+        route_call = {
+            "run_token": "opaque-business-token",
+            "route": "/objects/companies/acme",
+        }
+        with self.assertRaisesRegex(PageAgentBusinessHostError, "route_refused"):
+            proxy.handle_route(route_call)
+        proxy.handle({
+            "run_token": "opaque-business-token", "name": "query_companies",
+            "args": {"limit": 20},
+        })
+        with self.assertRaisesRegex(PageAgentBusinessHostError, "route_call_budget"):
+            proxy.handle_route(route_call)
 
     def test_wrong_token_call_budget_and_cancellation_fail_closed(self):
         proxy = self._proxy(max_calls=1)
@@ -157,16 +180,16 @@ class BusinessProxyTests(unittest.TestCase):
             PageAgentBusinessProxy(
                 run_token="opaque-business-token", runtime=runtime,
                 loaded_skill_ids=(skill.skill_id,), context=_context(),
-                expected_catalog_sha256="0" * 64, max_business_calls=1)
+                expected_catalog_sha256="0" * 64, max_business_calls=1,
+                max_route_calls=1)
         write_runtime, write_skill = _runtime(write=True)
         with self.assertRaisesRegex(ValueError, "read-only"):
             PageAgentBusinessProxy(
                 run_token="opaque-business-token", runtime=write_runtime,
                 loaded_skill_ids=(write_skill.skill_id,), context=_context(),
                 expected_catalog_sha256=write_runtime.catalog_sha256,
-                max_business_calls=1)
+                max_business_calls=1, max_route_calls=1)
 
 
 if __name__ == "__main__":
     unittest.main()
-

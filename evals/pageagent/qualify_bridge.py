@@ -63,7 +63,9 @@ def _config(*, prompt: str, capability: str, tools: list[dict[str, Any]],
         "model": "pageagent-qualification-model",
         "language": "en-US",
         "max_steps": 4,
+        "max_page_actions": 2,
         "wall_ms": 10_000,
+        "navigation_mode": "spa",
         "capability_profile": capability,
         "instructions": instructions,
         "tools": tools,
@@ -129,6 +131,7 @@ class _ScriptedClient:
             "contains_ask_user": "ask_user" in encoded_body,
             "contains_execute_javascript": "execute_javascript" in encoded_body,
             "contains_query_companies": "query_companies" in encoded_body,
+            "contains_open_allowed_route": "open_allowed_route" in encoded_body,
         })
         if len(self.requests) > len(self.responses):
             raise ValueError("PageAgent made an unplanned provider call")
@@ -174,9 +177,13 @@ class _QualificationExecutor:
         return BusinessToolResult(
             content={
                 "complete": True,
-                "companies": [{"name": "Synthetic Acme", "domain": "acme.example.com"}],
+                "companies": [{
+                    "name": "Synthetic Acme", "domain": "acme.example.com",
+                    "ui_path": "/object/company/synthetic-acme",
+                }],
             },
             audit={"returned_count": 1},
+            allowed_routes=("/object/company/synthetic-acme",),
         )
 
 
@@ -208,7 +215,8 @@ def _business_proxy(calls: list[dict[str, Any]]) -> PageAgentBusinessProxy:
     return PageAgentBusinessProxy(
         run_token="qualification-run-token", runtime=runtime,
         loaded_skill_ids=(skill.skill_id,), context=context,
-        expected_catalog_sha256=runtime.catalog_sha256, max_business_calls=1)
+        expected_catalog_sha256=runtime.catalog_sha256, max_business_calls=1,
+        max_route_calls=1)
 
 
 def _prepare_page(browser, bundle: Path, provider_actions: list[dict[str, Any]],
@@ -232,7 +240,8 @@ def _prepare_page(browser, bundle: Path, provider_actions: list[dict[str, Any]],
 
     page.expose_function("__WOA_PAGEAGENT_PROVIDER_FETCH__", proxy.handle)
     page.expose_function("__WOA_PAGEAGENT_BUSINESS_TOOL__", business_proxy.handle)
-    page.set_content("""
+    page.expose_function("__WOA_PAGEAGENT_OPEN_ROUTE__", business_proxy.handle_route)
+    document = """
 <!doctype html>
 <html lang="en">
   <head><meta charset="utf-8"><title>PageAgent qualification</title></head>
@@ -241,7 +250,10 @@ def _prepare_page(browser, bundle: Path, provider_actions: list[dict[str, Any]],
     <script>document.querySelector('#target').addEventListener('click', () => { document.querySelector('#state').textContent = 'clicked' })</script>
   </body>
 </html>
-""")
+"""
+    page.route("https://fixture.example/**", lambda route: route.fulfill(
+        status=200, content_type="text/html", body=document))
+    page.goto("https://fixture.example/start")
     page.add_script_tag(path=str(bundle))
     return page, client.requests, proxy, business_proxy
 
@@ -251,6 +263,7 @@ def qualify(bundle: Path) -> dict[str, Any]:
     if not raw_bundle or len(raw_bundle) > 2 * 1024 * 1024:
         raise ValueError("PageAgent baseline bundle is missing or oversized")
     business_calls: list[dict[str, Any]] = []
+    route_business_calls: list[dict[str, Any]] = []
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
@@ -284,6 +297,25 @@ def qualify(bundle: Path) -> dict[str, Any]:
             tool_host = tool_proxy.report()
             tool_business_host = tool_business_proxy.report()
             tool_page.close()
+
+            route_page, route_requests, route_proxy, route_business_proxy = _prepare_page(
+                browser, bundle,
+                [{"query_companies": {"name_contains": "Synthetic", "limit": 20}},
+                 {"open_allowed_route": {"route": "/object/company/synthetic-acme"}},
+                 {"done": {"text": "Opened Synthetic Acme.", "success": True}}],
+                route_business_calls,
+            )
+            route_result = route_page.evaluate(
+                "config => globalThis.__WOA_PAGEAGENT_BASELINE__.execute(config)",
+                _config(
+                    prompt="Open Synthetic Acme.", capability="skill_api",
+                    tools=list(route_business_proxy.tool_specs),
+                    instructions=route_business_proxy.instructions),
+            )
+            route_host = route_proxy.report()
+            route_business_host = route_business_proxy.report()
+            route_path = route_page.evaluate("location.pathname")
+            route_page.close()
             browser_version = browser.version
         finally:
             browser.close()
@@ -307,6 +339,7 @@ def qualify(bundle: Path) -> dict[str, Any]:
             not request["contains_ask_user"]
             and not request["contains_execute_javascript"]
             and not request["contains_query_companies"]
+            and not request["contains_open_allowed_route"]
             for request in dom_requests),
         "browser_only_business_unavailable": dom_business_proxy.report()["business_attempts"] == 0,
         "business_arguments_exact": (
@@ -316,7 +349,9 @@ def qualify(bundle: Path) -> dict[str, Any]:
         "business_host_exact": (
             tool_business_host["business_attempts"] == 1
             and tool_business_host["business_responses"] == 1
-            and tool_business_host["allowed_route_count"] == 0
+            and tool_business_host["route_attempts"] == 0
+            and tool_business_host["route_permits"] == 0
+            and tool_business_host["allowed_route_count"] == 1
             and tool_business_host["last_error_code"] is None),
         "business_result_succeeded": tool_result.get("success_claim") is True,
         "business_metrics_exact": tool_result.get("metrics") == {
@@ -332,7 +367,30 @@ def qualify(bundle: Path) -> dict[str, Any]:
             not request["contains_ask_user"]
             and not request["contains_execute_javascript"]
             and request["contains_query_companies"]
+            and request["contains_open_allowed_route"]
             for request in tool_requests),
+        "route_arguments_exact": (
+            len(route_business_calls) == 1
+            and {key: route_business_calls[0][key] for key in expected_business}
+            == expected_business),
+        "route_changed_spa_path": route_path == "/object/company/synthetic-acme",
+        "route_result_succeeded": route_result.get("success_claim") is True,
+        "route_metrics_exact": route_result.get("metrics") == {
+            "provider_calls": 3, "page_actions": 1, "business_calls": 1,
+            "retries": 0, "steps": 3,
+        },
+        "route_host_accounting_exact": (
+            len(route_requests) == 3
+            and route_host["provider_attempts"] == 3
+            and route_host["provider_responses"] == 3
+            and route_host["accounting"]["model_calls"] == 3),
+        "route_host_permit_exact": (
+            route_business_host["business_attempts"] == 1
+            and route_business_host["business_responses"] == 1
+            and route_business_host["route_attempts"] == 1
+            and route_business_host["route_permits"] == 1
+            and route_business_host["allowed_route_count"] == 1
+            and route_business_host["last_error_code"] is None),
     }
     if not all(checks.values()):
         raise ValueError("PageAgent bridge qualification checks did not all pass")
