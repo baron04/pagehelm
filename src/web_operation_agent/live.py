@@ -190,14 +190,27 @@ class LiveProductSession:
                  session_limits: RemoteSessionLimits | None = None,
                  registry: RemoteSessionRegistry | None = None,
                  gateway: EmbeddedGateway | None = None,
+                 provider_status: Callable[[], dict] | None = None,
                  on_close: Callable[[str], None] | None = None):
         if (registry is None) != (gateway is None):
             raise ValueError("registry and gateway must be supplied together")
         if registry is not None and session_limits is not None:
             raise ValueError("session_limits belong to the shared registry")
+        if provider_status is not None and not callable(provider_status):
+            raise TypeError("provider_status must be callable or None")
+        if gateway is not None and provider_status is not None:
+            raise ValueError("provider_status belongs to the shared server when gateway is shared")
         self._owns_gateway = registry is None
         self.registry = registry or RemoteSessionRegistry(limits=session_limits)
-        self.gateway = gateway or EmbeddedGateway(self.registry, sse_wait_s=sse_wait_s)
+        self._provider_status = provider_status
+        self._thread: threading.Thread | None = None
+        self._result = None
+        self._error: BaseException | None = None
+        self._closed = False
+        self._close_lock = threading.Lock()
+        self.gateway = gateway or EmbeddedGateway(
+            self.registry, sse_wait_s=sse_wait_s,
+            readiness_provider=self.readiness_snapshot)
         if self.gateway.registry is not self.registry:
             raise ValueError("shared gateway must use the supplied session registry")
         self.grant, self.channel = self.registry.create(
@@ -219,11 +232,6 @@ class LiveProductSession:
             if self._owns_gateway:
                 self.gateway.close()
             raise
-        self._thread: threading.Thread | None = None
-        self._result = None
-        self._error: BaseException | None = None
-        self._closed = False
-        self._close_lock = threading.Lock()
         self._on_close = on_close
 
     @property
@@ -274,6 +282,29 @@ class LiveProductSession:
             failed=self._error is not None,
         )
 
+    def readiness_snapshot(self) -> dict:
+        """Return content-free liveness dependencies for the loopback admin endpoint."""
+        thread = self._thread
+        try:
+            self.channel.validate_live()
+            channel_ready = True
+        except RemoteSessionClosed:
+            channel_ready = False
+        ready = (not self._closed and channel_ready and thread is not None
+                 and thread.is_alive() and self._error is None)
+        snapshot = {
+            "ready": ready,
+            "accepting_sessions": False,
+            "session_count": 1 if channel_ready else 0,
+            "session_capacity": 1,
+        }
+        if self._provider_status is not None:
+            provider = self._provider_status()
+            snapshot["provider"] = provider
+            if isinstance(provider, dict) and provider.get("circuit_open") is True:
+                snapshot["ready"] = False
+        return snapshot
+
     def close(self, reason: str = "host_stopped") -> None:
         with self._close_lock:
             if self._closed:
@@ -301,17 +332,22 @@ class LiveProductServer:
 
     def __init__(self, *, max_sessions: int = 100, sse_wait_s: float = .2,
                  host: str = "127.0.0.1", port: int = 0,
-                 session_limits: RemoteSessionLimits | None = None):
+                 session_limits: RemoteSessionLimits | None = None,
+                 provider_status: Callable[[], dict] | None = None):
         if (isinstance(max_sessions, bool) or not isinstance(max_sessions, int)
                 or not 1 <= max_sessions <= 10_000):
             raise ValueError("max_sessions must be an integer from 1 to 10000")
         self.max_sessions = max_sessions
+        if provider_status is not None and not callable(provider_status):
+            raise TypeError("provider_status must be callable or None")
+        self._provider_status = provider_status
         self.registry = RemoteSessionRegistry(limits=session_limits)
-        self.gateway = EmbeddedGateway(
-            self.registry, host=host, port=port, sse_wait_s=sse_wait_s)
         self._sessions: dict[str, LiveProductSession] = {}
         self._lock = threading.RLock()
         self._closed = False
+        self.gateway = EmbeddedGateway(
+            self.registry, host=host, port=port, sse_wait_s=sse_wait_s,
+            readiness_provider=self.readiness_snapshot)
 
     @property
     def base_url(self) -> str:
@@ -330,6 +366,26 @@ class LiveProductServer:
         for session in expired:
             session.close("session_expired")
         return len(expired)
+
+    def readiness_snapshot(self) -> dict:
+        """Return bounded service state without session identifiers or application content."""
+        self._reap_expired()
+        with self._lock:
+            closed = self._closed
+            session_count = len(self._sessions)
+        snapshot = {
+            "ready": not closed,
+            "accepting_sessions": not closed and session_count < self.max_sessions,
+            "session_count": session_count,
+            "session_capacity": self.max_sessions,
+        }
+        if self._provider_status is not None:
+            provider = self._provider_status()
+            snapshot["provider"] = provider
+            if isinstance(provider, dict) and provider.get("circuit_open") is True:
+                snapshot["ready"] = False
+                snapshot["accepting_sessions"] = False
+        return snapshot
 
     def start(self) -> "LiveProductServer":
         with self._lock:

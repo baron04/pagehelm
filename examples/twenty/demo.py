@@ -430,6 +430,8 @@ def build_live_session(
     application = bind_application(adapter)
     page_controller_module = application.descriptor.validate_page_controller(
         config.page_controller_module)
+    runtime_guard = getattr(chat, "runtime_guard", None)
+    provider_status = getattr(runtime_guard, "status", None)
     return LiveProductSession(
         allowed_origin=application.descriptor.origin,
         page_controller_module=page_controller_module,
@@ -437,6 +439,7 @@ def build_live_session(
         session_id=session_id or f"twenty-live-{uuid.uuid4().hex[:12]}",
         navigation_mode=application.descriptor.navigation_mode,
         principal=principal,
+        provider_status=provider_status if callable(provider_status) else None,
     )
 
 
@@ -579,6 +582,7 @@ def _run_browser(config: TwentyDemoConfig, live: LiveProductSession,
                     "application": "twenty",
                     "mode": "mutation_enabled" if config.allow_mutations else "read_only",
                     "entry_url": page.url,
+                    "gateway_url": live.gateway.base_url,
                     "output": str(outcomes_path.parent),
                 }
                 print(json.dumps(_safe(ready), ensure_ascii=False, sort_keys=True), flush=True)

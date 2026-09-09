@@ -101,6 +101,8 @@ Runtime 运行在业务页面的同源脚本环境中。因此当前安全模型
 
 Gateway 为每个会话签发随机 capability，并绑定允许的页面 Origin。Registry 只保存 token 哈希，产品宿主在会话存续期间保留用于生成 bootstrap 的原始 grant。Runtime 建立连接后还会取得活动 lease；整页导航产生的新 Runtime 会替换旧 lease，旧页面不能继续提交观察或结果。共享 server 对活动 session 数量执行准入上限；关闭一个 session 会原子移除其 token 哈希与 channel，使旧 capability 立即失效而不影响其他 session。每个 session 默认最多存活一小时，并对事件、已接受消息、待处理消息、观察标识、动作、审批和 Runtime 实例分别设置硬上限。消息队列达到瞬时上限时返回可重试的 429；生命周期状态达到硬上限时保留最后一个 terminal 事件并关闭 session。无限等待消息的 Host 也会在 TTL 到达时被唤醒，因此空闲会话不会永久占用线程和准入名额。
 
+Gateway 在 loopback 管理面提供两个无凭据探针：`/healthz` 只证明 HTTP 进程仍在响应，`/readyz` 表示组合仍可处理工作。就绪响应经过固定 schema 投影，只允许协议版本、是否就绪、是否接受新 session、当前 session 数量、容量和 provider guard 的数值/布尔状态；不包含 session id、capability、Origin、用户输入、页面内容、应用数据或回调错误正文。Provider 电路打开时返回 503，但容量已满只会把 `accepting_sessions` 设为 false，现有 session 仍可由同一进程服务。回调异常、字段畸形或不一致会返回不含异常文本的 503。该管理面目前只绑定 loopback，尚未替代部署平台的认证监控、指标采集和告警。
+
 应用宿主还可以在创建 session 前提供短期不可变 `PrincipalContext`。它包含 application、tenant、workspace、actor、delegation 和 scopes，但原始标识只存在于可信服务端内存中；bootstrap、Runtime hello 和跨浏览器协议只携带 application id 与主体摘要。启用 `require_identity` 后，缺少主体、主体过期或应用不匹配会在建立 turn 前拒绝。公开 Twenty demo 已从可信 Playwright 宿主读取即将用于浏览器的 HttpOnly session cookie，由 Twenty `/metadata` 解析页面 actor/workspace，再与 delegated OAuth 身份严格匹配；cookie 不进入 Runtime、模型或日志。浏览器运行期间宿主轮询 cookie 单向摘要，删除或替换会关闭 Agent session。
 
 Remote Session 维护严格 schema 的消息、观察、动作、结果、确认和事件序列。每个页面动作必须：

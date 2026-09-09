@@ -245,12 +245,26 @@ class TwentyDemoCompositionTests(unittest.TestCase):
             adapter = demo.build_adapter(config)
             holder = {}
             sentinel = object()
+            provider_snapshot = {
+                "max_concurrent_requests": 4, "in_flight": 0,
+                "consecutive_transient_failures": 0,
+                "circuit_open": False, "retry_after_s": 0.0,
+            }
+
+            class Guard:
+                @staticmethod
+                def status():
+                    return dict(provider_snapshot)
+
+            class Chat:
+                runtime_guard = Guard()
+
             principal = PrincipalContext(
                 1, "twenty", "workspace-1", "workspace-1", "actor-1", "delegation-1",
                 1_000_000, 1_060_000, ("companies:read",))
             with patch.object(demo, "LiveProductSession", return_value=sentinel) as session:
                 live = demo.build_live_session(
-                    config, adapter, object(), run_prefix="twenty-public-test",
+                    config, adapter, Chat(), run_prefix="twenty-public-test",
                     conversation_holder=holder, principal=principal,
                     session_id="twenty-public-session",
                 )
@@ -264,6 +278,7 @@ class TwentyDemoCompositionTests(unittest.TestCase):
             self.assertEqual(options["navigation_mode"], "spa")
             self.assertEqual(options["session_id"], "twenty-public-session")
             self.assertIs(options["principal"], principal)
+            self.assertEqual(options["provider_status"](), provider_snapshot)
             conversation = options["runner_factory"](object())
             self.assertIs(holder["conversation"], conversation)
 

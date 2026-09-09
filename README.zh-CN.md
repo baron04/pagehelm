@@ -24,6 +24,7 @@ Web Operation Agent 是一个早期阶段的框架，用于在第一方 Web 应�
 | 助手交互 | 基于显式状态模型的复用面板同时支持页面内嵌和独立回放。提交失败会保留用户输入，确认被拒绝后会恢复原目标供修改；成功、错误和不确定状态有独立表现，并支持响应式布局、键盘焦点、屏幕阅读器 live region、深色模式和减弱动画。 |
 | 身份绑定 | 应用宿主可以把短期 actor/tenant/workspace 主体绑定到 Runtime capability、Agent turn、类型化工具 scope、审批、mutation proposal 和脱敏审计事件。Twenty demo 会在启动前通过 Twenty 解析准确的 HttpOnly 浏览器 session，要求其与委托 OAuth 的 actor/workspace 一致，并在浏览器 cookie 被替换或删除时关闭 Agent session。 |
 | Provider 边界 | 模型请求在发送前经过结构、数量、字节、凭据形态和有限 JSON 检查。进程内共享 guard 限制并发请求，把排队时间计入请求截止时间，并在连续瞬时故障后进入冷却短路。每个已发送请求都有相关 ID；成功调用记录 provider 报告的 usage，无法获得可信 usage 的调用会把费用明确标为未知而不是零，失败还会把安全的关联字段写入 Session Ledger。远程 provider 必须使用 HTTPS，本机 loopback 开发端点除外。 |
+| 运行探针 | Loopback 网关用 `/healthz` 表示进程存活，用 `/readyz` 表示可处理工作。Readiness 只返回固定 schema 的数量、准入状态和 provider guard 健康信息；回调畸形时关闭就绪状态，并隐藏错误正文。 |
 | 审计与回放基础能力 | 服务端事件可以写入追加式账本，并转换成脱敏回放。 |
 | Twenty CRM 纵切 | 已打包的适配器支持通过有界 cursor 分页查询公司、显式标记不完整扫描、把 API 找到的公司路由交给浏览器，以及在显式开启后经确认创建一家公司并使用同一委托 token 回读。OAuth 刷新会在本机线程和进程间串行化，身份解析遇到 GraphQL `UNAUTHENTICATED` 时也会进入受控刷新。 |
 
@@ -58,7 +59,7 @@ flowchart LR
 | `web_operation_agent.conversation` | 在多轮之间保留有界、脱敏的引用上下文，不把历史事实或路由当成当前权限。 |
 | `web_operation_agent.live` | 管理网关和顺序执行的会话生命周期。 |
 | `web_operation_agent.remote` | 定义受能力凭据约束的远程浏览器通道和客户端。 |
-| `web_operation_agent.embedded_gateway` | 提供页面 Runtime 及带认证的 SSE/HTTP 端点。 |
+| `web_operation_agent.embedded_gateway` | 提供页面 Runtime、带认证的 SSE/HTTP 端点，以及不含业务内容的存活与就绪探针。 |
 | `web_operation_agent.business` | 加载 Skill，并代理类型化的读取和写入工具。 |
 | `web_operation_agent.egress` | 执行模型 provider 数据边界，并在不保存请求内容的前提下生成审计记录。 |
 | `web_operation_agent.mutation` | 在内存或 SQLite 中原子记录一次性 mutation intent 与终态。 |

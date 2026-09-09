@@ -8,9 +8,10 @@ over authenticated POST requests.
 from __future__ import annotations
 
 import json
+import math
 import re
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -68,7 +69,66 @@ def _normalized_origin(value: str) -> str:
     return f"{scheme}://{host}{f':{port}' if port is not None else ''}"
 
 
-def _handler(registry: RemoteSessionRegistry, *, sse_wait_s: float):
+def _readiness_payload(value: Mapping) -> dict:
+    """Project a trusted status callback onto a content-free public schema."""
+    if not isinstance(value, Mapping):
+        raise TypeError("readiness provider must return a mapping")
+
+    def boolean(name: str) -> bool:
+        selected = value.get(name)
+        if not isinstance(selected, bool):
+            raise ValueError(f"readiness {name} must be a boolean")
+        return selected
+
+    def count(source: Mapping, name: str, maximum: int = 1_000_000) -> int:
+        selected = source.get(name)
+        if (isinstance(selected, bool) or not isinstance(selected, int)
+                or not 0 <= selected <= maximum):
+            raise ValueError(f"readiness {name} must be a bounded non-negative integer")
+        return selected
+
+    payload = {
+        "schema_version": 1,
+        "protocol": 1,
+        "ready": boolean("ready"),
+        "accepting_sessions": boolean("accepting_sessions"),
+        "session_count": count(value, "session_count"),
+    }
+    if "session_capacity" in value:
+        capacity = count(value, "session_capacity")
+        if capacity < 1 or payload["session_count"] > capacity:
+            raise ValueError("readiness session capacity is inconsistent")
+        payload["session_capacity"] = capacity
+    provider = value.get("provider")
+    if provider is not None:
+        if not isinstance(provider, Mapping):
+            raise ValueError("readiness provider status must be a mapping")
+        retry_after_s = provider.get("retry_after_s")
+        if (isinstance(retry_after_s, bool)
+                or not isinstance(retry_after_s, (int, float))
+                or not math.isfinite(retry_after_s)
+                or not 0 <= retry_after_s <= 86_400):
+            raise ValueError("readiness retry_after_s must be a bounded finite number")
+        circuit_open = provider.get("circuit_open")
+        if not isinstance(circuit_open, bool):
+            raise ValueError("readiness circuit_open must be a boolean")
+        payload["provider"] = {
+            "max_concurrent_requests": count(provider, "max_concurrent_requests", 10_000),
+            "in_flight": count(provider, "in_flight", 10_000),
+            "consecutive_transient_failures": count(
+                provider, "consecutive_transient_failures", 10_000),
+            "circuit_open": circuit_open,
+            "retry_after_s": round(float(retry_after_s), 3),
+        }
+        if payload["provider"]["in_flight"] > payload["provider"]["max_concurrent_requests"]:
+            raise ValueError("readiness provider concurrency is inconsistent")
+        payload["ready"] = payload["ready"] and not circuit_open
+    payload["accepting_sessions"] = payload["accepting_sessions"] and payload["ready"]
+    return payload
+
+
+def _handler(registry: RemoteSessionRegistry, *, sse_wait_s: float,
+             readiness_provider: Callable[[], Mapping] | None = None):
     class Handler(BaseHTTPRequestHandler):
         server_version = "WOAEmbeddedGateway/1"
         protocol_version = "HTTP/1.1"
@@ -205,7 +265,26 @@ def _handler(registry: RemoteSessionRegistry, *, sse_wait_s: float):
         def do_GET(self):
             path = urlsplit(self.path).path
             if path == "/healthz":
-                self._json(200, {"ok": True, "protocol": 1})
+                self._json(200, {"ok": True, "protocol": 1, "schema_version": 1})
+                return
+            if path == "/readyz":
+                try:
+                    raw = (readiness_provider() if readiness_provider is not None else {
+                        "ready": True,
+                        "accepting_sessions": True,
+                        "session_count": registry.session_count,
+                    })
+                    status = _readiness_payload(raw)
+                except Exception:
+                    status = {
+                        "schema_version": 1,
+                        "protocol": 1,
+                        "ready": False,
+                        "accepting_sessions": False,
+                        "session_count": registry.session_count,
+                        "status_error": True,
+                    }
+                self._json(200 if status["ready"] else 503, status)
                 return
             runtime_assets = {
                 "/v1/runtime/embedded.js": RUNTIME_PATH,
@@ -267,12 +346,19 @@ class EmbeddedGateway:
     """Background HTTP listener sharing a ``RemoteSessionRegistry`` with the Agent."""
 
     def __init__(self, registry: RemoteSessionRegistry | None = None, *,
-                 host: str = "127.0.0.1", port: int = 0, sse_wait_s: float = 15):
+                 host: str = "127.0.0.1", port: int = 0, sse_wait_s: float = 15,
+                 readiness_provider: Callable[[], Mapping] | None = None):
         if host not in {"127.0.0.1", "localhost", "::1"}:
             raise ValueError("embedded gateway may bind only to loopback")
+        if readiness_provider is not None and not callable(readiness_provider):
+            raise TypeError("readiness_provider must be callable or None")
         self.registry = registry or RemoteSessionRegistry()
-        self._server = ThreadingHTTPServer((host, port),
-                                           _handler(self.registry, sse_wait_s=sse_wait_s))
+        self._server = ThreadingHTTPServer(
+            (host, port),
+            _handler(
+                self.registry, sse_wait_s=sse_wait_s,
+                readiness_provider=readiness_provider),
+        )
         self._thread: threading.Thread | None = None
 
     @property

@@ -387,6 +387,40 @@ class LiveProductSessionTests(unittest.TestCase):
         finally:
             server.close()
 
+    def test_server_readiness_reports_capacity_and_provider_circuit_without_content(self):
+        provider = {
+            "max_concurrent_requests": 4,
+            "in_flight": 1,
+            "consecutive_transient_failures": 0,
+            "circuit_open": False,
+            "retry_after_s": 0.0,
+        }
+        server = LiveProductServer(
+            max_sessions=1, sse_wait_s=.01,
+            provider_status=lambda: dict(provider))
+        try:
+            self.assertEqual(server.readiness_snapshot(), {
+                "ready": True,
+                "accepting_sessions": True,
+                "session_count": 0,
+                "session_capacity": 1,
+                "provider": provider,
+            })
+            session = server.create_session(
+                allowed_origin=ORIGIN,
+                page_controller_module=ORIGIN + "/page-controller.js",
+                runner_factory=lambda _channel: _Runner(),
+                session_id="readiness-capacity")
+            self.assertFalse(server.readiness_snapshot()["accepting_sessions"])
+            provider["circuit_open"] = True
+            provider["retry_after_s"] = 10.0
+            snapshot = server.readiness_snapshot()
+            self.assertFalse(snapshot["ready"])
+            self.assertFalse(snapshot["accepting_sessions"])
+            session.close()
+        finally:
+            server.close()
+
     def test_expired_sessions_release_shared_server_capacity(self):
         limits = RemoteSessionLimits(session_ttl_s=60)
         with mock.patch("web_operation_agent.remote._now_ms", return_value=1_000):

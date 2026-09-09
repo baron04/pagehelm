@@ -942,6 +942,69 @@ class GatewayTests(unittest.TestCase):
         self.assertNotIn(b"clientToken", body)
         self.assertNotIn(b"ControlPlan", body)
 
+    def test_liveness_and_default_readiness_are_content_free(self):
+        status, _, body = self.request("GET", "/healthz")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {
+            "ok": True, "protocol": 1, "schema_version": 1})
+        status, _, body = self.request("GET", "/readyz")
+        self.assertEqual(status, 200)
+        readiness = json.loads(body)
+        self.assertTrue(readiness["ready"])
+        self.assertEqual(readiness["session_count"], 1)
+        self.assertNotIn(self.grant.session_id, body.decode())
+        self.assertNotIn(self.grant.client_token, body.decode())
+
+    def test_readiness_callback_failure_is_masked_and_fails_closed(self):
+        def broken_status():
+            raise RuntimeError("secret readiness detail")
+
+        with EmbeddedGateway(
+                RemoteSessionRegistry(), sse_wait_s=0.01,
+                readiness_provider=broken_status) as gateway:
+            request = urllib.request.Request(gateway.base_url + "/readyz")
+            with self.assertRaises(urllib.error.HTTPError) as raised:
+                urllib.request.urlopen(request, timeout=2)
+            self.assertEqual(raised.exception.code, 503)
+            body = raised.exception.read()
+        readiness = json.loads(body)
+        self.assertFalse(readiness["ready"])
+        self.assertTrue(readiness["status_error"])
+        self.assertNotIn(b"secret", body)
+
+    def test_open_provider_circuit_makes_readiness_unavailable(self):
+        def status():
+            return {
+                "ready": True,
+                "accepting_sessions": True,
+                "session_count": 2,
+                "session_capacity": 10,
+                "provider": {
+                    "max_concurrent_requests": 4,
+                    "in_flight": 0,
+                    "consecutive_transient_failures": 3,
+                    "circuit_open": True,
+                    "retry_after_s": 12.5,
+                    "untrusted_extra": "must not be exposed",
+                },
+                "untrusted_extra": "must not be exposed",
+            }
+
+        with EmbeddedGateway(
+                RemoteSessionRegistry(), sse_wait_s=0.01,
+                readiness_provider=status) as gateway:
+            request = urllib.request.Request(gateway.base_url + "/readyz")
+            with self.assertRaises(urllib.error.HTTPError) as raised:
+                urllib.request.urlopen(request, timeout=2)
+            self.assertEqual(raised.exception.code, 503)
+            body = raised.exception.read()
+        readiness = json.loads(body)
+        self.assertFalse(readiness["ready"])
+        self.assertFalse(readiness["accepting_sessions"])
+        self.assertTrue(readiness["provider"]["circuit_open"])
+        self.assertEqual(readiness["provider"]["retry_after_s"], 12.5)
+        self.assertNotIn(b"untrusted_extra", body)
+
     def test_gateway_builds_one_ephemeral_first_party_bootstrap(self):
         source = self.gateway.bootstrap_script(
             self.grant, page_controller_module=ORIGIN + "/page-controller.js")

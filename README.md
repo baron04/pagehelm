@@ -24,6 +24,7 @@ The repository currently verifies these behaviors with local automated tests and
 | Assistant interface | A reusable state-driven panel renders embedded and standalone replay modes. It keeps failed input recoverable, restores the initiating goal when a confirmation is denied for editing, exposes calm success/error/indeterminate states, and supports responsive layout, keyboard focus, screen-reader live regions, dark mode, and reduced motion. |
 | Identity binding | A host can bind a short-lived actor/tenant/workspace principal to the runtime capability, Agent turn, typed-tool scope, approval, mutation proposal, and redacted audit events. The Twenty demo resolves the exact HttpOnly browser session against Twenty before startup, requires it to match the delegated OAuth actor/workspace, and closes the Agent session if the browser cookie is replaced or removed. |
 | Provider boundary | Model requests have deterministic schema, count, byte, credential, and finite-JSON checks. A shared in-process guard bounds concurrent requests, charges queue time to the request deadline, and opens a cooldown circuit after consecutive transient failures. Each dispatched request has a correlation ID; successful calls record reported usage, while calls without trustworthy usage record an explicit unknown cost instead of zero. Failures also write safe correlation fields to the session ledger. Remote endpoints require HTTPS except on loopback. |
+| Operational probes | The loopback gateway separates process liveness at `/healthz` from work readiness at `/readyz`. Readiness reports only schema-fixed counts, admission state, and provider guard health; malformed callbacks fail closed without exposing their error text. |
 | Audit and replay primitives | Server events can be written to an append-only ledger and projected into a redacted replay. |
 | Twenty CRM vertical | The packaged adapter can query companies through bounded cursor pagination, explicitly label incomplete scans, hand an API-discovered company route to the browser, and opt in to creating one company with confirmation and delegated-token readback. OAuth refresh is serialized across local threads and processes, including GraphQL `UNAUTHENTICATED` responses encountered during identity resolution. |
 
@@ -58,7 +59,7 @@ The main reusable boundaries are:
 | `web_operation_agent.conversation` | Retains bounded, redacted reference context across turns without granting current facts or routes. |
 | `web_operation_agent.live` | Owns the gateway and sequential conversation lifecycle. |
 | `web_operation_agent.remote` | Defines the capability-bound remote browser channel and client. |
-| `web_operation_agent.embedded_gateway` | Serves the embedded runtime and authenticated SSE/HTTP endpoints. |
+| `web_operation_agent.embedded_gateway` | Serves the embedded runtime, authenticated SSE/HTTP endpoints, and content-free liveness/readiness probes. |
 | `web_operation_agent.business` | Loads Skills and mediates typed read and mutation tools. |
 | `web_operation_agent.mutation` | Atomically records single-use mutation intent and terminal outcome in memory or SQLite. |
 | `web_operation_agent.egress` | Enforces and audits the model-provider data boundary without storing request content. |
