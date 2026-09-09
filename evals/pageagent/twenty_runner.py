@@ -26,7 +26,8 @@ from urllib.parse import urlsplit
 from evals.pageagent.business_host import PageAgentBusinessProxy
 from evals.pageagent.host import PageAgentProviderContract, PageAgentProviderProxy
 from web_operation_agent.application import bind_application
-from web_operation_agent.identity import OperationContext
+from web_operation_agent.business import BusinessToolError
+from web_operation_agent.identity import OperationContext, PrincipalError
 from web_operation_agent.model import ChatModel, SpendMeter, load_env
 from web_operation_agent.twenty import TwentyApplicationAdapter
 
@@ -41,6 +42,12 @@ _MAX_BUNDLE_BYTES = 2 * 1024 * 1024
 _MAX_VISIBLE_BYTES = 512 * 1024
 _QUERY_OUTPUT_CONTRACT = """EVALUATION OUTPUT CONTRACT
 For a company-list goal, call query_companies using a limit large enough for the complete current workspace. Then call done with text containing exactly one JSON object and no Markdown: {"artifact_version":1,"execution_status":"completed","complete":true,"companies":[{"name":"Company","domain":"company.example"}]}. Set complete to true only when the tool's completeness.source_complete is true and result_truncated is false. Copy every returned company exactly once. For an open goal, use open_allowed_route with the exact ui_path returned by query_companies; this is the adapter equivalent of the Skill's generic goto instruction. Finish only after re-observing the requested company name and domain on the opened page."""
+# Host error codes that describe the compared engine's own behaviour. Every other Host error is an
+# apparatus fault: the trial cannot be scored for or against the engine.
+_PRODUCT_PROVIDER_CODES = frozenset({"model_call_budget", "provider_deadline", "cancelled"})
+_PRODUCT_BUSINESS_CODES = frozenset({
+    "business_call_budget", "route_call_budget", "route_refused", "cancelled"})
+_BRIDGE_PROBE = "() => typeof globalThis.__WOA_PAGEAGENT_BASELINE__ === 'object'"
 
 
 class PageAgentTwentyRunnerError(ValueError):
@@ -77,6 +84,14 @@ def _domain(value: Any) -> str:
     return selected
 
 
+def _tool_domain(value: Any) -> str:
+    """Normalize a tool-returned domain for comparison without rejecting the tool result."""
+    try:
+        return _domain(value)
+    except PageAgentTwentyRunnerError:
+        return str(value).casefold().strip()
+
+
 def _execution_case(value: Any) -> dict[str, Any]:
     fields = {
         "artifact_version", "kind", "set_id", "split", "task_id",
@@ -108,8 +123,29 @@ def _execution_case(value: Any) -> dict[str, Any]:
     return {**value, "prompt": prompt, "task_kind": task_kind}
 
 
-def query_evidence(answer: Any) -> dict[str, Any]:
-    """Parse the user-visible PageAgent answer without repairing or completing it."""
+def _disclosed_companies(results: list[dict[str, Any]]) -> tuple[set[tuple[str, str]], bool]:
+    """Return the company identities disclosed by successful tool results and whether any
+    result reported a complete, untruncated scan."""
+    identities: set[tuple[str, str]] = set()
+    complete = False
+    for result in results:
+        rows = result.get("companies") if isinstance(result, dict) else None
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if isinstance(row, dict) and isinstance(row.get("name"), str):
+                identities.add((row["name"].strip().casefold(), _tool_domain(row.get("domain"))))
+        completeness = result.get("completeness")
+        if (isinstance(completeness, dict)
+                and completeness.get("source_complete") is True
+                and completeness.get("result_truncated") is False):
+            complete = True
+    return identities, complete
+
+
+def query_evidence(answer: Any, business_results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Parse the user-visible PageAgent answer without repairing or completing it, then require
+    it to restate exactly the companies and completeness that the business tools disclosed."""
     answer = _bounded_text(answer, "PageAgent answer", 20_000)
     try:
         value = json.loads(answer)
@@ -134,6 +170,13 @@ def query_evidence(answer: Any) -> dict[str, Any]:
     identities = [(row["name"].casefold(), row["domain"]) for row in companies]
     if len(identities) != len(set(identities)):
         raise PageAgentTwentyRunnerError("query answer contains duplicate companies")
+    if not business_results:
+        raise PageAgentTwentyRunnerError("query answer has no business result to be checked against")
+    disclosed, disclosed_complete = _disclosed_companies(business_results)
+    if set(identities) != disclosed:
+        raise PageAgentTwentyRunnerError("query answer does not restate the business results")
+    if value["complete"] is not disclosed_complete:
+        raise PageAgentTwentyRunnerError("query answer completeness contradicts the business results")
     return {**value, "companies": companies}
 
 
@@ -154,12 +197,16 @@ def _route_candidates(results: list[dict[str, Any]], path: str) -> list[dict[str
 
 
 def open_evidence(*, path: Any, visible_projection: Any,
-                  business_results: list[dict[str, Any]]) -> dict[str, Any]:
-    """Require route facts from the tool result and their presence in the rendered page."""
+                  business_results: list[dict[str, Any]],
+                  permitted_routes: Sequence[str]) -> dict[str, Any]:
+    """Require route facts from the tool result, a Host permit for that exact route, and the
+    presence of the same facts in the rendered page."""
     path = _bounded_text(path, "final page path", 1_000)
     if not path.startswith("/") or path.startswith("//") or "?" in path or "#" in path:
         raise PageAgentTwentyRunnerError("final page path is not a canonical record path")
     visible = _bounded_text(visible_projection, "visible page projection", _MAX_VISIBLE_BYTES)
+    if path not in set(permitted_routes):
+        raise PageAgentTwentyRunnerError("final route was not authorized by the route Host")
     candidates = _route_candidates(business_results, path)
     if len(candidates) != 1:
         raise PageAgentTwentyRunnerError(
@@ -240,7 +287,7 @@ class PageAgentTwentyConfig:
 
 
 def _visible_projection(page: Any) -> str:
-    value = page.evaluate("""() => {
+    value = page.evaluate(r"""() => {
       const visible = element => {
         const style = getComputedStyle(element)
         const rect = element.getBoundingClientRect()
@@ -258,6 +305,15 @@ def _visible_projection(page: Any) -> str:
     if not isinstance(value, str) or len(value.encode("utf-8")) > _MAX_VISIBLE_BYTES:
         raise PageAgentTwentyRunnerError("visible page projection is invalid or oversized")
     return value
+
+
+def _bridge_installed(page: Any) -> bool | None:
+    """Report whether the bridge global still exists; None when the page cannot answer."""
+    try:
+        value = page.evaluate(_BRIDGE_PROBE)
+    except Exception:
+        return None
+    return value if isinstance(value, bool) else None
 
 
 def _utc_now() -> str:
@@ -296,21 +352,74 @@ def _bridge_reports_match(*, bridge: dict[str, Any], provider: dict[str, Any],
 
 
 def _provider_apparatus_code(code: Any) -> str | None:
-    if code == "ledger_failure":
-        return "ledger_failure"
-    if code == "transport_contract":
-        return "transport_contract"
-    if code in {
-            "provider_call", "provider_http", "provider_transport", "provider_response",
-            "provider_usage", "provider_capacity"}:
-        return "provider_outage"
-    return None
+    """Map a provider Host error to an apparatus code, or None for the engine's own failure.
+
+    Any provider-side failure that is not explicitly a budget, deadline or cancellation is an
+    outage: a transport, HTTP, response, usage, capacity or circuit failure cannot be scored
+    against the compared engine.
+    """
+    if code in (None, ""):
+        return None
+    if code in {"ledger_failure", "transport_contract"}:
+        return str(code)
+    if code in _PRODUCT_PROVIDER_CODES:
+        return None
+    return "provider_outage"
+
+
+def _business_apparatus_code(code: Any) -> str | None:
+    """Map a business Host error to an apparatus code, or None for the engine's own failure.
+
+    The Host redacts the business tool's cause, so a failed read tool, a malformed bridge call
+    or a malformed route request is a transport fault rather than an engine failure.
+    """
+    if code in (None, ""):
+        return None
+    if code in _PRODUCT_BUSINESS_CODES:
+        return None
+    return "transport_contract"
+
+
+def _classify_host_errors(errors: Sequence[tuple[str, str]]) -> tuple[str | None, str | None]:
+    """Return (apparatus_code, error_code) for the Host refusals seen at the page bindings.
+
+    The Hosts raise budget, cancellation and contract refusals before they record a last error
+    code, so the runner keeps its own ordered record. The first apparatus fault invalidates the
+    run; otherwise the last refusal names the engine's own failure.
+    """
+    for host, code in errors:
+        apparatus = (_provider_apparatus_code(code) if host == "provider"
+                     else _business_apparatus_code(code))
+        if apparatus:
+            return apparatus, code
+    if errors:
+        return None, errors[-1][1]
+    return None, None
+
+
+def _accounting_only_report(client: ChatModel, run_id: str) -> dict[str, Any]:
+    """Provider report for a run that never reached the provider Host."""
+    try:
+        accounting = client.meter.run_report(run_id)
+    except Exception:
+        accounting = None
+    return {
+        "provider_attempts": 0,
+        "provider_responses": 0,
+        "last_error_code": None,
+        "accounting": accounting if isinstance(accounting, dict) else None,
+    }
 
 
 def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
              client: ChatModel, config: PageAgentTwentyConfig,
-             run_id: str | None = None) -> dict[str, Any]:
-    """Execute one query/open case in a new browser and return a private runner artifact."""
+             run_id: str | None = None,
+             cancelled: threading.Event | None = None) -> dict[str, Any]:
+    """Execute one query/open case in a new browser and return a private runner artifact.
+
+    ``cancelled`` lets the harness stop the run: every later provider, business and route call
+    is refused and the artifact reports a cancelled failure, never a completed one.
+    """
     selected = _execution_case(case)
     config.verify_files()
     run_id = run_id or f"pageagent-{uuid.uuid4().hex}"
@@ -321,23 +430,94 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
     application = bind_application(adapter)
     if not isinstance(client, ChatModel) or client.model.strip() != client.model:
         raise PageAgentTwentyRunnerError("runner requires a configured ChatModel")
+    if cancelled is None:
+        cancelled = threading.Event()
+    elif not isinstance(cancelled, threading.Event):
+        raise PageAgentTwentyRunnerError("cancelled must be a threading.Event or None")
     started_at = _utc_now()
     started = time.monotonic()
-    identity_now = int(time.time() * 1_000)
-    initial_binding = adapter.page_session_binding(
-        config.storage_state_path, now_ms=identity_now)
-    principal = adapter.bind_browser_session(
-        config.storage_state_path, delegation_id=f"pageagent-{uuid.uuid4().hex}",
-        lifetime_s=min(config.wall_time_s + 60, 3_600), now_ms=identity_now)
-    context = OperationContext.create(
-        principal, session_id=f"pa-{uuid.uuid4().hex}",
-        turn_id=f"turn-{uuid.uuid4().hex}", operation_id=f"op-{uuid.uuid4().hex}",
-        deadline_ms=identity_now + config.wall_time_s * 1_000, now_ms=identity_now)
     skills = application.business_tools.relevant(selected["prompt"])
     if not skills or any(not skill.read_only for skill in skills):
         raise PageAgentTwentyRunnerError("query/open case did not select read-only Business Skills")
+
+    def artifact(*, status: str, apparatus_code: str | None, error_code: str | None,
+                 evidence: dict[str, Any], bridge: dict[str, Any] | None,
+                 provider_report: dict[str, Any], business_report: dict[str, Any] | None,
+                 business_results: list[dict[str, Any]], final_path: str,
+                 page_error_count: int, session_unchanged: bool,
+                 permitted_route_count: int) -> dict[str, Any]:
+        bridge_projection = None
+        if bridge is not None:
+            bridge_projection = {
+                key: bridge.get(key) for key in (
+                    "bridge_version", "upstream_version", "status", "success_claim",
+                    "terminal_reason", "metrics")
+            }
+            bridge_projection["answer_digest"] = _digest_json(bridge.get("answer", ""))
+        runtime_trace_digest = _digest_json({
+            "bridge": bridge_projection,
+            "business_result_digests": [_digest_json(item) for item in business_results],
+            "final_path": final_path,
+            "page_errors": page_error_count,
+            "permitted_route_count": permitted_route_count,
+            "session_unchanged": session_unchanged,
+        })
+        result = {
+            "artifact_version": RUNNER_VERSION,
+            "kind": "pageagent_twenty_run",
+            "status": status,
+            "apparatus_code": apparatus_code,
+            "error_code": error_code,
+            "run_id": run_id,
+            "case": {key: selected[key] for key in (
+                "set_id", "split", "task_id", "task_digest", "template_family_digest")},
+            "engine": {"name": "pageagent_core", "release": "pageagent@1.12.4",
+                       "bundle_digest": config.bundle_digest},
+            "evidence": evidence,
+            "bridge": bridge_projection,
+            "provider": provider_report,
+            "business": business_report,
+            "cancelled": cancelled.is_set(),
+            "session_binding_unchanged": session_unchanged,
+            "page_error_count": page_error_count,
+            "runtime_trace_digest": runtime_trace_digest,
+            "started_at": started_at,
+            "finished_at": _utc_now(),
+            "wall_ms": int((time.monotonic() - started) * 1_000),
+        }
+        return {**result, "run_digest": _digest_json(result)}
+
+    failed_evidence = {"artifact_version": 1, "execution_status": "failed"}
+    if cancelled.is_set():
+        return artifact(
+            status="failed", apparatus_code=None, error_code="cancelled",
+            evidence=failed_evidence, bridge=None,
+            provider_report=_accounting_only_report(client, run_id), business_report=None,
+            business_results=[], final_path="", page_error_count=0,
+            session_unchanged=False, permitted_route_count=0)
+
+    # Identity binding happens before any browser or model work. A binding failure is an
+    # apparatus fault of the credential/identity class, not a result of the compared engine.
+    identity_now = int(time.time() * 1_000)
+    try:
+        initial_binding = adapter.page_session_binding(
+            config.storage_state_path, now_ms=identity_now)
+        principal = adapter.bind_browser_session(
+            config.storage_state_path, delegation_id=f"pageagent-{uuid.uuid4().hex}",
+            lifetime_s=min(config.wall_time_s + 60, 3_600), now_ms=identity_now)
+        context = OperationContext.create(
+            principal, session_id=f"pa-{uuid.uuid4().hex}",
+            turn_id=f"turn-{uuid.uuid4().hex}", operation_id=f"op-{uuid.uuid4().hex}",
+            deadline_ms=identity_now + config.wall_time_s * 1_000, now_ms=identity_now)
+    except (BusinessToolError, PrincipalError, ValueError, OSError):
+        return artifact(
+            status="apparatus_invalid", apparatus_code="credential_or_identity",
+            error_code="identity_binding", evidence=failed_evidence, bridge=None,
+            provider_report=_accounting_only_report(client, run_id), business_report=None,
+            business_results=[], final_path="", page_error_count=0,
+            session_unchanged=False, permitted_route_count=0)
+
     token = uuid.uuid4().hex
-    cancelled = threading.Event()
     provider = PageAgentProviderProxy(
         run_token=token, run_id=run_id, client=client,
         contract=PageAgentProviderContract(
@@ -352,6 +532,8 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
         max_business_calls=config.max_business_calls,
         max_route_calls=config.max_page_actions, cancelled=cancelled)
     business_results: list[dict[str, Any]] = []
+    permitted_routes: list[str] = []
+    host_errors: list[tuple[str, str]] = []
     page_errors: list[str] = []
     bridge_result: dict[str, Any] | None = None
     final_path = ""
@@ -374,15 +556,45 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
                 try:
                     page = browser_context.new_page()
                     page.on("pageerror", lambda error: page_errors.append(type(error).__name__))
-                    page.expose_function("__WOA_PAGEAGENT_PROVIDER_FETCH__", provider.handle)
+
+                    def record_host_error(host: str, exc: BaseException) -> None:
+                        code = getattr(exc, "code", None)
+                        code = code if isinstance(code, str) and code else "host_exception"
+                        if host == "provider" and code == "provider_call":
+                            # The page sees a redacted code; the Host keeps the specific one.
+                            recorded = provider.transport_report().get("last_error_code")
+                            if isinstance(recorded, str) and recorded:
+                                code = recorded
+                        host_errors.append((host, code))
+
+                    def provider_fetch(payload: Any) -> dict[str, Any]:
+                        try:
+                            return provider.handle(payload)
+                        except Exception as exc:
+                            record_host_error("provider", exc)
+                            raise
 
                     def invoke_business(payload: Any) -> dict[str, Any]:
-                        result = business.handle(payload)
+                        try:
+                            result = business.handle(payload)
+                        except Exception as exc:
+                            record_host_error("business", exc)
+                            raise
                         business_results.append(json.loads(json.dumps(result)))
                         return result
 
+                    def permit_route(payload: Any) -> dict[str, Any]:
+                        try:
+                            permit = business.handle_route(payload)
+                        except Exception as exc:
+                            record_host_error("business", exc)
+                            raise
+                        permitted_routes.append(str(permit["route"]))
+                        return permit
+
+                    page.expose_function("__WOA_PAGEAGENT_PROVIDER_FETCH__", provider_fetch)
                     page.expose_function("__WOA_PAGEAGENT_BUSINESS_TOOL__", invoke_business)
-                    page.expose_function("__WOA_PAGEAGENT_OPEN_ROUTE__", business.handle_route)
+                    page.expose_function("__WOA_PAGEAGENT_OPEN_ROUTE__", permit_route)
                     page.goto(
                         application.descriptor.origin + config.entry_path,
                         wait_until="domcontentloaded", timeout=config.wall_time_s * 1_000)
@@ -410,14 +622,16 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
                         if isinstance(value, dict):
                             bridge_result = value
                         else:
-                            error_code = "bridge_result"
+                            apparatus_code, error_code = "transport_contract", "bridge_result"
                     except Exception:
-                        try:
-                            host_code = provider.report().get("last_error_code")
-                        except Exception:
-                            host_code = "ledger_failure"
-                        apparatus_code = _provider_apparatus_code(host_code)
-                        error_code = str(host_code or "bridge_execution")
+                        # PageAgentCore returns its own failures as a result, so an exception
+                        # here means the bridge, the page or a Host broke. Host apparatus codes
+                        # win; a replaced document is the engine navigating away from itself.
+                        apparatus_code, error_code = _classify_host_errors(host_errors)
+                        if apparatus_code is None and _bridge_installed(page) is False:
+                            error_code = "document_replaced"
+                        elif apparatus_code is None and error_code is None:
+                            apparatus_code, error_code = "transport_contract", "bridge_execution"
                     final_path = urlsplit(page.url).path
                     if selected["task_kind"] == "open":
                         try:
@@ -449,77 +663,56 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
         error_code = "ledger_failure"
         provider_report = {**provider.transport_report(), "accounting": None}
     business_report = business.report()
-    evidence: dict[str, Any] = {"artifact_version": 1, "execution_status": "failed"}
+    evidence: dict[str, Any] = dict(failed_evidence)
     if apparatus_code is None and bridge_result is not None:
-        header_succeeded = (
-            bridge_result.get("bridge_version") == 2
-            and bridge_result.get("upstream_version") == "1.12.4"
-            and bridge_result.get("status") == "completed"
-            and bridge_result.get("success_claim") is True
-            and bridge_result.get("terminal_reason") is None)
-        reports_match = _bridge_reports_match(
+        # The bridge returns PageAgent's own failures as a result; the Hosts know whether the
+        # run stopped on an apparatus fault, on a budget, on a refused route or on cancellation.
+        host_apparatus, host_error = _classify_host_errors(host_errors)
+        if host_apparatus is not None:
+            apparatus_code, error_code = host_apparatus, host_error
+        elif cancelled.is_set():
+            error_code = "cancelled"
+        elif host_error is not None:
+            error_code = host_error
+        else:
+            header_succeeded = (
+                bridge_result.get("bridge_version") == 2
+                and bridge_result.get("upstream_version") == "1.12.4"
+                and bridge_result.get("status") == "completed"
+                and bridge_result.get("success_claim") is True
+                and bridge_result.get("terminal_reason") is None)
+            reports_match = _bridge_reports_match(
                 bridge=bridge_result, provider=provider_report,
                 business=business_report, task_kind=selected["task_kind"],
-                config=config)
-        successful = header_succeeded and reports_match
-        if successful:
-            try:
-                evidence = (
-                    query_evidence(bridge_result.get("answer"))
-                    if selected["task_kind"] == "query"
-                    else open_evidence(
-                        path=final_path, visible_projection=final_visible,
-                        business_results=business_results))
-            except PageAgentTwentyRunnerError:
-                error_code = "evidence_contract"
-        else:
-            error_code = error_code or (
-                "metrics_contract" if header_succeeded else "agent_failed")
-    elif apparatus_code is None:
-        error_code = error_code or "bridge_result"
+                config=config) and business_report.get("route_permits") == len(permitted_routes)
+            if header_succeeded and reports_match:
+                try:
+                    evidence = (
+                        query_evidence(bridge_result.get("answer"), business_results)
+                        if selected["task_kind"] == "query"
+                        else open_evidence(
+                            path=final_path, visible_projection=final_visible,
+                            business_results=business_results,
+                            permitted_routes=permitted_routes))
+                except PageAgentTwentyRunnerError:
+                    error_code = "evidence_contract"
+            else:
+                error_code = error_code or (
+                    "metrics_contract" if header_succeeded else "agent_failed")
+    elif apparatus_code is None and error_code is None:
+        apparatus_code, error_code = "transport_contract", "bridge_result"
 
-    bridge_projection = None
-    if bridge_result is not None:
-        bridge_projection = {
-            key: bridge_result.get(key) for key in (
-                "bridge_version", "upstream_version", "status", "success_claim",
-                "terminal_reason", "metrics")
-        }
-        bridge_projection["answer_digest"] = _digest_json(bridge_result.get("answer", ""))
-    runtime_trace_digest = _digest_json({
-        "bridge": bridge_projection,
-        "business_result_digests": [_digest_json(item) for item in business_results],
-        "final_path": final_path,
-        "page_errors": len(page_errors),
-        "session_unchanged": session_unchanged,
-    })
     status = (
         "apparatus_invalid" if apparatus_code else
         "completed" if evidence.get("execution_status") == "completed" else "failed")
-    finished_at = _utc_now()
-    result = {
-        "artifact_version": RUNNER_VERSION,
-        "kind": "pageagent_twenty_run",
-        "status": status,
-        "apparatus_code": apparatus_code,
-        "error_code": error_code,
-        "run_id": run_id,
-        "case": {key: selected[key] for key in (
-            "set_id", "split", "task_id", "task_digest", "template_family_digest")},
-        "engine": {"name": "pageagent_core", "release": "pageagent@1.12.4",
-                   "bundle_digest": config.bundle_digest},
-        "evidence": evidence,
-        "bridge": bridge_projection,
-        "provider": provider_report,
-        "business": business_report,
-        "session_binding_unchanged": session_unchanged,
-        "page_error_count": len(page_errors),
-        "runtime_trace_digest": runtime_trace_digest,
-        "started_at": started_at,
-        "finished_at": finished_at,
-        "wall_ms": int((time.monotonic() - started) * 1_000),
-    }
-    return {**result, "run_digest": _digest_json(result)}
+    if status == "completed" and error_code is not None:
+        status, evidence = "failed", dict(failed_evidence)
+    return artifact(
+        status=status, apparatus_code=apparatus_code, error_code=error_code,
+        evidence=evidence, bridge=bridge_result, provider_report=provider_report,
+        business_report=business_report, business_results=business_results,
+        final_path=final_path, page_error_count=len(page_errors),
+        session_unchanged=session_unchanged, permitted_route_count=len(permitted_routes))
 
 
 def _read_json(path: Path) -> dict[str, Any]:
