@@ -30,6 +30,27 @@ _SENSITIVE_KEY = re.compile(
 _MAX_RESULT_BYTES = 64 * 1024
 
 
+def _trigger_tokens(value: str) -> tuple[str, ...]:
+    """Tokenize Latin words and individual Han characters for bounded phrase matching."""
+    return tuple(re.findall(r"[a-z0-9]+|[\u3400-\u4dbf\u4e00-\u9fff]", value.casefold()))
+
+
+def _trigger_matches(trigger: str, task: str, *, max_gap_tokens: int = 8) -> bool:
+    """Match a Skill phrase with word boundaries and a small amount of natural-language fill."""
+    wanted = _trigger_tokens(trigger)
+    available = _trigger_tokens(task)
+    if not wanted or not available:
+        return False
+    cursor = -1
+    for token in wanted:
+        upper = min(len(available), cursor + max_gap_tokens + 2)
+        try:
+            cursor = available.index(token, cursor + 1, upper)
+        except ValueError:
+            return False
+    return True
+
+
 class BusinessToolError(RuntimeError):
     """A safe, expected refusal or read failure that the Agent may reason about."""
 
@@ -441,7 +462,8 @@ class BusinessToolRuntime:
         folded = task.casefold()
         ranked: list[tuple[int, str, BusinessSkill]] = []
         for skill in self._skills.values():
-            score = sum(1 for trigger in skill.triggers if trigger.casefold() in folded)
+            score = sum(1 for trigger in skill.triggers
+                        if _trigger_matches(trigger, folded))
             if score:
                 ranked.append((-score, skill.skill_id, skill))
         selected = [row[2] for row in sorted(ranked)]

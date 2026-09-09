@@ -71,18 +71,25 @@ class TwentyPackagedSkillTests(unittest.TestCase):
             adapter.business_tools.tool_names,
             frozenset({"query_companies", "create_company"}),
         )
-        relevant = adapter.business_tools.relevant("create company", limit=3)
-        self.assertEqual(
-            [skill.skill_id for skill in relevant],
-            ["twenty.crm.companies-create"],
+        create_prompts = (
+            "创建公司 Acme，域名 acme.example",
+            "创建名为 tom 的公司，域名 tom.com",
+            "新增一个公司 Acme",
+            "把 Acme 加进 CRM",
+            "create a company Acme",
+            "add a new company Acme",
+            "Register Acme Corp as a customer",
         )
-        chinese = adapter.business_tools.relevant(
-            "创建名为 tom 的公司，域名 tom.com", limit=3)
+        for prompt in create_prompts:
+            with self.subTest(prompt=prompt):
+                relevant = adapter.business_tools.relevant(prompt, limit=3)
+                self.assertEqual(
+                    [skill.skill_id for skill in relevant],
+                    ["twenty.crm.companies-create"],
+                )
         self.assertEqual(
-            [skill.skill_id for skill in chinese],
-            ["twenty.crm.companies-create"],
-        )
-        card = chinese[0].candidate_card()
+            adapter.business_tools.relevant("check my account settings", limit=3), ())
+        card = adapter.business_tools.relevant(create_prompts[0])[0].candidate_card()
         self.assertFalse(card["read_only"])
         self.assertEqual(card["tools"], ["query_companies", "create_company"])
         self.assertTrue(all(

@@ -258,6 +258,11 @@ class TwentyDemoLoginTests(unittest.TestCase):
 
 
 class TwentyDemoCompositionTests(unittest.TestCase):
+    def test_scripted_turn_waits_for_the_actual_textarea_composer(self):
+        source = Path(demo.__file__).read_text(encoding="utf-8")
+        self.assertIn("querySelector('textarea#woa-goal')", source)
+        self.assertNotIn("querySelector('input')", source)
+
     def _config(self, root: Path, *, allow_mutations: bool = False):
         return demo.TwentyDemoConfig(
             base_url="http://127.0.0.1:3020",

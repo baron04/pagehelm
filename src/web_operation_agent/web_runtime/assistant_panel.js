@@ -165,6 +165,7 @@ export class AssistantPanel {
         .empty span { margin-top:5px; color:var(--woa-muted); font-size:12px; }
         .entry { position:relative; margin:0 0 8px; padding:9px 11px 9px 31px; border:1px solid transparent;
           border-radius:13px; color:#485269; background:rgba(255,255,255,.7); overflow-wrap:anywhere; }
+        .entry > span { white-space:pre-wrap; }
         .entry:last-child { margin-bottom:0; }
         .entry::before { content:""; position:absolute; top:14px; left:13px; width:7px; height:7px;
           border-radius:50%; background:#9aa4b7; box-shadow:0 0 0 4px rgba(154,164,183,.12); }
@@ -414,7 +415,7 @@ export class AssistantPanel {
 
   add(value, {kind = 'progress', tone = 'neutral', timestamp: timeLabel = ''} = {}) {
     this.shadow.querySelector('[data-empty]')?.remove()
-    const message = String(value).slice(0, 300)
+    const message = String(value)
     const list = this.shadow.querySelector('.timeline')
     const previous = list.lastElementChild
     if (kind === 'progress' && previous?.dataset.kind === 'progress'

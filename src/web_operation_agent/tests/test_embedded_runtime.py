@@ -217,9 +217,15 @@ class EmbeddedRuntimeTests(unittest.TestCase):
 
             page.evaluate("""() => {
               window.testPanel.clearError(); window.testPanel.state('acting');
-              window.testPanel.setBusy(true); window.testPanel.add('A'.repeat(500));
+              window.testPanel.setBusy(true);
+              window.testPanel.add('第一行\\n' + 'A'.repeat(735));
             }""")
-            self.assertEqual(host.locator(".entry").last.inner_text().splitlines()[0], "A" * 300)
+            long_answer = host.locator(".entry").last.locator("span")
+            self.assertEqual(long_answer.text_content(), "第一行\n" + "A" * 735)
+            self.assertEqual(
+                long_answer.evaluate("node => getComputedStyle(node).whiteSpace"),
+                "pre-wrap",
+            )
             entries_before_repeat = host.locator(".entry").count()
             page.evaluate("""() => {
               window.testPanel.add('重新检查当前页面');

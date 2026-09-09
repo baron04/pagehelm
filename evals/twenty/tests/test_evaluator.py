@@ -52,6 +52,36 @@ def state(role: str, companies: list[dict] | None = None, *,
 
 
 class TwentyEvaluationTests(unittest.TestCase):
+    def test_soft_deleted_empty_company_is_retained_as_guard_data(self):
+        deleted = company(
+            "2c01915c-f887-4d58-be1b-8ba228aad51a", name="", domain="")
+        deleted["name"] = None
+        deleted["deleted_at"] = "2026-09-09T12:34:15+00:00"
+        before = state("baseline", [company(), deleted])
+        after = state("observation", [company(), deleted])
+        result = evaluate(
+            task={"artifact_version": 1, "kind": "query"},
+            before=before,
+            after=after,
+            evidence={
+                "artifact_version": 1,
+                "execution_status": "completed",
+                "complete": True,
+                "companies": [{"name": "Anthropic", "domain": "anthropic.com"}],
+            },
+        )
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(len(before["projection"]["companies"]), 2)
+
+    def test_active_empty_company_error_identifies_the_source_row(self):
+        invalid = company(
+            "2c01915c-f887-4d58-be1b-8ba228aad51a", name="", domain="")
+        with self.assertRaisesRegex(
+                ValueError,
+                r"companies\[1\] id=2c01915c-f887-4d58-be1b-8ba228aad51a: "
+                r"company.name"):
+            state("baseline", [company(), invalid])
+
     def test_query_passes_only_for_complete_truth_without_state_change(self):
         before = state("baseline")
         after = state("observation")

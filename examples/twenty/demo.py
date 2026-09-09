@@ -610,9 +610,9 @@ def _run_browser(config: TwentyDemoConfig, live: LiveProductSession,
                         )))
                         page.wait_for_function(
                             """() => {
-                              const input = document.querySelector('#woa-assistant')?.shadowRoot
-                                ?.querySelector('input');
-                              return input && !input.disabled;
+                              const composer = document.querySelector('#woa-assistant')?.shadowRoot
+                                ?.querySelector('textarea#woa-goal');
+                              return composer && !composer.disabled;
                             }""",
                             timeout=int(config.transport_timeout_s * 1000),
                         )

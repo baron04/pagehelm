@@ -90,6 +90,7 @@ class TwentyFixtureTests(unittest.TestCase):
         self.assertIn("-U", argv)
         self.assertIn("postgres", argv)
         self.assertIn('FROM "workspace_test".company', sql.decode())
+        self.assertNotIn('"deletedAt" IS NULL', sql.decode())
         self.assertEqual(state["status"], "READY")
         self.assertEqual(state["projection"]["companies"], [COMPANY])
         self.assertEqual(state["projection"]["guards"]["people"]["row_count"], 1)

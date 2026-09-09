@@ -84,18 +84,22 @@ def _normalize_domain(value: Any, *, allow_empty: bool = False,
 def _normalize_company(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != set(_COMPANY_FIELDS):
         raise EvaluationInputError("company projection has unexpected fields")
-    company: dict[str, Any] = {
-        "id": _text(value.get("id"), "company.id"),
-        "name": _text(value.get("name"), "company.name"),
-        "domain": _normalize_domain(value.get("domain"), allow_empty=True),
-    }
-    if not _UUID.fullmatch(company["id"]):
+    company_id = _text(value.get("id"), "company.id")
+    if not _UUID.fullmatch(company_id):
         raise EvaluationInputError("company.id must be a UUID")
-    for key in ("created_at", "updated_at"):
-        company[key] = _text(value.get(key), f"company.{key}")
     deleted_at = value.get("deleted_at")
     if deleted_at is not None and not isinstance(deleted_at, str):
         raise EvaluationInputError("company.deleted_at must be a string or null")
+    deleted = deleted_at is not None
+    raw_name = value.get("name")
+    company: dict[str, Any] = {
+        "id": company_id,
+        "name": ("" if deleted and raw_name is None
+                 else _text(raw_name, "company.name", allow_empty=deleted)),
+        "domain": _normalize_domain(value.get("domain"), allow_empty=True),
+    }
+    for key in ("created_at", "updated_at"):
+        company[key] = _text(value.get(key), f"company.{key}")
     company["deleted_at"] = deleted_at
     return company
 
@@ -120,7 +124,15 @@ def normalize_projection(value: Any) -> dict[str, Any]:
     if not isinstance(rows, list) or not isinstance(guards, dict) \
             or set(guards) != set(_GUARD_NAMES):
         raise EvaluationInputError("business projection is incomplete")
-    companies = [_normalize_company(row) for row in rows]
+    companies = []
+    for index, row in enumerate(rows):
+        try:
+            companies.append(_normalize_company(row))
+        except EvaluationInputError as exc:
+            row_id = row.get("id") if isinstance(row, dict) else None
+            identity = f" id={row_id}" if isinstance(row_id, str) else ""
+            raise EvaluationInputError(
+                f"companies[{index}]{identity}: {exc}") from exc
     companies.sort(key=lambda row: row["id"])
     ids = [row["id"] for row in companies]
     if len(ids) != len(set(ids)):
