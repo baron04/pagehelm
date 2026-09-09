@@ -189,16 +189,20 @@ class PageAgentProviderProxy:
         accounting = self.client.meter.run_report(self.run_id)
         if not isinstance(accounting, dict):
             raise PageAgentHostError("ledger_failure")
-        with self._lock:
-            attempts = self._attempts
-            completed = self._completed
+        transport = self.transport_report()
+        attempts = transport["provider_attempts"]
+        completed = transport["provider_responses"]
         calls = accounting.get("model_calls")
         if (isinstance(calls, bool) or not isinstance(calls, int)
                 or calls < completed or calls > attempts):
             raise PageAgentHostError("ledger_failure")
-        return {
-            "provider_attempts": attempts,
-            "provider_responses": completed,
-            "last_error_code": self._last_error_code or None,
-            "accounting": accounting,
-        }
+        return {**transport, "accounting": accounting}
+
+    def transport_report(self) -> dict[str, Any]:
+        """Return content-free transport counts even when accounting is unavailable."""
+        with self._lock:
+            return {
+                "provider_attempts": self._attempts,
+                "provider_responses": self._completed,
+                "last_error_code": self._last_error_code or None,
+            }

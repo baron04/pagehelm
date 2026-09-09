@@ -115,4 +115,4 @@ jobs:
         working-directory: evals/pageagent
         run: npm test
       - name: Test PageAgent server host
-        run: python -m unittest evals.pageagent.test_host evals.pageagent.test_business_host -v
+        run: python -m unittest evals.pageagent.test_host evals.pageagent.test_business_host evals.pageagent.test_twenty_runner -v

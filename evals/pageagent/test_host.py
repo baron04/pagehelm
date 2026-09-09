@@ -189,7 +189,20 @@ class ProviderProxyTests(unittest.TestCase):
             proxy.handle(_payload())
         self.assertEqual(proxy.report()["accounting"]["model_calls"], 1)
 
+    def test_transport_counts_remain_available_when_ledger_report_fails(self):
+        client = _Client()
+        proxy = self._proxy(client)
+        proxy.handle(_payload())
+        client.meter.run_report = lambda _run_id: None
+
+        with self.assertRaisesRegex(PageAgentHostError, "ledger_failure"):
+            proxy.report()
+        self.assertEqual(proxy.transport_report(), {
+            "provider_attempts": 1,
+            "provider_responses": 1,
+            "last_error_code": None,
+        })
+
 
 if __name__ == "__main__":
     unittest.main()
-
