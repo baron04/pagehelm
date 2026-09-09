@@ -13,8 +13,12 @@ from importlib import resources
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from web_operation_agent.business import BusinessToolError
+from web_operation_agent.business import (BusinessMutationIndeterminate,
+                                          BusinessSkill,
+                                          BusinessToolError,
+                                          BusinessToolRuntime)
 from web_operation_agent.identity import IdentityAssertion, PrincipalError
+from web_operation_agent.mutation import SQLiteMutationJournal
 from web_operation_agent.twenty import (TwentyApplicationAdapter,
                                         TwentyBusinessToolExecutor,
                                         TwentyOAuthTokenStore,
@@ -465,6 +469,61 @@ class TwentyPaginationTests(unittest.TestCase):
             with self.assertRaisesRegex(BusinessToolError, "incomplete"):
                 executor.prepare_mutation(
                     "create_company", {"name": "New", "domain": "new.example"})
+
+
+class TwentyMutationFaultTests(unittest.TestCase):
+    def test_lost_ack_after_commit_is_indeterminate_and_never_dispatched_twice(self):
+        record_id = str(uuid.uuid4())
+
+        class Tokens:
+            @staticmethod
+            def access_token():
+                return "token"
+
+        class LostAcknowledgementTwenty(TwentyBusinessToolExecutor):
+            def __init__(self):
+                super().__init__(
+                    base_url="http://127.0.0.1:3000", tokens=Tokens(),
+                    allow_mutations=True)
+                self.rows = []
+                self.posts = 0
+
+            def _get_companies(self):
+                return ({"totalCount": len(self.rows),
+                         "data": {"companies": list(self.rows)},
+                         "_woaPagination": {"complete": True}}, 200, False)
+
+            def _authorized_mutation_json(self, _path, _token, body):
+                self.posts += 1
+                self.rows.append({"id": record_id, "name": body["name"],
+                                  "domainName": body["domainName"]})
+                raise BusinessMutationIndeterminate(
+                    "Twenty mutation acknowledgement was unavailable; outcome is unknown")
+
+        with tempfile.TemporaryDirectory() as directory:
+            journal = SQLiteMutationJournal(Path(directory) / "mutations.sqlite3")
+            executor = LostAcknowledgementTwenty()
+            skill = BusinessSkill.load(resources.files("web_operation_agent").joinpath(
+                "skills/twenty/companies-create.json"))
+            runtime = BusinessToolRuntime(
+                (skill,), executor, mutation_journal=journal)
+            loaded = {skill.skill_id}
+            proposal = runtime.prepare_mutation(
+                "create_company",
+                {"name": "Fault Probe", "domain": "fault-probe.example"}, loaded)
+
+            with self.assertRaises(BusinessMutationIndeterminate):
+                runtime.execute_mutation(proposal, proposal.content_digest, loaded)
+            intent = journal.get(proposal.content_digest)
+            self.assertIsNotNone(intent)
+            self.assertEqual(intent.state, "indeterminate")
+            self.assertEqual(executor.posts, 1)
+            self.assertEqual(len(executor.rows), 1)
+
+            with self.assertRaisesRegex(BusinessToolError, "already indeterminate"):
+                runtime.execute_mutation(proposal, proposal.content_digest, loaded)
+            self.assertEqual(executor.posts, 1)
+            self.assertEqual(len(executor.rows), 1)
 
 
 class TwentyOAuthRefreshTests(unittest.TestCase):
