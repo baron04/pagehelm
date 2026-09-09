@@ -24,7 +24,17 @@ PYTHONPATH=../.. python qualify_bridge.py \
   --output ../../.artifacts/evals/pageagent/bridge-qualification.json
 ```
 
-The Twenty runner deliberately refuses create cases until PageAgent has an approval boundary equivalent to the product path. For query cases, the model's final `done.text` must itself be the complete schema-fixed answer; the runner never repairs prose, Markdown, omissions or duplicate rows. For open cases, the harness accepts page evidence only when one current business result disclosed the exact final route and the rendered page visibly contains that record's name and domain. Host reports and bridge metrics must agree exactly.
+The Twenty runner deliberately refuses create cases until PageAgent has an approval boundary equivalent to the product path. For query cases, the model's final `done.text` must itself be the complete schema-fixed answer; the runner never repairs prose, Markdown, omissions or duplicate rows, and it fails the run when that answer does not restate exactly the companies and completeness that the run's own `query_companies` results disclosed. For open cases, the harness accepts page evidence only when one current business result disclosed the exact final route, the route Host permitted that same route, and the rendered page visibly contains that record's name and domain; the evidence is sampled from the final browser page, never from database truth. Host reports and bridge metrics must agree exactly.
+
+Every Host refusal observed at the page bindings is classified. Model-call budget, provider deadline, business-call and route budgets, a refused route and cancellation are the engine's own failures and produce `status: failed`. Any other provider fault, a failed business tool, a malformed bridge call, an identity-binding failure before launch and a replaced browser session produce `status: apparatus_invalid` with the batch ledger's apparatus code (`provider_outage`, `transport_contract`, `credential_or_identity`, `ledger_failure`), so an outage is never scored against PageAgent and an engine failure never seals a batch. `run_case` also accepts a `cancelled` event: once set, every further provider, business and route call is refused and the artifact reports a cancelled failure, never a completed run.
+
+`scripted.py` provides the model-free test apparatus: a scripted OpenAI-compatible client with content-free accounting and injectable transport failures, a synthetic `query_companies` Business Runtime built on the product `BusinessToolRuntime`, a synthetic adapter that digests the browser session cookie, and a loopback SPA page whose list view exposes no company data. `test_twenty_runner.py` drives `run_case` through a fake Playwright and `test_twenty_runner_browser.py` executes the built bundle in real Chromium; both cover success, wrong answer, unauthorized route, identity failure, budget exhaustion, cancellation and provider outage, and score successful evidence with the independent evaluator against public development tasks instantiated over the synthetic set. The browser module skips when the bundle is missing or Chromium cannot launch:
+
+```bash
+PYTHONPATH=. python -m unittest evals.pageagent.test_twenty_runner evals.pageagent.test_twenty_runner_browser -v
+```
+
+This qualification proves the runner contract against synthetic components only. It is not the live qualification against the provisioned Twenty fixture, and it does not establish any success rate.
 
 Run one already-instantiated private execution case after provisioning the synthetic Twenty fixture and model environment:
 
