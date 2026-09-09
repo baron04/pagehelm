@@ -109,6 +109,12 @@ class ProviderEgressPolicy:
                 raise ProviderEgressError("provider message role is unsupported")
             role_counts[role] = role_counts.get(role, 0) + 1
             content = message.get("content", "")
+            if content is None:
+                tool_calls = message.get("tool_calls")
+                if role != "assistant" or not isinstance(tool_calls, list) or not tool_calls:
+                    raise ProviderEgressError(
+                        "null provider message content requires assistant tool calls")
+                content = ""
             if not isinstance(content, str):
                 raise ProviderEgressError("provider message content must be a string")
             if role == "user":
@@ -134,6 +140,16 @@ class ProviderEgressPolicy:
             roles=tuple(sorted(role_counts.items())),
             data_classes=tuple(sorted(classes)),
         )
+
+    def inspect_completion_body(self, body: dict) -> ProviderEgressReport:
+        """Inspect a caller-serialized completion without trusting its extra fields."""
+        if not isinstance(body, dict):
+            raise ProviderEgressError("provider request body must be an object")
+        if (has_unredacted_session_handoff(body, url_decode_depth=3)
+                or has_unredacted_sensitive_assignment(body, url_decode_depth=3)):
+            raise ProviderEgressError(
+                "provider request contains an unredacted credential value")
+        return self.inspect(body.get("messages"), body.get("tools"))
 
 
 DEFAULT_PROVIDER_EGRESS_POLICY = ProviderEgressPolicy()

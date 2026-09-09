@@ -133,6 +133,97 @@ class ProviderDeadline(unittest.TestCase):
         opened.assert_not_called()
 
 
+class NativeCompletionTransport(unittest.TestCase):
+    ENV = {"AGENT_OPENAI_BASE_URL": "https://provider.example/v1",
+           "AGENT_OPENAI_API_KEY": "test-key",
+           "AGENT_OPENAI_MODEL_PRO": "MiniMax-M3"}
+
+    @staticmethod
+    def _response(payload):
+        response = io.BytesIO(json.dumps(payload).encode("utf-8"))
+        response.__enter__ = lambda stream=response: stream
+        response.__exit__ = lambda stream=response, *_args: None
+        return response
+
+    def test_framework_native_body_is_not_rewritten_and_full_response_is_returned(self):
+        with tempfile.TemporaryDirectory() as directory:
+            meter = M.SpendMeter(ledger=Path(directory) / "spend.jsonl")
+            chat = M.ChatModel(meter, env=self.ENV)
+            body = {
+                "model": "MiniMax-M3",
+                "messages": [{"role": "user", "content": "Click the only button."}],
+                "tools": [{"type": "function", "function": {
+                    "name": "AgentOutput", "description": "Choose one action.",
+                    "parameters": {"type": "object", "properties": {},
+                                   "additionalProperties": False}}}],
+                "tool_choice": {"type": "function", "function": {"name": "AgentOutput"}},
+                "temperature": 0,
+                "top_p": 1,
+                "max_completion_tokens": 512,
+                "parallel_tool_calls": False,
+            }
+            payload = {
+                "id": "reply-1", "model": "provider-snapshot-2026-09-09",
+                "usage": {"prompt_tokens": 17, "completion_tokens": 9,
+                          "completion_tokens_details": {"reasoning_tokens": 3}},
+                "choices": [{"finish_reason": "tool_calls", "message": {
+                    "role": "assistant", "content": None, "tool_calls": [{
+                        "id": "call-1", "type": "function", "function": {
+                            "name": "AgentOutput", "arguments": "{}"}}]}}],
+            }
+            captured = []
+
+            def respond(request, timeout):
+                captured.append((json.loads(request.data), timeout))
+                return self._response(payload)
+
+            with patch.object(M.urllib.request, "urlopen", side_effect=respond):
+                result = chat.request_completion(body, "native-run", timeout_s=12)
+
+            self.assertEqual(result, payload)
+            self.assertEqual(captured[0][0], body)
+            self.assertGreater(captured[0][1], 11.9)
+            self.assertLessEqual(captured[0][1], 12)
+            report = meter.run_report("native-run")
+            self.assertEqual(report["model_calls"], 1)
+            self.assertEqual(report["provider_reported_models"],
+                             ["provider-snapshot-2026-09-09"])
+            self.assertEqual(report["known_input_tokens"], 17)
+            self.assertEqual(report["known_output_tokens"], 9)
+            self.assertEqual(report["known_reasoning_tokens"], 3)
+            self.assertRegex(report["provider_request_ids_digest"], r"^sha256:[0-9a-f]{64}$")
+            self.assertRegex(report["spend_ledger_slice_digest"], r"^sha256:[0-9a-f]{64}$")
+
+    def test_model_redirect_and_streaming_are_rejected_before_network(self):
+        with tempfile.TemporaryDirectory() as directory:
+            chat = M.ChatModel(
+                M.SpendMeter(ledger=Path(directory) / "spend.jsonl"), env=self.ENV)
+            messages = [{"role": "user", "content": "test"}]
+            invalid = (
+                {"model": "other-model", "messages": messages},
+                {"model": "MiniMax-M3", "messages": messages, "stream": True},
+            )
+            with patch.object(M.urllib.request, "urlopen") as opened:
+                for body in invalid:
+                    with self.subTest(body=body), self.assertRaises(M.ProviderError):
+                        chat.request_completion(body, "native-run")
+            opened.assert_not_called()
+
+    def test_native_extra_field_credential_is_rejected_before_network(self):
+        with tempfile.TemporaryDirectory() as directory:
+            chat = M.ChatModel(
+                M.SpendMeter(ledger=Path(directory) / "spend.jsonl"), env=self.ENV)
+            body = {
+                "model": "MiniMax-M3",
+                "messages": [{"role": "user", "content": "test"}],
+                "metadata": {"api_key": "must-not-leave"},
+            }
+            with patch.object(M.urllib.request, "urlopen") as opened:
+                with self.assertRaises(ValueError):
+                    chat.request_completion(body, "native-run")
+            opened.assert_not_called()
+
+
 class ProviderRuntimeProtection(unittest.TestCase):
     def test_capacity_wait_is_bounded_and_does_not_change_circuit_health(self):
         guard = M.ProviderRuntimeGuard(max_concurrent_requests=1)

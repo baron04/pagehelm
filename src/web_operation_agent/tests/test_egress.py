@@ -54,6 +54,36 @@ class ProviderEgressPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(ProviderEgressError, "tool count"):
             policy.inspect([{"role": "user", "content": "x"}], [{}, {}])
 
+    def test_assistant_tool_call_may_use_openai_null_content(self):
+        messages = [
+            {"role": "user", "content": "Inspect the page."},
+            {"role": "assistant", "content": None, "tool_calls": [{
+                "id": "call-1", "type": "function",
+                "function": {"name": "click", "arguments": "{}"},
+            }]},
+        ]
+        report = ProviderEgressPolicy().inspect(messages, [])
+        self.assertEqual(dict(report.roles), {"assistant": 1, "user": 1})
+
+    def test_null_content_without_an_assistant_tool_call_is_rejected(self):
+        invalid = (
+            [{"role": "user", "content": None}],
+            [{"role": "assistant", "content": None}],
+            [{"role": "assistant", "content": None, "tool_calls": []}],
+        )
+        for messages in invalid:
+            with self.subTest(messages=messages), self.assertRaises(ProviderEgressError):
+                ProviderEgressPolicy().inspect(messages, [])
+
+    def test_native_completion_extra_fields_cannot_smuggle_credentials(self):
+        body = {
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "safe"}],
+            "metadata": {"authorization": "Bearer private-value"},
+        }
+        with self.assertRaisesRegex(ProviderEgressError, "credential"):
+            ProviderEgressPolicy().inspect_completion_body(body)
+
 
 class AuditedChatTests(unittest.TestCase):
     def test_audit_contains_only_projection_and_precedes_delegate(self):

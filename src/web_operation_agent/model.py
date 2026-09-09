@@ -10,6 +10,7 @@ also fingerprints the configured real file before and after the suite as a final
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import ipaddress
 import json
 import math
@@ -267,6 +268,7 @@ class SpendMeter:
         self.total_in = self.total_out = self.total_cached = self.total_reasoning = 0
         self.batch_in = self.batch_out = self.batch_cached = 0
         self.run_in: dict[str, int] = {}
+        self._run_summaries: dict[str, dict] = {}
         self.price = price or PRICE
 
     def cost_of(self, i: int, o: int, c: int) -> float:
@@ -275,12 +277,56 @@ class SpendMeter:
     def batch_cost(self) -> float:
         return self.cost_of(self.batch_in, self.batch_out, self.batch_cached)
 
+    @staticmethod
+    def _reported_model(value: str | None) -> str:
+        if value is None:
+            return ""
+        if (not isinstance(value, str) or not value.strip() or len(value) > 120
+                or re.search(r"[\x00-\x1f\x7f]", value)):
+            raise ValueError("provider reported_model must be a bounded safe string")
+        return value.strip()
+
+    @staticmethod
+    def _empty_run_summary() -> dict:
+        return {
+            "model_calls": 0,
+            "usage_unavailable_calls": 0,
+            "known_input_tokens": 0,
+            "known_output_tokens": 0,
+            "known_cached_tokens": 0,
+            "known_reasoning_tokens": 0,
+            "known_cost_cny": 0.0,
+            "reported_models": set(),
+            "request_ids": [],
+            "record_digests": [],
+        }
+
+    def _commit_run_record(self, *, run_id: str, rec: dict, reported_model: str,
+                           request_id: str, unmetered: bool, known_cost: float = 0.0) -> None:
+        summary = self._run_summaries.setdefault(run_id, self._empty_run_summary())
+        summary["model_calls"] += 1
+        summary["usage_unavailable_calls"] += int(unmetered)
+        if not unmetered:
+            summary["known_input_tokens"] += rec["in"]
+            summary["known_output_tokens"] += rec["out"]
+            summary["known_cached_tokens"] += rec["cached"]
+            summary["known_reasoning_tokens"] += rec["reasoning"]
+            summary["known_cost_cny"] += known_cost
+        if reported_model:
+            summary["reported_models"].add(reported_model)
+        if request_id:
+            summary["request_ids"].append(request_id)
+        summary["record_digests"].append(hashlib.sha256(json.dumps(
+            rec, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+            allow_nan=False).encode("utf-8")).hexdigest())
+
     def record(self, *, provider: str, model: str, run_id: str, usage: dict,
-               request_id: str = "") -> dict:
+               request_id: str = "", reported_model: str | None = None) -> dict:
         if not isinstance(usage, dict):
             raise ValueError("provider usage must be an object")
         if request_id and not re.fullmatch(r"[0-9a-f]{32}", request_id):
             raise ValueError("provider request_id must be a 32-character lowercase hex value")
+        selected_reported_model = self._reported_model(reported_model)
         prompt_details = usage.get("prompt_tokens_details")
         completion_details = usage.get("completion_tokens_details")
         prompt_details = {} if prompt_details is None else prompt_details
@@ -307,38 +353,54 @@ class SpendMeter:
             raise ValueError("provider usage detail exceeds its containing token count")
         call_cost = self.cost_of(i, o, c)
         with self._lock:
-            self.calls += 1
-            self.total_in += i
-            self.total_out += o
-            self.total_cached += c
-            self.total_reasoning += r
-            self.batch_in += i
-            self.batch_out += o
-            self.batch_cached += c
-            self.run_in[run_id] = self.run_in.get(run_id, 0) + i
+            next_calls = self.calls + 1
+            next_total_in = self.total_in + i
+            next_total_out = self.total_out + o
+            next_total_cached = self.total_cached + c
+            next_batch_in = self.batch_in + i
+            next_batch_out = self.batch_out + o
+            next_batch_cached = self.batch_cached + c
+            next_run_in = self.run_in.get(run_id, 0) + i
+            next_batch_cost = cost_with(
+                self.price, next_batch_in, next_batch_out, next_batch_cached)
             rec = {"t": time.time(), "provider": provider, "model": model,
                    "batch_id": self.batch_id, "logical_run_id": run_id,
                    "accounting_status": "reported",
                    "in": i, "out": o, "cached": c, "reasoning": r,
-                   "cum_in": self.total_in, "cum_out": self.total_out,
+                   "cum_in": next_total_in, "cum_out": next_total_out,
                    "call_cost_cny": round(call_cost, 6),
-                   "batch_cost_cny": round(self.batch_cost(), 4),
-                   "run_in_tokens": self.run_in[run_id], "calls": self.calls}
+                   "batch_cost_cny": round(next_batch_cost, 4),
+                   "run_in_tokens": next_run_in, "calls": next_calls}
             if request_id:
                 rec["provider_request_id"] = request_id
+            if selected_reported_model:
+                rec["provider_reported_model"] = selected_reported_model
             self._append_record(rec)
-        if self.run_in[run_id] > self.run_input_token_abort:
+            self.calls = next_calls
+            self.total_in = next_total_in
+            self.total_out = next_total_out
+            self.total_cached = next_total_cached
+            self.total_reasoning += r
+            self.batch_in = next_batch_in
+            self.batch_out = next_batch_out
+            self.batch_cached = next_batch_cached
+            self.run_in[run_id] = next_run_in
+            self._commit_run_record(
+                run_id=run_id, rec=rec, reported_model=selected_reported_model,
+                request_id=request_id, unmetered=False, known_cost=call_cost)
+        if next_run_in > self.run_input_token_abort:
             raise BudgetExhausted("token_budget",
-                                  f"run {run_id} consumed {self.run_in[run_id]} input tokens, "
+                                  f"run {run_id} consumed {next_run_in} input tokens, "
                                   f"over the {self.run_input_token_abort} ceiling")
-        if self.batch_cost_stop is not None and self.batch_cost() > self.batch_cost_stop:
+        if self.batch_cost_stop is not None and next_batch_cost > self.batch_cost_stop:
             raise BudgetExhausted("batch_cost_stop",
-                                  f"batch spend {self.batch_cost():.4f} passed the "
+                                  f"batch spend {next_batch_cost:.4f} passed the "
                                   f"{self.batch_cost_stop:.4f} stop line")
         return rec
 
     def record_unmetered(self, *, provider: str, model: str, run_id: str,
-                         request_id: str, error_code: str) -> dict:
+                         request_id: str, error_code: str,
+                         reported_model: str | None = None) -> dict:
         """Record a dispatched call whose response supplied no trustworthy usage.
 
         A timeout or broken response can still be billed. Recording zero tokens or omitting
@@ -349,9 +411,9 @@ class SpendMeter:
             raise ValueError("provider request_id must be a 32-character lowercase hex value")
         if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", error_code):
             raise ValueError("provider error_code must be a bounded lowercase identifier")
+        selected_reported_model = self._reported_model(reported_model)
         with self._lock:
-            self.calls += 1
-            self.unmetered_calls += 1
+            next_calls = self.calls + 1
             rec = {
                 "t": time.time(), "provider": provider, "model": model,
                 "batch_id": self.batch_id, "logical_run_id": run_id,
@@ -361,9 +423,16 @@ class SpendMeter:
                 "in": None, "out": None, "cached": None, "reasoning": None,
                 "call_cost_cny": None,
                 "batch_cost_cny": round(self.batch_cost(), 4),
-                "run_in_tokens": self.run_in.get(run_id, 0), "calls": self.calls,
+                "run_in_tokens": self.run_in.get(run_id, 0), "calls": next_calls,
             }
+            if selected_reported_model:
+                rec["provider_reported_model"] = selected_reported_model
             self._append_record(rec)
+            self.calls = next_calls
+            self.unmetered_calls += 1
+            self._commit_run_record(
+                run_id=run_id, rec=rec, reported_model=selected_reported_model,
+                request_id=request_id, unmetered=True)
         return rec
 
     def _append_record(self, rec: dict) -> None:
@@ -396,6 +465,41 @@ class SpendMeter:
                 # whose machine produced it. The file used is unchanged; only its displayed
                 # name is normalized.
                 "ledger": _display_path(self.ledger), "batch_id": self.batch_id}
+
+    def run_report(self, run_id: str) -> dict:
+        """Return a content-free accounting slice for one logical run.
+
+        Request IDs and spend rows remain private. Their ordered digests bind a trial record
+        to the exact provider calls and ledger rows without exposing correlation IDs.
+        """
+        with self._lock:
+            summary = self._run_summaries.get(run_id, self._empty_run_summary())
+            request_ids = list(summary["request_ids"])
+            record_digests = list(summary["record_digests"])
+            calls = summary["model_calls"]
+            request_digest = None
+            if calls and len(request_ids) == calls:
+                request_digest = "sha256:" + hashlib.sha256(json.dumps(
+                    request_ids, separators=(",", ":")).encode("utf-8")).hexdigest()
+            slice_digest = None
+            if record_digests:
+                slice_digest = "sha256:" + hashlib.sha256(json.dumps(
+                    record_digests, separators=(",", ":")).encode("utf-8")).hexdigest()
+            known_cost = round(summary["known_cost_cny"], 6)
+            unavailable = summary["usage_unavailable_calls"]
+            return {
+                "model_calls": calls,
+                "usage_unavailable_calls": unavailable,
+                "provider_reported_models": sorted(summary["reported_models"]),
+                "provider_request_ids_digest": request_digest,
+                "known_input_tokens": summary["known_input_tokens"],
+                "known_output_tokens": summary["known_output_tokens"],
+                "known_cached_tokens": summary["known_cached_tokens"],
+                "known_reasoning_tokens": summary["known_reasoning_tokens"],
+                "known_cost_cny": known_cost,
+                "total_cost_cny": None if unavailable else known_cost,
+                "spend_ledger_slice_digest": slice_digest,
+            }
 
 
 class ChatModel:
@@ -465,12 +569,6 @@ class ChatModel:
         carries the per-model fields that can -- see `policies/model_options.json`; a caller
         passing its own merges over the model's, and neither may touch the fields above.
         """
-        if timeout_s is not None and (
-                isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float))
-                or not math.isfinite(timeout_s) or timeout_s <= 0):
-            raise ValueError("timeout_s must be a positive finite number")
-        getattr(self, "egress_policy", DEFAULT_PROVIDER_EGRESS_POLICY).inspect(
-            messages, tools)
         effective_max_tokens = self.max_completion_tokens if max_tokens is None else max_tokens
         if (isinstance(effective_max_tokens, bool)
                 or not isinstance(effective_max_tokens, int)
@@ -486,6 +584,51 @@ class ChatModel:
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"
+        data, request_id = self._request_completion_with_receipt(
+            body, run_id, timeout_s=timeout_s)
+        choices = data.get("choices") or []
+        if not isinstance(choices, list) or not choices:
+            raise ProviderError("provider returned no choices", request_id=request_id)
+        choice = choices[0]
+        if not isinstance(choice, dict):
+            raise ProviderError("provider choice must be an object", request_id=request_id)
+        message = choice.get("message") or {}
+        if not isinstance(message, dict):
+            raise ProviderError("provider message must be an object", request_id=request_id)
+        message["finish_reason"] = choice.get("finish_reason") or ""
+        message.setdefault("reasoning",
+                           message.get("reasoning_content") or message.get("reasoning") or "")
+        return message
+
+    def request_completion(self, body: dict, run_id: str,
+                           *, timeout_s: float | None = None) -> dict:
+        """Dispatch one caller-serialized chat completion through the protected provider path.
+
+        This entry point exists for a pinned framework adapter such as PageAgent that owns its
+        native message and tool-choice serialization. It neither injects nor rewrites request
+        fields; it enforces the configured endpoint/model, data boundary, budgets and spend
+        accounting, then returns the full OpenAI-compatible response.
+        """
+        data, _request_id = self._request_completion_with_receipt(
+            body, run_id, timeout_s=timeout_s)
+        return data
+
+    def _request_completion_with_receipt(
+            self, body: dict, run_id: str,
+            *, timeout_s: float | None = None) -> tuple[dict, str]:
+        if timeout_s is not None and (
+                isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float))
+                or not math.isfinite(timeout_s) or timeout_s <= 0):
+            raise ValueError("timeout_s must be a positive finite number")
+        if not isinstance(body, dict):
+            raise ProviderError("provider request body must be an object")
+        if body.get("model") != self.model:
+            raise ProviderError("provider request model must match the configured model")
+        if body.get("stream") not in (None, False):
+            raise ProviderError("streaming provider responses are unsupported")
+        getattr(
+            self, "egress_policy", DEFAULT_PROVIDER_EGRESS_POLICY
+        ).inspect_completion_body(body)
         request_timeout = self.timeout if timeout_s is None else min(self.timeout, timeout_s)
         try:
             payload = json.dumps(
@@ -581,9 +724,12 @@ class ChatModel:
                 code="provider_usage", request_id=request_id)
         # Record before inspecting the answer: a malformed reply still cost money.
         try:
+            reported_model = data.get("model")
+            if reported_model is not None and not isinstance(reported_model, str):
+                raise ValueError("provider reported model is invalid")
             self.meter.record(
                 provider=self.provider, model=self.model, run_id=run_id, usage=usage,
-                request_id=request_id)
+                request_id=request_id, reported_model=reported_model)
         except ValueError as exc:
             self.meter.record_unmetered(
                 provider=self.provider, model=self.model, run_id=run_id,
@@ -591,23 +737,4 @@ class ChatModel:
             raise ProviderError(
                 "provider usage is invalid",
                 code="provider_usage", request_id=request_id) from exc
-        choices = data.get("choices") or []
-        if not isinstance(choices, list) or not choices:
-            raise ProviderError("provider returned no choices", request_id=request_id)
-        choice = choices[0]
-        if not isinstance(choice, dict):
-            raise ProviderError("provider choice must be an object", request_id=request_id)
-        message = choice.get("message") or {}
-        if not isinstance(message, dict):
-            raise ProviderError("provider message must be an object", request_id=request_id)
-        # Two provider-neutral signals lifted to the top of the message so callers never have
-        # to know which vendor produced it:
-        #  * finish_reason distinguishes "the answer was cut off" (a budget problem the caller
-        #    can fix) from "the model stopped on its own" (an answer problem it cannot);
-        #  * reasoning is whatever the provider returned in a separate reasoning channel, under
-        #    any of the several field names vendors use for it. Inline <think> text is handled
-        #    later, in split_reasoning; this only catches the out-of-band form.
-        message["finish_reason"] = choice.get("finish_reason") or ""
-        message.setdefault("reasoning",
-                           message.get("reasoning_content") or message.get("reasoning") or "")
-        return message
+        return data, request_id

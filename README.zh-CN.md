@@ -23,7 +23,7 @@ Web Operation Agent 是一个早期阶段的框架，用于在第一方 Web 应�
 | 任务控制 | 面板可通过当前已认证 Runtime lease 停止精确绑定的活动消息。尚未被浏览器认领的动作和等待确认的写入不会再下发；已经认领的动作仍会结算为确定结果或 `indeterminate`。 |
 | 助手交互 | 基于显式状态模型的复用面板同时支持页面内嵌和独立回放。提交失败会保留用户输入，确认被拒绝后会恢复原目标供修改；成功、错误和不确定状态有独立表现，并支持响应式布局、键盘焦点、屏幕阅读器 live region、深色模式和减弱动画。 |
 | 身份绑定 | 应用宿主可以把短期 actor/tenant/workspace 主体绑定到 Runtime capability、Agent turn、类型化工具 scope、审批、mutation proposal 和脱敏审计事件。Twenty demo 会在启动前通过 Twenty 解析准确的 HttpOnly 浏览器 session，要求其与委托 OAuth 的 actor/workspace 一致，并在浏览器 cookie 被替换或删除时关闭 Agent session。 |
-| Provider 边界 | 模型请求在发送前经过结构、数量、字节、凭据形态和有限 JSON 检查。进程内共享 guard 限制并发请求，把排队时间计入请求截止时间，并在连续瞬时故障后进入冷却短路。每个已发送请求都有相关 ID；成功调用记录 provider 报告的 usage，无法获得可信 usage 的调用会把费用明确标为未知而不是零，失败还会把安全的关联字段写入 Session Ledger。远程 provider 必须使用 HTTPS，本机 loopback 开发端点除外。 |
+| Provider 边界 | 模型请求在发送前经过结构、数量、字节、凭据形态和有限 JSON 检查。固定版本的框架适配器可以保留自己的原生 chat 请求体，同时共用服务端凭据、传输、限制、guard 和费用记账。进程内共享 guard 限制并发请求，把排队时间计入请求截止时间，并在连续瞬时故障后进入冷却短路。每个已发送请求都有相关 ID；成功调用记录 provider 报告的 usage，无法获得可信 usage 的调用会把费用明确标为未知而不是零。逐 run 的无内容摘要用请求 ID 和费用行摘要把试验绑定到实际调用。远程 provider 必须使用 HTTPS，本机 loopback 开发端点除外。 |
 | 运行探针 | Loopback 网关用 `/healthz` 表示进程存活，用 `/readyz` 表示可处理工作。Readiness 只返回固定 schema 的数量、准入状态和 provider guard 健康信息；回调畸形时关闭就绪状态，并隐藏错误正文。 |
 | 审计与回放基础能力 | 服务端事件可以写入追加式账本，并转换成脱敏回放。 |
 | Twenty CRM 纵切 | 已打包的适配器支持通过有界 cursor 分页查询公司、显式标记不完整扫描、把 API 找到的公司路由交给浏览器，以及在显式开启后经确认创建一家公司并使用同一委托 token 回读。OAuth 刷新会在本机线程和进程间串行化，身份解析遇到 GraphQL `UNAUTHENTICATED` 时也会进入受控刷新。 |

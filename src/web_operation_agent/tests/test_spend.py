@@ -4,6 +4,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from web_operation_agent.model import (DEFAULT_PRICE_MODEL, PRICE, PRICES, BudgetExhausted,
                                        SpendMeter, cost_with, load_env)
@@ -90,6 +91,62 @@ class Ledger(unittest.TestCase):
         self.assertIsNone(rec["in"])
         self.assertEqual(m.report()["provider_calls"], 1)
         self.assertEqual(m.report()["unmetered_provider_calls"], 1)
+
+    def test_run_report_is_content_free_and_scoped_to_one_logical_run(self):
+        m = self._meter()
+        first_request = "a" * 32
+        second_request = "b" * 32
+        m.record(
+            provider="p", model="configured", run_id="r1",
+            usage={"prompt_tokens": 100, "completion_tokens": 12,
+                   "prompt_tokens_details": {"cached_tokens": 20},
+                   "completion_tokens_details": {"reasoning_tokens": 4}},
+            request_id=first_request, reported_model="snapshot-a",
+        )
+        m.record_unmetered(
+            provider="p", model="configured", run_id="r1",
+            request_id=second_request, error_code="provider_transport",
+        )
+        m.record(
+            provider="p", model="configured", run_id="r2",
+            usage={"prompt_tokens": 7, "completion_tokens": 2},
+            request_id="c" * 32, reported_model="snapshot-b",
+        )
+
+        report = m.run_report("r1")
+        self.assertEqual(report["model_calls"], 2)
+        self.assertEqual(report["usage_unavailable_calls"], 1)
+        self.assertEqual(report["provider_reported_models"], ["snapshot-a"])
+        self.assertEqual(report["known_input_tokens"], 100)
+        self.assertEqual(report["known_output_tokens"], 12)
+        self.assertEqual(report["known_cached_tokens"], 20)
+        self.assertEqual(report["known_reasoning_tokens"], 4)
+        self.assertIsNone(report["total_cost_cny"])
+        encoded = json.dumps(report)
+        self.assertNotIn(first_request, encoded)
+        self.assertNotIn(second_request, encoded)
+        self.assertEqual(m.run_report("missing")["model_calls"], 0)
+
+    def test_failed_ledger_append_does_not_advance_in_memory_accounting(self):
+        m = self._meter()
+        with mock.patch.object(m, "_append_record", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                m.record(
+                    provider="p", model="m", run_id="r1",
+                    usage={"prompt_tokens": 100, "completion_tokens": 10},
+                    request_id="a" * 32,
+                )
+        self.assertEqual(m.report()["provider_calls"], 0)
+        self.assertEqual(m.run_report("r1")["model_calls"], 0)
+
+    def test_reported_model_is_validated_before_writing(self):
+        m = self._meter()
+        with self.assertRaisesRegex(ValueError, "reported_model"):
+            m.record(
+                provider="p", model="m", run_id="r1", usage={},
+                request_id="a" * 32, reported_model="bad\nmodel",
+            )
+        self.assertFalse(self.path.exists())
 
     def test_cached_tokens_are_read_from_the_provider_reply(self):
         m = self._meter()
