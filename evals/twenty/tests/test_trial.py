@@ -72,6 +72,7 @@ def _run(protocol: dict, test_seal: dict, index: int, kind: str) -> dict:
         "case": {
             "task_id": pair["task_id"],
             "task_digest": test_seal["task_digests"][pair["task_id"]],
+            "evaluator_task": {"kind": "query"},
         },
         "started_at": started.isoformat(),
         "finished_at": (started + timedelta(seconds=1)).isoformat(),
@@ -105,6 +106,7 @@ class TrialProjectionTests(unittest.TestCase):
         evaluation = {
             "artifact_version": 1, "kind": "twenty_evaluation",
             "status": "PASS", "task_kind": "query", "checks": {"passed": True},
+            "before_digest": before["digest"], "after_digest": after["digest"],
         }
         with tempfile.TemporaryDirectory() as directory:
             ledger = Path(directory) / "qualification.jsonl"
@@ -142,6 +144,7 @@ class TrialProjectionTests(unittest.TestCase):
         evaluation = {
             "artifact_version": 1, "kind": "twenty_evaluation",
             "status": "PASS", "task_kind": "query", "checks": {"passed": True},
+            "before_digest": before["digest"], "after_digest": after["digest"],
         }
         index = next(
             candidate for candidate in range(len(protocol["schedule"]) * 2)
@@ -156,6 +159,29 @@ class TrialProjectionTests(unittest.TestCase):
                 batch_id="qualification-batch-v1", schedule_index=index,
                 arm_id=_arm(protocol, index), run=run, evaluation=evaluation,
                 before=before, after=after)
+
+    def test_evaluation_must_be_bound_to_the_same_fixture_states(self):
+        protocol, _development, test_seal, _split = frozen_artifacts()
+        before, after = _state("baseline"), _state("observation")
+        index = 0
+        arm_id = _arm(protocol, index)
+        engine = next(
+            arm["engine"] for arm in protocol["arms"]
+            if arm["arm_id"] == arm_id)
+        kind = ("woa_twenty_run" if engine == "web_operation_agent"
+                else "pageagent_twenty_run")
+        evaluation = {
+            "artifact_version": 1, "kind": "twenty_evaluation",
+            "status": "PASS", "task_kind": "query", "checks": {"passed": True},
+            "before_digest": "sha256:" + "f" * 64,
+            "after_digest": after["digest"],
+        }
+        with self.assertRaisesRegex(ValueError, "different baseline"):
+            project_trial_record(
+                protocol=protocol, test_seal=test_seal,
+                batch_id="qualification-batch-v1", schedule_index=index,
+                arm_id=arm_id, run=_run(protocol, test_seal, index, kind),
+                evaluation=evaluation, before=before, after=after)
 
 
 if __name__ == "__main__":

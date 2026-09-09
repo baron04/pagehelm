@@ -67,6 +67,10 @@ def project_trial_record(*, protocol: dict[str, Any], test_seal: dict[str, Any],
     if (case.get("task_id") != pair["task_id"]
             or case.get("task_digest") != seal["task_digests"].get(pair["task_id"])):
         raise EvaluationInputError("runner case does not match the frozen schedule")
+    before_state = validate_state(before, expected_role="baseline")
+    after_state = validate_state(after, expected_role="observation")
+    if before_state.get("status") != "READY":
+        raise EvaluationInputError("trial baseline is unavailable")
     run_status = run.get("status")
     apparatus = run.get("apparatus_code")
     if run_status == "apparatus_invalid":
@@ -75,9 +79,23 @@ def project_trial_record(*, protocol: dict[str, Any], test_seal: dict[str, Any],
         evaluation_digest = None
     elif run_status in {"completed", "failed", "indeterminate"}:
         trial_status = "valid"
-        evaluation_status = evaluation.get("status") if isinstance(evaluation, dict) else None
+        if (not isinstance(evaluation, dict)
+                or evaluation.get("artifact_version") != 1
+                or evaluation.get("kind") != "twenty_evaluation"):
+            raise EvaluationInputError("valid runner outcome lacks a Twenty evaluation")
+        evaluator_task = case.get("evaluator_task")
+        task_kind = evaluator_task.get("kind") if isinstance(evaluator_task, dict) else None
+        if not isinstance(task_kind, str) or evaluation.get("task_kind") != task_kind:
+            raise EvaluationInputError("evaluation task kind does not match the runner case")
+        if evaluation.get("before_digest") != before_state.get("digest"):
+            raise EvaluationInputError("evaluation is bound to a different baseline")
+        evaluation_status = evaluation.get("status")
         if evaluation_status not in {"PASS", "FAIL", "INDETERMINATE"}:
             raise EvaluationInputError("valid runner outcome lacks a usable evaluation")
+        expected_after_digest = (
+            after_state.get("digest") if after_state.get("status") == "READY" else None)
+        if evaluation.get("after_digest") != expected_after_digest:
+            raise EvaluationInputError("evaluation is bound to a different after-state")
         apparatus = None
         evaluation_digest = digest_json(evaluation)
     else:
@@ -87,8 +105,6 @@ def project_trial_record(*, protocol: dict[str, Any], test_seal: dict[str, Any],
     accounting = trial.get("accounting")
     if not isinstance(accounting, dict):
         raise EvaluationInputError("runner accounting projection is unavailable")
-    before_state = validate_state(before, expected_role="baseline")
-    after_state = validate_state(after, expected_role="observation")
     terminal = run.get("error_code") or "completed"
     if not isinstance(terminal, str) or not _CODE.fullmatch(terminal):
         raise EvaluationInputError("runner terminal reason is invalid")

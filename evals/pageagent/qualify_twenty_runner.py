@@ -16,6 +16,10 @@ from web_operation_agent.twenty import TwentyApplicationAdapter
 
 
 QUALIFICATION_VERSION = 1
+_CASE_GATE_FIELDS = (
+    "runner_completed", "evaluator_passed", "state_unchanged",
+    "identity_unchanged", "accounting_complete",
+)
 
 
 def _active_companies(state: dict[str, Any]) -> list[dict[str, str]]:
@@ -87,6 +91,9 @@ def qualify(*, fixture: TwentyPostgresFixture, adapter: TwentyApplicationAdapter
             evidence=run["evidence"])
         unchanged = before.get("digest") == after.get("digest")
         case_checks[case["evaluator_task"]["kind"]] = {
+            "runner_status": run.get("status"),
+            "runner_error_code": run.get("error_code"),
+            "apparatus_code": run.get("apparatus_code"),
             "runner_completed": run.get("status") == "completed",
             "evaluator_passed": evaluation.get("status") == "PASS",
             "state_unchanged": unchanged,
@@ -102,8 +109,12 @@ def qualify(*, fixture: TwentyPostgresFixture, adapter: TwentyApplicationAdapter
     checks = {
         "fixture_reset_guard": all(
             item["state_unchanged"] for item in case_checks.values()),
-        "query_runner_evaluator": all(case_checks.get("query", {}).values()),
-        "open_runner_evaluator": all(case_checks.get("open", {}).values()),
+        "query_runner_evaluator": all(
+            case_checks.get("query", {}).get(field) is True
+            for field in _CASE_GATE_FIELDS),
+        "open_runner_evaluator": all(
+            case_checks.get("open", {}).get(field) is True
+            for field in _CASE_GATE_FIELDS),
         "scripted_provider_zero_cost": all(
             item["accounting_complete"] for item in case_checks.values()),
         "schedule_completed": set(case_checks) == {"query", "open"},

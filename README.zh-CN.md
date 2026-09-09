@@ -123,7 +123,7 @@ python src/web_operation_agent/tests/run_all.py -k test_product.py
 
 Evaluator 还包含一套严格的配对实验预注册校验器，用于在运行前绑定 PageAgent、Skill/API 与 SourceProvider 对比所需的工件和实现摘要、等信息量实验臂、provider 参数、预算、任务资格、源码排除、确定性平衡顺序和 fail-fast 停止规则。当前尚未冻结正式运行协议，也没有形成比较结果。
 
-私有的 append-only batch ledger 会让所有 runner 使用同一种 trial schema，并强制执行冻结顺序。它通过摘要链检测删改和重排，拒绝重复或时间重叠的 trial，不会把未知 provider 费用写成零，还会检测同一 pair 的模型漂移，并在装置无效或观察到安全事件时停止。官方 PageAgentCore 与 PageController v1.12.4 已通过 npm lock 和 integrity 固定，其轻量 bridge 已完成可复现构建以及无模型调用的真实 Chromium DOM/custom-tool 资格检查；服务端 Host 现在把 run capability 绑定到共享的受保护 provider 传输，从本项目共用的 Business Skills/runtime 派生 principal 绑定的只读工具，并且只允许跳转到当前业务工具结果明确返回的 SPA 路由。只读 Twenty runner 已把这些组件绑定到真实浏览器/API 身份，并拒绝无法确定性验收的答案或页面证据；真实 runner 资格验证、统一 schedule 编排和可公开的脱敏报告生成器仍未完成。
+私有的 append-only batch ledger 会让所有 runner 使用同一种 trial schema，并强制执行冻结顺序。它通过摘要链检测删改和重排，拒绝重复或时间重叠的 trial，不会把未知 provider 费用写成零，还会检测同一 pair 的模型漂移，并在装置无效或观察到安全事件时停止。官方 PageAgentCore 与 PageController v1.12.4 已通过 npm lock 和 integrity 固定，其轻量 bridge 已完成可复现构建以及无模型调用的真实 Chromium DOM/custom-tool 资格检查；服务端 Host 现在把 run capability 绑定到共享的受保护 provider 传输，从本项目共用的 Business Skills/runtime 派生 principal 绑定的只读工具，并且只允许跳转到当前业务工具结果明确返回的 SPA 路由。只读 Twenty runner 已把这些组件绑定到真实浏览器/API 身份，并拒绝无法确定性验收的答案或页面证据。无模型 live 资格验证已在本地 Twenty 2.39.0 fixture 上用真实 Chromium、委托 API、数据库状态采集和独立 evaluator 跑通 query/open；两个引擎也已共用 typed failure 分类和同一个协议绑定 trial projector。Web Operation Agent run artifact 装配、统一 schedule 编排和可公开的脱敏报告生成器仍未完成；这两个资格用例不构成成功率或对比结论。
 
 ## 已知限制
 

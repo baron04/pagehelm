@@ -70,7 +70,13 @@ python -m evals.twenty verify-protocol \
   --split-verification evals/twenty/tasksets/twenty-companies-split-v1.json
 ```
 
-The repository currently ships the validator, not a frozen formal-run protocol. Actual engine bundles, PageAgent adapter, provider snapshot policy, fixture qualification, source allowlist and harness must be qualified and hashed before creating that artifact. Model runs performed before those fields are frozen remain exploratory and cannot support benchmark claims.
+The repository currently ships the validator, not a frozen formal-run protocol. The official PageAgent bundle and read-only runner are qualified; the Web Operation Agent run-artifact assembler, common schedule driver, provider snapshot policy, source allowlist and remaining environment manifests must be qualified and hashed before creating that artifact. Model runs performed before those fields are frozen remain exploratory and cannot support benchmark claims.
+
+## Shared outcome and trial projection
+
+[`outcomes.py`](outcomes.py) is the common failure classifier for both engines. Model-call limits, deadlines, invalid tool arguments, route refusal and cancellation remain scorable engine outcomes. Stable identity/authentication codes become `credential_or_identity`; provider failures become `provider_outage`; API, response-contract and browser-transport failures become `transport_contract`. Web Operation Agent writes the same typed business code to its private audit event that the PageAgent Business Host returns, so the classifier does not inspect exception text.
+
+[`trial.py`](trial.py) converts an engine runner's bounded `trial` projection into the canonical record validated by [`records.py`](records.py). It binds the artifact to the scheduled task, digest, arm and engine, then copies only accounting, action counts, safety counters and evidence digests. The same projector and append-only ledger test cover PageAgent and Web Operation Agent artifacts across a complete frozen schedule. The PageAgent runner emits this projection today; formal batch execution still needs the Web Operation Agent run-artifact assembler and one schedule driver.
 
 ## Append-only batch ledger
 

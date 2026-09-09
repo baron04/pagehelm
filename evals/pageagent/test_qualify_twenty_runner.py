@@ -67,7 +67,8 @@ class LiveQualificationContractTests(unittest.TestCase):
                     },
                 }
             return {
-                "status": "completed", "evidence": evidence,
+                "status": "completed", "error_code": None,
+                "apparatus_code": None, "evidence": evidence,
                 "session_binding_unchanged": True,
                 "run_digest": "sha256:" + ("1" if task["kind"] == "query" else "2") * 64,
                 "trial": {"accounting": {
@@ -90,6 +91,8 @@ class LiveQualificationContractTests(unittest.TestCase):
         self.assertEqual(calls, [("query", 2), ("open", 3)])
         self.assertTrue(all(result["checks"].values()))
         self.assertEqual(set(result["case_checks"]), {"query", "open"})
+        self.assertEqual(result["case_checks"]["query"]["runner_status"], "completed")
+        self.assertIsNone(result["case_checks"]["query"]["runner_error_code"])
         rendered = json.dumps(result)
         self.assertNotIn("Synthetic Acme", rendered)
         self.assertNotIn("acme.test", rendered)
