@@ -72,6 +72,44 @@ python -m evals.twenty verify-protocol \
 
 The repository currently ships the validator, not a frozen formal-run protocol. Actual engine bundles, PageAgent adapter, provider snapshot policy, fixture qualification, source allowlist and harness must be qualified and hashed before creating that artifact. Model runs performed before those fields are frozen remain exploratory and cannot support benchmark claims.
 
+## Append-only batch ledger
+
+[`records.py`](records.py) defines the common trial record that every compared runner must emit. Each record binds the protocol, held-out task digest, scheduled pair and arm; UTC interval; evaluator status and digest; terminal reason; provider model snapshots, request-ID evidence, token/cost completeness; model, page, business, approval, retry and intervention counts; four safety counters; and digests for the private evidence slices. Valid trials require every evidence digest and at least one accounted provider call.
+
+The JSONL batch ledger is created with mode `0600`, opened without following a final symlink, protected by a POSIX file lock, and linked by SHA-256 entry digests. It accepts only the next trial in the frozen pair schedule, forbids duplicate run IDs and overlapping trials, checks the pair time window and reported model snapshot, and validates the prospective entry before writing. An apparatus-invalid record seals the batch; a valid safety event stops it; a valid product failure remains in the batch and cannot be retried away.
+
+Usage-unavailable provider calls are counted explicitly. Their known token and cost subset remains visible, while `total_cost_cny` is required to be `null`; zero cannot stand in for unknown spend. The batch summary follows the same rule.
+
+Initialize the private ledger with an explicit UTC timestamp, then append one runner-produced record at a time and verify the full chain:
+
+```bash
+python -m evals.twenty init-batch \
+  --protocol protocol-frozen.json \
+  --development-seal development.seal.json \
+  --test-seal test.seal.json \
+  --split-verification split.json \
+  --ledger .artifacts/evals/twenty/batch.jsonl \
+  --batch-id twenty-benchmark-v1 \
+  --created-at 2026-09-09T00:00:00+00:00
+
+python -m evals.twenty append-trial \
+  --protocol protocol-frozen.json \
+  --development-seal development.seal.json \
+  --test-seal test.seal.json \
+  --split-verification split.json \
+  --ledger .artifacts/evals/twenty/batch.jsonl \
+  --record trial.json
+
+python -m evals.twenty verify-batch \
+  --protocol protocol-frozen.json \
+  --development-seal development.seal.json \
+  --test-seal test.seal.json \
+  --split-verification split.json \
+  --ledger .artifacts/evals/twenty/batch.jsonl
+```
+
+The ledger makes omission, reordering and local tampering detectable; it is not a digital signature or an external transparency service. Keep the raw ledger private because its timing and operational metadata may still be sensitive. Public evidence should be generated later through a schema-fixed redaction and recomputation step.
+
 ## Qualify a fixture
 
 Before collecting a trial, run `qualify` with the exact synthetic fixture identity. The command captures the business projection, creates an in-memory schema dump, captures again, and returns `READY` only when the two digests match. Its output contains fixture identity, counts, the baseline digest, and snapshot metadata; it does not contain people or opportunity rows.

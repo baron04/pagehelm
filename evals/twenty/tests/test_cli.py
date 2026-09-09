@@ -156,6 +156,53 @@ class TwentyCliTests(unittest.TestCase):
             self.assertEqual(verified.returncode, 0, verified.stderr)
             self.assertEqual(json.loads(verified.stdout)["status"], "READY")
 
+    def test_batch_ledger_cli_initializes_appends_and_verifies(self):
+        from evals.twenty.tests.test_records import frozen_artifacts, trial
+
+        protocol, development, test, split = frozen_artifacts()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            values = {
+                "protocol.json": protocol,
+                "development.seal.json": development,
+                "test.seal.json": test,
+                "split.json": split,
+                "trial.json": trial(protocol, test, 0),
+            }
+            for name, value in values.items():
+                (root / name).write_text(json.dumps(value), encoding="utf-8")
+            ledger = root / "batch.jsonl"
+            common = [
+                "--protocol", str(root / "protocol.json"),
+                "--development-seal", str(root / "development.seal.json"),
+                "--test-seal", str(root / "test.seal.json"),
+                "--split-verification", str(root / "split.json"),
+                "--ledger", str(ledger),
+            ]
+            initialized = subprocess.run(
+                [sys.executable, "-m", "evals.twenty", "init-batch", *common,
+                 "--batch-id", "qualification-batch-v1",
+                 "--created-at", "2026-09-08T23:59:59+00:00"],
+                cwd=ROOT, capture_output=True, text=True, timeout=10, check=False,
+            )
+            self.assertEqual(initialized.returncode, 0, initialized.stderr)
+            self.assertEqual(json.loads(initialized.stdout)["status"], "OPEN")
+
+            appended = subprocess.run(
+                [sys.executable, "-m", "evals.twenty", "append-trial", *common,
+                 "--record", str(root / "trial.json")],
+                cwd=ROOT, capture_output=True, text=True, timeout=10, check=False,
+            )
+            self.assertEqual(appended.returncode, 0, appended.stderr)
+            self.assertEqual(json.loads(appended.stdout)["completed_trials"], 1)
+
+            verified = subprocess.run(
+                [sys.executable, "-m", "evals.twenty", "verify-batch", *common],
+                cwd=ROOT, capture_output=True, text=True, timeout=10, check=False,
+            )
+            self.assertEqual(verified.returncode, 0, verified.stderr)
+            self.assertEqual(json.loads(verified.stdout), json.loads(appended.stdout))
+
 
 if __name__ == "__main__":
     unittest.main()

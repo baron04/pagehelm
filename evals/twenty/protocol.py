@@ -184,7 +184,8 @@ def _provider(value: Any) -> dict[str, Any]:
 def _budgets(value: Any, provider: dict[str, Any]) -> dict[str, int]:
     fields = {
         "max_model_calls", "max_page_actions", "max_business_calls",
-        "max_wall_time_s", "max_input_tokens", "max_output_tokens",
+        "max_wall_time_s", "input_token_abort_threshold",
+        "max_completion_tokens_per_call",
         "automatic_retries", "user_interventions",
     }
     raw = _exact(value, fields, "protocol.budgets")
@@ -193,14 +194,20 @@ def _budgets(value: Any, provider: dict[str, Any]) -> dict[str, int]:
         "max_page_actions": _integer(raw.get("max_page_actions"), "budgets.max_page_actions", minimum=0, maximum=200),
         "max_business_calls": _integer(raw.get("max_business_calls"), "budgets.max_business_calls", minimum=0, maximum=200),
         "max_wall_time_s": _integer(raw.get("max_wall_time_s"), "budgets.max_wall_time_s", minimum=1, maximum=3_600),
-        "max_input_tokens": _integer(raw.get("max_input_tokens"), "budgets.max_input_tokens", minimum=1, maximum=4_000_000),
-        "max_output_tokens": _integer(raw.get("max_output_tokens"), "budgets.max_output_tokens", minimum=1, maximum=131_072),
+        "input_token_abort_threshold": _integer(
+            raw.get("input_token_abort_threshold"), "budgets.input_token_abort_threshold",
+            minimum=1, maximum=4_000_000),
+        "max_completion_tokens_per_call": _integer(
+            raw.get("max_completion_tokens_per_call"),
+            "budgets.max_completion_tokens_per_call", minimum=1, maximum=131_072),
         "automatic_retries": _integer(raw.get("automatic_retries"), "budgets.automatic_retries", minimum=0, maximum=0),
         "user_interventions": _integer(raw.get("user_interventions"), "budgets.user_interventions", minimum=0, maximum=0),
     }
-    if normalized["max_output_tokens"] > provider["max_output_tokens"]:
+    if normalized["max_completion_tokens_per_call"] > provider["max_output_tokens"]:
         raise EvaluationInputError("task output budget exceeds the provider request limit")
-    if normalized["max_input_tokens"] + normalized["max_output_tokens"] > provider["context_window_tokens"]:
+    if (normalized["input_token_abort_threshold"]
+            + normalized["max_completion_tokens_per_call"]
+            > provider["context_window_tokens"]):
         raise EvaluationInputError("task token budgets exceed the provider context window")
     return normalized
 

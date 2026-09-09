@@ -11,12 +11,14 @@ from .fixture import (FixtureUnavailable, TwentyPostgresFixture, atomic_write_js
                       load_json, prepare_snapshot, qualify_fixture, restore_snapshot,
                       utc_now)
 from .protocol import freeze_protocol, verify_protocol
+from .records import append_trial, initialize_batch, verify_batch
 from .taskset import (instantiate_task, seal_task_set, verify_split_separation,
                       verify_task_set)
 
 
 _EXIT = {
-    "PASS": 0, "READY": 0, "FROZEN": 0, "FAIL": 1, "INVALID": 2,
+    "PASS": 0, "READY": 0, "FROZEN": 0, "OPEN": 0, "COMPLETE": 0,
+    "FAIL": 1, "STOPPED_SAFETY": 1, "INVALID": 2, "SEALED_INVALID": 2,
     "INDETERMINATE": 3,
 }
 
@@ -33,6 +35,13 @@ def _add_fixture(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--database", required=True)
     parser.add_argument("--db-user", required=True)
     parser.add_argument("--workspace-schema", required=True)
+
+
+def _add_protocol_artifacts(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--protocol", required=True)
+    parser.add_argument("--development-seal", required=True)
+    parser.add_argument("--test-seal", required=True)
+    parser.add_argument("--split-verification", required=True)
 
 
 def _emit(value: dict, output: str | None) -> int:
@@ -115,11 +124,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     for name in ("freeze-protocol", "verify-protocol"):
         command = commands.add_parser(name)
-        command.add_argument("--protocol", required=True)
-        command.add_argument("--development-seal", required=True)
-        command.add_argument("--test-seal", required=True)
-        command.add_argument("--split-verification", required=True)
+        _add_protocol_artifacts(command)
         command.add_argument("--output", required=name == "freeze-protocol")
+
+    command = commands.add_parser("init-batch")
+    _add_protocol_artifacts(command)
+    command.add_argument("--ledger", required=True)
+    command.add_argument("--batch-id", required=True)
+    command.add_argument("--created-at", required=True)
+    command.add_argument("--output")
+
+    command = commands.add_parser("append-trial")
+    _add_protocol_artifacts(command)
+    command.add_argument("--ledger", required=True)
+    command.add_argument("--record", required=True)
+    command.add_argument("--output")
+
+    command = commands.add_parser("verify-batch")
+    _add_protocol_artifacts(command)
+    command.add_argument("--ledger", required=True)
+    command.add_argument("--output")
     return parser
 
 
@@ -188,6 +212,30 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 value = verify_protocol(load_json(Path(args.protocol)), **inputs)
             return _emit(value, args.output)
+        if args.command in {"init-batch", "append-trial", "verify-batch"}:
+            input_names = [
+                "protocol", "development_seal", "test_seal", "split_verification",
+                "ledger",
+            ]
+            if args.command == "append-trial":
+                input_names.append("record")
+            _validate_distinct_output(args, *input_names)
+            inputs = {
+                "protocol": load_json(Path(args.protocol)),
+                "development_seal": load_json(Path(args.development_seal)),
+                "test_seal": load_json(Path(args.test_seal)),
+                "split_verification": load_json(Path(args.split_verification)),
+            }
+            if args.command == "init-batch":
+                value = initialize_batch(
+                    args.ledger, batch_id=args.batch_id, created_at=args.created_at,
+                    **inputs)
+            elif args.command == "append-trial":
+                value = append_trial(
+                    args.ledger, load_json(Path(args.record)), **inputs)
+            else:
+                value = verify_batch(args.ledger, **inputs)
+            return _emit(value, args.output)
         _validate_distinct_output(args, "taskset", "baseline")
         value = instantiate_task(
             load_json(Path(args.taskset)), args.task_id,
@@ -197,7 +245,8 @@ def main(argv: list[str] | None = None) -> int:
     except (EvaluationInputError, FixtureUnavailable) as exc:
         if args.command in {
                 "seal-taskset", "verify-taskset", "verify-splits", "instantiate-task",
-                "freeze-protocol", "verify-protocol"}:
+                "freeze-protocol", "verify-protocol", "init-batch", "append-trial",
+                "verify-batch"}:
             args.output = None
         return _emit({
             "artifact_version": ARTIFACT_VERSION,
