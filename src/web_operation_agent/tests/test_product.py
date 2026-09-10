@@ -491,7 +491,8 @@ class AgentTurnExecutorTests(unittest.TestCase):
 
             self.assertIn("Acme", execution.user_answer)
             self.assertIn("acme.test", execution.user_answer)
-            self.assertIn("Completeness: complete", execution.user_answer)
+            self.assertIn("Query result: companies (1 record)", execution.user_answer)
+            self.assertNotIn("Completeness", execution.user_answer)
             self.assertNotIn("Invented Co", execution.user_answer)
             self.assertEqual(custom_renderer_calls, [])
             projection = execution.to_json()["business_result"]["answer_projection"]
@@ -527,7 +528,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
 
         self.assertEqual(product.render_neutral_user_answer(context), "Opened Acme.")
 
-    def test_second_turn_resolves_reference_but_must_refresh_before_opening(self):
+    def test_second_turn_resolves_reference_but_must_requery_before_opening(self):
         class TwoCompanyExecutor(_Executor):
             @staticmethod
             def execute(name, args, *, context=None):
@@ -600,8 +601,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
             self.assertIn("potentially stale", second_opening)
             self.assertIn("load_skill", chat.tool_names[3])
             self.assertNotIn("query_companies", chat.tool_names[3])
-            self.assertEqual(_RemoteBrowser.instances[1].actions,
-                             ["observe", "observe", "goto"])
+            self.assertEqual(_RemoteBrowser.instances[1].actions, ["goto"])
             events = [json.loads(line) for line in
                       (root / "session.jsonl").read_text().splitlines()]
             self.assertEqual(

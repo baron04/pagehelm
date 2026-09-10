@@ -28,9 +28,11 @@ If preflight reports that the browser session is missing or expired, run `./demo
 
 The environment file may contain the `WOA_*` locations above together with `AGENT_OPENAI_BASE_URL`, `AGENT_OPENAI_API_KEY`, and `AGENT_OPENAI_MODEL_PRO`; explicit process values take precedence. Keep the file outside the repository and restrict it to the local user. When a repository-local `.env` exists, `demo.sh` selects it automatically and parses assignments as data rather than executing it as a shell script.
 
-The application files may also be passed as command-line options; run `./demo.sh --help` for the complete list. Command-line values take precedence over their `WOA_*` counterparts.
+The application files may also be passed as command-line options; run `./demo.sh --help` for the complete list. Command-line values take precedence over their `WOA_*` counterparts. The browser opens the Companies page by default; use `--entry-path` or `WOA_TWENTY_ENTRY_PATH` to select another same-origin starting page.
 
 The default session is read-only. To make the company-create Skill available, start a visible session with `./demo.sh --allow-mutations`. Mutation-enabled sessions require `WOA_MUTATION_JOURNAL`; the private SQLite journal durably consumes each confirmed proposal before the HTTP write is sent. A process crash or uncertain acknowledgement leaves the proposal non-retryable instead of risking a duplicate write. Every proposed creation still pauses for a fresh confirmation in the panel. The example does not provision or restore the Twenty instance, so an approved creation remains in that isolated workspace.
+
+Loading a server-side Skill or querying a typed API does not refresh or navigate the browser. A real page action still returns a fresh page observation, and a completed mutation performs one follow-up observation for verification.
 
 Use `--task` more than once to exercise a sequential conversation and close the browser when you are finished. Session summaries report Agent terminal states such as `finished`, `cancelled`, or `indeterminate`; they are operational records, not business-goal certification.
 

@@ -217,6 +217,11 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         html = f"""<!doctype html><html><body><main><h1>Fixture application</h1></main>
           <script type="module">
             const mod = await import('data:text/javascript;base64,{source}');
+            window.hostComposerEvents = [];
+            for (const name of ['beforeinput', 'input', 'change', 'compositionstart',
+              'compositionupdate', 'compositionend', 'keypress', 'keydown', 'keyup', 'submit']) {{
+              document.addEventListener(name, () => window.hostComposerEvents.push(name));
+            }}
             const panel = mod.createAssistantPanel({{labels:{{assistant:'Operations Copilot'}}}});
             panel.onTask(async value => {{
               if (value === 'retry this') {{ const error = new Error('busy'); error.code = 'backpressure'; throw error; }}
@@ -243,6 +248,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
             composer.fill("retry this")
             composer.press("Enter")
             host.locator(".notice[data-visible=true]").wait_for()
+            self.assertEqual(page.evaluate("window.hostComposerEvents"), [])
             self.assertEqual(composer.input_value(), "retry this")
             self.assertIn("稍后重试", host.locator(".notice p").inner_text())
             self.assertEqual(host.locator(".panel").get_attribute("data-state"), "error")

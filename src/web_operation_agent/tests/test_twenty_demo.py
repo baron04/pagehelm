@@ -42,7 +42,7 @@ class TwentyDemoArgumentsTests(unittest.TestCase):
         config = demo.parse_config([], BASE_ENV)
 
         self.assertEqual(config.base_url, "http://127.0.0.1:3020")
-        self.assertEqual(config.entry_path, "/settings/profile")
+        self.assertEqual(config.entry_path, "/objects/companies")
         self.assertFalse(config.allow_mutations)
         self.assertFalse(config.headless)
         self.assertEqual(config.tasks, ())

@@ -136,7 +136,7 @@ class StructuredAnswerRendering:
 def render_structured_query_answer(
         projection: StructuredQueryAnswer, *, user_text: str,
         max_chars: int) -> StructuredAnswerRendering:
-    """Render trusted facts without allowing an answer limit to hide completeness."""
+    """Render trusted facts and make result limits explicit when they exist."""
     if not isinstance(projection, StructuredQueryAnswer):
         raise TypeError("projection must be a StructuredQueryAnswer")
     if isinstance(max_chars, bool) or not isinstance(max_chars, int) or max_chars < 512:
@@ -146,34 +146,34 @@ def render_structured_query_answer(
     known_total = (str(projection.source_total)
                    if projection.source_total is not None else ("未知" if chinese else "unknown"))
     if chinese:
-        completeness = (
-            "完整" if projection.complete else
-            "源扫描完整，但返回结果受限" if projection.source_complete else "不完整")
-        lines = [
-            f"查询结果：{projection.collection}",
-            (f"完整性：{completeness}；返回 {total}/{projection.matched_count} 条匹配记录；"
-             f"来源总数 {known_total}；扫描记录数 "
-             f"{projection.records_scanned if projection.records_scanned is not None else '未知'}。"),
-            f"数据来源：{projection.source}；范围：{projection.scope}；采集时间：{projection.observed_at}。",
-        ]
-        if projection.incomplete_reason:
-            lines.append(f"不完整原因：{projection.incomplete_reason}。")
+        lines = [f"查询结果：{projection.collection}（{total} 条）"]
+        if not projection.complete:
+            limit = ("源扫描已完成，但返回结果受限" if projection.source_complete
+                     else "结果可能不完整")
+            lines.append(
+                f"{limit}：返回 {total}/{projection.matched_count} 条匹配记录；"
+                f"来源总数 {known_total}；扫描记录数 "
+                f"{projection.records_scanned if projection.records_scanned is not None else '未知'}。")
+            if projection.incomplete_reason:
+                lines.append(f"原因：{projection.incomplete_reason}。")
+        lines.append(
+            f"数据来源：{projection.source}；范围：{projection.scope}；采集时间：{projection.observed_at}。")
         lines.append("记录：")
         suffix_template = "显示限制：本答案列出 {shown}/{total} 条工具返回记录。"
     else:
-        completeness = (
-            "complete" if projection.complete else
-            "source scan complete, returned result limited" if projection.source_complete
-            else "incomplete")
-        lines = [
-            f"Query result: {projection.collection}",
-            (f"Completeness: {completeness}; returned {total}/{projection.matched_count} matching "
-             f"records; source total {known_total}; scanned "
-             f"{projection.records_scanned if projection.records_scanned is not None else 'unknown'} records."),
-            f"Source: {projection.source}; scope: {projection.scope}; observed: {projection.observed_at}.",
-        ]
-        if projection.incomplete_reason:
-            lines.append(f"Incomplete reason: {projection.incomplete_reason}.")
+        record_word = "record" if total == 1 else "records"
+        lines = [f"Query result: {projection.collection} ({total} {record_word})"]
+        if not projection.complete:
+            limit = ("The source scan completed, but the returned result is limited"
+                     if projection.source_complete else "The result may be incomplete")
+            lines.append(
+                f"{limit}: returned {total}/{projection.matched_count} matching records; "
+                f"source total {known_total}; scanned "
+                f"{projection.records_scanned if projection.records_scanned is not None else 'unknown'} records.")
+            if projection.incomplete_reason:
+                lines.append(f"Reason: {projection.incomplete_reason}.")
+        lines.append(
+            f"Source: {projection.source}; scope: {projection.scope}; observed: {projection.observed_at}.")
         lines.append("Records:")
         suffix_template = "Display limit: this answer lists {shown}/{total} tool-returned records."
 

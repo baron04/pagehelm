@@ -724,7 +724,7 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertFalse(event["dispatched"])
             self.assertFalse(event["side_effect_possible"])
 
-    def test_cancellation_during_read_tool_skips_followup_page_dispatch(self):
+    def test_cancellation_during_read_tool_dispatches_no_browser_action(self):
         with tempfile.TemporaryDirectory() as tmp:
             cancelled = {"value": False}
 
@@ -754,7 +754,7 @@ class BusinessReActTransition(unittest.TestCase):
             result = session.run()
 
             self.assertEqual(result.terminal_reason, "user_cancelled")
-            self.assertEqual(browser.actions, ["observe"])
+            self.assertEqual(browser.actions, [])
 
     def test_approved_server_mutation_returns_route_to_react_loop(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -881,7 +881,7 @@ class BusinessReActTransition(unittest.TestCase):
                              "the model must not receive a chance to retry")
             self.assertEqual(len(ledger.of_kind("business_mutation_indeterminate")), 1)
 
-    def test_load_query_and_finish_each_use_one_turn_and_fresh_page(self):
+    def test_load_query_and_finish_use_server_facts_without_page_dispatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill = _skill(Path(tmp) / "skill.json")
             runtime = BusinessToolRuntime((skill,), _Executor())
@@ -909,7 +909,8 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertNotIn("query_companies", chat.tool_names[0])
             self.assertIn("wait_for", chat.tool_names[0])
             self.assertIn("query_companies", chat.tool_names[1])
-            self.assertEqual(browser.actions, ["observe", "observe"])
+            self.assertEqual(browser.actions, [])
+            self.assertEqual(ledger.of_kind("action_receipt"), [])
             facts = [message["content"] for turn in chat.messages for message in turn
                      if message.get("role") == "tool"]
             self.assertTrue(any("BUSINESS SKILL LOADED" in text for text in facts))
@@ -1019,7 +1020,7 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertEqual(result.terminal_reason, "agent_finished")
             self.assertEqual(result.agent_said, "Opened Acme.")
             self.assertEqual(result.page_actions, 1)
-            self.assertEqual(browser.actions, ["observe", "observe", "goto"])
+            self.assertEqual(browser.actions, ["goto"])
             self.assertEqual(browser.url, "http://app.test/object/company/company-1")
             opened = ledger.of_kind("business_route_opened")
             self.assertEqual(len(opened), 1)
@@ -1050,7 +1051,7 @@ class BusinessReActTransition(unittest.TestCase):
             result = session.run()
 
             self.assertEqual(result.terminal_reason, "agent_refused")
-            self.assertEqual(browser.actions, ["observe", "observe"])
+            self.assertEqual(browser.actions, [])
             self.assertEqual(len(ledger.of_kind("page_route_rejected")), 1)
             self.assertEqual(len(ledger.of_kind("business_route_opened")), 0)
 

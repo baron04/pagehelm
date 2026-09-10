@@ -71,8 +71,9 @@ tools with element references from that observation.
 How to work:
 * Read the observation. Element references (e1, e2, ...) are only valid for the observation \
 they came from; after any action you get a fresh one and the old references are dead.
-* Call exactly one tool in each response, then wait for its receipt and fresh observation \
-before choosing the next action.
+* Call exactly one tool in each response, then wait for its result before choosing the next
+action. Browser actions return a fresh page observation. Server-only Skill and typed business
+tools return their own facts without changing or re-reading the page.
 * Navigate using links the page offers. If the run's public scope forbids `click`, call \
 `goto` with that link's exact href. Otherwise you may click the link. Never use `goto` for \
 a path that is not an exact href on the current page.
@@ -236,13 +237,16 @@ BUSINESS_SKILL_SYSTEM = """\
 BUSINESS SKILL CANDIDATES are server-selected playbooks, not current business data. Call
 load_skill for the relevant candidate before using its typed tools. The loaded Skill explains
 how to use those tools; the tool result supplies current data for the delegated application
-user. After every Skill or business-tool result, inspect the fresh page observation and replan.
+user. After every Skill or business-tool result, replan from those facts and the latest page
+observation already available.
 Runtime ToolResult facts override Skill text, source code, documentation and page assumptions.
 If a result contains a ui_path, generic goto may use only that exact returned path; the
 server rejects invented record routes. Never invent omitted rows or repeat an unchanged query.
 For a requested mutation, load a matching candidate with read_only=false before deciding that
 no write tool is available. Such a Skill may also contain the read tool needed for preflight.
-Keep the final user answer concise: state the outcome and the next useful action. Do not list
+Do not call observe merely because a Skill or typed business tool returned. Re-read the page
+only when current UI state is needed for the next browser action. Keep the final user answer
+concise: state the outcome and the next useful action. Do not list
 internal Skill names, tool availability, routes, record IDs, counters, or audit steps unless
 the user explicitly asks for technical details.
 """
@@ -959,29 +963,8 @@ class ServerAgentSession:
                     feedback = ("BUSINESS SKILL LOADED (playbook; not runtime data):\n"
                                 + json.dumps(skill.loaded_card(), ensure_ascii=False,
                                              sort_keys=True, separators=(",", ":")))
-                try:
-                    receipt, write, fresh = self._observe_after_server_tool(
-                        obs, step, "load_skill")
-                except TransportError as exc:
-                    return self._finish(
-                        result, t0, self._transport_terminal("observe", may_write=False),
-                        str(exc), steps=step)
-                if write["state"] in (WRITE_UNKNOWN, "control_error"):
-                    reason = ("indeterminate_write" if write["state"] == WRITE_UNKNOWN
-                              else "control_plane_error")
-                    if write["state"] == WRITE_UNKNOWN:
-                        self._uncertain_write = write["detail"]
-                    return self._finish(result, t0, reason, write["detail"], steps=step)
-                if not fresh:
-                    return self._finish(
-                        result, t0, "transport_error",
-                        "load_skill could not obtain a successful fresh observation",
-                        steps=step)
-                obs = receipt.observation
-                note = self._ground(obs, receipt, write["state"], write["refused_requests"])
                 self._sync_plan_message(messages)
-                messages += [_assistant_call(call), _tool_result(
-                    call, feedback + "\n\n" + self._render(obs, receipt, note, write))]
+                messages += [_assistant_call(call), _tool_result(call, feedback)]
                 messages = _trim(messages, self.keep_observations)
                 continue
 
@@ -1002,30 +985,8 @@ class ServerAgentSession:
                             error_code=getattr(exc, "code", "business_tool"),
                             reason=detail, dispatched=False, side_effect_possible=False,
                             identity=operation_identity)
-                        try:
-                            receipt, write, fresh = self._observe_after_server_tool(
-                                obs, step, name)
-                        except TransportError as transport:
-                            return self._finish(
-                                result, t0, self._transport_terminal(
-                                    "observe", may_write=False), str(transport), steps=step)
-                        if write["state"] in (WRITE_UNKNOWN, "control_error"):
-                            reason = ("indeterminate_write"
-                                      if write["state"] == WRITE_UNKNOWN
-                                      else "control_plane_error")
-                            return self._finish(
-                                result, t0, reason, write["detail"], steps=step)
-                        if not fresh:
-                            return self._finish(
-                                result, t0, "transport_error",
-                                f"{name} refusal could not obtain a fresh observation",
-                                steps=step)
-                        obs = receipt.observation
-                        note = self._ground(
-                            obs, receipt, write["state"], write["refused_requests"])
                         messages += [_assistant_call(call), _tool_result(
-                            call, "BUSINESS MUTATION REFUSED BEFORE DISPATCH: " + detail
-                            + "\n\n" + self._render(obs, receipt, note, write))]
+                            call, "BUSINESS MUTATION REFUSED BEFORE DISPATCH: " + detail)]
                         messages = _trim(messages, self.keep_observations)
                         continue
 
@@ -1163,7 +1124,7 @@ class ServerAgentSession:
                     feedback = ("BUSINESS MUTATION RESULT (approved, executed once, "
                                 "current runtime fact):\n" + tool_result.render())
                     try:
-                        receipt, write, fresh = self._observe_after_server_tool(
+                        receipt, write, fresh = self._observe_after_business_mutation(
                             obs, step, name)
                     except TurnCancelled as exc:
                         # The typed application acknowledgement and durable journal already
@@ -1234,27 +1195,8 @@ class ServerAgentSession:
                         reason=detail, side_effect_possible=False,
                         identity=operation_identity)
                     feedback = "BUSINESS TOOL FAILED: " + detail
-                try:
-                    receipt, write, fresh = self._observe_after_server_tool(obs, step, name)
-                except TransportError as exc:
-                    return self._finish(
-                        result, t0, self._transport_terminal("observe", may_write=False),
-                        str(exc), steps=step)
-                if write["state"] in (WRITE_UNKNOWN, "control_error"):
-                    reason = ("indeterminate_write" if write["state"] == WRITE_UNKNOWN
-                              else "control_plane_error")
-                    if write["state"] == WRITE_UNKNOWN:
-                        self._uncertain_write = write["detail"]
-                    return self._finish(result, t0, reason, write["detail"], steps=step)
-                if not fresh:
-                    return self._finish(
-                        result, t0, "transport_error",
-                        f"{name} could not obtain a successful fresh observation", steps=step)
-                obs = receipt.observation
-                note = self._ground(obs, receipt, write["state"], write["refused_requests"])
                 self._sync_plan_message(messages)
-                messages += [_assistant_call(call), _tool_result(
-                    call, feedback + "\n\n" + self._render(obs, receipt, note, write))]
+                messages += [_assistant_call(call), _tool_result(call, feedback)]
                 messages = _trim(messages, self.keep_observations)
                 continue
 
@@ -1788,9 +1730,9 @@ class ServerAgentSession:
                            fresh_observation=fresh)
         return receipt, write, fresh
 
-    def _observe_after_server_tool(self, obs: PageObservation, step: int,
-                                   server_tool: str) -> tuple[ActionReceipt, dict, bool]:
-        """Return a fresh page after a server-side Skill or read-only business tool."""
+    def _observe_after_business_mutation(self, obs: PageObservation, step: int,
+                                         server_tool: str) -> tuple[ActionReceipt, dict, bool]:
+        """Return one fresh page after a completed typed business mutation."""
         if self._cancel_requested():
             raise TurnCancelled("the user stopped this task before page observation")
         prior_epoch = obs.epoch

@@ -249,7 +249,7 @@ def build_parser(environ: Mapping[str, str] | None = None) -> argparse.ArgumentP
     )
     parser.add_argument(
         "--entry-path",
-        default=_configured(env, "WOA_TWENTY_ENTRY_PATH") or "/settings/profile",
+        default=_configured(env, "WOA_TWENTY_ENTRY_PATH") or "/objects/companies",
         help="initial same-origin Twenty path (or WOA_TWENTY_ENTRY_PATH)",
     )
     parser.add_argument(

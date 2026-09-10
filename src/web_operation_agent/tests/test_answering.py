@@ -59,7 +59,7 @@ class StructuredQueryAnswerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "query answer value is invalid"):
             _projection(records=(("safe\u202e", "domain.test"),))
 
-    def test_renderer_places_completeness_before_records_and_never_cuts_a_row(self):
+    def test_renderer_states_only_real_limits_and_never_cuts_a_row(self):
         records = tuple((f"Company {index}", "x" * 80) for index in range(20))
         projection = _projection(records=records)
         rendered = render_structured_query_answer(
@@ -67,7 +67,8 @@ class StructuredQueryAnswerTests(unittest.TestCase):
 
         self.assertLessEqual(len(rendered.text), 512)
         self.assertTrue(rendered.presentation_truncated)
-        self.assertIn("完整性：完整", rendered.text)
+        self.assertNotIn("完整性", rendered.text)
+        self.assertNotIn("未截断", rendered.text)
         self.assertIn("显示限制", rendered.text)
         for line in rendered.text.splitlines():
             if "domain:" in line:
@@ -77,8 +78,17 @@ class StructuredQueryAnswerTests(unittest.TestCase):
         rendered = render_structured_query_answer(
             _projection(complete=False), user_text="List companies", max_chars=2_000)
 
-        self.assertIn("Completeness: incomplete", rendered.text)
+        self.assertIn("may be incomplete", rendered.text)
         self.assertIn("bounded_scan_stopped", rendered.text)
+
+    def test_complete_result_is_concise_while_preserving_source_evidence(self):
+        rendered = render_structured_query_answer(
+            _projection(), user_text="列出公司", max_chars=2_000)
+
+        self.assertIn("查询结果：companies（1 条）", rendered.text)
+        self.assertIn("数据来源：fixture", rendered.text)
+        self.assertNotIn("完整性", rendered.text)
+        self.assertNotIn("未截断", rendered.text)
 
 
 if __name__ == "__main__":

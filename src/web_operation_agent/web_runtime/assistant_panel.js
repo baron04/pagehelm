@@ -311,14 +311,21 @@ export class AssistantPanel {
 
   _bind() {
     const q = selector => this.shadow.querySelector(selector)
+    const stopHostPropagation = event => event.stopPropagation()
     q('.collapse').addEventListener('click', () => this.model.setCollapsed(!this.model.collapsed))
     q('.dismiss').addEventListener('click', () => this.clearError())
     q('.retry').addEventListener('click', () => { if (this.retryAction) void this.retryAction() })
     q('textarea').addEventListener('input', event => {
+      event.stopPropagation()
       event.currentTarget.style.height = 'auto'
       event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 112)}px`
     })
+    for (const name of ['beforeinput', 'change', 'compositionstart', 'compositionupdate',
+      'compositionend', 'keypress', 'keyup']) {
+      q('textarea').addEventListener(name, stopHostPropagation)
+    }
     q('textarea').addEventListener('keydown', event => {
+      event.stopPropagation()
       if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
         event.preventDefault()
         q('form').requestSubmit()
@@ -326,6 +333,7 @@ export class AssistantPanel {
     })
     q('form').addEventListener('submit', event => {
       event.preventDefault()
+      event.stopPropagation()
       void this._submitFromComposer()
     })
     q('.stop').addEventListener('click', () => { void this._cancelFromPanel() })

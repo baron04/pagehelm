@@ -162,7 +162,7 @@ def inspect_local(
 def _config_from(values: Mapping[str, str], *, allow_mutations: bool) -> demo.TwentyDemoConfig:
     return demo.TwentyDemoConfig(
         base_url=values["base_url"],
-        entry_path="/settings/profile",
+        entry_path="/objects/companies",
         storage_state_path=Path(values["storage_state"]).expanduser(),
         oauth_token_path=Path(values["oauth_token"]).expanduser(),
         oauth_registration_path=Path(values["oauth_registration"]).expanduser(),

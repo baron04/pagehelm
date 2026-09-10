@@ -26,7 +26,7 @@ The repository currently verifies these behaviors with local automated tests and
 | Provider boundary | Model requests have deterministic schema, count, byte, credential, and finite-JSON checks. Pinned framework adapters can preserve their native chat body while using the same server-held credentials, transport, limits, guard, and accounting. A shared in-process guard bounds concurrent requests, charges queue time to the request deadline, and opens a cooldown circuit only after consecutive transient provider-health failures; user cancellation and local deadlines neither increment nor clear that state. Queueing and connection setup on the native Agent path are cancellable. A cancellation before HTTP dispatch creates no spend row, while every dispatched request has a correlation ID and either reported usage or an explicit unknown cost. Content-free per-run summaries bind trials to digests of their request IDs and spend rows. Remote endpoints require HTTPS except on loopback. |
 | Operational probes | The loopback gateway separates process liveness at `/healthz` from work readiness at `/readyz`. Readiness reports only schema-fixed counts, admission state, and provider guard health; malformed callbacks fail closed without exposing their error text. |
 | Audit and replay primitives | Server events can be written to an append-only ledger and projected into a redacted replay. |
-| Twenty CRM vertical | The packaged adapter can query companies through bounded cursor pagination, project the returned records, source and completeness into the user answer without trusting model prose, hand an API-discovered company route to the browser, and opt in to creating one company with confirmation and delegated-token readback. OAuth refresh is serialized across local threads and processes, including GraphQL `UNAUTHENTICATED` responses encountered during identity resolution. |
+| Twenty CRM vertical | The packaged adapter can query companies through bounded cursor pagination, project the returned records and source into the user answer without trusting model prose, state any result limit explicitly, hand an API-discovered company route to the browser, and opt in to creating one company with confirmation and delegated-token readback. OAuth refresh is serialized across local threads and processes, including GraphQL `UNAUTHENTICATED` responses encountered during identity resolution. |
 
 These claims describe the implemented paths only. The project does not yet have a public benchmark large enough to establish general task success, a source-retrieval advantage, or superiority over PageAgent or other browser agents.
 
@@ -127,7 +127,7 @@ This repository does not yet provision a Twenty instance, so a fresh clone repor
 
 ## Twenty CRM integration
 
-`TwentyApplicationAdapter` ships with read-only and mutation Skills as package resources, so it can be imported from an installed wheel outside the repository. It still needs:
+`TwentyApplicationAdapter` ships with read-only and mutation Skills as package resources, so it can be imported from an installed wheel outside the repository. Loading a Skill or querying its typed API does not dispatch a browser action; page actions still return fresh observations, and a completed mutation performs one follow-up observation for verification. It still needs:
 
 - a separately provisioned compatible Twenty CRM instance;
 - OAuth token and client-registration files for a delegated test user;
@@ -162,7 +162,7 @@ A private append-only batch ledger now enforces that frozen order and a common t
 - Mutation-journal idempotency covers one exact proposal digest. Separate sessions can still create distinct proposals for the same business key; cross-session in-flight business-key exclusion is not implemented.
 - Source-aware retrieval exists as an optional planning input, but its benefit has not been established across a representative held-out evaluation.
 - Provider egress is bounded, classified and credential-checked, but the framework does not yet provide application-specific field classification, customer-managed encryption, regional routing, a DLP service, or a complete data-retention policy.
-- The assistant panel has automated keyboard, responsive, semantic, reduced-motion, recovery, and visual-state coverage. Its default copy is Chinese and can be overridden through label hooks; broader localization, assistive-technology/browser matrix testing, and the end-to-end deployment experience remain release work.
+- The assistant panel has automated keyboard, responsive, semantic, reduced-motion, recovery, host-event isolation, and visual-state coverage. Its default copy is Chinese and can be overridden through label hooks; broader localization, assistive-technology/browser matrix testing, and the end-to-end deployment experience remain release work.
 - Do not connect this alpha to production accounts, customer data, payments, email, or other consequential systems.
 
 ## Documentation
