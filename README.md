@@ -94,6 +94,18 @@ To run one test module through the same guarded runner:
 python src/web_operation_agent/tests/run_all.py -k test_product.py
 ```
 
+### Self-contained minimal demo
+
+The packaged [Minimal Contacts example](examples/minimal/README.md) removes the external application setup from the first run. It starts a synthetic first-party application and typed API on loopback, injects the real assistant runtime into Chromium, and runs the normal gateway, session host and ReAct executor:
+
+```bash
+python -m pip install --editable ".[demo]"
+python -m playwright install chromium
+web-operation-agent-demo --scripted
+```
+
+The explicit `--scripted` mode performs one fixed, zero-cost apparatus walkthrough: load a Skill, query the current API, open an API-authorized route, observe the new page, and finish. It does not measure model quality. Omit `--scripted` and configure an OpenAI-compatible provider to use the same application interactively with actual model decisions.
+
 ### Qualification
 
 `scripts/qualify.sh` is the single gate. CI runs the same script, so a gate cannot hold locally and be missing in CI:
@@ -106,7 +118,7 @@ It runs the product suite, the Twenty evaluator foundation tests, the offline Pa
 
 Two gates depend on the environment and are reported, never assumed:
 
-- **Chromium qualification** runs the PageAgent browser cases against the built bundle. It is self-contained — no Twenty needed — and CI makes it required with `--require-browser`. Without the flag, a missing bundle or Chromium is reported rather than counted as a pass.
+- **Chromium qualification** runs both the packaged minimal demo end to end and the PageAgent browser cases against the built bundle. Neither needs Twenty, and CI makes both required with `--require-browser`. Without the flag, a missing bundle or Chromium is reported rather than counted as a pass.
 - **Live Twenty qualification** runs only when every prerequisite is set: `WOA_TWENTY_BASE_URL`, `WOA_TWENTY_STORAGE_STATE`, `WOA_TWENTY_OAUTH_TOKEN`, `WOA_TWENTY_OAUTH_REGISTRATION`, `WOA_TWENTY_PAGE_CONTROLLER_MODULE`, `WOA_TWENTY_DB_CONTAINER`, `WOA_TWENTY_DB_NAME`, `WOA_TWENTY_DB_USER`, `WOA_TWENTY_WORKSPACE_SCHEMA`. Otherwise it prints `BLOCKED` and names what is unset. A blocked gate is untested — neither a pass nor a product failure. `--require-live` turns that absence into a failure for an environment that must have it.
 
 This repository does not yet provision a Twenty instance, so a fresh clone reports the live gate as `BLOCKED`.
@@ -142,7 +154,7 @@ A private append-only batch ledger now enforces that frozen order and a common t
 
 - The shared runtime gateway, session registry, bounded event journal, message queue, conversation context, and ledger remain local-process components; restart recovery, horizontal scaling, and durable tenant isolation are not complete. A session TTL and hard quotas prevent unbounded retention but do not make state recoverable. Confirmed Twenty API writes have a durable single-use SQLite journal, but a crash after dispatch remains `indeterminate` and requires reconciliation rather than automatic retry. The Twenty demo enforces identity from its trusted Playwright host, but a normal embedded application still needs a server-authenticated identity assertion from its own login boundary; principal renewal and distributed revocation are not implemented. The separate legacy page-control gateway still has global permit and trace state: cooperating clients serialize complete runs and clear state at both boundaries, but a gateway-native tenant/session/turn scope is required before concurrent page writes.
 - Turn deadlines cap provider queueing and socket time together. The server Agent's native completion path uses a closeable HTTP connection: message-bound cancellation aborts an in-flight request, releases its provider-guard slot, prevents later tool dispatch, and records the dispatched call with unknown usage rather than retrying it. Every implementation reachable from a turn satisfies one explicit `ChatPort` contract in which cancellation is mandatory, and it is checked where the model is wired rather than probed at call time, so an implementation that cannot be cancelled is rejected instead of silently degraded. Contract-planning calls still use the plain completion path and are not cancellable. The provider guard is local to one process and has no distributed tenant rate quota. Initial observation binding and claim-before-execution target/form/route freshness checks exist, while dependencies outside the target element, crash recovery, and broader operational observability remain incomplete.
-- The only packaged business adapter is a narrow Twenty CRM Companies vertical.
+- The only packaged real-application adapter is a narrow Twenty CRM Companies vertical; Minimal Contacts is a synthetic onboarding example.
 - Arbitrary third-party websites and a browser extension are not implemented.
 - Browser actions do not provide database transaction or rollback semantics.
 - Source-aware retrieval exists as an optional planning input, but its benefit has not been established across a representative held-out evaluation.

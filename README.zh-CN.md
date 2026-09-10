@@ -94,6 +94,18 @@ python src/web_operation_agent/tests/run_all.py
 python src/web_operation_agent/tests/run_all.py -k test_product.py
 ```
 
+### 自包含 minimal demo
+
+打包发布的 [Minimal Contacts 示例](examples/minimal/README.md) 去除了首次运行所需的外部应用配置。它会在 loopback 启动合成的第一方应用和类型化 API，把真实助手 Runtime 注入 Chromium，并运行现有网关、会话 Host 和 ReAct executor：
+
+```bash
+python -m pip install --editable ".[demo]"
+python -m playwright install chromium
+web-operation-agent-demo --scripted
+```
+
+显式的 `--scripted` 模式只执行一次固定的零费用装置演示：加载 Skill、查询当前 API、打开 API 授权的精确路由、观察新页面并结束。它不衡量模型能力。去掉 `--scripted` 并配置 OpenAI-compatible provider 后，同一个应用会改用真实模型决策并保持浏览器可交互。
+
 ### 资格门禁
 
 `scripts/qualify.sh` 是唯一入口。CI 运行同一个脚本，因此不会出现某道门禁只在本地成立、CI 里缺失的情况：
@@ -106,7 +118,7 @@ scripts/qualify.sh
 
 有两道门禁取决于环境，它们只会被如实报告，不会被默认当作通过：
 
-- **Chromium 资格**运行 PageAgent 的浏览器用例。它自包含，不需要 Twenty；CI 用 `--require-browser` 把它设为必需。不加该参数时，缺少 bundle 或 Chromium 会被报告出来，而不是计为通过。
+- **Chromium 资格**会端到端运行打包的 minimal demo，并用已构建 bundle 运行 PageAgent 浏览器用例。二者都不需要 Twenty；CI 用 `--require-browser` 把它们设为必需。不加该参数时，缺少 bundle 或 Chromium 会被报告出来，而不是计为通过。
 - **本地 Twenty 资格**只在全部前置条件就绪时运行：`WOA_TWENTY_BASE_URL`、`WOA_TWENTY_STORAGE_STATE`、`WOA_TWENTY_OAUTH_TOKEN`、`WOA_TWENTY_OAUTH_REGISTRATION`、`WOA_TWENTY_PAGE_CONTROLLER_MODULE`、`WOA_TWENTY_DB_CONTAINER`、`WOA_TWENTY_DB_NAME`、`WOA_TWENTY_DB_USER`、`WOA_TWENTY_WORKSPACE_SCHEMA`。否则输出 `BLOCKED` 并列出未设置的变量。BLOCKED 表示未被测试，既不是通过，也不是产品失败。需要该门禁的环境可用 `--require-live` 把缺失变成失败。
 
 本仓库还没有提供 Twenty 实例的准备资产，因此全新 clone 会把本地 Twenty 门禁报告为 `BLOCKED`。
@@ -142,7 +154,7 @@ Evaluator 还包含一套严格的配对实验预注册校验器，用于在运�
 
 - 共享 Runtime 网关、session registry、有界事件 journal、消息队列、会话上下文和账本仍是本地进程组件；重启恢复、水平扩展和持久租户隔离尚未完成。Session TTL 与硬配额可以防止无限保留，但不能恢复状态。已确认的 Twenty API 写入拥有持久的一次性 SQLite journal，但 dispatch 之后发生崩溃仍会标记为 `indeterminate`，必须核对而不能自动重试。Twenty demo 已通过可信 Playwright 宿主强制身份绑定；普通嵌入式应用仍需从自身登录边界提供服务端认证的身份断言，principal 续期和分布式撤销也尚未实现。独立的旧页面控制网关仍使用全局许可与 trace：协作客户端会串行执行完整 run，并在前后边界清空状态，但并发页面写入前仍需在网关内部实现 tenant/session/turn scope。
 - 单轮截止时间同时覆盖 provider 排队和 socket 调用。服务端 Agent 的原生 completion 路径使用可关闭的 HTTP 连接：消息级主动取消会中断进行中的请求、释放 provider guard 名额、阻止后续工具下发，并把已派发调用记为 usage 未知而不自动重试。所有能被单轮触达的实现都满足同一个显式 `ChatPort` 契约，其中取消能力是必需项，并在模型被组装的位置校验，而不是在调用时探测，因此无法取消的实现会被直接拒绝，而不是静默降级。合同规划调用仍走普通 completion 路径，不可取消。Provider guard 只在单进程内生效，还没有分布式租户速率配额。已有初始页面观察绑定，以及 claim 前对目标控件、关联表单和路由的新鲜度检查；目标元素之外的依赖、崩溃恢复和更完整的运行监控仍未完成。
-- 唯一打包的业务适配器是范围有限的 Twenty CRM Companies 纵切。
+- 唯一打包的真实应用适配器是范围有限的 Twenty CRM Companies 纵切；Minimal Contacts 只是合成的上手示例。
 - 尚未实现任意第三方网站支持和浏览器扩展。
 - 浏览器操作不具备数据库事务或回滚语义。
 - 源码感知检索可以作为可选规划输入，但尚未在有代表性的保留测试集上证明收益。

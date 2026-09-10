@@ -114,7 +114,8 @@ required = ["web_operation_agent/policies/model_options.json",
             "web_operation_agent/skills/twenty/companies-query.json",
             "web_operation_agent/skills/twenty/companies-create.json",
             "web_operation_agent/web_runtime/embedded.js",
-            "web_operation_agent/web_runtime/trace_replay.html"]
+            "web_operation_agent/web_runtime/trace_replay.html",
+            "web_operation_agent_demo/assets/page_controller.js"]
 missing = [name for name in required if name not in names]
 assert not missing, f"wheel is missing {missing}"
 assert "web_operation_agent/policies/enforcement.json" not in names, \
@@ -144,6 +145,7 @@ from pathlib import Path
 import web_operation_agent
 from web_operation_agent.sourcetree import SourceTree
 from web_operation_agent.twenty import TwentyApplicationAdapter
+from web_operation_agent_demo import MinimalContactsAdapter
 
 installed = Path(web_operation_agent.__file__).resolve()
 assert Path(sys.prefix).resolve() in installed.parents, installed
@@ -156,6 +158,7 @@ assert TwentyApplicationAdapter(**common).business_tools.tool_names == frozenset
     {"query_companies"})
 assert TwentyApplicationAdapter(**common, allow_mutations=True).business_tools.tool_names \
     == frozenset({"query_companies", "create_company"})
+assert MinimalContactsAdapter
 print("installed wheel imports and composes outside the checkout")
 PY
   ) || return 1
@@ -172,6 +175,19 @@ fi
 # Self-contained once the deterministic bundle and Chromium are available; no Twenty is
 # involved. Run with the suite's required flag whenever prerequisites are present, so a real
 # test failure can never be downgraded to an optional skip.
+if ! "${PYTHON}" - <<'PY'
+from web_operation_agent.tests.test_minimal_demo import _chromium_launches
+raise SystemExit(0 if _chromium_launches() else 1)
+PY
+then
+  record "minimal demo Chromium qualification" BLOCKED "Chromium is unavailable"
+  [[ "${require_browser}" == "1" ]] && failed+=("minimal demo Chromium qualification")
+else
+  run_gate "minimal demo Chromium qualification" 1 \
+    env WOA_REQUIRE_MINIMAL_DEMO_BROWSER=1 "${PYTHON}" \
+    src/web_operation_agent/tests/run_all.py -k test_minimal_demo.py
+fi
+
 browser_bundle="${WOA_PAGEAGENT_BUNDLE:-${ROOT}/.artifacts/evals/pageagent/pageagent-baseline.js}"
 if [[ "${pageagent_ready}" != "1" ]]; then
   record "PageAgent Chromium qualification" BLOCKED \

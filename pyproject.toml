@@ -22,6 +22,14 @@ dependencies = [
   "playwright>=1.52,<1.53",
 ]
 
+[project.optional-dependencies]
+# The minimal demo deliberately adds no application framework or database.  Keeping a named
+# extra gives users a stable installation command while the demo remains self-contained.
+demo = []
+
+[project.scripts]
+web-operation-agent-demo = "web_operation_agent_demo.app:main"
+
 [tool.setuptools]
 package-dir = { "" = "src" }
 include-package-data = true
@@ -39,4 +47,7 @@ web_operation_agent = [
   "skills/twenty/*.json",
   "web_runtime/*.html",
   "web_runtime/*.js",
+]
+web_operation_agent_demo = [
+  "assets/*.js",
 ]
