@@ -286,7 +286,8 @@ class TwentyDemoCompositionTests(unittest.TestCase):
             adapter = demo.build_adapter(config)
             turn = demo.build_turn_config(config)
 
-        self.assertEqual(adapter.business_tools.tool_names, frozenset({"query_companies"}))
+        self.assertEqual(adapter.business_tools.tool_names, frozenset(
+            {"query_companies", "query_people", "query_opportunities"}))
         self.assertFalse(turn.allow_business_mutations)
         self.assertTrue(turn.require_identity)
         self.assertTrue({"click", "fill", "select", "submit"} <= turn.disabled_actions)
@@ -308,7 +309,8 @@ class TwentyDemoCompositionTests(unittest.TestCase):
 
         self.assertEqual(
             adapter.business_tools.tool_names,
-            frozenset({"query_companies", "create_company"}),
+            frozenset({"query_companies", "query_people", "query_opportunities",
+                       "create_company"}),
         )
         self.assertTrue(turn.allow_business_mutations)
         self.assertIn("fresh confirmation", turn.supported_scope)

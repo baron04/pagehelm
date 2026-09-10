@@ -44,10 +44,21 @@ class TwentyPackagedSkillTests(unittest.TestCase):
             bound = assert_adapter_contract(self, adapter)
 
         self.assertEqual(
-            adapter.business_tools.tool_names, frozenset({"query_companies"}))
+            adapter.business_tools.tool_names,
+            frozenset({"query_companies", "query_people", "query_opportunities"}))
         skills = adapter.business_tools.relevant("Which companies are available?")
         self.assertEqual([skill.skill_id for skill in skills],
                          ["twenty.crm.companies-query"])
+        self.assertEqual(
+            [skill.skill_id for skill in adapter.business_tools.relevant(
+                "列出当前所有联系人", limit=3)],
+            ["twenty.crm.people-query"],
+        )
+        self.assertEqual(
+            [skill.skill_id for skill in adapter.business_tools.relevant(
+                "Open the API Integration Deal opportunity", limit=3)],
+            ["twenty.crm.opportunities-query"],
+        )
         self.assertTrue(any(
             "Companies list" in instruction and "exact href" in instruction
             for instruction in skills[0].instructions
@@ -80,7 +91,8 @@ class TwentyPackagedSkillTests(unittest.TestCase):
             allow_mutations=True, mutation_journal=MemoryMutationJournal())
         self.assertEqual(
             adapter.business_tools.tool_names,
-            frozenset({"query_companies", "create_company"}),
+            frozenset({"query_companies", "query_people", "query_opportunities",
+                       "create_company"}),
         )
         create_prompts = (
             "创建公司 Acme，域名 acme.example",
@@ -110,7 +122,8 @@ class TwentyPackagedSkillTests(unittest.TestCase):
                 self.assertTrue(selection.fallback_used)
                 self.assertEqual(
                     list(selection.candidate_ids),
-                    ["twenty.crm.companies-create"],
+                    ["twenty.crm.companies-create",
+                     "twenty.crm.opportunities-query", "twenty.crm.people-query"],
                 )
         person_request = adapter.business_tools.select(
             "Create a person named Bob at Acme company",
@@ -146,7 +159,8 @@ class TwentyPackagedSkillTests(unittest.TestCase):
 
         self.assertEqual(
             adapter.business_tools.tool_names,
-            frozenset({"query_companies", "create_company"}),
+            frozenset({"query_companies", "query_people", "query_opportunities",
+                       "create_company"}),
         )
         relevant = adapter.business_tools.relevant("create company", limit=3)
         self.assertTrue(all(not skill.artifact_uri.startswith("package://")
@@ -166,7 +180,8 @@ class TwentyPackagedSkillTests(unittest.TestCase):
         principal = adapter.bind_principal(
             page, delegation_id="grant-1", now_ms=1_000_001)
         self.assertEqual(
-            principal.scopes, ("companies:read", "companies:write"))
+            principal.scopes, ("companies:read", "companies:write",
+                               "opportunities:read", "people:read"))
         adapter._executor.resolve_delegated_identity = Mock(return_value=IdentityAssertion(
             1, "delegated_api", "twenty", "workspace-1", "workspace-1",
             "actor-2", 1_000_000, 1_060_000))
@@ -397,6 +412,36 @@ class TwentyPaginationTests(unittest.TestCase):
             "domainName": {"primaryLinkLabel": f"company-{index}.example"},
         } for index in range(start, start + count)]
 
+    def test_people_and_opportunity_queries_project_bounded_routes_and_answers(self):
+        class RelatedTwenty(TwentyBusinessToolExecutor):
+            def __init__(self):
+                super().__init__(base_url="http://127.0.0.1:3000", tokens=object())
+
+            def _get_collection(self, resource):
+                rows = ({
+                    "people": [{"id": "7a93d1e5-3f74-4945-8a65-d7f996083f72",
+                                "name": {"firstName": "Ivan", "lastName": "Zhao"},
+                                "emails": {"primaryEmail": "zhao@example.com"}}],
+                    "opportunities": [{
+                        "id": "2beb07b0-340c-41d7-be33-5aa91757f329",
+                        "name": "API Integration Deal", "stage": "SCREENING"}],
+                })[resource]
+                return ({"totalCount": 1, "data": {resource: rows},
+                         "_woaPagination": {"complete": True, "records_scanned": 1}},
+                        200, False)
+
+        executor = RelatedTwenty()
+        people = executor.execute("query_people", {"name_contains": "zhao"})
+        self.assertEqual(people.content["people"][0]["email"], "zhao@example.com")
+        self.assertEqual(people.allowed_routes,
+                         ("/object/person/7a93d1e5-3f74-4945-8a65-d7f996083f72",))
+        self.assertEqual(people.query_answer.collection, "people")
+        opportunities = executor.execute("query_opportunities", {"limit": 1})
+        self.assertEqual(opportunities.content["opportunities"][0]["stage"], "SCREENING")
+        self.assertEqual(opportunities.allowed_routes,
+                         ("/object/opportunity/2beb07b0-340c-41d7-be33-5aa91757f329",))
+        self.assertTrue(opportunities.query_answer.source_complete)
+
     def test_company_query_scans_every_cursor_page_before_answering(self):
         first = self._rows(0, 100)
         second = self._rows(100, 50)
@@ -544,11 +589,12 @@ class TwentyMutationFaultTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             journal = SQLiteMutationJournal(Path(directory) / "mutations.sqlite3")
             executor = LostAcknowledgementTwenty()
-            skill = BusinessSkill.load(resources.files("web_operation_agent").joinpath(
-                "skills/twenty/companies-create.json"))
+            skill_root = resources.files("web_operation_agent").joinpath("skills", "twenty")
+            skills = tuple(BusinessSkill.load(skill_root.joinpath(name)) for name in (
+                "companies-create.json", "people-query.json", "opportunities-query.json"))
             runtime = BusinessToolRuntime(
-                (skill,), executor, mutation_journal=journal)
-            loaded = {skill.skill_id}
+                skills, executor, mutation_journal=journal)
+            loaded = {skill.skill_id for skill in skills}
             proposal = runtime.prepare_mutation(
                 "create_company",
                 {"name": "Fault Probe", "domain": "fault-probe.example"}, loaded)

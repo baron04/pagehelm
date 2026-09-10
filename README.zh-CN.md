@@ -26,7 +26,7 @@ Web Operation Agent 是一个早期阶段的框架，用于在第一方 Web 应�
 | Provider 边界 | 模型请求在发送前经过结构、数量、字节、凭据形态和有限 JSON 检查。固定版本的框架适配器可以保留自己的原生 chat 请求体，同时共用服务端凭据、传输、限制、guard 和费用记账。进程内共享 guard 限制并发请求，把排队时间计入请求截止时间，且只在连续的 provider 瞬时健康故障后进入冷却短路；用户取消和本地 deadline 既不累加也不清空该状态。原生 Agent 路径的排队和建连阶段均可取消。HTTP 派发前取消不会生成费用行；每个已派发请求都有相关 ID，并记录 provider 报告的 usage，或将无法确认的费用明确标为未知。逐 run 的无内容摘要用请求 ID 和费用行摘要把试验绑定到实际调用。远程 provider 必须使用 HTTPS，本机 loopback 开发端点除外。 |
 | 运行探针 | Loopback 网关用 `/healthz` 表示进程存活，用 `/readyz` 表示可处理工作。Readiness 只返回固定 schema 的数量、准入状态和 provider guard 健康信息；回调畸形时关闭就绪状态，并隐藏错误正文。 |
 | 审计与回放基础能力 | 服务端事件可以写入追加式账本，并转换成脱敏回放。 |
-| Twenty CRM 纵切 | 已打包的适配器支持通过有界 cursor 分页查询公司，将返回记录和来源直接投影到用户答案而不信任模型散文，并明确说明任何结果限制；它还能把 API 找到的公司路由交给浏览器，以及在显式开启后经确认创建一家公司并使用同一委托 token 回读。OAuth 刷新会在本机线程和进程间串行化，身份解析遇到 GraphQL `UNAUTHENTICATED` 时也会进入受控刷新。 |
+| Twenty CRM 纵切 | 已打包的适配器通过有界 cursor 分页查询 Companies、People 和 Opportunities，把类型化结果、来源及 API 找到的详情路由交给 Agent。公司创建需单独开启，并要求用户确认及委托 token 回读。OAuth 刷新会在本机线程和进程间串行化，身份解析遇到 GraphQL `UNAUTHENTICATED` 时也会进入受控刷新。 |
 
 这些结论只覆盖已经实现的路径。项目还没有规模足够的公开评测，不能据此宣称通用任务成功率、源码检索收益，或优于 PageAgent 等浏览器 Agent。
 
@@ -64,7 +64,7 @@ flowchart LR
 | `web_operation_agent.business` | 加载 Skill，并代理类型化的读取和写入工具。 |
 | `web_operation_agent.egress` | 执行模型 provider 数据边界，并在不保存请求内容的前提下生成审计记录。 |
 | `web_operation_agent.mutation` | 在内存或 SQLite 中原子记录一次性 mutation intent 与终态。 |
-| `web_operation_agent.twenty` | 提供当前 Twenty CRM Companies 适配器。 |
+| `web_operation_agent.twenty` | 提供当前 Twenty CRM Companies、People 和 Opportunities 适配器。 |
 | `web_operation_agent.session` | 实现有步数和时间限制的服务端 Agent 循环。 |
 
 Application Adapter 暴露版本化、无敏感信息的描述，由摘要绑定的 Skill/typed-tool catalog，以及身份、路由、结果数据分类、mutation 后置条件和保守核对端口。`bind_application()` 会检查所有工具和 mutation 均被覆盖，并确认运行时使用的就是同一组端口对象。路由端口拥有应用 URL 语法、源码感知的入口发现，以及应用特有 handoff secret 的浏览器出站前脱敏扩展；通用 Agent 不解析具体框架的路由。`AgentTurnExecutor(application=...)` 会在浏览器或模型工作开始前拒绝来自其它应用 Origin 的消息和无效 principal；typed-tool 路由进入 Agent 上下文前必须通过 Adapter 校验，已收到确认的写入也只有通过 Adapter 后置条件后才能记为完成。这是 Adapter contract version 2。自然语言目标直接进入通用 Agent 循环，Adapter 不会先把目标分类成固定的产品意图枚举。软件包 API 仍在演进，稳定版本发布前不承诺向后兼容。
@@ -163,7 +163,7 @@ Evaluator 还包含一套严格的配对实验预注册校验器，用于在运�
 
 - 共享 Runtime 网关及活跃执行仍位于进程内。可选 SQLite 恢复在身份作用域内保存去重与进度并使用 owner lease，重新签发浏览器权限，将旧工作标记为中断而不重跑动作；跨主机扩展和模型对话上下文持久化尚未实现。Session TTL 与硬配额限制资源占用；SQLite 模式只恢复安全历史，不恢复执行权限。已确认的 Twenty API 写入拥有持久的一次性 SQLite journal，但 dispatch 之后发生崩溃仍会标记为 `indeterminate`，必须核对而不能自动重试。Twenty demo 已通过可信 Playwright 宿主强制身份绑定；普通嵌入式应用仍需从自身登录边界提供服务端认证的身份断言，principal 续期和分布式撤销也尚未实现。独立的旧页面控制网关仍使用全局许可与 trace：协作客户端会串行执行完整 run，并在前后边界清空状态，但并发页面写入前仍需在网关内部实现 tenant/session/turn scope。
 - 单轮截止时间同时覆盖 provider 排队和 socket 调用。服务端 Agent 的原生 completion 路径使用可关闭的 HTTP 连接：消息级主动取消会中断进行中的请求、释放 provider guard 名额、阻止后续工具下发，并把已派发调用记为 usage 未知而不自动重试。所有能被单轮触达的实现都满足同一个显式 `ChatPort` 契约，其中取消能力是必需项，并在模型被组装的位置校验，而不是在调用时探测，因此无法取消的实现会被直接拒绝，而不是静默降级。合同规划调用仍走普通 completion 路径，不可取消。并发 guard 只在单进程内生效；可选 SQLite 滚动请求配额可按服务端指定的租户/provider scope 在本机进程间协调，尚无 token 和金额配额。已有初始页面观察绑定，以及 claim 前对目标控件、关联表单和路由的新鲜度检查；目标元素之外的依赖、跨机器恢复和更完整的运行监控仍未完成。
-- 唯一打包的真实应用适配器是范围有限的 Twenty CRM Companies 纵切；Minimal Contacts 只是合成的上手示例。
+- 唯一打包的真实应用适配器仍是范围有限的 Twenty CRM 纵切：Companies 支持读取和确认后创建，People 与 Opportunities 目前支持读取及记录导航；Minimal Contacts 只是合成的上手示例。
 - 尚未实现任意第三方网站支持和浏览器扩展。
 - 浏览器操作不具备数据库事务或回滚语义。
 - Mutation journal 会阻断同一应用、工具、租户、工作区、actor 业务键的在途与不确定写入，即使 proposal 不同。SQLite 通过同一数据库的事务实现跨进程互斥。Twenty 创建公司使用规范化名称作为业务键；其它 Adapter 可声明 reconcile key，否则使用规范化参数。这不保证跨 actor 或独立数据库的全局唯一性。旧版无业务键的未解决记录会保守阻断新写入；升级前需停止旧进程。已提供只读核对及默认 dry-run 的运维裁决，不确定结果不会自动解除阻断。

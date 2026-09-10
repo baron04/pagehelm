@@ -119,6 +119,8 @@ required = ["web_operation_agent/durable.py",
             "web_operation_agent/integrations/ofbiz_knowledge.py",
             "web_operation_agent/skills/twenty/companies-query.json",
             "web_operation_agent/skills/twenty/companies-create.json",
+            "web_operation_agent/skills/twenty/people-query.json",
+            "web_operation_agent/skills/twenty/opportunities-query.json",
             "web_operation_agent/web_runtime/embedded.js",
             "web_operation_agent/web_runtime/trace_replay.html",
             "web_operation_agent_demo/assets/page_controller.js"]
@@ -166,12 +168,12 @@ root = Path.cwd().resolve()
 assert SourceTree.load("ofbiz", root).root == root
 common = dict(base_url="http://127.0.0.1:3000", token_path="tokens.json",
               registration_path="registration.json")
-assert TwentyApplicationAdapter(**common).business_tools.tool_names == frozenset(
-    {"query_companies"})
+read_tools = {"query_companies", "query_people", "query_opportunities"}
+assert TwentyApplicationAdapter(**common).business_tools.tool_names == frozenset(read_tools)
 assert (TwentyApplicationAdapter(
     **common, allow_mutations=True,
     mutation_journal=SQLiteMutationJournal(root / "mutations.sqlite3"),
-).business_tools.tool_names == frozenset({"query_companies", "create_company"}))
+).business_tools.tool_names == frozenset(read_tools | {"create_company"}))
 assert MinimalContactsAdapter
 print("installed wheel imports and composes outside the checkout")
 PY

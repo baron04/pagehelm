@@ -78,6 +78,37 @@ QUERY_COMPANIES_SCHEMA = {
     },
 }
 
+
+def _query_record_schema(name: str, description: str) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name_contains": {
+                        "type": "string", "maxLength": 100,
+                        "description": "Optional case-insensitive record name substring.",
+                    },
+                    "limit": {
+                        "type": "integer", "minimum": 1, "maximum": 50,
+                        "description": "Maximum rows to return; defaults to 20.",
+                    },
+                },
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+QUERY_PEOPLE_SCHEMA = _query_record_schema(
+    "query_people", "Read people visible to the currently delegated Twenty user.")
+QUERY_OPPORTUNITIES_SCHEMA = _query_record_schema(
+    "query_opportunities",
+    "Read opportunities visible to the currently delegated Twenty user.")
+
 CREATE_COMPANY_SCHEMA = {
     "type": "function",
     "function": {
@@ -116,6 +147,8 @@ _DOMAIN = re.compile(
     r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?", re.I)
 _SKILL_RESOURCE_ROOT = ("skills", "twenty")
 _QUERY_SKILL_RESOURCE = "companies-query.json"
+_PEOPLE_SKILL_RESOURCE = "people-query.json"
+_OPPORTUNITIES_SKILL_RESOURCE = "opportunities-query.json"
 _MUTATION_SKILL_RESOURCE = "companies-create.json"
 _IDENTITY_QUERY = "query WoaIdentity { currentUser { id } currentWorkspace { id } }"
 _SESSION_COOKIE_NAMES = frozenset({"twenty-session", "__Host-twenty-session"})
@@ -469,11 +502,12 @@ class TwentyBusinessToolExecutor:
         self.allow_mutations = allow_mutations
 
     def tool_schemas(self) -> tuple[dict, ...]:
-        return ((QUERY_COMPANIES_SCHEMA, CREATE_COMPANY_SCHEMA)
-                if self.allow_mutations else (QUERY_COMPANIES_SCHEMA,))
+        reads = (QUERY_COMPANIES_SCHEMA, QUERY_PEOPLE_SCHEMA, QUERY_OPPORTUNITIES_SCHEMA)
+        return reads + ((CREATE_COMPANY_SCHEMA,) if self.allow_mutations else ())
 
     def tool_effects(self) -> dict[str, str]:
-        effects = {"query_companies": "read"}
+        effects = {name: "read" for name in
+                   ("query_companies", "query_people", "query_opportunities")}
         if self.allow_mutations:
             effects["create_company"] = "write"
         return effects
@@ -520,6 +554,8 @@ class TwentyBusinessToolExecutor:
 
     def execute(self, name: str, args: dict, *,
                 context: OperationContext | None = None) -> BusinessToolResult:
+        if name in {"query_people", "query_opportunities"}:
+            return self._execute_related_query(name, args, context=context)
         if name != "query_companies":
             raise BusinessToolRequestError("unknown Twenty business tool")
         unknown = set(args) - {"name_contains", "limit"}
@@ -638,6 +674,93 @@ class TwentyBusinessToolExecutor:
                 incomplete_reason=incomplete_reason,
             ),
         )
+
+    def _execute_related_query(self, name: str, args: dict, *,
+                               context: OperationContext | None) -> BusinessToolResult:
+        resource = "people" if name == "query_people" else "opportunities"
+        unknown = set(args) - {"name_contains", "limit"}
+        if unknown:
+            raise BusinessToolRequestError(f"{name} received unknown arguments")
+        needle = args.get("name_contains", "")
+        if (not isinstance(needle, str) or len(needle) > 100
+                or re.search(r"[\x00-\x1f\x7f]", needle)):
+            raise BusinessToolRequestError(
+                "name_contains must be a string of at most 100 characters")
+        limit = args.get("limit", 20)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
+            raise BusinessToolRequestError("limit must be an integer from 1 to 50")
+        payload, status, refreshed = self._get_collection(resource)
+        data = payload.get("data") if isinstance(payload, dict) else None
+        rows = data.get(resource) if isinstance(data, dict) else None
+        if not isinstance(rows, list):
+            raise BusinessToolContractError(f"Twenty {resource} response has an unexpected shape")
+        projected = []
+        folded = needle.casefold().strip()
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if resource == "people":
+                raw_name = row.get("name")
+                if not isinstance(raw_name, dict):
+                    continue
+                display_name = " ".join(str(raw_name.get(part) or "").strip()
+                                        for part in ("firstName", "lastName")).strip()
+                emails = row.get("emails")
+                detail = (str(emails.get("primaryEmail") or "")[:320]
+                          if isinstance(emails, dict) else "")
+                route_name = "person"
+                fields = ("name", "email")
+            else:
+                display_name = str(row.get("name") or "").strip()
+                detail = str(row.get("stage") or "")[:100]
+                route_name = "opportunity"
+                fields = ("name", "stage")
+            if not display_name or (folded and folded not in display_name.casefold()):
+                continue
+            record_id = row.get("id")
+            ui_path = (f"/object/{route_name}/{record_id}"
+                       if isinstance(record_id, str) and _UUID.fullmatch(record_id) else "")
+            item = {fields[0]: display_name[:300], fields[1]: detail}
+            if ui_path:
+                item["ui_path"] = ui_path
+            projected.append(item)
+        matched = len(projected)
+        visible = projected[:limit]
+        pagination = payload.get("_woaPagination")
+        pagination = pagination if isinstance(pagination, dict) else {}
+        source_total = payload.get("totalCount")
+        source_total_known = not isinstance(source_total, bool) and isinstance(source_total, int)
+        if not source_total_known:
+            source_total = len(rows)
+        source_complete = pagination.get("complete") is True
+        result_truncated = matched > limit or not source_complete
+        records_scanned = pagination.get("records_scanned", len(rows))
+        incomplete_reason = str(pagination.get("incomplete_reason") or "")[:500]
+        observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        return BusinessToolResult(
+            content={resource: visible, "matched_count": matched, "source_total": source_total,
+                     "scope": "current_delegated_workspace", "observed_at": observed_at,
+                     "completeness": {"source_total_known": source_total_known,
+                         "source_complete": source_complete, "result_truncated": result_truncated,
+                         "pages_scanned": pagination.get("pages_scanned", 1),
+                         "records_scanned": records_scanned,
+                         "incomplete_reason": incomplete_reason}},
+            audit={"application": "twenty", "operation": name, "http_status": status,
+                   "matched_count": matched, "returned_count": len(visible),
+                   "source_total": source_total, "source_complete": source_complete,
+                   "result_truncated": result_truncated, "records_scanned": records_scanned,
+                   "scope": "current_delegated_workspace", "observed_at": observed_at,
+                   "oauth_refreshed": refreshed, **self._identity_audit(context)},
+            allowed_routes=tuple(item["ui_path"] for item in visible if item.get("ui_path")),
+            query_answer=StructuredQueryAnswer(
+                collection=resource, fields=fields,
+                records=tuple((item[fields[0]], item[fields[1]]) for item in visible),
+                source=f"Twenty delegated REST /rest/{resource}",
+                scope="current_delegated_workspace", observed_at=observed_at,
+                source_complete=source_complete, result_truncated=result_truncated,
+                matched_count=matched,
+                source_total=(source_total if source_total_known else None),
+                records_scanned=records_scanned, incomplete_reason=incomplete_reason))
 
     def prepare_mutation(self, name: str, args: dict, *,
                          context: OperationContext | None = None
@@ -769,6 +892,11 @@ class TwentyBusinessToolExecutor:
                 raise BusinessToolError("a company with the same name or domain already exists")
 
     def _get_companies(self) -> tuple[dict, int, bool]:
+        return self._get_collection("companies")
+
+    def _get_collection(self, resource: str) -> tuple[dict, int, bool]:
+        if resource not in {"companies", "people", "opportunities"}:
+            raise ValueError("unsupported Twenty collection")
         token = self.tokens.access_token()
         refreshed = False
         rows: list[dict] = []
@@ -783,7 +911,7 @@ class TwentyBusinessToolExecutor:
             query = {"limit": _COMPANY_PAGE_SIZE}
             if cursor:
                 query["starting_after"] = cursor
-            path = "/rest/companies?" + urlencode(query)
+            path = f"/rest/{resource}?" + urlencode(query)
             try:
                 page = self._authorized_json(path, token)
             except BusinessToolAuthenticationError:
@@ -799,7 +927,7 @@ class TwentyBusinessToolExecutor:
                 raise
             pages_scanned += 1
             data = page.get("data") if isinstance(page, dict) else None
-            page_rows = data.get("companies") if isinstance(data, dict) else None
+            page_rows = data.get(resource) if isinstance(data, dict) else None
             total = page.get("totalCount") if isinstance(page, dict) else None
             if (not isinstance(page_rows, list) or isinstance(total, bool)
                     or not isinstance(total, int) or total < 0):
@@ -807,7 +935,7 @@ class TwentyBusinessToolExecutor:
                     incomplete_reason = "unexpected_page_shape"
                     break
                 raise BusinessToolContractError(
-                    "Twenty companies response has an unexpected shape")
+                    f"Twenty {resource} response has an unexpected shape")
             if expected_total is None:
                 expected_total = total
             elif total != expected_total:
@@ -854,7 +982,7 @@ class TwentyBusinessToolExecutor:
             cursor = next_cursor
         return ({
             "totalCount": expected_total if expected_total is not None else len(rows),
-            "data": {"companies": rows},
+            "data": {resource: rows},
             "_woaPagination": {
                 "complete": complete,
                 "pages_scanned": pages_scanned,
@@ -1032,18 +1160,26 @@ class TwentyApplicationAdapter:
         )
         query_skill = (BusinessSkill.load(skill_path) if skill_path is not None
                        else _packaged_skill(_QUERY_SKILL_RESOURCE))
-        skills = [query_skill]
+        skills = [query_skill, _packaged_skill(_PEOPLE_SKILL_RESOURCE),
+                  _packaged_skill(_OPPORTUNITIES_SKILL_RESOURCE)]
         if allow_mutations:
             skills.append(
                 BusinessSkill.load(mutation_skill_path)
                 if mutation_skill_path is not None
                 else _packaged_skill(_MUTATION_SKILL_RESOURCE))
-        required_scopes = {"query_companies": "companies:read"}
+        required_scopes = {"query_companies": "companies:read",
+                           "query_people": "people:read",
+                           "query_opportunities": "opportunities:read"}
         if allow_mutations:
             required_scopes["create_company"] = "companies:write"
+        read_classes = {
+            "query_companies": "business.company",
+            "query_people": "business.person",
+            "query_opportunities": "business.opportunity",
+        }
         data = DeclaredDataClassifier(tuple(
-            (name, (("business.company", "business.identifier", "application.route")
-                    if name == "query_companies" else
+            (name, ((read_classes[name], "business.identifier", "application.route")
+                    if name in read_classes else
                     ("business.company", "business.identifier", "application.route",
                      "business.mutation_result")))
             for name in sorted(required_scopes)))
@@ -1053,7 +1189,9 @@ class TwentyApplicationAdapter:
             if allow_mutations else ())
         routes = DeclaredRoutePort(
             application_id="twenty",
-            tool_route_patterns=(r"/objects/companies", r"/object/company/[0-9a-f-]{36}"),
+            tool_route_patterns=(
+                r"/objects/(companies|people|opportunities)",
+                r"/object/(company|person|opportunity)/[0-9a-f-]{36}"),
         )
         self.business_tools = BusinessToolRuntime(
             tuple(skills), executor, application_id="twenty",
