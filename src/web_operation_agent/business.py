@@ -13,9 +13,9 @@ import re
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 from urllib.parse import urlsplit
 
 from .answering import StructuredQueryAnswer
@@ -33,6 +33,7 @@ _MAX_RESULT_BYTES = 64 * 1024
 BUSINESS_SKILL_MATCHER_VERSION = "business-skill-trigger-v2"
 _EXPLICIT_TOOL_REFERENCE = re.compile(
     r"\bcall\s+`?([a-z][a-z0-9_]{1,63})`?", re.I)
+_DATA_CLASS = re.compile(r"^[a-z][a-z0-9_.-]{1,63}$")
 
 
 def _trigger_tokens(value: str) -> tuple[str, ...]:
@@ -100,6 +101,57 @@ class BusinessMutationIndeterminate(RuntimeError):
     """A dispatched mutation may have landed and therefore must never be retried."""
 
 
+@dataclass(frozen=True, slots=True)
+class MutationPostcondition:
+    """Application-owned verdict produced after one acknowledged mutation dispatch."""
+
+    verified: bool
+    code: str
+    evidence: dict
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.verified, bool):
+            raise ValueError("postcondition verified must be a boolean")
+        if (not isinstance(self.code, str) or not _DATA_CLASS.fullmatch(self.code)
+                or not isinstance(self.evidence, dict)):
+            raise ValueError("postcondition verdict is invalid")
+        try:
+            json.dumps(self.evidence, ensure_ascii=False, sort_keys=True,
+                       separators=(",", ":"), allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("postcondition evidence must be finite JSON") from exc
+        if _has_sensitive_key(self.evidence):
+            raise ValueError("postcondition evidence may not contain credentials")
+
+
+@runtime_checkable
+class BusinessPostconditionVerifier(Protocol):
+    """Verify an acknowledged mutation without granting or dispatching another write."""
+
+    @property
+    def supported_tools(self) -> frozenset[str]: ...
+
+    def verify(self, name: str, args: dict, result: "BusinessToolResult", *,
+               context: OperationContext | None = None) -> MutationPostcondition: ...
+
+
+@runtime_checkable
+class BusinessDataClassifier(Protocol):
+    """Classify typed application data before it enters the Agent context."""
+
+    @property
+    def tool_names(self) -> frozenset[str]: ...
+
+    def classify(self, name: str, result: "BusinessToolResult") -> tuple[str, ...]: ...
+
+
+@runtime_checkable
+class BusinessRouteValidator(Protocol):
+    """Validate a route returned by an application tool before Agent use."""
+
+    def validate_tool_route(self, route: str) -> str: ...
+
+
 def _string_list(value: object, name: str) -> tuple[str, ...]:
     if not isinstance(value, list) or not value \
             or any(not isinstance(item, str) or not item.strip() for item in value):
@@ -124,6 +176,7 @@ class BusinessToolResult:
     audit: dict
     allowed_routes: tuple[str, ...] = ()
     query_answer: StructuredQueryAnswer | None = None
+    data_classes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.content, dict) or not isinstance(self.audit, dict):
@@ -146,6 +199,11 @@ class BusinessToolResult:
         if self.query_answer is not None and not isinstance(
                 self.query_answer, StructuredQueryAnswer):
             raise ValueError("business query answer projection is invalid")
+        if (not isinstance(self.data_classes, tuple)
+                or len(self.data_classes) != len(set(self.data_classes))
+                or any(not isinstance(item, str) or not _DATA_CLASS.fullmatch(item)
+                       for item in self.data_classes)):
+            raise ValueError("business tool data_classes must be unique identifiers")
         for route in self.allowed_routes:
             parsed = urlsplit(route) if isinstance(route, str) else None
             safe = bool(
@@ -392,6 +450,9 @@ class BusinessToolRuntime:
                  *, application_id: str = "",
                  required_scopes: dict[str, str] | None = None,
                  mutation_journal: MutationJournal | None = None,
+                 data_classifier: BusinessDataClassifier | None = None,
+                 postcondition_verifier: BusinessPostconditionVerifier | None = None,
+                 route_validator: BusinessRouteValidator | None = None,
                  max_pending_mutations: int = 1_000):
         skill_ids = [skill.skill_id for skill in skills]
         if len(skill_ids) != len(set(skill_ids)):
@@ -451,6 +512,24 @@ class BusinessToolRuntime:
         self._schemas = schemas
         self._effects = dict(effects)
         self._executor = executor
+        if data_classifier is not None:
+            if (not callable(getattr(data_classifier, "classify", None))
+                    or getattr(data_classifier, "tool_names", None) != frozenset(schemas)):
+                raise TypeError(
+                    "data_classifier must classify every business tool")
+        write_tools = frozenset(
+            name for name, effect in effects.items() if effect == "write")
+        if postcondition_verifier is not None:
+            if (not callable(getattr(postcondition_verifier, "verify", None))
+                    or getattr(postcondition_verifier, "supported_tools", None) != write_tools):
+                raise TypeError(
+                    "postcondition_verifier must verify every mutation tool")
+        self._data_classifier = data_classifier
+        self._postcondition_verifier = postcondition_verifier
+        if route_validator is not None and not isinstance(
+                route_validator, BusinessRouteValidator):
+            raise TypeError("route_validator must provide validate_tool_route")
+        self._route_validator = route_validator
         self.application_id = application_id
         self._required_scopes = scopes
         self._mutation_journal = (mutation_journal
@@ -483,8 +562,54 @@ class BusinessToolRuntime:
         return "write" in self._effects.values()
 
     @property
+    def mutation_tool_names(self) -> frozenset[str]:
+        return frozenset(
+            name for name, effect in self._effects.items() if effect == "write")
+
+    @property
+    def required_scopes(self) -> dict[str, str]:
+        return dict(self._required_scopes)
+
+    @property
     def mutation_journal_durability(self) -> MutationJournalDurability:
         return self._mutation_journal_durability
+
+    @property
+    def data_classifier(self) -> BusinessDataClassifier | None:
+        return self._data_classifier
+
+    @property
+    def postcondition_verifier(self) -> BusinessPostconditionVerifier | None:
+        return self._postcondition_verifier
+
+    @property
+    def route_validator(self) -> BusinessRouteValidator | None:
+        return self._route_validator
+
+    def _classify_result(self, name: str, result: BusinessToolResult) -> BusinessToolResult:
+        if self._route_validator is not None:
+            try:
+                for route in result.allowed_routes:
+                    self._route_validator.validate_tool_route(route)
+            except Exception as exc:
+                raise BusinessToolContractError(
+                    "application returned a route outside its adapter contract") from exc
+        if self._data_classifier is None:
+            return result
+        try:
+            classes = self._data_classifier.classify(name, result)
+        except BusinessToolError:
+            raise
+        except Exception as exc:
+            raise BusinessToolContractError(
+                "application data classification failed") from exc
+        if (not isinstance(classes, tuple)
+                or len(classes) != len(set(classes))
+                or any(not isinstance(item, str) or not _DATA_CLASS.fullmatch(item)
+                       for item in classes)):
+            raise BusinessToolContractError(
+                "application data classifier returned invalid classes")
+        return replace(result, data_classes=classes)
 
     @property
     def catalog_manifest(self) -> dict:
@@ -638,7 +763,7 @@ class BusinessToolRuntime:
         if not isinstance(result, BusinessToolResult):
             raise BusinessToolContractError(
                 "business tool returned an invalid result")
-        return result
+        return self._classify_result(name, result)
 
     def prepare_mutation(self, name: str, args: object,
                          loaded_ids: set[str], *,
@@ -751,6 +876,40 @@ class BusinessToolRuntime:
             self._forget_mutation(digest)
             raise BusinessMutationIndeterminate(
                 "business mutation returned an invalid acknowledgement")
+        try:
+            result = self._classify_result(proposal.tool, result)
+            if self._postcondition_verifier is not None:
+                postcondition = self._postcondition_verifier.verify(
+                    proposal.tool, proposal.args, result, context=context)
+                if not isinstance(postcondition, MutationPostcondition):
+                    raise BusinessToolContractError(
+                        "application postcondition verifier returned an invalid verdict")
+                if not postcondition.verified:
+                    raise BusinessMutationIndeterminate(
+                        "business mutation postcondition was not verified")
+                result = replace(result, audit={
+                    **result.audit,
+                    "postcondition": {
+                        "code": postcondition.code,
+                        "verified": True,
+                        "evidence": postcondition.evidence,
+                    },
+                })
+        except BusinessMutationIndeterminate:
+            try:
+                self._mutation_journal.finish(digest, "indeterminate")
+            except MutationJournalError:
+                pass
+            self._forget_mutation(digest)
+            raise
+        except Exception as exc:
+            try:
+                self._mutation_journal.finish(digest, "indeterminate")
+            except MutationJournalError:
+                pass
+            self._forget_mutation(digest)
+            raise BusinessMutationIndeterminate(
+                "business mutation postcondition verification failed") from exc
         try:
             self._mutation_journal.finish(
                 digest, "completed", result_digest=result.content_digest)

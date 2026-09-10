@@ -54,8 +54,8 @@ flowchart LR
 
 | 模块 | 职责 |
 | --- | --- |
-| `web_operation_agent.application` | 校验版本化应用描述，并把精确的 Skill/tool catalog 绑定到产品会话。 |
-| `web_operation_agent.product` | 校验一条用户消息，将它绑定到最新页面观察，并执行一次与具体应用无关的 Agent turn。 |
+| `web_operation_agent.application` | 校验版本化应用描述，以及可执行的身份、路由、数据分类、mutation 后置条件与核对端口。 |
+| `web_operation_agent.product` | 把已校验的应用和一条用户消息绑定到最新页面观察，并执行一次与具体应用无关的 Agent turn。 |
 | `web_operation_agent.conversation` | 在多轮之间保留有界、脱敏的引用上下文，不把历史事实或路由当成当前权限。 |
 | `web_operation_agent.live` | 管理网关和顺序执行的会话生命周期。 |
 | `web_operation_agent.remote` | 定义受能力凭据约束的远程浏览器通道和客户端。 |
@@ -66,7 +66,7 @@ flowchart LR
 | `web_operation_agent.twenty` | 提供当前 Twenty CRM Companies 适配器。 |
 | `web_operation_agent.session` | 实现有步数和时间限制的服务端 Agent 循环。 |
 
-Application Adapter 暴露版本化、无敏感信息的描述，以及由摘要绑定的 Skill 和 typed-tool catalog。自然语言目标直接进入通用 Agent 循环，Adapter 不会先把目标分类成固定的产品意图枚举。软件包 API 仍在演进，稳定版本发布前不承诺向后兼容。
+Application Adapter 暴露版本化、无敏感信息的描述，由摘要绑定的 Skill/typed-tool catalog，以及身份、路由、结果数据分类、mutation 后置条件和保守核对端口。`bind_application()` 会检查所有工具和 mutation 均被覆盖，并确认运行时使用的就是同一组端口对象。`AgentTurnExecutor(application=...)` 会在浏览器或模型工作开始前拒绝来自其它应用 Origin 的消息和无效 principal；typed-tool 路由进入 Agent 上下文前必须通过 Adapter 校验，已收到确认的写入也只有通过 Adapter 后置条件后才能记为完成。这是 Adapter contract version 2。自然语言目标直接进入通用 Agent 循环，Adapter 不会先把目标分类成固定的产品意图枚举。软件包 API 仍在演进，稳定版本发布前不承诺向后兼容。
 
 启用 mutation 时，`AgentTurnConfig.deployment_profile` 默认为 `production`。如果 mutation 策略没有要求身份、没有安装写工具，或所选 journal 没有声明跨重启持久性，组合会在接收用户任务前失败。测试若有意使用 `MemoryMutationJournal`，必须设置 `deployment_profile="test"`；该 profile 不会放宽身份绑定或用户确认。部署 Host 仍需提供并续期认证 principal、关闭无法授权的浏览器动作、撤销已变化的会话、保护确认界面，并校验实际部署的 page-controller 资产；这些 Host 责任不会由 profile 标志自动推导。
 
@@ -161,7 +161,7 @@ Evaluator 还包含一套严格的配对实验预注册校验器，用于在运�
 - 浏览器操作不具备数据库事务或回滚语义。
 - Mutation journal 的幂等范围是同一个精确 proposal digest。不同会话仍可为同一业务键生成不同 proposal；跨会话的在途业务键互斥尚未实现。
 - 源码感知检索可以作为可选规划输入，但尚未在有代表性的保留测试集上证明收益。
-- Provider egress 已有大小限制、数据分类和凭据检查，但还没有应用字段级分类、客户管理的加密、区域路由、DLP 服务或完整的数据保留策略。
+- Provider egress 已有大小限制、数据分类和凭据检查。Adapter 现在会为每个 typed-tool 结果及其审计事件附加声明的数据类别，但尚未实现字段级策略执行、客户管理的加密、区域路由、DLP 服务或完整的数据保留策略。
 - 助手面板已有键盘、响应式、语义、减弱动画、错误恢复、宿主事件隔离和视觉状态的自动化覆盖。默认文案为中文，可通过 labels hook 覆盖；更完整的本地化、辅助技术与浏览器矩阵测试，以及端到端部署体验仍属于发布前工作。
 - 不要把当前 Alpha 版本连接到生产账号、客户数据、支付、邮件或其他高影响系统。
 

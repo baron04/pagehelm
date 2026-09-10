@@ -54,8 +54,8 @@ The main reusable boundaries are:
 
 | Module | Responsibility |
 | --- | --- |
-| `web_operation_agent.application` | Validates a versioned application descriptor and binds its exact Skill/tool catalog to a product session. |
-| `web_operation_agent.product` | Validates and binds one user message to the latest observation, then runs one application-neutral agent turn. |
+| `web_operation_agent.application` | Validates a versioned application descriptor and executable identity, route, data-classification, mutation-postcondition, and reconciliation ports. |
+| `web_operation_agent.product` | Binds a validated application and one user message to the latest observation, then runs one application-neutral agent turn. |
 | `web_operation_agent.conversation` | Retains bounded, redacted reference context across turns without granting current facts or routes. |
 | `web_operation_agent.live` | Owns the gateway and sequential conversation lifecycle. |
 | `web_operation_agent.remote` | Defines the capability-bound remote browser channel and client. |
@@ -66,7 +66,7 @@ The main reusable boundaries are:
 | `web_operation_agent.twenty` | Provides the current Twenty CRM Companies adapter. |
 | `web_operation_agent.session` | Implements the bounded server-side agent loop. |
 
-Application adapters expose a versioned, non-secret descriptor plus a digest-bound Skill and typed-tool catalog. Natural-language goals enter the generic Agent loop directly; an adapter does not preclassify them into a fixed product intent enum. The package API is still evolving; no compatibility guarantee is made before a stable release.
+Application adapters expose a versioned, non-secret descriptor, a digest-bound Skill and typed-tool catalog, and executable ports for identity, routes, result data classes, mutation postconditions, and conservative reconciliation. `bind_application()` checks that every tool and mutation is covered and that the runtime uses the same port objects. `AgentTurnExecutor(application=...)` rejects another application origin or invalid principal before browser/model work; typed-tool routes are checked before entering the Agent context, and an acknowledged write remains indeterminate until its adapter postcondition passes. Natural-language goals enter the generic Agent loop directly; an adapter does not preclassify them into a fixed product intent enum. This is adapter contract version 2, and the package API is still evolving; no compatibility guarantee is made before a stable release.
 
 For mutation-enabled composition, `AgentTurnConfig.deployment_profile` defaults to `production`. The composition fails before a user task when mutation policy does not require identity, no mutation tool is installed, or the selected journal does not declare durable restart behavior. Tests that intentionally use `MemoryMutationJournal` must set `deployment_profile="test"`; that profile does not relax identity binding or user approval. A deployment host must still supply and renew the authenticated principal, disable browser actions it cannot authorize, revoke changed sessions, protect the approval surface, and verify the deployed page-controller asset. Those host obligations are not inferred from the profile flag.
 
@@ -161,7 +161,7 @@ A private append-only batch ledger now enforces that frozen order and a common t
 - Browser actions do not provide database transaction or rollback semantics.
 - Mutation-journal idempotency covers one exact proposal digest. Separate sessions can still create distinct proposals for the same business key; cross-session in-flight business-key exclusion is not implemented.
 - Source-aware retrieval exists as an optional planning input, but its benefit has not been established across a representative held-out evaluation.
-- Provider egress is bounded, classified and credential-checked, but the framework does not yet provide application-specific field classification, customer-managed encryption, regional routing, a DLP service, or a complete data-retention policy.
+- Provider egress is bounded, classified and credential-checked. Adapters now attach declared application data classes to each typed-tool result and its audit event, but field-level policy enforcement, customer-managed encryption, regional routing, a DLP service, and a complete data-retention policy are not implemented.
 - The assistant panel has automated keyboard, responsive, semantic, reduced-motion, recovery, host-event isolation, and visual-state coverage. Its default copy is Chinese and can be overridden through label hooks; broader localization, assistive-technology/browser matrix testing, and the end-to-end deployment experience remain release work.
 - Do not connect this alpha to production accounts, customer data, payments, email, or other consequential systems.
 

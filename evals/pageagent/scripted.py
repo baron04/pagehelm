@@ -17,7 +17,15 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
-from web_operation_agent.application import APPLICATION_ADAPTER_VERSION, ApplicationDescriptor
+from web_operation_agent.application import (
+    APPLICATION_ADAPTER_VERSION,
+    ApplicationDescriptor,
+    ApplicationPorts,
+    DeclaredRoutePort,
+    ConservativeMutationReconciler,
+    DeclaredDataClassifier,
+    ResultPostconditionVerifier,
+)
 from web_operation_agent.answering import StructuredQueryAnswer
 from web_operation_agent.business import (
     BusinessMutationSpec, BusinessSkill, BusinessToolError, BusinessToolRequestError,
@@ -384,9 +392,21 @@ def synthetic_business_runtime(executor: SyntheticCompanyExecutor) -> BusinessTo
             "read_only": False,
         }).encode("utf-8"), artifact_uri="memory://synthetic/companies-create.json"))
         required_scopes["create_company"] = "companies:write"
+    data = DeclaredDataClassifier(tuple(
+        (name, ("synthetic.company", "business.identifier", "application.route"))
+        for name in sorted(required_scopes)))
+    postconditions = ResultPostconditionVerifier(
+        (("create_company",
+          ("content.readback_verified", "audit.readback_verified")),)
+        if executor.allow_mutations else ())
+    routes = DeclaredRoutePort(
+        application_id="twenty",
+        tool_route_patterns=(r"/objects/companies", r"/object/company/[0-9a-f-]{36}"),
+    )
     return BusinessToolRuntime(
         tuple(skills), executor, application_id="twenty",
-        required_scopes=required_scopes)
+        required_scopes=required_scopes, data_classifier=data,
+        postcondition_verifier=postconditions, route_validator=routes)
 
 
 def session_binding(storage_state: str | Path | dict[str, Any]) -> str:
@@ -425,6 +445,37 @@ def write_storage_state(path: Path, *, origin: str,
     return path
 
 
+class _SyntheticIdentityPort:
+    required = True
+
+    def __init__(self, required_scopes: frozenset[str]):
+        self.required_scopes = required_scopes
+
+    def bind(self, page_identity, *, delegation_id: str,
+             lifetime_s: int = 300, now_ms: int | None = None) -> PrincipalContext:
+        now = int(time.time() * 1000) if now_ms is None else now_ms
+        page_identity.require_live(now_ms=now)
+        if page_identity.application_id != "twenty":
+            raise BusinessToolError("synthetic page identity belongs to another application")
+        return PrincipalContext(
+            schema_version=PRINCIPAL_CONTEXT_VERSION,
+            application_id="twenty",
+            tenant_id=page_identity.tenant_id,
+            workspace_id=page_identity.workspace_id,
+            actor_id=page_identity.actor_id,
+            delegation_id=delegation_id,
+            issued_at=now,
+            expires_at=min(page_identity.expires_at, now + lifetime_s * 1000),
+            scopes=tuple(sorted(self.required_scopes)),
+        )
+
+    def validate(self, principal: PrincipalContext | None, *,
+                 application_id: str) -> None:
+        if principal is None:
+            raise PrincipalError("synthetic Twenty requires a principal")
+        principal.require_live(application_id=application_id)
+
+
 class SyntheticTwentyAdapter(TwentyApplicationAdapter):
     """Keep the Twenty adapter interface without OAuth files, Metadata API or network access."""
 
@@ -434,6 +485,14 @@ class SyntheticTwentyAdapter(TwentyApplicationAdapter):
         self.page_controller_module = origin + "/woa/page-controller.js"
         self.business_tools = runtime
         self.identity_failure = identity_failure
+        self.ports = ApplicationPorts(
+            identity=_SyntheticIdentityPort(
+                frozenset(runtime.required_scopes.values())),
+            routes=runtime.route_validator,
+            postconditions=runtime.postcondition_verifier,
+            reconciliation=ConservativeMutationReconciler(runtime.mutation_tool_names),
+            data=runtime.data_classifier,
+        )
         self.descriptor = ApplicationDescriptor(
             schema_version=APPLICATION_ADAPTER_VERSION,
             application_id="twenty",

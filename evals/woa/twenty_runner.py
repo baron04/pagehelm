@@ -14,7 +14,7 @@ import re
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -262,13 +262,17 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter, client:
     runtime_tools = (
         RecordingBusinessRuntime(application.business_tools)
         if config.capability_profile == "skill_api" else None)
+    # The benchmark may deliberately hide typed application tools. Keep the already-bound
+    # application identity and route contract while substituting only the instrumented
+    # capability surface seen by the compared arm.
+    execution_application = replace(application, business_tools=runtime_tools)
     registry = RemoteSessionRegistry()
     grant, channel = registry.create(
         allowed_origins=[application.descriptor.origin],
         session_id=f"woa-eval-{uuid.uuid4().hex[:12]}", principal=principal)
     executor = AgentTurnExecutor(
         channel=channel, config=turn_config(config, ledger_path), chat=client,
-        business_tools=runtime_tools, control=ReadOnlyControl(),
+        application=execution_application, control=ReadOnlyControl(),
         source_map=source_map,
         run_id_factory=lambda _message: run_id)
     execution: AgentTurnExecution | None = None

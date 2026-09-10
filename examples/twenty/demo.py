@@ -418,7 +418,7 @@ def build_conversation(
         channel=channel,
         config=build_turn_config(config),
         chat=chat,
-        business_tools=application.business_tools,
+        application=application,
         control=ReadOnlyControl(),
         run_id_factory=lambda _message: f"{run_prefix}-{uuid.uuid4().hex[:12]}",
         attestation=None,

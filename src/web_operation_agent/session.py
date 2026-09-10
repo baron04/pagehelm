@@ -1115,6 +1115,7 @@ class ServerAgentSession:
                         proposal_digest=proposal.content_digest,
                         result_digest=tool_result.content_digest,
                         audit=tool_result.audit,
+                        data_classes=list(tool_result.data_classes),
                         route_count=len(tool_result.allowed_routes),
                         side_effect_possible=True, completed=True,
                         identity=operation_identity)
@@ -1180,6 +1181,7 @@ class ServerAgentSession:
                         "business_tool_result", step=step, tool=name,
                         result_digest=tool_result.content_digest,
                         audit=tool_result.audit,
+                        data_classes=list(tool_result.data_classes),
                         route_count=len(tool_result.allowed_routes),
                         side_effect_possible=False, identity=operation_identity)
                     self._business_routes.update(tool_result.allowed_routes)

@@ -14,6 +14,7 @@ from web_operation_agent.business import (
     BusinessToolRequestError, BusinessToolResult, BusinessToolRuntime,
     BusinessToolUnavailableError,
 )
+from web_operation_agent.application import ResultPostconditionVerifier
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.identity import OperationContext, PrincipalContext
@@ -443,6 +444,29 @@ class BusinessRuntimeValidation(unittest.TestCase):
                 runtime.execute_mutation(
                     proposal, proposal.content_digest, {skill.skill_id})
             self.assertEqual(executor.executions, 1)
+
+    def test_unverified_adapter_postcondition_keeps_acknowledged_write_indeterminate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _write_skill(Path(tmp) / "write-skill.json")
+            executor = _MutationExecutor()
+            journal = MemoryMutationJournal()
+            runtime = BusinessToolRuntime(
+                (skill,), executor, mutation_journal=journal,
+                postcondition_verifier=ResultPostconditionVerifier((
+                    ("create_company", ("content.readback_verified",)),
+                )))
+            loaded = {skill.skill_id}
+            proposal = runtime.prepare_mutation(
+                "create_company", {"name": "Acme"}, loaded)
+
+            with self.assertRaisesRegex(
+                    BusinessMutationIndeterminate, "not verified"):
+                runtime.execute_mutation(
+                    proposal, proposal.content_digest, loaded)
+
+            self.assertEqual(executor.executions, 1)
+            self.assertEqual(
+                journal.get(proposal.content_digest).state, "indeterminate")
 
     def test_missing_durable_completion_turns_success_into_indeterminate(self):
         class BrokenFinishJournal(MemoryMutationJournal):

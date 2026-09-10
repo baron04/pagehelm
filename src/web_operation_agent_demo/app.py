@@ -28,7 +28,13 @@ from typing import Any
 
 from web_operation_agent.application import (
     APPLICATION_ADAPTER_VERSION,
+    AnonymousIdentityPort,
     ApplicationDescriptor,
+    ApplicationPorts,
+    DeclaredRoutePort,
+    ConservativeMutationReconciler,
+    DeclaredDataClassifier,
+    ResultPostconditionVerifier,
     bind_application,
 )
 from web_operation_agent.business import (
@@ -324,8 +330,26 @@ class MinimalContactsAdapter:
     def __init__(self, origin: str):
         skill = BusinessSkill.from_bytes(
             _json_bytes(_SKILL), artifact_uri="package://minimal-demo/contacts-query.json")
+        data = DeclaredDataClassifier((
+            ("list_contacts", (
+                "synthetic.contact", "business.identifier", "application.route")),
+        ))
+        postconditions = ResultPostconditionVerifier(())
+        routes = DeclaredRoutePort(
+            application_id="minimal.contacts",
+            tool_route_patterns=(r"/contacts/[a-z0-9-]+",),
+        )
         self.business_tools = BusinessToolRuntime(
-            (skill,), _ContactsToolExecutor(origin), application_id="minimal.contacts")
+            (skill,), _ContactsToolExecutor(origin), application_id="minimal.contacts",
+            data_classifier=data, postcondition_verifier=postconditions,
+            route_validator=routes)
+        self.ports = ApplicationPorts(
+            identity=AnonymousIdentityPort(),
+            routes=routes,
+            postconditions=postconditions,
+            reconciliation=ConservativeMutationReconciler(),
+            data=data,
+        )
         self.descriptor = ApplicationDescriptor(
             schema_version=APPLICATION_ADAPTER_VERSION,
             application_id="minimal.contacts",
@@ -545,7 +569,7 @@ def run_demo(config: DemoConfig) -> dict:
                     max_user_answer_chars=8_000,
                 ),
                 chat=chat,
-                business_tools=bound.business_tools,
+                application=bound,
                 control=ReadOnlyControl(),
                 run_id_factory=lambda _message: "minimal-" + uuid.uuid4().hex[:16],
             )

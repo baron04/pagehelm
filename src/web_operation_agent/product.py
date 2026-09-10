@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit
 
+from .application import BoundApplication
 from .answering import render_structured_query_answer
 from .browser import TransportError
 from .business import BusinessToolResult, BusinessToolRuntime
@@ -50,6 +51,7 @@ class AgentTurnErrorCode(str, Enum):
     STALE_MESSAGE = "stale_message"
     INVALID_RUN_ID = "invalid_run_id"
     IDENTITY_UNAVAILABLE = "identity_unavailable"
+    APPLICATION_MISMATCH = "application_mismatch"
     RUNTIME_UNAVAILABLE = "runtime_unavailable"
     EXECUTION_FAILED = "execution_failed"
 
@@ -271,7 +273,8 @@ class AgentTurnExecutor:
     """Execute one application-selected task without owning the channel lifecycle."""
 
     def __init__(self, *, channel: RemoteSessionChannel, config: AgentTurnConfig, chat,
-                 business_tools: BusinessToolRuntime | None, control,
+                 business_tools: BusinessToolRuntime | None = None,
+                 application: BoundApplication | None = None, control,
                  run_id_factory: RunIdFactory,
                  answer_renderer: AnswerRenderer = render_neutral_user_answer,
                  ledger_factory: LedgerFactory = SessionLedger,
@@ -283,7 +286,17 @@ class AgentTurnExecutor:
         # Checked here, not on the first model call: a wrong chat shape is a wiring error and
         # must surface where the executor is composed.
         self.chat = require_chat_port(chat, role="executor chat")
-        self.business_tools = business_tools
+        if application is not None and not isinstance(application, BoundApplication):
+            raise TypeError("application must be a BoundApplication or None")
+        if application is not None and business_tools is not None:
+            raise ValueError("pass either application or business_tools, not both")
+        self.application = application
+        self.business_tools = (application.business_tools
+                               if application is not None else business_tools)
+        if (application is not None and application.ports.identity.required
+                and not self.config.require_identity):
+            raise ValueError(
+                "the application identity port requires require_identity=True")
         if self.config.allow_business_mutations:
             if self.business_tools is None or not self.business_tools.has_mutations:
                 raise ValueError(
@@ -319,6 +332,13 @@ class AgentTurnExecutor:
 
     def execute(self, message: dict) -> AgentTurnExecution:
         turn_message = AgentTurnMessage.from_wire(message)
+        if self.application is not None:
+            if not self.application.descriptor.owns_url(turn_message.page_url):
+                raise AgentTurnError(
+                    AgentTurnErrorCode.APPLICATION_MISMATCH,
+                    "the task belongs to a different application origin",
+                    retryable=False,
+                )
         principal = getattr(self.channel, "principal", None)
         if principal is None and self.config.require_identity:
             raise AgentTurnError(
@@ -326,7 +346,18 @@ class AgentTurnExecutor:
                 "this application requires a verified session identity",
                 retryable=False,
             )
-        if principal is not None:
+        if self.application is not None:
+            try:
+                self.application.ports.identity.validate(
+                    principal,
+                    application_id=self.application.descriptor.application_id)
+            except PrincipalError as exc:
+                raise AgentTurnError(
+                    AgentTurnErrorCode.IDENTITY_UNAVAILABLE,
+                    "the session identity is invalid, expired, or belongs to another application",
+                    retryable=False,
+                ) from exc
+        elif principal is not None:
             try:
                 principal.require_live()
                 application_id = (self.business_tools.application_id

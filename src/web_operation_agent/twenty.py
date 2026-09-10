@@ -34,8 +34,15 @@ from web_operation_agent.business import (BusinessMutationIndeterminate,
                                           BusinessToolResult,
                                           BusinessToolRuntime,
                                           BusinessToolUnavailableError)
-from web_operation_agent.application import (APPLICATION_ADAPTER_VERSION,
-                                             ApplicationDescriptor)
+from web_operation_agent.application import (
+    APPLICATION_ADAPTER_VERSION,
+    ApplicationDescriptor,
+    ApplicationPorts,
+    DeclaredRoutePort,
+    ConservativeMutationReconciler,
+    DeclaredDataClassifier,
+    ResultPostconditionVerifier,
+)
 from web_operation_agent.identity import (IdentityAssertion, OperationContext,
                                           PrincipalContext, bind_matching_identity)
 from web_operation_agent.mutation import MutationJournal
@@ -943,6 +950,30 @@ class TwentyBusinessToolExecutor:
         return payload, status
 
 
+class _TwentyIdentityPort:
+    required = True
+
+    def __init__(self, executor: TwentyBusinessToolExecutor,
+                 required_scopes: frozenset[str]):
+        self._executor = executor
+        self.required_scopes = required_scopes
+
+    def bind(self, page_identity: IdentityAssertion, *, delegation_id: str,
+             lifetime_s: int = 300, now_ms: int | None = None) -> PrincipalContext:
+        delegated = self._executor.resolve_delegated_identity(
+            lifetime_s=lifetime_s, now_ms=now_ms)
+        return bind_matching_identity(
+            page_identity, delegated, delegation_id=delegation_id,
+            scopes=tuple(sorted(self.required_scopes)), now_ms=now_ms)
+
+    def validate(self, principal: PrincipalContext | None, *,
+                 application_id: str) -> None:
+        if principal is None:
+            raise PrincipalError(
+                "Twenty requires a verified application principal")
+        principal.require_live(application_id=application_id)
+
+
 class TwentyApplicationAdapter:
     """Application-owned facts and tools for the Twenty Companies integration."""
 
@@ -977,12 +1008,38 @@ class TwentyApplicationAdapter:
         required_scopes = {"query_companies": "companies:read"}
         if allow_mutations:
             required_scopes["create_company"] = "companies:write"
+        data = DeclaredDataClassifier(tuple(
+            (name, (("business.company", "business.identifier", "application.route")
+                    if name == "query_companies" else
+                    ("business.company", "business.identifier", "application.route",
+                     "business.mutation_result")))
+            for name in sorted(required_scopes)))
+        postconditions = ResultPostconditionVerifier(
+            (("create_company",
+              ("content.readback_verified", "audit.readback_verified")),)
+            if allow_mutations else ())
+        routes = DeclaredRoutePort(
+            application_id="twenty",
+            tool_route_patterns=(r"/objects/companies", r"/object/company/[0-9a-f-]{36}"),
+        )
         self.business_tools = BusinessToolRuntime(
             tuple(skills), executor, application_id="twenty",
             required_scopes=required_scopes,
-            mutation_journal=mutation_journal)
+            mutation_journal=mutation_journal,
+            data_classifier=data,
+            postcondition_verifier=postconditions,
+            route_validator=routes)
         self._executor = executor
-        self._principal_scopes = tuple(sorted(required_scopes.values()))
+        identity = _TwentyIdentityPort(
+            executor, frozenset(required_scopes.values()))
+        self.ports = ApplicationPorts(
+            identity=identity,
+            routes=routes,
+            postconditions=postconditions,
+            reconciliation=ConservativeMutationReconciler(
+                frozenset({"create_company"}) if allow_mutations else frozenset()),
+            data=data,
+        )
         self.descriptor = ApplicationDescriptor(
             schema_version=APPLICATION_ADAPTER_VERSION,
             application_id="twenty",
@@ -1010,11 +1067,9 @@ class TwentyApplicationAdapter:
         The application host must obtain ``page_identity`` from Twenty's authenticated
         server session. DOM text or a browser-provided user id is not trusted evidence.
         """
-        delegated = self._executor.resolve_delegated_identity(
+        return self.ports.identity.bind(
+            page_identity, delegation_id=delegation_id,
             lifetime_s=lifetime_s, now_ms=now_ms)
-        return bind_matching_identity(
-            page_identity, delegated, delegation_id=delegation_id,
-            scopes=self._principal_scopes, now_ms=now_ms)
 
     def bind_browser_session(self, storage_state_path: str | Path, *,
                              delegation_id: str, lifetime_s: int = 300,

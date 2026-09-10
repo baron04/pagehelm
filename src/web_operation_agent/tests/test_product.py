@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from web_operation_agent import product
+from web_operation_agent.application import bind_application
 from web_operation_agent.answering import StructuredQueryAnswer
 from web_operation_agent.business import BusinessToolResult, BusinessToolRuntime
 from web_operation_agent.conversation import ConversationState
@@ -37,6 +38,7 @@ from web_operation_agent.tests.test_business import (
     _skill,
     _write_skill,
 )
+from web_operation_agent.tests.test_application import _InvoiceAdapter
 
 
 class _Channel:
@@ -296,6 +298,26 @@ class AgentTurnBoundaryTests(unittest.TestCase):
                 executor.run_once(_message("http://app.test/old"))
         self.assertEqual(caught.exception.code, AgentTurnErrorCode.STALE_MESSAGE)
         self.assertEqual(called, [])
+
+    def test_bound_application_rejects_another_origin_before_browser_or_artifacts(self):
+        called = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            executor = AgentTurnExecutor(
+                channel=_Channel(),
+                config=AgentTurnConfig(
+                    supported_scope="Read invoices.",
+                    ledger_path=root / "session.jsonl"),
+                chat=_Chat([]), application=bind_application(_InvoiceAdapter()),
+                control=ReadOnlyControl(),
+                run_id_factory=lambda message: called.append(message) or "must-not-run",
+            )
+            with self.assertRaises(AgentTurnError) as caught:
+                executor.run_once(_message())
+        self.assertEqual(
+            caught.exception.code, AgentTurnErrorCode.APPLICATION_MISMATCH)
+        self.assertEqual(called, [])
+        self.assertFalse((root / "session.jsonl").exists())
 
     def test_identity_required_rejects_an_unbound_channel_before_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
