@@ -231,9 +231,24 @@ live_vars=(WOA_TWENTY_BASE_URL WOA_TWENTY_STORAGE_STATE WOA_TWENTY_OAUTH_TOKEN
            WOA_TWENTY_OAUTH_REGISTRATION WOA_TWENTY_PAGE_CONTROLLER_MODULE
            WOA_TWENTY_DB_CONTAINER WOA_TWENTY_DB_NAME WOA_TWENTY_DB_USER
            WOA_TWENTY_WORKSPACE_SCHEMA)
+live_values=()
+# Match demo.sh without sourcing the dotenv file as shell code. Explicit process values win;
+# otherwise WOA_MODEL_ENV, or the repository-local ignored .env, supplies configuration.
+while IFS= read -r value; do live_values+=("${value}"); done < <(
+  "${PYTHON}" -c '
+import os, sys
+from pathlib import Path
+from web_operation_agent.model import load_env
+root = Path(sys.argv[1])
+configured = os.environ.get("WOA_MODEL_ENV", "").strip()
+loaded = load_env(Path(configured).expanduser() if configured else root / ".env")
+for name in sys.argv[2:]:
+    print(str(os.environ[name] if name in os.environ else loaded.get(name, "")).strip())
+' "${ROOT}" "${live_vars[@]}"
+)
 missing=()
-for name in "${live_vars[@]}"; do
-  [[ -z "${!name:-}" ]] && missing+=("${name}")
+for ((index=0; index<${#live_vars[@]}; index++)); do
+  [[ -z "${live_values[${index}]:-}" ]] && missing+=("${live_vars[${index}]}")
 done
 
 if (( ${#missing[@]} )); then
@@ -247,13 +262,13 @@ else
   live_out="$(mktemp -d)"
   live_ok=1
   "${PYTHON}" -m evals.woa.qualify_live \
-    --base-url "${WOA_TWENTY_BASE_URL}" --storage-state "${WOA_TWENTY_STORAGE_STATE}" \
-    --oauth-token "${WOA_TWENTY_OAUTH_TOKEN}" \
-    --oauth-registration "${WOA_TWENTY_OAUTH_REGISTRATION}" \
-    --page-controller-module "${WOA_TWENTY_PAGE_CONTROLLER_MODULE}" \
+    --base-url "${live_values[0]}" --storage-state "${live_values[1]}" \
+    --oauth-token "${live_values[2]}" \
+    --oauth-registration "${live_values[3]}" \
+    --page-controller-module "${live_values[4]}" \
     --audit-ledger "${live_out}/woa-audit.jsonl" \
-    --container "${WOA_TWENTY_DB_CONTAINER}" --database "${WOA_TWENTY_DB_NAME}" \
-    --db-user "${WOA_TWENTY_DB_USER}" --workspace-schema "${WOA_TWENTY_WORKSPACE_SCHEMA}" \
+    --container "${live_values[5]}" --database "${live_values[6]}" \
+    --db-user "${live_values[7]}" --workspace-schema "${live_values[8]}" \
     --output "${live_out}/woa-live.json" || live_ok=0
   if [[ "${live_ok}" == "1" ]]; then
     record "live Twenty qualification" PASS "artifact ${live_out}/woa-live.json"
