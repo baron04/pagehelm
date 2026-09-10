@@ -5,7 +5,8 @@ import re
 from collections import Counter
 from typing import Any
 
-from .breadth import ARTIFACT_VERSION, ENTITIES, validate_breadth_state
+from .breadth import (ARTIFACT_VERSION, ENTITIES, validate_breadth_state,
+                      validate_breadth_task)
 from .evaluator import EvaluationInputError, digest_json
 
 
@@ -16,6 +17,7 @@ _PLACEHOLDER = re.compile(r"\{\{([a-z.]+)\}\}")
 _DOMAIN = re.compile(
     r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
     r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?\Z", re.I)
+_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 
 def _text(value: Any, name: str, maximum: int = 500) -> str:
@@ -150,3 +152,46 @@ def instantiate_breadth_task(value: Any, task_id: str, baseline: Any) -> dict[st
             "template_family_digest": digest_json(
                 {"template_family": task["template_family"]}),
             "evaluator_task": evaluator_task}
+
+
+def validate_breadth_execution_case(value: Any) -> dict[str, Any]:
+    """Validate one instantiated v2 case without reading its baseline or task catalog."""
+    fields = {"artifact_version", "kind", "set_id", "split", "task_id", "prompt",
+              "task_digest", "template_family_digest", "evaluator_task"}
+    if (not isinstance(value, dict) or set(value) != fields
+            or value.get("artifact_version") != ARTIFACT_VERSION
+            or value.get("kind") != "twenty_breadth_execution_case"
+            or value.get("split") not in {"development", "test"}):
+        raise EvaluationInputError("breadth execution case header is invalid")
+    set_id = _identifier(value.get("set_id"), "execution_case.set_id")
+    task_id = _identifier(value.get("task_id"), "execution_case.task_id")
+    prompt = _text(value.get("prompt"), "execution_case.prompt", 20_000)
+    for name in ("task_digest", "template_family_digest"):
+        if not isinstance(value.get(name), str) or not _DIGEST.fullmatch(value[name]):
+            raise EvaluationInputError(f"execution_case.{name} is invalid")
+    evaluator_task = value.get("evaluator_task")
+    if not isinstance(evaluator_task, dict):
+        raise EvaluationInputError("breadth execution evaluator task is invalid")
+    if evaluator_task.get("artifact_version") == 1:
+        expected = {"artifact_version", "kind", "name", "domain", "require_open"}
+        if (set(evaluator_task) != expected or evaluator_task.get("kind") != "create"
+                or not isinstance(evaluator_task.get("require_open"), bool)):
+            raise EvaluationInputError("breadth create evaluator task is invalid")
+        normalized_evaluator = {
+            "artifact_version": 1, "kind": "create",
+            "name": _text(evaluator_task.get("name"), "evaluator_task.name", 100),
+            "domain": _text(evaluator_task.get("domain"), "evaluator_task.domain", 253),
+            "require_open": evaluator_task["require_open"],
+        }
+        task_kind, entity = "create", "companies"
+    else:
+        normalized = validate_breadth_task(evaluator_task)
+        normalized_evaluator = {"artifact_version": ARTIFACT_VERSION, **normalized}
+        task_kind = {
+            "enumerate": "query", "filter": "query", "open_record": "open",
+            "open_collection": "open", "refuse": "refuse",
+        }[normalized["kind"]]
+        entity = normalized["entity"]
+    return {**value, "set_id": set_id, "task_id": task_id, "prompt": prompt,
+            "evaluator_task": normalized_evaluator, "task_kind": task_kind,
+            "entity": entity}

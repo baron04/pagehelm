@@ -60,7 +60,7 @@ class TwentyPackagedSkillTests(unittest.TestCase):
             ["twenty.crm.opportunities-query"],
         )
         self.assertTrue(any(
-            "Companies list" in instruction and "exact href" in instruction
+            "Companies list" in instruction and "/objects/companies" in instruction
             for instruction in skills[0].instructions
         ))
         self.assertEqual(
@@ -434,12 +434,14 @@ class TwentyPaginationTests(unittest.TestCase):
         people = executor.execute("query_people", {"name_contains": "zhao"})
         self.assertEqual(people.content["people"][0]["email"], "zhao@example.com")
         self.assertEqual(people.allowed_routes,
-                         ("/object/person/7a93d1e5-3f74-4945-8a65-d7f996083f72",))
+                         ("/objects/people",
+                          "/object/person/7a93d1e5-3f74-4945-8a65-d7f996083f72"))
         self.assertEqual(people.query_answer.collection, "people")
         opportunities = executor.execute("query_opportunities", {"limit": 1})
         self.assertEqual(opportunities.content["opportunities"][0]["stage"], "SCREENING")
         self.assertEqual(opportunities.allowed_routes,
-                         ("/object/opportunity/2beb07b0-340c-41d7-be33-5aa91757f329",))
+                         ("/objects/opportunities",
+                          "/object/opportunity/2beb07b0-340c-41d7-be33-5aa91757f329"))
         self.assertTrue(opportunities.query_answer.source_complete)
 
     def test_company_query_scans_every_cursor_page_before_answering(self):

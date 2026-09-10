@@ -75,7 +75,7 @@ run_gate "PageAgent host and runner (offline)" 1 "${PYTHON}" -m unittest \
   evals.pageagent.test_twenty_runner evals.pageagent.test_qualify_twenty_runner
 run_gate "WOA runner and schedule driver (offline)" 1 "${PYTHON}" -m unittest \
   evals.woa.test_chat_port evals.woa.test_assembler evals.woa.test_twenty_runner \
-  evals.woa.test_qualify_schedule
+  evals.woa.test_breadth_runner evals.woa.test_qualify_schedule
 
 # ---------------------------------------------------------------- PageAgent bundle gate
 # `npm ci` is environment preparation. Reproducibility verification and the build itself are
@@ -272,8 +272,18 @@ else
     --container "${live_values[5]}" --database "${live_values[6]}" \
     --db-user "${live_values[7]}" --workspace-schema "${live_values[8]}" \
     --output "${live_out}/woa-live.json" || live_ok=0
+  "${PYTHON}" -m evals.woa.qualify_breadth_live \
+    --base-url "${live_values[0]}" --storage-state "${live_values[1]}" \
+    --oauth-token "${live_values[2]}" \
+    --oauth-registration "${live_values[3]}" \
+    --page-controller-module "${live_values[4]}" \
+    --audit-ledger "${live_out}/woa-breadth-audit.jsonl" \
+    --container "${live_values[5]}" --database "${live_values[6]}" \
+    --db-user "${live_values[7]}" --workspace-schema "${live_values[8]}" \
+    --output "${live_out}/woa-breadth-live.json" || live_ok=0
   if [[ "${live_ok}" == "1" ]]; then
-    record "live Twenty qualification" PASS "artifact ${live_out}/woa-live.json"
+    record "live Twenty qualification" PASS \
+      "artifacts ${live_out}/woa-live.json and ${live_out}/woa-breadth-live.json"
   else
     record "live Twenty qualification" FAIL "see ${live_out}"
     failed+=("live Twenty qualification")

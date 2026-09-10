@@ -6,6 +6,8 @@ This directory runs the product itself as one arm of the Twenty comparison. It i
 
 `assembler.py` turns what that turn produced into the engine-neutral `woa_twenty_run` artifact consumed by `evals.twenty.trial`. It classifies the outcome with `evals.twenty.outcomes.classify_woa_outcome`, never by exception text: invalid tool arguments, budgets, a refused route, a refusal and cancellation stay scorable product outcomes, while identity, provider, business-API and transport faults become `apparatus_invalid` with the ledger's apparatus code. A replaced browser session invalidates even a claimed success, and an indeterminate write stays indeterminate. Skill/API query evidence comes from the same public structured answer projection the product renders to the user, so incorrect model prose cannot add records or upgrade completeness; browser-only query evidence still comes from its public answer. Open evidence comes only from the final visible page. Both paths use the shared `evals.twenty.evidence` contract.
 
+`breadth_assembler.py` and `run_breadth_case` add a separate v2 path for Companies, People, and Opportunities without changing the frozen v1 artifact. It supports enumeration, filtering, record opening, collection navigation, confirmed company creation, and explicit refusal of unsupported mutations. Collection navigation is authorized only after the corresponding typed query returns its exact `collection_ui_path`; merely appearing in a Skill or adapter route pattern does not permit direct navigation. `breadth_scripted.py` qualifies this behavior through the same product turn and remote-runtime protocol without contacting a model.
+
 The product propagates the runner's 20,000-character answer limit into `ServerAgentSession`, matching the shared evidence contract and the PageAgent runner. The artifact reports `turn.answer_at_engine_ceiling` so a reviewer can still identify an answer that reached the common limit.
 
 `scripted.py` is the model-free apparatus: a scripted chat with content-free accounting and injectable provider failures, a recording wrapper that keeps the run's own successful business results, and a simulated runtime that plays the browser over the real hello/lease, observation, claim and result protocol for a synthetic SPA whose list page exposes no company data. `browser_host.py` is the real alternative: the trusted Playwright host serves the embedded runtime from a loopback gateway bound to the runner's own registry, injects the bootstrap script into the authenticated page, and submits one goal through the panel API. It reads the document's own `location.href` rather than Playwright's cached URL, because a first-party SPA route change uses `history.pushState` and the cached value can still hold the previous route.
@@ -13,7 +15,7 @@ The product propagates the runner's 20,000-character answer limit into `ServerAg
 ## Offline and browser-free tests
 
 ```bash
-PYTHONPATH=. python -m unittest evals.woa.test_assembler evals.woa.test_twenty_runner evals.woa.test_qualify_schedule -v
+PYTHONPATH=. python -m unittest evals.woa.test_assembler evals.woa.test_twenty_runner evals.woa.test_breadth_runner evals.woa.test_qualify_schedule -v
 ```
 
 `test_twenty_runner.py` drives the real turn path for success, model prose that disagrees with an authoritative typed-query projection, an open case without a disclosed route, invalid tool arguments, a business API outage, a provider outage with unknown cost, identity failure before launch, a replaced session, cancellation before and during a turn, and the step budget, then scores successful evidence with the independent evaluator.
@@ -26,7 +28,7 @@ The paired Source OFF/ON tool surface is qualified, but the source treatment is 
 
 ## Live no-model qualification
 
-`qualify_live.py` runs one fixed public development query case and one open case through real Chromium, the real embedded runtime, the delegated Twenty API, the database before/after projection and the independent evaluator, with a scripted provider so it spends no model tokens. It asserts an unchanged read-only fixture before each case and writes only versions, digests, counts and Boolean checks.
+`qualify_live.py` runs one fixed public development query case and one open case through real Chromium, the real embedded runtime, the delegated Twenty API, the database before/after projection and the independent evaluator. `qualify_breadth_live.py` adds seven People and Opportunities enumeration, record-opening, collection-navigation, and refusal cases. Both use a scripted provider, spend no model tokens, assert unchanged read-only fixture state, and write only versions, digests, counts and Boolean checks. `scripts/qualify.sh --require-live` runs both.
 
 ```bash
 PYTHONPATH=. python -m evals.woa.qualify_live \

@@ -523,9 +523,7 @@ class SyntheticTwentyAdapter(TwentyApplicationAdapter):
             delegation_id=delegation_id,
             issued_at=now,
             expires_at=now + lifetime_s * 1_000,
-            scopes=(("companies:read", "companies:write")
-                    if "create_company" in self.business_tools.tool_names
-                    else ("companies:read",)),
+            scopes=tuple(sorted(set(self.business_tools.required_scopes.values()))),
         )
 
 

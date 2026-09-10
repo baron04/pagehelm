@@ -7,6 +7,7 @@
   "instructions": [
     "Call query_opportunities for current workspace data; do not answer from Skill text or stale page content.",
     "Use name_contains only when the user supplied an opportunity-name filter.",
+    "To open the Opportunities collection, call query_opportunities once, then call goto with /objects/opportunities, the collection route authorized by that ToolResult.",
     "To open one opportunity, require exactly one API match and call goto with that result's exact ui_path.",
     "After goto, observe the target record before reporting completion.",
     "For zero or multiple matches, ask for clarification rather than inventing a route."

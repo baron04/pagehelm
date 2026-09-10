@@ -23,6 +23,8 @@ from evals.twenty.evidence import EvidenceContractError, validate_execution_case
 from evals.woa.assembler import (
     FinalPageSample, TurnEvidence, WoaRunAssemblyError, assemble_woa_run, utc_now,
 )
+from evals.twenty.breadth_taskset import validate_breadth_execution_case
+from evals.woa.breadth_assembler import assemble_woa_breadth_run
 from evals.woa.scripted import RecordingBusinessRuntime
 from web_operation_agent.application import bind_application
 from web_operation_agent.business import BusinessToolError
@@ -44,7 +46,7 @@ _RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
 _SKILL_DISABLED_BROWSER_ACTIONS = frozenset({"click", "fill", "select", "submit", "back"})
 _BROWSER_DISABLED_ACTIONS = frozenset({"fill", "select", "submit", "back"})
 _SKILL_READ_ONLY_SCOPE = (
-    "Read current Twenty CRM company data and open only routes returned by the delegated "
+    "Read current Twenty CRM records and open only routes returned by the delegated "
     "application API. Do not modify records or submit browser forms."
 )
 _CREATE_SCOPE = (
@@ -78,6 +80,16 @@ _CREATE_OUTPUT_CONTRACT = (
     "with the user-supplied name and domain. The server will pause for a fresh exact-effect "
     "approval. Never retry an uncertain or rejected write. If the user asked to open the "
     "record, use only the successful result's exact ui_path and re-observe it before finish."
+)
+_BREADTH_OUTPUT_CONTRACT = (
+    "EVALUATION OUTPUT CONTRACT\n"
+    "For an enumeration or filtered lookup, load the matching Skill, call its typed query "
+    "tool once, and return a brief answer; the product projects exact records and "
+    "completeness from that ToolResult. To open one record, query it first, use only its "
+    "exact ui_path, and observe the destination before finishing. To open a collection, go "
+    "to its declared collection route and observe it before finishing. If the requested "
+    "mutation is unsupported, call finish with done=false and a brief reason; do not use a "
+    "browser form or substitute another operation."
 )
 
 
@@ -182,12 +194,15 @@ def turn_config(config: WoaTwentyConfig, ledger_path: Path) -> AgentTurnConfig:
     )
 
 
-def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter, client: ChatPort,
-             config: WoaTwentyConfig, ledger_path: Path, runtime_factory: RuntimeFactory,
-             page_sampler: Any = None, run_id: str | None = None,
-             cancelled: threading.Event | None = None,
-             source_map: SourceMap | None = None) -> dict[str, Any]:
-    """Execute one query/open/create case through the product path and return a private artifact.
+def _run_validated_case(
+        *, case: dict[str, Any], selected: dict[str, Any],
+        assembler: Any, output_contract: str,
+        adapter: TwentyApplicationAdapter, client: ChatPort,
+        config: WoaTwentyConfig, ledger_path: Path, runtime_factory: RuntimeFactory,
+        page_sampler: Any = None, run_id: str | None = None,
+        cancelled: threading.Event | None = None,
+        source_map: SourceMap | None = None) -> dict[str, Any]:
+    """Execute one already validated case through the shared product and runtime path.
 
     ``runtime_factory(channel, grant, registry, origin, entry_path)`` supplies the page host
     for this run; ``page_sampler(runtime)`` returns the text a user can currently see on the
@@ -195,8 +210,6 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter, client:
     user's own scorable outcome. A task already in flight is stopped the way the assistant
     panel stops it, by cancelling that exact message through the authenticated channel.
     """
-    selected = validate_execution_case(
-        case, allowed_kinds=("query", "open", "create"))
     if selected["task_kind"] == "create" and not config.allow_create:
         raise WoaTwentyRunnerError("create case requires explicit allow_create configuration")
     if selected["task_kind"] != "create" and config.allow_create:
@@ -235,7 +248,7 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter, client:
     started = time.monotonic()
 
     def artifact(evidence: TurnEvidence) -> dict[str, Any]:
-        return assemble_woa_run(
+        return assembler(
             case=case, run_id=run_id, evidence=evidence,
             capability_profile=config.capability_profile, source_mode=config.source_mode,
             source_interface=config.source_interface,
@@ -286,10 +299,6 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter, client:
             channel=channel, grant=grant, registry=registry,
             origin=application.descriptor.origin, entry_path=config.entry_path)
         runtime.start()
-        output_contract = (
-            _CREATE_OUTPUT_CONTRACT if selected["task_kind"] == "create" else
-            _BROWSER_OUTPUT_CONTRACT if config.capability_profile == "browser_only"
-            else _SKILL_OUTPUT_CONTRACT)
         runtime.submit_task(selected["prompt"] + "\n\n" + output_contract)
         # The conversation host dequeues one message and hands it to the executor; the runner
         # does the same directly so a typed boundary failure is preserved for classification
@@ -348,6 +357,46 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter, client:
         page_error_count=page_error_count))
 
 
+def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter, client: ChatPort,
+             config: WoaTwentyConfig, ledger_path: Path, runtime_factory: RuntimeFactory,
+             page_sampler: Any = None, run_id: str | None = None,
+             cancelled: threading.Event | None = None,
+             source_map: SourceMap | None = None) -> dict[str, Any]:
+    """Execute one frozen Companies v1 query/open/create case."""
+    selected = validate_execution_case(
+        case, allowed_kinds=("query", "open", "create"))
+    output_contract = (
+        _CREATE_OUTPUT_CONTRACT if selected["task_kind"] == "create" else
+        _BROWSER_OUTPUT_CONTRACT if config.capability_profile == "browser_only"
+        else _SKILL_OUTPUT_CONTRACT)
+    return _run_validated_case(
+        case=case, selected=selected, assembler=assemble_woa_run,
+        output_contract=output_contract, adapter=adapter, client=client, config=config,
+        ledger_path=ledger_path, runtime_factory=runtime_factory,
+        page_sampler=page_sampler, run_id=run_id, cancelled=cancelled,
+        source_map=source_map)
+
+
+def run_breadth_case(
+        *, case: dict[str, Any], adapter: TwentyApplicationAdapter, client: ChatPort,
+        config: WoaTwentyConfig, ledger_path: Path, runtime_factory: RuntimeFactory,
+        page_sampler: Any = None, run_id: str | None = None,
+        cancelled: threading.Event | None = None,
+        source_map: SourceMap | None = None) -> dict[str, Any]:
+    """Execute one v2 breadth case through the same identity, ReAct, and audit path."""
+    selected = validate_breadth_execution_case(case)
+    if config.capability_profile != "skill_api":
+        raise WoaTwentyRunnerError("breadth cases require the skill_api capability profile")
+    output_contract = (_CREATE_OUTPUT_CONTRACT if selected["task_kind"] == "create"
+                       else _BREADTH_OUTPUT_CONTRACT)
+    return _run_validated_case(
+        case=case, selected=selected, assembler=assemble_woa_breadth_run,
+        output_contract=output_contract, adapter=adapter, client=client, config=config,
+        ledger_path=ledger_path, runtime_factory=runtime_factory,
+        page_sampler=page_sampler, run_id=run_id, cancelled=cancelled,
+        source_map=source_map)
+
+
 def _accounting(client: ChatPort, run_id: str) -> dict[str, Any] | None:
     try:
         report = client.meter.run_report(run_id)
@@ -376,5 +425,6 @@ def _ledger_events(ledger_path: Path, run_id: str) -> list[dict[str, Any]]:
 
 
 __all__ = [
-    "RuntimeHost", "WoaTwentyConfig", "WoaTwentyRunnerError", "run_case", "turn_config",
+    "RuntimeHost", "WoaTwentyConfig", "WoaTwentyRunnerError", "run_breadth_case",
+    "run_case", "turn_config",
 ]

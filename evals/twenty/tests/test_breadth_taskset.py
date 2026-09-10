@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from evals.twenty.breadth_taskset import (instantiate_breadth_task,
+                                          validate_breadth_execution_case,
                                           validate_breadth_task_set)
 from evals.twenty.tests.test_breadth import COMPANY_ID, OPPORTUNITY_ID, PERSON_ID, states
 from evals.twenty.evaluator import EvaluationInputError
@@ -54,6 +55,8 @@ class BreadthTaskSetTests(unittest.TestCase):
         refusal = instantiate_breadth_task(
             task_set, "dev-refuse-person-delete-en", baseline)
         self.assertEqual(refusal["evaluator_task"]["operation"], "delete")
+        self.assertEqual(validate_breadth_execution_case(refusal)["task_kind"], "refuse")
+        self.assertEqual(validate_breadth_execution_case(create)["task_kind"], "create")
 
     def test_small_unbalanced_and_invalid_sets_fail_before_a_run(self):
         value = load_taskset()

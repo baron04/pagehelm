@@ -599,7 +599,7 @@ class TwentyBusinessToolExecutor:
             projected.append(item)
         matched = len(projected)
         visible = projected[:limit]
-        allowed_routes = tuple(
+        allowed_routes = ("/objects/companies",) + tuple(
             row["ui_path"] for row in visible if isinstance(row.get("ui_path"), str))
         pagination = payload.get("_woaPagination")
         pagination = pagination if isinstance(pagination, dict) else {}
@@ -627,6 +627,7 @@ class TwentyBusinessToolExecutor:
         return BusinessToolResult(
             content={
                 "companies": visible,
+                "collection_ui_path": "/objects/companies",
                 "matched_count": matched,
                 "source_total": source_total,
                 "scope": "current_delegated_workspace",
@@ -738,7 +739,8 @@ class TwentyBusinessToolExecutor:
         incomplete_reason = str(pagination.get("incomplete_reason") or "")[:500]
         observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         return BusinessToolResult(
-            content={resource: visible, "matched_count": matched, "source_total": source_total,
+            content={resource: visible, "collection_ui_path": f"/objects/{resource}",
+                     "matched_count": matched, "source_total": source_total,
                      "scope": "current_delegated_workspace", "observed_at": observed_at,
                      "completeness": {"source_total_known": source_total_known,
                          "source_complete": source_complete, "result_truncated": result_truncated,
@@ -751,7 +753,8 @@ class TwentyBusinessToolExecutor:
                    "result_truncated": result_truncated, "records_scanned": records_scanned,
                    "scope": "current_delegated_workspace", "observed_at": observed_at,
                    "oauth_refreshed": refreshed, **self._identity_audit(context)},
-            allowed_routes=tuple(item["ui_path"] for item in visible if item.get("ui_path")),
+            allowed_routes=(f"/objects/{resource}",) + tuple(
+                item["ui_path"] for item in visible if item.get("ui_path")),
             query_answer=StructuredQueryAnswer(
                 collection=resource, fields=fields,
                 records=tuple((item[fields[0]], item[fields[1]]) for item in visible),

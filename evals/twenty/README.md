@@ -7,8 +7,10 @@ as a separate process. Product and Agent code must never import it.
 Gate 4 also includes `breadth.py`, `breadth_taskset.py`, and the public
 `tasksets/twenty-breadth-development-v2.json`. The v2 path is deliberately separate from the
 frozen Companies v1 artifacts. It captures selected fields for Companies, People, and
-Opportunities and defines 30 development templates across six task kinds. The catalog and
-evaluator are qualified; no breadth runner result or paid-model success rate exists yet.
+Opportunities and defines 30 development templates across six task kinds. The catalog,
+evaluator, and model-free WOA scripted runner are qualified. Seven read, navigation, and
+refusal cases also pass against local Twenty 2.39.0 in real Chromium. No paid-model success
+rate exists yet.
 
 The evaluator currently covers only three Companies tasks:
 

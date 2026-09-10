@@ -529,12 +529,14 @@ class BusinessRuntimeValidation(unittest.TestCase):
             "query_companies", {"name_contains": "Anthropic", "limit": 2})
 
         self.assertEqual(result.content["matched_count"], 1)
+        self.assertEqual(result.content["collection_ui_path"], "/objects/companies")
         self.assertEqual(result.content["companies"], [{
             "name": "Anthropic", "domain": "anthropic.com",
             "ui_path": "/object/company/f45ee421-8a3e-4aa5-a1cf-7207cc6754e1",
         }])
         self.assertEqual(result.allowed_routes, (
-            "/object/company/f45ee421-8a3e-4aa5-a1cf-7207cc6754e1",))
+            "/objects/companies",
+            "/object/company/f45ee421-8a3e-4aa5-a1cf-7207cc6754e1"))
 
     def test_twenty_create_normalizes_checks_and_reads_back_same_user(self):
         class Tokens:

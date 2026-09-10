@@ -153,7 +153,7 @@ scripts/qualify.sh
 
 当前还提供一份公开的 6 用例开发任务集，以及一份只公开摘要承诺、私下保存完整内容的 12 用例保留测试集。Split verifier 会拒绝任务、ID、版本和模板族交叉。这些小型任务集只用于验证评估流水线，既不代表完整业务范围，也不具备统计功效。
 
-Gate 4 breadth 开发目录新增 30 个唯一的中英文提示模板，覆盖 Companies、People、Opportunities 的完整列举、条件查询、打开记录、模块导航、确认后创建公司和安全拒绝。v2 fixture 与确定性 evaluator 已在本地合成 Twenty 数据库上完成资格验证。改写提示仍属于相关的开发用例，不能当作相互独立的统计样本。breadth runner 和付费 pilot 尚未运行，因此当前没有产品成功率结论，也不构成 benchmark 声明。
+Gate 4 breadth 开发目录新增 30 个唯一的中英文提示模板，覆盖 Companies、People、Opportunities 的完整列举、条件查询、打开记录、模块导航、确认后创建公司和安全拒绝。v2 fixture 与确定性 evaluator 已在本地合成 Twenty 数据库上完成资格验证。WOA breadth runner 也已经通过无模型 scripted qualification，执行时走真实的身份绑定、远程会话、ReAct、类型化工具、确认和审计链路。新增对象的 7 个查询、导航和拒绝用例还在本地 Twenty 2.39.0 + 真实 Chromium 上通过了同一组检查。改写提示仍属于相关的开发用例，不能当作相互独立的统计样本。付费 pilot 尚未执行，因此当前没有产品成功率结论，也不构成 benchmark 声明。
 
 Evaluator 还包含一套严格的配对实验预注册校验器，用于在运行前绑定 PageAgent、Skill/API 与 SourceProvider 对比所需的工件和实现摘要、等信息量实验臂、provider 参数、预算、任务资格、源码排除、确定性平衡顺序和 fail-fast 停止规则。当前尚未冻结正式运行协议，也没有形成比较结果。
 

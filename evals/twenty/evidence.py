@@ -128,12 +128,17 @@ def disclosed_routes(results: Sequence[dict[str, Any]]) -> list[str]:
     """Every exact ``ui_path`` a successful business result disclosed, in order."""
     routes: list[str] = []
     for result in results:
-        rows = result.get("companies") if isinstance(result, dict) else None
-        if isinstance(rows, list):
-            for row in rows:
-                if isinstance(row, dict) and isinstance(row.get("ui_path"), str):
-                    if row["ui_path"] not in routes:
-                        routes.append(row["ui_path"])
+        collection_route = (result.get("collection_ui_path")
+                            if isinstance(result, dict) else None)
+        if isinstance(collection_route, str) and collection_route not in routes:
+            routes.append(collection_route)
+        for collection in ("companies", "people", "opportunities"):
+            rows = result.get(collection) if isinstance(result, dict) else None
+            if isinstance(rows, list):
+                for row in rows:
+                    if isinstance(row, dict) and isinstance(row.get("ui_path"), str):
+                        if row["ui_path"] not in routes:
+                            routes.append(row["ui_path"])
         company = result.get("company") if isinstance(result, dict) else None
         if isinstance(company, dict) and isinstance(company.get("ui_path"), str):
             if company["ui_path"] not in routes:

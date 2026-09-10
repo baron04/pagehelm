@@ -153,7 +153,7 @@ def _public_record(entity: str, row: dict[str, Any]) -> dict[str, str]:
     return {"name": row["name"], "detail": row["stage"]}
 
 
-def _task(value: Any) -> dict[str, Any]:
+def validate_breadth_task(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or value.get("artifact_version") != ARTIFACT_VERSION:
         raise EvaluationInputError("breadth task header is invalid")
     kind, entity = value.get("kind"), value.get("entity")
@@ -186,7 +186,7 @@ def _task(value: Any) -> dict[str, Any]:
 def evaluate_breadth(*, task: Any, before: Any, after: Any, evidence: Any) -> dict[str, Any]:
     """Evaluate one read-only breadth case without network, product, or model access."""
     try:
-        selected = _task(task)
+        selected = validate_breadth_task(task)
         baseline = validate_breadth_state(before, role="baseline")
         observation = validate_breadth_state(after, role="observation")
         if baseline["fixture"] != observation["fixture"]:
