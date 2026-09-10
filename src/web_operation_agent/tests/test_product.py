@@ -597,6 +597,8 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 return message_id in self.cancelled_messages
 
         class BlockingChat:
+            model = "blocking-double"
+
             def __init__(self):
                 self.started = threading.Event()
                 self.calls = 0

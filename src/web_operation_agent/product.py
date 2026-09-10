@@ -22,6 +22,7 @@ from .conversation import ConversationState
 from .embedded_agent import ApprovalGate
 from .identity import OperationContext, PrincipalError
 from .ledger import SessionLedger
+from .model import require_chat_port
 from .privacy import redact_sensitive_assignments, redact_session_handoffs
 from .remote import (RemoteBrowserClient, RemoteProtocolError,
                      RemoteSessionChannel, ensure_safe_browser_payload)
@@ -257,7 +258,9 @@ class AgentTurnExecutor:
                  conversation_state: ConversationState | None = None):
         self.channel = channel
         self.config = config
-        self.chat = chat
+        # Checked here, not on the first model call: a wrong chat shape is a wiring error and
+        # must surface where the executor is composed.
+        self.chat = require_chat_port(chat, role="executor chat")
         self.business_tools = business_tools
         self.control = control
         self.run_id_factory = run_id_factory

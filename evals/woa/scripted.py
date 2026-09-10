@@ -18,7 +18,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from evals.pageagent.scripted import SCRIPTED_MODEL, SESSION_COOKIE, ScriptedMeter
-from web_operation_agent.model import ChatModel, ProviderError
+from web_operation_agent.model import ProviderError
 from web_operation_agent.privacy import (
     SENSITIVE_CREDENTIAL_NAME, SESSION_HANDOFF_QUERY_KEYS, redact_sensitive_assignments,
     redact_session_handoffs,
@@ -43,15 +43,17 @@ class _WoaScriptedMeter(ScriptedMeter):
             return {"provider_calls": self.client.dispatched, "cost_cny": 0.0}
 
 
-class ScriptedWoaChat(ChatModel):
+class ScriptedWoaChat:
     """Answer ``ServerAgentSession`` model calls from a fixed reply script.
 
     ``replies`` holds ``(tool_name, arguments)`` pairs; a ``None`` tool name returns the
     arguments as plain assistant content, which is how the product loop accepts a final
     business answer. ``failures`` maps a 1-based call sequence to a provider error code
-    raised instead of a reply. The class keeps the ``ChatModel`` type the product boundary
-    expects but never runs the real constructor, so it holds no endpoint, credential or
-    ledger; a shared scripted meter projects its calls the way ``SpendMeter.run_report`` does.
+    raised instead of a reply. The double implements ``ChatPort`` rather than subclassing the
+    concrete provider: it holds no endpoint, credential or ledger, and it owns the
+    cancellation behaviour it claims instead of inheriting a method whose provider state it
+    never built. A shared scripted meter projects its calls the way ``SpendMeter.run_report``
+    does.
     """
 
     def __init__(self, replies: Sequence[tuple[str | None, Any]], *,
@@ -67,6 +69,18 @@ class ScriptedWoaChat(ChatModel):
         self.dispatched = 0
         self.lock = threading.Lock()
         self.meter = _WoaScriptedMeter(self)
+
+    def complete_cancellable(self, messages: list[dict], tools: list[dict] | None,
+                             run_id: str, *, cancelled,
+                             max_tokens: int | None = None, options: dict | None = None,
+                             timeout_s: float | None = None) -> dict[str, Any]:
+        if not callable(cancelled):
+            raise TypeError("cancelled must be callable")
+        if cancelled():
+            raise ProviderError("the user stopped this task", code="provider_cancelled",
+                                retryable=False)
+        return self.complete(messages, tools, run_id, max_tokens=max_tokens,
+                             options=options, timeout_s=timeout_s)
 
     def complete(self, messages: list[dict], tools: list[dict] | None, run_id: str,
                  max_tokens: int | None = None, options: dict | None = None,

@@ -24,7 +24,8 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from evals.pageagent.business_host import PageAgentBusinessProxy
-from evals.pageagent.host import PageAgentProviderContract, PageAgentProviderProxy
+from evals.pageagent.host import (
+    PageAgentProviderContract, PageAgentProviderProxy, require_completion_client)
 from evals.twenty.evidence import (
     EvidenceContractError, browser_open_evidence, case_projection, failed_evidence,
     create_evidence, indeterminate_evidence, open_evidence, parse_query_evidence,
@@ -201,7 +202,7 @@ def _bridge_reports_match(*, bridge: dict[str, Any], provider: dict[str, Any],
     return bool(exact)
 
 
-def _accounting_only_report(client: ChatModel, run_id: str) -> dict[str, Any]:
+def _accounting_only_report(client: Any, run_id: str) -> dict[str, Any]:
     """Provider report for a run that never reached the provider Host."""
     try:
         accounting = client.meter.run_report(run_id)
@@ -226,7 +227,7 @@ def _no_business_report() -> dict[str, Any]:
 
 
 def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
-             client: ChatModel, config: PageAgentTwentyConfig,
+             client: Any, config: PageAgentTwentyConfig,
              run_id: str | None = None,
              cancelled: threading.Event | None = None,
              approval_decider: Callable[[str], str] | None = None) -> dict[str, Any]:
@@ -252,8 +253,8 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
     if not isinstance(adapter, TwentyApplicationAdapter):
         raise PageAgentTwentyRunnerError("runner requires a TwentyApplicationAdapter")
     application = bind_application(adapter)
-    if not isinstance(client, ChatModel) or client.model.strip() != client.model:
-        raise PageAgentTwentyRunnerError("runner requires a configured ChatModel")
+    require_completion_client(client, error=PageAgentTwentyRunnerError,
+                              role="runner client")
     if cancelled is None:
         cancelled = threading.Event()
     elif not isinstance(cancelled, threading.Event):

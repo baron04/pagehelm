@@ -159,18 +159,20 @@ class AuditedChat:
     """Apply an egress policy and record only its non-content projection."""
 
     def __init__(self, delegate, ledger, *, policy: ProviderEgressPolicy | None = None):
-        if not callable(getattr(delegate, "complete", None)):
-            raise TypeError("chat delegate must provide complete")
+        from .model import require_chat_port  # deferred: model imports this module
+
+        require_chat_port(delegate, role="chat delegate")
         if not callable(getattr(ledger, "append", None)):
             raise TypeError("egress ledger must provide append")
         self._delegate = delegate
         self._ledger = ledger
         self.policy = policy or DEFAULT_PROVIDER_EGRESS_POLICY
-        if hasattr(delegate, "meter"):
-            self.meter = delegate.meter
-
-    def __getattr__(self, name: str):
-        return getattr(self._delegate, name)
+        # Forwarded explicitly rather than through __getattr__: a blanket pass-through makes
+        # every capability probe on the wrapper succeed, which is how a missing
+        # `complete_cancellable` used to look like a present one.
+        self.model = delegate.model
+        self.meter = getattr(delegate, "meter", None)
+        self.options = getattr(delegate, "options", None)
 
     def complete(self, messages: list[dict], tools: list[dict] | None, run_id: str,
                  **kwargs) -> dict:
@@ -182,7 +184,5 @@ class AuditedChat:
                              run_id: str, *, cancelled, **kwargs) -> dict:
         report = self.policy.inspect(messages, tools)
         self._ledger.append("provider_egress", **report.audit_projection())
-        complete = getattr(self._delegate, "complete_cancellable", None)
-        if callable(complete):
-            return complete(messages, tools, run_id, cancelled=cancelled, **kwargs)
-        return self._delegate.complete(messages, tools, run_id, **kwargs)
+        return self._delegate.complete_cancellable(
+            messages, tools, run_id, cancelled=cancelled, **kwargs)

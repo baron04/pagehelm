@@ -8,6 +8,7 @@ from pathlib import Path
 from web_operation_agent.egress import (AuditedChat, ProviderEgressError,
                                          ProviderEgressPolicy)
 from web_operation_agent.ledger import SessionLedger
+from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
 
 
 class ProviderEgressPolicyTests(unittest.TestCase):
@@ -87,7 +88,7 @@ class ProviderEgressPolicyTests(unittest.TestCase):
 
 class AuditedChatTests(unittest.TestCase):
     def test_audit_contains_only_projection_and_precedes_delegate(self):
-        class Delegate:
+        class Delegate(CancellableChatDouble):
             meter = object()
 
             def __init__(self):
@@ -116,7 +117,7 @@ class AuditedChatTests(unittest.TestCase):
         self.assertNotIn("Synthetic customer record", disk)
 
     def test_blocked_request_never_reaches_delegate(self):
-        class Delegate:
+        class Delegate(CancellableChatDouble):
             def __init__(self):
                 self.calls = 0
 

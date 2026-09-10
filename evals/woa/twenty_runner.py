@@ -28,7 +28,7 @@ from web_operation_agent.application import bind_application
 from web_operation_agent.business import BusinessToolError
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.identity import PrincipalError
-from web_operation_agent.model import ChatModel
+from web_operation_agent.model import ChatPort, require_chat_port
 from web_operation_agent.product import (
     AgentTurnConfig, AgentTurnError, AgentTurnExecution, AgentTurnExecutor,
 )
@@ -183,7 +183,7 @@ def turn_config(config: WoaTwentyConfig, ledger_path: Path) -> AgentTurnConfig:
     )
 
 
-def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter, client: ChatModel,
+def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter, client: ChatPort,
              config: WoaTwentyConfig, ledger_path: Path, runtime_factory: RuntimeFactory,
              page_sampler: Any = None, run_id: str | None = None,
              cancelled: threading.Event | None = None,
@@ -212,8 +212,12 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter, client:
         raise WoaTwentyRunnerError("source-on run requires a version-bound SourceMap")
     if config.source_mode == "off" and source_map is not None:
         raise WoaTwentyRunnerError("source-off run cannot receive a SourceMap")
-    if not isinstance(client, ChatModel) or client.model.strip() != client.model:
-        raise WoaTwentyRunnerError("runner requires a configured ChatModel")
+    try:
+        require_chat_port(client, role="runner client")
+    except TypeError as exc:
+        raise WoaTwentyRunnerError(str(exc)) from exc
+    if not callable(getattr(getattr(client, "meter", None), "run_report", None)):
+        raise WoaTwentyRunnerError("runner client meter must provide run_report")
     if cancelled is None:
         cancelled = threading.Event()
     elif not isinstance(cancelled, threading.Event):
@@ -341,7 +345,7 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter, client:
         page_error_count=page_error_count))
 
 
-def _accounting(client: ChatModel, run_id: str) -> dict[str, Any] | None:
+def _accounting(client: ChatPort, run_id: str) -> dict[str, Any] | None:
     try:
         report = client.meter.run_report(run_id)
     except Exception:

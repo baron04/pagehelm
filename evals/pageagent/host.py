@@ -84,6 +84,27 @@ class PageAgentProviderContract:
         }
 
 
+def require_completion_client(candidate: Any, *, error: type[Exception] = TypeError,
+                              role: str = "client") -> Any:
+    """Return `candidate` if it satisfies the PageAgent completion port.
+
+    PageAgent reaches the provider through `request_completion`, not through the product's
+    `ChatPort`, so this is a separate and narrower contract: one dispatch method, a frozen
+    model label and a meter that can project one run. It is checked structurally on purpose.
+    An `isinstance(candidate, ChatModel)` gate here would accept any subclass of the concrete
+    provider whose constructor never ran, which is the shape that made `evals/woa` report
+    apparatus failures at `61603fe`.
+    """
+    if not callable(getattr(candidate, "request_completion", None)):
+        raise error(f"{role} must provide request_completion")
+    label = getattr(candidate, "model", None)
+    if not isinstance(label, str) or not label.strip() or label.strip() != label:
+        raise error(f"{role}.model must be a non-empty label without surrounding space")
+    if not callable(getattr(getattr(candidate, "meter", None), "run_report", None)):
+        raise error(f"{role} meter must provide run_report")
+    return candidate
+
+
 class PageAgentProviderProxy:
     """Bind one opaque browser run to one guarded server-side completion client."""
 
@@ -96,12 +117,9 @@ class PageAgentProviderProxy:
         if (not isinstance(run_id, str) or not 1 <= len(run_id) <= 160
                 or re.search(r"[\x00-\x1f\x7f]", run_id)):
             raise ValueError("run_id is invalid")
-        if not callable(getattr(client, "request_completion", None)):
-            raise TypeError("client must provide request_completion")
+        require_completion_client(client)
         if getattr(client, "model", None) != contract.model:
             raise ValueError("client model does not match the frozen contract")
-        if not callable(getattr(getattr(client, "meter", None), "run_report", None)):
-            raise TypeError("client meter must provide run_report")
         if cancelled is not None and not isinstance(cancelled, threading.Event):
             raise TypeError("cancelled must be a threading.Event or None")
         if clock is not None and not callable(clock):

@@ -20,6 +20,7 @@ from web_operation_agent.live import LiveConversationRunner, LiveTurnOutcome
 from web_operation_agent.product import (AgentTurnExecution, AgentTurnMessage,
                                          AgentTurnStatus)
 from web_operation_agent.session import RunResult
+from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
 
 
 BASE_ENV = {
@@ -317,7 +318,12 @@ class TwentyDemoCompositionTests(unittest.TestCase):
             config = self._config(Path(tmp))
             adapter = demo.build_adapter(config)
             channel = object()
-            chat = object()
+
+            class _Chat(CancellableChatDouble):
+                def complete(self, messages, tools, run_id, **kwargs):
+                    raise AssertionError("composition test must not reach the model")
+
+            chat = _Chat()
             conversation = demo.build_conversation(
                 channel, config=config, adapter=adapter, chat=chat,
                 run_prefix="twenty-public-test",
@@ -372,8 +378,11 @@ class TwentyDemoCompositionTests(unittest.TestCase):
                 def status():
                     return dict(provider_snapshot)
 
-            class Chat:
+            class Chat(CancellableChatDouble):
                 runtime_guard = Guard()
+
+                def complete(self, messages, tools, run_id, **kwargs):
+                    raise AssertionError("composition test must not reach the model")
 
             principal = PrincipalContext(
                 1, "twenty", "workspace-1", "workspace-1", "actor-1", "delegation-1",

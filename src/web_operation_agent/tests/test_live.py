@@ -125,6 +125,8 @@ def _channel_with_observation():
 class LiveProductSessionTests(unittest.TestCase):
     def test_cancel_and_deadline_release_host_for_following_messages(self):
         class Chat:
+            model = "live-double"
+
             def __init__(self):
                 self.calls = 0
                 self.started = threading.Event()

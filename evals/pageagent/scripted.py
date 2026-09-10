@@ -23,7 +23,6 @@ from web_operation_agent.business import (
     BusinessToolResult, BusinessToolRuntime,
 )
 from web_operation_agent.identity import PRINCIPAL_CONTEXT_VERSION, PrincipalContext
-from web_operation_agent.model import ChatModel
 from web_operation_agent.twenty import (
     CREATE_COMPANY_SCHEMA, QUERY_COMPANIES_SCHEMA, TwentyApplicationAdapter,
 )
@@ -121,13 +120,15 @@ class ScriptedMeter:
         }
 
 
-class ScriptedProviderClient(ChatModel):
+class ScriptedProviderClient:
     """Answer PageAgent provider calls from a fixed action script.
 
-    The class keeps the ``ChatModel`` type required by the runner boundary but never runs the
-    real constructor, so it holds no endpoint, credential or ledger. ``failures`` maps a
-    1-based call sequence to a transport code raised instead of a response; ``after_call``
-    runs after every dispatched call, which lets a test cancel a run at an exact point.
+    The class implements the PageAgent completion port -- ``request_completion``, a frozen
+    ``model`` label and a ``meter`` -- instead of subclassing the concrete provider, so it
+    holds no endpoint, credential or ledger and inherits no method whose provider state it
+    never built. ``failures`` maps a 1-based call sequence to a transport code raised instead
+    of a response; ``after_call`` runs after every dispatched call, which lets a test cancel a
+    run at an exact point.
     """
 
     def __init__(self, actions: list[dict[str, Any]], *, model: str = SCRIPTED_MODEL,

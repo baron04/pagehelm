@@ -263,10 +263,12 @@ class SourceAffordanceLoop(unittest.TestCase):
             root = Path(tmp)
             smap = _map(root)
             sessions = []
+            chats = []
             for mode, source_map in (("auto", smap), ("empty", None)):
+                chats.append(_Chat([("finish", {"done": False, "why": "inspect"})]))
                 session = ServerAgentSession(
                     task=TaskSpec("T", "Inspect the seed trays"), arm="P",
-                    chat=_Chat([("finish", {"done": False, "why": "inspect"})]),
+                    chat=chats[-1],
                     browser=_Browser([_obs(1)]), control=_Control([[], []]),
                     ledger=SessionLedger(root / f"{mode}.jsonl", mode), attestation=None,
                     source_map=source_map, source_contract=False,
@@ -285,9 +287,9 @@ class SourceAffordanceLoop(unittest.TestCase):
             for session in sessions:
                 session.run()
             auto_opening = "\n".join(str(m.get("content") or "")
-                                      for m in sessions[0].chat.seen[0])
+                                      for m in chats[0].seen[0])
             empty_opening = "\n".join(str(m.get("content") or "")
-                                       for m in sessions[1].chat.seen[0])
+                                       for m in chats[1].seen[0])
             self.assertIn('"request":"findTrays"', auto_opening)
             self.assertIn("SOURCE AFFORDANCES", empty_opening)
             self.assertIn("[]", empty_opening)

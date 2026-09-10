@@ -14,6 +14,7 @@ from pathlib import Path
 from web_operation_agent.contract import (ContractPlanner, PlanningFailed, SourceRetriever,
                                           validate_contract)
 from web_operation_agent.schemas import OperationContract
+from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
 from web_operation_agent.sourcemap import OFBizCompiler
 from web_operation_agent.sourcetree import SourceTree
 from web_operation_agent.tests.test_sourcemap import POLICY, build
@@ -25,7 +26,7 @@ def _map(tmp: Path):
     return OFBizCompiler(build(tmp, ("greenhouse", "lighthouse")), "fixture").compile()
 
 
-class _StubModel:
+class _StubModel(CancellableChatDouble):
     """Answers with whatever the test queued. Records what it was asked."""
 
     def __init__(self, replies):

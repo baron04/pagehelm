@@ -5,6 +5,7 @@ import unittest
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ElementRef, OperationContract,
                                          PageObservation)
 from web_operation_agent.session import _render_contract, _render_observation, _trim
+from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
 
 
 def _obs(epoch=1, url="http://app/x"):
@@ -100,7 +101,7 @@ from web_operation_agent.session import (AGENT_SYSTEM, SCOPE_FIRST_SYSTEM,
                                          ServerAgentSession, TaskSpec, _PLAN_MARK)
 
 
-class _Chat:
+class _Chat(CancellableChatDouble):
     def __init__(self, calls):
         self.script = list(calls)
         self.seen = []

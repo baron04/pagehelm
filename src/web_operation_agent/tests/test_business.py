@@ -21,6 +21,7 @@ from web_operation_agent.mutation import MemoryMutationJournal, MutationJournalE
 from web_operation_agent.schemas import ActionReceipt, PageObservation
 from web_operation_agent.session import ServerAgentSession, TaskSpec
 from web_operation_agent.twenty import TwentyBusinessToolExecutor
+from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
 
 
 SCHEMA = {"type": "function", "function": {
@@ -176,7 +177,7 @@ class _Browser:
         return []
 
 
-class _Chat:
+class _Chat(CancellableChatDouble):
     def __init__(self, script):
         self.script = list(script)
         self.tool_names = []

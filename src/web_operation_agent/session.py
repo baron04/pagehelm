@@ -734,18 +734,11 @@ class ServerAgentSession:
                 return self._finish(result, t0, "wall_clock_budget",
                                     f"exceeded {self.wall_budget_s}s", steps=step)
             try:
-                complete_cancellable = getattr(self.chat, "complete_cancellable", None)
-                if callable(complete_cancellable):
-                    reply = complete_cancellable(
-                        messages, self.tool_schemas(), self.run_id,
-                        timeout_s=max(0.001, self.wall_budget_s - elapsed),
-                        cancelled=self._cancel_requested,
-                    )
-                else:
-                    reply = self.chat.complete(
-                        messages, self.tool_schemas(), self.run_id,
-                        timeout_s=max(0.001, self.wall_budget_s - elapsed),
-                    )
+                reply = self.chat.complete_cancellable(
+                    messages, self.tool_schemas(), self.run_id,
+                    timeout_s=max(0.001, self.wall_budget_s - elapsed),
+                    cancelled=self._cancel_requested,
+                )
             except BudgetExhausted as e:
                 if self._cancel_requested():
                     return self._finish(
@@ -2095,7 +2088,7 @@ class ServerAgentSession:
         result.page_actions = self.page_actions
         result.contract_conflicts = self.conflicts
         result.wall_seconds = round(time.time() - t0, 1)
-        result.spend = self.chat.meter.report() if hasattr(self.chat, "meter") else {}
+        result.spend = self.chat.meter.report() if self.chat.meter is not None else {}
         result.plan_status = self.plan_state.counts() if self.contract_source != "none" else {}
         result.plan_withdrawn = self.plan_state.withdrawn
         result.write_refusals = self.write_refusals

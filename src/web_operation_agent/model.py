@@ -14,6 +14,7 @@ import fcntl
 import hashlib
 import http.client
 import ipaddress
+import inspect
 import json
 import math
 import os
@@ -25,6 +26,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 from .egress import DEFAULT_PROVIDER_EGRESS_POLICY, ProviderEgressPolicy
 
@@ -508,6 +510,100 @@ class SpendMeter:
                 "total_cost_cny": None if unavailable else known_cost,
                 "spend_ledger_slice_digest": slice_digest,
             }
+
+
+#: The instance state a real :class:`ChatModel` only has once its constructor ran. A double
+#: that subclasses the concrete provider to satisfy a type check inherits the real methods
+#: without this state, so the first model call fails with ``AttributeError`` inside the turn
+#: instead of failing as an implementation. ``require_chat_port`` refuses that shape.
+_PROVIDER_STATE = ("base", "_key", "meter", "max_completion_tokens", "temperature",
+                   "timeout", "runtime_guard", "egress_policy")
+
+
+@runtime_checkable
+class ChatPort(Protocol):
+    """The one boundary a turn uses to reach a model.
+
+    Both entry points are mandatory. Cancellation is not an optional capability discovered at
+    call time: an implementation that cannot abort a dispatched request must say so by not
+    satisfying this port, never by silently completing a run the user already stopped.
+    """
+
+    model: str
+
+    def complete(self, messages: list[dict], tools: list[dict] | None, run_id: str,
+                 max_tokens: int | None = None, options: dict | None = None,
+                 timeout_s: float | None = None) -> dict: ...
+
+    def complete_cancellable(self, messages: list[dict], tools: list[dict] | None, run_id: str,
+                             *, cancelled, max_tokens: int | None = None,
+                             options: dict | None = None,
+                             timeout_s: float | None = None) -> dict: ...
+
+
+def _accepts_keyword(signature: inspect.Signature, name: str, *, keyword_only: bool) -> bool:
+    parameter = signature.parameters.get(name)
+    if parameter is not None:
+        if keyword_only:
+            return parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        return parameter.kind in (inspect.Parameter.KEYWORD_ONLY,
+                                  inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    if keyword_only:
+        return any(p.kind is inspect.Parameter.VAR_KEYWORD
+                   for p in signature.parameters.values())
+    return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values())
+
+
+def _accepts_positional(signature: inspect.Signature, count: int) -> bool:
+    positional = [p for p in signature.parameters.values()
+                  if p.kind in (inspect.Parameter.POSITIONAL_ONLY,
+                                inspect.Parameter.POSITIONAL_OR_KEYWORD)]
+    if len(positional) >= count:
+        return True
+    return any(p.kind is inspect.Parameter.VAR_POSITIONAL
+               for p in signature.parameters.values())
+
+
+def require_chat_port(candidate, *, role: str = "chat"):
+    """Return `candidate` if it satisfies :class:`ChatPort`, else raise ``TypeError``.
+
+    Composition calls this so a wrong shape fails where it is wired, not on the first model
+    call several layers down. The checks are deliberately structural: presence of both entry
+    points, a keyword-only cancellation hook, a usable model label, and -- the case that made
+    `evals/woa` report 22 of 36 failures at `61603fe` -- no half-built subclass of the
+    concrete provider standing in for an implementation.
+    """
+    for name in ("complete", "complete_cancellable"):
+        method = getattr(candidate, name, None)
+        if not callable(method):
+            raise TypeError(
+                f"{role} must implement ChatPort.{name}; cancellation is not optional")
+    if isinstance(candidate, ChatModel):
+        missing = [name for name in _PROVIDER_STATE if not hasattr(candidate, name)]
+        if missing:
+            raise TypeError(
+                f"{role} subclasses ChatModel but its __init__ never ran (missing "
+                f"{missing[0]!r}); implement ChatPort instead of borrowing the concrete "
+                "provider to satisfy a type check")
+    try:
+        plain = inspect.signature(candidate.complete)
+        cancellable = inspect.signature(candidate.complete_cancellable)
+    except (TypeError, ValueError) as exc:  # pragma: no cover - exotic callables
+        raise TypeError(f"{role} exposes an uninspectable ChatPort signature") from exc
+    for name, signature in (("complete", plain), ("complete_cancellable", cancellable)):
+        if not _accepts_positional(signature, 3):
+            raise TypeError(
+                f"{role}.{name} must accept (messages, tools, run_id)")
+        if not _accepts_keyword(signature, "timeout_s", keyword_only=False):
+            raise TypeError(f"{role}.{name} must accept a timeout_s deadline")
+    if not _accepts_keyword(cancellable, "cancelled", keyword_only=True):
+        raise TypeError(
+            f"{role}.complete_cancellable must take a keyword-only 'cancelled' hook so a "
+            "caller cannot pass it by accident or omit it silently")
+    label = getattr(candidate, "model", None)
+    if not isinstance(label, str) or not label.strip() or label.strip() != label:
+        raise TypeError(f"{role}.model must be a non-empty label without surrounding space")
+    return candidate
 
 
 class ChatModel:
