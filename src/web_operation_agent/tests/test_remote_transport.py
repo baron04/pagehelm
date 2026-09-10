@@ -1146,13 +1146,15 @@ class GatewayTests(unittest.TestCase):
         module_url = ORIGIN + "/page-controller.js?v=1"
         config = self.gateway.bootstrap_config(
             self.grant, page_controller_module=module_url,
-            panel_labels={"assistant": "Operations copilot", "send": "Send"})
+            panel_labels={"assistant": "Operations copilot", "send": "Send",
+                          "statusReady": "Connected"})
         self.assertEqual(config["pageControllerModule"], module_url)
         self.assertEqual(config["navigationMode"], "document")
         self.assertEqual(config["principalExpiresAt"], 0)
         self.assertEqual(config["sessionExpiresAt"], self.grant.session_expires_at)
         self.assertEqual(config["panelLabels"], {
-            "assistant": "Operations copilot", "send": "Send"})
+            "assistant": "Operations copilot", "send": "Send",
+            "statusReady": "Connected"})
         with self.assertRaisesRegex(ValueError, "unknown panel label"):
             self.gateway.bootstrap_config(
                 self.grant, page_controller_module=module_url,

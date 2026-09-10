@@ -32,7 +32,12 @@ PANEL_LABEL_KEYS = frozenset({
     "assistant", "product", "timeline", "emptyTitle", "emptyDetail", "input",
     "placeholder", "send", "stop", "collapse", "expand", "keyHint", "approvalTitle",
     "approvalEffect", "approvalTargets", "deny", "approve", "approvalHint", "retry",
-    "dismiss",
+    "dismiss", "goalPrefix", "progressRunning", "progressStopping", "progressStopFailed",
+    "progressApprovalRequired", "progressApproved", "progressDenied", "progressTerminal",
+    "statusConnecting", "statusReady", "statusQueued", "statusObserving", "statusActing",
+    "statusKnowledge", "statusStopping", "statusReconnecting", "statusAwaitingConfirmation",
+    "statusNeedsInput", "statusSuccess", "statusCancelled", "statusRefused",
+    "statusIndeterminate", "statusError", "statusEnded", "statusReplaced",
 })
 
 

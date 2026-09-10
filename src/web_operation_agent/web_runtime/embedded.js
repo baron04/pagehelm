@@ -9,7 +9,7 @@
 
 import {
   AssistantPanel, AssistantPanelViewModel, PANEL_STATES, createAssistantPanel,
-  panelErrorMessage, setPanelState,
+  panelErrorMessage, panelLabel, setPanelState,
 } from './assistant_panel.js'
 export {
   AssistantPanel, AssistantPanelViewModel, createAssistantPanel, panelErrorMessage,
@@ -518,7 +518,7 @@ export class EmbeddedWebRuntime {
     this.panel?.setStopping?.(this.stored.cancellationPending)
     const connectedState = resultDeferred ? 'reconnecting'
       : (this.stored.cancellationPending ? 'stopping' : 'ready')
-    setPanelState(this.panel, connectedState, connectedState === 'ready' ? '已连接' : '')
+    setPanelState(this.panel, connectedState)
     if (this.stored.cancellationPending) {
       void this.cancelTask({retry: true}).catch(() => {})
     }
@@ -543,8 +543,9 @@ export class EmbeddedWebRuntime {
     this.stored.cancellationPending = false
     this._save()
     this.panel?.setBusy?.(true)
-    setPanelState(this.panel, 'observing', '正在读取当前页面')
-    this.panel?.add(`目标：${goal}`, {kind: 'goal'})
+    setPanelState(this.panel, 'observing')
+    if (this.panel?.beginTurn) this.panel.beginTurn(messageId, goal)
+    else this.panel?.add(`${panelLabel(this.panel, 'goalPrefix')}${goal}`, {kind: 'goal'})
     try {
       // A first-party SPA can change route without replacing this JavaScript runtime. Bind
       // every new task to a fresh observation before posting the message, so the server does
@@ -572,7 +573,9 @@ export class EmbeddedWebRuntime {
     if (this.stored.cancellationPending && !retry) return
     this.panel?.cancelApproval?.()
     setPanelState(this.panel, 'stopping')
-    if (!retry) this.panel?.add('正在安全停止当前任务', {tone: 'warning'})
+    if (!retry) this.panel?.add(panelLabel(this.panel, 'progressStopping'), {
+      tone: 'warning', turnId: this.stored.activeMessageId,
+    })
     this.stored.cancellationPending = true
     this._save()
     this.panel?.setStopping?.(true)
@@ -586,8 +589,10 @@ export class EmbeddedWebRuntime {
       this.stored.cancellationPending = false
       this._save()
       this.panel?.setStopping?.(false)
-      setPanelState(this.panel, 'error', '停止请求失败')
-      this.panel?.add('停止请求未送达，请重试', {tone: 'error'})
+      setPanelState(this.panel, 'error')
+      this.panel?.add(panelLabel(this.panel, 'progressStopFailed'), {
+        tone: 'error', turnId: this.stored.activeMessageId,
+      })
       throw error
     }
   }
@@ -621,7 +626,7 @@ export class EmbeddedWebRuntime {
       try {
         const observation = await this.observe(this.stored.inFlight?.action_id || '')
         await this._post('/observations', observation)
-        setPanelState(this.panel, 'ready', '已连接')
+        setPanelState(this.panel, 'ready')
         if (!this.stopped) void this._eventLoop()
         return
       } catch (error) {
@@ -838,6 +843,7 @@ export class EmbeddedWebRuntime {
   }
 
   async _handleEvent(event) {
+    const turnId = String(event.turn_id || event.payload?.turn_id || this.stored.activeMessageId || '')
     if (event.kind === 'action') {
       await this._handleAction(event.payload)
     } else if (event.kind === 'progress') {
@@ -854,12 +860,6 @@ export class EmbeddedWebRuntime {
         this._save()
         this.panel?.setBusy?.(false)
       }
-      const statuses = {
-        finished: '已结束', refused: '无法执行', cancelled: '已取消',
-        indeterminate: '结果不确定', failed: '任务失败',
-        verified: '已完成', needs_input: '等待补充', not_verified: '未通过验证', approval_denied: '已取消',
-        task_failed: '任务失败', knowledge_used: '使用知识', cancelling: '正在停止',
-      }
       const panelStates = {
         finished: 'ended', refused: 'refused', cancelled: 'cancelled',
         indeterminate: 'indeterminate', failed: 'error', verified: 'success',
@@ -868,23 +868,25 @@ export class EmbeddedWebRuntime {
       }
       const panelState = panelStates[progressState] || 'acting'
       const tone = PANEL_STATES[panelState].tone
-      this.panel?.add(event.payload.message || '正在执行', {
-        kind: finished ? 'result' : 'progress', tone,
+      this.panel?.add(event.payload.message || panelLabel(this.panel, 'progressRunning'), {
+        kind: finished ? 'result' : 'progress', tone, turnId,
       })
-      setPanelState(this.panel, panelState, statuses[progressState] || '执行中')
+      setPanelState(this.panel, panelState)
     } else if (event.kind === 'terminal') {
       this.stored.taskInFlight = false
       this.stored.activeMessageId = ''
       this.stored.cancellationPending = false
       this._save()
       this.panel?.setBusy?.(false)
-      this.panel?.add(event.payload.message || event.payload.reason || '任务结束', {kind: 'result'})
+      this.panel?.add(event.payload.message || event.payload.reason || panelLabel(this.panel, 'progressTerminal'), {
+        kind: 'result', turnId,
+      })
       setPanelState(this.panel, 'ended')
       // The terminal cursor is durable after this handler returns.  A closed server session
       // has no future events, so another GET would only turn the final UI into a reconnect loop.
       this.stopped = true
     } else if (event.kind === 'approval_required') {
-      this.panel?.add('需要确认后才能继续', {tone: 'warning'})
+      this.panel?.add(panelLabel(this.panel, 'progressApprovalRequired'), {tone: 'warning', turnId})
       setPanelState(this.panel, 'awaiting_confirmation')
       let decision = this.stored.approvals[event.payload.approval_id]
       if (!decision) {
@@ -903,8 +905,9 @@ export class EmbeddedWebRuntime {
         turn_id: String(event.payload.turn_id || ''),
         operation_id: String(event.payload.operation_id || ''),
       })
-      this.panel?.add(decision === 'approved' ? '已确认执行' : '已取消操作', {
+      this.panel?.add(panelLabel(this.panel, decision === 'approved' ? 'progressApproved' : 'progressDenied'), {
         tone: decision === 'approved' ? 'neutral' : 'warning',
+        turnId,
       })
       setPanelState(this.panel, decision === 'approved' ? 'acting' : 'cancelled')
     }
@@ -997,7 +1000,7 @@ export class EmbeddedWebRuntime {
     this.stored.inFlight.phase = 'claimed'
     this._save()
     this._showActionProgress(action)
-    setPanelState(this.panel, 'acting', '执行中')
+    setPanelState(this.panel, 'acting')
 
     let success = true
     let code = ''
@@ -1038,7 +1041,7 @@ export class EmbeddedWebRuntime {
       this.stored.visibleObserveTurnId = turnId
       this._save()
     }
-    this.panel?.add(describeAction(action.command), {kind: 'action'})
+    this.panel?.add(describeAction(action.command), {kind: 'action', turnId: action.turn_id})
   }
 
   async _execute(command) {
@@ -1291,7 +1294,7 @@ export class EmbeddedWebRuntime {
         after.page_epoch >= this.currentObservation.page_epoch)) {
       this.currentObservation = after
     }
-    setPanelState(this.panel, 'observing', '正在核对结果')
+    setPanelState(this.panel, 'observing')
   }
 }
 
@@ -1301,7 +1304,7 @@ export async function startEmbeddedRuntime(config) {
   const runtime = new EmbeddedWebRuntime(config)
   try { return await runtime.start() } catch (error) {
     runtime.stop({removePanel: false})
-    setPanelState(runtime.panel, 'error', '连接失败')
+    setPanelState(runtime.panel, 'error')
     runtime.panel?.showError?.(panelErrorMessage(error, 'connect'), () => location.reload())
     window.__WOA_EMBEDDED_RUNTIME_STARTED__ = false
     throw error

@@ -7,34 +7,23 @@
  */
 
 export const PANEL_STATES = Object.freeze({
-  connecting: {label: '正在连接', tone: 'neutral'},
-  ready: {label: '已就绪', tone: 'ready'},
-  queued: {label: '已提交', tone: 'active'},
-  observing: {label: '正在观察', tone: 'active'},
-  acting: {label: '正在执行', tone: 'active'},
-  knowledge: {label: '正在检索知识', tone: 'active'},
-  stopping: {label: '正在停止', tone: 'warning'},
-  reconnecting: {label: '正在重连', tone: 'warning'},
-  awaiting_confirmation: {label: '等待确认', tone: 'warning'},
-  needs_input: {label: '等待补充', tone: 'warning'},
-  success: {label: '已完成', tone: 'success'},
-  cancelled: {label: '已取消', tone: 'neutral'},
-  refused: {label: '无法执行', tone: 'error'},
-  indeterminate: {label: '结果不确定', tone: 'warning'},
-  error: {label: '任务失败', tone: 'error'},
-  ended: {label: '已结束', tone: 'neutral'},
-  replaced: {label: '已由另一页面接管', tone: 'neutral'},
-})
-
-const PANEL_STATUS_STATE = Object.freeze({
-  '正在连接': 'connecting', '已连接': 'ready', '已就绪': 'ready',
-  '已提交': 'queued', '正在执行': 'acting', '执行中': 'acting',
-  '使用知识': 'knowledge', '正在停止': 'stopping', '停止请求失败': 'error',
-  '正在重连': 'reconnecting', '等待确认': 'awaiting_confirmation',
-  '等待补充': 'needs_input', '已完成': 'success', '已取消': 'cancelled',
-  '无法执行': 'refused', '结果不确定': 'indeterminate', '未通过验证': 'indeterminate',
-  '任务失败': 'error', '连接失败': 'error', '已结束': 'ended',
-  '已由另一页面接管': 'replaced',
+  connecting: {labelKey: 'statusConnecting', tone: 'neutral'},
+  ready: {labelKey: 'statusReady', tone: 'ready'},
+  queued: {labelKey: 'statusQueued', tone: 'active'},
+  observing: {labelKey: 'statusObserving', tone: 'active'},
+  acting: {labelKey: 'statusActing', tone: 'active'},
+  knowledge: {labelKey: 'statusKnowledge', tone: 'active'},
+  stopping: {labelKey: 'statusStopping', tone: 'warning'},
+  reconnecting: {labelKey: 'statusReconnecting', tone: 'warning'},
+  awaiting_confirmation: {labelKey: 'statusAwaitingConfirmation', tone: 'warning'},
+  needs_input: {labelKey: 'statusNeedsInput', tone: 'warning'},
+  success: {labelKey: 'statusSuccess', tone: 'success'},
+  cancelled: {labelKey: 'statusCancelled', tone: 'neutral'},
+  refused: {labelKey: 'statusRefused', tone: 'error'},
+  indeterminate: {labelKey: 'statusIndeterminate', tone: 'warning'},
+  error: {labelKey: 'statusError', tone: 'error'},
+  ended: {labelKey: 'statusEnded', tone: 'neutral'},
+  replaced: {labelKey: 'statusReplaced', tone: 'neutral'},
 })
 
 const DEFAULT_PANEL_LABELS = Object.freeze({
@@ -45,13 +34,24 @@ const DEFAULT_PANEL_LABELS = Object.freeze({
   keyHint: 'Enter 发送 · Shift + Enter 换行', approvalTitle: '执行前请确认',
   approvalEffect: '将执行', approvalTargets: '影响对象', deny: '返回修改', approve: '确认执行',
   approvalHint: '只会授权上述操作；页面变化后需要重新确认。', retry: '重试', dismiss: '关闭提示',
+  goalPrefix: '目标：', progressRunning: '正在执行', progressStopping: '正在安全停止当前任务',
+  progressStopFailed: '停止请求未送达，请重试', progressApprovalRequired: '需要确认后才能继续',
+  progressApproved: '已确认执行', progressDenied: '已取消操作', progressTerminal: '任务结束',
+  statusConnecting: '正在连接', statusReady: '已就绪', statusQueued: '已提交',
+  statusObserving: '正在观察', statusActing: '正在执行', statusKnowledge: '正在检索知识',
+  statusStopping: '正在停止', statusReconnecting: '正在重连',
+  statusAwaitingConfirmation: '等待确认', statusNeedsInput: '等待补充',
+  statusSuccess: '已完成', statusCancelled: '已取消', statusRefused: '无法执行',
+  statusIndeterminate: '结果不确定', statusError: '任务失败', statusEnded: '已结束',
+  statusReplaced: '已由另一页面接管',
 })
 
 export class AssistantPanelViewModel {
-  constructor(onChange = () => {}) {
+  constructor(onChange = () => {}, labels = DEFAULT_PANEL_LABELS) {
     this.onChange = onChange
+    this.labels = labels
     this.state = 'connecting'
-    this.label = PANEL_STATES.connecting.label
+    this.label = this.labels[PANEL_STATES.connecting.labelKey]
     this.busy = false
     this.stopping = false
     this.collapsed = false
@@ -66,7 +66,7 @@ export class AssistantPanelViewModel {
   transition(state, label = '') {
     if (!Object.hasOwn(PANEL_STATES, state)) throw new Error(`unknown assistant panel state: ${state}`)
     this.state = state
-    this.label = String(label || PANEL_STATES[state].label).slice(0, 80)
+    this.label = String(label || this.labels[PANEL_STATES[state].labelKey]).slice(0, 80)
     this.onChange(this.snapshot())
   }
 
@@ -125,7 +125,7 @@ export class AssistantPanel {
         .panel { position:relative; overflow:hidden; border:1px solid rgba(113,126,158,.28);
           border-radius:22px; background:rgba(251,252,255,.97);
           box-shadow:0 24px 72px rgba(24,32,51,.20), 0 3px 14px rgba(24,32,51,.08);
-          isolation:isolate; }
+          isolation:isolate; max-height:calc(100vh - 16px); }
         .panel::before { content:""; position:absolute; z-index:3; inset:-1px; pointer-events:none;
           border-radius:22px; padding:2px; opacity:0; background:linear-gradient(115deg,
           #6a5cff, #32b8d8, #62cf9b, #f3b35d, #df6b9c, #6a5cff); background-size:260% 260%;
@@ -180,6 +180,10 @@ export class AssistantPanel {
         .entry[data-tone="error"]::before { background:#d14343; }
         .entry time { display:block; margin-top:3px; color:var(--woa-muted); font:10px/1.2 ui-monospace,
           "SFMono-Regular", Consolas, monospace; }
+        .turn { margin:0 0 12px; padding:0; list-style:none; }
+        .turn:last-child { margin-bottom:0; }
+        .turn-events { margin:0; padding:0 0 0 10px; border-left:2px solid rgba(91,92,226,.14); list-style:none; }
+        .turn > .entry[data-kind="goal"] { margin:0 0 8px; }
         .notice { display:none; align-items:start; grid-template-columns:1fr auto; gap:10px; margin:12px 12px 0;
           padding:11px 12px; border:1px solid #efcccc; border-radius:13px; color:#7d2f2f; background:#fff3f3; }
         .notice[data-visible="true"] { display:grid; }
@@ -245,8 +249,14 @@ export class AssistantPanel {
         @media (max-width:520px) {
           :host { right:8px; bottom:max(8px, env(safe-area-inset-bottom)); width:calc(100vw - 16px); }
           .panel { border-radius:20px; }
+          .body { max-height:calc(100vh - 82px); overflow:auto; overscroll-behavior:contain; }
           .timeline { max-height:42vh; }
           .key-hint { display:none; }
+        }
+        @media (max-width:360px) {
+          .approval { max-height:58vh; overflow:auto; }
+          .approval menu { flex-direction:column-reverse; }
+          .approval menu button { width:100%; }
         }
         @media (prefers-reduced-motion:reduce) {
           *, *::before, *::after { animation:none!important; scroll-behavior:auto!important; transition:none!important; }
@@ -281,7 +291,9 @@ export class AssistantPanel {
     this._wireLabels()
     this.shadow.querySelector('.panel').dataset.mode = this.mode
     this.document.documentElement.appendChild(this.host)
-    this.model = new AssistantPanelViewModel(snapshot => this._render(snapshot))
+    this.model = new AssistantPanelViewModel(snapshot => this._render(snapshot), this.labels)
+    this.turns = new Map()
+    this.activeTurnId = ''
     this.cancelPendingApproval = () => {}
     this.retryAction = null
     this.taskHandler = null
@@ -401,10 +413,7 @@ export class AssistantPanel {
 
   state(name, label = '') { this.model.transition(name, label) }
 
-  status(value) {
-    const label = String(value || '')
-    this.state(PANEL_STATUS_STATE[label] || (this.model.busy ? 'acting' : 'ready'), label)
-  }
+  label(name) { return String(this.labels[name] || '') }
 
   setBusy(value) {
     this.model.setBusy(value)
@@ -418,13 +427,61 @@ export class AssistantPanel {
 
   clear() {
     this.shadow.querySelector('.timeline').replaceChildren()
+    this.turns.clear()
+    this.activeTurnId = ''
     this._renderEmpty()
   }
 
-  add(value, {kind = 'progress', tone = 'neutral', timestamp: timeLabel = ''} = {}) {
+  beginTurn(turnId, goal) {
+    const boundedId = String(turnId || '').slice(0, 200)
+    if (!boundedId) throw new Error('assistant panel turn id is required')
+    this.shadow.querySelector('[data-empty]')?.remove()
+    let turn = this.turns.get(boundedId)
+    if (!turn) {
+      turn = this.document.createElement('li')
+      turn.className = 'turn'
+      turn.dataset.turnId = boundedId
+      const goalItem = this._entry(`${this.labels.goalPrefix}${String(goal)}`, 'goal', 'neutral', '')
+      const events = this.document.createElement('ol')
+      events.className = 'turn-events'
+      turn.append(goalItem, events)
+      this.shadow.querySelector('.timeline').appendChild(turn)
+      this.turns.set(boundedId, turn)
+      while (this.turns.size > 8) {
+        const [oldestId, oldestTurn] = this.turns.entries().next().value
+        this.turns.delete(oldestId)
+        oldestTurn.remove()
+      }
+    }
+    this.activeTurnId = boundedId
+    const timeline = this.shadow.querySelector('.timeline')
+    timeline.scrollTop = timeline.scrollHeight
+    return turn
+  }
+
+  _entry(value, kind, tone, timeLabel) {
+    const item = this.document.createElement('li')
+    item.className = 'entry'
+    item.dataset.kind = kind
+    item.dataset.tone = tone
+    const content = this.document.createElement('span')
+    content.textContent = String(value)
+    const timestamp = this.document.createElement('time')
+    const now = new Date()
+    timestamp.dateTime = now.toISOString()
+    timestamp.textContent = String(timeLabel || '') || new Intl.DateTimeFormat(undefined, {
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(now)
+    item.append(content, timestamp)
+    return item
+  }
+
+  add(value, {kind = 'progress', tone = 'neutral', timestamp: timeLabel = '', turnId = ''} = {}) {
     this.shadow.querySelector('[data-empty]')?.remove()
     const message = String(value)
-    const list = this.shadow.querySelector('.timeline')
+    const selectedTurnId = String(turnId || this.activeTurnId || '')
+    const turn = selectedTurnId ? this.turns.get(selectedTurnId) : null
+    const list = turn?.querySelector('.turn-events') || this.shadow.querySelector('.timeline')
     const previous = list.lastElementChild
     if (kind === 'progress' && previous?.dataset.kind === 'progress'
         && previous.querySelector('span')?.textContent === message) {
@@ -436,22 +493,11 @@ export class AssistantPanel {
       }).format(now)
       return
     }
-    const item = this.document.createElement('li')
-    item.className = 'entry'
-    item.dataset.kind = kind
-    item.dataset.tone = tone
-    const content = this.document.createElement('span')
-    content.textContent = message
-    const timestamp = this.document.createElement('time')
-    const now = new Date()
-    timestamp.dateTime = now.toISOString()
-    timestamp.textContent = String(timeLabel || '') || new Intl.DateTimeFormat(undefined, {
-      hour: '2-digit', minute: '2-digit', hour12: false,
-    }).format(now)
-    item.append(content, timestamp)
+    const item = this._entry(message, kind, tone, timeLabel)
     list.appendChild(item)
     while (list.children.length > 30) list.firstElementChild.remove()
-    list.scrollTop = list.scrollHeight
+    const timeline = this.shadow.querySelector('.timeline')
+    timeline.scrollTop = timeline.scrollHeight
   }
 
   showError(message, retry = null) {
@@ -546,5 +592,9 @@ export function createAssistantPanel(options = {}) { return new AssistantPanel(o
 
 export function setPanelState(panel, state, label = '') {
   if (typeof panel?.state === 'function') panel.state(state, label)
-  else panel?.status?.(label || PANEL_STATES[state].label)
+  else panel?.status?.(state, label)
+}
+
+export function panelLabel(panel, name) {
+  return String(panel?.label?.(name) || DEFAULT_PANEL_LABELS[name] || '')
 }

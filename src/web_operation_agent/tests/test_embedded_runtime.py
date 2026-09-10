@@ -222,7 +222,10 @@ class EmbeddedRuntimeTests(unittest.TestCase):
               'compositionupdate', 'compositionend', 'keypress', 'keydown', 'keyup', 'submit']) {{
               document.addEventListener(name, () => window.hostComposerEvents.push(name));
             }}
-            const panel = mod.createAssistantPanel({{labels:{{assistant:'Operations Copilot'}}}});
+            const panel = mod.createAssistantPanel({{labels:{{
+              assistant:'Operations Copilot', statusActing:'Working', goalPrefix:'Request: ',
+              approve:'Approve this operation', deny:'Return and edit',
+            }}}});
             panel.onTask(async value => {{
               if (value === 'retry this') {{ const error = new Error('busy'); error.code = 'backpressure'; throw error; }}
               panel.setBusy(true); panel.state('acting'); panel.add('Inspecting current page');
@@ -258,6 +261,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
               window.testPanel.setBusy(true);
               window.testPanel.add('第一行\\n' + 'A'.repeat(735));
             }""")
+            self.assertEqual(host.locator("output").inner_text(), "Working")
             long_answer = host.locator(".entry").last.locator("span")
             self.assertEqual(long_answer.text_content(), "第一行\n" + "A" * 735)
             self.assertEqual(
@@ -275,6 +279,22 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                 host.locator(".entry").last.locator("span").inner_text(),
                 "重新检查当前页面",
             )
+            page.evaluate("""() => {
+              window.testPanel.clear();
+              window.testPanel.beginTurn('turn-1', 'List every company');
+              for (let index = 0; index < 35; index += 1) {
+                window.testPanel.add(`first-${index}`, {turnId:'turn-1'});
+              }
+              window.testPanel.beginTurn('turn-2', 'Open the second company');
+              window.testPanel.add('Inspecting', {turnId:'turn-2'});
+              window.testPanel.add('Inspecting', {turnId:'turn-2'});
+            }""")
+            self.assertEqual(host.locator(".turn").count(), 2)
+            self.assertEqual(host.locator(".turn > [data-kind=goal] > span").all_inner_texts(), [
+                "Request: List every company", "Request: Open the second company",
+            ])
+            self.assertEqual(host.locator(".turn").nth(0).locator(".turn-events .entry").count(), 30)
+            self.assertEqual(host.locator(".turn").nth(1).locator(".turn-events .entry").count(), 1)
             animation = host.locator(".panel").evaluate(
                 "node => getComputedStyle(node, '::before').animationName")
             self.assertEqual(animation, "none")
@@ -311,6 +331,30 @@ class EmbeddedRuntimeTests(unittest.TestCase):
             host.locator(".approval").wait_for()
             host.locator(".approval button:not(.deny)").press("Enter")
             page.wait_for_function("window.approvalDecision === 'approved'")
+            page.set_viewport_size({"width": 320, "height": 480})
+            page.evaluate("""() => {
+              window.approvalDecision = '';
+              window.testPanel.requestApproval({approval_id:'approval-ui-narrow',
+                effect:'Create a company after checking the exact requested values',
+                targets:['Acme Corporation · acme.example', 'Current authenticated workspace'],
+                expires_at:Date.now()+10000}).then(value => { window.approvalDecision = value });
+            }""")
+            narrow_approval = host.locator(".approval")
+            narrow_approval.wait_for()
+            narrow_approval.scroll_into_view_if_needed()
+            host_box = host.bounding_box()
+            approval_box = narrow_approval.bounding_box()
+            deny_box = host.locator(".deny").bounding_box()
+            approve_box = host.locator(".approval button:not(.deny)").bounding_box()
+            self.assertIsNotNone(host_box)
+            self.assertIsNotNone(approval_box)
+            self.assertGreaterEqual(host_box["y"], 0)
+            self.assertLessEqual(host_box["y"] + host_box["height"], 480)
+            self.assertGreaterEqual(approval_box["x"], 0)
+            self.assertLessEqual(approval_box["x"] + approval_box["width"], 320)
+            self.assertGreaterEqual(deny_box["y"], approve_box["y"] + approve_box["height"])
+            host.locator(".deny").press("Escape")
+            page.wait_for_function("window.approvalDecision === 'denied'")
             page.evaluate("window.testPanel.state('success')")
             self.assertEqual(host.locator(".panel").get_attribute("data-tone"), "success")
             page.evaluate("window.testPanel.state('indeterminate')")
@@ -429,7 +473,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
           runtime.stored = {{taskInFlight:false}};
           runtime._save = () => {{}};
           const statuses = [];
-          runtime.panel = {{add() {{}}, status(value) {{statuses.push(value)}}, setBusy() {{}}}};
+          runtime.panel = {{add() {{}}, state(value) {{statuses.push(value)}}, setBusy() {{}}}};
           const sent = [];
           let epoch = 0;
           runtime.observe = async () => ({{schema_version:1, session_id:'session-1',
@@ -465,7 +509,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                          ["/observations", "/messages", "/observations", "/messages"])
         self.assertTrue(result["overlapRejected"])
         self.assertTrue(result["taskInFlight"])
-        self.assertIn("等待补充", result["statuses"])
+        self.assertIn("needs_input", result["statuses"])
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_product_turn_terminal_states_release_the_panel(self):
@@ -473,8 +517,8 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         script = f"""
           const mod = await import('data:text/javascript;base64,{source}');
           const expected = {{
-            finished:'已结束', refused:'无法执行', cancelled:'已取消',
-            indeterminate:'结果不确定', failed:'任务失败',
+            finished:'ended', refused:'refused', cancelled:'cancelled',
+            indeterminate:'indeterminate', failed:'error',
           }};
           const rows = [];
           for (const [state, label] of Object.entries(expected)) {{
@@ -486,7 +530,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
             runtime.panel = {{
               add() {{}},
               setBusy(value) {{ busy = value; }},
-              status(value) {{ status = value; }},
+              state(value) {{ status = value; }},
             }};
             await runtime._handleEvent({{kind:'progress', payload:{{state, message:'done'}}}});
             rows.push({{state, label, status, busy, taskInFlight:runtime.stored.taskInFlight}});
@@ -498,7 +542,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         rows = json.loads(proc.stdout)
         self.assertEqual(
             [row["status"] for row in rows],
-            ["已结束", "无法执行", "已取消", "结果不确定", "任务失败"],
+            ["ended", "refused", "cancelled", "indeterminate", "error"],
         )
         self.assertTrue(all(row["busy"] is False for row in rows))
         self.assertTrue(all(row["taskInFlight"] is False for row in rows))
@@ -522,7 +566,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
           let busy = true;
           runtime.panel = {{
             add(value) {{ notes.push(value); }},
-            status(value) {{ statuses.push(value); }},
+            state(value) {{ statuses.push(value); }},
             setBusy(value) {{ busy = value; }},
             setStopping(value) {{ stopping = value; }},
             cancelApproval() {{ approvalCancelled += 1; }},
@@ -552,7 +596,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         self.assertEqual(result["pending"], {
             "busy": True, "stopping": True, "taskInFlight": True,
             "activeMessageId": "message-7", "cancellationPending": True})
-        self.assertEqual(result["statuses"], ["正在停止", "已取消"])
+        self.assertEqual(result["statuses"], ["stopping", "cancelled"])
         self.assertEqual(result["notes"], ["正在安全停止当前任务", "Stopped"])
         self.assertFalse(result["busy"])
         self.assertFalse(result["stored"]["taskInFlight"])
