@@ -157,6 +157,7 @@ A private append-only batch ledger now enforces that frozen order and a common t
 - The only packaged real-application adapter is a narrow Twenty CRM Companies vertical; Minimal Contacts is a synthetic onboarding example.
 - Arbitrary third-party websites and a browser extension are not implemented.
 - Browser actions do not provide database transaction or rollback semantics.
+- Mutation-journal idempotency covers one exact proposal digest. Separate sessions can still create distinct proposals for the same business key; cross-session in-flight business-key exclusion is not implemented.
 - Source-aware retrieval exists as an optional planning input, but its benefit has not been established across a representative held-out evaluation.
 - Provider egress is bounded, classified and credential-checked, but the framework does not yet provide application-specific field classification, customer-managed encryption, regional routing, a DLP service, or a complete data-retention policy.
 - The assistant panel has automated keyboard, responsive, semantic, reduced-motion, recovery, and visual-state coverage. Its default copy is Chinese and can be overridden through label hooks; broader localization, assistive-technology/browser matrix testing, and the end-to-end deployment experience remain release work.

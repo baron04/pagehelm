@@ -1116,6 +1116,22 @@ class ServerAgentSession:
                     try:
                         receipt, write, fresh = self._observe_after_server_tool(
                             obs, step, name)
+                    except TurnCancelled as exc:
+                        # The typed application acknowledgement and durable journal already
+                        # agree that this mutation completed. Cancelling the subsequent page
+                        # refresh ends the turn, but cannot turn a known write into an unknown
+                        # one or invite reconciliation/retry.
+                        detail = (f"{name} completed, but the follow-up page observation "
+                                  "was cancelled.")
+                        result.agent_said = detail
+                        self.ledger.append(
+                            "business_mutation_followup_cancelled", step=step, tool=name,
+                            proposal_digest=proposal.content_digest,
+                            result_digest=tool_result.content_digest,
+                            completed=True, dispatched=True,
+                            side_effect_possible=True, reason=str(exc)[:300])
+                        return self._finish(
+                            result, t0, "user_cancelled", detail, steps=step)
                     except TransportError as exc:
                         return self._finish(
                             result, t0, "indeterminate_write",

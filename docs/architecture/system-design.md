@@ -258,13 +258,15 @@ App Skill 适合描述当前菜单不可见、但已审核的只读页面入口�
 3. 生成包含 effect、targets、规范化参数和随机 nonce 的 mutation proposal；
 4. 在页面面板展示 effect 与 targets；
 5. 将当前受认证浏览器会话的决定在服务端绑定到 proposal digest；
-6. 在持久 mutation journal 中原子地将 proposal 从 `prepared` 认领为 `dispatching`，使并发调用和进程重启都不能再次执行；
+6. 在持久 mutation journal 中原子地将 proposal 从 `prepared` 认领为 `dispatching`，使并发调用和进程重启都不能再次执行同一 proposal digest；
 7. 最多发送一次写请求；
 8. 将确定结果持久记录为 `completed` 或 `failed`，将无法确定的结果记录为 `indeterminate`；需要业务成功判定的集成还应由 Adapter 进行同用户回读。
 
 `allow_business_mutations` 默认是 `false`。没有显式启用或没有确认通道时，写工具在 dispatch 前终止。用户拒绝对应 `CANCELLED`。
 
 任何发生在 dispatch 后、又无法确定结果的异常都必须对应 `INDETERMINATE`。系统不会因为超时、连接丢失、回执格式错误、回读失败或进程在 dispatch 后崩溃而自动重试写请求。公开 Twenty composition 要求独立的私有 SQLite journal；它持久保留 proposal digest、operation context digest、状态、期限和结果摘要，不保存原始业务参数或身份字段。journal 解决的是重复发送风险，不提供应用数据库事务或自动判断崩溃前的请求是否已经生效。
+
+这项一次性保证以 proposal digest 为单位。每次 proposal 都包含新的服务端 nonce，因此两个会话分别为同一业务对象生成的新 proposal 目前不会互斥。基于应用声明的业务键和 actor 的跨会话在途互斥属于后续持久恢复工作；在此之前，部署方不应把 proposal 幂等描述为业务语义上的全局 exactly-once。
 
 ### 7.3 页面写入
 

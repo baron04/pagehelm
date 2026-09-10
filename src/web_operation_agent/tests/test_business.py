@@ -736,6 +736,58 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertEqual(browser.url, "http://app.test/object/company/company-2")
             self.assertEqual(len(ledger.of_kind("business_mutation_result")), 1)
 
+    def test_cancelling_followup_observation_does_not_rewrite_completed_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cancelled = {"value": False}
+
+            class CancelAfterCompletedMutation(_MutationExecutor):
+                def execute_mutation(self, name, args, *, context=None):
+                    result = super().execute_mutation(name, args, context=context)
+                    cancelled["value"] = True
+                    return result
+
+            skill = _write_skill(Path(tmp) / "write-skill.json")
+            executor = CancelAfterCompletedMutation()
+            journal = MemoryMutationJournal()
+            runtime = BusinessToolRuntime(
+                (skill,), executor, mutation_journal=journal)
+            chat = _Chat([
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("create_company", {"name": "Acme"}),
+            ])
+            ledger = SessionLedger(Path(tmp) / "session.jsonl", "write-followup-cancelled")
+
+            def approve(proposal):
+                return SimpleNamespace(
+                    approval_id="approval-1", decision="approved",
+                    plan_digest=proposal.content_digest)
+
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="Create company Acme.",
+                              supported_scope="Create exactly one company."),
+                arm="U", chat=chat, browser=_Browser(), control=ReadOnlyControl(),
+                ledger=ledger, attestation=None, source_contract=False,
+                step_budget=3, wall_budget_s=30, run_id="write-followup-cancelled",
+                business_tools=runtime, business_mutation_approval=approve,
+                cancelled=lambda: cancelled["value"])
+            session.entry_observation = _observation(1)
+            session.plan()
+            result = session.run()
+
+            completed = ledger.of_kind("business_mutation_result")[-1]
+            intent = journal.get(completed["proposal_digest"])
+            self.assertIsNotNone(intent)
+            self.assertEqual(intent.state, "completed")
+            self.assertEqual(intent.result_digest, completed["result_digest"])
+            self.assertEqual(result.terminal_reason, "user_cancelled")
+            self.assertIn("completed", result.agent_said)
+            self.assertEqual(executor.executions, 1)
+            self.assertEqual(result.business_control["mutation_completed"], 1)
+            self.assertEqual(result.business_control["mutation_indeterminate"], 0)
+            followup = ledger.of_kind("business_mutation_followup_cancelled")
+            self.assertEqual(len(followup), 1)
+            self.assertTrue(followup[0]["completed"])
+
     def test_indeterminate_server_mutation_stops_without_model_retry(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill = _write_skill(Path(tmp) / "write-skill.json")
