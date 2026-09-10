@@ -148,6 +148,24 @@ class NativeCompletionTransport(unittest.TestCase):
         response.__exit__ = lambda stream=response, *_args: None
         return response
 
+    def test_shared_quota_refuses_before_http_and_spend(self):
+        from web_operation_agent.durable import SQLiteSessionStore, SQLiteProviderQuota
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            quota = SQLiteProviderQuota(SQLiteSessionStore(path / "quota.db"),
+                                        scope="tenant-provider", max_requests=1)
+            self.assertTrue(quota.reserve())
+            ledger = path / "spend.jsonl"
+            chat = M.ChatModel(M.SpendMeter(ledger=ledger), env=self.ENV, shared_quota=quota)
+            with patch.object(M.urllib.request, "urlopen") as opened:
+                with self.assertRaises(M.ProviderError) as caught:
+                    chat.request_completion({"model": "MiniMax-M3", "messages": [{"role": "user", "content": "hello"}]}, "run")
+                self.assertEqual(caught.exception.code, "provider_capacity")
+                self.assertIs(caught.exception.dispatched, False)
+                opened.assert_not_called()
+            self.assertFalse(ledger.exists())
+            self.assertEqual(chat.runtime_guard.status()["in_flight"], 0)
+
     def test_framework_native_body_is_not_rewritten_and_full_response_is_returned(self):
         with tempfile.TemporaryDirectory() as directory:
             meter = M.SpendMeter(ledger=Path(directory) / "spend.jsonl")

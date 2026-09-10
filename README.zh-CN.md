@@ -19,7 +19,7 @@ Web Operation Agent 是一个早期阶段的框架，用于在第一方 Web 应�
 | 受控写入 | 业务写入默认关闭。启用写入的 turn 必须绑定已验证身份、经过页面内明确确认，并原子记录 `prepared → dispatching → completed/failed/indeterminate`。生产组合还要求 journal 明确声明具备跨重启持久性；易失 journal 只允许在显式 test profile 下使用。 |
 | 旧页面控制层 | 旧版外部页面控制网关在本机线程和进程间只允许一个协作 run 持有租约，使用前重置，释放前清空；清理失败时关闭执行。这条兼容路径不能提供并发的租户级许可。 |
 | 多轮会话承载 | 会话 Host 按顺序处理面板消息、隔离普通单轮失败，并在内存中保留最多 4 轮或 32 KiB 的引用上下文。历史业务事实可以帮助理解“第二家公司”等指代，但 Agent 必须重新读取当前 API 或页面，历史路由不会获得权限。 |
-| 共享本地网关 | 有容量上限的 server composition 可以在一个网关中承载多个可独立撤销的 session capability；50 会话确定性隔离测试覆盖 token 与 channel 分离。Session 默认一小时过期，队列有背压，事件、消息、观察、动作、审批和 Runtime 实例都有硬上限。状态仍只存在于当前进程。 |
+| 共享本地网关 | 有容量上限的 server composition 可以在一个网关中承载多个可独立撤销的 session capability；50 会话确定性隔离测试覆盖 token 与 channel 分离。Session 默认一小时过期，队列有背压，事件、消息、观察、动作、审批和 Runtime 实例都有硬上限。可选 SQLite 存储支持本机进程间的 owner fencing、消息去重记录与进度 outbox。 |
 | 任务控制 | 面板可通过当前已认证 Runtime lease 停止精确绑定的活动消息。尚未被浏览器认领的动作和等待确认的写入不会再下发；已经认领的动作仍会结算为确定结果或 `indeterminate`。 |
 | 助手交互 | 基于显式状态模型的复用面板同时支持页面内嵌和独立回放。进度和结果按用户轮次分组，提交失败会保留输入，确认被拒绝后会恢复原目标供修改，机器状态与可覆盖的显示文案分离。窄视口审批、键盘焦点、屏幕阅读器 live region、深色模式和减弱动画已有自动化覆盖。 |
 | 身份绑定 | 应用宿主可以把短期 actor/tenant/workspace 主体绑定到 Runtime capability、Agent turn、类型化工具 scope、审批、mutation proposal 和脱敏审计事件。Twenty demo 会在启动前通过 Twenty 解析准确的 HttpOnly 浏览器 session，要求其与委托 OAuth 的 actor/workspace 一致，并在浏览器 cookie 被替换或删除时关闭 Agent session。 |
@@ -157,14 +157,16 @@ Evaluator 还包含一套严格的配对实验预注册校验器，用于在运�
 
 私有的 append-only batch ledger 会让所有 runner 使用同一种 trial schema，并强制执行冻结顺序。它通过摘要链检测删改和重排，拒绝重复或时间重叠的 trial，不会把未知 provider 费用写成零，还会检测同一 pair 的模型漂移，并在装置无效或观察到安全事件时停止。官方 PageAgentCore 与 PageController v1.12.4 已通过 npm lock 和 integrity 固定，其轻量 bridge 已完成可复现构建以及无模型调用的真实 Chromium DOM/custom-tool 资格检查。两个引擎现在共用同一套证据合同、同一个 typed failure 分类器和同一个协议绑定 trial projector：只读 PageAgent runner 与只读 Web Operation Agent runner 都绑定真实浏览器/API 身份，并拒绝无法确定性验收的答案或页面证据。统一的串行 schedule driver 按冻结顺序完成状态采集、任务实例化、执行、判定、投影与追加，内部没有任何引擎特例；固定 schema 的报告只从已验证账本重算公开计数，并拒绝把小批次表述成对比结论。两个 runner 都曾在本地 Twenty 2.39.0 fixture 上用真实 Chromium、委托 API、数据库状态采集和独立 evaluator 通过无模型 live 资格验证。该结论记录的是一次在已准备环境上的运行，不是任何 checkout 自带的属性：live 门禁通过 `scripts/qualify.sh` 重跑，缺少该环境时它会报告 `BLOCKED`。冻结的正式协议、provider 快照策略和源码 allowlist 仍未完成；这些资格用例不构成成功率或对比结论。
 
+本机持久恢复、共享请求配额、保留策略与 mutation 核对见[持久化运维指南](docs/integrations/durable-operations.zh-CN.md)。
+
 ## 已知限制
 
-- 共享 Runtime 网关、session registry、有界事件 journal、消息队列、会话上下文和账本仍是本地进程组件；重启恢复、水平扩展和持久租户隔离尚未完成。Session TTL 与硬配额可以防止无限保留，但不能恢复状态。已确认的 Twenty API 写入拥有持久的一次性 SQLite journal，但 dispatch 之后发生崩溃仍会标记为 `indeterminate`，必须核对而不能自动重试。Twenty demo 已通过可信 Playwright 宿主强制身份绑定；普通嵌入式应用仍需从自身登录边界提供服务端认证的身份断言，principal 续期和分布式撤销也尚未实现。独立的旧页面控制网关仍使用全局许可与 trace：协作客户端会串行执行完整 run，并在前后边界清空状态，但并发页面写入前仍需在网关内部实现 tenant/session/turn scope。
-- 单轮截止时间同时覆盖 provider 排队和 socket 调用。服务端 Agent 的原生 completion 路径使用可关闭的 HTTP 连接：消息级主动取消会中断进行中的请求、释放 provider guard 名额、阻止后续工具下发，并把已派发调用记为 usage 未知而不自动重试。所有能被单轮触达的实现都满足同一个显式 `ChatPort` 契约，其中取消能力是必需项，并在模型被组装的位置校验，而不是在调用时探测，因此无法取消的实现会被直接拒绝，而不是静默降级。合同规划调用仍走普通 completion 路径，不可取消。Provider guard 只在单进程内生效，还没有分布式租户速率配额。已有初始页面观察绑定，以及 claim 前对目标控件、关联表单和路由的新鲜度检查；目标元素之外的依赖、崩溃恢复和更完整的运行监控仍未完成。
+- 共享 Runtime 网关及活跃执行仍位于进程内。可选 SQLite 恢复在身份作用域内保存去重与进度并使用 owner lease，重新签发浏览器权限，将旧工作标记为中断而不重跑动作；跨主机扩展和模型对话上下文持久化尚未实现。Session TTL 与硬配额限制资源占用；SQLite 模式只恢复安全历史，不恢复执行权限。已确认的 Twenty API 写入拥有持久的一次性 SQLite journal，但 dispatch 之后发生崩溃仍会标记为 `indeterminate`，必须核对而不能自动重试。Twenty demo 已通过可信 Playwright 宿主强制身份绑定；普通嵌入式应用仍需从自身登录边界提供服务端认证的身份断言，principal 续期和分布式撤销也尚未实现。独立的旧页面控制网关仍使用全局许可与 trace：协作客户端会串行执行完整 run，并在前后边界清空状态，但并发页面写入前仍需在网关内部实现 tenant/session/turn scope。
+- 单轮截止时间同时覆盖 provider 排队和 socket 调用。服务端 Agent 的原生 completion 路径使用可关闭的 HTTP 连接：消息级主动取消会中断进行中的请求、释放 provider guard 名额、阻止后续工具下发，并把已派发调用记为 usage 未知而不自动重试。所有能被单轮触达的实现都满足同一个显式 `ChatPort` 契约，其中取消能力是必需项，并在模型被组装的位置校验，而不是在调用时探测，因此无法取消的实现会被直接拒绝，而不是静默降级。合同规划调用仍走普通 completion 路径，不可取消。并发 guard 只在单进程内生效；可选 SQLite 滚动请求配额可按服务端指定的租户/provider scope 在本机进程间协调，尚无 token 和金额配额。已有初始页面观察绑定，以及 claim 前对目标控件、关联表单和路由的新鲜度检查；目标元素之外的依赖、跨机器恢复和更完整的运行监控仍未完成。
 - 唯一打包的真实应用适配器是范围有限的 Twenty CRM Companies 纵切；Minimal Contacts 只是合成的上手示例。
 - 尚未实现任意第三方网站支持和浏览器扩展。
 - 浏览器操作不具备数据库事务或回滚语义。
-- Mutation journal 会阻断同一应用、工具、租户、工作区、actor 业务键的在途与不确定写入，即使 proposal 不同。SQLite 通过同一数据库的事务实现跨进程互斥。Twenty 创建公司使用规范化名称作为业务键；其它 Adapter 可声明 reconcile key，否则使用规范化参数。这不保证跨 actor 或独立数据库的全局唯一性。旧版无业务键的未解决记录会保守阻断新写入；升级前需停止旧进程。运维核对与审计化 resolve 尚未完成。
+- Mutation journal 会阻断同一应用、工具、租户、工作区、actor 业务键的在途与不确定写入，即使 proposal 不同。SQLite 通过同一数据库的事务实现跨进程互斥。Twenty 创建公司使用规范化名称作为业务键；其它 Adapter 可声明 reconcile key，否则使用规范化参数。这不保证跨 actor 或独立数据库的全局唯一性。旧版无业务键的未解决记录会保守阻断新写入；升级前需停止旧进程。已提供只读核对及默认 dry-run 的运维裁决，不确定结果不会自动解除阻断。
 - 源码感知检索可以作为可选规划输入，但尚未在有代表性的保留测试集上证明收益。
 - Provider egress 已有大小限制、数据分类和凭据检查。Adapter 现在会为每个 typed-tool 结果及其审计事件附加声明的数据类别，但尚未实现字段级策略执行、客户管理的加密、区域路由、DLP 服务或完整的数据保留策略。
 - 助手面板已有多轮分组、窄视口审批、键盘、语义、减弱动画、错误恢复、宿主事件隔离和视觉状态的自动化覆盖。状态迁移使用稳定枚举，默认中文状态与进度文案可通过服务端校验的 labels hook 覆盖；完整动作与错误文案本地化、辅助技术与浏览器矩阵测试，以及端到端部署体验仍属于发布前工作。

@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import secrets
+import sqlite3
 import threading
 import time
 import uuid
@@ -18,6 +19,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
+from .durable import SQLiteSessionStore, DurableStateError, principal_scope
 from .browser import TransportError, TurnCancelled
 from .identity import PrincipalContext, PrincipalError
 from .privacy import (SESSION_HANDOFF_QUERY_KEYS, SENSITIVE_CREDENTIAL_NAME,
@@ -176,7 +178,8 @@ class RemoteSessionChannel:
 
     def __init__(self, session_id: str, allowed_origins: tuple[str, ...],
                  principal: PrincipalContext | None = None,
-                 limits: RemoteSessionLimits | None = None):
+                 limits: RemoteSessionLimits | None = None,
+                 durable_store: SQLiteSessionStore | None = None):
         self.session_id = session_id
         self.allowed_origins = frozenset(allowed_origins)
         self.principal = principal
@@ -212,6 +215,13 @@ class RemoteSessionChannel:
         self._approvals: dict[str, ApprovalRequest] = {}
         self._approval_decisions: dict[str, ApprovalDecision] = {}
         self._pending_approval_id = ""
+        self._durable_store = durable_store
+        if durable_store is not None and principal is None:
+            raise ValueError("durable sessions require a freshly authenticated principal")
+        self._owner = (durable_store.acquire(session_id, principal_scope(principal, allowed_origins))
+                       if durable_store else None)
+        self.recovered_history = (durable_store.history(self._owner) if durable_store else [])
+        self._heartbeat_stop = threading.Event()
         self._closed = False
         self._close_reason = ""
         self._append_event("session_started", {
@@ -219,6 +229,25 @@ class RemoteSessionChannel:
             "application_id": (principal.application_id if principal else ""),
             "principal_digest": (principal.binding_digest if principal else ""),
         })
+
+        if self.recovered_history:
+            self._append_event("progress", {
+                "state": "session_recovered",
+                "message": "会话已重新连接。此前未完成的任务没有重跑，请检查结果后提交新任务；写入仍需重新确认。"})
+        if durable_store is not None:
+            self._heartbeat = threading.Thread(target=self._renew_owner, daemon=True)
+            self._heartbeat.start()
+
+    def _renew_owner(self):
+        while not self._heartbeat_stop.wait(self._durable_store.lease_ms / 3000):
+            try:
+                self.validate_live()
+            except (RemoteSessionClosed, DurableStateError, OSError, sqlite3.Error):
+                with self._condition:
+                    self._closed = True
+                    self._close_reason = "owner_fenced"
+                    self._condition.notify_all()
+                return
 
     @property
     def latest_event_id(self) -> str:
@@ -241,6 +270,13 @@ class RemoteSessionChannel:
         if self._closed:
             detail = (f": {self._close_reason}" if self._close_reason else "")
             raise RemoteSessionClosed(f"remote session is closed{detail}")
+        if self._durable_store is not None:
+            try:
+                self._durable_store.renew(self._owner)
+            except (DurableStateError, sqlite3.Error, OSError) as exc:
+                self._closed = True
+                self._heartbeat_stop.set()
+                raise RemoteSessionClosed("durable session owner was fenced") from exc
         now_ms = _now_ms()
         if self.principal is not None and now_ms >= self.principal.expires_at:
             self._terminate("principal_expired")
@@ -279,6 +315,18 @@ class RemoteSessionChannel:
         if len(canonical_json(event.to_json()).encode("utf-8")) > _MAX_EVENT_BYTES:
             raise RemoteProtocolError(
                 "task event exceeds 256 KiB", code="payload_too_large", status=413)
+        if self._durable_store is not None:
+            # Store user-visible progress only. No action/approval capability survives restart.
+            persisted = {"kind": kind, "turn_id": turn_id,
+                         "payload": (_copy_json(payload) if kind == "progress"
+                                     else {"state": "not_replayable"})}
+            try:
+                self._durable_store.append(self._owner, persisted)
+            except (DurableStateError, sqlite3.Error, OSError) as exc:
+                self._closed = True
+                self._heartbeat_stop.set()
+                self._condition.notify_all()
+                raise RemoteSessionClosed("durable event commit failed") from exc
         self._events.append(event)
         self._condition.notify_all()
         return _copy_wire(event)
@@ -293,6 +341,9 @@ class RemoteSessionChannel:
         if len(self._events) < self.limits.max_events:
             self._new_event("terminal", {"reason": reason})
         self._closed = True
+        self._heartbeat_stop.set()
+        if self._durable_store is not None:
+            self._durable_store.release(self._owner)
         self._condition.notify_all()
 
     def _capacity_exhausted(self, resource: str) -> None:
@@ -562,6 +613,9 @@ class RemoteSessionChannel:
                     code="backpressure",
                     status=429,
                 )
+            if self._durable_store is not None and not self._durable_store.message(
+                    self._owner, message_id, fingerprint):
+                return {"accepted": True, "duplicate": True}
             self._message_digests[message_id] = fingerprint
             self._messages.append(_copy_json(message))
             self._condition.notify_all()
@@ -621,6 +675,12 @@ class RemoteSessionChannel:
 
     def complete_message(self, message_id: str) -> None:
         with self._condition:
+            if message_id and self._durable_store is not None:
+                try:
+                    self._durable_store.transition(self._owner, message_id, "completed")
+                except (DurableStateError, sqlite3.Error, OSError):
+                    self._closed = True
+                    self._heartbeat_stop.set()
             if message_id:
                 self._completed_message_ids.add(message_id)
             if self._active_message_id == message_id:
@@ -866,6 +926,8 @@ class RemoteSessionChannel:
             if self._messages and not self._active_message_id:
                 self._ensure_open()
                 message = _copy_json(self._messages.popleft())
+                if self._durable_store is not None:
+                    self._durable_store.transition(self._owner, message["message_id"], "running")
                 self._active_message_id = message["message_id"]
                 return message
             self._ensure_open()
@@ -908,7 +970,9 @@ class RemoteSessionChannel:
 class RemoteSessionRegistry:
     """Own capability-token hashes and session channels; raw tokens are never retained."""
 
-    def __init__(self, *, limits: RemoteSessionLimits | None = None):
+    def __init__(self, *, limits: RemoteSessionLimits | None = None,
+                 durable_store: SQLiteSessionStore | None = None):
+        self.durable_store = durable_store
         self.limits = limits or RemoteSessionLimits()
         if not isinstance(self.limits, RemoteSessionLimits):
             raise TypeError("limits must be RemoteSessionLimits or None")
@@ -932,7 +996,8 @@ class RemoteSessionRegistry:
             principal.require_live(now_ms=_now_ms())
         token = secrets.token_urlsafe(32)
         self.reap_expired()
-        channel = RemoteSessionChannel(sid, origins, principal, self.limits)
+        channel = RemoteSessionChannel(sid, origins, principal, self.limits,
+                                       durable_store=self.durable_store)
         with self._lock:
             if sid in self._channels:
                 raise ValueError(f"session {sid!r} already exists")

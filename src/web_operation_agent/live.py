@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Protocol, cast
 
+from .durable import SQLiteSessionStore
 from .embedded_gateway import EmbeddedGateway
 from .identity import PrincipalContext
 from .privacy import redact_sensitive_assignments, redact_session_handoffs
@@ -189,12 +190,15 @@ class LiveProductSession:
                  sensitive_query_keys: frozenset[str] = frozenset(),
                  principal: PrincipalContext | None = None,
                  session_limits: RemoteSessionLimits | None = None,
+                 durable_store: SQLiteSessionStore | None = None,
                  registry: RemoteSessionRegistry | None = None,
                  gateway: EmbeddedGateway | None = None,
                  provider_status: Callable[[], dict] | None = None,
                  on_close: Callable[[str], None] | None = None):
         if (registry is None) != (gateway is None):
             raise ValueError("registry and gateway must be supplied together")
+        if registry is not None and durable_store is not None:
+            raise ValueError("durable_store belongs to the shared registry")
         if registry is not None and session_limits is not None:
             raise ValueError("session_limits belong to the shared registry")
         if provider_status is not None and not callable(provider_status):
@@ -202,7 +206,7 @@ class LiveProductSession:
         if gateway is not None and provider_status is not None:
             raise ValueError("provider_status belongs to the shared server when gateway is shared")
         self._owns_gateway = registry is None
-        self.registry = registry or RemoteSessionRegistry(limits=session_limits)
+        self.registry = registry or RemoteSessionRegistry(limits=session_limits, durable_store=durable_store)
         self._provider_status = provider_status
         self._thread: threading.Thread | None = None
         self._result = None
@@ -330,12 +334,13 @@ class LiveProductServer:
     """Bounded shared gateway and registry for multiple local product sessions.
 
     This removes the one-listener-per-session topology while keeping the existing channel
-    protocol. State remains in memory; durable restart recovery is a later M8.3d slice.
+    protocol. Optional SQLite storage preserves safe history and fences local owners.
     """
 
     def __init__(self, *, max_sessions: int = 100, sse_wait_s: float = .2,
                  host: str = "127.0.0.1", port: int = 0,
                  session_limits: RemoteSessionLimits | None = None,
+                 durable_store: SQLiteSessionStore | None = None,
                  provider_status: Callable[[], dict] | None = None):
         if (isinstance(max_sessions, bool) or not isinstance(max_sessions, int)
                 or not 1 <= max_sessions <= 10_000):
@@ -344,7 +349,7 @@ class LiveProductServer:
         if provider_status is not None and not callable(provider_status):
             raise TypeError("provider_status must be callable or None")
         self._provider_status = provider_status
-        self.registry = RemoteSessionRegistry(limits=session_limits)
+        self.registry = RemoteSessionRegistry(limits=session_limits, durable_store=durable_store)
         self._sessions: dict[str, LiveProductSession] = {}
         self._lock = threading.RLock()
         self._closed = False

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import os
 import re
@@ -41,6 +42,7 @@ class MutationIntent:
     updated_at: int
     result_digest: str = ""
     business_key: str = ""
+    reconciliation_json: str = "{}"
 
     def __post_init__(self) -> None:
         if not _DIGEST.fullmatch(self.proposal_digest):
@@ -65,7 +67,7 @@ class MutationJournal(Protocol):
 
     def register(self, proposal_digest: str, operation_context_digest: str, *,
                  expires_at: int, now_ms: int | None = None,
-                 business_key: str = "") -> None: ...
+                 business_key: str = "", reconciliation: dict | None = None) -> None: ...
 
     def claim(self, proposal_digest: str, operation_context_digest: str, *,
               now_ms: int | None = None) -> None: ...
@@ -110,7 +112,10 @@ class MemoryMutationJournal:
 
     def register(self, proposal_digest: str, operation_context_digest: str, *,
                  expires_at: int, now_ms: int | None = None,
-                 business_key: str = "") -> None:
+                 business_key: str = "", reconciliation: dict | None = None) -> None:
+        encoded = json.dumps(reconciliation or {}, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        if len(encoded.encode()) > 16_384:
+            raise MutationJournalError("reconciliation metadata exceeds 16 KiB")
         now = _now(now_ms)
         _registration(proposal_digest, operation_context_digest, expires_at, now)
         if business_key and not _DIGEST.fullmatch(business_key):
@@ -119,14 +124,15 @@ class MemoryMutationJournal:
             prior = self._records.get(proposal_digest)
             if prior is not None:
                 if (prior.operation_context_digest != operation_context_digest
-                        or prior.expires_at != expires_at or prior.business_key != business_key):
+                        or prior.expires_at != expires_at or prior.business_key != business_key
+                        or prior.reconciliation_json != encoded):
                     raise MutationJournalError("proposal digest registration conflicts")
                 return
             if len(self._records) >= self.max_entries:
                 raise MutationJournalError("mutation journal capacity is exhausted")
             self._records[proposal_digest] = MutationIntent(
                 proposal_digest, operation_context_digest, "prepared",
-                expires_at, now, business_key=business_key)
+                expires_at, now, business_key=business_key, reconciliation_json=encoded)
 
     def claim(self, proposal_digest: str, operation_context_digest: str, *,
               now_ms: int | None = None) -> None:
@@ -217,6 +223,13 @@ class SQLiteMutationJournal:
             if "business_key" not in columns:
                 connection.execute(
                     "ALTER TABLE mutation_intents ADD COLUMN business_key TEXT NOT NULL DEFAULT ''")
+            if "reconciliation_json" not in columns:
+                connection.execute("ALTER TABLE mutation_intents ADD COLUMN "
+                                   "reconciliation_json TEXT NOT NULL DEFAULT '{}'")
+            connection.execute("CREATE TABLE IF NOT EXISTS mutation_resolutions ("
+                               "proposal_digest TEXT PRIMARY KEY, expected_updated_at INTEGER NOT NULL, "
+                               "outcome TEXT NOT NULL, operator_digest TEXT NOT NULL, "
+                               "evidence_digest TEXT NOT NULL, resolved_at INTEGER NOT NULL)")
             connection.execute("CREATE INDEX IF NOT EXISTS mutation_business_key "
                                "ON mutation_intents(business_key, state)")
             connection.commit()
@@ -233,7 +246,10 @@ class SQLiteMutationJournal:
 
     def register(self, proposal_digest: str, operation_context_digest: str, *,
                  expires_at: int, now_ms: int | None = None,
-                 business_key: str = "") -> None:
+                 business_key: str = "", reconciliation: dict | None = None) -> None:
+        encoded = json.dumps(reconciliation or {}, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        if len(encoded.encode()) > 16_384:
+            raise MutationJournalError("reconciliation metadata exceeds 16 KiB")
         now = _now(now_ms)
         _registration(proposal_digest, operation_context_digest, expires_at, now)
         if business_key and not _DIGEST.fullmatch(business_key):
@@ -241,19 +257,20 @@ class SQLiteMutationJournal:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT operation_context_digest, expires_at, business_key FROM mutation_intents "
+                "SELECT operation_context_digest, expires_at, business_key, reconciliation_json FROM mutation_intents "
                 "WHERE proposal_digest = ?", (proposal_digest,)).fetchone()
             if row is not None:
                 if (row["operation_context_digest"] != operation_context_digest
-                        or row["expires_at"] != expires_at or row["business_key"] != business_key):
+                        or row["expires_at"] != expires_at or row["business_key"] != business_key
+                        or row["reconciliation_json"] != encoded):
                     raise MutationJournalError("proposal digest registration conflicts")
                 connection.commit()
                 return
             connection.execute(
                 "INSERT INTO mutation_intents "
-                "(proposal_digest, operation_context_digest, state, expires_at, updated_at, business_key) "
-                "VALUES (?, ?, 'prepared', ?, ?, ?)",
-                (proposal_digest, operation_context_digest, expires_at, now, business_key))
+                "(proposal_digest, operation_context_digest, state, expires_at, updated_at, business_key, reconciliation_json) "
+                "VALUES (?, ?, 'prepared', ?, ?, ?, ?)",
+                (proposal_digest, operation_context_digest, expires_at, now, business_key, encoded))
             connection.commit()
 
     def claim(self, proposal_digest: str, operation_context_digest: str, *,
@@ -315,6 +332,47 @@ class SQLiteMutationJournal:
                 "SELECT * FROM mutation_intents WHERE proposal_digest = ?",
                 (proposal_digest,)).fetchone()
         return (MutationIntent(**dict(row)) if row is not None else None)
+
+    def unresolved(self) -> tuple[MutationIntent, ...]:
+        with self._connect() as connection:
+            rows = connection.execute("SELECT * FROM mutation_intents WHERE state IN "
+                                      "('dispatching', 'indeterminate') ORDER BY updated_at").fetchall()
+        return tuple(MutationIntent(**dict(row)) for row in rows)
+
+    def resolve(self, proposal_digest: str, *, expected_updated_at: int,
+                outcome: str, operator_digest: str, evidence_digest: str,
+                writer_stopped: bool, dry_run: bool = True) -> dict:
+        """Operator-only CAS resolution; never retries a write or restores an approval.
+
+        A verified stopped writer is required even for indeterminate records: a timed-out
+        upstream request may still complete. Evidence must establish a definitive result.
+        """
+        if outcome not in {"completed", "failed"} or writer_stopped is not True:
+            raise MutationJournalError("resolution requires definite evidence and a stopped writer")
+        if not isinstance(dry_run, bool):
+            raise MutationJournalError("dry_run must be boolean")
+        if not all(_DIGEST.fullmatch(value) for value in (operator_digest, evidence_digest)):
+            raise MutationJournalError("resolution requires operator and evidence digests")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT * FROM mutation_intents WHERE proposal_digest = ?",
+                                     (proposal_digest,)).fetchone()
+            if row is None or row["state"] not in {"dispatching", "indeterminate"}:
+                raise MutationJournalError("resolution requires an unresolved intent")
+            if row["updated_at"] != expected_updated_at:
+                raise MutationJournalError("resolution evidence is stale")
+            plan = {"proposal_digest": proposal_digest, "from": row["state"],
+                    "to": outcome, "dry_run": dry_run, "dispatches": 0}
+            if not dry_run:
+                now = _now(None)
+                connection.execute("INSERT INTO mutation_resolutions VALUES (?, ?, ?, ?, ?, ?)",
+                                   (proposal_digest, expected_updated_at, outcome,
+                                    operator_digest, evidence_digest, now))
+                connection.execute("UPDATE mutation_intents SET state = ?, updated_at = ?, "
+                                   "result_digest = ? WHERE proposal_digest = ?",
+                                   (outcome, now, evidence_digest, proposal_digest))
+            connection.commit()
+            return plan
 
     def database_sha256(self) -> str:
         """Return a diagnostic file digest after checkpointing committed WAL pages."""

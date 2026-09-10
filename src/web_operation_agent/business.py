@@ -815,7 +815,13 @@ class BusinessToolRuntime:
             try:
                 self._mutation_journal.register(
                     proposal.content_digest, proposal.operation_context_digest,
-                    expires_at=expires_at, now_ms=now_ms, business_key=business_key)
+                    expires_at=expires_at, now_ms=now_ms, business_key=business_key,
+                    reconciliation={"application_id": self.application_id, "tool": name,
+                                    "args": spec.args,
+                                    "identity": ({key: value for key, value in
+                                        principal.audit_projection().items() if key in {
+                                            "tenant_digest", "workspace_digest", "actor_digest"}}
+                                        if principal else {})})
             except MutationJournalError as exc:
                 raise BusinessToolError(str(exc)) from exc
             self._prepared_mutations[proposal.content_digest] = (proposal, expires_at)

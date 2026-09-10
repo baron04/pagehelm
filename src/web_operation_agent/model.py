@@ -29,6 +29,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from .durable import SQLiteProviderQuota
 from .egress import DEFAULT_PROVIDER_EGRESS_POLICY, ProviderEgressPolicy
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -651,7 +652,8 @@ class ChatModel:
                  timeout: int = 180, provider: str | None = None,
                  options: dict | None = None,
                  egress_policy: ProviderEgressPolicy | None = None,
-                 runtime_guard: ProviderRuntimeGuard | None = None):
+                 runtime_guard: ProviderRuntimeGuard | None = None,
+                 shared_quota: SQLiteProviderQuota | None = None):
         env = env if env is not None else load_env()
         raw_base = env.get("AGENT_OPENAI_BASE_URL") or ""
         self._key = env.get("AGENT_OPENAI_API_KEY") or ""
@@ -678,6 +680,9 @@ class ChatModel:
         if (isinstance(temperature, bool) or not isinstance(temperature, (int, float))
                 or not math.isfinite(temperature) or not 0 <= temperature <= 2):
             raise ValueError("temperature must be a finite number from 0 to 2")
+        if shared_quota is not None and not isinstance(shared_quota, SQLiteProviderQuota):
+            raise TypeError("shared_quota must be SQLiteProviderQuota or None")
+        self.shared_quota = shared_quota
         self.meter = meter
         # Fail now, loudly, rather than book a run at another model's rates.
         meter.price = price_for(self.model)
@@ -817,6 +822,10 @@ class ChatModel:
                     "provider concurrency wait exhausted the request deadline",
                     code="provider_capacity",
                 )
+            quota = getattr(self, "shared_quota", None)
+            if quota is not None and not quota.reserve():
+                raise ProviderError("shared provider request quota exhausted",
+                                    code="provider_capacity", dispatched=False)
             request_id = uuid.uuid4().hex
             url = f"{self.base}/chat/completions"
             headers = {"content-type": "application/json",

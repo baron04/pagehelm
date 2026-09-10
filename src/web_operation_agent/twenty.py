@@ -39,7 +39,7 @@ from web_operation_agent.application import (
     ApplicationDescriptor,
     ApplicationPorts,
     DeclaredRoutePort,
-    ConservativeMutationReconciler,
+    MutationReconciliation,
     DeclaredDataClassifier,
     ResultPostconditionVerifier,
 )
@@ -975,6 +975,38 @@ class _TwentyIdentityPort:
         principal.require_live(application_id=application_id)
 
 
+class _TwentyMutationReconciler:
+    def __init__(self, executor, enabled):
+        self._executor = executor
+        self.supported_tools = frozenset({"create_company"}) if enabled else frozenset()
+
+    def reconcile(self, name, business_key, *, evidence, principal):
+        if name not in self.supported_tools or principal is None:
+            raise ValueError("reconciliation requires an enabled tool and principal")
+        principal.require_live(application_id="twenty")
+        if "companies:read" not in principal.scopes:
+            raise PrincipalError("reconciliation requires companies:read scope")
+        delegated = self._executor.resolve_delegated_identity()
+        if any(getattr(principal, field) != getattr(delegated, field)
+               for field in ("tenant_id", "workspace_id", "actor_id")):
+            raise PrincipalError("reconciliation delegated identity changed")
+        args = self._executor._normalize_company(business_key)
+        payload, _status, _refreshed = self._executor._get_companies()
+        rows = (payload.get("data") or {}).get("companies", [])
+        complete = (payload.get("_woaPagination", {}).get("complete") is True
+                    and payload.get("totalCount") == len(rows))
+        matches = [row for row in rows if isinstance(row, dict)
+                   and str(row.get("name", "")).strip().casefold() == args["name"].casefold()
+                   and normalize_twenty_domain((row.get("domainName") or {}).get("primaryLinkUrl")
+                       or (row.get("domainName") or {}).get("primaryLinkLabel")) == args["domain"]]
+        # A matching row is not proof that this proposal created it. Absence also cannot
+        # rule out an upstream write still in flight. Keep the journal unresolved.
+        return MutationReconciliation(
+            outcome="unknown", requires_human=True,
+            reason=(f"Current matching records: {len(matches)}; complete scan: {complete}. "
+                    "Establish the original writer's final outcome before resolving."))
+
+
 class TwentyApplicationAdapter:
     """Application-owned facts and tools for the Twenty Companies integration."""
 
@@ -1037,8 +1069,7 @@ class TwentyApplicationAdapter:
             identity=identity,
             routes=routes,
             postconditions=postconditions,
-            reconciliation=ConservativeMutationReconciler(
-                frozenset({"create_company"}) if allow_mutations else frozenset()),
+            reconciliation=_TwentyMutationReconciler(executor, allow_mutations),
             data=data,
         )
         self.descriptor = ApplicationDescriptor(

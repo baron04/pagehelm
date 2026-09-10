@@ -110,7 +110,9 @@ import glob, zipfile
 paths = glob.glob("dist/*.whl")
 assert len(paths) == 1, paths
 names = zipfile.ZipFile(paths[0]).namelist()
-required = ["web_operation_agent/policies/model_options.json",
+required = ["web_operation_agent/durable.py",
+            "web_operation_agent/mutation_ops.py",
+            "web_operation_agent/policies/model_options.json",
             "web_operation_agent/policies/ofbiz.json",
             "web_operation_agent/policies/prices.json",
             "web_operation_agent/integrations/ofbiz.py",
@@ -151,6 +153,8 @@ import os, sys
 from pathlib import Path
 import web_operation_agent
 from web_operation_agent.mutation import SQLiteMutationJournal
+from web_operation_agent.durable import SQLiteSessionStore, SQLiteProviderQuota
+from web_operation_agent.mutation_ops import reconcile
 from web_operation_agent.sourcetree import SourceTree
 from web_operation_agent.twenty import TwentyApplicationAdapter
 from web_operation_agent_demo import MinimalContactsAdapter
