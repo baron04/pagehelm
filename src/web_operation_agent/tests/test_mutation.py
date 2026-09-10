@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import multiprocessing
 import tempfile
 import threading
 import unittest
@@ -15,6 +16,17 @@ from web_operation_agent.mutation import (MemoryMutationJournal,
 PROPOSAL = "a" * 64
 CONTEXT = "b" * 64
 RESULT = "c" * 64
+
+
+def _competing_claim(path, proposal, ready, start, output):
+    journal = SQLiteMutationJournal(path)
+    ready.put(True)
+    start.wait(10)
+    try:
+        journal.claim(proposal, CONTEXT, now_ms=1_001)
+        output.put("claimed")
+    except MutationJournalError:
+        output.put("refused")
 
 
 class MutationJournalContract:
@@ -35,6 +47,41 @@ class MutationJournalContract:
         self.assertEqual(intent.result_digest, RESULT)
         with self.assertRaisesRegex(MutationJournalError, "already completed"):
             journal.claim(PROPOSAL, CONTEXT, now_ms=1_004)
+
+    def test_distinct_proposals_block_until_definite_finish(self):
+        journal = self.make_journal()
+        for proposal in (PROPOSAL, RESULT):
+            journal.register(proposal, CONTEXT, expires_at=2_000, now_ms=1_000,
+                             business_key="d" * 64)
+        journal.claim(PROPOSAL, CONTEXT, now_ms=1_001)
+        with self.assertRaisesRegex(MutationJournalError, "business key"):
+            journal.claim(RESULT, CONTEXT, now_ms=1_002)
+        journal.finish(PROPOSAL, "completed", now_ms=1_003)
+        journal.claim(RESULT, CONTEXT, now_ms=1_004)
+        self.assertEqual(journal.get(RESULT).state, "dispatching")
+
+    def test_indeterminate_key_never_expires_into_permission(self):
+        journal = self.make_journal()
+        journal.register(PROPOSAL, CONTEXT, expires_at=2_000, now_ms=1_000,
+                         business_key="d" * 64)
+        journal.claim(PROPOSAL, CONTEXT, now_ms=1_001)
+        journal.finish(PROPOSAL, "indeterminate", now_ms=1_002)
+        journal.register(RESULT, CONTEXT, expires_at=4_000, now_ms=3_000,
+                         business_key="d" * 64)
+        with self.assertRaisesRegex(MutationJournalError, "business key"):
+            journal.claim(RESULT, CONTEXT, now_ms=3_001)
+        journal.register("e" * 64, CONTEXT, expires_at=4_000, now_ms=3_000,
+                         business_key="f" * 64)
+        journal.claim("e" * 64, CONTEXT, now_ms=3_001)
+
+    def test_legacy_unresolved_intent_blocks_new_keyed_dispatch(self):
+        journal = self.make_journal()
+        journal.register(PROPOSAL, CONTEXT, expires_at=2_000, now_ms=1_000)
+        journal.claim(PROPOSAL, CONTEXT, now_ms=1_001)
+        journal.register(RESULT, CONTEXT, expires_at=2_000, now_ms=1_000,
+                         business_key="d" * 64)
+        with self.assertRaisesRegex(MutationJournalError, "business key"):
+            journal.claim(RESULT, CONTEXT, now_ms=1_002)
 
     def test_context_mismatch_and_expiry_fail_before_claim(self):
         journal = self.make_journal()
@@ -88,6 +135,36 @@ class SQLiteMutationJournalTests(MutationJournalContract, unittest.TestCase):
         reopened.finish(PROPOSAL, "indeterminate", now_ms=1_003)
         self.assertEqual(self.make_journal().get(PROPOSAL).state, "indeterminate")
         self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o600)
+
+    def test_separate_processes_cannot_claim_the_same_business_key(self):
+        journal = self.make_journal()
+        for proposal in (PROPOSAL, RESULT):
+            journal.register(proposal, CONTEXT, expires_at=2_000, now_ms=1_000,
+                             business_key="d" * 64)
+        ctx = multiprocessing.get_context("spawn")
+        ready, output, start = ctx.Queue(), ctx.Queue(), ctx.Event()
+        workers = [ctx.Process(target=_competing_claim,
+                   args=(self.path, proposal, ready, start, output))
+                   for proposal in (PROPOSAL, RESULT)]
+        try:
+            for worker in workers:
+                worker.start()
+            for _ in workers:
+                ready.get(timeout=10)
+            start.set()
+            self.assertEqual(sorted(output.get(timeout=10) for _ in workers),
+                             ["claimed", "refused"])
+            for worker in workers:
+                worker.join(10)
+                self.assertEqual(worker.exitcode, 0)
+        finally:
+            for worker in workers:
+                if worker.is_alive():
+                    worker.terminate()
+                    worker.join()
+        reopened = self.make_journal()
+        self.assertEqual(sum(reopened.get(p).state == "dispatching"
+                             for p in (PROPOSAL, RESULT)), 1)
 
     def test_invalid_timeout_and_symbolic_link_are_rejected(self):
         for value in (True, 0, float("inf"), 121):

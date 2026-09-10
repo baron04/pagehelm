@@ -262,8 +262,11 @@ class BusinessMutationSpec:
     args: dict
     effect: str
     targets: tuple[str, ...]
+    reconcile_key: str = ""
 
     def __post_init__(self) -> None:
+        if not isinstance(self.reconcile_key, str) or len(self.reconcile_key) > 1000:
+            raise ValueError("mutation reconcile key must be a bounded string")
         if (not isinstance(self.args, dict)
                 or any(not isinstance(key, str) for key in self.args)
                 or _has_sensitive_key(self.args)):
@@ -790,6 +793,15 @@ class BusinessToolRuntime:
             tool=name, args=spec.args, effect=spec.effect, targets=spec.targets,
             nonce=uuid.uuid4().hex,
             operation_context_digest=(context.binding_digest if context else ""))
+        principal = context.principal if context is not None else None
+        key_payload = [self.application_id, name,
+                       principal.tenant_id if principal else "",
+                       principal.workspace_id if principal else "",
+                       principal.actor_id if principal else "",
+                       spec.reconcile_key or spec.args]
+        business_key = hashlib.sha256(json.dumps(
+            key_payload, ensure_ascii=False, sort_keys=True,
+            separators=(",", ":")).encode()).hexdigest()
         expires_at = context.expires_at if context is not None else now_ms + 10 * 60 * 1000
         with self._mutation_lock:
             expired = [digest for digest, (_proposal, item_expires_at)
@@ -803,7 +815,7 @@ class BusinessToolRuntime:
             try:
                 self._mutation_journal.register(
                     proposal.content_digest, proposal.operation_context_digest,
-                    expires_at=expires_at, now_ms=now_ms)
+                    expires_at=expires_at, now_ms=now_ms, business_key=business_key)
             except MutationJournalError as exc:
                 raise BusinessToolError(str(exc)) from exc
             self._prepared_mutations[proposal.content_digest] = (proposal, expires_at)

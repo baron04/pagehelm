@@ -648,6 +648,7 @@ class TwentyBusinessToolExecutor:
         self._assert_no_duplicate(normalized["name"], normalized["domain"])
         return BusinessMutationSpec(
             args=normalized,
+            reconcile_key=normalized["name"].casefold(),
             effect="在 Twenty CRM 中创建 1 家公司",
             targets=(f"公司：{normalized['name']}", f"域名：{normalized['domain']}"),
         )

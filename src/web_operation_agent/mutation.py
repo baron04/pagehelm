@@ -10,7 +10,7 @@ import stat
 import threading
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
 from typing import Protocol
@@ -40,6 +40,7 @@ class MutationIntent:
     expires_at: int
     updated_at: int
     result_digest: str = ""
+    business_key: str = ""
 
     def __post_init__(self) -> None:
         if not _DIGEST.fullmatch(self.proposal_digest):
@@ -53,6 +54,8 @@ class MutationIntent:
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise MutationJournalError(f"{name} must be a non-negative integer")
+        if self.business_key and not _DIGEST.fullmatch(self.business_key):
+            raise MutationJournalError("business key is invalid")
         if self.result_digest and not _DIGEST.fullmatch(self.result_digest):
             raise MutationJournalError("result digest is invalid")
 
@@ -61,7 +64,8 @@ class MutationJournal(Protocol):
     durability: MutationJournalDurability
 
     def register(self, proposal_digest: str, operation_context_digest: str, *,
-                 expires_at: int, now_ms: int | None = None) -> None: ...
+                 expires_at: int, now_ms: int | None = None,
+                 business_key: str = "") -> None: ...
 
     def claim(self, proposal_digest: str, operation_context_digest: str, *,
               now_ms: int | None = None) -> None: ...
@@ -105,21 +109,24 @@ class MemoryMutationJournal:
         self._lock = threading.RLock()
 
     def register(self, proposal_digest: str, operation_context_digest: str, *,
-                 expires_at: int, now_ms: int | None = None) -> None:
+                 expires_at: int, now_ms: int | None = None,
+                 business_key: str = "") -> None:
         now = _now(now_ms)
         _registration(proposal_digest, operation_context_digest, expires_at, now)
+        if business_key and not _DIGEST.fullmatch(business_key):
+            raise MutationJournalError("business key is invalid")
         with self._lock:
             prior = self._records.get(proposal_digest)
             if prior is not None:
                 if (prior.operation_context_digest != operation_context_digest
-                        or prior.expires_at != expires_at):
+                        or prior.expires_at != expires_at or prior.business_key != business_key):
                     raise MutationJournalError("proposal digest registration conflicts")
                 return
             if len(self._records) >= self.max_entries:
                 raise MutationJournalError("mutation journal capacity is exhausted")
             self._records[proposal_digest] = MutationIntent(
                 proposal_digest, operation_context_digest, "prepared",
-                expires_at, now)
+                expires_at, now, business_key=business_key)
 
     def claim(self, proposal_digest: str, operation_context_digest: str, *,
               now_ms: int | None = None) -> None:
@@ -135,9 +142,13 @@ class MemoryMutationJournal:
             if intent.state != "prepared":
                 raise MutationJournalError(
                     f"mutation proposal is already {intent.state}")
-            self._records[proposal_digest] = MutationIntent(
-                intent.proposal_digest, intent.operation_context_digest,
-                "dispatching", intent.expires_at, now)
+            if intent.business_key and any(
+                    row.business_key in {"", intent.business_key}
+                    and row.state in {"dispatching", "indeterminate"}
+                    for row in self._records.values()):
+                raise MutationJournalError("business key has an in-flight or unresolved mutation")
+            self._records[proposal_digest] = replace(
+                intent, state="dispatching", updated_at=now)
 
     def finish(self, proposal_digest: str, state: str, *,
                result_digest: str = "", now_ms: int | None = None) -> None:
@@ -148,9 +159,8 @@ class MemoryMutationJournal:
             intent = self._records.get(proposal_digest)
             if intent is None or intent.state != "dispatching":
                 raise MutationJournalError("only a dispatching mutation can finish")
-            self._records[proposal_digest] = MutationIntent(
-                intent.proposal_digest, intent.operation_context_digest,
-                state, intent.expires_at, now, result_digest)
+            self._records[proposal_digest] = replace(
+                intent, state=state, updated_at=now, result_digest=result_digest)
 
     def get(self, proposal_digest: str) -> MutationIntent | None:
         with self._lock:
@@ -201,6 +211,16 @@ class SQLiteMutationJournal:
                 )
             """)
 
+            connection.execute("BEGIN IMMEDIATE")
+            columns = {row["name"] for row in connection.execute(
+                "PRAGMA table_info(mutation_intents)")}
+            if "business_key" not in columns:
+                connection.execute(
+                    "ALTER TABLE mutation_intents ADD COLUMN business_key TEXT NOT NULL DEFAULT ''")
+            connection.execute("CREATE INDEX IF NOT EXISTS mutation_business_key "
+                               "ON mutation_intents(business_key, state)")
+            connection.commit()
+
     @contextmanager
     def _connect(self):
         connection = sqlite3.connect(
@@ -212,25 +232,28 @@ class SQLiteMutationJournal:
             connection.close()
 
     def register(self, proposal_digest: str, operation_context_digest: str, *,
-                 expires_at: int, now_ms: int | None = None) -> None:
+                 expires_at: int, now_ms: int | None = None,
+                 business_key: str = "") -> None:
         now = _now(now_ms)
         _registration(proposal_digest, operation_context_digest, expires_at, now)
+        if business_key and not _DIGEST.fullmatch(business_key):
+            raise MutationJournalError("business key is invalid")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT operation_context_digest, expires_at FROM mutation_intents "
+                "SELECT operation_context_digest, expires_at, business_key FROM mutation_intents "
                 "WHERE proposal_digest = ?", (proposal_digest,)).fetchone()
             if row is not None:
                 if (row["operation_context_digest"] != operation_context_digest
-                        or row["expires_at"] != expires_at):
+                        or row["expires_at"] != expires_at or row["business_key"] != business_key):
                     raise MutationJournalError("proposal digest registration conflicts")
                 connection.commit()
                 return
             connection.execute(
                 "INSERT INTO mutation_intents "
-                "(proposal_digest, operation_context_digest, state, expires_at, updated_at) "
-                "VALUES (?, ?, 'prepared', ?, ?)",
-                (proposal_digest, operation_context_digest, expires_at, now))
+                "(proposal_digest, operation_context_digest, state, expires_at, updated_at, business_key) "
+                "VALUES (?, ?, 'prepared', ?, ?, ?)",
+                (proposal_digest, operation_context_digest, expires_at, now, business_key))
             connection.commit()
 
     def claim(self, proposal_digest: str, operation_context_digest: str, *,
@@ -238,6 +261,16 @@ class SQLiteMutationJournal:
         now = _now(now_ms)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            intent = connection.execute(
+                "SELECT * FROM mutation_intents WHERE proposal_digest = ?",
+                (proposal_digest,)).fetchone()
+            if intent is not None and intent["state"] == "prepared" and intent["business_key"]:
+                blocked = connection.execute(
+                    "SELECT 1 FROM mutation_intents WHERE (business_key = ? OR business_key = '') "
+                    "AND state IN ('dispatching', 'indeterminate') LIMIT 1",
+                    (intent["business_key"],)).fetchone()
+                if blocked:
+                    raise MutationJournalError("business key has an in-flight or unresolved mutation")
             changed = connection.execute(
                 "UPDATE mutation_intents SET state = 'dispatching', updated_at = ? "
                 "WHERE proposal_digest = ? AND operation_context_digest = ? "

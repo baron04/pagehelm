@@ -397,6 +397,23 @@ class BusinessRuntimeValidation(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "read-only"):
                 BusinessToolRuntime((BusinessSkill.load(path),), _MutationExecutor())
 
+    def test_separate_runtimes_share_normalized_business_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _write_skill(Path(tmp) / "write-skill.json")
+            journal = MemoryMutationJournal()
+            executors = [_MutationExecutor(), _MutationExecutor()]
+            runtimes = [BusinessToolRuntime((skill,), executor, mutation_journal=journal)
+                        for executor in executors]
+            proposals = [runtime.prepare_mutation(
+                "create_company", {"name": name}, {skill.skill_id})
+                for runtime, name in zip(runtimes, (" Acme ", "Acme"))]
+            self.assertNotEqual(proposals[0].content_digest, proposals[1].content_digest)
+            journal.claim(proposals[0].content_digest, "")
+            with self.assertRaisesRegex(BusinessToolError, "business key"):
+                runtimes[1].execute_mutation(
+                    proposals[1], proposals[1].content_digest, {skill.skill_id})
+            self.assertEqual(executors[1].executions, 0)
+
     def test_mutation_requires_exact_approval_and_is_single_use(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill = _write_skill(Path(tmp) / "write-skill.json")
