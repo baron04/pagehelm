@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Callable
 
 from .schemas import ActionReceipt, ContractStep, OperationContract, PageObservation
 
@@ -38,19 +39,12 @@ WRITE_UNKNOWN = "unknown"       # the control plane could not be read: never ass
 #: refusal page are still one piece of evidence and cannot refute unattempted steps.
 _ATTEMPTS_NOTHING = frozenset({"observe"})
 
-#: `/<webapp>/control/<request>` -- the shape every OFBiz request takes.
-_ROUTE = re.compile(r"/(?P<webapp>[^/]+)/control/(?P<request>[^?;#]+)")
+RouteIdentity = Callable[[str], tuple[str, str]]
 
 
-def route_of(url: str) -> tuple[str, str]:
-    """The (webapp, request) a url addresses, or ("", "").
-
-    Route identity excludes query-string coincidences and includes the application, so the
-    same request name in two applications remains distinct.
-    """
-    m = _ROUTE.search(url or "")
-    return ((m.group("webapp").lower(), m.group("request").rstrip("/").lower())
-            if m else ("", ""))
+def opaque_route_identity(_url: str) -> tuple[str, str]:
+    """Default for applications that did not declare source-contract route semantics."""
+    return "", ""
 
 
 #: Text an application shows when it has refused to do something. Matching these is what turns
@@ -86,15 +80,19 @@ class PlanState:
     standing_notes: list[str] = field(default_factory=list)
     #: Refused requests whose identity does not match the plan. Not evidence against it.
     unattributed_refusals: int = 0
+    route_identity: RouteIdentity = field(default=opaque_route_identity, repr=False)
 
     @staticmethod
-    def of(contract: OperationContract) -> "PlanState":
+    def of(contract: OperationContract,
+           route_identity: RouteIdentity = opaque_route_identity) -> "PlanState":
         """Entry candidates are alternatives; the steps are a sequence.
 
         Reaching any candidate satisfies the entry requirement and leaves the unused
         alternatives `not_applicable`; candidate order must not constrain the route taken.
         """
-        return PlanState(contract=contract,
+        if not callable(route_identity):
+            raise TypeError("route_identity must be callable")
+        return PlanState(contract=contract, route_identity=route_identity,
                          candidates=[StepState(c) for c in contract.entry_candidates],
                          steps=[StepState(s) for s in contract.steps])
 
@@ -136,7 +134,7 @@ class PlanState:
         page = " ".join([obs.title, *obs.landmarks, *obs.messages]).lower()
         refusal_on_page = bool(_REFUSAL_MARKS.search(page))
         attempted = receipt.action not in _ATTEMPTS_NOTHING
-        here = route_of(obs.url or "")
+        here = self.route_identity(obs.url or "")
         if write_outcome == WRITE_REFUSED:
             # Only enforcement decisions identify a refused request. The current/previous
             # page and action arguments do not: AJAX may submit elsewhere. Identity includes

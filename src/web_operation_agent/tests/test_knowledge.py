@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from web_operation_agent.knowledge import AppSkill, KnowledgeRouter
+from web_operation_agent.integrations.ofbiz_knowledge import AppSkill, KnowledgeRouter
 
 
 VALID = {

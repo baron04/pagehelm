@@ -166,6 +166,22 @@ class ApplicationAdapterTests(unittest.TestCase):
                     ValueError, "query"):
                 routes.validate_tool_route(route)
 
+    def test_generic_route_port_does_not_invent_source_contract_semantics(self):
+        routes = _InvoiceAdapter().ports.routes
+        self.assertEqual(
+            routes.route_identity("https://ledger.example/invoices/invoice-1"),
+            "/invoices/invoice-1")
+        self.assertEqual(
+            routes.contract_route_identity("https://ledger.example/invoices/invoice-1"),
+            ("", ""))
+        self.assertEqual(routes.discover_source_scopes(object()), frozenset())
+
+    def test_route_port_requires_named_groups_for_contract_identity(self):
+        with self.assertRaisesRegex(ValueError, "scope and route"):
+            DeclaredRoutePort(
+                "ledger-demo", (r"/invoices/[a-z0-9-]+",),
+                contract_route_pattern=r"/invoices/(?P<route>[^/]+)")
+
 
 if __name__ == "__main__":
     unittest.main()

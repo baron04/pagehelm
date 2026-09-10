@@ -113,6 +113,8 @@ names = zipfile.ZipFile(paths[0]).namelist()
 required = ["web_operation_agent/policies/model_options.json",
             "web_operation_agent/policies/ofbiz.json",
             "web_operation_agent/policies/prices.json",
+            "web_operation_agent/integrations/ofbiz.py",
+            "web_operation_agent/integrations/ofbiz_knowledge.py",
             "web_operation_agent/skills/twenty/companies-query.json",
             "web_operation_agent/skills/twenty/companies-create.json",
             "web_operation_agent/web_runtime/embedded.js",

@@ -708,9 +708,12 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         script = f"""
           const mod = await import('data:text/javascript;base64,{source}');
           const h = mod.runtimeInternals;
+          h.configureSensitiveQueryKeys([
+            'externalLoginKey', 'externaLoginKey', 'externLoginKey', 'jsessionid']);
           const content = [
             '[0]<input type=password name=PASSWORD value=my super secret />',
             '[4]<a href=/next?externalLoginKey=abc123>Next />',
+            '[5]<input type=text name=externalLoginKey value=field-secret />',
             '[7]<input type=text name=note value=public />',
             '[8]<button>First line\\nSecond line />',
             '[9]<input type=submit name=find value=Find />'
@@ -786,6 +789,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         self.assertNotIn("my super secret", result["clean"])
         self.assertNotIn("super secret", result["clean"])
         self.assertNotIn("abc123", result["clean"])
+        self.assertNotIn("field-secret", result["clean"])
         self.assertIn("externalLoginKey=[redacted]", result["clean"])
         self.assertIn("jsessionid%253D[redacted]", result["encoded"])
         self.assertNotIn("TOPSECRET", result["generic"])
@@ -795,7 +799,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         self.assertEqual(result["encodedKeyGeneric"], "[redacted]")
         self.assertEqual(result["encodedKeyHandoff"], "[redacted]")
         self.assertEqual([item["ref"] for item in result["elements"]],
-                         ["e0", "e4", "e7", "e8", "e9"])
+                         ["e0", "e4", "e5", "e7", "e8", "e9"])
         self.assertEqual(result["elements"][1]["role"], "link")
         self.assertEqual(result["elements"][0]["epoch"], 9)
         self.assertEqual(result["hydrated"][0]["attrs"], {
@@ -805,9 +809,9 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                          "/callback?access_token=[redacted]&next=1")
         self.assertEqual(result["args"]["value"], "[redacted]")
         self.assertEqual(result["args"]["nested"]["token"], "[redacted]")
-        self.assertIn("First line", result["elements"][3]["name"])
-        self.assertIn("Second line", result["elements"][3]["name"])
-        self.assertEqual(result["elements"][4]["name"], "Find")
+        self.assertIn("First line", result["elements"][4]["name"])
+        self.assertIn("Second line", result["elements"][4]["name"])
+        self.assertEqual(result["elements"][5]["name"], "Find")
         self.assertEqual(result["recoveries"], {
             "link": True, "prepared": False, "submit": False, "reload": False,
             "formGet": True,

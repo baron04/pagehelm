@@ -96,6 +96,8 @@ from pathlib import Path                                                     # n
 from web_operation_agent.browser import TransportError                       # noqa: E402
 from web_operation_agent.controlplane import ControlPlaneError               # noqa: E402
 from web_operation_agent.grounding import PlanState                          # noqa: E402
+from web_operation_agent.integrations.ofbiz import (                        # noqa: E402
+    OFBIZ_ROUTE_PORT, ofbiz_route_identity)
 from web_operation_agent.ledger import SessionLedger                         # noqa: E402
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionReceipt,     # noqa: E402
                                          ElementRef, OperationContract, PageObservation)
@@ -111,6 +113,10 @@ CONTRACT = OperationContract.from_json({
     "mutation": {"webapp": "ordermgr", "request": "addShippingAddress",
                  "citations": ["a.xml:1-2"]},
     "citations": ["a.xml:1-2"]})
+
+
+def _plan_state(value):
+    return PlanState.of(value, route_identity=ofbiz_route_identity)
 
 
 def _page(url="http://app/ordermgr/control/orderview", title="Order"):
@@ -163,10 +169,11 @@ def _run(chat, browser, control):
             task=TaskSpec(task_ref="T", prompt="change the delivery address"), arm="S",
             chat=chat, browser=browser, control=control,
             ledger=SessionLedger(Path(tmp) / "l.jsonl", "r1"), attestation=None,
-            step_budget=6, wall_budget_s=120, run_id="r1")
+            step_budget=6, wall_budget_s=120, run_id="r1",
+            application_routes=OFBIZ_ROUTE_PORT)
         s.contract = CONTRACT
         s.contract_source = "compiled"
-        s.plan_state = PlanState.of(CONTRACT)
+        s.plan_state = _plan_state(CONTRACT)
         s.entry_observation = browser.pages[0] if hasattr(browser, "pages") else _page()
         return s.run(), s
 
@@ -298,7 +305,7 @@ class ThePageOnlyArmIsNotToldItHasSource(unittest.TestCase):
         s = object.__new__(ServerAgentSession)
         s.contract_source = source
         s.contract = CONTRACT
-        s.plan_state = PlanState.of(CONTRACT)
+        s.plan_state = _plan_state(CONTRACT)
         return ServerAgentSession._plan_block(s) or ""
 
     def test_the_source_arm_is_told_the_plan_came_from_source(self):
@@ -348,6 +355,7 @@ class TheEvidenceThePlannerHadIsRecorded(unittest.TestCase):
             s.run_id = "r1"
             s.entry_observation = _page()
             s.served_webapps = set()
+            s._contract_route_identity = ofbiz_route_identity
             s.terms_cache = None
             s.ledger = SessionLedger(Path(tmp) / "l.jsonl", "r1")
             s.bundle = EvidenceBundle(task_ref="T")

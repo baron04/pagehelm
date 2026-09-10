@@ -473,6 +473,8 @@ class AgentTurnExecutor:
                 self.config.plain_business_answer_min_page_actions),
             max_agent_said_chars=self.config.max_user_answer_chars,
             allow_application_entry=self.config.allow_application_entry,
+            application_routes=(
+                self.application.ports.routes if self.application is not None else None),
             cancelled=lambda: self.channel.message_cancelled(turn_message.message_id),
             principal=principal,
             session_id=(self.channel.session_id if principal is not None else ""),

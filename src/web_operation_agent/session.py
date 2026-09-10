@@ -24,8 +24,9 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Callable
-from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit
+from urllib.parse import urlencode, urljoin, urlsplit
 
+from .application import ApplicationRoutePort
 from .affordance import SourceAffordance, resolve_source_affordances
 from .browser import BrowserExecutor, TransportError, TurnCancelled
 from .business import (BusinessMutationIndeterminate, BusinessToolError,
@@ -35,13 +36,13 @@ from .contract import (ContractPlanner, EvidenceBundle, PlanningFailed, SourceRe
 from .controlplane import ControlPlaneClient, ControlPlaneError
 from .egress import AuditedChat, ProviderEgressError
 from .grounding import (NOT_APPLICABLE, REFUTED, WRITE_MIXED, WRITE_PERMITTED, WRITE_REFUSED,
-                        WRITE_UNKNOWN, PlanState, route_of)
+                        WRITE_UNKNOWN, PlanState, opaque_route_identity)
 from .identity import OperationContext, PrincipalContext
-from .knowledge import KnowledgeRouter
+from .knowledge import ApplicationKnowledgePort
 from .ledger import SessionLedger
 from .model import BudgetExhausted, ProviderError
-from .privacy import (SESSION_HANDOFF_QUERY_KEYS, has_unredacted_session_handoff,
-                      redact_sensitive_assignments, redact_session_handoffs)
+from .privacy import (has_unredacted_session_handoff, redact_sensitive_assignments,
+                      redact_session_handoffs)
 from .schemas import (BROWSER_ACTIONS, ActionReceipt, ControlPlan, OperationContract,
                       PageObservation, empty_contract)
 
@@ -117,7 +118,7 @@ TOOL_SCHEMAS = [
             "ref": {"type": "string"},
             "expect_navigation": {"type": "boolean"}}, "required": ["ref"]}}},
     {"type": "function", "function": {
-        "name": "goto", "description": "Open a path on this application, e.g. /accounting/control/main",
+        "name": "goto", "description": "Open an exact same-application path authorized by the current page or a typed tool result.",
         "parameters": {"type": "object", "properties": {"url": {"type": "string"}},
                        "required": ["url"]}}},
     {"type": "function", "function": {
@@ -153,8 +154,7 @@ SOURCE_NAV_TOOL = {"type": "function", "function": {
     "description": "Open a same-origin read-only request that a prior lookup_source result "
                    "explicitly cited. The server validates that source declared it view-only.",
     "parameters": {"type": "object", "properties": {
-        "url": {"type": "string", "description": "Path including current-page query values, "
-                "for example /workeffort/control/Thing/Edit?thingId=123"}},
+        "url": {"type": "string", "description": "Exact relative path, including only query values established by current evidence."}},
         "required": ["url"]}}}
 
 SOURCE_CANDIDATE_TOOL = {"type": "function", "function": {
@@ -229,8 +229,9 @@ page; expected text is a verification hint and never overrides current-page evid
 
 APPLICATION_ENTRY_SYSTEM = """\
 For a visible application link whose href contains a redacted session handoff, call
-enter_application with its element ref. The server accepts only a same-origin /control/main
-link and the browser follows the real DOM link locally. Inspect its fresh page before acting.
+enter_application with its element ref. The server applies the current Adapter's entry-route
+and handoff contract, then the browser follows the real DOM link locally. Inspect its fresh
+page before acting.
 """
 
 BUSINESS_SKILL_SYSTEM = """\
@@ -341,8 +342,9 @@ class ServerAgentSession:
                  policy_block_limit: int | None = None,
                  source_affordance_mode: str = "off",
                  source_contract: bool | None = None,
-                 knowledge_router: KnowledgeRouter | None = None,
+                 knowledge_router: ApplicationKnowledgePort | None = None,
                  allow_application_entry: bool = False,
+                 application_routes: ApplicationRoutePort | None = None,
                  business_tools: BusinessToolRuntime | None = None,
                  business_mutation_approval=None,
                  plain_business_answer_min_page_actions: int | None = None,
@@ -408,6 +410,23 @@ class ServerAgentSession:
             self.conversation_context = json.loads(encoded_conversation)
         else:
             self.conversation_context = None
+        if application_routes is not None and not isinstance(
+                application_routes, ApplicationRoutePort):
+            raise TypeError("application_routes must implement ApplicationRoutePort or be None")
+        if knowledge_router is not None and not isinstance(
+                knowledge_router, ApplicationKnowledgePort):
+            raise TypeError("knowledge_router must implement ApplicationKnowledgePort or be None")
+        source_routes_enabled = bool(
+            runtime_source or source_affordance_mode == "auto" or source_contract is True
+            or (source_contract is None and source_map is not None))
+        if application_routes is None and (
+                source_routes_enabled or knowledge_router is not None or allow_application_entry):
+            raise ValueError(
+                "source navigation and application entry require an application route port")
+        self.application_routes = application_routes
+        self._contract_route_identity = (
+            application_routes.contract_route_identity
+            if application_routes is not None else opaque_route_identity)
         self.task = task
         self.arm = arm
         self.chat = AuditedChat(chat, ledger)
@@ -547,7 +566,8 @@ class ServerAgentSession:
         #: is exactly one place in this product that decides how a run ends.
         self.planning_error: str = ""
         #: The plan and what the run has learned about it. Replaced by `plan()`.
-        self.plan_state: PlanState = PlanState.of(self.contract)
+        self.plan_state: PlanState = PlanState.of(
+            self.contract, route_identity=self._contract_route_identity)
         #: How much of the control plane's decision log this session has already read.
         self._control_seen = 0
         self._control_started = False
@@ -561,7 +581,7 @@ class ServerAgentSession:
         self._uncertain_write = ""
         self._awaiting_control = False
         self._browser_attempts = 0
-        #: The webapps this deployment actually serves, read off the entry page's navigation.
+        #: Source-contract scopes declared by the Adapter and observed on the entry page.
         #: Empty until `observe_entry()` has run, which is why planning happens after it.
         self.served_webapps: set[str] = set()
 
@@ -569,16 +589,15 @@ class ServerAgentSession:
     def observe_entry(self) -> PageObservation:
         """First look at the running application, before anything is planned.
 
-        Planning needs one runtime fact that no descriptor can supply: which of the
-        applications in the release tree this deployment actually serves. It is read off
-        the entry page's own navigation, so the contract can never offer a move into a
-        webapp that is not there.
+        Planning needs one runtime fact that no descriptor can supply: which source-contract
+        scopes this deployment actually exposes. The Adapter derives them from entry-page
+        navigation, so the core does not interpret an application's URL grammar.
         """
         obs = self.browser.observe()
         self.entry_observation = obs
-        self.served_webapps = {m.group(1) for e in obs.elements
-                               for m in [re.search(r"/([a-zA-Z0-9_]+)/control/",
-                                                   str(e.attrs.get("href", "")))] if m}
+        self.served_webapps = set(
+            self.application_routes.discover_source_scopes(obs)
+            if self.application_routes is not None else ())
         self.ledger.append("entry_observed", url=obs.url, epoch=obs.epoch,
                            served_webapps=sorted(self.served_webapps))
         return obs
@@ -646,7 +665,8 @@ class ServerAgentSession:
                            citations=len(self.contract.cited_keys()),
                            unknowns=len(self.contract.unknowns),
                            contract=self.contract.to_json())
-        self.plan_state = PlanState.of(self.contract)
+        self.plan_state = PlanState.of(
+            self.contract, route_identity=self._contract_route_identity)
         return self.contract
 
     def install_control_plan(self, plan: ControlPlan) -> None:
@@ -1416,7 +1436,13 @@ class ServerAgentSession:
                       or candidate.source_map_digest != self.source_map.content_digest):
                     rejection = "candidate_id is stale for the current source binding"
                 else:
-                    url, rejection = self._candidate_url(candidate, bindings)
+                    url, rejection = self._candidate_url(
+                        candidate, bindings,
+                        route_identity=self._contract_route_identity,
+                        session_handoff_query_keys=(
+                            self.application_routes.session_handoff_query_keys
+                            if self.application_routes is not None else frozenset()),
+                    )
                 if rejection:
                     citations = list(candidate.citations) if candidate is not None else []
                     binding_names = (sorted(str(key)[:100] for key in bindings)
@@ -1472,7 +1498,8 @@ class ServerAgentSession:
                                      and not parsed.scheme and not parsed.netloc
                                      and "%" not in parsed.path
                                      and ".." not in parsed.path.split("/"))
-                identity = route_of(url) if safe_relative else ("", "")
+                identity = (self._contract_route_identity(url)
+                            if safe_relative else ("", ""))
                 citations = self._source_view_routes.get(identity)
                 if not citations:
                     messages += [_assistant_call(call), _tool_result(
@@ -1621,30 +1648,15 @@ class ServerAgentSession:
             tools += self.business_tools.schemas_for(self._loaded_business_skill_ids)
         return tools
 
-    @staticmethod
-    def _application_link_ref(ref: object, obs: PageObservation) -> tuple[str, str]:
-        if not isinstance(ref, str) or not ref:
-            return "", "ref must identify an observed link"
-        matches = [element for element in obs.elements if element.ref == ref]
-        if len(matches) != 1 or matches[0].role != "link" or matches[0].tag != "a":
-            return "", "ref must identify one observed anchor link"
-        href = matches[0].attrs.get("href")
-        if not isinstance(href, str) or not href:
-            return "", "the observed link has no href"
-        current = urlsplit(obs.url)
-        target = urlsplit(urljoin(obs.url, href))
-        if (target.scheme not in ("http", "https") or target.scheme != current.scheme
-                or target.netloc != current.netloc
-                or not re.fullmatch(r"/[A-Za-z0-9_]+/control/main", target.path)):
-            return "", "the link is not a same-origin application Main route"
-        query = parse_qsl(target.query, keep_blank_values=True)
-        if (not query or any(key.casefold() not in SESSION_HANDOFF_QUERY_KEYS
-                             or value.casefold() != "[redacted]" for key, value in query)):
-            return "", "the application link lacks a safely redacted session handoff"
-        return ref, ""
+    def _application_link_ref(self, ref: object, obs: PageObservation) -> tuple[str, str]:
+        if self.application_routes is None:
+            return "", "no application entry contract is installed"
+        return self.application_routes.validate_application_entry(ref, obs)
 
     @staticmethod
-    def _candidate_url(candidate: SourceAffordance, bindings) -> tuple[str, str]:
+    def _candidate_url(candidate: SourceAffordance, bindings, *,
+                       route_identity=opaque_route_identity,
+                       session_handoff_query_keys: frozenset[str] = frozenset()) -> tuple[str, str]:
         """Validate bindings and assemble one same-origin URL, without evaluating source.
 
         The second tuple member is an error message; an empty error means the URL is safe.
@@ -1658,7 +1670,7 @@ class ServerAgentSession:
         declared: dict[str, list] = {}
         for parameter in candidate.parameters:
             declared.setdefault(parameter.name, []).append(parameter)
-        if any(name.casefold() in SESSION_HANDOFF_QUERY_KEYS for name in declared):
+        if any(name.casefold() in session_handoff_query_keys for name in declared):
             return "", "the candidate declares a forbidden session parameter"
         if any(not isinstance(name, str) or name not in declared for name in bindings):
             return "", "bindings contain an undeclared parameter"
@@ -1680,7 +1692,7 @@ class ServerAgentSession:
                          and not ({".", ".."} & set(path_parts))
                          and "\\" not in parsed.path
                          and not re.search(r"[\x00-\x1f\x7f]", parsed.path))
-        if not safe_path or route_of(candidate.route_template) != (
+        if not safe_path or route_identity(candidate.route_template) != (
                 candidate.webapp.casefold(), candidate.request.rstrip("/").casefold()):
             return "", "the candidate route is not a safe relative control path"
 
@@ -1938,8 +1950,8 @@ class ServerAgentSession:
             return None
         return _PLAN_MARK + "\n\n".join(parts)
 
-    # OFBiz also permits writes through GET routes, including goto/back. Only observation
-    # and waiting do not dispatch a new application action. An onchange may write on fill.
+    # Some applications permit writes through navigation routes. Only observation and
+    # waiting avoid a new application action; an onchange may write during fill.
     WRITE_CAPABLE = frozenset({"click", "submit", "fill", "select", "goto", "back"})
     # These worker errors are raised before invoking the action. Locator timeouts and
     # origin_refused are excluded: either may occur after dispatch/navigation began.

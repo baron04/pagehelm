@@ -39,6 +39,7 @@ PANEL_LABEL_KEYS = frozenset({
     "statusNeedsInput", "statusSuccess", "statusCancelled", "statusRefused",
     "statusIndeterminate", "statusError", "statusEnded", "statusReplaced",
 })
+_SENSITIVE_QUERY_KEY = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{1,63}\Z")
 
 
 def _panel_labels(value: Mapping[str, str] | None) -> dict[str, str]:
@@ -58,6 +59,16 @@ def _panel_labels(value: Mapping[str, str] | None) -> dict[str, str]:
             raise ValueError(f"panel label {key} must contain 1-200 display characters")
         labels[key] = label
     return labels
+
+
+def _sensitive_query_keys(value) -> list[str]:
+    if value is None:
+        return []
+    if (not isinstance(value, (tuple, list, set, frozenset)) or len(value) > 32
+            or any(not isinstance(key, str) or not _SENSITIVE_QUERY_KEY.fullmatch(key)
+                   for key in value)):
+        raise ValueError("sensitive_query_keys must contain at most 32 safe query names")
+    return sorted({key.casefold() for key in value})
 
 
 def _normalized_origin(value: str) -> str:
@@ -379,7 +390,8 @@ class EmbeddedGateway:
     def bootstrap_config(self, grant: SessionGrant, *,
                          page_controller_module: str,
                          navigation_mode: str = "document",
-                         panel_labels: Mapping[str, str] | None = None) -> dict:
+                         panel_labels: Mapping[str, str] | None = None,
+                         sensitive_query_keys=()) -> dict:
         """Return data for the first-party shell to place in ``window.__WOA_EMBED_CONFIG__``."""
         if not isinstance(page_controller_module, str):
             raise ValueError("page_controller_module must be an absolute http(s) URL")
@@ -405,6 +417,7 @@ class EmbeddedGateway:
             "principalBinding": grant.principal_digest,
             "principalExpiresAt": grant.expires_at,
             "sessionExpiresAt": grant.session_expires_at,
+            "sensitiveQueryKeys": _sensitive_query_keys(sensitive_query_keys),
         }
         labels = _panel_labels(panel_labels)
         if labels:
@@ -414,7 +427,8 @@ class EmbeddedGateway:
     def bootstrap_script(self, grant: SessionGrant, *,
                          page_controller_module: str,
                          navigation_mode: str = "document",
-                         panel_labels: Mapping[str, str] | None = None) -> str:
+                         panel_labels: Mapping[str, str] | None = None,
+                         sensitive_query_keys=()) -> str:
         """Build the two-tag first-party shell integration as one ephemeral script.
 
         The returned source contains the session capability and must be injected directly
@@ -424,7 +438,8 @@ class EmbeddedGateway:
         """
         config = self.bootstrap_config(
             grant, page_controller_module=page_controller_module,
-            navigation_mode=navigation_mode, panel_labels=panel_labels)
+            navigation_mode=navigation_mode, panel_labels=panel_labels,
+            sensitive_query_keys=sensitive_query_keys)
         runtime_url = json.dumps(self.runtime_url)
         allowed_origins = json.dumps(sorted(grant.allowed_origins), separators=(",", ":"))
         safe_config = json.dumps(config, separators=(",", ":")).replace("</", "<\\/")

@@ -186,6 +186,7 @@ class LiveProductSession:
                  runner_factory: Callable[[RemoteSessionChannel], ProductRunner],
                  session_id: str | None = None, sse_wait_s: float = .2,
                  navigation_mode: str = "document",
+                 sensitive_query_keys: frozenset[str] = frozenset(),
                  principal: PrincipalContext | None = None,
                  session_limits: RemoteSessionLimits | None = None,
                  registry: RemoteSessionRegistry | None = None,
@@ -225,6 +226,7 @@ class LiveProductSession:
                 self.gateway.close()
             raise ValueError("navigation_mode must be document or spa")
         self.navigation_mode = navigation_mode
+        self.sensitive_query_keys = sensitive_query_keys
         try:
             self.runner = runner_factory(self.channel)
         except BaseException:
@@ -241,7 +243,8 @@ class LiveProductSession:
         self.channel.validate_live()
         return self.gateway.bootstrap_script(
             self.grant, page_controller_module=self.page_controller_module,
-            navigation_mode=self.navigation_mode)
+            navigation_mode=self.navigation_mode,
+            sensitive_query_keys=self.sensitive_query_keys)
 
     def start(self) -> "LiveProductSession":
         if self._thread is not None:
@@ -402,6 +405,7 @@ class LiveProductServer:
                        runner_factory: Callable[[RemoteSessionChannel], ProductRunner],
                        session_id: str | None = None,
                        navigation_mode: str = "document",
+                       sensitive_query_keys: frozenset[str] = frozenset(),
                        principal: PrincipalContext | None = None) -> LiveProductSession:
         with self._lock:
             if self._closed:
@@ -415,6 +419,7 @@ class LiveProductServer:
                 runner_factory=runner_factory,
                 session_id=session_id,
                 navigation_mode=navigation_mode,
+                sensitive_query_keys=sensitive_query_keys,
                 principal=principal,
                 registry=self.registry,
                 gateway=self.gateway,

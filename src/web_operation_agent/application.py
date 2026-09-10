@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, urljoin, urlsplit
 
 from .business import (BusinessDataClassifier, BusinessPostconditionVerifier,
                        BusinessRouteValidator, BusinessToolResult, BusinessToolRuntime,
@@ -163,6 +163,12 @@ class ApplicationRoutePort(BusinessRouteValidator, Protocol):
 
     def route_identity(self, url: str) -> str: ...
 
+    def contract_route_identity(self, url: str) -> tuple[str, str]: ...
+
+    def discover_source_scopes(self, observation: object) -> frozenset[str]: ...
+
+    def validate_application_entry(self, ref: object, observation: object) -> tuple[str, str]: ...
+
 
 @dataclass(frozen=True, slots=True)
 class DeclaredRoutePort:
@@ -172,6 +178,8 @@ class DeclaredRoutePort:
     tool_route_patterns: tuple[str, ...]
     session_handoff_query_keys: frozenset[str] = frozenset()
     allowed_tool_query_keys: frozenset[str] = frozenset()
+    contract_route_pattern: str = ""
+    application_entry_patterns: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not _APPLICATION_ID.fullmatch(self.application_id):
@@ -185,6 +193,24 @@ class DeclaredRoutePort:
                 re.compile(pattern)
             except re.error as exc:
                 raise ValueError("route port pattern is invalid") from exc
+        if not isinstance(self.contract_route_pattern, str):
+            raise ValueError("contract route pattern must be a string")
+        if (not isinstance(self.application_entry_patterns, tuple)
+                or any(not isinstance(pattern, str) or not pattern
+                       for pattern in self.application_entry_patterns)):
+            raise ValueError("application entry patterns must be a tuple of regular expressions")
+        if self.contract_route_pattern:
+            try:
+                compiled = re.compile(self.contract_route_pattern)
+            except re.error as exc:
+                raise ValueError("contract route pattern is invalid") from exc
+            if not {"scope", "route"}.issubset(compiled.groupindex):
+                raise ValueError("contract route pattern requires scope and route groups")
+        for pattern in self.application_entry_patterns:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                raise ValueError("application entry pattern is invalid") from exc
         if (not isinstance(self.session_handoff_query_keys, frozenset)
                 or not isinstance(self.allowed_tool_query_keys, frozenset)):
             raise ValueError("route port handoff keys are invalid")
@@ -230,6 +256,62 @@ class DeclaredRoutePort:
         if not parsed or not parsed.path.startswith("/"):
             return ""
         return parsed.path.rstrip("/") or "/"
+
+    def contract_route_identity(self, url: str) -> tuple[str, str]:
+        """Return the adapter's legacy source-contract route identity, when configured."""
+        if not self.contract_route_pattern or not isinstance(url, str):
+            return "", ""
+        match = re.search(self.contract_route_pattern, urlsplit(url).path)
+        if match is None:
+            return "", ""
+        return match.group("scope").casefold(), match.group("route").rstrip("/").casefold()
+
+    def discover_source_scopes(self, observation: object) -> frozenset[str]:
+        scopes = set()
+        current_url = str(getattr(observation, "url", ""))
+        current = urlsplit(current_url)
+        for element in getattr(observation, "elements", ()):
+            href = getattr(element, "attrs", {}).get("href")
+            if not isinstance(href, str):
+                continue
+            target = urlsplit(urljoin(current_url, href))
+            if target.scheme != current.scheme or target.netloc != current.netloc:
+                continue
+            scope, route = self.contract_route_identity(target.geturl())
+            if scope and route:
+                scopes.add(scope)
+        return frozenset(scopes)
+
+    def validate_application_entry(
+            self, ref: object, observation: object) -> tuple[str, str]:
+        if not isinstance(ref, str) or not ref:
+            return "", "ref must identify an observed link"
+        matches = [element for element in getattr(observation, "elements", ())
+                   if getattr(element, "ref", "") == ref]
+        if (len(matches) != 1 or getattr(matches[0], "role", "") != "link"
+                or getattr(matches[0], "tag", "") != "a"):
+            return "", "ref must identify one observed anchor link"
+        href = getattr(matches[0], "attrs", {}).get("href")
+        if not isinstance(href, str) or not href:
+            return "", "the observed link has no href"
+        current = urlsplit(str(getattr(observation, "url", "")))
+        target = urlsplit(urljoin(current.geturl(), href))
+        same_origin = (target.scheme in {"http", "https"}
+                       and target.scheme == current.scheme and target.netloc == current.netloc)
+        entry_path = any(re.fullmatch(pattern, target.path)
+                         for pattern in self.application_entry_patterns)
+        if not same_origin or not entry_path or target.fragment:
+            return "", "the link is outside the adapter's application entry contract"
+        query = parse_qsl(target.query, keep_blank_values=True)
+        if self.session_handoff_query_keys:
+            valid_query = bool(query) and all(
+                key.casefold() in self.session_handoff_query_keys
+                and value.casefold() == "[redacted]" for key, value in query)
+        else:
+            valid_query = not query
+        if not valid_query:
+            return "", "the application link lacks an adapter-declared redacted handoff"
+        return ref, ""
 
 
 @dataclass(frozen=True, slots=True)

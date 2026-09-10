@@ -10,6 +10,8 @@ An Application Adapter connects one first-party web application to the generic s
 
 `BusinessToolRuntime` exposes current application data through fixed JSON schemas. Keep credentials and arbitrary HTTP construction inside the application executor. A Skill explains when and how to call these tools; it is not evidence that a current record exists. Each returned route must appear verbatim in the result content and pass the adapter route port before the Agent can use it.
 
+The route port owns every application URL shape used at runtime. Ordinary adapters declare typed-tool paths and return an empty source-contract identity. A source-aware integration may additionally declare a contract route pattern with named `scope` and `route` groups plus explicit application-entry patterns. The generic Agent asks the port to identify routes, discover entry-page scopes, and validate an observed handoff link; it does not parse framework URL conventions. Declare application-specific session handoff query names in `session_handoff_query_keys` and pass that set to `LiveProductSession(sensitive_query_keys=...)` so the embedded Runtime removes those values before DOM content leaves the browser.
+
 ## PageController and static Runtime
 
 The application origin must serve an ES module that exports `PageController` and `getElementByIndex`. The minimal example serves a small compatible controller for its synthetic pages. A real integration should pin and deploy the PageController implementation it has qualified, then put the exact same-origin URL in `ApplicationDescriptor.page_controller_module`. A CDN on another origin is rejected.
@@ -32,7 +34,7 @@ After one acknowledged dispatch, the postcondition port decides whether the muta
 
 ## Composition and qualification
 
-Bind once with `application = bind_application(adapter)`, pass that object to `AgentTurnExecutor(application=application, ...)`, and use its descriptor to configure `LiveProductSession`. Do not pass the raw tool runtime separately in a product composition.
+Bind once with `application = bind_application(adapter)`, pass that object to `AgentTurnExecutor(application=application, ...)`, and use its descriptor and route port to configure `LiveProductSession`. Do not pass the raw tool runtime separately in a product composition.
 
 Run the reusable adapter contract assertions for every adapter, then add application tests for valid routes, identity mismatch, read completeness, mutation refusal, approval, postcondition failure, and credential redaction. `scripts/qualify.sh --require-browser` runs the product suite, isolated wheel checks, the minimal embedded Runtime walkthrough, and the canonical browser protocol in real Chromium. A live application gate that reports `BLOCKED` has not run and is not a pass.
 

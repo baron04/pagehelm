@@ -1147,7 +1147,8 @@ class GatewayTests(unittest.TestCase):
         config = self.gateway.bootstrap_config(
             self.grant, page_controller_module=module_url,
             panel_labels={"assistant": "Operations copilot", "send": "Send",
-                          "statusReady": "Connected"})
+                          "statusReady": "Connected"},
+            sensitive_query_keys={"handoffKey"})
         self.assertEqual(config["pageControllerModule"], module_url)
         self.assertEqual(config["navigationMode"], "document")
         self.assertEqual(config["principalExpiresAt"], 0)
@@ -1155,6 +1156,7 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(config["panelLabels"], {
             "assistant": "Operations copilot", "send": "Send",
             "statusReady": "Connected"})
+        self.assertEqual(config["sensitiveQueryKeys"], ["handoffkey"])
         with self.assertRaisesRegex(ValueError, "unknown panel label"):
             self.gateway.bootstrap_config(
                 self.grant, page_controller_module=module_url,
@@ -1170,6 +1172,10 @@ class GatewayTests(unittest.TestCase):
             self.gateway.bootstrap_config(
                 self.grant, page_controller_module=module_url,
                 navigation_mode="invented")
+        with self.assertRaisesRegex(ValueError, "sensitive_query_keys"):
+            self.gateway.bootstrap_config(
+                self.grant, page_controller_module=module_url,
+                sensitive_query_keys={"bad key"})
         normalized = self.gateway.bootstrap_config(
             self.grant,
             page_controller_module="http://APP.TEST:80/page-controller.js",

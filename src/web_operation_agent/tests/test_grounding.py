@@ -7,8 +7,13 @@ import unittest
 
 from web_operation_agent.grounding import (NOT_APPLICABLE, REFUTED, SATISFIED, WRITE_NONE,
                                            WRITE_PERMITTED, WRITE_REFUSED, PlanState)
+from web_operation_agent.integrations.ofbiz import ofbiz_route_identity
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionReceipt, ElementRef,
                                          OperationContract, PageObservation)
+
+
+def _plan_state(value):
+    return PlanState.of(value, route_identity=ofbiz_route_identity)
 
 
 def contract(steps, mutation=None) -> OperationContract:
@@ -46,7 +51,7 @@ MUTATION = {"webapp": "accounting", "request": "createPaymentApplication",
 class OnTheWayIsNotAContradiction(unittest.TestCase):
     def test_the_applications_own_home_page_is_not_a_conflict(self):
         """An intermediate application page provides no evidence against a later step."""
-        st = PlanState.of(contract(STEPS))
+        st = _plan_state(contract(STEPS))
         event = st.observe(page(), receipt(), WRITE_NONE)
         self.assertEqual(event["verdict"], NOT_APPLICABLE)
         self.assertEqual(st.refuted_steps, [])
@@ -54,14 +59,14 @@ class OnTheWayIsNotAContradiction(unittest.TestCase):
         self.assertEqual(st.standing_notes, [])
 
     def test_an_unjudgeable_page_leaves_the_cursor_where_it_was(self):
-        st = PlanState.of(contract(STEPS))
+        st = _plan_state(contract(STEPS))
         for _ in range(5):
             st.observe(page(), receipt(), WRITE_NONE)
         self.assertEqual(st.current.step.intent, "open the payments list")
         self.assertEqual(st.counts()[REFUTED], 0)
 
     def test_absence_of_a_landmark_alone_never_withdraws_a_plan(self):
-        st = PlanState.of(contract(STEPS, MUTATION))
+        st = _plan_state(contract(STEPS, MUTATION))
         for _ in range(20):
             st.observe(page(), receipt(), WRITE_NONE)
         self.assertFalse(st.withdrawn, "a plan must not be discarded for want of evidence")
@@ -69,7 +74,7 @@ class OnTheWayIsNotAContradiction(unittest.TestCase):
 
 class Confirmation(unittest.TestCase):
     def test_the_landmark_confirms_the_step(self):
-        st = PlanState.of(contract([{**STEPS[0], "request": ""}, STEPS[1]]))
+        st = _plan_state(contract([{**STEPS[0], "request": ""}, STEPS[1]]))
         event = st.observe(page(title="Find Payment", landmarks=["Find Payment"]),
                            receipt(), WRITE_NONE)
         self.assertEqual(event["verdict"], SATISFIED)
@@ -77,7 +82,7 @@ class Confirmation(unittest.TestCase):
 
     def test_arriving_at_the_named_request_confirms_it_without_the_landmark(self):
         """The request is the fact; the landmark is a guess about how it will look."""
-        st = PlanState.of(contract(STEPS))
+        st = _plan_state(contract(STEPS))
         event = st.observe(page(url="http://app/accounting/control/findPayments",
                                 title="Something Else", landmarks=["Nothing Familiar"]),
                            receipt(), WRITE_NONE)
@@ -86,7 +91,7 @@ class Confirmation(unittest.TestCase):
 
 class Refutation(unittest.TestCase):
     def test_a_refused_write_on_the_step_the_plan_named_refutes_it(self):
-        st = PlanState.of(contract(STEPS, MUTATION))
+        st = _plan_state(contract(STEPS, MUTATION))
         st.observe(page(url="http://app/accounting/control/findPayments"), receipt(), WRITE_NONE)
         st.observe(page(url="http://app/accounting/control/editPaymentApplications"),
                    receipt(), WRITE_NONE)
@@ -97,7 +102,7 @@ class Refutation(unittest.TestCase):
         self.assertTrue(st.standing_notes)
 
     def test_a_page_that_says_no_refutes_the_step_it_was_supposed_to_satisfy(self):
-        st = PlanState.of(contract(STEPS))
+        st = _plan_state(contract(STEPS))
         event = st.observe(page(url="http://app/accounting/control/findPayments",
                                 title="Action refused", landmarks=["Action refused"]),
                            receipt(), WRITE_NONE)
@@ -106,7 +111,7 @@ class Refutation(unittest.TestCase):
 
     def test_a_refusal_on_a_failed_action_is_not_attributed_to_the_step(self):
         """If the action itself failed, the page it left behind proves nothing about the plan."""
-        st = PlanState.of(contract(STEPS))
+        st = _plan_state(contract(STEPS))
         event = st.observe(page(title="Action refused", landmarks=["Action refused"]),
                            receipt(ok=False), WRITE_NONE)
         self.assertEqual(event["verdict"], NOT_APPLICABLE)
@@ -114,7 +119,7 @@ class Refutation(unittest.TestCase):
 
 class Withdrawal(unittest.TestCase):
     def test_a_refused_write_endpoint_withdraws_the_plan(self):
-        st = PlanState.of(contract(STEPS, MUTATION))
+        st = _plan_state(contract(STEPS, MUTATION))
         event = st.refute_mutation("the application refused it")
         self.assertEqual(event["verdict"], REFUTED)
         self.assertTrue(st.withdrawn)
@@ -125,7 +130,7 @@ class Withdrawal(unittest.TestCase):
 
         Waiting for an identical refusal adds no evidence and risks repeating the same write.
         """
-        st = PlanState.of(contract(STEPS, MUTATION))
+        st = _plan_state(contract(STEPS, MUTATION))
         st.observe(page(url="http://app/accounting/control/editInvoiceApplications"),
                    receipt(), WRITE_REFUSED,
                    refused_requests=["accounting/createPaymentApplication"])
@@ -133,7 +138,7 @@ class Withdrawal(unittest.TestCase):
         self.assertIn("refused", st.withdrawn_because)
 
     def test_two_contradicted_steps_withdraw_the_plan(self):
-        st = PlanState.of(contract(STEPS, MUTATION))
+        st = _plan_state(contract(STEPS, MUTATION))
         st.observe(page(url="http://app/accounting/control/findPayments",
                         title="Action refused"), receipt(), WRITE_NONE)
         self.assertFalse(st.withdrawn, "one wrong step is survivable")
@@ -143,13 +148,13 @@ class Withdrawal(unittest.TestCase):
         self.assertIn("2 of its steps", st.withdrawn_because)
 
     def test_a_withdrawn_plan_stops_judging(self):
-        st = PlanState.of(contract(STEPS, MUTATION))
+        st = _plan_state(contract(STEPS, MUTATION))
         st.refute_mutation("refused")
         event = st.observe(page(title="Find Payment"), receipt(), WRITE_NONE)
         self.assertEqual(event["verdict"], "no_active_step")
 
     def test_withdrawal_is_announced_once_and_says_what_to_do(self):
-        st = PlanState.of(contract(STEPS, MUTATION))
+        st = _plan_state(contract(STEPS, MUTATION))
         st.refute_mutation("refused")
         st.refute_mutation("refused again")
         withdrawals = [n for n in st.standing_notes if "withdrawn" in n]
@@ -158,7 +163,7 @@ class Withdrawal(unittest.TestCase):
 
     def test_a_refusal_it_cannot_place_does_not_blame_an_unrelated_step(self):
         """An AJAX refusal without request identity cannot be assigned to the current step."""
-        st = PlanState.of(contract(STEPS, MUTATION))
+        st = _plan_state(contract(STEPS, MUTATION))
         event = st.observe(page(url="http://app/accounting/control/editInvoiceApplications"),
                            receipt(), WRITE_REFUSED)
         self.assertEqual(event["verdict"], NOT_APPLICABLE)
@@ -171,7 +176,7 @@ class Withdrawal(unittest.TestCase):
     def test_a_page_text_refutation_alone_still_needs_two(self):
         """An inference from page text is weaker evidence than a refusal, and one wrong
         intermediate step does not condemn a plan that may still be right about the rest."""
-        st = PlanState.of(contract(STEPS, MUTATION))
+        st = _plan_state(contract(STEPS, MUTATION))
         st.observe(page(url="http://app/accounting/control/findPayments",
                         title="Action refused"), receipt(), WRITE_NONE)
         self.assertFalse(st.withdrawn)
@@ -180,7 +185,7 @@ class Withdrawal(unittest.TestCase):
         self.assertTrue(st.withdrawn)
 
     def test_a_permitted_write_never_refutes_anything(self):
-        st = PlanState.of(contract(STEPS, MUTATION))
+        st = _plan_state(contract(STEPS, MUTATION))
         for _ in range(3):
             st.observe(page(), receipt(), WRITE_PERMITTED)
         self.assertFalse(st.withdrawn)

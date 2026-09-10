@@ -582,6 +582,7 @@ def run_demo(config: DemoConfig) -> dict:
             page_controller_module=bound.descriptor.page_controller_module,
             runner_factory=runner_factory,
             navigation_mode=bound.descriptor.navigation_mode,
+            sensitive_query_keys=bound.ports.routes.session_handoff_query_keys,
         ).start()
         try:
             records, last_url, last_page_text = _run_browser(

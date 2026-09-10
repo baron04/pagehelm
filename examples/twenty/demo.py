@@ -448,6 +448,7 @@ def build_live_session(
         runner_factory=runner_factory,
         session_id=session_id or f"twenty-live-{uuid.uuid4().hex[:12]}",
         navigation_mode=application.descriptor.navigation_mode,
+        sensitive_query_keys=application.ports.routes.session_handoff_query_keys,
         principal=principal,
         provider_status=provider_status if callable(provider_status) else None,
     )

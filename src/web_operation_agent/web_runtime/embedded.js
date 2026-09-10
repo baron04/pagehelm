@@ -21,10 +21,33 @@ const PAGE_CONTROLLER_ANNOTATION_STYLE_ID = 'woa-hide-page-controller-annotation
 const MAX_CONTENT_CHARS = 120_000
 const RESULT_POST_RESERVE_MS = 500
 const RUNTIME_NAME = 'woa-embedded/page-controller-1.12.2'
-const SENSITIVE_NAME = /(password|passwd|pwd|secret|token|api[_-]?key|authorization|externalLoginKey|externaLoginKey|externLoginKey|jsessionid)/i
-const HANDOFF_ASSIGNMENT = /((?:externalLoginKey|externaLoginKey|externLoginKey|jsessionid)(?:=|%(?:25)*3[dD]))(.+?)(?=(?:[&;/?#\s"<>\\]|%(?:25)*(?:26|3[bBfF]|2[fF]|23)|$))/gi
+const GENERIC_SENSITIVE_NAME = '(?:password|passwd|pwd|secret|token|api[_-]?key|authorization)'
+let SENSITIVE_NAME = new RegExp(GENERIC_SENSITIVE_NAME, 'i')
+let HANDOFF_ASSIGNMENT = /(?!)/g
 const URL_SECRET_ASSIGNMENT = /((?:^|[?&#;\s"'<>\\]|%(?:25)*(?:26|23|3[bBfF]))(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|authorization|password|passwd|pwd|secret|token)(?:=|%(?:25)*3[dD]))(.+?)(?=(?:[&;/?#\s"'<>\\]|%(?:25)*(?:26|3[bBfF]|2[fF]|23)|$))/gi
-const SENSITIVE_FIELD = /\b(?:type|name|id|autocomplete)=(?:"[^"]*(?:password|passwd|pwd|secret|token|api[_-]?key)[^"]*"|'[^']*(?:password|passwd|pwd|secret|token|api[_-]?key)[^']*'|[^\s>]*(?:password|passwd|pwd|secret|token|api[_-]?key)[^\s>]*)/i
+
+function sensitiveFieldPattern(pattern) {
+  return new RegExp(`\\b(?:type|name|id|autocomplete)=(?:"[^"]*(?:${pattern})[^"]*"|'[^']*(?:${pattern})[^']*'|[^\\s>]*(?:${pattern})[^\\s>]*)`, 'i')
+}
+
+let SENSITIVE_FIELD = sensitiveFieldPattern(GENERIC_SENSITIVE_NAME)
+
+function configureSensitiveQueryKeys(value) {
+  const keys = Array.isArray(value) ? value : []
+  if (keys.length > 32 || keys.some(key =>
+    typeof key !== 'string' || !/^[A-Za-z][A-Za-z0-9_.-]{1,63}$/.test(key))) {
+    throw new Error('sensitiveQueryKeys must contain at most 32 safe query names')
+  }
+  const escaped = [...new Set(keys.map(key => key.toLowerCase()))]
+    .map(key => key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  const namePattern = escaped.length
+    ? `${GENERIC_SENSITIVE_NAME}|(?:${escaped.join('|')})` : GENERIC_SENSITIVE_NAME
+  SENSITIVE_NAME = new RegExp(namePattern, 'i')
+  SENSITIVE_FIELD = sensitiveFieldPattern(namePattern)
+  HANDOFF_ASSIGNMENT = escaped.length
+    ? new RegExp(`((?:${escaped.join('|')})(?:=|%(?:25)*3[dD]))(.+?)(?=(?:[&;/?#\\s"<>\\\\]|%(?:25)*(?:26|3[bBfF]|2[fF]|23)|$))`, 'gi')
+    : /(?!)/g
+}
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -210,9 +233,9 @@ function elementsFrom(content, epoch) {
     const attrs = attrsFrom(separator >= 0 ? body.slice(0, separator) : body)
     const text = separator >= 0 ? body.slice(separator + 1) : ''
     const role = roleFor(tag, attrs)
-    // OFBiz uses <input type=submit value="Find"> for many primary controls. Unlike a
-    // button it has no inner text, so omitting value turns a visible labelled control into
-    // an anonymous ref. Textbox values remain state, never their accessible name.
+    // Legacy applications often use labelled input[type=submit] controls. Unlike a button,
+    // they have no inner text, so retain the button value as the accessible name. Textbox
+    // values remain state and never become their accessible name.
     const buttonValue = role === 'button' ? attrs.value : ''
     const name = SENSITIVE_NAME.test(String(attrs.name || ''))
       ? ''
@@ -377,6 +400,7 @@ export class EmbeddedWebRuntime {
       throw new Error('endpoint, sessionId and clientToken are required')
     }
     this.config = config
+    configureSensitiveQueryKeys(config.sensitiveQueryKeys || [])
     this.endpoint = String(config.endpoint).replace(/\/$/, '')
     this.sessionId = String(config.sessionId)
     this.token = String(config.clientToken)
@@ -1317,6 +1341,7 @@ export const runtimeInternals = Object.freeze({
   redactString, sanitizePageContent, safeArgs, safeErrorDetail, elementsFrom,
   hydrateLinkFacts, actionElementFingerprint,
   urlDigest, navigationWal, recoveryProvesNavigation, formGetUrl,
+  configureSensitiveQueryKeys,
 })
 
 if (typeof window !== 'undefined' && window.__WOA_EMBED_CONFIG__) {

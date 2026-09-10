@@ -370,6 +370,7 @@ class LiveProductSessionTests(unittest.TestCase):
             page_controller_module=ORIGIN + "/page-controller.js",
             runner_factory=lambda _channel: _Runner({"ok": True}),
             session_id="live-test",
+            sensitive_query_keys=frozenset({"handoffKey"}),
         )
         with self.assertRaisesRegex(RuntimeError, "started"):
             _ = live.bootstrap_script
@@ -385,6 +386,7 @@ class LiveProductSessionTests(unittest.TestCase):
             self.assertNotIn(live.grant.client_token, repr(status))
             self.assertIn(live.grant.client_token, source)
             self.assertIn("startEmbeddedRuntime", source)
+            self.assertIn('"sensitiveQueryKeys":["handoffkey"]', source)
         finally:
             live.close()
 

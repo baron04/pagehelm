@@ -10,6 +10,8 @@ Application Adapter 把一个第一方 Web 应用接入通用服务端 Agent。A
 
 `BusinessToolRuntime` 通过固定 JSON schema 暴露当前应用数据。凭据和任意 HTTP 构造应保留在应用 executor 内。Skill 说明何时及如何调用工具，但不能证明当前记录存在。返回的每条路由必须原样出现在结果内容中，并在 Agent 使用前通过 Adapter 路由端口校验。
 
+运行时使用的所有应用 URL 形状都归路由端口所有。普通 Adapter 只声明 typed tool 路径，并为空源码合同返回空路由身份。需要源码能力的集成可以额外声明带 `scope`、`route` 命名组的合同路由模式，以及明确的应用入口模式。通用 Agent 只调用端口识别路由、发现入口页 scope 和校验观察到的 handoff 链接，不解析具体框架的 URL 约定。应用特有的 session handoff 查询参数名应写入 `session_handoff_query_keys`，并传给 `LiveProductSession(sensitive_query_keys=...)`，使内嵌 Runtime 在 DOM 内容离开浏览器前删除这些值。
+
 ## PageController 与静态 Runtime
 
 应用 Origin 必须提供一个导出 `PageController` 和 `getElementByIndex` 的 ES module。Minimal 示例为合成页面提供了一个小型兼容 controller。真实集成应固定并部署已经通过资格验证的 PageController 实现，再把准确的同源 URL 写入 `ApplicationDescriptor.page_controller_module`。其它 Origin 上的 CDN URL 会被拒绝。
@@ -32,7 +34,7 @@ Adapter 与 turn policy 默认都关闭写入。启用写入的 Adapter 在生�
 
 ## 组合与资格验证
 
-先执行 `application = bind_application(adapter)`，再把该对象传给 `AgentTurnExecutor(application=application, ...)`，并使用它的 Descriptor 配置 `LiveProductSession`。产品组合不应再单独传递原始 tool runtime。
+先执行 `application = bind_application(adapter)`，再把该对象传给 `AgentTurnExecutor(application=application, ...)`，并使用它的 Descriptor 和路由端口配置 `LiveProductSession`。产品组合不应再单独传递原始 tool runtime。
 
 每个 Adapter 都应运行可复用的 contract assertion，并增加有效路由、身份不匹配、读取完整性、mutation 拒绝、确认、后置条件失败和凭据脱敏测试。`scripts/qualify.sh --require-browser` 会运行产品套件、隔离 wheel 检查、Minimal 内嵌 Runtime 演练和真实 Chromium 中的规范浏览器协议。真实应用门若显示 `BLOCKED`，表示没有执行，不能算通过。
 

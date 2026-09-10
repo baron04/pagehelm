@@ -6,10 +6,15 @@ request from another application's request with the same name.
 """
 import unittest
 
-from web_operation_agent.grounding import (NOT_APPLICABLE, REFUTED, SATISFIED, WRITE_NONE, WRITE_REFUSED,
-                                           PlanState, route_of)
+from web_operation_agent.grounding import (NOT_APPLICABLE, REFUTED, SATISFIED, WRITE_NONE,
+                                           WRITE_REFUSED, PlanState)
+from web_operation_agent.integrations.ofbiz import ofbiz_route_identity as route_of
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionReceipt, ElementRef,
                                          OperationContract, PageObservation)
+
+
+def _plan_state(value):
+    return PlanState.of(value, route_identity=route_of)
 
 
 def contract(steps=(), candidates=(), mutation=None) -> OperationContract:
@@ -44,7 +49,7 @@ class ArrivingIsNotBeingAllowed(unittest.TestCase):
     """A named route that refuses the operation refutes rather than satisfies the step."""
 
     def _observe(self):
-        st = PlanState.of(contract([STEP_A, STEP_B]))
+        st = _plan_state(contract([STEP_A, STEP_B]))
         return st, st.observe(page(url="http://app/accounting/control/findPayments",
                                    title="Access denied",
                                    landmarks=["Access denied"]), receipt(), WRITE_NONE)
@@ -78,7 +83,7 @@ class TheSameObservationIsOnePieceOfEvidence(unittest.TestCase):
     """Repeatedly observing one unrelated refusal cannot refute unattempted steps."""
 
     def test_observing_twice_does_not_refute_two_steps(self):
-        st = PlanState.of(contract([STEP_A, STEP_B], mutation={
+        st = _plan_state(contract([STEP_A, STEP_B], mutation={
             "webapp": "accounting", "request": "createPaymentApplication",
             "citations": ["a.xml:1-2"]}))
         p = page(url="http://app/accounting/control/somewhereElse", title="Action refused")
@@ -89,7 +94,7 @@ class TheSameObservationIsOnePieceOfEvidence(unittest.TestCase):
 
     def test_an_observe_attempts_nothing_so_it_refutes_nothing(self):
         """`observe` re-reads the page. It cannot be the attempt that proves a step wrong."""
-        st = PlanState.of(contract([STEP_A]))
+        st = _plan_state(contract([STEP_A]))
         event = st.observe(page(title="Action refused"), receipt(action="observe"), WRITE_NONE)
         self.assertEqual(event["verdict"], NOT_APPLICABLE)
 
@@ -105,7 +110,7 @@ class CandidatesAreAlternatives(unittest.TestCase):
     ]
 
     def test_denied_second_candidate_does_not_discard_the_first(self):
-        st = PlanState.of(contract([STEP_B], candidates=self.CANDIDATES))
+        st = _plan_state(contract([STEP_B], candidates=self.CANDIDATES))
         event = st.observe(page(url="http://app/accounting/control/findInvoices",
                                 title="Access denied"), receipt(), WRITE_NONE)
         self.assertEqual(event["verdict"], REFUTED)
@@ -113,7 +118,7 @@ class CandidatesAreAlternatives(unittest.TestCase):
         self.assertEqual([c.status for c in st.candidates], ["pending", REFUTED])
 
     def test_matching_landmark_on_another_named_route_is_not_arrival(self):
-        st = PlanState.of(contract([STEP_A]))
+        st = _plan_state(contract([STEP_A]))
         event = st.observe(page(url="http://app/beta/control/findPayments",
                                 title="Find Payment"), receipt(), WRITE_NONE)
         self.assertEqual(event["verdict"], NOT_APPLICABLE)
@@ -122,7 +127,7 @@ class CandidatesAreAlternatives(unittest.TestCase):
 class RefusalIdentity(unittest.TestCase):
     def test_another_webapps_refusal_never_refutes_mutation_even_after_steps_end(self):
         for steps in ([], [STEP_A]):
-            st = PlanState.of(contract(steps, mutation={"webapp": "alpha", "request": "edit"}))
+            st = _plan_state(contract(steps, mutation={"webapp": "alpha", "request": "edit"}))
             event = st.observe(page(url="http://app/beta/control/edit"),
                                receipt(url_after="http://app/alpha/control/edit"),
                                WRITE_REFUSED, refused_requests=["beta/edit"])
@@ -130,7 +135,7 @@ class RefusalIdentity(unittest.TestCase):
             self.assertFalse(st.withdrawn)
 
     def test_the_request_identity_can_refute_even_when_ajax_leaves_the_url_unchanged(self):
-        st = PlanState.of(contract([STEP_A], mutation={"webapp": "alpha", "request": "edit"}))
+        st = _plan_state(contract([STEP_A], mutation={"webapp": "alpha", "request": "edit"}))
         event = st.observe(page(), receipt(), WRITE_REFUSED, refused_requests=["alpha/edit"])
         self.assertEqual(event["verdict"], REFUTED)
         self.assertTrue(st.withdrawn)
@@ -140,13 +145,13 @@ class SuccessfulCandidates(unittest.TestCase):
     CANDIDATES = CandidatesAreAlternatives.CANDIDATES
 
     def test_reaching_the_second_candidate_satisfies_the_entry(self):
-        st = PlanState.of(contract([STEP_B], candidates=self.CANDIDATES))
+        st = _plan_state(contract([STEP_B], candidates=self.CANDIDATES))
         event = st.observe(page(url="http://app/accounting/control/findInvoices",
                                 title="Find Invoice"), receipt(), WRITE_NONE)
         self.assertEqual(event["verdict"], SATISFIED)
 
     def test_the_unused_candidate_is_not_left_pending_or_wrong(self):
-        st = PlanState.of(contract([STEP_B], candidates=self.CANDIDATES))
+        st = _plan_state(contract([STEP_B], candidates=self.CANDIDATES))
         st.observe(page(url="http://app/accounting/control/findInvoices", title="Find Invoice"),
                    receipt(), WRITE_NONE)
         self.assertEqual(st.counts()[REFUTED], 0, "not taking a route does not disprove it")
@@ -155,7 +160,7 @@ class SuccessfulCandidates(unittest.TestCase):
                          "the ordered steps begin once any candidate has been reached")
 
     def test_a_candidate_that_is_never_reached_does_not_block_the_steps(self):
-        st = PlanState.of(contract([STEP_B], candidates=self.CANDIDATES))
+        st = _plan_state(contract([STEP_B], candidates=self.CANDIDATES))
         st.observe(page(url="http://app/accounting/control/findPayments", title="Find Payment"),
                    receipt(), WRITE_NONE)
         self.assertEqual(st.current.step.intent, STEP_B["intent"])

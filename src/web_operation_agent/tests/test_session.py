@@ -94,11 +94,16 @@ from pathlib import Path
 
 from web_operation_agent.controlplane import ControlPlaneError
 from web_operation_agent.grounding import PlanState
-from web_operation_agent.knowledge import AppSkill, KnowledgeRouter
+from web_operation_agent.integrations.ofbiz import OFBIZ_ROUTE_PORT, ofbiz_route_identity
+from web_operation_agent.integrations.ofbiz_knowledge import AppSkill, KnowledgeRouter
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.schemas import ActionReceipt, OperationContract, empty_contract
 from web_operation_agent.session import (AGENT_SYSTEM, SCOPE_FIRST_SYSTEM,
                                          ServerAgentSession, TaskSpec, _PLAN_MARK)
+
+
+def _plan_state(value):
+    return PlanState.of(value, route_identity=ofbiz_route_identity)
 
 
 class _Chat(CancellableChatDouble):
@@ -211,11 +216,12 @@ def _session(tmp, chat, browser, control, contract=None):
         task=TaskSpec(task_ref="T", prompt="do the thing"), arm="S", chat=chat,
         browser=browser, control=control,
         ledger=SessionLedger(Path(tmp) / "l.jsonl", "r1"), attestation=None,
-        step_budget=6, wall_budget_s=120, run_id="r1")
+        step_budget=6, wall_budget_s=120, run_id="r1",
+        application_routes=OFBIZ_ROUTE_PORT)
     if contract is not None:
         session.contract = contract
         session.contract_source = "compiled"
-        session.plan_state = PlanState.of(contract)
+        session.plan_state = _plan_state(contract)
     session.entry_observation = browser.pages[0]
     return session
 
@@ -644,7 +650,7 @@ class WithdrawnPlanLeavesTheContext(unittest.TestCase):
             s = _session(tmp, chat, browser, _Control([[]] * 3), None)
             s.contract = empty_contract("T")
             s.contract_source = "none"
-            s.plan_state = PlanState.of(s.contract)
+            s.plan_state = _plan_state(s.contract)
             s.run()
             for msgs in chat.seen:
                 self.assertFalse([m for m in msgs
@@ -682,7 +688,7 @@ class SkillRouteStaysServerSide(unittest.TestCase):
             title="Party Manager", landmarks=[], elements=[ElementRef(
                 "e4", "link", "Accounting", "a", 1,
                 {"href": "/accounting/control/main?externalLoginKey=[redacted]"})])
-        self.assertEqual(ServerAgentSession._application_link_ref("e4", entry), ("e4", ""))
+        self.assertEqual(OFBIZ_ROUTE_PORT.validate_application_entry("e4", entry), ("e4", ""))
         for href in (
             "/accounting/control/findInvoices",
             "/accounting/control/main?externalLoginKey=clear",
@@ -690,7 +696,8 @@ class SkillRouteStaysServerSide(unittest.TestCase):
         ):
             entry.elements[0] = ElementRef("e4", "link", "Accounting", "a", 1,
                                            {"href": href})
-            self.assertNotEqual(ServerAgentSession._application_link_ref("e4", entry)[1], "")
+            self.assertNotEqual(
+                OFBIZ_ROUTE_PORT.validate_application_entry("e4", entry)[1], "")
 
     def test_generic_application_entry_bypasses_static_click_block_only_after_validation(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -707,7 +714,7 @@ class SkillRouteStaysServerSide(unittest.TestCase):
                 browser=browser, control=_Control([[], [], []]),
                 ledger=SessionLedger(Path(tmp) / "ledger.jsonl", "app-entry"),
                 attestation=None, source_contract=False, disabled_actions={"click"},
-                allow_application_entry=True)
+                allow_application_entry=True, application_routes=OFBIZ_ROUTE_PORT)
             session.entry_observation = entry
             result = session.run()
             self.assertEqual(result.terminal_reason, "agent_refused")
@@ -733,6 +740,7 @@ class SkillRouteStaysServerSide(unittest.TestCase):
                 browser=browser, control=_Control([[], [], []]),
                 ledger=SessionLedger(Path(tmp) / "ledger.jsonl", "skill-entry"),
                 attestation=None, knowledge_router=_knowledge_router(tmp),
+                application_routes=OFBIZ_ROUTE_PORT,
                 source_contract=False, disabled_actions={"click"})
             session.entry_observation = entry
 
@@ -760,6 +768,7 @@ class SkillRouteStaysServerSide(unittest.TestCase):
                 browser=browser, control=_Control([[], [], []]),
                 ledger=SessionLedger(Path(tmp) / "ledger.jsonl", "skill"),
                 attestation=None, knowledge_router=_knowledge_router(tmp),
+                application_routes=OFBIZ_ROUTE_PORT,
                 source_contract=False)
             session.entry_observation = browser.pages[0]
 
@@ -793,6 +802,7 @@ class SkillRouteStaysServerSide(unittest.TestCase):
                 browser=browser, control=_Control([[], [], []]),
                 ledger=SessionLedger(Path(tmp) / "ledger.jsonl", "skill-reject"),
                 attestation=None, knowledge_router=_knowledge_router(tmp),
+                application_routes=OFBIZ_ROUTE_PORT,
                 source_contract=False)
             session.entry_observation = browser.pages[0]
 
@@ -816,7 +826,7 @@ class ScopeReachesEveryArmAlike(unittest.TestCase):
                           supported_scope="Only the widget record may change.")
         if contract is None:
             s.contract, s.contract_source = empty_contract("T"), "none"
-            s.plan_state = PlanState.of(s.contract)
+            s.plan_state = _plan_state(s.contract)
         s.run()
         return next(m["content"] for m in chat.seen[0] if m["role"] == "user")
 
@@ -869,7 +879,7 @@ class APlanWhoseWriteIsAuthorisedPauses(unittest.TestCase):
 
     def test_pausing_is_not_a_refutation(self):
         from web_operation_agent.grounding import PlanState
-        st = PlanState.of(CONTRACT)
+        st = _plan_state(CONTRACT)
         st.pause_for_confirmation("the write it led to was authorised")
         self.assertEqual(st.counts()["refuted"], 0)
         self.assertEqual(st.unattributed_refusals, 0)
