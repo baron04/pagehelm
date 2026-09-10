@@ -4,7 +4,8 @@ The assembler consumes what the product path already produces: the ``AgentTurnEx
 or the typed boundary error, the private Session Ledger events of that run, the SpendMeter
 accounting slice, the final page as observed by the runtime and sampled by the trusted host,
 and the browser/API identity check. It never reads database truth, the evaluator, or a
-model's tool arguments, and it never repairs the public user answer.
+model's tool arguments. Skill/API query evidence comes from the product's public structured
+answer projection; the assembler does not repair or complete that projection.
 """
 from __future__ import annotations
 
@@ -139,6 +140,26 @@ def _browser_page_evidence(final_page: FinalPageSample | None) -> dict[str, Any]
         path=path, visible_projection=final_page.visible_projection)
 
 
+def _structured_query_evidence(
+        execution: AgentTurnExecution,
+        business_results: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """Project the user-visible typed-query result into Twenty's shared evidence schema."""
+    result = execution.business_result
+    projection = result.query_answer if result is not None else None
+    if not execution.agent.business_answer_projected or projection is None:
+        raise EvidenceContractError("typed query has no public structured answer projection")
+    if projection.collection != "companies" or projection.fields != ("name", "domain"):
+        raise EvidenceContractError("typed query projection is not a company collection")
+    public = projection.to_json()
+    evidence_answer = json.dumps({
+        "artifact_version": 1,
+        "execution_status": "completed",
+        "complete": public["completeness"]["complete"],
+        "companies": public["records"],
+    }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return query_evidence(evidence_answer, business_results)
+
+
 def assemble_woa_run(*, case: dict[str, Any], run_id: str, evidence: TurnEvidence,
                      capability_profile: str, source_mode: str, source_interface: str,
                      started_at: str,
@@ -192,7 +213,7 @@ def assemble_woa_run(*, case: dict[str, Any], run_id: str, evidence: TurnEvidenc
                         evidence_out = (
                             parse_query_evidence(execution.user_answer)
                             if capability_profile == "browser_only"
-                            else query_evidence(execution.user_answer, business_results))
+                            else _structured_query_evidence(execution, business_results))
                     elif selected["task_kind"] == "open":
                         evidence_out = (
                             _browser_page_evidence(evidence.final_page)

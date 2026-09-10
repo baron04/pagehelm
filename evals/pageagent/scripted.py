@@ -18,6 +18,7 @@ from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from web_operation_agent.application import APPLICATION_ADAPTER_VERSION, ApplicationDescriptor
+from web_operation_agent.answering import StructuredQueryAnswer
 from web_operation_agent.business import (
     BusinessMutationSpec, BusinessSkill, BusinessToolError, BusinessToolRequestError,
     BusinessToolResult, BusinessToolRuntime,
@@ -260,23 +261,40 @@ class SyntheticCompanyExecutor:
         } for company in self.companies if not needle or needle in company["name"].casefold()]
         visible = rows[:limit]
         result_truncated = len(rows) > limit or not self.complete
+        observed_at = "2026-09-09T00:00:00+00:00"
+        incomplete_reason = "" if self.complete else "synthetic_bounded_scan"
         return BusinessToolResult(
             content={
                 "companies": visible,
                 "matched_count": len(rows),
                 "source_total": len(self.companies),
                 "scope": "synthetic_workspace",
+                "observed_at": observed_at,
                 "completeness": {
                     "source_total_known": True,
                     "source_complete": self.complete,
                     "result_truncated": result_truncated,
                     "pages_scanned": 1,
                     "records_scanned": len(self.companies),
-                    "incomplete_reason": "" if self.complete else "synthetic_bounded_scan",
+                    "incomplete_reason": incomplete_reason,
                 },
             },
             audit={"returned_count": len(visible), "matched_count": len(rows)},
             allowed_routes=tuple(row["ui_path"] for row in visible),
+            query_answer=StructuredQueryAnswer(
+                collection="companies",
+                fields=("name", "domain"),
+                records=tuple((row["name"], row["domain"]) for row in visible),
+                source="Synthetic Twenty application API",
+                scope="synthetic_workspace",
+                observed_at=observed_at,
+                source_complete=self.complete,
+                result_truncated=result_truncated,
+                matched_count=len(rows),
+                source_total=len(self.companies),
+                records_scanned=len(self.companies),
+                incomplete_reason=incomplete_reason,
+            ),
         )
 
     def prepare_mutation(self, name: str, args: dict[str, Any], *,

@@ -315,6 +315,10 @@ class RunResult:
     #: Model-selected actions refused by a server policy before the browser saw a command.
     #: This is separate from gateway write refusals and from actions the browser executed.
     policy_blocks: int = 0
+    #: True only when the loop ended from plain model content immediately after a successful
+    #: typed business read. Product rendering may then replace factual prose with the
+    #: application-supplied structured query projection. A later navigation + finish does not.
+    business_answer_projected: bool = False
     detail: str = ""
 
     def to_json(self) -> dict:
@@ -819,6 +823,7 @@ class ServerAgentSession:
                         "business_answer", step=step, said=said[:300],
                         successful_business_tools=successful_business_tools,
                         success_claim="unverified")
+                    result.business_answer_projected = True
                     result.agent_said = said[:self.max_agent_said_chars]
                     return self._finish(
                         result, t0, "agent_finished", result.agent_said, steps=step)

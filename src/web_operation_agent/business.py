@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlsplit
 
+from .answering import StructuredQueryAnswer
 from .identity import OperationContext, PrincipalError
 from .mutation import (MemoryMutationJournal, MutationJournal,
                        MutationJournalError)
@@ -122,6 +123,7 @@ class BusinessToolResult:
     content: dict
     audit: dict
     allowed_routes: tuple[str, ...] = ()
+    query_answer: StructuredQueryAnswer | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.content, dict) or not isinstance(self.audit, dict):
@@ -141,6 +143,9 @@ class BusinessToolResult:
         if not isinstance(self.allowed_routes, tuple) \
                 or len(self.allowed_routes) != len(set(self.allowed_routes)):
             raise ValueError("business tool routes must be a unique tuple")
+        if self.query_answer is not None and not isinstance(
+                self.query_answer, StructuredQueryAnswer):
+            raise ValueError("business query answer projection is invalid")
         for route in self.allowed_routes:
             parsed = urlsplit(route) if isinstance(route, str) else None
             safe = bool(

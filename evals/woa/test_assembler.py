@@ -10,6 +10,8 @@ from evals.woa.assembler import (
     ENGINE_ANSWER_CEILING, FinalPageSample, TurnEvidence, WoaRunAssemblyError,
     assemble_woa_run, permitted_routes, utc_now,
 )
+from web_operation_agent.answering import StructuredQueryAnswer
+from web_operation_agent.business import BusinessToolResult
 from web_operation_agent.product import AgentTurnExecution, AgentTurnMessage, AgentTurnStatus
 from web_operation_agent.session import RunResult
 
@@ -58,10 +60,23 @@ def _answer():
 
 def _execution(*, terminal_reason="agent_finished", answer=None,
                page_actions=0) -> AgentTurnExecution:
+    structured_query = terminal_reason == "agent_finished" and page_actions == 0
     agent = RunResult(
         run_id="woa-turn", task_ref="woa-turn", arm="U", terminal_reason=terminal_reason,
         steps_used=3, page_actions=page_actions,
-        agent_said=answer if answer is not None else _answer())
+        agent_said=answer if answer is not None else _answer(),
+        business_answer_projected=structured_query)
+    business_result = (BusinessToolResult(
+        content=_results()[0], audit={}, allowed_routes=(ROUTE,),
+        query_answer=StructuredQueryAnswer(
+            collection="companies", fields=("name", "domain"),
+            records=((COMPANY["name"], COMPANY["domain"]),),
+            source="synthetic typed API", scope="synthetic_workspace",
+            observed_at="2026-09-10T00:00:00+00:00",
+            source_complete=True, result_truncated=False, matched_count=1,
+            source_total=1, records_scanned=1,
+        ),
+    ) if structured_query else None)
     return AgentTurnExecution(
         schema_version=1, run_id="woa-turn", session_id="woa-session",
         message=AgentTurnMessage(
@@ -71,7 +86,7 @@ def _execution(*, terminal_reason="agent_finished", answer=None,
                 else AgentTurnStatus.FAILED),
         terminal_reason=terminal_reason,
         user_answer=answer if answer is not None else _answer(),
-        agent=agent, business_result=None, answer_fallback_used=False,
+        agent=agent, business_result=business_result, answer_fallback_used=False,
         started_at=1.0, finished_at=2.0)
 
 

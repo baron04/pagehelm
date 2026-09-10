@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from web_operation_agent import product
+from web_operation_agent.answering import StructuredQueryAnswer
 from web_operation_agent.business import BusinessToolResult, BusinessToolRuntime
 from web_operation_agent.conversation import ConversationState
 from web_operation_agent.embedded_agent import ReadOnlyControl
@@ -167,6 +168,7 @@ class AgentTurnConfigTests(unittest.TestCase):
                 {"allow_business_mutations": 1},
                 {"require_identity": 1},
                 {"plain_business_answer_min_page_actions": -1},
+                {"max_user_answer_chars": 511},
             ):
                 with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                     AgentTurnConfig(
@@ -365,6 +367,95 @@ class AgentTurnExecutorTests(unittest.TestCase):
             self.assertEqual(execution.user_answer, long_answer)
             self.assertEqual(execution.agent.agent_said, long_answer)
             self.assertEqual(channel.published[-1][1]["message"], long_answer)
+
+    def test_typed_query_projects_facts_and_completeness_instead_of_model_prose(self):
+        class ProjectedExecutor(_Executor):
+            @staticmethod
+            def execute(name, args, *, context=None):
+                result = _Executor.execute(name, args, context=context)
+                return BusinessToolResult(
+                    content=result.content,
+                    audit=result.audit,
+                    allowed_routes=result.allowed_routes,
+                    query_answer=StructuredQueryAnswer(
+                        collection="companies",
+                        fields=("name", "domain"),
+                        records=(("Acme", "acme.test"),),
+                        source="fixture typed API",
+                        scope="current_workspace",
+                        observed_at="2026-09-10T00:00:00+00:00",
+                        source_complete=True,
+                        result_truncated=False,
+                        matched_count=1,
+                        source_total=1,
+                        records_scanned=1,
+                    ),
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = _skill(root / "query-skill.json")
+            chat = _Chat([
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("query_companies", {}),
+                (None, {"content": "Invented Co is definitely the complete result."}),
+            ])
+            channel = _Channel()
+            custom_renderer_calls = []
+            executor = AgentTurnExecutor(
+                channel=channel,
+                config=AgentTurnConfig(
+                    supported_scope="Read company data only.",
+                    ledger_path=root / "session.jsonl",
+                    plain_business_answer_min_page_actions=0,
+                ),
+                chat=chat,
+                business_tools=BusinessToolRuntime((skill,), ProjectedExecutor()),
+                control=ReadOnlyControl(),
+                run_id_factory=lambda _message: "turn-structured-answer-001",
+                answer_renderer=lambda _context: (
+                    custom_renderer_calls.append(True) or "untrusted replacement"),
+            )
+            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+                execution = executor.run_once(_message())
+
+            self.assertIn("Acme", execution.user_answer)
+            self.assertIn("acme.test", execution.user_answer)
+            self.assertIn("Completeness: complete", execution.user_answer)
+            self.assertNotIn("Invented Co", execution.user_answer)
+            self.assertEqual(custom_renderer_calls, [])
+            projection = execution.to_json()["business_result"]["answer_projection"]
+            self.assertEqual(projection["records"], [
+                {"name": "Acme", "domain": "acme.test"}])
+            events = [json.loads(line) for line in
+                      (root / "session.jsonl").read_text().splitlines()]
+            event = next(item for item in events
+                         if item["event"] == "structured_query_answer_rendered")
+            self.assertFalse(event["model_facts_used"])
+            self.assertFalse(event["presentation_truncated"])
+
+    def test_query_projection_does_not_replace_a_later_navigation_completion(self):
+        result = BusinessToolResult(
+            content={"companies": [{"name": "Acme", "domain": "acme.test"}]},
+            audit={},
+            query_answer=StructuredQueryAnswer(
+                collection="companies", fields=("name", "domain"),
+                records=(("Acme", "acme.test"),), source="fixture typed API",
+                scope="workspace", observed_at="2026-09-10T00:00:00+00:00",
+                source_complete=True, result_truncated=False, matched_count=1,
+                source_total=1, records_scanned=1,
+            ),
+        )
+        context = product.AgentAnswerContext(
+            message=AgentTurnMessage.from_wire(_message()),
+            agent=product.RunResult(
+                run_id="run", task_ref="task", arm="U",
+                terminal_reason="agent_finished", agent_said="Opened Acme."),
+            business_result=result,
+            max_chars=4_000,
+        )
+
+        self.assertEqual(product.render_neutral_user_answer(context), "Opened Acme.")
 
     def test_second_turn_resolves_reference_but_must_refresh_before_opening(self):
         class TwoCompanyExecutor(_Executor):

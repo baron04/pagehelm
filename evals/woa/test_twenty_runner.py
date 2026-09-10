@@ -301,7 +301,7 @@ class WoaRunnerScenarioTests(unittest.TestCase):
         self.assertEqual(result["turn"]["route_rejections"], 1)
         self.assertEqual(evaluate_run(case, self.companies, result)["status"], "FAIL")
 
-    def test_wrong_or_repaired_answers_fail_without_repair(self):
+    def test_model_prose_cannot_change_the_typed_query_projection(self):
         case = development_case("dev-query-en-1", self.companies)
         for answer in (query_answer(self.companies[:2]),
                        "```json\n" + query_answer(self.companies) + "\n```",
@@ -310,12 +310,13 @@ class WoaRunnerScenarioTests(unittest.TestCase):
             with self.subTest(answer=answer[:40]):
                 result = self._run(
                     case=case, chat=ScriptedWoaChat(self._query_replies(answer)))
-                self.assertEqual(result["status"], "failed")
-                self.assertEqual(result["error_code"], "evidence_contract")
-                self.assertEqual(result["evidence"], {
-                    "artifact_version": 1, "execution_status": "failed"})
+                self.assertEqual(result["status"], "completed", result)
+                self.assertIsNone(result["error_code"])
                 self.assertEqual(
-                    evaluate_run(case, self.companies, result)["status"], "FAIL")
+                    sorted(row["name"] for row in result["evidence"]["companies"]),
+                    sorted(company["name"] for company in self.companies))
+                self.assertEqual(
+                    evaluate_run(case, self.companies, result)["status"], "PASS")
 
     def test_invalid_tool_arguments_are_a_scorable_engine_failure(self):
         case = development_case("dev-query-en-1", self.companies)

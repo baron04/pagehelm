@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit
 
+from .answering import render_structured_query_answer
 from .browser import TransportError
 from .business import BusinessToolResult, BusinessToolRuntime
 from .conversation import ConversationState
@@ -148,6 +149,8 @@ class AgentTurnConfig:
             raise ValueError("approval_ttl_s cannot exceed 600 seconds")
         if self.max_user_answer_chars > 20_000:
             raise ValueError("max_user_answer_chars cannot exceed 20000")
+        if self.max_user_answer_chars < 512:
+            raise ValueError("max_user_answer_chars must be at least 512")
         if (isinstance(self.transport_timeout_s, bool)
                 or not isinstance(self.transport_timeout_s, (int, float))
                 or not math.isfinite(self.transport_timeout_s)
@@ -175,6 +178,7 @@ class AgentAnswerContext:
     message: AgentTurnMessage
     agent: RunResult
     business_result: BusinessToolResult | None
+    max_chars: int
 
 
 def render_neutral_user_answer(context: AgentAnswerContext) -> str:
@@ -182,6 +186,13 @@ def render_neutral_user_answer(context: AgentAnswerContext) -> str:
     status = _status_for(context.agent.terminal_reason)
     if status is AgentTurnStatus.INDETERMINATE:
         return "The action outcome is uncertain. It was not retried automatically."
+    projection = (context.business_result.query_answer
+                  if context.business_result is not None else None)
+    if (status is AgentTurnStatus.FINISHED
+            and context.agent.business_answer_projected and projection is not None):
+        return render_structured_query_answer(
+            projection, user_text=context.message.text,
+            max_chars=context.max_chars).text
     if context.agent.agent_said.strip():
         return context.agent.agent_said.strip()
     return {
@@ -233,6 +244,10 @@ class AgentTurnExecution:
             "business_result": ({
                 "content_digest": business.content_digest,
                 "route_count": len(business.allowed_routes),
+                "answer_projection": (
+                    business.query_answer.to_json()
+                    if (self.agent.business_answer_projected
+                        and business.query_answer is not None) else None),
             } if business is not None else None),
             "answer_fallback_used": self.answer_fallback_used,
             "started_at": self.started_at,
@@ -439,10 +454,19 @@ class AgentTurnExecutor:
             message=turn_message,
             agent=agent,
             business_result=session.latest_business_tool_result,
+            max_chars=self.config.max_user_answer_chars,
         )
         fallback_used = False
         try:
-            rendered = self.answer_renderer(answer_context)
+            authoritative_projection = (
+                session.latest_business_tool_result.query_answer
+                if (agent.business_answer_projected
+                    and session.latest_business_tool_result is not None) else None)
+            # A server-trusted renderer may customize ordinary terminal prose. It cannot
+            # replace facts already projected by a typed query with model-authored prose.
+            rendered = (render_neutral_user_answer(answer_context)
+                        if authoritative_projection is not None
+                        else self.answer_renderer(answer_context))
             if not isinstance(rendered, str) or not rendered.strip():
                 raise ValueError("answer renderer returned no text")
         except Exception as exc:
@@ -454,6 +478,23 @@ class AgentTurnExecutor:
         if not user_answer:
             fallback_used = True
             user_answer = render_neutral_user_answer(answer_context)
+
+        projection = authoritative_projection
+        if agent.business_answer_projected and projection is not None:
+            projection_rendering = render_structured_query_answer(
+                projection, user_text=turn_message.text,
+                max_chars=self.config.max_user_answer_chars)
+            ledger.append(
+                "structured_query_answer_rendered",
+                business_result_digest=session.latest_business_tool_result.content_digest,
+                projection_digest=projection.content_digest,
+                returned_records=len(projection.records),
+                presented_records=projection_rendering.presented_records,
+                presentation_truncated=projection_rendering.presentation_truncated,
+                source_complete=projection.source_complete,
+                result_truncated=projection.result_truncated,
+                model_facts_used=False,
+            )
 
         execution = AgentTurnExecution(
             schema_version=1,

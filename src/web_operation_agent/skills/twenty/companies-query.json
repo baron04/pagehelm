@@ -16,7 +16,7 @@
     "When the user asks to open one company, call query_companies with their name, require exactly one match, then call goto with that result's exact ui_path.",
     "After goto, if the requested company name and domain are not visible yet, call wait_for once for bounded SPA loading before reporting completion.",
     "If the company query has zero or multiple matches, ask for clarification; never invent a record path.",
-    "Treat the ToolResult as runtime truth. Claim an exhaustive answer only when completeness.source_complete is true; otherwise state that the rows are partial and include the bounded incomplete_reason."
+    "Treat the ToolResult as runtime truth. After the query, respond briefly; the server projects the exact records, source and completeness into the user answer, so do not restate or extend the record set."
   ],
   "tool_names": [
     "query_companies"

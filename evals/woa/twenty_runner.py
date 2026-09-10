@@ -57,11 +57,9 @@ _BROWSER_READ_ONLY_SCOPE = (
 )
 _SKILL_OUTPUT_CONTRACT = (
     "EVALUATION OUTPUT CONTRACT\n"
-    "For a company-list goal, answer with exactly one JSON object and no Markdown: "
-    '{"artifact_version":1,"execution_status":"completed","complete":true,'
-    '"companies":[{"name":"Company","domain":"company.example"}]}. Set complete to true only '
-    "when the tool's completeness.source_complete is true and result_truncated is false. Copy "
-    "every returned company exactly once. For an open goal, finish only after the requested "
+    "For a company-list goal, query once and return a brief explanation; the product projects "
+    "the exact records, source and completeness from the typed ToolResult. Do not restate or "
+    "extend the record set. For an open goal, finish only after the requested "
     "company name and domain are visible on the opened record page."
 )
 _BROWSER_OUTPUT_CONTRACT = (

@@ -23,6 +23,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
+from web_operation_agent.answering import StructuredQueryAnswer
 from web_operation_agent.business import (BusinessMutationIndeterminate,
                                           BusinessMutationSpec, BusinessSkill,
                                           BusinessToolAuthenticationError,
@@ -569,6 +570,16 @@ class TwentyBusinessToolExecutor:
             pagination.get("complete") is True
             if pagination else source_total_known and len(rows) == source_total)
         result_truncated = matched > limit or not source_complete
+        records_scanned = pagination.get("records_scanned", len(rows))
+        if (isinstance(records_scanned, bool)
+                or not isinstance(records_scanned, int) or records_scanned < 0):
+            records_scanned = len(rows)
+        incomplete_reason = pagination.get("incomplete_reason", "")
+        if not isinstance(incomplete_reason, str):
+            incomplete_reason = ""
+        incomplete_reason = incomplete_reason[:500]
+        if not source_complete and not incomplete_reason:
+            incomplete_reason = "source_scan_incomplete"
         observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         return BusinessToolResult(
             content={
@@ -582,8 +593,8 @@ class TwentyBusinessToolExecutor:
                     "source_complete": source_complete,
                     "result_truncated": result_truncated,
                     "pages_scanned": pagination.get("pages_scanned", 1),
-                    "records_scanned": pagination.get("records_scanned", len(rows)),
-                    "incomplete_reason": pagination.get("incomplete_reason", ""),
+                    "records_scanned": records_scanned,
+                    "incomplete_reason": incomplete_reason,
                 },
             },
             audit={
@@ -597,14 +608,28 @@ class TwentyBusinessToolExecutor:
                 "source_complete": source_complete,
                 "result_truncated": result_truncated,
                 "pages_scanned": pagination.get("pages_scanned", 1),
-                "records_scanned": pagination.get("records_scanned", len(rows)),
-                "incomplete_reason": pagination.get("incomplete_reason", ""),
+                "records_scanned": records_scanned,
+                "incomplete_reason": incomplete_reason,
                 "scope": "current_delegated_workspace",
                 "observed_at": observed_at,
                 "oauth_refreshed": refreshed,
                 **self._identity_audit(context),
             },
             allowed_routes=allowed_routes,
+            query_answer=StructuredQueryAnswer(
+                collection="companies",
+                fields=("name", "domain"),
+                records=tuple((row["name"], row["domain"]) for row in visible),
+                source="Twenty delegated REST /rest/companies",
+                scope="current_delegated_workspace",
+                observed_at=observed_at,
+                source_complete=source_complete,
+                result_truncated=result_truncated,
+                matched_count=matched,
+                source_total=(source_total if source_total_known else None),
+                records_scanned=records_scanned,
+                incomplete_reason=incomplete_reason,
+            ),
         )
 
     def prepare_mutation(self, name: str, args: dict, *,

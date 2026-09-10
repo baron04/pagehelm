@@ -429,6 +429,14 @@ class TwentyPaginationTests(unittest.TestCase):
         self.assertEqual(result.content["completeness"]["pages_scanned"], 2)
         self.assertEqual(result.content["completeness"]["incomplete_reason"], "")
         self.assertTrue(result.content["completeness"]["result_truncated"])
+        projection = result.query_answer.to_json()
+        self.assertEqual(len(projection["records"]), 50)
+        self.assertEqual(projection["records"][0], {
+            "name": "Company 000", "domain": "company-0.example"})
+        self.assertTrue(projection["completeness"]["source_complete"])
+        self.assertTrue(projection["completeness"]["result_truncated"])
+        self.assertEqual(projection["completeness"]["source_total"], 150)
+        self.assertNotIn("ui_path", projection["records"][0])
 
     def test_nonadvancing_cursor_returns_an_explicit_partial_result(self):
         pages = [self._rows(0, 2), self._rows(2, 2)]
@@ -459,6 +467,9 @@ class TwentyPaginationTests(unittest.TestCase):
         self.assertTrue(completeness["result_truncated"])
         self.assertEqual(completeness["incomplete_reason"], "cursor_did_not_advance")
         self.assertEqual(completeness["records_scanned"], 4)
+        self.assertFalse(result.query_answer.complete)
+        self.assertEqual(
+            result.query_answer.incomplete_reason, "cursor_did_not_advance")
 
     def test_page_cap_is_partial_and_duplicate_preflight_fails_closed(self):
         class Tokens:
