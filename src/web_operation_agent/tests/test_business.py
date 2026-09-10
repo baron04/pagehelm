@@ -977,6 +977,7 @@ class BusinessReActTransition(unittest.TestCase):
                      if message.get("role") == "tool"]
             self.assertTrue(any("BUSINESS SKILL LOADED" in text for text in facts))
             self.assertTrue(any('"name":"Acme"' in text for text in facts))
+            self.assertTrue(any("SERVER QUERY ANSWER READY" in text for text in facts))
             self.assertEqual(len(ledger.of_kind("business_skill_loaded")), 1)
             self.assertEqual(ledger.of_kind("business_answer")[0]["terminal_tool"], "finish")
             candidates = ledger.of_kind("business_skill_candidates")

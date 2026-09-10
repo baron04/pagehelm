@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
+import statistics
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -64,11 +66,30 @@ def _environment(path: Path, process: Mapping[str, str]) -> dict[str, str]:
 def _summary(*, taskset: dict[str, Any], initial: dict[str, Any], model: str,
              max_cost_cny: float, cases: list[dict[str, Any]],
              stopped_reason: str | None) -> dict[str, Any]:
+    def distribution(field: str) -> dict[str, float | int | None]:
+        values = sorted(float(item[field]) for item in cases
+                        if isinstance(item.get(field), (int, float))
+                        and not isinstance(item.get(field), bool)
+                        and math.isfinite(float(item[field])))
+        if not values:
+            return {"count": 0, "median": None, "p90": None, "p95": None}
+
+        def nearest_rank(percentile: float) -> float:
+            return values[max(0, math.ceil(percentile * len(values)) - 1)]
+
+        return {"count": len(values), "median": statistics.median(values),
+                "p90": nearest_rank(.90), "p95": nearest_rank(.95)}
+
     completed = len(cases) == len(TASK_IDS) and stopped_reason is None
     evaluation_counts = {name: sum(item["evaluation_status"] == name for item in cases)
                          for name in ("PASS", "FAIL", "INVALID")}
     unknown_cost_calls = sum(item["usage_unavailable_calls"] for item in cases)
     known_cost = round(sum(item["known_cost_cny"] for item in cases), 6)
+    safety_keys = ("unauthorized_writes", "duplicate_writes",
+                   "forbidden_state_changes", "cross_identity_actions")
+    safety_totals = {key: sum(int(item.get("safety", {}).get(key, 0)) for item in cases)
+                     for key in safety_keys}
+    refusal_cases = [item for item in cases if item.get("task_kind") == "refuse"]
     return {
         "artifact_version": PILOT_VERSION, "kind": "woa_twenty_breadth_paid_pilot",
         "status": "COMPLETE" if completed else "STOPPED",
@@ -79,7 +100,20 @@ def _summary(*, taskset: dict[str, Any], initial: dict[str, Any], model: str,
         "evaluation_counts": evaluation_counts,
         "apparatus_invalid_count": sum(
             item["runner_status"] == "apparatus_invalid" for item in cases),
-        "known_cost_cny": known_cost, "unknown_cost_calls": unknown_cost_calls,
+        "known_cost_cny": known_cost,
+        "total_cost_cny": None if unknown_cost_calls else known_cost,
+        "unknown_cost_calls": unknown_cost_calls,
+        "metrics": {
+            field: distribution(field) for field in (
+                "wall_ms", "steps_used", "model_calls", "page_actions",
+                "business_calls", "known_cost_cny")
+        },
+        "safety_totals": safety_totals,
+        "refusal_counts": {
+            "scheduled": len(refusal_cases),
+            "passed": sum(item.get("evaluation_status") == "PASS"
+                          for item in refusal_cases),
+        },
         "cost_ceiling_cny": max_cost_cny, "stopped_reason": stopped_reason,
         "cases": cases, "finished_at": utc_now(),
     }
@@ -126,7 +160,9 @@ def run_pilot(*, fixture: TwentyPostgresFixture, adapter: TwentyApplicationAdapt
         evaluation = evaluate_breadth(
             task=case["evaluator_task"], before=before, after=after,
             evidence=run["evidence"])
-        accounting = run.get("trial", {}).get("accounting") or {}
+        trial = run.get("trial", {})
+        accounting = trial.get("accounting") or {}
+        safety = trial.get("safety") or {}
         cases.append({
             "position": position, "task_id": task_id,
             "task_kind": case["evaluator_task"]["kind"],
@@ -139,6 +175,17 @@ def run_pilot(*, fixture: TwentyPostgresFixture, adapter: TwentyApplicationAdapt
             "page_actions": run.get("trial", {}).get("page_actions"),
             "business_calls": run.get("trial", {}).get("business_calls"),
             "policy_blocks": (run.get("turn") or {}).get("policy_blocks"),
+            "wall_ms": run.get("wall_ms"),
+            "approvals_requested": trial.get("approvals_requested"),
+            "approvals_approved": trial.get("approvals_approved"),
+            "approvals_denied": trial.get("approvals_denied"),
+            "automatic_retries": trial.get("automatic_retries"),
+            "user_interventions": trial.get("user_interventions"),
+            "safety": {
+                key: int(safety.get(key, 0)) for key in (
+                    "unauthorized_writes", "duplicate_writes",
+                    "forbidden_state_changes", "cross_identity_actions")
+            },
             "evaluation_status": evaluation.get("status"),
             "failed_checks": sorted(
                 key for key, value in evaluation.get("checks", {}).items() if value is False),

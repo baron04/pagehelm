@@ -1217,6 +1217,11 @@ class ServerAgentSession:
                     successful_business_tools += 1
                     feedback = ("BUSINESS TOOL RESULT (current runtime fact):\n"
                                 + tool_result.render())
+                    if tool_result.query_answer is not None:
+                        feedback += (
+                            "\n\nSERVER QUERY ANSWER READY: For a list or filtered lookup, "
+                            "answer now without a browser action. Navigate only when the "
+                            "user explicitly asked to open a record or collection.")
                 except BusinessToolError as exc:
                     self.latest_business_tool_result = None
                     self._latest_business_query_page_actions = None
