@@ -192,6 +192,7 @@ fi
 # Self-contained once the deterministic bundle and Chromium are available; no Twenty is
 # involved. Run with the suite's required flag whenever prerequisites are present, so a real
 # test failure can never be downgraded to an optional skip.
+chromium_ready=0
 if ! "${PYTHON}" - <<'PY'
 from web_operation_agent.tests.test_minimal_demo import _chromium_launches
 raise SystemExit(0 if _chromium_launches() else 1)
@@ -200,6 +201,7 @@ then
   record "minimal demo Chromium qualification" BLOCKED "Chromium is unavailable"
   [[ "${require_browser}" == "1" ]] && failed+=("minimal demo Chromium qualification")
 else
+  chromium_ready=1
   run_gate "minimal demo Chromium qualification" 1 \
     env WOA_REQUIRE_MINIMAL_DEMO_BROWSER=1 "${PYTHON}" \
     src/web_operation_agent/tests/run_all.py -k test_minimal_demo.py
@@ -213,17 +215,32 @@ if [[ "${pageagent_ready}" != "1" ]]; then
 elif [[ ! -f "${browser_bundle}" ]]; then
   record "PageAgent Chromium qualification" BLOCKED "bundle is absent: ${browser_bundle}"
   [[ "${require_browser}" == "1" ]] && failed+=("PageAgent Chromium qualification")
-elif ! "${PYTHON}" - <<'PY'
-from evals.pageagent.test_twenty_runner_browser import _chromium_launches
-raise SystemExit(0 if _chromium_launches() else 1)
-PY
-then
+elif [[ "${chromium_ready}" != "1" ]]; then
   record "PageAgent Chromium qualification" BLOCKED "Chromium is unavailable"
   [[ "${require_browser}" == "1" ]] && failed+=("PageAgent Chromium qualification")
 else
   run_gate "PageAgent Chromium qualification" 1 \
     env WOA_REQUIRE_PAGEAGENT_BROWSER=1 "${PYTHON}" -m unittest \
     evals.pageagent.test_twenty_runner_browser
+fi
+
+page_controller_module="${ROOT}/evals/pageagent/node_modules/@page-agent/page-controller/dist/lib/page-controller.js"
+if [[ "${pageagent_ready}" != "1" ]]; then
+  record "embedded Runtime Chromium qualification" BLOCKED \
+    "the pinned PageController dependency was not qualified"
+  [[ "${require_browser}" == "1" ]] && failed+=("embedded Runtime Chromium qualification")
+elif [[ ! -f "${page_controller_module}" ]]; then
+  record "embedded Runtime Chromium qualification" BLOCKED \
+    "PageController module is absent: ${page_controller_module}"
+  [[ "${require_browser}" == "1" ]] && failed+=("embedded Runtime Chromium qualification")
+elif [[ "${chromium_ready}" != "1" ]]; then
+  record "embedded Runtime Chromium qualification" BLOCKED "Chromium is unavailable"
+  [[ "${require_browser}" == "1" ]] && failed+=("embedded Runtime Chromium qualification")
+else
+  run_gate "embedded Runtime Chromium qualification" 1 \
+    env WOA_PAGE_CONTROLLER_MODULE="${page_controller_module}" "${PYTHON}" -m unittest \
+    web_operation_agent.tests.test_embedded_runtime.EmbeddedRuntimeTests.test_real_pagecontroller_survives_navigation_without_repeating_action \
+    web_operation_agent.tests.test_embedded_runtime.EmbeddedRuntimeTests.test_same_origin_iframe_form_navigation_is_observed_without_top_level_change
 fi
 
 # ---------------------------------------------------------------- live gate

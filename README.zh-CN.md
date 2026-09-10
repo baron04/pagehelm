@@ -125,7 +125,7 @@ scripts/qualify.sh
 
 有两道门禁取决于环境，它们只会被如实报告，不会被默认当作通过：
 
-- **Chromium 资格**会端到端运行打包的 minimal demo，并用已构建 bundle 运行 PageAgent 浏览器用例。二者都不需要 Twenty；CI 用 `--require-browser` 把它们设为必需。不加该参数时，缺少 bundle 或 Chromium 会被报告出来，而不是计为通过。
+- **Chromium 资格**会端到端运行打包的 minimal demo、用已构建 bundle 运行 PageAgent 浏览器用例，并用固定版本的 PageController 运行嵌入式 Runtime。Runtime 用例同时覆盖顶层文档换页和 OFBiz 风格的同源 iframe 表单换页；后者必须返回新的页面观察，而且不能重复提交表单。这些合成用例都不需要 Twenty 或 OFBiz；CI 用 `--require-browser` 把它们设为必需。不加该参数时，缺少 bundle、PageController 或 Chromium 会被报告出来，而不是计为通过。
 - **本地 Twenty 资格**只在全部前置条件就绪时运行：`WOA_TWENTY_BASE_URL`、`WOA_TWENTY_STORAGE_STATE`、`WOA_TWENTY_OAUTH_TOKEN`、`WOA_TWENTY_OAUTH_REGISTRATION`、`WOA_TWENTY_PAGE_CONTROLLER_MODULE`、`WOA_TWENTY_DB_CONTAINER`、`WOA_TWENTY_DB_NAME`、`WOA_TWENTY_DB_USER`、`WOA_TWENTY_WORKSPACE_SCHEMA`。门禁优先读取进程变量，随后读取与 `demo.sh` 相同的 `WOA_MODEL_ENV` 或被忽略的仓库 `.env`；配置文件按数据解析，不作为 shell 代码执行。否则输出 `BLOCKED` 并列出未设置的变量。BLOCKED 表示未被测试，既不是通过，也不是产品失败。需要该门禁的环境可用 `--require-live` 把缺失变成失败。
 
 本仓库还没有提供 Twenty 实例的准备资产，因此全新 clone 会把本地 Twenty 门禁报告为 `BLOCKED`。

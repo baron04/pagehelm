@@ -131,8 +131,8 @@ function explicitAttribute(element, name) {
   return Object.hasOwn(element, name) ? String(element[name] || '') : null
 }
 
-function baseTarget() {
-  const base = globalThis.document?.querySelector?.('base[target]')
+function baseTarget(ownerDocument = globalThis.document) {
+  const base = ownerDocument?.querySelector?.('base[target]')
   return String(base?.getAttribute?.('target') || base?.target || '')
 }
 
@@ -151,7 +151,46 @@ function effectiveTarget(element, form = null) {
   }
   const parentTarget = explicitAttribute(form, 'target')
   if (parentTarget?.trim()) return parentTarget
-  return baseTarget()
+  return baseTarget(element?.ownerDocument || form?.ownerDocument)
+}
+
+function navigationWatch(element) {
+  const ownerDocument = element?.ownerDocument || globalThis.document
+  const context = ownerDocument?.defaultView || globalThis.window
+  let frameElement = null
+  try { frameElement = context === globalThis.window ? null : context?.frameElement } catch {
+    frameElement = null
+  }
+  let startedUrl = ''
+  try { startedUrl = absoluteUrl(context?.location?.href || '') } catch { /* opaque frame */ }
+  return {context, document: ownerDocument, frameElement, startedUrl}
+}
+
+function navigationCommitted(context, urlBefore, documentBefore, frameElement = null) {
+  try {
+    const liveContext = frameElement?.contentWindow || context
+    const liveDocument = frameElement?.contentDocument || liveContext?.document
+    const currentUrl = absoluteUrl(liveContext?.location?.href || '')
+    return Boolean(currentUrl && currentUrl !== urlBefore) || Boolean(
+      documentBefore && liveDocument && liveDocument !== documentBefore)
+  } catch { return false }
+}
+
+function armChildFrameNavigation(frameElement) {
+  if (!frameElement?.addEventListener) return null
+  let committed = false
+  let resolveCommitted
+  const promise = new Promise(resolve => { resolveCommitted = resolve })
+  const onLoad = () => {
+    committed = true
+    resolveCommitted({navigated: true, message: 'child frame navigation committed'})
+  }
+  frameElement.addEventListener('load', onLoad, {once: true})
+  return {
+    get committed() { return committed },
+    promise,
+    dispose() { frameElement.removeEventListener('load', onLoad) },
+  }
 }
 
 function isSubmitControl(element) {
@@ -1029,11 +1068,15 @@ export class EmbeddedWebRuntime {
     let success = true
     let code = ''
     let detail = ''
+    // A native submit can commit a child-frame navigation before _execute returns. Arm the
+    // stable iframe element first so that fast server responses cannot escape observation.
+    const navigationSignal = armChildFrameNavigation(navigation.frameElement)
     try {
       const result = await this._execute(action.command)
       if (result?.native_navigation_expected || this._mayNavigate(action.command, before)) {
         const navigationResult = await this._waitForNavigation(
-          executing.started_url_raw, action.deadline)
+          navigation.startedUrl || executing.started_url_raw, action.deadline,
+          navigation.context, navigation.document, navigation.frameElement, navigationSignal)
         if (!navigationResult.navigated) {
           throw new Error('navigation_timeout: expected navigation did not commit before deadline')
         }
@@ -1048,10 +1091,16 @@ export class EmbeddedWebRuntime {
       else if (detail.startsWith('bad_arguments')) code = 'bad_arguments'
       else if (detail.startsWith('navigation_timeout')) code = 'navigation_timeout'
       else code = 'page_error'
+    } finally {
+      navigationSignal?.dispose()
     }
     const observation = await this.observe(action.action_id)
+    // The wire contract defines `navigated` as a change in the observed top-level URL. A
+    // child-frame commit satisfies the action guard, while its new content is carried by the
+    // fresh observation rather than being misreported as a top-level navigation.
     const receipt = this._receipt(executing, success, code, detail, observation,
-      before.observation.url !== observation.observation.url, Date.now() - executing.started_at)
+      before.observation.url !== observation.observation.url,
+      Date.now() - executing.started_at)
     const result = this._completedResult(executing, receipt, observation)
     this.stored.cachedResult = result
     this._save()
@@ -1192,26 +1241,29 @@ export class EmbeddedWebRuntime {
   _navigationExpectation(command, before) {
     try {
       if (command.action === 'goto' && command.args?.url) {
-        return {kind: 'goto', url: sameOriginUrl(command.args.url)}
+        return {kind: 'goto', url: sameOriginUrl(command.args.url),
+          ...navigationWatch(globalThis.document?.documentElement)}
       }
       if (command.action === 'click') {
         const element = this.getElementByIndex(
           this.controller.selectorMap, refIndex(command.args?.ref))
         const native = this._nativeNavigation(element)
-        if (native?.kind === 'link') return {kind: 'link', url: native.url}
+        const watch = navigationWatch(element)
+        if (native?.kind === 'link') return {kind: 'link', url: native.url, ...watch}
         if (native?.kind === 'form' && native.method === 'get') {
-          return {kind: 'form-get', url: formGetUrl(native, element)}
+          return {kind: 'form-get', url: formGetUrl(native, element), ...watch}
         }
-        if (native?.kind === 'form') return {kind: 'form', url: ''}
+        if (native?.kind === 'form') return {kind: 'form', url: '', ...watch}
       }
       if (command.action === 'submit') {
         const element = this.getElementByIndex(
           this.controller.selectorMap, refIndex(command.args?.ref))
         const native = this._nativeNavigation(element)
+        const watch = navigationWatch(element)
         if (native?.kind === 'form' && native.method === 'get') {
-          return {kind: 'form-get', url: formGetUrl(native)}
+          return {kind: 'form-get', url: formGetUrl(native), ...watch}
         }
-        if (native?.kind === 'form') return {kind: 'form', url: ''}
+        if (native?.kind === 'form') return {kind: 'form', url: '', ...watch}
       }
     } catch { /* execution returns the typed origin_refused receipt after claiming */ }
     // A form submission, history traversal, JavaScript click, or manual reload can have
@@ -1219,8 +1271,11 @@ export class EmbeddedWebRuntime {
     return {kind: '', url: ''}
   }
 
-  async _waitForNavigation(urlBefore, deadline) {
-    if (absoluteUrl(location.href) !== urlBefore) {
+  async _waitForNavigation(urlBefore, deadline, context = globalThis.window,
+                           documentBefore = globalThis.document, frameElement = null,
+                           navigationSignal = null) {
+    if (navigationSignal?.committed ||
+        navigationCommitted(context, urlBefore, documentBefore, frameElement)) {
       return {navigated: true, message: 'navigation committed'}
     }
     const configured = Math.min(
@@ -1232,12 +1287,13 @@ export class EmbeddedWebRuntime {
     }
     return new Promise(resolve => {
       let settled = false
+      const topLevelNavigation = context === globalThis.window
       const finish = value => {
         if (settled) return
         settled = true
         clearInterval(poll)
         clearTimeout(timer)
-        window.removeEventListener('pagehide', onPageHide)
+        if (topLevelNavigation) window.removeEventListener('pagehide', onPageHide)
         resolve(value)
       }
       // Do not resolve on pagehide.  The old document is going away and its callback cannot
@@ -1247,14 +1303,18 @@ export class EmbeddedWebRuntime {
         clearInterval(poll)
         clearTimeout(timer)
       }
-      window.addEventListener('pagehide', onPageHide, {once: true})
+      // Only a top-level unload destroys this Runtime and requires the next document to
+      // recover the write-ahead action. A same-origin iframe unload leaves this Runtime
+      // alive, so suppressing its timer would strand the action forever.
+      if (topLevelNavigation) window.addEventListener('pagehide', onPageHide, {once: true})
       const poll = setInterval(() => {
-        if (absoluteUrl(location.href) !== urlBefore) {
+        if (navigationCommitted(context, urlBefore, documentBefore, frameElement)) {
           finish({navigated: true, message: 'navigation committed'})
         }
       }, 100)
       const timer = setTimeout(
         () => finish({navigated: false, message: 'navigation guard elapsed'}), cap)
+      navigationSignal?.promise.then(finish)
     })
   }
 

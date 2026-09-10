@@ -1292,6 +1292,83 @@ class EmbeddedRuntimeTests(unittest.TestCase):
             gateway.close()
             app.close()
 
+    @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
+                         "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
+    def test_same_origin_iframe_form_navigation_is_observed_without_top_level_change(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            self.skipTest("Playwright is not installed")
+
+        registry = RemoteSessionRegistry()
+        app = _FixtureApplication(PAGE_CONTROLLER)
+        app.start()
+        grant, channel = registry.create(
+            allowed_origins=[app.origin], session_id="iframe-browser-session")
+        gateway = EmbeddedGateway(registry, sse_wait_s=0.1).start()
+        app.runtime_url = gateway.runtime_url
+        app.runtime_config = gateway.bootstrap_config(
+            grant, page_controller_module=app.origin + "/page-controller.js")
+        app.runtime_config["navigationGuardMs"] = 3_000
+        try:
+            with sync_playwright() as playwright:
+                browser_process = playwright.chromium.launch(headless=True)
+                page = browser_process.new_page()
+                errors = []
+                console_errors = []
+                requests = []
+                page.on("pageerror", lambda error: errors.append(str(error)))
+                page.on("console", lambda message: console_errors.append(
+                    f"{message.type}:{message.text}"))
+                page.on("request", lambda request: requests.append(request.url))
+                host_path = "/accounting/control/FindInvoices"
+                page.goto(app.origin + host_path, wait_until="domcontentloaded")
+
+                remote = RemoteBrowserClient(channel, timeout_s=8)
+                remote.start()
+                first = remote.observe()
+                submitters = [element for element in first.elements
+                              if element.role == "button"]
+                self.assertTrue(submitters, repr(first.elements))
+                submit = submitters[0]
+                self.assertEqual(submit.name, "RunReport")
+                action_result = {}
+
+                def submit_in_background():
+                    try:
+                        action_result["receipt"] = remote.execute(
+                            "submit", {"ref": submit.ref})
+                    except Exception as exc:
+                        action_result["error"] = exc
+
+                worker = threading.Thread(target=submit_in_background, daemon=True)
+                worker.start()
+                page.wait_for_function("""() => {
+                  const frame = document.querySelector('iframe');
+                  return frame?.contentDocument?.body?.innerText.includes('Invoice report ready');
+                }""", timeout=5_000)
+                worker.join(timeout=8)
+                self.assertFalse(worker.is_alive(), "Runtime did not return iframe action evidence")
+                self.assertNotIn(
+                    "error", action_result,
+                    f"{action_result.get('error')}; page_errors={errors}; "
+                    f"console_errors={console_errors}; frames={[frame.url for frame in page.frames]}; "
+                    f"result_requests={app.iframe_result_requests}; requests={requests}")
+                receipt = action_result["receipt"]
+
+                self.assertTrue(receipt.ok, receipt.error_detail)
+                self.assertFalse(receipt.navigated)
+                self.assertEqual(receipt.url_before, app.origin + host_path)
+                self.assertEqual(receipt.url_after, app.origin + host_path)
+                self.assertIn("Invoice report ready", remote.observe().content)
+                self.assertEqual(app.iframe_result_requests, 1)
+                self.assertEqual(errors, [])
+                page.close()
+                browser_process.close()
+        finally:
+            gateway.close()
+            app.close()
+
 
 class _FixtureApplication:
     def __init__(self, controller_path: Path):
@@ -1299,6 +1376,7 @@ class _FixtureApplication:
         self.runtime_url = ""
         self.runtime_config = {}
         self.page2_requests = 0
+        self.iframe_result_requests = 0
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -1318,14 +1396,32 @@ class _FixtureApplication:
                 if self.path.startswith("/page2?"):
                     owner.page2_requests += 1
                     return self.page("<h1>Order details</h1><button>Done</button>")
+                if self.path == "/accounting/control/FindInvoices":
+                    return self.page("""
+                      <h1>Invoice workspace</h1>
+                      <iframe title="Invoice search" src="/accounting/control/InvoiceSearchFrame">
+                      </iframe>
+                    """)
+                if self.path == "/accounting/control/InvoiceSearchFrame":
+                    return self.page("""
+                      <form method="get" action="/accounting/control/InvoiceReport">
+                        <input name="status" value="OPEN">
+                        <input type="submit" value="RunReport">
+                      </form>
+                    """, runtime=False)
+                if self.path.startswith("/accounting/control/InvoiceReport?"):
+                    owner.iframe_result_requests += 1
+                    return self.page("<h2>Invoice report ready</h2>", runtime=False)
                 self.send_error(404)
 
-            def page(self, content: str):
-                config = json.dumps(owner.runtime_config).replace("</", "<\\/")
-                html = ("<!doctype html><html><head><title>Fixture</title></head><body>" + content +
-                        f"<script>window.__WOA_EMBED_CONFIG__={config}</script>" +
-                        f"<script type=\"module\" src=\"{owner.runtime_url}\"></script>" +
-                        "</body></html>")
+            def page(self, content: str, *, runtime: bool = True):
+                scripts = ""
+                if runtime:
+                    config = json.dumps(owner.runtime_config).replace("</", "<\\/")
+                    scripts = (f"<script>window.__WOA_EMBED_CONFIG__={config}</script>" +
+                               f"<script type=\"module\" src=\"{owner.runtime_url}\"></script>")
+                html = ("<!doctype html><html><head><title>Fixture</title></head><body>" +
+                        content + scripts + "</body></html>")
                 self.reply(html.encode(), "text/html; charset=utf-8")
 
             def reply(self, body: bytes, content_type: str):
