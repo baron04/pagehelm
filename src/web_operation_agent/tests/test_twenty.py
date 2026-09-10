@@ -25,6 +25,7 @@ from web_operation_agent.twenty import (TwentyApplicationAdapter,
                                         TwentyOAuthTokenStore,
                                         TwentyPageSessionIdentityResolver,
                                         normalize_twenty_domain)
+from web_operation_agent.tests.adapter_contract import assert_adapter_contract
 
 
 def _adapter(**kwargs) -> TwentyApplicationAdapter:
@@ -40,6 +41,7 @@ class TwentyPackagedSkillTests(unittest.TestCase):
     def test_default_adapter_loads_query_skill_outside_the_checkout(self):
         with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
             adapter = _adapter()
+            bound = assert_adapter_contract(self, adapter)
 
         self.assertEqual(
             adapter.business_tools.tool_names, frozenset({"query_companies"}))
@@ -55,6 +57,7 @@ class TwentyPackagedSkillTests(unittest.TestCase):
             "package://web_operation_agent/skills/twenty/companies-query.json",
         )
         self.assertEqual(adapter.descriptor.application_id, "twenty")
+        self.assertIs(bound.business_tools, adapter.business_tools)
         self.assertEqual(adapter.descriptor.navigation_mode, "spa")
         self.assertEqual(
             adapter.descriptor.catalog_sha256,

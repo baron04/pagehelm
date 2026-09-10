@@ -7,7 +7,6 @@ import unittest
 import urllib.request
 from pathlib import Path
 
-from web_operation_agent.application import bind_application
 from web_operation_agent.model import ProviderError, require_chat_port
 from web_operation_agent_demo.app import (
     DemoConfig,
@@ -16,6 +15,7 @@ from web_operation_agent_demo.app import (
     ScriptedDemoChat,
     run_demo,
 )
+from web_operation_agent.tests.adapter_contract import assert_adapter_contract
 
 
 def _chromium_launches() -> bool:
@@ -33,7 +33,7 @@ class MinimalDemoUnitTests(unittest.TestCase):
     def test_second_adapter_binds_and_reads_its_live_typed_api(self):
         with MinimalContactsApplication() as application:
             adapter = MinimalContactsAdapter(application.origin)
-            bound = bind_application(adapter)
+            bound = assert_adapter_contract(self, adapter)
             self.assertTrue(adapter.health()["passed"])
             self.assertEqual(bound.descriptor.application_id, "minimal.contacts")
             self.assertEqual(

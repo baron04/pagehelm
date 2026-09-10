@@ -1,0 +1,39 @@
+# Integrating an application
+
+An Application Adapter connects one first-party web application to the generic server Agent. The adapter owns application facts and permissions; it does not own the ReAct loop. A new adapter supplies a versioned descriptor, typed business Skills and tools, five executable ports, and a health check. `bind_application()` validates the complete composition before a user task can reach the browser or model.
+
+## Required components
+
+`ApplicationDescriptor` declares the application ID, exact web origin, navigation mode, same-origin PageController module URL, and SHA-256 of the current Skill/tool catalog. Construct the descriptor after the `BusinessToolRuntime`, using `business_tools.catalog_sha256`. A changed Skill or schema then makes a stale deployment fail during composition.
+
+`ApplicationPorts` contains identity, route, data-classification, mutation-postcondition, and reconciliation ports. The data port must classify every typed tool. The postcondition and reconciliation ports must cover every write tool. The identity scopes must equal the non-empty scopes declared by the tool runtime. The runtime and `ApplicationPorts` must use the same route, data, and postcondition objects.
+
+`BusinessToolRuntime` exposes current application data through fixed JSON schemas. Keep credentials and arbitrary HTTP construction inside the application executor. A Skill explains when and how to call these tools; it is not evidence that a current record exists. Each returned route must appear verbatim in the result content and pass the adapter route port before the Agent can use it.
+
+## PageController and static Runtime
+
+The application origin must serve an ES module that exports `PageController` and `getElementByIndex`. The minimal example serves a small compatible controller for its synthetic pages. A real integration should pin and deploy the PageController implementation it has qualified, then put the exact same-origin URL in `ApplicationDescriptor.page_controller_module`. A CDN on another origin is rejected.
+
+The Web Operation Agent Runtime is served by `EmbeddedGateway` at `/v1/runtime/embedded.js`. Do not copy it into each application or persist a generated bootstrap script. After `LiveProductSession.start()`, obtain `live.bootstrap_script` and inject that ephemeral script directly into the authenticated top-level application page. It contains a short-lived session capability, so it must not be logged, cached, embedded in a static bundle, or exposed to another origin. The public demos use Playwright `context.add_init_script` only as a development host; a production first-party application should inject equivalent session bootstrap from its trusted application shell.
+
+The Runtime starts only in the top-level document and only when `location.origin` matches the session grant. It observes the DOM, executes the fixed generic action set, displays progress and approval UI, and returns receipts. It must not receive model credentials, source indexes, hidden permissions, business plans, or evaluators.
+
+## Identity
+
+An authenticated application should implement `ApplicationIdentityPort` from evidence produced by its trusted server login boundary. Bind the page actor, tenant or workspace, delegated API actor, scopes, delegation ID, issue time, and expiry into a `PrincipalContext`. DOM text, a browser-provided user ID, or possession of a Runtime capability is not identity evidence.
+
+Set `AgentTurnConfig.require_identity=True` whenever the identity port is required. `AgentTurnExecutor(application=...)` validates the principal and exact application origin before it starts the browser transport or model. Every typed tool then receives an `OperationContext` that binds the principal to the session, turn, operation, deadline, and required scope. Synthetic unauthenticated examples must declare `AnonymousIdentityPort` explicitly.
+
+## Writes and verification
+
+Writes are disabled in both the adapter and turn policy by default. A write-enabled adapter must provide a durable mutation journal in production, a postcondition verifier for each write tool, and a reconciliation port. User approval binds one normalized proposal digest, effect, targets, principal, turn, and operation, and can be consumed once.
+
+After one acknowledged dispatch, the postcondition port decides whether the mutation can be recorded as completed. A missing or failed postcondition produces an indeterminate result and no automatic retry. The current conservative reconciler leaves uncertain writes for human handling; persistent reconciliation keys, background recovery, and cross-session in-flight business-key exclusion are later reliability work.
+
+## Composition and qualification
+
+Bind once with `application = bind_application(adapter)`, pass that object to `AgentTurnExecutor(application=application, ...)`, and use its descriptor to configure `LiveProductSession`. Do not pass the raw tool runtime separately in a product composition.
+
+Run the reusable adapter contract assertions for every adapter, then add application tests for valid routes, identity mismatch, read completeness, mutation refusal, approval, postcondition failure, and credential redaction. `scripts/qualify.sh --require-browser` runs the product suite, isolated wheel checks, the minimal embedded Runtime walkthrough, and the canonical browser protocol in real Chromium. A live application gate that reports `BLOCKED` has not run and is not a pass.
+
+Minimal Contacts and Twenty CRM currently satisfy the same Adapter v2 contract without application branches in the Agent core. Minimal Contacts is the onboarding reference. Twenty remains in the main distribution while the SPI is still pre-stable, because splitting it now would add a second release and compatibility surface without proving independent versioning demand.
