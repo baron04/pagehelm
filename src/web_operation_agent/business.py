@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 from .answering import StructuredQueryAnswer
 from .identity import OperationContext, PrincipalError
 from .mutation import (MemoryMutationJournal, MutationJournal,
-                       MutationJournalError)
+                       MutationJournalDurability, MutationJournalError)
 from .schemas import BROWSER_ACTIONS
 
 
@@ -459,6 +459,11 @@ class BusinessToolRuntime:
         if any(not callable(getattr(self._mutation_journal, method, None))
                for method in ("register", "claim", "finish", "get")):
             raise TypeError("mutation_journal does not implement the journal contract")
+        durability = getattr(self._mutation_journal, "durability", None)
+        if not isinstance(durability, MutationJournalDurability):
+            raise TypeError(
+                "mutation_journal must declare a MutationJournalDurability")
+        self._mutation_journal_durability = durability
         self._max_pending_mutations = max_pending_mutations
         self._mutation_lock = threading.RLock()
         self._prepared_mutations: dict[
@@ -472,6 +477,14 @@ class BusinessToolRuntime:
     @property
     def tool_names(self) -> frozenset[str]:
         return frozenset(self._schemas)
+
+    @property
+    def has_mutations(self) -> bool:
+        return "write" in self._effects.values()
+
+    @property
+    def mutation_journal_durability(self) -> MutationJournalDurability:
+        return self._mutation_journal_durability
 
     @property
     def catalog_manifest(self) -> dict:

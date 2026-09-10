@@ -17,6 +17,7 @@ from web_operation_agent.conversation import ConversationState
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.identity import PrincipalContext
 from web_operation_agent.model import ProviderError
+from web_operation_agent.mutation import SQLiteMutationJournal
 from web_operation_agent.product import (
     AgentTurnConfig,
     AgentTurnError,
@@ -167,6 +168,7 @@ class AgentTurnConfigTests(unittest.TestCase):
                 {"allow_application_entry": "yes"},
                 {"allow_business_mutations": 1},
                 {"require_identity": 1},
+                {"deployment_profile": "staging"},
                 {"plain_business_answer_min_page_actions": -1},
                 {"max_user_answer_chars": 511},
             ):
@@ -177,6 +179,74 @@ class AgentTurnConfigTests(unittest.TestCase):
                         ledger_path=path,
                         **kwargs,
                     )
+
+    def test_mutation_policy_requires_identity_even_in_the_test_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, "verified session identity"):
+                AgentTurnConfig(
+                    supported_scope="Create one company.",
+                    ledger_path=Path(tmp) / "turn.jsonl",
+                    allow_business_mutations=True,
+                    deployment_profile="test",
+                )
+
+    def test_production_mutation_composition_requires_a_durable_journal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = _write_skill(root / "write-skill.json")
+            memory_tools = BusinessToolRuntime((skill,), _MutationExecutor())
+            config = AgentTurnConfig(
+                supported_scope="Create one company.",
+                ledger_path=root / "turn.jsonl",
+                allow_business_mutations=True,
+                require_identity=True,
+            )
+            with self.assertRaisesRegex(ValueError, "configured mutation tool"):
+                AgentTurnExecutor(
+                    channel=_Channel(principal=_principal()), config=config,
+                    chat=_Chat([]), business_tools=None,
+                    control=ReadOnlyControl(),
+                    run_id_factory=lambda _message: "missing-write-tool",
+                )
+            with self.assertRaisesRegex(ValueError, "durable mutation journal"):
+                AgentTurnExecutor(
+                    channel=_Channel(principal=_principal()), config=config,
+                    chat=_Chat([]), business_tools=memory_tools,
+                    control=ReadOnlyControl(),
+                    run_id_factory=lambda _message: "unsafe-write",
+                )
+
+            durable_tools = BusinessToolRuntime(
+                (skill,), _MutationExecutor(),
+                mutation_journal=SQLiteMutationJournal(root / "mutations.sqlite3"),
+            )
+            executor = AgentTurnExecutor(
+                channel=_Channel(principal=_principal()), config=config,
+                chat=_Chat([]), business_tools=durable_tools,
+                control=ReadOnlyControl(),
+                run_id_factory=lambda _message: "durable-write",
+            )
+            self.assertIs(executor.business_tools, durable_tools)
+
+    def test_memory_journal_requires_an_explicit_test_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = _write_skill(root / "write-skill.json")
+            tools = BusinessToolRuntime((skill,), _MutationExecutor())
+            executor = AgentTurnExecutor(
+                channel=_Channel(principal=_principal()),
+                config=AgentTurnConfig(
+                    supported_scope="Create one company.",
+                    ledger_path=root / "turn.jsonl",
+                    allow_business_mutations=True,
+                    require_identity=True,
+                    deployment_profile="test",
+                ),
+                chat=_Chat([]), business_tools=tools,
+                control=ReadOnlyControl(),
+                run_id_factory=lambda _message: "test-write",
+            )
+            self.assertIs(executor.business_tools, tools)
 
 
 class AgentTurnBoundaryTests(unittest.TestCase):
@@ -624,7 +694,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 ("load_skill", {"skill_id": skill.skill_id}),
                 ("create_company", {"name": "Acme"}),
             ])
-            channel = _Channel(decision="denied")
+            channel = _Channel(decision="denied", principal=_principal())
             executor = AgentTurnExecutor(
                 channel=channel,
                 config=AgentTurnConfig(
@@ -632,6 +702,8 @@ class AgentTurnExecutorTests(unittest.TestCase):
                     ledger_path=root / "session.jsonl",
                     approval_ttl_s=17,
                     allow_business_mutations=True,
+                    require_identity=True,
+                    deployment_profile="test",
                 ),
                 chat=chat,
                 business_tools=tools,
@@ -794,13 +866,15 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 ("load_skill", {"skill_id": skill.skill_id}),
                 ("create_company", {"name": "Acme"}),
             ])
-            channel = _Channel(decision="approved")
+            channel = _Channel(decision="approved", principal=_principal())
             executor = AgentTurnExecutor(
                 channel=channel,
                 config=AgentTurnConfig(
                     supported_scope="Create the supplied company only.",
                     ledger_path=root / "session.jsonl",
-                    allow_business_mutations=True),
+                    allow_business_mutations=True,
+                    require_identity=True,
+                    deployment_profile="test"),
                 chat=chat, business_tools=tools, control=ReadOnlyControl(),
                 run_id_factory=lambda _message: "turn-write-indeterminate",
             )

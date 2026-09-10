@@ -143,6 +143,7 @@ PY
 import os, sys
 from pathlib import Path
 import web_operation_agent
+from web_operation_agent.mutation import SQLiteMutationJournal
 from web_operation_agent.sourcetree import SourceTree
 from web_operation_agent.twenty import TwentyApplicationAdapter
 from web_operation_agent_demo import MinimalContactsAdapter
@@ -156,8 +157,10 @@ common = dict(base_url="http://127.0.0.1:3000", token_path="tokens.json",
               registration_path="registration.json")
 assert TwentyApplicationAdapter(**common).business_tools.tool_names == frozenset(
     {"query_companies"})
-assert TwentyApplicationAdapter(**common, allow_mutations=True).business_tools.tool_names \
-    == frozenset({"query_companies", "create_company"})
+assert (TwentyApplicationAdapter(
+    **common, allow_mutations=True,
+    mutation_journal=SQLiteMutationJournal(root / "mutations.sqlite3"),
+).business_tools.tool_names == frozenset({"query_companies", "create_company"}))
 assert MinimalContactsAdapter
 print("installed wheel imports and composes outside the checkout")
 PY

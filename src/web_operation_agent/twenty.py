@@ -956,6 +956,9 @@ class TwentyApplicationAdapter:
             raise ValueError("allow_mutations must be a boolean")
         if mutation_skill_path is not None and not allow_mutations:
             raise ValueError("mutation_skill_path requires allow_mutations=True")
+        if allow_mutations and mutation_journal is None:
+            raise ValueError(
+                "allow_mutations=True requires an explicit mutation journal")
         self.origin = _validated_origin(base_url)
         self.page_controller_module = self.origin + "/woa/page-controller.js"
         executor = TwentyBusinessToolExecutor(

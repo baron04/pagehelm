@@ -267,7 +267,7 @@ Business Skill 候选只根据当前用户文本和受限的历史用户文本�
 7. 最多发送一次写请求；
 8. 将确定结果持久记录为 `completed` 或 `failed`，将无法确定的结果记录为 `indeterminate`；需要业务成功判定的集成还应由 Adapter 进行同用户回读。
 
-`allow_business_mutations` 默认是 `false`。没有显式启用或没有确认通道时，写工具在 dispatch 前终止。用户拒绝对应 `CANCELLED`。
+`allow_business_mutations` 默认是 `false`。启用时，turn 配置必须同时要求经过验证的 principal；组合还必须提供写工具。`deployment_profile` 默认为 `production`，该 profile 只接受明确声明为跨重启持久的 mutation journal。内存 journal 仅可在显式 `test` profile 中使用，且 test profile 不放宽身份或确认要求。Twenty Adapter 自身也拒绝启用写入却省略 journal。没有显式启用或没有确认通道时，写工具在 dispatch 前终止。用户拒绝对应 `CANCELLED`。
 
 任何发生在 dispatch 后、又无法确定结果的异常都必须对应 `INDETERMINATE`。系统不会因为超时、连接丢失、回执格式错误、回读失败或进程在 dispatch 后崩溃而自动重试写请求。公开 Twenty composition 要求独立的私有 SQLite journal；它持久保留 proposal digest、operation context digest、状态、期限和结果摘要，不保存原始业务参数或身份字段。journal 解决的是重复发送风险，不提供应用数据库事务或自动判断崩溃前的请求是否已经生效。
 

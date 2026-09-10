@@ -367,6 +367,26 @@ class BusinessRuntimeValidation(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "same tools"):
                 BusinessToolRuntime((_skill(Path(tmp) / "skill.json"),), EmptyExecutor())
 
+    def test_custom_mutation_journal_must_declare_restart_behavior(self):
+        class UnclassifiedJournal:
+            def register(self, *_args, **_kwargs):
+                pass
+
+            def claim(self, *_args, **_kwargs):
+                pass
+
+            def finish(self, *_args, **_kwargs):
+                pass
+
+            def get(self, *_args, **_kwargs):
+                return None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(TypeError, "MutationJournalDurability"):
+                BusinessToolRuntime(
+                    (_skill(Path(tmp) / "skill.json"),), _Executor(),
+                    mutation_journal=UnclassifiedJournal())
+
     def test_read_only_skill_cannot_expose_a_write_tool(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "skill.json"

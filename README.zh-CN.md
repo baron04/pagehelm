@@ -16,7 +16,7 @@ Web Operation Agent 是一个早期阶段的框架，用于在第一方 Web 应�
 | ReAct 执行 | 同一个服务端 Agent 接收每次工具结果，重新观察页面，并在时间与步数预算内决定下一步。 |
 | 有依据的页面操作 | 导航和元素操作必须通过当前页面观察与应用控制层检查。 |
 | Skill 与业务工具 | 可审计、有上限的用户意图匹配器选择候选 Skill；没有命中时回退到合格的只读 Skill 和显式开启的写 Skill。实时数据来自类型化应用 API，而不是 Skill 文本。 |
-| 受控写入 | 业务写入默认关闭。启用后仍需页面中的明确确认，并以原子状态机记录 `prepared → dispatching → completed/failed/indeterminate`。Twenty 演示使用私有 SQLite journal，崩溃或不确定结果不会使同一 proposal 恢复为可重试。 |
+| 受控写入 | 业务写入默认关闭。启用写入的 turn 必须绑定已验证身份、经过页面内明确确认，并原子记录 `prepared → dispatching → completed/failed/indeterminate`。生产组合还要求 journal 明确声明具备跨重启持久性；易失 journal 只允许在显式 test profile 下使用。 |
 | 旧页面控制层 | 旧版外部页面控制网关在本机线程和进程间只允许一个协作 run 持有租约，使用前重置，释放前清空；清理失败时关闭执行。这条兼容路径不能提供并发的租户级许可。 |
 | 多轮会话承载 | 会话 Host 按顺序处理面板消息、隔离普通单轮失败，并在内存中保留最多 4 轮或 32 KiB 的引用上下文。历史业务事实可以帮助理解“第二家公司”等指代，但 Agent 必须重新读取当前 API 或页面，历史路由不会获得权限。 |
 | 共享本地网关 | 有容量上限的 server composition 可以在一个网关中承载多个可独立撤销的 session capability；50 会话确定性隔离测试覆盖 token 与 channel 分离。Session 默认一小时过期，队列有背压，事件、消息、观察、动作、审批和 Runtime 实例都有硬上限。状态仍只存在于当前进程。 |
@@ -67,6 +67,8 @@ flowchart LR
 | `web_operation_agent.session` | 实现有步数和时间限制的服务端 Agent 循环。 |
 
 Application Adapter 暴露版本化、无敏感信息的描述，以及由摘要绑定的 Skill 和 typed-tool catalog。自然语言目标直接进入通用 Agent 循环，Adapter 不会先把目标分类成固定的产品意图枚举。软件包 API 仍在演进，稳定版本发布前不承诺向后兼容。
+
+启用 mutation 时，`AgentTurnConfig.deployment_profile` 默认为 `production`。如果 mutation 策略没有要求身份、没有安装写工具，或所选 journal 没有声明跨重启持久性，组合会在接收用户任务前失败。测试若有意使用 `MemoryMutationJournal`，必须设置 `deployment_profile="test"`；该 profile 不会放宽身份绑定或用户确认。部署 Host 仍需提供并续期认证 principal、关闭无法授权的浏览器动作、撤销已变化的会话、保护确认界面，并校验实际部署的 page-controller 资产；这些 Host 责任不会由 profile 标志自动推导。
 
 ## 开发环境
 
@@ -132,7 +134,7 @@ scripts/qualify.sh
 - 页面端 controller 集成；
 - 提供模型、控制层、账本位置和会话 Host 的应用装配。
 
-默认只有读取能力。创建公司需要同时在 Twenty 适配器和 turn 策略中显式开启，然后经过页面内的用户确认流程。
+默认只有读取能力。创建公司需要同时在 Twenty 适配器和 turn 策略中显式开启、提供明确的 mutation journal、绑定已验证身份，然后经过页面内的用户确认流程。公开 demo 使用 `SQLiteMutationJournal`；适配器会拒绝启用 mutation 却省略 journal 的组合。
 
 公司枚举使用 Twenty 的 `pageInfo.endCursor` 和 `starting_after` 翻页，并设置页数与记录数硬上限，同时检测重复记录、cursor 停滞、总数变化和畸形响应。扫描被有界中断时，工具会明确返回部分结果，不会把它表示成完整公司清单。创建公司的重复项检查只有在完整扫描当前集合后才会继续。Cursor 分页不是数据库快照；如果扫描期间工作区正在变化，结果仍可能被标记为不完整，需要等数据稳定后重试。
 

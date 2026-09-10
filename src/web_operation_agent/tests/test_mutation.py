@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from web_operation_agent.mutation import (MemoryMutationJournal,
+                                          MutationJournalDurability,
                                           MutationJournalError,
                                           SQLiteMutationJournal)
 
@@ -49,6 +50,10 @@ class MemoryMutationJournalTests(MutationJournalContract, unittest.TestCase):
     def make_journal(self):
         return MemoryMutationJournal()
 
+    def test_declares_volatile_restart_behavior(self):
+        self.assertIs(
+            self.make_journal().durability, MutationJournalDurability.VOLATILE)
+
     def test_capacity_exhaustion_fails_closed(self):
         journal = MemoryMutationJournal(max_entries=1)
         journal.register(PROPOSAL, CONTEXT, expires_at=2_000, now_ms=1_000)
@@ -66,6 +71,10 @@ class SQLiteMutationJournalTests(MutationJournalContract, unittest.TestCase):
 
     def make_journal(self):
         return SQLiteMutationJournal(self.path)
+
+    def test_declares_durable_restart_behavior(self):
+        self.assertIs(
+            self.make_journal().durability, MutationJournalDurability.DURABLE)
 
     def test_dispatching_state_survives_reopen_and_prevents_retry(self):
         first = self.make_journal()

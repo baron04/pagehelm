@@ -18,7 +18,8 @@ from web_operation_agent.business import (BusinessMutationIndeterminate,
                                           BusinessToolError,
                                           BusinessToolRuntime)
 from web_operation_agent.identity import IdentityAssertion, PrincipalError
-from web_operation_agent.mutation import SQLiteMutationJournal
+from web_operation_agent.mutation import (MemoryMutationJournal,
+                                          SQLiteMutationJournal)
 from web_operation_agent.twenty import (TwentyApplicationAdapter,
                                         TwentyBusinessToolExecutor,
                                         TwentyOAuthTokenStore,
@@ -69,8 +70,11 @@ class TwentyPackagedSkillTests(unittest.TestCase):
             TwentyBusinessToolExecutor(
                 base_url="http://127.0.0.1:3000", tokens=object(),
                 allow_mutations=1)  # type: ignore[arg-type]
+        with self.assertRaisesRegex(ValueError, "explicit mutation journal"):
+            _adapter(allow_mutations=True)
 
-        adapter = _adapter(allow_mutations=True)
+        adapter = _adapter(
+            allow_mutations=True, mutation_journal=MemoryMutationJournal())
         self.assertEqual(
             adapter.business_tools.tool_names,
             frozenset({"query_companies", "create_company"}),
@@ -134,6 +138,7 @@ class TwentyPackagedSkillTests(unittest.TestCase):
                 skill_path=query,
                 mutation_skill_path=create,
                 allow_mutations=True,
+                mutation_journal=MemoryMutationJournal(),
             )
 
         self.assertEqual(
@@ -145,7 +150,8 @@ class TwentyPackagedSkillTests(unittest.TestCase):
                             for skill in relevant))
 
     def test_adapter_binds_only_matching_page_and_oauth_identity(self):
-        adapter = _adapter(allow_mutations=True)
+        adapter = _adapter(
+            allow_mutations=True, mutation_journal=MemoryMutationJournal())
         page = IdentityAssertion(
             1, "page_session", "twenty", "workspace-1", "workspace-1",
             "actor-1", 1_000_000, 1_060_000)

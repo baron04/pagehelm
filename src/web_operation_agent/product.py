@@ -24,6 +24,7 @@ from .embedded_agent import ApprovalGate
 from .identity import OperationContext, PrincipalError
 from .ledger import SessionLedger
 from .model import require_chat_port
+from .mutation import MutationJournalDurability
 from .privacy import redact_sensitive_assignments, redact_session_handoffs
 from .remote import (RemoteBrowserClient, RemoteProtocolError,
                      RemoteSessionChannel, ensure_safe_browser_payload)
@@ -128,6 +129,7 @@ class AgentTurnConfig:
     allow_application_entry: bool = False
     allow_business_mutations: bool = False
     require_identity: bool = False
+    deployment_profile: str = "production"
     max_user_answer_chars: int = 4_000
     source_affordance_mode: str = "off"
 
@@ -161,6 +163,11 @@ class AgentTurnConfig:
             raise ValueError("disabled_actions must be a frozenset of tool names")
         if self.source_affordance_mode not in {"off", "empty", "auto"}:
             raise ValueError("source_affordance_mode must be off, empty, or auto")
+        if self.deployment_profile not in {"production", "test"}:
+            raise ValueError("deployment_profile must be production or test")
+        if self.allow_business_mutations and not self.require_identity:
+            raise ValueError(
+                "business mutations require a verified session identity")
         if self.policy_block_limit is not None and (
                 isinstance(self.policy_block_limit, bool)
                 or not isinstance(self.policy_block_limit, int)
@@ -277,6 +284,15 @@ class AgentTurnExecutor:
         # must surface where the executor is composed.
         self.chat = require_chat_port(chat, role="executor chat")
         self.business_tools = business_tools
+        if self.config.allow_business_mutations:
+            if self.business_tools is None or not self.business_tools.has_mutations:
+                raise ValueError(
+                    "business mutations require a configured mutation tool")
+            if (self.config.deployment_profile == "production"
+                    and self.business_tools.mutation_journal_durability
+                    is not MutationJournalDurability.DURABLE):
+                raise ValueError(
+                    "production business mutations require a durable mutation journal")
         self.control = control
         self.run_id_factory = run_id_factory
         self.answer_renderer = answer_renderer

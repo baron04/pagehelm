@@ -174,6 +174,7 @@ def turn_config(config: WoaTwentyConfig, ledger_path: Path) -> AgentTurnConfig:
         keep_observations=config.keep_observations,
         allow_business_mutations=config.allow_create,
         require_identity=True,
+        deployment_profile=("test" if config.allow_create else "production"),
         max_user_answer_chars=20_000,
         source_affordance_mode=(
             "auto" if config.source_mode == "on"

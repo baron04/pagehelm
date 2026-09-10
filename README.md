@@ -16,7 +16,7 @@ The repository currently verifies these behaviors with local automated tests and
 | ReAct execution | The same server-side agent receives each tool result, observes the page again, and chooses the next step within time and step budgets. |
 | Grounded page actions | Navigation and element actions are checked against the current observation and an application-owned control layer. |
 | Skills and business tools | An auditable, bounded user-intent matcher selects candidate Skills; an empty match falls back to eligible read Skills and explicitly enabled mutation Skills. Current data comes from typed application APIs rather than Skill text. |
-| Guarded writes | Business mutations are disabled by default. Enabled integrations require an explicit page confirmation and atomically record `prepared → dispatching → completed/failed/indeterminate`. The Twenty demo uses a private SQLite journal so a crash or uncertain outcome cannot make the same proposal retryable. |
+| Guarded writes | Business mutations are disabled by default. A mutation-enabled turn requires verified identity, an explicit page confirmation, and atomic `prepared → dispatching → completed/failed/indeterminate` recording. Production composition also requires a journal that explicitly declares durable restart behavior; volatile journals are accepted only under an explicit test profile. |
 | Legacy page control | The legacy external page-control gateway is leased to one cooperating run across local threads and processes, reset before use, and cleared before release. A control cleanup failure stops closed; this compatibility path does not provide concurrent tenant-scoped permits. |
 | Multi-turn hosting | A conversation host processes panel messages sequentially, isolates an ordinary turn failure from later turns, and retains at most four turns or 32 KiB of in-memory reference context. Historical business facts can resolve phrases such as “the second company,” but the Agent must refresh the current API or page and historical routes receive no authority. |
 | Shared local gateway | A bounded server composition can host multiple independently revocable session capabilities on one gateway; a 50-session deterministic isolation test covers token/channel separation. Sessions have a one-hour default TTL, bounded queues and hard event/message/observation/action/approval/runtime-instance limits. State is still process-local. |
@@ -67,6 +67,8 @@ The main reusable boundaries are:
 | `web_operation_agent.session` | Implements the bounded server-side agent loop. |
 
 Application adapters expose a versioned, non-secret descriptor plus a digest-bound Skill and typed-tool catalog. Natural-language goals enter the generic Agent loop directly; an adapter does not preclassify them into a fixed product intent enum. The package API is still evolving; no compatibility guarantee is made before a stable release.
+
+For mutation-enabled composition, `AgentTurnConfig.deployment_profile` defaults to `production`. The composition fails before a user task when mutation policy does not require identity, no mutation tool is installed, or the selected journal does not declare durable restart behavior. Tests that intentionally use `MemoryMutationJournal` must set `deployment_profile="test"`; that profile does not relax identity binding or user approval. A deployment host must still supply and renew the authenticated principal, disable browser actions it cannot authorize, revoke changed sessions, protect the approval surface, and verify the deployed page-controller asset. Those host obligations are not inferred from the profile flag.
 
 ## Developer setup
 
@@ -132,7 +134,7 @@ This repository does not yet provision a Twenty instance, so a fresh clone repor
 - the page-side controller integration; and
 - an application composition that supplies the model, control plane, ledger location, and session host.
 
-Read access is the default. Creating a company requires opting in at both the Twenty adapter and turn policy, followed by the user-visible approval flow.
+Read access is the default. Creating a company requires opting in at both the Twenty adapter and turn policy, supplying an explicit mutation journal, binding a verified identity, and completing the user-visible approval flow. The public demo supplies `SQLiteMutationJournal`; the adapter rejects mutation enablement with an omitted journal.
 
 Company enumeration follows Twenty's `pageInfo.endCursor` with `starting_after`, with hard page and record ceilings plus repeated-record, stalled-cursor, changing-total, and malformed-page detection. A bounded interruption is returned as an explicit partial result; it is never represented as a complete company list. Duplicate checks for company creation fail closed unless the complete active set was scanned. Cursor pagination does not provide a database snapshot, so a workspace changing during a scan can still force an incomplete result and a retry after the data settles.
 

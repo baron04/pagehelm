@@ -11,6 +11,7 @@ import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Protocol
 
@@ -22,6 +23,13 @@ _TERMINAL = {"completed", "failed", "indeterminate"}
 
 class MutationJournalError(RuntimeError):
     """A mutation intent cannot safely transition to the requested state."""
+
+
+class MutationJournalDurability(str, Enum):
+    """Restart behavior a journal implementation explicitly promises."""
+
+    VOLATILE = "volatile"
+    DURABLE = "durable"
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +58,8 @@ class MutationIntent:
 
 
 class MutationJournal(Protocol):
+    durability: MutationJournalDurability
+
     def register(self, proposal_digest: str, operation_context_digest: str, *,
                  expires_at: int, now_ms: int | None = None) -> None: ...
 
@@ -83,6 +93,8 @@ def _registration(proposal_digest: str, operation_context_digest: str,
 
 class MemoryMutationJournal:
     """Thread-safe bounded journal used when durable storage is not configured."""
+
+    durability = MutationJournalDurability.VOLATILE
 
     def __init__(self, *, max_entries: int = 10_000):
         if isinstance(max_entries, bool) or not isinstance(max_entries, int) \
@@ -147,6 +159,8 @@ class MemoryMutationJournal:
 
 class SQLiteMutationJournal:
     """Process-safe durable mutation state machine backed by a private SQLite file."""
+
+    durability = MutationJournalDurability.DURABLE
 
     def __init__(self, path: str | Path, *, timeout_s: float = 5.0):
         if (isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float))
