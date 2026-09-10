@@ -704,7 +704,8 @@ class AgentTurnExecutorTests(unittest.TestCase):
                     while not cancelled():
                         time.sleep(.01)
                     raise ProviderError(
-                        "provider call cancelled", code="provider_cancelled", retryable=False)
+                        "provider call cancelled", code="provider_cancelled",
+                        retryable=False, dispatched=True)
                 return {"tool_calls": [{"id": "finish-recovery", "function": {
                     "name": "finish",
                     "arguments": json.dumps({"done": True, "why": "recovered"}),
@@ -743,6 +744,45 @@ class AgentTurnExecutorTests(unittest.TestCase):
             self.assertEqual(recovered.terminal_reason, "agent_finished")
             self.assertEqual(chat.calls, 2)
             self.assertEqual(channel.published[-1][1]["state"], "finished")
+
+    def test_provider_failure_is_not_relabelled_when_cancellation_arrives(self):
+        class FailureAtCancellation:
+            model = "failure-at-cancellation"
+
+            def __init__(self, channel):
+                self.channel = channel
+
+            def complete(self, *_args, **_kwargs):
+                raise AssertionError("the cancellable path is required")
+
+            def complete_cancellable(self, *_args, cancelled, **_kwargs):
+                self.channel.cancelled = True
+                raise ProviderError(
+                    "provider failed", code="provider_http", retryable=True,
+                    request_id="a" * 32, dispatched=True)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            channel = _Channel()
+            executor = AgentTurnExecutor(
+                channel=channel,
+                config=AgentTurnConfig(
+                    supported_scope="Read current company data.",
+                    ledger_path=root / "session.jsonl"),
+                chat=FailureAtCancellation(channel), business_tools=None,
+                control=ReadOnlyControl(),
+                run_id_factory=lambda _message: "turn-provider-failed",
+            )
+            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+                execution = executor.run_once(_message())
+
+            self.assertEqual(execution.status, AgentTurnStatus.FAILED)
+            self.assertEqual(execution.terminal_reason, "provider_error")
+            events = [json.loads(line) for line in
+                      (root / "session.jsonl").read_text().splitlines()]
+            failed = next(item for item in events if item["event"] == "provider_failed")
+            self.assertEqual(failed["provider_error_code"], "provider_http")
+            self.assertFalse(any(item["event"] == "provider_cancelled" for item in events))
 
     def test_indeterminate_write_is_preserved_and_never_presented_as_failure(self):
         with tempfile.TemporaryDirectory() as tmp:

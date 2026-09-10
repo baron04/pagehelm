@@ -775,18 +775,39 @@ class ServerAgentSession:
                 return self._finish(result, t0, "token_budget" if e.kind == "token_budget"
                                     else "wall_clock_budget", str(e), steps=step)
             except (ProviderError, ProviderEgressError) as e:
-                if self._cancel_requested():
+                provider_code = getattr(e, "code", "provider_error")
+                request_id = getattr(e, "request_id", "")
+                dispatched = getattr(e, "dispatched", None)
+                if provider_code == "provider_cancelled":
+                    self.ledger.append(
+                        "provider_cancelled",
+                        step=step,
+                        dispatched=bool(dispatched),
+                        accounting_status=("usage_unavailable" if dispatched
+                                           else "not_dispatched"),
+                    )
                     return self._finish(
                         result, t0, "user_cancelled",
                         "the user stopped this task while the provider was working",
                         steps=step)
-                request_id = getattr(e, "request_id", "")
+                if provider_code == "provider_deadline":
+                    self.ledger.append(
+                        "provider_deadline",
+                        step=step,
+                        dispatched=bool(dispatched),
+                        accounting_status=("usage_unavailable" if dispatched
+                                           else "not_dispatched"),
+                    )
+                    return self._finish(
+                        result, t0, "wall_clock_budget",
+                        "the provider request reached the turn deadline",
+                        steps=step)
                 if request_id:
                     self.ledger.append(
                         "provider_failed",
                         step=step,
                         provider_request_id=request_id,
-                        provider_error_code=getattr(e, "code", "provider_error"),
+                        provider_error_code=provider_code,
                         retryable=bool(getattr(e, "retryable", False)),
                     )
                 reason = ("wall_clock_budget"

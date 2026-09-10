@@ -25,6 +25,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from enum import Enum
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -52,17 +53,28 @@ class ProviderError(Exception):
     """Callers map this to terminal reason `provider_error`."""
 
     def __init__(self, message: str, *, code: str = "provider_error", retryable: bool = True,
-                 request_id: str = ""):
+                 request_id: str = "", dispatched: bool | None = None):
         super().__init__(message)
         self.code = code
         self.retryable = retryable
         self.request_id = request_id
+        if dispatched is not None and not isinstance(dispatched, bool):
+            raise TypeError("provider dispatched state must be a boolean or None")
+        self.dispatched = dispatched
 
 
 class _ProviderHTTPStatus(Exception):
     def __init__(self, status: int):
         super().__init__(f"provider returned HTTP {status}")
         self.status = status
+
+
+class ProviderOutcome(str, Enum):
+    SUCCESS = "success"
+    TRANSIENT_PROVIDER_FAILURE = "transient_provider_failure"
+    PERMANENT_PROVIDER_FAILURE = "permanent_provider_failure"
+    CANCELLED = "cancelled"
+    DEADLINE = "deadline"
 
 
 class ProviderRuntimeGuard:
@@ -110,18 +122,38 @@ class ProviderRuntimeGuard:
             self._open_until = 0.0
             self._consecutive_transient_failures = 0
 
-    def acquire(self, timeout_s: float) -> float:
+    def acquire(self, timeout_s: float, *, cancelled=None) -> float:
         """Acquire one request slot and return seconds spent waiting for it."""
         if (isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float))
                 or not math.isfinite(timeout_s) or timeout_s <= 0):
             raise ValueError("provider guard timeout must be a positive finite number")
+        if cancelled is not None and not callable(cancelled):
+            raise TypeError("provider guard cancelled hook must be callable or None")
         started = self._clock()
         with self._lock:
             self._require_closed_circuit()
-        if not self._slots.acquire(timeout=float(timeout_s)):
+        if cancelled is not None and cancelled():
+            raise ProviderError(
+                "provider call cancelled before dispatch", code="provider_cancelled",
+                retryable=False, dispatched=False)
+        if cancelled is None:
+            acquired = self._slots.acquire(timeout=float(timeout_s))
+        else:
+            deadline = time.monotonic() + float(timeout_s)
+            acquired = False
+            while not acquired:
+                if cancelled():
+                    raise ProviderError(
+                        "provider call cancelled while waiting for capacity",
+                        code="provider_cancelled", retryable=False, dispatched=False)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                acquired = self._slots.acquire(timeout=min(.05, remaining))
+        if not acquired:
             raise ProviderError(
                 "provider concurrency limit was not available before the request deadline",
-                code="provider_capacity",
+                code="provider_capacity", dispatched=False,
             )
         try:
             with self._lock:
@@ -139,14 +171,19 @@ class ProviderRuntimeGuard:
             self._in_flight -= 1
         self._slots.release()
 
-    def record_success(self) -> None:
-        with self._lock:
-            self._consecutive_transient_failures = 0
-            self._open_until = 0.0
+    def record_outcome(self, outcome: ProviderOutcome) -> None:
+        """Update provider health only from provider health evidence.
 
-    def record_failure(self, *, transient: bool) -> None:
+        Cancellation and a caller-owned deadline say nothing about provider health, so they
+        neither add to nor erase an existing transient-failure sequence.
+        """
+        if not isinstance(outcome, ProviderOutcome):
+            raise TypeError("provider outcome must be a ProviderOutcome")
         with self._lock:
-            if not transient:
+            if outcome in {ProviderOutcome.CANCELLED, ProviderOutcome.DEADLINE}:
+                return
+            if outcome in {ProviderOutcome.SUCCESS,
+                           ProviderOutcome.PERMANENT_PROVIDER_FAILURE}:
                 self._consecutive_transient_failures = 0
                 self._open_until = 0.0
                 return
@@ -760,11 +797,19 @@ class ChatModel:
             raise ProviderError("provider request body must be finite JSON") from exc
         if len(payload) > MAX_PROVIDER_REQUEST_BYTES:
             raise ProviderError("provider request body exceeds the 2 MiB limit")
+        if cancelled is not None and cancelled():
+            raise ProviderError(
+                "provider call cancelled before dispatch", code="provider_cancelled",
+                retryable=False, dispatched=False)
         guard = getattr(self, "runtime_guard", None)
         acquired = False
         request_id = ""
+        request_dispatched = False
         try:
-            waited_s = guard.acquire(request_timeout) if guard is not None else 0.0
+            waited_s = (
+                guard.acquire(request_timeout, cancelled=cancelled)
+                if guard is not None and cancelled is not None else
+                guard.acquire(request_timeout) if guard is not None else 0.0)
             acquired = guard is not None
             socket_timeout = request_timeout - waited_s
             if socket_timeout <= 0:
@@ -781,11 +826,13 @@ class ChatModel:
                 if cancelled is None:
                     req = urllib.request.Request(
                         url, data=payload, method="POST", headers=headers)
+                    request_dispatched = True
                     with urllib.request.urlopen(req, timeout=socket_timeout) as r:
                         raw_response = r.read(MAX_PROVIDER_RESPONSE_BYTES + 1)
                 else:
                     raw_response = self._cancellable_post(
                         url, payload, headers, socket_timeout, cancelled)
+                    request_dispatched = True
                 if len(raw_response) > MAX_PROVIDER_RESPONSE_BYTES:
                     raise ProviderError(
                         "provider response exceeds the 4 MiB limit",
@@ -796,7 +843,9 @@ class ChatModel:
             except urllib.error.HTTPError as e:
                 transient = e.code in {408, 425, 429} or 500 <= e.code <= 599
                 if guard is not None:
-                    guard.record_failure(transient=transient)
+                    guard.record_outcome(
+                        ProviderOutcome.TRANSIENT_PROVIDER_FAILURE if transient
+                        else ProviderOutcome.PERMANENT_PROVIDER_FAILURE)
                 e.close()
                 self.meter.record_unmetered(
                     provider=self.provider, model=self.model, run_id=run_id,
@@ -810,7 +859,9 @@ class ChatModel:
             except _ProviderHTTPStatus as e:
                 transient = e.status in {408, 425, 429} or 500 <= e.status <= 599
                 if guard is not None:
-                    guard.record_failure(transient=transient)
+                    guard.record_outcome(
+                        ProviderOutcome.TRANSIENT_PROVIDER_FAILURE if transient
+                        else ProviderOutcome.PERMANENT_PROVIDER_FAILURE)
                 self.meter.record_unmetered(
                     provider=self.provider, model=self.model, run_id=run_id,
                     request_id=request_id, error_code="provider_http")
@@ -819,26 +870,36 @@ class ChatModel:
                     retryable=transient, request_id=request_id) from e
             except ProviderError as exc:
                 if guard is not None:
-                    guard.record_failure(transient=bool(exc.retryable))
-                exc.request_id = exc.request_id or request_id
-                self.meter.record_unmetered(
-                    provider=self.provider, model=self.model, run_id=run_id,
-                    request_id=request_id, error_code=exc.code)
+                    guard.record_outcome(self._provider_outcome(exc))
+                dispatched = (request_dispatched
+                              if exc.dispatched is None else exc.dispatched)
+                exc.dispatched = dispatched
+                if dispatched:
+                    exc.request_id = exc.request_id or request_id
+                    self.meter.record_unmetered(
+                        provider=self.provider, model=self.model, run_id=run_id,
+                        request_id=request_id, error_code=exc.code)
+                else:
+                    exc.request_id = ""
                 raise
             except Exception as e:
+                deadline = self._is_deadline_error(e)
                 if guard is not None:
-                    guard.record_failure(transient=True)
+                    guard.record_outcome(
+                        ProviderOutcome.DEADLINE if deadline
+                        else ProviderOutcome.TRANSIENT_PROVIDER_FAILURE)
+                error_code = "provider_deadline" if deadline else "provider_transport"
                 self.meter.record_unmetered(
                     provider=self.provider, model=self.model, run_id=run_id,
-                    request_id=request_id, error_code="provider_transport")
+                    request_id=request_id, error_code=error_code)
                 raise ProviderError(
                     f"provider call failed: {type(e).__name__}",
-                    code="provider_transport",
-                    request_id=request_id,
+                    code=error_code, retryable=not deadline,
+                    request_id=request_id, dispatched=True,
                 ) from e
             else:
                 if guard is not None:
-                    guard.record_success()
+                    guard.record_outcome(ProviderOutcome.SUCCESS)
         finally:
             if acquired:
                 guard.release()
@@ -883,9 +944,26 @@ class ChatModel:
         return data, request_id
 
     @staticmethod
+    def _provider_outcome(error: ProviderError) -> ProviderOutcome:
+        if error.code == "provider_cancelled":
+            return ProviderOutcome.CANCELLED
+        if error.code == "provider_deadline":
+            return ProviderOutcome.DEADLINE
+        return (ProviderOutcome.TRANSIENT_PROVIDER_FAILURE if error.retryable
+                else ProviderOutcome.PERMANENT_PROVIDER_FAILURE)
+
+    @staticmethod
+    def _is_deadline_error(error: BaseException) -> bool:
+        if isinstance(error, TimeoutError):
+            return True
+        return (isinstance(error, urllib.error.URLError)
+                and isinstance(getattr(error, "reason", None), TimeoutError))
+
+    @staticmethod
     def _cancellable_post(url: str, payload: bytes, headers: dict[str, str],
                           timeout_s: float, cancelled) -> bytes:
-        """POST through a closeable stdlib connection and abort it on turn cancellation."""
+        """POST through a closeable stdlib connection and abort every blocking phase."""
+        started = time.monotonic()
         parsed = urllib.parse.urlsplit(url)
         target_port = parsed.port or (443 if parsed.scheme == "https" else 80)
         path = parsed.path or "/"
@@ -920,6 +998,63 @@ class ChatModel:
                                else http.client.HTTPConnection)
             connection = connection_type(
                 parsed.hostname, parsed.port, timeout=max(0.001, timeout_s))
+        connect_done = threading.Event()
+        abandon_connect = threading.Event()
+        connect_error: list[BaseException] = []
+
+        def connect() -> None:
+            try:
+                connection.connect()
+            except BaseException as exc:  # delivered to the owning call below
+                connect_error.append(exc)
+            finally:
+                if abandon_connect.is_set():
+                    connection.close()
+                connect_done.set()
+
+        if cancelled():
+            raise ProviderError(
+                "provider call cancelled before dispatch", code="provider_cancelled",
+                retryable=False, dispatched=False)
+        connector = threading.Thread(
+            target=connect, name="woa-provider-connect", daemon=True)
+        connector.start()
+        while not connect_done.wait(.05):
+            if cancelled():
+                abandon_connect.set()
+                connection.close()
+                raise ProviderError(
+                    "provider call cancelled while connecting", code="provider_cancelled",
+                    retryable=False, dispatched=False)
+            if time.monotonic() - started >= timeout_s:
+                abandon_connect.set()
+                connection.close()
+                raise ProviderError(
+                    "provider deadline elapsed while connecting", code="provider_deadline",
+                    retryable=False, dispatched=False)
+        if connect_error:
+            if cancelled():
+                raise ProviderError(
+                    "provider call cancelled while connecting", code="provider_cancelled",
+                    retryable=False, dispatched=False) from connect_error[0]
+            if (time.monotonic() - started >= timeout_s
+                    or ChatModel._is_deadline_error(connect_error[0])):
+                raise ProviderError(
+                    "provider deadline elapsed while connecting", code="provider_deadline",
+                    retryable=False, dispatched=False) from connect_error[0]
+            raise ProviderError(
+                f"provider connection failed: {type(connect_error[0]).__name__}",
+                code="provider_transport", retryable=True,
+                dispatched=False) from connect_error[0]
+        remaining = timeout_s - (time.monotonic() - started)
+        if remaining <= 0:
+            connection.close()
+            raise ProviderError(
+                "provider deadline elapsed before dispatch", code="provider_deadline",
+                retryable=False, dispatched=False)
+        connection.timeout = max(.001, remaining)
+        if connection.sock is not None:
+            connection.sock.settimeout(max(.001, remaining))
         finished = threading.Event()
         was_cancelled = threading.Event()
 
@@ -936,23 +1071,31 @@ class ChatModel:
                     connection.close()
                     return
 
-        if cancelled():
-            raise ProviderError(
-                "provider call cancelled before dispatch", code="provider_cancelled",
-                retryable=False)
         watcher = threading.Thread(target=watch, name="woa-provider-cancel", daemon=True)
         watcher.start()
+        dispatched = False
         try:
+            if cancelled():
+                raise ProviderError(
+                    "provider call cancelled before dispatch", code="provider_cancelled",
+                    retryable=False, dispatched=False)
+            dispatched = True
             connection.request("POST", path, body=payload, headers=headers)
             response = connection.getresponse()
             if not 200 <= response.status <= 299:
                 raise _ProviderHTTPStatus(response.status)
             return response.read(MAX_PROVIDER_RESPONSE_BYTES + 1)
+        except ProviderError:
+            raise
         except Exception as exc:
             if was_cancelled.is_set() or cancelled():
                 raise ProviderError(
                     "provider call cancelled", code="provider_cancelled",
-                    retryable=False) from exc
+                    retryable=False, dispatched=dispatched) from exc
+            if ChatModel._is_deadline_error(exc):
+                raise ProviderError(
+                    "provider deadline elapsed", code="provider_deadline",
+                    retryable=False, dispatched=dispatched) from exc
             raise
         finally:
             finished.set()

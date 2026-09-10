@@ -336,8 +336,10 @@ class ProviderRuntimeProtection(unittest.TestCase):
                     chat.complete_cancellable(
                         [{"role": "user", "content": "first"}], None, "first",
                         cancelled=lambda: False, timeout_s=.05)
-                self.assertEqual(timed_out.exception.code, "provider_transport")
+                self.assertEqual(timed_out.exception.code, "provider_deadline")
                 self.assertEqual(guard.status()["in_flight"], 0)
+                self.assertEqual(
+                    guard.status()["consecutive_transient_failures"], 0)
 
                 reply = chat.complete_cancellable(
                     [{"role": "user", "content": "second"}], None, "second",
@@ -370,7 +372,7 @@ class ProviderRuntimeProtection(unittest.TestCase):
             failure_threshold=2, cooldown_s=5, clock=lambda: now[0])
         for _ in range(2):
             guard.acquire(1)
-            guard.record_failure(transient=True)
+            guard.record_outcome(M.ProviderOutcome.TRANSIENT_PROVIDER_FAILURE)
             guard.release()
         self.assertTrue(guard.status()["circuit_open"])
         self.assertEqual(guard.status()["retry_after_s"], 5)
@@ -379,10 +381,95 @@ class ProviderRuntimeProtection(unittest.TestCase):
         self.assertEqual(caught.exception.code, "provider_circuit_open")
         now[0] += 5
         guard.acquire(1)
-        guard.record_success()
+        guard.record_outcome(M.ProviderOutcome.SUCCESS)
         guard.release()
         self.assertFalse(guard.status()["circuit_open"])
         self.assertEqual(guard.status()["consecutive_transient_failures"], 0)
+
+    def test_cancel_and_deadline_do_not_change_existing_provider_health(self):
+        guard = M.ProviderRuntimeGuard(failure_threshold=3)
+        for _ in range(2):
+            guard.record_outcome(M.ProviderOutcome.TRANSIENT_PROVIDER_FAILURE)
+        for outcome in (M.ProviderOutcome.CANCELLED, M.ProviderOutcome.DEADLINE):
+            guard.record_outcome(outcome)
+            self.assertEqual(
+                guard.status()["consecutive_transient_failures"], 2)
+            self.assertFalse(guard.status()["circuit_open"])
+        guard.record_outcome(M.ProviderOutcome.PERMANENT_PROVIDER_FAILURE)
+        self.assertEqual(guard.status()["consecutive_transient_failures"], 0)
+
+    def test_waiting_for_capacity_can_be_cancelled_without_touching_health(self):
+        guard = M.ProviderRuntimeGuard(max_concurrent_requests=1)
+        guard.acquire(1)
+        cancelled = threading.Event()
+        outcome = []
+
+        def wait_for_slot():
+            try:
+                guard.acquire(5, cancelled=cancelled.is_set)
+            except Exception as exc:
+                outcome.append(exc)
+
+        worker = threading.Thread(target=wait_for_slot)
+        worker.start()
+        time.sleep(.05)
+        started = time.monotonic()
+        cancelled.set()
+        worker.join(1)
+        guard.release()
+
+        self.assertFalse(worker.is_alive())
+        self.assertLess(time.monotonic() - started, .5)
+        self.assertEqual(outcome[0].code, "provider_cancelled")
+        self.assertFalse(outcome[0].dispatched)
+        self.assertEqual(guard.status()["consecutive_transient_failures"], 0)
+
+    def test_connecting_can_be_cancelled_before_dispatch_without_a_spend_row(self):
+        connect_started = threading.Event()
+        release_connect = threading.Event()
+
+        def blocked_connect(_connection):
+            connect_started.set()
+            release_connect.wait(5)
+
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = Path(directory) / "spend.jsonl"
+            guard = M.ProviderRuntimeGuard(max_concurrent_requests=1)
+            chat = M.ChatModel(
+                M.SpendMeter(ledger=ledger),
+                env={"AGENT_OPENAI_BASE_URL": "http://127.0.0.1:9/v1",
+                     "AGENT_OPENAI_API_KEY": "key",
+                     "AGENT_OPENAI_MODEL_PRO": "MiniMax-M3"},
+                runtime_guard=guard,
+            )
+            cancelled = threading.Event()
+            outcome = []
+
+            def call():
+                try:
+                    chat.complete_cancellable(
+                        [{"role": "user", "content": "test"}], None, "connect-cancel",
+                        cancelled=cancelled.is_set, timeout_s=5)
+                except Exception as exc:
+                    outcome.append(exc)
+
+            with patch.object(M.http.client.HTTPConnection, "connect", blocked_connect):
+                worker = threading.Thread(target=call)
+                worker.start()
+                self.assertTrue(connect_started.wait(1))
+                started = time.monotonic()
+                cancelled.set()
+                worker.join(1)
+                release_connect.set()
+
+            self.assertFalse(worker.is_alive())
+            self.assertLess(time.monotonic() - started, .5)
+            self.assertEqual(outcome[0].code, "provider_cancelled")
+            self.assertFalse(outcome[0].dispatched)
+            self.assertEqual(chat.meter.calls, 0)
+            self.assertFalse(ledger.exists())
+            self.assertEqual(guard.status()["in_flight"], 0)
+            self.assertEqual(guard.status()["consecutive_transient_failures"], 0)
 
     def test_http_failures_trip_shared_guard_without_hidden_retries(self):
         now = [10.0]
