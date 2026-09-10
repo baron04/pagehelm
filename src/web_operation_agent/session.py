@@ -27,7 +27,7 @@ from typing import Callable
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit
 
 from .affordance import SourceAffordance, resolve_source_affordances
-from .browser import ThinBrowserClient, TransportError, TurnCancelled
+from .browser import BrowserExecutor, TransportError, TurnCancelled
 from .business import (BusinessMutationIndeterminate, BusinessToolError,
                        BusinessToolResult, BusinessToolRuntime)
 from .contract import (ContractPlanner, EvidenceBundle, PlanningFailed, SourceRetriever,
@@ -330,7 +330,7 @@ class RunResult:
 
 
 class ServerAgentSession:
-    def __init__(self, *, task: TaskSpec, arm: str, chat, browser: ThinBrowserClient,
+    def __init__(self, *, task: TaskSpec, arm: str, chat, browser: BrowserExecutor,
                  control: ControlPlaneClient, ledger: SessionLedger,
                  attestation, source_map=None, plan_from_page: bool = False,
                  oracle_contract: OperationContract | None = None,
@@ -392,6 +392,8 @@ class ServerAgentSession:
             raise ValueError("principal-bound sessions require session_id and turn_id")
         if principal is None and (session_id or turn_id):
             raise ValueError("session_id and turn_id require a principal")
+        if not isinstance(browser, BrowserExecutor):
+            raise TypeError("browser must implement the BrowserExecutor contract")
         if conversation_context is not None:
             if not isinstance(conversation_context, dict):
                 raise ValueError("conversation_context must be a JSON object or None")

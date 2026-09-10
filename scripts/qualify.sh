@@ -101,7 +101,9 @@ fi
 
 # ---------------------------------------------------------------- packaging gate
 build_and_check_wheel() {
-  rm -rf dist
+  # setuptools may otherwise copy deleted modules from an ignored build/lib tree into a new
+  # wheel. A release gate must build from the current source tree, not incremental residue.
+  rm -rf dist build src/*.egg-info
   "${PYTHON}" -m pip wheel --no-deps --quiet --wheel-dir dist . || return 1
   "${PYTHON}" - <<'PY' || return 1
 import glob, zipfile
@@ -118,6 +120,9 @@ required = ["web_operation_agent/policies/model_options.json",
             "web_operation_agent_demo/assets/page_controller.js"]
 missing = [name for name in required if name not in names]
 assert not missing, f"wheel is missing {missing}"
+retired = ["web_operation_agent/browser_worker.py", "web_operation_agent/cli.py"]
+present = [name for name in retired if name in names]
+assert not present, f"wheel contains retired browser executors: {present}"
 assert "web_operation_agent/policies/enforcement.json" not in names, \
     "the enforcement policy must not ship in the wheel"
 leaked = [name for name in names if "/tests/" in name]

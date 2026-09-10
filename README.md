@@ -58,6 +58,7 @@ The main reusable boundaries are:
 | `web_operation_agent.product` | Binds a validated application and one user message to the latest observation, then runs one application-neutral agent turn. |
 | `web_operation_agent.conversation` | Retains bounded, redacted reference context across turns without granting current facts or routes. |
 | `web_operation_agent.live` | Owns the gateway and sequential conversation lifecycle. |
+| `web_operation_agent.browser` | Defines the structural browser executor and typed transport outcomes; it contains no browser engine. |
 | `web_operation_agent.remote` | Defines the capability-bound remote browser channel and client. |
 | `web_operation_agent.embedded_gateway` | Serves the embedded runtime, authenticated SSE/HTTP endpoints, and content-free liveness/readiness probes. |
 | `web_operation_agent.business` | Loads Skills and mediates typed read and mutation tools. |
@@ -67,6 +68,8 @@ The main reusable boundaries are:
 | `web_operation_agent.session` | Implements the bounded server-side agent loop. |
 
 Application adapters expose a versioned, non-secret descriptor, a digest-bound Skill and typed-tool catalog, and executable ports for identity, routes, result data classes, mutation postconditions, and conservative reconciliation. `bind_application()` checks that every tool and mutation is covered and that the runtime uses the same port objects. `AgentTurnExecutor(application=...)` rejects another application origin or invalid principal before browser/model work; typed-tool routes are checked before entering the Agent context, and an acknowledged write remains indeterminate until its adapter postcondition passes. Natural-language goals enter the generic Agent loop directly; an adapter does not preclassify them into a fixed product intent enum. This is adapter contract version 2, and the package API is still evolving; no compatibility guarantee is made before a stable release.
+
+The embedded Runtime is the only shipping browser executor. `RemoteBrowserClient` converts each server action into the versioned `ActionCommand` carried by the authenticated session protocol, and the Runtime returns the matching `ActionReceipt`. The earlier subprocess Playwright worker and its unpublished experimental CLI were removed because their navigation, selection, and observation semantics had diverged from the embedded product path.
 
 For mutation-enabled composition, `AgentTurnConfig.deployment_profile` defaults to `production`. The composition fails before a user task when mutation policy does not require identity, no mutation tool is installed, or the selected journal does not declare durable restart behavior. Tests that intentionally use `MemoryMutationJournal` must set `deployment_profile="test"`; that profile does not relax identity binding or user approval. A deployment host must still supply and renew the authenticated principal, disable browser actions it cannot authorize, revoke changed sessions, protect the approval surface, and verify the deployed page-controller asset. Those host obligations are not inferred from the profile flag.
 

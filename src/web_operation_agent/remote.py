@@ -1012,7 +1012,6 @@ class RemoteBrowserClient:
         self.timeout_s = timeout_s
         self.turn_id = turn_id
         self.command_count = 0
-        self.relogins = 0
         self._delivered_observation: ObservationEnvelope | None = None
 
     def _deliver(self, envelope: ObservationEnvelope) -> PageObservation:

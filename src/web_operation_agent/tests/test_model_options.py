@@ -655,29 +655,6 @@ class WhatTheAgentIsToldAfterAWrite(unittest.TestCase):
 
 
 class SessionRecoveryIsVisible(unittest.TestCase):
-    """A run bounced back to a login page and a run quietly recovered look identical in the
-    record unless the count the worker already reports is actually read."""
-
-    def _client(self, relogins):
-        from web_operation_agent.browser import ThinBrowserClient
-        c = object.__new__(ThinBrowserClient)
-        c.relogins = 0
-        c._roundtrip = lambda msg, expect, timeout_note="": {
-            "kind": "console", "lines": ["error: x"], "relogins": relogins}
-        return c
-
-    def test_the_count_reaches_the_caller(self):
-        from web_operation_agent.browser import ThinBrowserClient
-        c = self._client(5)
-        ThinBrowserClient.console(c)
-        self.assertEqual(c.relogins, 5)
-
-    def test_a_worker_that_reports_nothing_is_zero_not_an_error(self):
-        from web_operation_agent.browser import ThinBrowserClient
-        c = self._client(None)
-        ThinBrowserClient.console(c)
-        self.assertEqual(c.relogins, 0)
-
     def test_the_action_ledger_carries_it_per_action(self):
         from dataclasses import replace
         from web_operation_agent.tests.test_session import (_Browser, _Chat, _Control,

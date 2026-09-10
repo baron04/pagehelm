@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 from unittest import mock
 
-from web_operation_agent.browser import TransportError, TurnCancelled
+from web_operation_agent.browser import BrowserExecutor, TransportError, TurnCancelled
 from web_operation_agent.embedded_gateway import EmbeddedGateway
 from web_operation_agent.identity import OperationContext, PrincipalContext
 from web_operation_agent.remote import (RemoteBrowserClient, RemoteProtocolError,
@@ -568,6 +568,7 @@ class ChannelTests(unittest.TestCase):
 
     def test_remote_browser_adapter_roundtrip_unblocks_on_fresh_result(self):
         browser = RemoteBrowserClient(self.channel, timeout_s=2)
+        self.assertIsInstance(browser, BrowserExecutor)
         self.assertEqual(browser.start()["url"], self.first.observation.url)
         answer = {}
 
@@ -583,6 +584,13 @@ class ChannelTests(unittest.TestCase):
         events = self.channel.events_after(
             "e00000001", lease_id=self.lease, wait_s=1)
         envelope = next(event.action() for event in events if event.kind == "action")
+        self.assertEqual(envelope.command, ActionCommand(
+            command_id=envelope.action_id,
+            action="click",
+            args={"ref": "e0"},
+            expect_navigation=True,
+        ))
+        self.assertEqual(envelope.command_digest, envelope.command.content_digest)
         self.channel.claim_action({"action_id": envelope.action_id},
                                   lease_id=self.lease)
         after = observation(self.grant.session_id, 2, caused_by=envelope.action_id,

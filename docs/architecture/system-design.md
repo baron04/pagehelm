@@ -2,7 +2,7 @@
 
 Web Operation Agent 是一个面向复杂业务 Web 应用的嵌入式 AI 助手。用户在应用页面内用自然语言描述目标；服务端 Agent 负责理解、规划、调用知识与业务工具，页面内 Runtime 负责观察当前页面、执行受限的通用动作并返回结果。
 
-系统采用“两层运行结构、一个逻辑 Agent”。推理只发生在服务端。浏览器 Runtime 是可替换的执行端，不持有计划、业务知识或模型能力。
+系统采用“两层运行结构、一个逻辑 Agent”。推理只发生在服务端。浏览器 Runtime 通过版本化协议与服务端隔离，不持有计划、业务知识或模型能力。当前发布物只有一个规范执行端：页面内嵌 Runtime；新增浏览器宿主必须实现同一 `ActionCommand`/`ActionReceipt` 合同并通过同一行为套件，不能在产品包内复制另一套动作语义。
 
 ## 1. 目标与非目标
 
@@ -113,6 +113,8 @@ Remote Session 维护严格 schema 的消息、观察、动作、结果、确认
 4. 对重复 id 返回同一结果，对内容冲突的重放拒绝。
 
 这些约束解决页面刷新和 SSE 重连时的重复执行问题。它们不能证明业务写入是否落库；无法证明时必须进入 `INDETERMINATE`。
+
+服务端 `BrowserExecutor` 只是 `observe`、`execute` 和 `console` 的结构合同，不实现浏览器行为。唯一的产品实现 `RemoteBrowserClient` 会把动作封装为 `ActionCommand`，经 Remote Session 发送给内嵌 Runtime，并校验返回的 `ActionReceipt` 与原命令、观察和 claim 一致。早期的 `ThinBrowserClient/browser_worker` 子进程执行端只被未发布实验 CLI 使用，且其选择、导航和观察语义已与内嵌 Runtime 分叉，现已从产品包删除。
 
 ### 3.3 Conversation Host 与 Turn Executor
 

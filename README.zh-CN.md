@@ -58,6 +58,7 @@ flowchart LR
 | `web_operation_agent.product` | 把已校验的应用和一条用户消息绑定到最新页面观察，并执行一次与具体应用无关的 Agent turn。 |
 | `web_operation_agent.conversation` | 在多轮之间保留有界、脱敏的引用上下文，不把历史事实或路由当成当前权限。 |
 | `web_operation_agent.live` | 管理网关和顺序执行的会话生命周期。 |
+| `web_operation_agent.browser` | 定义结构化浏览器执行协议和类型化传输结果，不包含浏览器引擎。 |
 | `web_operation_agent.remote` | 定义受能力凭据约束的远程浏览器通道和客户端。 |
 | `web_operation_agent.embedded_gateway` | 提供页面 Runtime、带认证的 SSE/HTTP 端点，以及不含业务内容的存活与就绪探针。 |
 | `web_operation_agent.business` | 加载 Skill，并代理类型化的读取和写入工具。 |
@@ -67,6 +68,8 @@ flowchart LR
 | `web_operation_agent.session` | 实现有步数和时间限制的服务端 Agent 循环。 |
 
 Application Adapter 暴露版本化、无敏感信息的描述，由摘要绑定的 Skill/typed-tool catalog，以及身份、路由、结果数据分类、mutation 后置条件和保守核对端口。`bind_application()` 会检查所有工具和 mutation 均被覆盖，并确认运行时使用的就是同一组端口对象。`AgentTurnExecutor(application=...)` 会在浏览器或模型工作开始前拒绝来自其它应用 Origin 的消息和无效 principal；typed-tool 路由进入 Agent 上下文前必须通过 Adapter 校验，已收到确认的写入也只有通过 Adapter 后置条件后才能记为完成。这是 Adapter contract version 2。自然语言目标直接进入通用 Agent 循环，Adapter 不会先把目标分类成固定的产品意图枚举。软件包 API 仍在演进，稳定版本发布前不承诺向后兼容。
+
+页面内嵌 Runtime 是当前唯一随产品发布的浏览器执行端。`RemoteBrowserClient` 把每个服务端动作转换为认证会话协议中的版本化 `ActionCommand`，Runtime 返回与之匹配的 `ActionReceipt`。此前基于子进程 Playwright worker 的执行端及其未发布实验 CLI 已删除，因为它们的导航、选择和观察语义已经与内嵌产品路径分叉。
 
 启用 mutation 时，`AgentTurnConfig.deployment_profile` 默认为 `production`。如果 mutation 策略没有要求身份、没有安装写工具，或所选 journal 没有声明跨重启持久性，组合会在接收用户任务前失败。测试若有意使用 `MemoryMutationJournal`，必须设置 `deployment_profile="test"`；该 profile 不会放宽身份绑定或用户确认。部署 Host 仍需提供并续期认证 principal、关闭无法授权的浏览器动作、撤销已变化的会话、保护确认界面，并校验实际部署的 page-controller 资产；这些 Host 责任不会由 profile 标志自动推导。
 
