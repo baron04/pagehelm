@@ -34,12 +34,6 @@ jobs:
       - name: Install pinned PageAgent baseline
         working-directory: evals/pageagent
         run: npm ci
-      - name: Verify deterministic PageAgent baseline bundle
-        working-directory: evals/pageagent
-        run: npm test
-      - name: Build pinned PageAgent baseline bundle
-        working-directory: evals/pageagent
-        run: npm run build
       - name: Install Chromium for PageAgent qualification
         run: python -m playwright install --with-deps chromium
       - name: Qualify

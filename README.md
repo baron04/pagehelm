@@ -102,7 +102,7 @@ python src/web_operation_agent/tests/run_all.py -k test_product.py
 scripts/qualify.sh
 ```
 
-It runs the product suite, the Twenty evaluator foundation tests, the offline PageAgent and Web Operation Agent runner suites, and an installable-wheel build whose contents and out-of-checkout import are both checked. It exits non-zero if any required gate fails.
+It runs the product suite, the Twenty evaluator foundation tests, the offline PageAgent and Web Operation Agent runner suites, verifies and builds the pinned PageAgent bundle when its installed dependencies are present, and builds an installable wheel whose contents and out-of-checkout import are both checked. It exits non-zero if any required gate fails. Installing the pinned npm dependencies remains environment preparation; CI does that before invoking the same gate.
 
 Two gates depend on the environment and are reported, never assumed:
 

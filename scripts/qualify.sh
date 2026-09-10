@@ -52,6 +52,7 @@ run_gate() {   # run_gate <name> <required:0|1> <command...>
   printf '\n\033[1m── %s ──\033[0m\n' "${name}"
   if "$@"; then
     record "${name}" PASS ""
+    return 0
   else
     local code=$?
     if [[ "${required}" == "1" ]]; then
@@ -60,6 +61,7 @@ run_gate() {   # run_gate <name> <required:0|1> <command...>
     else
       record "${name}" SKIPPED "exit ${code}, not required here"
     fi
+    return "${code}"
   fi
 }
 
@@ -74,6 +76,28 @@ run_gate "PageAgent host and runner (offline)" 1 "${PYTHON}" -m unittest \
 run_gate "WOA runner and schedule driver (offline)" 1 "${PYTHON}" -m unittest \
   evals.woa.test_chat_port evals.woa.test_assembler evals.woa.test_twenty_runner \
   evals.woa.test_qualify_schedule
+
+# ---------------------------------------------------------------- PageAgent bundle gate
+# `npm ci` is environment preparation. Reproducibility verification and the build itself are
+# qualification gates, so they live here rather than in the CI workflow. A local checkout
+# without the installed pinned dependencies is BLOCKED; it must never reuse an unverified old
+# bundle and report the browser path as passed.
+printf '\n\033[1m── PageAgent deterministic bundle ──\033[0m\n'
+pageagent_ready=0
+if ! command -v npm >/dev/null 2>&1; then
+  record "PageAgent deterministic bundle" BLOCKED "npm is unavailable"
+  [[ "${require_browser}" == "1" ]] && failed+=("PageAgent deterministic bundle")
+elif [[ ! -d "${ROOT}/evals/pageagent/node_modules" ]]; then
+  record "PageAgent deterministic bundle" BLOCKED \
+    "run npm ci in evals/pageagent"
+  [[ "${require_browser}" == "1" ]] && failed+=("PageAgent deterministic bundle")
+elif ( cd "${ROOT}/evals/pageagent" && npm test && npm run build ); then
+  record "PageAgent deterministic bundle" PASS ""
+  pageagent_ready=1
+else
+  record "PageAgent deterministic bundle" FAIL "deterministic build failed"
+  failed+=("PageAgent deterministic bundle")
+fi
 
 # ---------------------------------------------------------------- packaging gate
 build_and_check_wheel() {
@@ -145,23 +169,28 @@ else
 fi
 
 # ---------------------------------------------------------------- browser gate
-# Self-contained: needs only the built PageAgent bundle and a Chromium, no Twenty. CI makes
-# it required; a developer without Chromium sees SKIPPED, never a pass.
-if [[ "${require_browser}" == "1" ]]; then
+# Self-contained once the deterministic bundle and Chromium are available; no Twenty is
+# involved. Run with the suite's required flag whenever prerequisites are present, so a real
+# test failure can never be downgraded to an optional skip.
+browser_bundle="${WOA_PAGEAGENT_BUNDLE:-${ROOT}/.artifacts/evals/pageagent/pageagent-baseline.js}"
+if [[ "${pageagent_ready}" != "1" ]]; then
+  record "PageAgent Chromium qualification" BLOCKED \
+    "the deterministic PageAgent bundle was not qualified"
+  [[ "${require_browser}" == "1" ]] && failed+=("PageAgent Chromium qualification")
+elif [[ ! -f "${browser_bundle}" ]]; then
+  record "PageAgent Chromium qualification" BLOCKED "bundle is absent: ${browser_bundle}"
+  [[ "${require_browser}" == "1" ]] && failed+=("PageAgent Chromium qualification")
+elif ! "${PYTHON}" - <<'PY'
+from evals.pageagent.test_twenty_runner_browser import _chromium_launches
+raise SystemExit(0 if _chromium_launches() else 1)
+PY
+then
+  record "PageAgent Chromium qualification" BLOCKED "Chromium is unavailable"
+  [[ "${require_browser}" == "1" ]] && failed+=("PageAgent Chromium qualification")
+else
   run_gate "PageAgent Chromium qualification" 1 \
     env WOA_REQUIRE_PAGEAGENT_BROWSER=1 "${PYTHON}" -m unittest \
     evals.pageagent.test_twenty_runner_browser
-else
-  # Without the flag the suite skips itself when the bundle or Chromium is absent, so a green
-  # run here does not prove the browser path ran. Say so rather than recording a bare PASS.
-  printf '\n\033[1m── PageAgent Chromium qualification ──\033[0m\n'
-  if "${PYTHON}" -m unittest evals.pageagent.test_twenty_runner_browser; then
-    record "PageAgent Chromium qualification" PASS \
-      "not required here; skips silently without a bundle or Chromium"
-  else
-    record "PageAgent Chromium qualification" FAIL "exit non-zero"
-    failed+=("PageAgent Chromium qualification")
-  fi
 fi
 
 # ---------------------------------------------------------------- live gate
