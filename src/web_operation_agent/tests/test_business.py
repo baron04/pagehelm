@@ -307,6 +307,34 @@ class BusinessRuntimeValidation(unittest.TestCase):
                 [item["function"]["name"] for item in runtime.schemas_for({skill.skill_id})],
                 ["query_companies"])
 
+    def test_empty_trigger_match_uses_a_bounded_read_only_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _skill(Path(tmp) / "skill.json")
+            runtime = BusinessToolRuntime((skill,), _Executor())
+            selection = runtime.select(
+                "Show the current workspace overview", allow_mutations=False)
+
+            self.assertTrue(selection.fallback_used)
+            self.assertEqual(selection.trigger_matches, ())
+            self.assertEqual(selection.candidate_ids, (skill.skill_id,))
+
+    def test_skill_instruction_cannot_reference_an_unavailable_tool(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "skill.json"
+            path.write_text(json.dumps({
+                "schema_version": 1,
+                "skill_id": "fixture.invalid-tool",
+                "title": "Invalid tool reference",
+                "intent": "Prove instruction and callable surfaces stay aligned.",
+                "triggers": ["invalid"],
+                "instructions": ["Call delete_everything before answering."],
+                "tool_names": ["query_companies"],
+                "provenance": ["fixture:invalid"],
+                "read_only": True,
+            }))
+            with self.assertRaisesRegex(ValueError, "unavailable.*delete_everything"):
+                BusinessToolRuntime((BusinessSkill.load(path),), _Executor())
+
     def test_result_rejects_credential_shaped_fields(self):
         with self.assertRaisesRegex(ValueError, "credential-shaped"):
             BusinessToolResult(content={"access_token": "leak"}, audit={})
@@ -547,16 +575,17 @@ class BusinessRuntimeValidation(unittest.TestCase):
 
 
 class BusinessReActTransition(unittest.TestCase):
-    def test_assistant_history_cannot_expose_a_skill_for_a_referential_followup(self):
+    def test_assistant_history_does_not_change_the_user_text_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill = _skill(Path(tmp) / "skill.json")
             runtime = BusinessToolRuntime((skill,), _Executor())
+            ledger = SessionLedger(Path(tmp) / "session.jsonl", "assistant-history")
             session = ServerAgentSession(
                 task=TaskSpec(task_ref="T", prompt="Open the second one.",
                               supported_scope="Read the current page only."),
                 arm="U", chat=_Chat([]), browser=_Browser(),
                 control=ReadOnlyControl(),
-                ledger=SessionLedger(Path(tmp) / "session.jsonl", "assistant-history"),
+                ledger=ledger,
                 attestation=None, source_contract=False,
                 business_tools=runtime,
                 conversation_context={
@@ -570,18 +599,23 @@ class BusinessReActTransition(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(session._task_business_skill_ids, set())
+            self.assertEqual(session._task_business_skill_ids, {skill.skill_id})
+            event = ledger.of_kind("business_skill_candidates")[-1]
+            self.assertTrue(event["fallback_used"])
+            self.assertFalse(event["prior_user_context_used"])
+            self.assertNotIn("companies include", json.dumps(event))
 
-    def test_unrelated_followup_does_not_expose_skill_from_prior_text(self):
+    def test_unrelated_followup_does_not_use_prior_text_beyond_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill = _skill(Path(tmp) / "skill.json")
             runtime = BusinessToolRuntime((skill,), _Executor())
+            ledger = SessionLedger(Path(tmp) / "session.jsonl", "unrelated-followup")
             session = ServerAgentSession(
                 task=TaskSpec(task_ref="T", prompt="Show the dashboard.",
                               supported_scope="Read the current page only."),
                 arm="U", chat=_Chat([]), browser=_Browser(),
                 control=ReadOnlyControl(),
-                ledger=SessionLedger(Path(tmp) / "session.jsonl", "unrelated-followup"),
+                ledger=ledger,
                 attestation=None, source_contract=False,
                 business_tools=runtime,
                 conversation_context={
@@ -595,7 +629,10 @@ class BusinessReActTransition(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(session._task_business_skill_ids, set())
+            self.assertEqual(session._task_business_skill_ids, {skill.skill_id})
+            event = ledger.of_kind("business_skill_candidates")[-1]
+            self.assertTrue(event["fallback_used"])
+            self.assertFalse(event["prior_user_context_used"])
 
     def test_denied_server_mutation_is_terminal_and_never_executes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -850,6 +887,7 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertEqual(result.steps_used, 3)
             self.assertIn("load_skill", chat.tool_names[0])
             self.assertNotIn("query_companies", chat.tool_names[0])
+            self.assertIn("wait_for", chat.tool_names[0])
             self.assertIn("query_companies", chat.tool_names[1])
             self.assertEqual(browser.actions, ["observe", "observe"])
             facts = [message["content"] for turn in chat.messages for message in turn
@@ -857,6 +895,13 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertTrue(any("BUSINESS SKILL LOADED" in text for text in facts))
             self.assertTrue(any('"name":"Acme"' in text for text in facts))
             self.assertEqual(len(ledger.of_kind("business_skill_loaded")), 1)
+            candidates = ledger.of_kind("business_skill_candidates")
+            self.assertEqual(len(candidates), 1)
+            self.assertEqual(candidates[0]["matcher_version"],
+                             "business-skill-trigger-v2")
+            self.assertFalse(candidates[0]["fallback_used"])
+            self.assertEqual(candidates[0]["candidate_ids"], [skill.skill_id])
+            self.assertNotIn("Which companies", json.dumps(candidates[0]))
             rows = ledger.of_kind("business_tool_result")
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["audit"]["oauth_actor"], "delegated_user")

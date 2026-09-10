@@ -59,7 +59,7 @@ def _replies(case: dict[str, Any], companies: list[dict[str, str]]) -> list[tupl
         ("query_companies", {"name_contains": target["name"], "limit": 20}),
         ("goto", {"url": f"/object/company/{target['id']}"}),
         # The packaged Skill allows one bounded wait for SPA loading before reporting.
-        ("wait_for", {"seconds": 2}),
+        ("wait_for", {"ms": 2_000}),
         ("finish", {"done": True, "why": "The requested company record is open."}),
     ]
 

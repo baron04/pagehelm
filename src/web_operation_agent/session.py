@@ -126,6 +126,11 @@ TOOL_SCHEMAS = [
         "name": "observe", "description": "Re-read the current page without changing it.",
         "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {
+        "name": "wait_for", "description": "Wait briefly for bounded page loading, then observe again.",
+        "parameters": {"type": "object", "properties": {
+            "ms": {"type": "integer", "minimum": 0, "maximum": 10000}},
+            "additionalProperties": False}}},
+    {"type": "function", "function": {
         "name": "finish", "description": "End the task. Use done=false if you cannot complete it.",
         "parameters": {"type": "object", "properties": {
             "done": {"type": "boolean"}, "why": {"type": "string"}},
@@ -433,7 +438,12 @@ class ServerAgentSession:
         if business_tools is None:
             self._task_business_skills = ()
         else:
-            current_skills = business_tools.relevant(task.public_text())
+            selection = business_tools.select(
+                task.public_text(),
+                allow_mutations=business_mutation_approval is not None,
+                limit=5,
+            )
+            current_skills = selection.skills
             prior_skills = ()
             if (self.conversation_context is not None
                     and _REFERENCE_FOLLOWUP.search(task.prompt)):
@@ -452,10 +462,23 @@ class ServerAgentSession:
                     if skill.read_only)
             merged_skills = {skill.skill_id: skill for skill in current_skills}
             for skill in prior_skills:
-                if len(merged_skills) >= 3:
+                if len(merged_skills) >= 5:
                     break
                 merged_skills.setdefault(skill.skill_id, skill)
             self._task_business_skills = tuple(merged_skills.values())
+            self.ledger.append(
+                "business_skill_candidates",
+                matcher_version=selection.matcher_version,
+                task_digest=hashlib.sha256(
+                    task.public_text().encode("utf-8")).hexdigest(),
+                trigger_matches=list(selection.trigger_matches),
+                candidate_ids=[skill.skill_id for skill in self._task_business_skills],
+                trigger_match_empty=not selection.trigger_matches,
+                fallback_used=selection.fallback_used,
+                mutations_enabled=business_mutation_approval is not None,
+                prior_user_context_used=bool(prior_skills),
+                bounded_limit=5,
+            )
         self._task_business_skill_ids = {
             skill.skill_id for skill in self._task_business_skills}
         self._loaded_business_skill_ids: set[str] = set()

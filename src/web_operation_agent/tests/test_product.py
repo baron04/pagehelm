@@ -698,8 +698,9 @@ class AgentTurnExecutorTests(unittest.TestCase):
                     supported_scope="Read-only application access.",
                     ledger_path=root / "session.jsonl"),
                 chat=_Chat([
-                    ("load_skill", {"skill_id": skill.skill_id}),
                     ("create_company", {"name": "Acme"}),
+                    ("finish", {"done": False,
+                                "why": "Company creation is not enabled."}),
                 ]),
                 business_tools=BusinessToolRuntime((skill,), mutation_executor),
                 control=ReadOnlyControl(),
@@ -712,10 +713,17 @@ class AgentTurnExecutorTests(unittest.TestCase):
                     "page_url": "http://app.test/companies",
                 })
 
-            self.assertEqual(execution.status, AgentTurnStatus.FAILED)
-            self.assertEqual(execution.terminal_reason, "approval_unavailable")
+            self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
+            self.assertEqual(execution.terminal_reason, "agent_refused")
             self.assertEqual(channel.approvals, [])
             self.assertEqual(mutation_executor.executions, 0)
+            events = [json.loads(line) for line in
+                      (root / "session.jsonl").read_text().splitlines()]
+            candidates = next(event for event in events
+                              if event["event"] == "business_skill_candidates")
+            self.assertEqual(candidates["candidate_ids"], [])
+            self.assertEqual(candidates["trigger_matches"], [skill.skill_id])
+            self.assertFalse(candidates["mutations_enabled"])
 
     def test_closed_channel_does_not_erase_an_already_finished_execution(self):
         with tempfile.TemporaryDirectory() as tmp:

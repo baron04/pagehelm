@@ -21,6 +21,7 @@ from urllib.parse import urlsplit
 from .identity import OperationContext, PrincipalError
 from .mutation import (MemoryMutationJournal, MutationJournal,
                        MutationJournalError)
+from .schemas import BROWSER_ACTIONS
 
 
 _SKILL_ID = re.compile(r"^[a-z][a-z0-9_.-]{2,79}$")
@@ -28,6 +29,9 @@ _TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 _SENSITIVE_KEY = re.compile(
     r"(?:password|passwd|pwd|secret|token|api[_-]?key|authorization)", re.I)
 _MAX_RESULT_BYTES = 64 * 1024
+BUSINESS_SKILL_MATCHER_VERSION = "business-skill-trigger-v2"
+_EXPLICIT_TOOL_REFERENCE = re.compile(
+    r"\bcall\s+`?([a-z][a-z0-9_]{1,63})`?", re.I)
 
 
 def _trigger_tokens(value: str) -> tuple[str, ...]:
@@ -35,15 +39,19 @@ def _trigger_tokens(value: str) -> tuple[str, ...]:
     return tuple(re.findall(r"[a-z0-9]+|[\u3400-\u4dbf\u4e00-\u9fff]", value.casefold()))
 
 
-def _trigger_matches(trigger: str, task: str, *, max_gap_tokens: int = 8) -> bool:
+def _trigger_matches(trigger: str, task: str, *, max_gap_tokens: int = 3) -> bool:
     """Match a Skill phrase with word boundaries and a small amount of natural-language fill."""
     wanted = _trigger_tokens(trigger)
     available = _trigger_tokens(task)
     if not wanted or not available:
         return False
     cursor = -1
-    for token in wanted:
-        upper = min(len(available), cursor + max_gap_tokens + 2)
+    for position, token in enumerate(wanted):
+        # A phrase can occur anywhere in the task. Only the distance between its own words
+        # is bounded; otherwise a one-word domain trigger would inexplicably stop matching
+        # near the end of an ordinary sentence.
+        upper = (len(available) if position == 0
+                 else min(len(available), cursor + max_gap_tokens + 2))
         try:
             cursor = available.index(token, cursor + 1, upper)
         except ValueError:
@@ -358,6 +366,20 @@ class BusinessSkill:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class BusinessSkillSelection:
+    """Bounded result of matching user intent against one installed catalog."""
+
+    matcher_version: str
+    skills: tuple[BusinessSkill, ...]
+    trigger_matches: tuple[str, ...]
+    fallback_used: bool
+
+    @property
+    def candidate_ids(self) -> tuple[str, ...]:
+        return tuple(skill.skill_id for skill in self.skills)
+
+
 class BusinessToolRuntime:
     """Validate a Skill catalog and dispatch only tools from loaded relevant Skills."""
 
@@ -392,6 +414,22 @@ class BusinessToolRuntime:
         for skill in skills:
             if skill.read_only and any(effects[name] == "write" for name in skill.tool_names):
                 raise ValueError("read-only Business Skills may not declare write tools")
+        callable_tools = set(schemas) | set(BROWSER_ACTIONS) | {"finish", "load_skill"}
+        for skill in skills:
+            references = {
+                match.group(1) for instruction in skill.instructions
+                for match in _EXPLICIT_TOOL_REFERENCE.finditer(instruction)
+            }
+            unavailable = references - callable_tools
+            if unavailable:
+                raise ValueError(
+                    f"Business Skill {skill.skill_id} instructions reference unavailable "
+                    f"tools: {sorted(unavailable)}")
+            foreign_business = (references & set(schemas)) - set(skill.tool_names)
+            if foreign_business:
+                raise ValueError(
+                    f"Business Skill {skill.skill_id} instructions reference business tools "
+                    f"it does not declare: {sorted(foreign_business)}")
         if application_id and not re.fullmatch(r"[a-z][a-z0-9.-]{2,79}", application_id):
             raise ValueError("business tool application_id is invalid")
         scopes = dict(required_scopes or {})
@@ -480,6 +518,43 @@ class BusinessToolRuntime:
                     set(skill.tool_names) < tools for tools in mutation_toolsets))
             ]
         return tuple(selected[:limit])
+
+    def select(self, task: str, *, allow_mutations: bool,
+               limit: int = 5) -> BusinessSkillSelection:
+        """Select task candidates and use a bounded capability-aware empty fallback.
+
+        Trigger matching is the primary high-precision route. If it finds nothing eligible,
+        expose read-only Skills plus mutation Skills only when this turn has a real approval
+        path. This preserves the user-text-only injection boundary while preventing one missed
+        paraphrase from making the application's entire typed tool surface disappear.
+        """
+        if not isinstance(allow_mutations, bool):
+            raise ValueError("allow_mutations must be a boolean")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
+            raise ValueError("Skill candidate limit must be an integer from 1 to 20")
+        matched = self.relevant(task, limit=max(limit, len(self._skills)))
+        eligible = tuple(
+            skill for skill in matched if skill.read_only or allow_mutations)
+        if eligible:
+            return BusinessSkillSelection(
+                BUSINESS_SKILL_MATCHER_VERSION, eligible[:limit],
+                tuple(skill.skill_id for skill in matched), False)
+
+        fallback = [
+            skill for skill in sorted(self._skills.values(), key=lambda item: item.skill_id)
+            if skill.read_only or allow_mutations
+        ]
+        mutation_toolsets = [set(skill.tool_names) for skill in fallback
+                             if not skill.read_only]
+        if mutation_toolsets:
+            fallback = [
+                skill for skill in fallback
+                if (not skill.read_only or not any(
+                    set(skill.tool_names) < tools for tools in mutation_toolsets))
+            ]
+        return BusinessSkillSelection(
+            BUSINESS_SKILL_MATCHER_VERSION, tuple(fallback[:limit]),
+            tuple(skill.skill_id for skill in matched), bool(fallback))
 
     def load(self, skill_id: object, allowed_ids: set[str]) -> tuple[BusinessSkill | None, str]:
         if not isinstance(skill_id, str) or skill_id not in allowed_ids:

@@ -91,6 +91,27 @@ class TwentyPackagedSkillTests(unittest.TestCase):
                     [skill.skill_id for skill in relevant],
                     ["twenty.crm.companies-create"],
                 )
+        fallback_prompts = (
+            "Onboard Acme Corp (acme.com)",
+            "把 Acme 录入系统",
+            "Please set up a new account for Acme",
+        )
+        for prompt in fallback_prompts:
+            with self.subTest(prompt=prompt):
+                selection = adapter.business_tools.select(
+                    prompt, allow_mutations=True)
+                self.assertTrue(selection.fallback_used)
+                self.assertEqual(
+                    list(selection.candidate_ids),
+                    ["twenty.crm.companies-create"],
+                )
+        person_request = adapter.business_tools.select(
+            "Create a person named Bob at Acme company",
+            allow_mutations=True)
+        self.assertNotIn(
+            "twenty.crm.companies-create", person_request.candidate_ids,
+            "a company name inside a person request must not expose company creation",
+        )
         self.assertEqual(
             adapter.business_tools.relevant("check my account settings", limit=3), ())
         card = adapter.business_tools.relevant(create_prompts[0])[0].candidate_card()
