@@ -28,6 +28,18 @@ COMPANY = {
     "updated_at": "2026-09-08T01:00:00+00:00",
     "deleted_at": None,
 }
+PERSON = {
+    "id": "7a93d1e5-3f74-4945-8a65-d7f996083f72", "name": "Ivan Zhao",
+    "email": "zhao@example.com", "company_id": COMPANY["id"],
+    "created_at": "2026-09-08T01:00:00+00:00",
+    "updated_at": "2026-09-08T01:00:00+00:00", "deleted_at": None,
+}
+OPPORTUNITY = {
+    "id": "2beb07b0-340c-41d7-be33-5aa91757f329", "name": "API Deal",
+    "stage": "SCREENING", "amount_micros": "75000000000", "currency": "USD",
+    "company_id": COMPANY["id"], "created_at": "2026-09-08T01:00:00+00:00",
+    "updated_at": "2026-09-08T01:00:00+00:00", "deleted_at": None,
+}
 
 
 def capture_output() -> bytes:
@@ -52,6 +64,22 @@ class FakeRunner:
 
 
 class TwentyFixtureTests(unittest.TestCase):
+    def test_breadth_capture_projects_all_three_collections_with_selected_fields(self):
+        output = ("\n".join(json.dumps(row, sort_keys=True) for row in (
+            {"section": "companies", "rows": [COMPANY]},
+            {"section": "people", "rows": [PERSON]},
+            {"section": "opportunities", "rows": [OPPORTUNITY]},
+        )) + "\n").encode()
+        runner = FakeRunner([output])
+        state = TwentyPostgresFixture(**FIXTURE_ARGS, runner=runner).capture_breadth(
+            role="baseline")
+        self.assertEqual(state["projection"]["people"], [PERSON])
+        self.assertEqual(state["projection"]["opportunities"], [OPPORTUNITY])
+        sql = runner.calls[0][1].decode()
+        self.assertIn('"emailsPrimaryEmail"', sql)
+        self.assertIn('"amountAmountMicros"::text', sql)
+        self.assertNotIn("emailsAdditionalEmails", sql)
+
     def test_qualification_proves_stable_capture_and_reset_dump_without_raw_guards(self):
         dump = b"PGDMP\x00synthetic-dump"
         runner = FakeRunner([capture_output(), dump, capture_output()])

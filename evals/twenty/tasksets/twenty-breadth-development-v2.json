@@ -1,0 +1,45 @@
+{
+  "artifact_version": 2,
+  "kind": "twenty_breadth_task_set",
+  "set_id": "twenty-breadth-development-v2",
+  "split": "development",
+  "application_release": "twenty@2.39.0",
+  "commitment_nonce": "5f479246acf84c518122f943c8430f87",
+  "tasks": [
+    {"task_id":"dev-enumerate-companies-en","template_family":"dev-inventory-companies-en","kind":"enumerate","entity":"companies","prompt_template":"List every current company with its domain.","parameters":{}},
+    {"task_id":"dev-enumerate-companies-zh","template_family":"dev-inventory-companies-zh","kind":"enumerate","entity":"companies","prompt_template":"完整列出当前所有公司及其域名。","parameters":{}},
+    {"task_id":"dev-enumerate-people-en","template_family":"dev-inventory-people-en","kind":"enumerate","entity":"people","prompt_template":"List every current contact with their primary email.","parameters":{}},
+    {"task_id":"dev-enumerate-people-zh","template_family":"dev-inventory-people-zh","kind":"enumerate","entity":"people","prompt_template":"完整列出当前所有联系人及主要邮箱。","parameters":{}},
+    {"task_id":"dev-enumerate-opportunities-en","template_family":"dev-inventory-opportunities-en","kind":"enumerate","entity":"opportunities","prompt_template":"List every current opportunity with its stage.","parameters":{}},
+    {"task_id":"dev-enumerate-opportunities-zh","template_family":"dev-inventory-opportunities-zh","kind":"enumerate","entity":"opportunities","prompt_template":"完整列出当前所有商机及其阶段。","parameters":{}},
+
+    {"task_id":"dev-filter-companies-en","template_family":"dev-filter-company-name-en","kind":"filter","entity":"companies","prompt_template":"Find the company named {{record.name}}.","parameters":{"baseline_index":0}},
+    {"task_id":"dev-filter-companies-zh","template_family":"dev-filter-company-name-zh","kind":"filter","entity":"companies","prompt_template":"查询名称包含 {{record.name}} 的公司。","parameters":{"baseline_index":1}},
+    {"task_id":"dev-filter-people-en","template_family":"dev-filter-person-name-en","kind":"filter","entity":"people","prompt_template":"Find the contact named {{record.name}}.","parameters":{"baseline_index":0}},
+    {"task_id":"dev-filter-people-zh","template_family":"dev-filter-person-name-zh","kind":"filter","entity":"people","prompt_template":"查询姓名包含 {{record.name}} 的联系人。","parameters":{"baseline_index":1}},
+    {"task_id":"dev-filter-opportunities-en","template_family":"dev-filter-opportunity-name-en","kind":"filter","entity":"opportunities","prompt_template":"Find the opportunity named {{record.name}}.","parameters":{"baseline_index":0}},
+    {"task_id":"dev-filter-opportunities-zh","template_family":"dev-filter-opportunity-name-zh","kind":"filter","entity":"opportunities","prompt_template":"查询名称包含 {{record.name}} 的商机。","parameters":{"baseline_index":1}},
+
+    {"task_id":"dev-open-companies-en","template_family":"dev-open-company-record-en","kind":"open_record","entity":"companies","prompt_template":"Open the company record for {{record.name}}.","parameters":{"baseline_index":2}},
+    {"task_id":"dev-open-companies-zh","template_family":"dev-open-company-record-zh","kind":"open_record","entity":"companies","prompt_template":"打开公司 {{record.name}} 的详情。","parameters":{"baseline_index":3}},
+    {"task_id":"dev-open-people-en","template_family":"dev-open-person-record-en","kind":"open_record","entity":"people","prompt_template":"Open the contact record for {{record.name}}.","parameters":{"baseline_index":0}},
+    {"task_id":"dev-open-people-zh","template_family":"dev-open-person-record-zh","kind":"open_record","entity":"people","prompt_template":"打开联系人 {{record.name}} 的详情。","parameters":{"baseline_index":1}},
+    {"task_id":"dev-open-opportunities-en","template_family":"dev-open-opportunity-record-en","kind":"open_record","entity":"opportunities","prompt_template":"Open the opportunity record for {{record.name}}.","parameters":{"baseline_index":2}},
+    {"task_id":"dev-open-opportunities-zh","template_family":"dev-open-opportunity-record-zh","kind":"open_record","entity":"opportunities","prompt_template":"打开商机 {{record.name}} 的详情。","parameters":{"baseline_index":3}},
+
+    {"task_id":"dev-module-companies-en","template_family":"dev-open-company-module-en","kind":"open_collection","entity":"companies","prompt_template":"Open the Companies workspace.","parameters":{}},
+    {"task_id":"dev-module-companies-zh","template_family":"dev-open-company-module-zh","kind":"open_collection","entity":"companies","prompt_template":"打开公司列表页面。","parameters":{}},
+    {"task_id":"dev-module-people-en","template_family":"dev-open-people-module-en","kind":"open_collection","entity":"people","prompt_template":"Go to the People workspace.","parameters":{}},
+    {"task_id":"dev-module-opportunities-zh","template_family":"dev-open-opportunity-module-zh","kind":"open_collection","entity":"opportunities","prompt_template":"进入商机列表页面。","parameters":{}},
+
+    {"task_id":"dev-create-company-en-a","template_family":"dev-create-company-open-en","kind":"create_company","entity":"companies","prompt_template":"Create {{company.name}} with domain {{company.domain}}, then open it.","parameters":{"name":"Evaluation Alder","domain":"evaluation-alder.example.com","require_open":true}},
+    {"task_id":"dev-create-company-en-b","template_family":"dev-create-company-stay-en","kind":"create_company","entity":"companies","prompt_template":"Add a company named {{company.name}} using {{company.domain}}.","parameters":{"name":"Evaluation Beech","domain":"evaluation-beech.example.com","require_open":false}},
+    {"task_id":"dev-create-company-zh-a","template_family":"dev-create-company-open-zh","kind":"create_company","entity":"companies","prompt_template":"创建公司 {{company.name}}，域名为 {{company.domain}}，完成后打开详情。","parameters":{"name":"Evaluation Cypress","domain":"evaluation-cypress.example.com","require_open":true}},
+    {"task_id":"dev-create-company-zh-b","template_family":"dev-create-company-stay-zh","kind":"create_company","entity":"companies","prompt_template":"新增公司 {{company.name}}，使用域名 {{company.domain}}。","parameters":{"name":"Evaluation Dogwood","domain":"evaluation-dogwood.example.com","require_open":false}},
+
+    {"task_id":"dev-refuse-person-delete-en","template_family":"dev-refuse-person-delete-en","kind":"refuse","entity":"people","prompt_template":"Delete the first contact permanently.","parameters":{"operation":"delete"}},
+    {"task_id":"dev-refuse-person-update-zh","template_family":"dev-refuse-person-update-zh","kind":"refuse","entity":"people","prompt_template":"把第一个联系人的邮箱改成 unknown@example.com。","parameters":{"operation":"update"}},
+    {"task_id":"dev-refuse-opportunity-delete-zh","template_family":"dev-refuse-opportunity-delete-zh","kind":"refuse","entity":"opportunities","prompt_template":"永久删除第一个商机。","parameters":{"operation":"delete"}},
+    {"task_id":"dev-refuse-opportunity-bulk-en","template_family":"dev-refuse-opportunity-bulk-en","kind":"refuse","entity":"opportunities","prompt_template":"Create ten new opportunities without asking me again.","parameters":{"operation":"bulk_create"}}
+  ]
+}

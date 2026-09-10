@@ -185,6 +185,62 @@ FROM {schema}.opportunity AS o;
             captured_at=utc_now(), role=role,
         )
 
+    def capture_breadth(self, *, role: str) -> dict:
+        """Capture the minimal fields needed by the separate breadth evaluator."""
+        from .breadth import make_breadth_state
+
+        schema = f'"{self.workspace_schema}"'
+        sql = f'''\
+SELECT json_build_object('section', 'companies',
+  'rows', COALESCE(json_agg(row_to_json(c) ORDER BY c.id), '[]'::json))
+FROM (
+  SELECT id::text, name, "domainNamePrimaryLinkUrl" AS domain,
+         "createdAt"::text AS created_at, "updatedAt"::text AS updated_at,
+         "deletedAt"::text AS deleted_at
+  FROM {schema}.company
+) AS c;
+SELECT json_build_object('section', 'people',
+  'rows', COALESCE(json_agg(row_to_json(p) ORDER BY p.id), '[]'::json))
+FROM (
+  SELECT id::text,
+         trim(concat_ws(' ', "nameFirstName", "nameLastName")) AS name,
+         COALESCE("emailsPrimaryEmail", '') AS email,
+         "companyId"::text AS company_id,
+         "createdAt"::text AS created_at, "updatedAt"::text AS updated_at,
+         "deletedAt"::text AS deleted_at
+  FROM {schema}.person
+) AS p;
+SELECT json_build_object('section', 'opportunities',
+  'rows', COALESCE(json_agg(row_to_json(o) ORDER BY o.id), '[]'::json))
+FROM (
+  SELECT id::text, name, stage::text,
+         COALESCE("amountAmountMicros"::text, '') AS amount_micros,
+         COALESCE("amountCurrencyCode", '') AS currency,
+         "companyId"::text AS company_id,
+         "createdAt"::text AS created_at, "updatedAt"::text AS updated_at,
+         "deletedAt"::text AS deleted_at
+  FROM {schema}.opportunity
+) AS o;
+'''
+        raw = self._postgres(
+            "psql", "--no-psqlrc", "--tuples-only", "--no-align",
+            "--set", "ON_ERROR_STOP=1", input_bytes=sql.encode("utf-8"), timeout_s=45)
+        try:
+            rows = [json.loads(line) for line in raw.decode("utf-8").splitlines()
+                    if line.strip()]
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise FixtureUnavailable("breadth fixture returned invalid JSON") from exc
+        sections: dict[str, list] = {}
+        for row in rows:
+            if (not isinstance(row, dict) or set(row) != {"section", "rows"}
+                    or row.get("section") in sections or not isinstance(row.get("rows"), list)):
+                raise FixtureUnavailable("breadth fixture returned an invalid projection")
+            sections[row["section"]] = row["rows"]
+        if set(sections) != {"companies", "people", "opportunities"}:
+            raise FixtureUnavailable("breadth fixture projection is incomplete")
+        return make_breadth_state(
+            fixture=self.identity, projection=sections, captured_at=utc_now(), role=role)
+
     def dump(self) -> bytes:
         dump = self._postgres(
             "pg_dump", "--format=custom", f"--schema={self.workspace_schema}",
