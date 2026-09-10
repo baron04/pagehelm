@@ -86,17 +86,30 @@ PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 python -m pip install --editable .
 python src/web_operation_agent/tests/run_all.py
 ```
 
-The test runner uses Python `unittest` discovery and guards the real model-spend ledger from test writes. Browser-backed tests skip when Chromium is absent. Tests that exercise the upstream PageController run only when `WOA_PAGE_CONTROLLER_MODULE` names an installed module; otherwise they skip. CI also builds and inspects an installable wheel:
-
-```bash
-python -m pip wheel --no-deps --wheel-dir dist .
-```
+The test runner uses Python `unittest` discovery and guards the real model-spend ledger from test writes. Browser-backed tests skip when Chromium is absent. Tests that exercise the upstream PageController run only when `WOA_PAGE_CONTROLLER_MODULE` names an installed module; otherwise they skip.
 
 To run one test module through the same guarded runner:
 
 ```bash
 python src/web_operation_agent/tests/run_all.py -k test_product.py
 ```
+
+### Qualification
+
+`scripts/qualify.sh` is the single gate. CI runs the same script, so a gate cannot hold locally and be missing in CI:
+
+```bash
+scripts/qualify.sh
+```
+
+It runs the product suite, the Twenty evaluator foundation tests, the offline PageAgent and Web Operation Agent runner suites, and an installable-wheel build whose contents and out-of-checkout import are both checked. It exits non-zero if any required gate fails.
+
+Two gates depend on the environment and are reported, never assumed:
+
+- **Chromium qualification** runs the PageAgent browser cases against the built bundle. It is self-contained — no Twenty needed — and CI makes it required with `--require-browser`. Without the flag, a missing bundle or Chromium is reported rather than counted as a pass.
+- **Live Twenty qualification** runs only when every prerequisite is set: `WOA_TWENTY_BASE_URL`, `WOA_TWENTY_STORAGE_STATE`, `WOA_TWENTY_OAUTH_TOKEN`, `WOA_TWENTY_OAUTH_REGISTRATION`, `WOA_TWENTY_PAGE_CONTROLLER_MODULE`, `WOA_TWENTY_DB_CONTAINER`, `WOA_TWENTY_DB_NAME`, `WOA_TWENTY_DB_USER`, `WOA_TWENTY_WORKSPACE_SCHEMA`. Otherwise it prints `BLOCKED` and names what is unset. A blocked gate is untested — neither a pass nor a product failure. `--require-live` turns that absence into a failure for an environment that must have it.
+
+This repository does not yet provision a Twenty instance, so a fresh clone reports the live gate as `BLOCKED`.
 
 ## Twenty CRM integration
 
@@ -123,12 +136,12 @@ A public six-case development task set and a digest-only commitment to a private
 
 The evaluator also includes a strict preregistration validator for paired PageAgent, Skill/API, and SourceProvider comparisons. It binds artifact and implementation digests, equal-information arms, provider settings, budgets, task eligibility, source exclusions, deterministic balanced order, and fail-fast stop rules before execution. No formal run protocol or comparative result is frozen yet.
 
-A private append-only batch ledger now enforces that frozen order and a common trial schema across runners. It hash-chains entries, rejects duplicate or overlapping trials, preserves unknown provider cost as unknown, detects paired model drift, and stops on apparatus invalidity or observed safety events. The official PageAgentCore and PageController v1.12.4 packages are also pinned by npm lock and integrity; their thin bridge passes deterministic bundle and real-Chromium DOM/custom-tool qualification without a model call. Both engines now run behind one evidence contract, one typed failure classifier and one protocol-bound trial projector: a read-only PageAgent runner and a read-only Web Operation Agent runner each bind the actual browser/API identity and reject answers or page evidence that cannot be deterministically evaluated. A single serial schedule driver captures state, instantiates the task, runs the scheduled arm, evaluates, projects and appends each trial in the frozen order, with no engine-specific branch; a schema-fixed report recomputes public counts from the verified ledger and refuses to phrase a small batch as a comparison. Both runners passed no-model live qualification against a local Twenty 2.39.0 fixture through real Chromium, the delegated API, database state capture and the independent evaluator. A frozen formal protocol, the provider snapshot policy and the source allowlist are still pending; these qualification cases are not a success-rate or comparative result.
+A private append-only batch ledger now enforces that frozen order and a common trial schema across runners. It hash-chains entries, rejects duplicate or overlapping trials, preserves unknown provider cost as unknown, detects paired model drift, and stops on apparatus invalidity or observed safety events. The official PageAgentCore and PageController v1.12.4 packages are also pinned by npm lock and integrity; their thin bridge passes deterministic bundle and real-Chromium DOM/custom-tool qualification without a model call. Both engines now run behind one evidence contract, one typed failure classifier and one protocol-bound trial projector: a read-only PageAgent runner and a read-only Web Operation Agent runner each bind the actual browser/API identity and reject answers or page evidence that cannot be deterministically evaluated. A single serial schedule driver captures state, instantiates the task, runs the scheduled arm, evaluates, projects and appends each trial in the frozen order, with no engine-specific branch; a schema-fixed report recomputes public counts from the verified ledger and refuses to phrase a small batch as a comparison. Both runners have passed no-model live qualification against a local Twenty 2.39.0 fixture through real Chromium, the delegated API, database state capture and the independent evaluator. That result is a record of an earlier run on a provisioned environment, not a property of any checkout: the live gate is re-run through `scripts/qualify.sh`, which reports `BLOCKED` wherever such an environment is absent. A frozen formal protocol, the provider snapshot policy and the source allowlist are still pending; these qualification cases are not a success-rate or comparative result.
 
 ## Known limitations
 
 - The shared runtime gateway, session registry, bounded event journal, message queue, conversation context, and ledger remain local-process components; restart recovery, horizontal scaling, and durable tenant isolation are not complete. A session TTL and hard quotas prevent unbounded retention but do not make state recoverable. Confirmed Twenty API writes have a durable single-use SQLite journal, but a crash after dispatch remains `indeterminate` and requires reconciliation rather than automatic retry. The Twenty demo enforces identity from its trusted Playwright host, but a normal embedded application still needs a server-authenticated identity assertion from its own login boundary; principal renewal and distributed revocation are not implemented. The separate legacy page-control gateway still has global permit and trace state: cooperating clients serialize complete runs and clear state at both boundaries, but a gateway-native tenant/session/turn scope is required before concurrent page writes.
-- Turn deadlines cap provider queueing and socket time together. The server Agent's native completion path uses a closeable HTTP connection: message-bound cancellation aborts an in-flight request, releases its provider-guard slot, prevents later tool dispatch, and records the dispatched call with unknown usage rather than retrying it. Contract-planning calls and framework-native provider adapters do not yet expose the same cancellation hook. The provider guard is local to one process and has no distributed tenant rate quota. Initial observation binding and claim-before-execution target/form/route freshness checks exist, while dependencies outside the target element, crash recovery, and broader operational observability remain incomplete.
+- Turn deadlines cap provider queueing and socket time together. The server Agent's native completion path uses a closeable HTTP connection: message-bound cancellation aborts an in-flight request, releases its provider-guard slot, prevents later tool dispatch, and records the dispatched call with unknown usage rather than retrying it. Every implementation reachable from a turn satisfies one explicit `ChatPort` contract in which cancellation is mandatory, and it is checked where the model is wired rather than probed at call time, so an implementation that cannot be cancelled is rejected instead of silently degraded. Contract-planning calls still use the plain completion path and are not cancellable. The provider guard is local to one process and has no distributed tenant rate quota. Initial observation binding and claim-before-execution target/form/route freshness checks exist, while dependencies outside the target element, crash recovery, and broader operational observability remain incomplete.
 - The only packaged business adapter is a narrow Twenty CRM Companies vertical.
 - Arbitrary third-party websites and a browser extension are not implemented.
 - Browser actions do not provide database transaction or rollback semantics.

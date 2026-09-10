@@ -86,17 +86,30 @@ PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 python -m pip install --editable .
 python src/web_operation_agent/tests/run_all.py
 ```
 
-测试入口使用 Python `unittest` 自动发现，并防止测试数据写入真实模型费用账本。浏览器测试会在缺少 Chromium 时跳过。依赖上游 PageController 的测试只有在 `WOA_PAGE_CONTROLLER_MODULE` 指向已安装模块时才会运行，否则会跳过。CI 还会构建并检查可安装 wheel：
-
-```bash
-python -m pip wheel --no-deps --wheel-dir dist .
-```
+测试入口使用 Python `unittest` 自动发现，并防止测试数据写入真实模型费用账本。浏览器测试会在缺少 Chromium 时跳过。依赖上游 PageController 的测试只有在 `WOA_PAGE_CONTROLLER_MODULE` 指向已安装模块时才会运行，否则会跳过。
 
 通过同一受保护入口只运行一个测试模块：
 
 ```bash
 python src/web_operation_agent/tests/run_all.py -k test_product.py
 ```
+
+### 资格门禁
+
+`scripts/qualify.sh` 是唯一入口。CI 运行同一个脚本，因此不会出现某道门禁只在本地成立、CI 里缺失的情况：
+
+```bash
+scripts/qualify.sh
+```
+
+它会运行产品套件、Twenty evaluator 基础测试、PageAgent 与 Web Operation Agent 的离线 runner 套件，并构建可安装 wheel，同时检查 wheel 内容和在 checkout 之外的导入。任一必需门禁失败即以非零码退出。
+
+有两道门禁取决于环境，它们只会被如实报告，不会被默认当作通过：
+
+- **Chromium 资格**运行 PageAgent 的浏览器用例。它自包含，不需要 Twenty；CI 用 `--require-browser` 把它设为必需。不加该参数时，缺少 bundle 或 Chromium 会被报告出来，而不是计为通过。
+- **本地 Twenty 资格**只在全部前置条件就绪时运行：`WOA_TWENTY_BASE_URL`、`WOA_TWENTY_STORAGE_STATE`、`WOA_TWENTY_OAUTH_TOKEN`、`WOA_TWENTY_OAUTH_REGISTRATION`、`WOA_TWENTY_PAGE_CONTROLLER_MODULE`、`WOA_TWENTY_DB_CONTAINER`、`WOA_TWENTY_DB_NAME`、`WOA_TWENTY_DB_USER`、`WOA_TWENTY_WORKSPACE_SCHEMA`。否则输出 `BLOCKED` 并列出未设置的变量。BLOCKED 表示未被测试，既不是通过，也不是产品失败。需要该门禁的环境可用 `--require-live` 把缺失变成失败。
+
+本仓库还没有提供 Twenty 实例的准备资产，因此全新 clone 会把本地 Twenty 门禁报告为 `BLOCKED`。
 
 ## Twenty CRM 集成
 
@@ -123,12 +136,12 @@ python src/web_operation_agent/tests/run_all.py -k test_product.py
 
 Evaluator 还包含一套严格的配对实验预注册校验器，用于在运行前绑定 PageAgent、Skill/API 与 SourceProvider 对比所需的工件和实现摘要、等信息量实验臂、provider 参数、预算、任务资格、源码排除、确定性平衡顺序和 fail-fast 停止规则。当前尚未冻结正式运行协议，也没有形成比较结果。
 
-私有的 append-only batch ledger 会让所有 runner 使用同一种 trial schema，并强制执行冻结顺序。它通过摘要链检测删改和重排，拒绝重复或时间重叠的 trial，不会把未知 provider 费用写成零，还会检测同一 pair 的模型漂移，并在装置无效或观察到安全事件时停止。官方 PageAgentCore 与 PageController v1.12.4 已通过 npm lock 和 integrity 固定，其轻量 bridge 已完成可复现构建以及无模型调用的真实 Chromium DOM/custom-tool 资格检查。两个引擎现在共用同一套证据合同、同一个 typed failure 分类器和同一个协议绑定 trial projector：只读 PageAgent runner 与只读 Web Operation Agent runner 都绑定真实浏览器/API 身份，并拒绝无法确定性验收的答案或页面证据。统一的串行 schedule driver 按冻结顺序完成状态采集、任务实例化、执行、判定、投影与追加，内部没有任何引擎特例；固定 schema 的报告只从已验证账本重算公开计数，并拒绝把小批次表述成对比结论。两个 runner 都已在本地 Twenty 2.39.0 fixture 上用真实 Chromium、委托 API、数据库状态采集和独立 evaluator 通过无模型 live 资格验证。冻结的正式协议、provider 快照策略和源码 allowlist 仍未完成；这些资格用例不构成成功率或对比结论。
+私有的 append-only batch ledger 会让所有 runner 使用同一种 trial schema，并强制执行冻结顺序。它通过摘要链检测删改和重排，拒绝重复或时间重叠的 trial，不会把未知 provider 费用写成零，还会检测同一 pair 的模型漂移，并在装置无效或观察到安全事件时停止。官方 PageAgentCore 与 PageController v1.12.4 已通过 npm lock 和 integrity 固定，其轻量 bridge 已完成可复现构建以及无模型调用的真实 Chromium DOM/custom-tool 资格检查。两个引擎现在共用同一套证据合同、同一个 typed failure 分类器和同一个协议绑定 trial projector：只读 PageAgent runner 与只读 Web Operation Agent runner 都绑定真实浏览器/API 身份，并拒绝无法确定性验收的答案或页面证据。统一的串行 schedule driver 按冻结顺序完成状态采集、任务实例化、执行、判定、投影与追加，内部没有任何引擎特例；固定 schema 的报告只从已验证账本重算公开计数，并拒绝把小批次表述成对比结论。两个 runner 都曾在本地 Twenty 2.39.0 fixture 上用真实 Chromium、委托 API、数据库状态采集和独立 evaluator 通过无模型 live 资格验证。该结论记录的是一次在已准备环境上的运行，不是任何 checkout 自带的属性：live 门禁通过 `scripts/qualify.sh` 重跑，缺少该环境时它会报告 `BLOCKED`。冻结的正式协议、provider 快照策略和源码 allowlist 仍未完成；这些资格用例不构成成功率或对比结论。
 
 ## 已知限制
 
 - 共享 Runtime 网关、session registry、有界事件 journal、消息队列、会话上下文和账本仍是本地进程组件；重启恢复、水平扩展和持久租户隔离尚未完成。Session TTL 与硬配额可以防止无限保留，但不能恢复状态。已确认的 Twenty API 写入拥有持久的一次性 SQLite journal，但 dispatch 之后发生崩溃仍会标记为 `indeterminate`，必须核对而不能自动重试。Twenty demo 已通过可信 Playwright 宿主强制身份绑定；普通嵌入式应用仍需从自身登录边界提供服务端认证的身份断言，principal 续期和分布式撤销也尚未实现。独立的旧页面控制网关仍使用全局许可与 trace：协作客户端会串行执行完整 run，并在前后边界清空状态，但并发页面写入前仍需在网关内部实现 tenant/session/turn scope。
-- 单轮截止时间同时覆盖 provider 排队和 socket 调用。服务端 Agent 的原生 completion 路径使用可关闭的 HTTP 连接：消息级主动取消会中断进行中的请求、释放 provider guard 名额、阻止后续工具下发，并把已派发调用记为 usage 未知而不自动重试。合同规划调用和框架原生 provider 适配器尚未接入同一取消钩子。Provider guard 只在单进程内生效，还没有分布式租户速率配额。已有初始页面观察绑定，以及 claim 前对目标控件、关联表单和路由的新鲜度检查；目标元素之外的依赖、崩溃恢复和更完整的运行监控仍未完成。
+- 单轮截止时间同时覆盖 provider 排队和 socket 调用。服务端 Agent 的原生 completion 路径使用可关闭的 HTTP 连接：消息级主动取消会中断进行中的请求、释放 provider guard 名额、阻止后续工具下发，并把已派发调用记为 usage 未知而不自动重试。所有能被单轮触达的实现都满足同一个显式 `ChatPort` 契约，其中取消能力是必需项，并在模型被组装的位置校验，而不是在调用时探测，因此无法取消的实现会被直接拒绝，而不是静默降级。合同规划调用仍走普通 completion 路径，不可取消。Provider guard 只在单进程内生效，还没有分布式租户速率配额。已有初始页面观察绑定，以及 claim 前对目标控件、关联表单和路由的新鲜度检查；目标元素之外的依赖、崩溃恢复和更完整的运行监控仍未完成。
 - 唯一打包的业务适配器是范围有限的 Twenty CRM Companies 纵切。
 - 尚未实现任意第三方网站支持和浏览器扩展。
 - 浏览器操作不具备数据库事务或回滚语义。
