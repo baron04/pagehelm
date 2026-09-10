@@ -31,83 +31,6 @@ jobs:
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
         run: python -m pip install --editable .
-      - name: Build wheel
-        run: python -m pip wheel --no-deps --wheel-dir dist .
-      - name: Inspect wheel contents
-        run: >-
-          python -c "import glob, zipfile;
-          p=glob.glob('dist/*.whl'); assert len(p)==1;
-          n=zipfile.ZipFile(p[0]).namelist();
-          required=['web_operation_agent/policies/model_options.json',
-          'web_operation_agent/policies/ofbiz.json',
-          'web_operation_agent/policies/prices.json',
-          'web_operation_agent/skills/twenty/companies-query.json',
-          'web_operation_agent/skills/twenty/companies-create.json',
-          'web_operation_agent/web_runtime/embedded.js',
-          'web_operation_agent/web_runtime/trace_replay.html'];
-          assert all(x in n for x in required);
-          assert 'web_operation_agent/policies/enforcement.json' not in n;
-          assert not any('/tests/' in x for x in n)"
-      - name: Smoke test the installed wheel outside the checkout
-        shell: bash
-        run: |
-          smoke_venv="${RUNNER_TEMP}/woa-wheel-smoke"
-          python -m venv "${smoke_venv}"
-          "${smoke_venv}/bin/python" -m pip install --no-deps dist/*.whl
-          wheel_path="$(python -c 'import glob, os; print(os.path.abspath(glob.glob("dist/*.whl")[0]))')"
-          smoke_cwd="$(mktemp -d)"
-          cd "${smoke_cwd}"
-          env -u PYTHONPATH "${smoke_venv}/bin/python" -I -c '
-          import os
-          import sys
-          from pathlib import Path
-          import web_operation_agent
-          from web_operation_agent.sourcetree import SourceTree
-          from web_operation_agent.twenty import TwentyApplicationAdapter
-
-          checkout = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
-          installed = Path(web_operation_agent.__file__).resolve()
-          venv = Path(sys.prefix).resolve()
-          assert venv in installed.parents, (venv, installed)
-          assert checkout not in installed.parents, (checkout, installed)
-          source_root = Path.cwd().resolve()
-          source_tree = SourceTree.load("ofbiz", source_root)
-          assert source_tree.root == source_root
-          assert "root" not in source_tree.policy
-          common = dict(base_url="http://127.0.0.1:3000",
-                        token_path="tokens.json",
-                        registration_path="registration.json")
-          read_adapter = TwentyApplicationAdapter(**common)
-          assert read_adapter.business_tools.tool_names == frozenset({"query_companies"})
-          write_adapter = TwentyApplicationAdapter(**common, allow_mutations=True)
-          assert write_adapter.business_tools.tool_names == frozenset(
-              {"query_companies", "create_company"})
-          assert all(skill.artifact_uri.startswith("package://web_operation_agent/")
-                     for skill in write_adapter.business_tools.relevant(
-                         "list companies and create company"))
-          '
-          env -u PYTHONPATH WOA_WHEEL="${wheel_path}" python -I -c '
-          import os
-          import sys
-          sys.path.insert(0, os.environ["WOA_WHEEL"])
-          import web_operation_agent
-          from pathlib import Path
-          from web_operation_agent.sourcetree import SourceTree
-          from web_operation_agent.twenty import TwentyApplicationAdapter
-
-          assert ".whl/" in web_operation_agent.__file__.replace("\\", "/")
-          source_root = Path.cwd().resolve()
-          assert SourceTree.load("ofbiz", source_root).root == source_root
-          adapter = TwentyApplicationAdapter(
-              base_url="http://127.0.0.1:3000",
-              token_path="tokens.json",
-              registration_path="registration.json")
-          assert adapter.business_tools.tool_names == frozenset({"query_companies"})
-          '
-      - name: Run product tests
-        run: python src/web_operation_agent/tests/run_all.py
-      - name: Run Twenty evaluator foundation tests
-        run: python -m unittest discover -s evals/twenty/tests -v
       - name: Install pinned PageAgent baseline
         working-directory: evals/pageagent
         run: npm ci
@@ -119,9 +42,7 @@ jobs:
         run: npm run build
       - name: Install Chromium for PageAgent qualification
         run: python -m playwright install --with-deps chromium
-      - name: Test and qualify PageAgent server host
+      - name: Qualify
         env:
           WOA_REQUIRE_PAGEAGENT_BROWSER: "1"
-        run: python -m unittest evals.pageagent.test_host evals.pageagent.test_business_host evals.pageagent.test_twenty_runner evals.pageagent.test_qualify_twenty_runner evals.pageagent.test_twenty_runner_browser -v
-      - name: Qualify the Web Operation Agent runner and the common schedule driver
-        run: python -m unittest evals.woa.test_assembler evals.woa.test_twenty_runner evals.woa.test_qualify_schedule -v
+        run: scripts/qualify.sh --require-browser
