@@ -30,6 +30,8 @@ The paired Source OFF/ON tool surface is qualified, but the source treatment is 
 
 `qualify_live.py` runs one fixed public development query case and one open case through real Chromium, the real embedded runtime, the delegated Twenty API, the database before/after projection and the independent evaluator. `qualify_breadth_live.py` adds seven People and Opportunities enumeration, record-opening, collection-navigation, and refusal cases. Both use a scripted provider, spend no model tokens, assert unchanged read-only fixture state, and write only versions, digests, counts and Boolean checks. `scripts/qualify.sh --require-live` runs both.
 
+`pilot_breadth.py` runs a fixed 12-case read/navigation/refusal development diagnostic with the configured paid model, a CNY stop line, per-case fixture and identity guards, and immediate stop on apparatus invalidity. `pilot_breadth_synthetic.py` exercises the same runner, schedule, and evaluator with randomly generated synthetic CRM records and a simulated browser protocol, so model behavior can be diagnosed without disclosing a local Twenty fixture. The summary artifact stores task IDs, typed outcomes, failed check names, usage, cost, and digests; it stores no prompt, answer, page text, or fixture row. A completed pilot is diagnostic evidence and is never rendered as a benchmark success rate. The recorded synthetic run completed 12 cases with 11 `PASS`, 1 `FAIL`, 0 `INVALID`, and CNY 0.447744 known cost; the result does not qualify real-browser model behavior.
+
 ```bash
 PYTHONPATH=. python -m evals.woa.qualify_live \
   --base-url http://localhost:3020 \

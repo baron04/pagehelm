@@ -163,14 +163,30 @@ class WoaBreadthRunnerTests(unittest.TestCase):
         self.assertEqual(result["trial"]["approvals_approved"], 1)
         self.assertEqual(executor.mutation_dispatches, 1)
 
-    def test_wrong_collection_projection_fails_the_runner_evidence_contract(self):
-        _case, result = self._run("dev-enumerate-people-en", [
+    def test_wrong_collection_projection_is_a_scored_agent_failure(self):
+        case, result = self._run("dev-enumerate-people-en", [
             ("load_skill", {"skill_id": "synthetic.companies-query"}),
             ("query_companies", {"limit": 50}),
             (None, "These are the records."),
         ])
-        self.assertEqual(result["status"], "failed")
-        self.assertIn(result["error_code"], {"agent_refused", "evidence_contract"})
+        self.assertEqual((result["status"], result["error_code"]),
+                         ("failed", "agent_refused"))
+        self.assertEqual(self._evaluate(case, result)["status"], "FAIL")
+
+    def test_query_followed_by_navigation_is_a_scored_agent_failure(self):
+        case = self._case("dev-filter-people-en")
+        target = case["evaluator_task"]["name_contains"]
+        case, result = self._run("dev-filter-people-en", [
+            ("load_skill", {"skill_id": "synthetic.people-query"}),
+            ("query_people", {"name_contains": target, "limit": 20}),
+            ("goto", {"url": "/objects/people"}),
+            ("finish", {"done": True, "why": "The contact list is open."}),
+        ])
+        self.assertEqual((result["status"], result["error_code"]),
+                         ("failed", "query_answer_unavailable"))
+        evaluation = self._evaluate(case, result)
+        self.assertEqual(evaluation["status"], "FAIL")
+        self.assertFalse(evaluation["checks"]["execution_completed"])
 
 
 if __name__ == "__main__":

@@ -143,11 +143,28 @@ def assemble_woa_breadth_run(
                     status, error_code = "indeterminate", "indeterminate_write"
                     evidence_out = {"artifact_version": 1,
                                     "execution_status": "indeterminate"}
+                elif evaluator_kind in {"enumerate", "filter"}:
+                    if execution.terminal_reason == "agent_finished":
+                        try:
+                            evidence_out = _query(execution, entity=selected["entity"])
+                            status, error_code = "completed", None
+                        except EvidenceContractError:
+                            error_code = "query_answer_unavailable"
+                    else:
+                        error_code = execution.terminal_reason
+                    if status != "completed":
+                        # The runner observed a complete product turn, so an absent, stale,
+                        # or wrong-collection answer is an Agent outcome rather than broken
+                        # apparatus. Emit valid negative evidence so the independent evaluator
+                        # scores it FAIL instead of excluding it as INVALID.
+                        evidence_out = {
+                            "artifact_version": 2,
+                            "execution_status": "failed",
+                            "complete": False,
+                            "records": [],
+                        }
                 elif execution.terminal_reason != "agent_finished":
                     error_code = execution.terminal_reason
-                elif evaluator_kind in {"enumerate", "filter"}:
-                    evidence_out = _query(execution, entity=selected["entity"])
-                    status, error_code = "completed", None
                 elif evaluator_kind == "open_record":
                     page = _page(evidence.final_page, visible=True)
                     if page["path"] not in permitted_routes(events, business_results):

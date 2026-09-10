@@ -320,9 +320,10 @@ class RunResult:
     #: Model-selected actions refused by a server policy before the browser saw a command.
     #: This is separate from gateway write refusals and from actions the browser executed.
     policy_blocks: int = 0
-    #: True only when the loop ended from plain model content immediately after a successful
-    #: typed business read. Product rendering may then replace factual prose with the
-    #: application-supplied structured query projection. A later navigation + finish does not.
+    #: True only when the loop ended immediately after a successful typed business read,
+    #: either with plain content or ``finish(done=true)``. Product rendering may then replace
+    #: factual prose with the application-supplied structured query projection. A later page
+    #: action does not qualify.
     business_answer_projected: bool = False
     detail: str = ""
 
@@ -516,6 +517,7 @@ class ServerAgentSession:
         # render requested facts directly.  The audit ledger intentionally stores only its
         # digest and projection; model prose is not a reliable transport for table rows.
         self.latest_business_tool_result: BusinessToolResult | None = None
+        self._latest_business_query_page_actions: int | None = None
         self.plain_business_answer_min_page_actions = \
             plain_business_answer_min_page_actions
         self.max_agent_said_chars = max_agent_said_chars
@@ -870,7 +872,7 @@ class ServerAgentSession:
                         "business_answer", step=step, said=said[:300],
                         successful_business_tools=successful_business_tools,
                         success_claim="unverified")
-                    result.business_answer_projected = True
+                    result.business_answer_projected = self._business_answer_is_projectable()
                     result.agent_said = said[:self.max_agent_said_chars]
                     return self._finish(
                         result, t0, "agent_finished", result.agent_said, steps=step)
@@ -1143,6 +1145,8 @@ class ServerAgentSession:
                         identity=operation_identity)
                     self._business_routes.update(tool_result.allowed_routes)
                     self.latest_business_tool_result = tool_result
+                    self._latest_business_query_page_actions = (
+                        self.page_actions if tool_result.query_answer is not None else None)
                     successful_business_tools += 1
                     feedback = ("BUSINESS MUTATION RESULT (approved, executed once, "
                                 "current runtime fact):\n" + tool_result.render())
@@ -1208,10 +1212,14 @@ class ServerAgentSession:
                         side_effect_possible=False, identity=operation_identity)
                     self._business_routes.update(tool_result.allowed_routes)
                     self.latest_business_tool_result = tool_result
+                    self._latest_business_query_page_actions = (
+                        self.page_actions if tool_result.query_answer is not None else None)
                     successful_business_tools += 1
                     feedback = ("BUSINESS TOOL RESULT (current runtime fact):\n"
                                 + tool_result.render())
                 except BusinessToolError as exc:
+                    self.latest_business_tool_result = None
+                    self._latest_business_query_page_actions = None
                     detail = str(exc)[:500]
                     self.ledger.append(
                         "business_tool_rejected", step=step, tool=name,
@@ -1532,6 +1540,12 @@ class ServerAgentSession:
                               "Continue, or call finish with done=false if you cannot "
                               "complete it.")]
                     continue
+                if done and self._business_answer_is_projectable():
+                    result.business_answer_projected = True
+                    self.ledger.append(
+                        "business_answer", step=step, said=result.agent_said[:300],
+                        successful_business_tools=successful_business_tools,
+                        success_claim="unverified", terminal_tool="finish")
                 # `agent_finished` records only that the agent stopped and claimed completion.
                 # Runtime enforcement evidence is tracked separately, and a repeated claim
                 # after a contradiction still cannot become a confirmed success by itself.
@@ -2081,6 +2095,18 @@ class ServerAgentSession:
         return ("SOURCE AFFORDANCES (source-bound read-only candidates; current page wins):\n"
                 + json.dumps(public_payload, ensure_ascii=False, sort_keys=True,
                              separators=(",", ":")))
+
+    def _business_answer_is_projectable(self) -> bool:
+        """Whether the latest typed query still describes this turn's terminal answer."""
+        minimum = self.plain_business_answer_min_page_actions
+        result = self.latest_business_tool_result
+        return bool(
+            minimum is not None
+            and result is not None
+            and result.query_answer is not None
+            and self._latest_business_query_page_actions == self.page_actions
+            and self.page_actions >= minimum
+        )
 
     def _finish(self, result: RunResult, t0: float, reason: str, detail: str = "",
                 steps: int = 0) -> RunResult:

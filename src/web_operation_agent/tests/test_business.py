@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+from web_operation_agent.answering import StructuredQueryAnswer
 from web_operation_agent.business import (
     BusinessMutationIndeterminate, BusinessMutationSpec, BusinessSkill,
     BusinessToolContractError, BusinessToolError, BusinessToolIdentityError,
@@ -63,6 +64,22 @@ class _Executor:
                    "scope": "current_delegated_workspace",
                    "source_complete": True},
             allowed_routes=("/object/company/company-1",))
+
+
+class _ProjectedExecutor(_Executor):
+    @staticmethod
+    def execute(name, args, *, context=None):
+        result = _Executor.execute(name, args, context=context)
+        return BusinessToolResult(
+            content=result.content, audit=result.audit,
+            allowed_routes=result.allowed_routes,
+            query_answer=StructuredQueryAnswer(
+                collection="companies", fields=("name", "domain"),
+                records=(("Acme", "acme.test"),), source="fixture API",
+                scope="current_delegated_workspace",
+                observed_at="2026-09-08T05:00:00+00:00",
+                source_complete=True, result_truncated=False,
+                matched_count=1, source_total=1, records_scanned=1))
 
 
 def _skill(path: Path) -> BusinessSkill:
@@ -927,7 +944,7 @@ class BusinessReActTransition(unittest.TestCase):
     def test_load_query_and_finish_use_server_facts_without_page_dispatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill = _skill(Path(tmp) / "skill.json")
-            runtime = BusinessToolRuntime((skill,), _Executor())
+            runtime = BusinessToolRuntime((skill,), _ProjectedExecutor())
             chat = _Chat([
                 ("load_skill", {"skill_id": skill.skill_id}),
                 ("query_companies", {}),
@@ -941,12 +958,14 @@ class BusinessReActTransition(unittest.TestCase):
                 arm="U", chat=chat, browser=browser, control=ReadOnlyControl(),
                 ledger=ledger, attestation=None, source_contract=False,
                 step_budget=4, wall_budget_s=30, run_id="business-react",
-                business_tools=runtime)
+                business_tools=runtime,
+                plain_business_answer_min_page_actions=0)
             session.entry_observation = _observation(1)
             session.plan()
             result = session.run()
 
             self.assertEqual(result.terminal_reason, "agent_finished")
+            self.assertTrue(result.business_answer_projected)
             self.assertEqual(result.steps_used, 3)
             self.assertIn("load_skill", chat.tool_names[0])
             self.assertNotIn("query_companies", chat.tool_names[0])
@@ -959,6 +978,7 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertTrue(any("BUSINESS SKILL LOADED" in text for text in facts))
             self.assertTrue(any('"name":"Acme"' in text for text in facts))
             self.assertEqual(len(ledger.of_kind("business_skill_loaded")), 1)
+            self.assertEqual(ledger.of_kind("business_answer")[0]["terminal_tool"], "finish")
             candidates = ledger.of_kind("business_skill_candidates")
             self.assertEqual(len(candidates), 1)
             self.assertEqual(candidates[0]["matcher_version"],
@@ -975,7 +995,7 @@ class BusinessReActTransition(unittest.TestCase):
     def test_plain_answer_after_successful_read_tool_is_terminal(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill = _skill(Path(tmp) / "skill.json")
-            runtime = BusinessToolRuntime((skill,), _Executor())
+            runtime = BusinessToolRuntime((skill,), _ProjectedExecutor())
             chat = _Chat([
                 ("load_skill", {"skill_id": skill.skill_id}),
                 ("query_companies", {}),
@@ -996,6 +1016,7 @@ class BusinessReActTransition(unittest.TestCase):
 
             self.assertEqual(result.terminal_reason, "agent_finished")
             self.assertEqual(result.agent_said, "Acme (acme.test)")
+            self.assertTrue(result.business_answer_projected)
             self.assertEqual(session.latest_business_tool_result.content["companies"], [{
                 "name": "Acme", "domain": "acme.test",
                 "ui_path": "/object/company/company-1",
@@ -1039,7 +1060,7 @@ class BusinessReActTransition(unittest.TestCase):
     def test_exact_tool_result_route_can_open_a_record_read_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill = _skill(Path(tmp) / "skill.json")
-            runtime = BusinessToolRuntime((skill,), _Executor())
+            runtime = BusinessToolRuntime((skill,), _ProjectedExecutor())
             chat = _Chat([
                 ("load_skill", {"skill_id": skill.skill_id}),
                 ("query_companies", {}),
@@ -1063,6 +1084,7 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertEqual(result.terminal_reason, "agent_finished")
             self.assertEqual(result.agent_said, "Opened Acme.")
             self.assertEqual(result.page_actions, 1)
+            self.assertFalse(result.business_answer_projected)
             self.assertEqual(browser.actions, ["goto"])
             self.assertEqual(browser.url, "http://app.test/object/company/company-1")
             opened = ledger.of_kind("business_route_opened")
