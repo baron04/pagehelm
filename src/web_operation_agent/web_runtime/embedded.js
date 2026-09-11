@@ -5,15 +5,15 @@
  * source knowledge, model credentials and the control plan stay on the server.  A result
  * is written to sessionStorage before it is posted so an SSE reconnect can resend the
  * result without repeating the page action.
+ *
+ * The assistant panel is a separate module this file mounts and feeds.  It renders; it
+ * never fetches, never holds the lease, and never keeps a timeline of its own -- what it
+ * shows is the server's own projection, fetched here, which is why a full page navigation
+ * no longer empties it.
  */
 
-import {
-  AssistantPanel, AssistantPanelViewModel, PANEL_STATES, createAssistantPanel,
-  panelErrorMessage, panelLabel, setPanelState,
-} from './assistant_panel.js'
-export {
-  AssistantPanel, AssistantPanelViewModel, createAssistantPanel, panelErrorMessage,
-}
+import {PanelHost, backoffAfter, classifyTransportError} from './panel_host.js'
+export {PanelHost, classifyTransportError}
 
 const WIRE_VERSION = 1
 const MAX_WAIT_MS = 10_000
@@ -419,19 +419,6 @@ function suppressPageControllerAnnotations() {
   document.documentElement.appendChild(style)
 }
 
-export function describeAction(command) {
-  const action = String(command?.action || '')
-  const args = command?.args || {}
-  if (action === 'goto') return `打开页面：${redactString(args.url || '')}`
-  if (action === 'back') return '返回上一页'
-  if (action === 'click') return `点击页面控件：${String(args.ref || '')}`
-  if (action === 'fill') return `填写页面字段：${String(args.ref || '')}`
-  if (action === 'select') return `选择页面选项：${String(args.ref || '')}`
-  if (action === 'submit') return `提交页面表单：${String(args.ref || '')}`
-  if (action === 'wait_for') return '等待页面状态更新'
-  if (action === 'observe') return '重新检查当前页面'
-  return action ? `执行页面动作：${action}` : '执行页面动作'
-}
 
 export class EmbeddedWebRuntime {
   constructor(config) {
@@ -461,7 +448,6 @@ export class EmbeddedWebRuntime {
     this.stored.approvals ||= {}
     this.stored.taskInFlight = Boolean(this.stored.taskInFlight)
     this.stored.activeMessageId = String(this.stored.activeMessageId || '')
-    this.stored.visibleObserveTurnId = String(this.stored.visibleObserveTurnId || '')
     this.stored.cancellationPending = Boolean(this.stored.cancellationPending)
     writeStored(this.sessionId, this.stored)
     this.currentObservation = null
@@ -470,7 +456,21 @@ export class EmbeddedWebRuntime {
     this.stopped = false
     this.eventAbortController = null
     this.controller = null
-    this.panel = config.panel === false ? null : createAssistantPanel({labels: config.panelLabels || {}})
+    this.panelEnabled = config.panel !== false
+    this.panelContainer = null
+    this.panelHost = null
+    this.panelHandle = null
+    this.panelConfiguration = null
+    this.panelCursor = ''
+    this._expiryTimer = 0
+    if (this.panelEnabled && typeof document !== 'undefined') {
+      // Created before the PageController so it can be excluded from the page the agent
+      // observes; the panel itself is mounted into it once hello returns its configuration.
+      this.panelContainer = document.createElement('div')
+      this.panelContainer.id = 'woa-assistant-root'
+      this.panelContainer.setAttribute('data-page-agent-not-interactive', 'true')
+      document.body?.appendChild(this.panelContainer)
+    }
     this._onPageShow = event => {
       if (!event?.persisted || this.stopped) return
       // A BFCache restore resumes the suspended JavaScript heap, whose runtime lease may have
@@ -481,10 +481,108 @@ export class EmbeddedWebRuntime {
       window.__WOA_EMBEDDED_RUNTIME_STARTED__ = false
       queueMicrotask(() => { void startEmbeddedRuntime(restartConfig).catch(() => {}) })
     }
+    this._onOnline = () => {
+      this.panelHost?.setConnection({online: true})
+      this.panelHost?.clearNotice()
+    }
+    this._onOffline = () => {
+      this.panelHost?.setConnection({online: false})
+      this.panelHost?.raise('offline', {retryable: false})
+    }
     window.addEventListener?.('pageshow', this._onPageShow)
+    window.addEventListener?.('online', this._onOnline)
+    window.addEventListener?.('offline', this._onOffline)
   }
 
   _save() { writeStored(this.sessionId, this.stored) }
+
+  _panelState(state) {
+    this.panelHost?.setConnection({state})
+  }
+
+  /** One place where a failed request becomes a panel state and a stop-or-retry decision. */
+  _raise(error, fallback = 'submit_failed') {
+    const verdict = classifyTransportError(error, this.panelConfiguration)
+    if (verdict.terminal) {
+      this.stopped = true
+      this.eventAbortController?.abort()
+      this._panelState(verdict.state)
+      this.panelHost?.raise(verdict.code, {retryable: false})
+    } else {
+      this.panelHost?.raise(error?.code || fallback, {retryable: true})
+    }
+    return verdict
+  }
+
+  async _mountPanel() {
+    if (!this.panelEnabled || !this.panelContainer || this.panelHandle) return
+    this.panelHost = new PanelHost({
+      configuration: this.panelConfiguration,
+      actions: {
+        submit: text => { void this.submitTask(text).catch(() => {}) },
+        cancel: () => { void this.cancelTask().catch(() => {}) },
+        decide: (approvalId, decision) => {
+          const request = this.panelHost?.snapshot().pendingApproval
+          if (!request || request.approval_id !== approvalId) return
+          void this._postApproval(request, decision).catch(error => this._raise(error))
+        },
+        newConversation: () => {
+          void this._post('/conversation', {action: 'new'})
+            .then(() => this._refreshTimeline())
+            .catch(error => this._raise(error))
+        },
+        loadOlder: before => {
+          void this._loadOlder(before).catch(error => this._raise(error))
+        },
+      },
+    })
+    const moduleUrl = this.config.panelModule
+      || `${this.endpoint}/v1/runtime/panel/panel.js`
+    const panel = await import(/* @vite-ignore */ moduleUrl)
+    this.panelHandle = panel.mountPanel({
+      host: this.panelHost,
+      allowedOrigins: [location.origin],
+      container: this.panelContainer,
+    })
+  }
+
+  async _refreshTimeline() {
+    if (!this.panelHost) return
+    const page = await this._timeline({after: this.panelCursor})
+    this.panelCursor = page.cursor || this.panelCursor
+    this.panelHost.applyTimeline(page)
+  }
+
+  async _loadOlder(before) {
+    if (!this.panelHost) {
+      return
+    }
+    try {
+      const page = await this._timeline({before})
+      this.panelHost.applyTimeline(page, {prepend: true})
+    } finally {
+      this.panelHost.setLoadingOlder(false)
+    }
+  }
+
+  async _timeline({after = '', before = ''} = {}) {
+    const query = new URLSearchParams()
+    if (after) query.set('after', after)
+    if (before) query.set('before', before)
+    const suffix = query.toString()
+    const response = await fetch(
+      `${this.endpoint}/v1/sessions/${encodeURIComponent(this.sessionId)}/timeline${suffix ? `?${suffix}` : ''}`,
+      {headers: this._headers(), credentials: 'omit', cache: 'no-store'})
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      const error = new Error(payload.error || `timeline returned ${response.status}`)
+      error.code = payload.code || ''
+      error.status = response.status
+      throw error
+    }
+    return payload
+  }
+
 
   _headers(extra = {}, includeLease = true) {
     const headers = {Authorization: `Bearer ${this.token}`, ...extra}
@@ -534,7 +632,7 @@ export class EmbeddedWebRuntime {
         'type', 'name', 'id', 'value',
         'aria-label', 'placeholder', 'autocomplete',
       ],
-      interactiveBlacklist: this.panel ? [this.panel.host] : [],
+      interactiveBlacklist: this.panelContainer ? [this.panelContainer] : [],
     })
     return this._startConnectedRuntime()
   }
@@ -562,13 +660,16 @@ export class EmbeddedWebRuntime {
         }
       }
     }
-    this.panel?.onTask(text => this.submitTask(text))
-    this.panel?.onCancel?.(() => this.cancelTask())
-    this.panel?.setBusy?.(this.stored.taskInFlight)
-    this.panel?.setStopping?.(this.stored.cancellationPending)
+    await this._mountPanel()
+    this.panelHost?.setConnection({
+      busy: this.stored.taskInFlight,
+      stopping: this.stored.cancellationPending,
+      online: typeof navigator === 'undefined' || navigator.onLine !== false,
+    })
     const connectedState = resultDeferred ? 'reconnecting'
       : (this.stored.cancellationPending ? 'stopping' : 'ready')
-    setPanelState(this.panel, connectedState)
+    this._panelState(connectedState)
+    await this._refreshTimeline().catch(() => {})
     if (this.stored.cancellationPending) {
       void this.cancelTask({retry: true}).catch(() => {})
     }
@@ -592,10 +693,10 @@ export class EmbeddedWebRuntime {
     this.stored.activeMessageId = messageId
     this.stored.cancellationPending = false
     this._save()
-    this.panel?.setBusy?.(true)
-    setPanelState(this.panel, 'observing')
-    if (this.panel?.beginTurn) this.panel.beginTurn(messageId, goal)
-    else this.panel?.add(`${panelLabel(this.panel, 'goalPrefix')}${goal}`, {kind: 'goal'})
+    this.panelHost?.setConnection({busy: true})
+    this._panelState('observing')
+    // Echo the message immediately; the server's own `message_accepted` event replaces it.
+    this.panelHost?.setOptimistic({turnId: messageId, text: goal, failed: false})
     try {
       // A first-party SPA can change route without replacing this JavaScript runtime. Bind
       // every new task to a fresh observation before posting the message, so the server does
@@ -606,14 +707,16 @@ export class EmbeddedWebRuntime {
         message_id: messageId, text: redactString(goal),
         page_url: observation.observation.url,
       })
-      setPanelState(this.panel, 'queued')
+      this._panelState('queued')
       return response
     } catch (error) {
       this.stored.taskInFlight = false
       this.stored.activeMessageId = ''
       this.stored.cancellationPending = false
       this._save()
-      this.panel?.setBusy?.(false)
+      this.panelHost?.setConnection({busy: false})
+      this.panelHost?.failOptimistic()
+      this._raise(error)
       throw error
     }
   }
@@ -621,14 +724,10 @@ export class EmbeddedWebRuntime {
   async cancelTask({retry = false} = {}) {
     if (this.stopped || !this.stored.taskInFlight || !this.stored.activeMessageId) return
     if (this.stored.cancellationPending && !retry) return
-    this.panel?.cancelApproval?.()
-    setPanelState(this.panel, 'stopping')
-    if (!retry) this.panel?.add(panelLabel(this.panel, 'progressStopping'), {
-      tone: 'warning', turnId: this.stored.activeMessageId,
-    })
+    this._panelState('stopping')
     this.stored.cancellationPending = true
     this._save()
-    this.panel?.setStopping?.(true)
+    this.panelHost?.setConnection({stopping: true})
     try {
       await this._post('/cancellations', {
         schema_version: WIRE_VERSION,
@@ -638,30 +737,23 @@ export class EmbeddedWebRuntime {
     } catch (error) {
       this.stored.cancellationPending = false
       this._save()
-      this.panel?.setStopping?.(false)
-      setPanelState(this.panel, 'error')
-      this.panel?.add(panelLabel(this.panel, 'progressStopFailed'), {
-        tone: 'error', turnId: this.stored.activeMessageId,
-      })
+      this.panelHost?.setConnection({stopping: false})
+      this._panelState('error')
+      this.panelHost?.raise('cancel_failed', {retryable: true})
       throw error
     }
   }
 
   async _retryCachedResult() {
-    let backoff = 250
+    let backoff = 0
     while (!this.stopped && this.stored.cachedResult) {
       try {
         await this._sendResult(this.stored.cachedResult)
         return true
       } catch (error) {
-        if (['runtime_replaced', 'session_closed'].includes(error?.code)) {
-          this.stopped = true
-          setPanelState(this.panel, error.code === 'session_closed' ? 'ended' : 'replaced')
-          return false
-        }
-        setPanelState(this.panel, 'reconnecting')
+        if (this._raise(error, 'reconnecting').terminal) return false
         await sleep(backoff)
-        backoff = Math.min(backoff * 2, 4000)
+        backoff = backoffAfter(backoff)
       }
     }
     return false
@@ -671,34 +763,40 @@ export class EmbeddedWebRuntime {
     if (!await this._retryCachedResult() || this.stopped) return
     // The cached result can describe the document that just navigated away.  Refresh the
     // selector map and server observation before consuming another action in this document.
-    let backoff = 250
+    let backoff = 0
     while (!this.stopped) {
       try {
         const observation = await this.observe(this.stored.inFlight?.action_id || '')
         await this._post('/observations', observation)
-        setPanelState(this.panel, 'ready')
+        this._panelState('ready')
         if (!this.stopped) void this._eventLoop()
         return
       } catch (error) {
-        if (['runtime_replaced', 'session_closed'].includes(error?.code)) {
-          this.stopped = true
-          setPanelState(this.panel, error.code === 'session_closed' ? 'ended' : 'replaced')
-          return
-        }
-        setPanelState(this.panel, 'reconnecting')
+        if (this._raise(error, 'reconnecting').terminal) return
         await sleep(backoff)
-        backoff = Math.min(backoff * 2, 4000)
+        backoff = backoffAfter(backoff)
       }
     }
   }
 
   stop({removePanel = true} = {}) {
     this.stopped = true
+    clearTimeout(this._expiryTimer)
     this.eventAbortController?.abort()
     this.eventAbortController = null
     window.removeEventListener?.('pageshow', this._onPageShow)
+    window.removeEventListener?.('online', this._onOnline)
+    window.removeEventListener?.('offline', this._onOffline)
     this.controller?.dispose()
-    if (removePanel) this.panel?.host.remove()
+    if (removePanel) {
+      this.panelHandle?.destroy()
+      this.panelHandle = null
+    this.panelConfiguration = null
+    this.panelCursor = ''
+    this._expiryTimer = 0
+      this.panelContainer?.remove()
+      this.panelContainer = null
+    }
   }
 
   async _hello() {
@@ -719,6 +817,44 @@ export class EmbeddedWebRuntime {
     }, {includeLease: false})
     if (!reply.lease_id) throw new Error('hello response did not include a runtime lease')
     this.leaseId = String(reply.lease_id)
+    if (!reply.panel || typeof reply.panel.protocol !== 'number') {
+      throw new Error('hello response did not include the panel configuration')
+    }
+    this.panelConfiguration = reply.panel
+    this._armExpiry()
+  }
+
+  /**
+   * Stop pretending a session is live past its own deadline.
+   *
+   * `principalExpiresAt` and `sessionExpiresAt` have been in the bootstrap since the
+   * beginning and nothing read them, so an expired session looked like a network fault and
+   * reconnected forever. Now it ends, and says which deadline it was.
+   */
+  _armExpiry() {
+    clearTimeout(this._expiryTimer)
+    const deadlines = [
+      [Number(this.config.principalExpiresAt || 0)
+        || Number(this.panelConfiguration?.principal_expires_at || 0), 'principal_expired'],
+      [Number(this.config.sessionExpiresAt || 0)
+        || Number(this.panelConfiguration?.session_expires_at || 0), 'session_expired'],
+    ].filter(([at]) => at > 0)
+    if (!deadlines.length) return
+    const [at, code] = deadlines.reduce((a, b) => (a[0] <= b[0] ? a : b))
+    const delay = at - Date.now()
+    if (delay <= 0) {
+      this._expire(code)
+      return
+    }
+    this._expiryTimer = setTimeout(() => this._expire(code), Math.min(delay, 2_147_483_647))
+  }
+
+  _expire(code) {
+    if (this.stopped) return
+    this.stopped = true
+    this.eventAbortController?.abort()
+    this._panelState('ended')
+    this.panelHost?.raise(code, {retryable: false})
   }
 
   async observe(causedByActionId = '') {
@@ -814,7 +950,7 @@ export class EmbeddedWebRuntime {
   }
 
   async _eventLoop() {
-    let backoff = 250
+    let backoff = 0
     while (!this.stopped) {
       const abortController = new AbortController()
       this.eventAbortController = abortController
@@ -825,25 +961,19 @@ export class EmbeddedWebRuntime {
         })
         if (!response.ok || !response.body) {
           const payload = await response.json().catch(() => ({}))
-          if (payload.code === 'runtime_replaced' || payload.code === 'session_closed') {
-            this.stopped = true
-            setPanelState(this.panel, payload.code === 'session_closed' ? 'ended' : 'replaced')
-            return
-          }
-          throw new Error(payload.error || `event stream returned ${response.status}`)
+          const failure = new Error(payload.error || `event stream returned ${response.status}`)
+          failure.code = payload.code || ''
+          failure.status = response.status
+          throw failure
         }
-        backoff = 250
+        backoff = 0
+        this.panelHost?.clearNotice()
         await this._readEventStream(response.body)
       } catch (error) {
-        if (['runtime_replaced', 'session_closed'].includes(error?.code)) {
-          this.stopped = true
-          setPanelState(this.panel, error.code === 'session_closed' ? 'ended' : 'replaced')
-          return
-        }
         if (this.stopped) return
-        setPanelState(this.panel, 'reconnecting')
+        if (this._raise(error, 'reconnecting').terminal) return
+        backoff = backoffAfter(backoff)
         await sleep(backoff)
-        backoff = Math.min(backoff * 2, 4000)
       } finally {
         if (this.eventAbortController === abortController) {
           this.eventAbortController = null
@@ -886,6 +1016,9 @@ export class EmbeddedWebRuntime {
           this._save()
         }
       }
+      // One projection fetch per delivered batch, not per event: the panel renders the
+      // server's timeline, so it has to come from the server.
+      await this._refreshTimeline().catch(() => {})
     }
   }
 
@@ -905,59 +1038,57 @@ export class EmbeddedWebRuntime {
         this.stored.activeMessageId = ''
         this.stored.cancellationPending = false
         this._save()
-        this.panel?.setBusy?.(false)
+        this.panelHost?.setConnection({busy: false})
+        this.panelHost?.clearOptimisticOnce(turnId)
       }
-      const panelStates = {
-        finished: 'ended', refused: 'refused', cancelled: 'cancelled',
-        indeterminate: 'indeterminate', failed: 'error', verified: 'success',
-        needs_input: 'needs_input', not_verified: 'indeterminate', approval_denied: 'cancelled',
-        task_failed: 'error', knowledge_used: 'knowledge', cancelling: 'stopping',
-      }
-      const panelState = panelStates[progressState] || 'acting'
-      const tone = PANEL_STATES[panelState].tone
-      this.panel?.add(event.payload.message || panelLabel(this.panel, 'progressRunning'), {
-        kind: finished ? 'result' : 'progress', tone, turnId,
-      })
-      setPanelState(this.panel, panelState)
+      // The panel state each progress state maps to is the server's table, not a second
+      // copy of it here; an unmapped state means the contract moved and must be noticed.
+      const mapped = this.panelConfiguration?.progress_states?.[progressState]
+      this._panelState(mapped ? mapped.panel_state : 'acting')
     } else if (event.kind === 'terminal') {
       this.stored.taskInFlight = false
       this.stored.activeMessageId = ''
       this.stored.cancellationPending = false
       this._save()
-      this.panel?.setBusy?.(false)
-      this.panel?.add(event.payload.message || event.payload.reason || panelLabel(this.panel, 'progressTerminal'), {
-        kind: 'result', turnId,
-      })
-      setPanelState(this.panel, 'ended')
+      this.panelHost?.setConnection({busy: false})
+      this.panelHost?.clearOptimisticOnce(turnId)
+      this._panelState('ended')
       // The terminal cursor is durable after this handler returns.  A closed server session
       // has no future events, so another GET would only turn the final UI into a reconnect loop.
       this.stopped = true
     } else if (event.kind === 'approval_required') {
-      this.panel?.add(panelLabel(this.panel, 'progressApprovalRequired'), {tone: 'warning', turnId})
-      setPanelState(this.panel, 'awaiting_confirmation')
-      let decision = this.stored.approvals[event.payload.approval_id]
-      if (!decision) {
-        decision = this.panel
-          ? await this.panel.requestApproval(event.payload)
-          : 'denied'
-        this.stored.approvals[event.payload.approval_id] = decision
-        this._save()
+      this._panelState('awaiting_confirmation')
+      const decided = this.stored.approvals[event.payload.approval_id]
+      if (decided) {
+        // A document that reloaded between deciding and posting must finish the POST, not
+        // ask the user a second time: the decision is already recorded and idempotent.
+        await this._postApproval(event.payload, decided)
+        return
       }
-      await this._post('/approvals', {
-        schema_version: WIRE_VERSION,
-        session_id: this.sessionId,
-        approval_id: event.payload.approval_id,
-        decision,
-        principal_digest: String(event.payload.principal_digest || ''),
-        turn_id: String(event.payload.turn_id || ''),
-        operation_id: String(event.payload.operation_id || ''),
-      })
-      this.panel?.add(panelLabel(this.panel, decision === 'approved' ? 'progressApproved' : 'progressDenied'), {
-        tone: decision === 'approved' ? 'neutral' : 'warning',
-        turnId,
-      })
-      setPanelState(this.panel, decision === 'approved' ? 'acting' : 'cancelled')
+      if (!this.panelHost) {
+        // No panel means nobody can be asked, and an unanswered write must not proceed.
+        await this._postApproval(event.payload, 'denied')
+        return
+      }
+      this.panelHost.setPendingApproval(event.payload)
     }
+  }
+
+  /** Record the decision before dispatching it, so a reload replays rather than re-asks. */
+  async _postApproval(request, decision) {
+    this.stored.approvals[request.approval_id] = decision
+    this._save()
+    await this._post('/approvals', {
+      schema_version: WIRE_VERSION,
+      session_id: this.sessionId,
+      approval_id: request.approval_id,
+      decision,
+      principal_digest: String(request.principal_digest || ''),
+      turn_id: String(request.turn_id || ''),
+      operation_id: String(request.operation_id || ''),
+    })
+    this.panelHost?.setPendingApproval(null)
+    this._panelState(decision === 'approved' ? 'acting' : 'cancelled')
   }
 
   async _handleAction(action) {
@@ -1046,8 +1177,7 @@ export class EmbeddedWebRuntime {
     executing.phase = 'claimed'
     this.stored.inFlight.phase = 'claimed'
     this._save()
-    this._showActionProgress(action)
-    setPanelState(this.panel, 'acting')
+    this._panelState('acting')
 
     let success = true
     let code = ''
@@ -1089,16 +1219,6 @@ export class EmbeddedWebRuntime {
     this.stored.cachedResult = result
     this._save()
     await this._sendResult(result)
-  }
-
-  _showActionProgress(action) {
-    if (action.command?.action === 'observe') {
-      const turnId = String(action.turn_id || '')
-      if (turnId && this.stored.visibleObserveTurnId === turnId) return
-      this.stored.visibleObserveTurnId = turnId
-      this._save()
-    }
-    this.panel?.add(describeAction(action.command), {kind: 'action', turnId: action.turn_id})
   }
 
   async _execute(command) {
@@ -1368,7 +1488,7 @@ export class EmbeddedWebRuntime {
         after.page_epoch >= this.currentObservation.page_epoch)) {
       this.currentObservation = after
     }
-    setPanelState(this.panel, 'observing')
+    this._panelState('observing')
   }
 }
 
@@ -1378,8 +1498,8 @@ export async function startEmbeddedRuntime(config) {
   const runtime = new EmbeddedWebRuntime(config)
   try { return await runtime.start() } catch (error) {
     runtime.stop({removePanel: false})
-    setPanelState(runtime.panel, 'error')
-    runtime.panel?.showError?.(panelErrorMessage(error, 'connect'), () => location.reload())
+    runtime._panelState('error')
+    runtime.panelHost?.raise(error?.code || 'connect_failed', {retryable: true})
     window.__WOA_EMBEDDED_RUNTIME_STARTED__ = false
     throw error
   }

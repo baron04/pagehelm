@@ -112,10 +112,15 @@ class ScriptedBrowser:
 
     def __init__(self, *, start: PageObservation | None = None,
                  links: tuple[tuple[str, str, str], ...] = (),
-                 navigation_times_out: bool = False):
+                 navigation_times_out: bool = False,
+                 observation_never_advances: bool = False):
         #: The runtime executes a command and only then waits for the navigation the
         #: server predicted, so a timeout is a command that already reached the page.
         self.navigation_times_out = navigation_times_out
+        #: A page that answers `observe` without ever moving on. A refusal that cannot
+        #: obtain a fresh page must stop the run rather than reason about a page it can no
+        #: longer see, and that branch is unreachable while every observe advances.
+        self.observation_never_advances = observation_never_advances
         self.links = links
         self.start = start or observation(1, links=links)
         self.url = self.start.url
@@ -132,7 +137,8 @@ class ScriptedBrowser:
         if action == "goto":
             target = str(args.get("url") or "")
             self.url = target if target.startswith("http") else "http://app.test" + target
-        self.epoch += 1
+        if not (self.observation_never_advances and action == "observe"):
+            self.epoch += 1
         timed_out = self.navigation_times_out and expect_navigation
         return ActionReceipt(
             schema_version=SCHEMA_VERSIONS["ActionReceipt"],
@@ -638,6 +644,72 @@ def source_candidates_are_delivered_with_citations(tmp: Path) -> Prepared:
     return Prepared(session=session, chat=chat, browser=browser)
 
 
+def application_entry_refused_observes_before_it_answers(tmp: Path) -> Prepared:
+    """A routing tool that refuses still has to leave the agent a page it can act on.
+
+    The four routing tools each carried their own copy of this sequence -- ledger the
+    reason, observe, settle any write the observation reveals, render the fresh page, carry
+    on -- and the copies had started to differ. These three scenarios record what the
+    sequence produces, so the one remaining copy cannot quietly stop doing part of it.
+    """
+    chat = ScriptedChat([
+        ("enter_application", {"ref": "e9"}),
+        ("finish", {"done": False, "why": "there is no application link on this page"}),
+    ])
+    browser = ScriptedBrowser(
+        start=observation(1, "http://app.test/portal",
+                          links=(("e1", "Elsewhere", "/other/page"),)),
+        links=(("e1", "Elsewhere", "/other/page"),))
+    session = _session(tmp, "application_entry_refused_observes_before_it_answers",
+                       chat=chat, browser=browser, allow_application_entry=True)
+    return Prepared(session=session, chat=chat, browser=browser)
+
+
+def skill_route_refused_observes_before_it_answers(tmp: Path) -> Prepared:
+    chat = ScriptedChat([
+        ("open_skill_route", {"skill_id": "unknown-skill"}),
+        ("finish", {"done": False, "why": "that Skill is not available to this task"}),
+    ])
+    browser = ScriptedBrowser()
+    session = _session(
+        tmp, "skill_route_refused_observes_before_it_answers", chat=chat, browser=browser,
+        knowledge_router=FixtureKnowledgeRouter((TRAY_SKILL,)))
+    return Prepared(session=session, chat=chat, browser=browser)
+
+
+def a_refusal_that_cannot_see_the_page_stops_the_run(tmp: Path) -> Prepared:
+    """A refusal whose observation never moves is terminal, not a shrug.
+
+    This is the branch that separates "the server said no, here is the page" from "the
+    server said no and has no idea what the page is now". The second one has to end the
+    run; continuing would let the model reason about a page nobody has looked at.
+    """
+    chat = ScriptedChat([
+        ("open_skill_route", {"skill_id": "unknown-skill"}),
+        ("finish", {"done": False, "why": "unreachable"}),
+    ])
+    browser = ScriptedBrowser(observation_never_advances=True)
+    session = _session(
+        tmp, "a_refusal_that_cannot_see_the_page_stops_the_run", chat=chat, browser=browser,
+        knowledge_router=FixtureKnowledgeRouter((TRAY_SKILL,)))
+    return Prepared(session=session, chat=chat, browser=browser)
+
+
+def source_candidate_refused_observes_before_it_answers(tmp: Path) -> Prepared:
+    source_map = fixture_source_map(tmp / "source")
+    chat = ScriptedChat([
+        ("open_source_candidate", {"candidate_id": "c-not-delivered"}),
+        ("finish", {"done": False, "why": "no such candidate was delivered"}),
+    ])
+    browser = ScriptedBrowser()
+    session = _session(
+        tmp, "source_candidate_refused_observes_before_it_answers", chat=chat,
+        browser=browser, source=SourceCapability(
+            source_map=source_map, source_affordance_mode="auto"))
+    session.adopt_entry(browser.observe())
+    return Prepared(session=session, chat=chat, browser=browser)
+
+
 def runtime_source_lookup_returns_cited_evidence(tmp: Path) -> Prepared:
     source_map = fixture_source_map(tmp / "source")
     chat = ScriptedChat([
@@ -742,6 +814,18 @@ SCENARIOS: tuple[Scenario, ...] = (
     Scenario("runtime_source_lookup_returns_cited_evidence",
              "explicit source retrieval is bounded and cited",
              runtime_source_lookup_returns_cited_evidence),
+    Scenario("application_entry_refused_observes_before_it_answers",
+             "a refused routing tool hands back a fresh page, not just a no",
+             application_entry_refused_observes_before_it_answers),
+    Scenario("skill_route_refused_observes_before_it_answers",
+             "an unavailable Skill refuses through the same sequence",
+             skill_route_refused_observes_before_it_answers),
+    Scenario("source_candidate_refused_observes_before_it_answers",
+             "a refused candidate refuses through the same sequence",
+             source_candidate_refused_observes_before_it_answers),
+    Scenario("a_refusal_that_cannot_see_the_page_stops_the_run",
+             "a refusal with no fresh page is terminal, not a shrug",
+             a_refusal_that_cannot_see_the_page_stops_the_run),
     Scenario("goto_outside_the_application_grammar_is_refused",
              "the route grammar bounds where a run may go",
              goto_outside_the_application_grammar_is_refused),

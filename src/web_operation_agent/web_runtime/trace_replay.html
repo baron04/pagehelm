@@ -7,6 +7,7 @@
     content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'none'; base-uri 'none'; form-action 'none'">
   <title>__WOA_PRODUCT_NAME__ · 可验证执行轨迹</title>
   <style>
+    /*__WOA_DESIGN_TOKENS__*/
     :root {
       --paper: #eef3f8;
       --sheet: #f8fbfd;
@@ -160,14 +161,6 @@
       <footer>回放只显示已脱敏的 trace bundle。完成状态应来自确定性产品 verifier，而非模型自评。</footer>
     </main>
   </div>
-  <script type="module">
-    /*__WOA_ASSISTANT_COMPONENT__*/
-    if (typeof createAssistantPanel === 'function') {
-      window.__WOA_REPLAY_PANEL__ = createAssistantPanel({
-        mode: 'replay', labels: {product: 'TRACE REPLAY', assistant: 'AI 助手轨迹'},
-      })
-    }
-  </script>
   <script id="trace-data" type="application/json">__WOA_TRACE_BUNDLE__</script>
   <script id="trace-example" type="application/json">
     {
@@ -229,21 +222,6 @@
     let timer = null
     let visible = Infinity
 
-    function renderAssistant() {
-      const panel = window.__WOA_REPLAY_PANEL__
-      if (!panel) return
-      panel.clear()
-      panel.add(`目标：${active.task}`, {kind: 'goal', timestamp: active.mode})
-      active.events.slice(0, visible).forEach(event => panel.add(event.title, {
-        kind: event.kind === 'action_receipt' ? 'action' : 'progress',
-        tone: event.tone === 'verify' ? 'success' : (event.tone === 'guard' ? 'error'
-          : (event.tone === 'approval' ? 'warning' : 'neutral')),
-        timestamp: `+${(event.at_ms / 1000).toFixed(1)}s`,
-      }))
-      const finished = visible >= active.events.length
-      panel.state(finished ? (active.success ? 'success' : 'indeterminate') : 'acting',
-        finished ? (active.success ? '回放完成' : '验证未通过') : '正在回放')
-    }
 
     const metric = (value, label, extra = '') => {
       const cell = document.createElement('div')
@@ -285,13 +263,12 @@
         const dd = document.createElement('dd'); dd.textContent = value
         return [dt, dd]
       }))
-      visible = Infinity; reveal(); renderAssistant()
+      visible = Infinity; reveal()
       document.querySelectorAll('.case').forEach((button, i) =>
         button.setAttribute('aria-current', i === index ? 'true' : 'false'))
     }
     function reveal() {
       ;[...rail.children].forEach((item, index) => item.classList.toggle('visible', index < visible))
-      renderAssistant()
     }
     bundle.cases.forEach((item, index) => {
       const button = document.createElement('button'); button.type = 'button'; button.className = 'case'

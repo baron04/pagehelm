@@ -23,12 +23,21 @@ DISTRIBUTIONS = {
             "web_operation_agent/policies/model_options.json",
             "web_operation_agent/policies/prices.json",
             "web_operation_agent/web_runtime/embedded.js",
+            "web_operation_agent/web_runtime/panel_host.js",
+            "web_operation_agent/web_runtime/panel_contract.json",
+            "web_operation_agent/web_runtime/design_tokens.json",
             "web_operation_agent/web_runtime/trace_replay.html",
+            # The built panel. A wheel without it cannot serve the assistant at all, so its
+            # absence is a packaging failure, not something to discover at runtime.
+            "web_operation_agent/web_runtime/panel/manifest.json",
+            "web_operation_agent/web_runtime/panel/panel.js",
         ],
         "forbidden": [
             "web_operation_agent/browser_worker.py",
             "web_operation_agent/cli.py",
             "web_operation_agent/policies/enforcement.json",
+            # Replaced by the panel built from `frontend/`.
+            "web_operation_agent/web_runtime/assistant_panel.js",
         ],
         # The core package must not carry any application's own assets. A name containing
         # either application's slug, wherever it appears in the path, is a leak.

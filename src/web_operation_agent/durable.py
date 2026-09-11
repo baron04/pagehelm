@@ -159,9 +159,10 @@ class SQLiteSessionStore:
     def history(self, owner):
         with self.connect() as db:
             self._check(db, owner)
-            rows = db.execute("SELECT payload FROM outbox WHERE sid=? ORDER BY sequence DESC LIMIT 30",
-                              (owner.session_id,)).fetchall()
-        return [json.loads(row[0]) for row in reversed(rows)]
+            rows = db.execute(
+                "SELECT payload, created FROM outbox WHERE sid=? ORDER BY sequence DESC LIMIT 30",
+                (owner.session_id,)).fetchall()
+        return [{**json.loads(row[0]), "at": int(row[1])} for row in reversed(rows)]
 
     def prune(self, *, older_than_ms: int) -> int:
         """Remove entire inactive sessions; retain tombstones for every live session."""

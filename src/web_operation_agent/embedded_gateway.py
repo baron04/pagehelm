@@ -12,11 +12,13 @@ import math
 import re
 import threading
 from collections.abc import Callable, Mapping
+from functools import lru_cache
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
+from .panel_view import label_keys, panel_limits
 from .remote import RemoteProtocolError, RemoteSessionRegistry, SessionGrant
 from .schemas import (ActionResultEnvelope, ApprovalDecision, CancellationRequest, ClientHello,
                       ObservationEnvelope, SchemaError, canonical_json)
@@ -24,21 +26,37 @@ from .schemas import (ActionResultEnvelope, ApprovalDecision, CancellationReques
 MAX_BODY_BYTES = 1024 * 1024
 SESSION_PATH = re.compile(
     r"^/v1/sessions/([A-Za-z0-9_-]{1,128})/"
-    r"(hello|observations|claims|results|messages|approvals|cancellations|events)$"
+    r"(hello|observations|claims|results|messages|approvals|cancellations|events|timeline|conversation)$"
 )
-RUNTIME_PATH = Path(__file__).resolve().parent / "web_runtime" / "embedded.js"
-ASSISTANT_PANEL_PATH = Path(__file__).resolve().parent / "web_runtime" / "assistant_panel.js"
-PANEL_LABEL_KEYS = frozenset({
-    "assistant", "product", "timeline", "emptyTitle", "emptyDetail", "input",
-    "placeholder", "send", "stop", "collapse", "expand", "keyHint", "approvalTitle",
-    "approvalEffect", "approvalTargets", "deny", "approve", "approvalHint", "retry",
-    "dismiss", "goalPrefix", "progressRunning", "progressStopping", "progressStopFailed",
-    "progressApprovalRequired", "progressApproved", "progressDenied", "progressTerminal",
-    "statusConnecting", "statusReady", "statusQueued", "statusObserving", "statusActing",
-    "statusKnowledge", "statusStopping", "statusReconnecting", "statusAwaitingConfirmation",
-    "statusNeedsInput", "statusSuccess", "statusCancelled", "statusRefused",
-    "statusIndeterminate", "statusError", "statusEnded", "statusReplaced",
-})
+WEB_RUNTIME = Path(__file__).resolve().parent / "web_runtime"
+RUNTIME_PATH = WEB_RUNTIME / "embedded.js"
+# The Runtime is split across modules; an explicit map keeps the directory from becoming
+# a served tree by accident.
+RUNTIME_MODULES = {
+    "/v1/runtime/embedded.js": RUNTIME_PATH,
+    "/v1/runtime/panel_host.js": WEB_RUNTIME / "panel_host.js",
+}
+PANEL_ROOT = WEB_RUNTIME / "panel"
+PANEL_PREFIX = "/v1/runtime/panel/"
+_PANEL_ASSET = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,80})?$")
+
+
+@lru_cache(maxsize=1)
+def _panel_manifest() -> dict:
+    """What the built panel ships, by published path.
+
+    A checkout without Node has no panel.  That is reported as a named prerequisite rather
+    than served from whatever happens to be lying in the directory -- the same rule the
+    PageAgent bundle gate applies.
+    """
+    try:
+        manifest = json.loads((PANEL_ROOT / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    assets = manifest.get("assets")
+    return assets if isinstance(assets, dict) else {}
+
+
 _SENSITIVE_QUERY_KEY = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{1,63}\Z")
 
 
@@ -49,14 +67,16 @@ def _panel_labels(value: Mapping[str, str] | None) -> dict[str, str]:
         raise TypeError("panel_labels must be a string mapping")
     if not all(isinstance(key, str) for key in value):
         raise TypeError("panel_labels keys must be strings")
-    unknown = set(value) - PANEL_LABEL_KEYS
+    unknown = set(value) - label_keys()
     if unknown:
         raise ValueError(f"unknown panel label: {sorted(unknown)[0]}")
+    maximum = panel_limits()["label_max_chars"]
     labels = {}
     for key, label in value.items():
-        if (not isinstance(label, str) or not label.strip() or len(label) > 200
+        if (not isinstance(label, str) or not label.strip() or len(label) > maximum
                 or any(ord(character) < 32 for character in label)):
-            raise ValueError(f"panel label {key} must contain 1-200 display characters")
+            raise ValueError(
+                f"panel label {key} must contain 1-{maximum} display characters")
         labels[key] = label
     return labels
 
@@ -143,6 +163,14 @@ def _readiness_payload(value: Mapping) -> dict:
     return payload
 
 
+def _bounded_limit(raw: str) -> int:
+    try:
+        value = int(raw)
+    except ValueError:
+        return panel_limits()["history_page_size"]
+    return min(500, max(1, value))
+
+
 def _handler(registry: RemoteSessionRegistry, *, sse_wait_s: float,
              readiness_provider: Callable[[], Mapping] | None = None):
     class Handler(BaseHTTPRequestHandler):
@@ -173,6 +201,23 @@ def _handler(registry: RemoteSessionRegistry, *, sse_wait_s: float,
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self._cors(session_id)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _static(self, source: Path, media_type: str, *, cache: str) -> None:
+            try:
+                body = source.read_bytes()
+            except OSError as exc:
+                self._error(exc)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", media_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", cache)
+            self.send_header("X-Content-Type-Options", "nosniff")
+            # These are public, non-secret assets that a first-party page loads as modules,
+            # so they need CORS.  Nothing session-bound is ever served from this path.
+            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(body)
 
@@ -240,7 +285,7 @@ def _handler(registry: RemoteSessionRegistry, *, sse_wait_s: float,
 
         def do_POST(self):
             match = self._route()
-            if not match or match.group(2) == "events":
+            if not match or match.group(2) in {"events", "timeline"}:
                 self._json(404, {"error": "unknown endpoint", "code": "not_found"})
                 return
             session_id, endpoint = match.groups()
@@ -272,6 +317,11 @@ def _handler(registry: RemoteSessionRegistry, *, sse_wait_s: float,
                 elif endpoint == "cancellations":
                     reply = channel.accept_cancellation(
                         CancellationRequest.from_json(body), lease_id=lease_id)
+                elif endpoint == "conversation":
+                    if body != {"action": "new"}:
+                        raise RemoteProtocolError(
+                            "conversation takes exactly {\"action\": \"new\"}", status=400)
+                    reply = channel.request_new_conversation(lease_id=lease_id)
                 else:
                     reply = channel.accept_message(body, lease_id=lease_id)
                 self._json(200, reply, session_id=session_id)
@@ -302,29 +352,42 @@ def _handler(registry: RemoteSessionRegistry, *, sse_wait_s: float,
                     }
                 self._json(200 if status["ready"] else 503, status)
                 return
-            runtime_assets = {
-                "/v1/runtime/embedded.js": RUNTIME_PATH,
-                "/v1/runtime/assistant_panel.js": ASSISTANT_PANEL_PATH,
-            }
-            if path in runtime_assets:
-                try:
-                    body = runtime_assets[path].read_bytes()
-                except OSError as exc:
-                    self._error(exc)
+            if path in RUNTIME_MODULES:
+                self._static(RUNTIME_MODULES[path], "text/javascript; charset=utf-8",
+                             cache="no-cache")
+                return
+            if path.startswith(PANEL_PREFIX):
+                relative = path[len(PANEL_PREFIX):]
+                entry = _panel_manifest().get(relative)
+                if entry is None or not _PANEL_ASSET.fullmatch(relative):
+                    self._json(404, {
+                        "error": ("the assistant panel is not built in this installation; "
+                                  "run scripts/build_panel.py"),
+                        "code": "panel_unavailable"})
                     return
-                self.send_response(200)
-                self.send_header("Content-Type", "text/javascript; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.send_header("Cache-Control", "no-cache")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                self.wfile.write(body)
+                # Content-hashed by the build, so it is safe to keep for a year.
+                self._static(PANEL_ROOT / relative, entry["media_type"],
+                             cache="public, max-age=31536000, immutable")
                 return
             match = self._route()
-            if not match or match.group(2) != "events":
+            if not match or match.group(2) not in {"events", "timeline"}:
                 self._json(404, {"error": "unknown endpoint", "code": "not_found"})
                 return
-            session_id = match.group(1)
+            session_id, endpoint = match.groups()
+            if endpoint == "timeline":
+                try:
+                    channel, lease_id = self._authenticate(session_id)
+                    query = parse_qs(urlsplit(self.path).query)
+                    self._json(200, channel.panel_timeline(
+                        lease_id=lease_id,
+                        after=query.get("after", [""])[0][:64],
+                        before=query.get("before", [""])[0][:64],
+                        limit=_bounded_limit(query.get("limit", [""])[0]),
+                        wait_s=sse_wait_s if query.get("wait") else 0,
+                    ), session_id=session_id)
+                except Exception as exc:
+                    self._error(exc, session_id=session_id)
+                return
             try:
                 channel, lease_id = self._authenticate(session_id)
                 cursor = self.headers.get("Last-Event-ID", "")

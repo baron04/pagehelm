@@ -22,6 +22,8 @@ from urllib.parse import urlsplit
 from .durable import SQLiteSessionStore, DurableStateError, principal_scope
 from .browser import TransportError, TurnCancelled
 from .identity import PrincipalContext, PrincipalError
+from .panel_view import (collapse_timeline, panel_contract, panel_limits,
+                         project_event, project_history_record)
 from .privacy import (SESSION_HANDOFF_QUERY_KEYS, SENSITIVE_CREDENTIAL_NAME,
                       has_unredacted_sensitive_assignment,
                       has_unredacted_session_handoff,
@@ -215,6 +217,8 @@ class RemoteSessionChannel:
         self._approvals: dict[str, ApprovalRequest] = {}
         self._approval_decisions: dict[str, ApprovalDecision] = {}
         self._pending_approval_id = ""
+        self._event_times: dict[int, int] = {}
+        self._new_conversation_pending = False
         self._durable_store = durable_store
         if durable_store is not None and principal is None:
             raise ValueError("durable sessions require a freshly authenticated principal")
@@ -328,6 +332,7 @@ class RemoteSessionChannel:
                 self._condition.notify_all()
                 raise RemoteSessionClosed("durable event commit failed") from exc
         self._events.append(event)
+        self._event_times[event.sequence] = _now_ms()
         self._condition.notify_all()
         return _copy_wire(event)
 
@@ -422,7 +427,8 @@ class RemoteSessionChannel:
                     raise RemoteProtocolError("runtime instance changed its hello contract")
                 self._hello = hello
                 return {"accepted": True, "lease_id": existing_lease,
-                        "server_event_id": self.latest_event_id}
+                        "server_event_id": self.latest_event_id,
+                        "panel": self._panel_configuration()}
 
             if len(self._runtime_leases) >= self.limits.max_runtime_instances:
                 self._capacity_exhausted("runtime_instance")
@@ -436,7 +442,8 @@ class RemoteSessionChannel:
             self._hello = hello
             self._condition.notify_all()
             return {"accepted": True, "lease_id": lease_id,
-                    "server_event_id": self.latest_event_id}
+                    "server_event_id": self.latest_event_id,
+                    "panel": self._panel_configuration()}
 
     def _validate_observation(self, envelope: ObservationEnvelope) -> tuple[bool, str]:
         if envelope.session_id != self.session_id:
@@ -618,6 +625,12 @@ class RemoteSessionChannel:
                 return {"accepted": True, "duplicate": True}
             self._message_digests[message_id] = fingerprint
             self._messages.append(_copy_json(message))
+            # The panel replays its timeline from this event stream.  Without the goal here
+            # a full page navigation would leave the user looking at progress lines that
+            # belong to a task they can no longer see the text of.
+            self._append_event("progress", {
+                "state": "message_accepted", "message_id": message_id, "text": text,
+            }, turn_id=message_id)
             self._condition.notify_all()
             return {"accepted": True, "duplicate": False}
 
@@ -665,6 +678,32 @@ class RemoteSessionChannel:
                 self._condition.notify_all()
             return {"accepted": True, "duplicate": duplicate}
 
+    def request_new_conversation(self, *, lease_id: str) -> dict:
+        """Record that the user started a new conversation.
+
+        Only the model's reference history ends here.  The event log stays whole, which is
+        why this appends a marker instead of deleting anything: the timeline above the
+        divider is still the record of what this session did.
+        """
+        with self._condition:
+            self._ensure_open()
+            self._require_active_lease(lease_id)
+            if self._active_message_id:
+                raise RemoteProtocolError(
+                    "a task is still running in this conversation",
+                    code="turn_in_flight", status=409)
+            self._new_conversation_pending = True
+            self._append_event("progress", {"state": "new_conversation"})
+            self._condition.notify_all()
+            return {"accepted": True}
+
+    def take_new_conversation(self) -> bool:
+        """Consume a pending boundary; the host calls this before composing a turn."""
+        with self._condition:
+            pending = self._new_conversation_pending
+            self._new_conversation_pending = False
+            return pending
+
     def message_cancelled(self, message_id: str) -> bool:
         with self._condition:
             try:
@@ -688,7 +727,13 @@ class RemoteSessionChannel:
             self._condition.notify_all()
 
     def accept_approval(self, decision: ApprovalDecision, *, lease_id: str) -> dict:
-        """Accept one idempotent response from the currently authenticated page session."""
+        """Accept one idempotent response from the currently authenticated page session.
+
+        The panel renders inside the host application page, so this cannot distinguish a
+        decision a person made from one a script in that page made.  That limit is stated
+        in SECURITY.md rather than papered over here with evidence that would not survive
+        an attacker who shares the panel's realm.
+        """
         with self._condition:
             self._ensure_open()
             self._require_active_lease(lease_id)
@@ -737,6 +782,99 @@ class RemoteSessionChannel:
             }, turn_id=request.turn_id)
             self._condition.notify_all()
             return {"accepted": True, "duplicate": False}
+
+    # -- panel projection ------------------------------------------------------------
+    def _panel_configuration(self) -> dict:
+        """Every bound and every user-visible string the panel renders by.
+
+        The panel holds no copy of these.  F8b was two sets of constants drifting apart;
+        one of them is now a file the server reads and the panel is handed.
+        """
+        contract = panel_contract()
+        return {
+            "protocol": contract["protocol"],
+            "limits": panel_limits(),
+            "labels": dict(contract["label_keys"]),
+            "notices": dict(contract["notices"]),
+            "panel_states": dict(contract["panel_states"]),
+            "progress_states": _copy_json(contract["progress_states"]),
+            "approval_visibility": dict(contract["approval_visibility"]),
+            "terminal_error_codes": list(contract["terminal_error_codes"]),
+            "terminal_panel_state_by_code": dict(contract["terminal_panel_state_by_code"]),
+            "session_expires_at": self.expires_at,
+            "principal_expires_at": (self.principal.expires_at
+                                     if self.principal is not None else 0),
+        }
+
+    def panel_timeline(self, *, lease_id: str, after: str = "", before: str = "",
+                       limit: int = 80, wait_s: float = 0) -> dict:
+        """Return the server's own projection of this session onto the panel's timeline.
+
+        The panel keeps no history of its own: a full page navigation replays from here
+        (F8a), and every bound it renders by comes from the server (F8b).  Paging is by the
+        same event cursor the runtime already uses -- ``after`` follows the live edge,
+        ``before`` walks backwards into history.
+        """
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 500:
+            raise RemoteProtocolError("timeline limit must be an integer from 1 to 500",
+                                      status=400)
+        if after and before:
+            raise RemoteProtocolError("timeline takes after or before, not both", status=400)
+        with self._condition:
+            self._require_active_lease(lease_id)
+            cursor = _event_sequence(after)
+            if cursor > len(self._events):
+                raise RemoteProtocolError("timeline cursor is ahead of this session")
+            if after and len(self._events) <= cursor and wait_s > 0:
+                self._condition.wait_for(
+                    lambda: (self._closed or len(self._events) > cursor
+                             or lease_id != self._active_lease_id),
+                    timeout=self._bounded_wait(wait_s),
+                )
+                self._require_active_lease(lease_id)
+            return self._panel_timeline(after=after, before=before, limit=limit)
+
+    def _panel_timeline(self, *, after: str, before: str, limit: int) -> dict:
+        """Project the event log for the panel; the caller holds ``self._condition``."""
+        entries: list[dict] = []
+        replayed: list[dict] = []
+        for record in self.recovered_history:
+            projected = project_history_record(record, index=len(replayed) + 1)
+            if projected is not None:
+                replayed.append(projected)
+        live = [projected for projected in
+                (project_event(event, at=self._event_times.get(event.sequence, 0))
+                 for event in self._events) if projected is not None]
+        whole = collapse_timeline(replayed + live)
+
+        if after:
+            floor = _event_sequence(after)
+            entries = [entry for entry in whole if entry["sequence"] > floor]
+            has_more = False
+        elif before:
+            ceiling = _event_sequence(before)
+            older = [entry for entry in whole
+                     if entry["sequence"] < ceiling or entry["sequence"] == 0]
+            entries = older[-limit:]
+            has_more = len(older) > limit
+        else:
+            entries = whole[-limit:]
+            has_more = len(whole) > limit
+
+        payload = {
+            "schema_version": SCHEMA_VERSIONS["TaskEvent"],
+            "protocol": panel_contract()["protocol"],
+            "entries": entries,
+            "cursor": self._events[-1].event_id if self._events else "",
+            "oldest": entries[0]["id"] if entries else "",
+            "has_more": has_more,
+            "closed": self._closed,
+            "close_reason": self._close_reason,
+            "pending_approval": None,
+        }
+        if self._pending_approval_id:
+            payload["pending_approval"] = self._approvals[self._pending_approval_id].to_json()
+        return payload
 
     # -- server -> browser ----------------------------------------------------------
     def enqueue_action(self, action: ActionEnvelope) -> TaskEvent:
@@ -845,6 +983,7 @@ class RemoteSessionChannel:
                 "approval_required", request.to_json(), turn_id=request.turn_id)
             self._approvals[request.approval_id] = request
             self._pending_approval_id = request.approval_id
+            self._condition.notify_all()
             return event
 
     def events_after(self, event_id: str = "", *, lease_id: str,

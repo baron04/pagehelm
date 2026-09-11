@@ -16,7 +16,7 @@ Application Adapter 把一个第一方 Web 应用接入通用服务端 Agent。A
 
 应用 Origin 必须提供一个导出 `PageController` 和 `getElementByIndex` 的 ES module。Minimal 示例为合成页面提供了一个小型兼容 controller。真实集成应固定并部署已经通过资格验证的 PageController 实现，再把准确的同源 URL 写入 `ApplicationDescriptor.page_controller_module`。其它 Origin 上的 CDN URL 会被拒绝。
 
-Web Operation Agent Runtime 由 `EmbeddedGateway` 在 `/v1/runtime/embedded.js` 提供。不要把它复制到每个应用，也不要持久保存生成的 bootstrap script。`LiveProductSession.start()` 后，获取 `live.bootstrap_script` 并直接注入已认证的顶层应用页面。该临时脚本包含短期 session capability，不能写日志、缓存、打入静态 bundle 或暴露给其它 Origin。公开 Demo 使用 Playwright `context.add_init_script` 只是开发宿主；生产第一方应用应从可信应用 shell 注入等价的 session bootstrap。
+Web Operation Agent Runtime 由 `EmbeddedGateway` 在 `/v1/runtime/embedded.js` 提供；它从同一个网关导入 `/v1/runtime/panel_host.js` 与构建好的助手面板 `/v1/runtime/panel/panel.js`，因此客户端始终与服务端协议同版本。未跑过 `scripts/build_panel.py` 的 checkout 没有面板，网关会以 `panel_unavailable` 回绝该请求，而不是发一份旧的。不要把它复制到每个应用，也不要持久保存生成的 bootstrap script。`LiveProductSession.start()` 后，获取 `live.bootstrap_script` 并直接注入已认证的顶层应用页面。该临时脚本包含短期 session capability，不能写日志、缓存、打入静态 bundle 或暴露给其它 Origin。公开 Demo 使用 Playwright `context.add_init_script` 只是开发宿主；生产第一方应用应从可信应用 shell 注入等价的 session bootstrap。
 
 Runtime 只会在顶层 document 且 `location.origin` 与 session grant 一致时启动。它观察 DOM、执行固定通用动作、展示进度和确认 UI，并返回回执。模型凭据、源码索引、隐藏权限、业务计划和 evaluator 都不能进入 Runtime。
 

@@ -272,13 +272,10 @@ def _outcome_json(outcome) -> dict:
 #: The panel's own approve control, inside the assistant's shadow root. Reached exactly as
 #: a user reaches it: there is no other way to approve, because the decision has to come
 #: from the page session that holds the lease.
-_APPROVE_IN_PANEL = """() => {
-  const card = document.querySelector('#woa-assistant')?.shadowRoot
-      ?.querySelector('.approval menu button:not(.deny)')
-  if (!card) return false
-  card.click()
-  return true
-}"""
+#: The panel's own approve control. Playwright pierces the open shadow root, and its click
+#: is a real one: the card refuses an event a script synthesised, which is precisely the
+#: case this walkthrough must not be allowed to take.
+_APPROVE_CONTROL = '[data-testid="woa-approve"]'
 
 
 def _approve_in_page(page, timeout_s: float) -> None:
@@ -288,12 +285,12 @@ def _approve_in_page(page, timeout_s: float) -> None:
     decision that did not come from the page session holding the lease, so approving any
     other way would qualify an apparatus the product does not ship.
     """
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        if page.evaluate(_APPROVE_IN_PANEL):
-            return
-        page.wait_for_timeout(200)
-    raise RuntimeError("the approval card never appeared in the panel")
+    control = page.locator(_APPROVE_CONTROL)
+    control.wait_for(state="visible", timeout=int(timeout_s * 1000))
+    # The card also refuses a press it cannot prove was visible long enough to read. That
+    # dwell is the point, so the walkthrough waits it out rather than working around it.
+    page.wait_for_timeout(700)
+    control.click()
 
 
 def _assert_session_unchanged(adapter: OdooApplicationAdapter, context,

@@ -65,6 +65,18 @@ class ConversationState:
         with self._lock:
             return len(self._turns)
 
+    def clear(self) -> int:
+        """Forget every retained turn and return how many were dropped.
+
+        This is what "new conversation" means: the model's reference history ends here.
+        It does not touch the session's event log or its audit ledger -- those are the
+        record of what happened, and a user starting a new topic does not unmake them.
+        """
+        with self._lock:
+            dropped = len(self._turns)
+            self._turns.clear()
+            return dropped
+
     def record(self, *, message_id: str, user_text: str, assistant_text: str,
                status: str, business_result: BusinessToolResult | None = None) -> None:
         if (not isinstance(message_id, str) or not message_id.strip()

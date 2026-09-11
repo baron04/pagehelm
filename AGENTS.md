@@ -10,6 +10,7 @@ Read `README.md`, then inspect the modules and tests that define the behavior yo
 
 - Keep planning, model access, knowledge retrieval, session policy, write authorization, and audit state on the server.
 - Keep the embedded browser runtime small. It may observe the page, execute fixed generic tools, show progress or approval UI, and return action receipts. It must not contain model credentials, source indexes, hidden permissions, business plans, or evaluators.
+- Keep the assistant panel a view. Bounds, user-visible copy, state names, and the palette are the server's; the panel is handed them and declares none of its own. A constant that exists on both sides is a defect, not a convenience.
 - Feed each tool result and fresh page observation back to the same server-side agent before the next decision.
 - Prefer current runtime facts over Skills, source code, documentation, and API schemas.
 - Keep application-specific behavior behind adapters, Skills, typed tools, and application-owned verification. The core turn executor and live session host must remain application-neutral.

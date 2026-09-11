@@ -22,7 +22,9 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: evals/pageagent/package-lock.json
+          cache-dependency-path: |
+            evals/pageagent/package-lock.json
+            frontend/package-lock.json
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -34,8 +36,12 @@ jobs:
           python -m pip install --editable .
           python -m pip install --no-deps --editable examples/ofbiz
           python -m pip install --no-deps --editable examples/twenty
+          python -m pip install --no-deps --editable examples/odoo
       - name: Install pinned PageAgent baseline
         working-directory: evals/pageagent
+        run: npm ci
+      - name: Install the assistant panel toolchain
+        working-directory: frontend
         run: npm ci
       - name: Install Chromium for PageAgent qualification
         run: python -m playwright install --with-deps chromium

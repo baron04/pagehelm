@@ -364,6 +364,11 @@ class AgentTurnExecutor:
 
     def execute(self, message: dict) -> AgentTurnExecution:
         turn_message = AgentTurnMessage.from_wire(message)
+        # "New conversation" means the model's reference history ends here. It is consumed
+        # at the start of a turn rather than when the user clicks, so it can never land
+        # between planning and execution of a turn already under way.
+        dropped_on_new_conversation = (self.conversation_state.clear()
+                            if self.channel.take_new_conversation() else -1)
         if self.application is not None:
             if not self.application.descriptor.owns_url(turn_message.page_url):
                 raise AgentTurnError(
@@ -431,6 +436,8 @@ class AgentTurnExecutor:
                   # can be scoped to a tenant without the ledger holding a tenant name.
                   "tenant_digest": (principal.audit_projection().get("tenant_digest", "")
                                     if principal is not None else "")})
+        if dropped_on_new_conversation >= 0:
+            ledger.append("new_conversation", dropped_turns=dropped_on_new_conversation)
         if principal is not None:
             ledger.append(
                 "turn_identity_bound",

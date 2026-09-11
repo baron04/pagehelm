@@ -24,7 +24,11 @@ lab/
 # Node / frontend
 node_modules/
 dist/
+storybook-static/
 *.tsbuildinfo
+# Built by scripts/build_panel.py from frontend/; a generated artifact, not a source file.
+src/web_operation_agent/web_runtime/panel/
+frontend/src/styles/_tokens.generated.scss
 
 # Java / Maven
 target/

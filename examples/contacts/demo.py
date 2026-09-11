@@ -130,23 +130,20 @@ class DemoConfig:
 #: The panel's own approve control, inside the assistant's shadow root. There is no other
 #: way to approve: the decision has to come from the page session that holds the lease, and
 #: an integration that found a way around that would be testing a product it does not ship.
-_APPROVE_IN_PANEL = """() => {
-  const approve = document.querySelector('#woa-assistant')?.shadowRoot
-      ?.querySelector('.approval menu button:not(.deny)')
-  if (!approve) return false
-  approve.click()
-  return true
-}"""
+#: The panel's own approve control. Playwright pierces the open shadow root, and its click
+#: is a real one: the card refuses an event a script synthesised, which is precisely the
+#: case this walkthrough must not be allowed to take.
+_APPROVE_CONTROL = '[data-testid="woa-approve"]'
 
 
 def _approve_in_page(page, timeout_s: float) -> None:
     """Click approve, as the person at the keyboard would, once the panel asks."""
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        if page.evaluate(_APPROVE_IN_PANEL):
-            return
-        page.wait_for_timeout(200)
-    raise RuntimeError("the approval card never appeared in the panel")
+    control = page.locator(_APPROVE_CONTROL)
+    control.wait_for(state="visible", timeout=int(timeout_s * 1000))
+    # The card also refuses a press it cannot prove was visible long enough to read. That
+    # dwell is the point, so the walkthrough waits it out rather than working around it.
+    page.wait_for_timeout(700)
+    control.click()
 
 
 def _chat(config: DemoConfig, run_dir: Path):

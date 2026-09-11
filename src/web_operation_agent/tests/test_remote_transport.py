@@ -943,12 +943,22 @@ class GatewayTests(unittest.TestCase):
         self.assertIn(b"class EmbeddedWebRuntime", body)
         self.assertNotIn(b"OPENAI_API_KEY", body)
         self.assertNotIn(b"ControlPlan", body)
-        status, headers, body = self.request("GET", "/v1/runtime/assistant_panel.js")
-        self.assertEqual(status, 200)
-        self.assertEqual(headers["Access-Control-Allow-Origin"], "*")
-        self.assertIn(b"class AssistantPanel", body)
-        self.assertNotIn(b"clientToken", body)
-        self.assertNotIn(b"ControlPlan", body)
+        # The built panel is a generated artifact. Where it is absent the gateway names the
+        # prerequisite instead of serving whatever happens to be in the directory.
+        status, headers, body = self.request("GET", "/v1/runtime/panel/panel.js")
+        if status == 200:
+            self.assertEqual(headers["Access-Control-Allow-Origin"], "*")
+            self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
+            self.assertIn("immutable", headers["Cache-Control"])
+            self.assertNotIn(b"clientToken", body)
+            self.assertNotIn(b"ControlPlan", body)
+        else:
+            self.assertEqual(status, 404)
+            self.assertIn(b"panel_unavailable", body)
+        # Path traversal out of the panel directory is refused by the manifest, not by
+        # string surgery on the request path.
+        self.assertEqual(
+            self.request("GET", "/v1/runtime/panel/../../embedded.js")[0], 404)
 
     def test_liveness_and_default_readiness_are_content_free(self):
         status, _, body = self.request("GET", "/healthz")

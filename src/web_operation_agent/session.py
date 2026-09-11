@@ -280,6 +280,41 @@ choose a different allowed action.
 """
 
 @dataclass(frozen=True)
+class _RouteResolution:
+    """What a routing tool resolved to: a browser action, or a refusal.
+
+    ``enter_application``, ``enter_skill_app``, ``open_skill_route`` and
+    ``open_source_candidate`` are not browser actions. Each one decides *which* exact page
+    request the agent is allowed to make, then hands that request to the same dispatch path
+    every other action uses. Making that answer a value is what lets `_run` hold one copy of
+    the refusal sequence instead of four that drifted apart a line at a time.
+    """
+
+    name: str = ""
+    args: dict = field(default_factory=dict)
+    citations: tuple[str, ...] = ()
+    skill: object | None = None
+    rejection: str = ""
+
+    @property
+    def refused(self) -> bool:
+        return bool(self.rejection)
+
+
+@dataclass(frozen=True)
+class _RouteTool:
+    """One routing tool: how it resolves, and what a refusal has to say."""
+
+    resolve: object
+    explanation: object
+    no_fresh_detail: str
+    # A refused source candidate re-observes, and the new page may carry different
+    # candidates. Its plan message has to be refreshed before the model is told anything,
+    # which the other three do not need.
+    resync_plan_on_refusal: bool = False
+
+
+@dataclass(frozen=True)
 class _StepEnd:
     """How one refused step ended: a terminal reason, or a fresh page and what to say.
 
@@ -1416,148 +1451,29 @@ class ServerAgentSession:
             source_route_citations: list[str] = []
             source_route_read_only = False
             skill_app_entry = None
-            if name == "enter_application" and self.allow_application_entry:
-                ref, rejection = self._application_link_ref(args.get("ref"), obs)
-                if rejection:
-                    self.ledger.append(
-                        "application_entry_rejected", step=step, reason=rejection,
-                        element_ref=str(args.get("ref") or "")[:100],
-                        requested_tool_dispatched=False, side_effect_possible=False)
+            # The routing tools resolve to a browser action rather than being one. Each of
+            # them used to carry its own copy of the refusal sequence -- ledger, observe,
+            # settle, render, continue -- and the copies had already begun to differ.
+            routing = self._route_tools().get(name)
+            if routing is not None:
+                resolution = routing.resolve(args, obs, step)
+                if resolution.refused:
                     ended = self._refuse_before_dispatch(
-                        "enter_application",
-                        "The server rejected enter_application before dispatch: "
-                        + rejection + ".",
-                        obs=obs, step=step,
-                        no_fresh_detail=("application-entry refusal did not obtain a fresh "
-                                         "observation"))
+                        name, routing.explanation(resolution.rejection),
+                        obs=obs, step=step, no_fresh_detail=routing.no_fresh_detail)
                     if ended.terminal:
                         return self._finish(result, t0, ended.reason, ended.detail,
                                             steps=step)
                     obs = ended.observation
+                    if routing.resync_plan_on_refusal:
+                        self._sync_plan_message(messages)
                     messages += [_assistant_call(call), _tool_result(call, ended.feedback)]
                     messages = _trim(messages, self.keep_observations)
                     continue
-                self.ledger.append("application_entered", step=step, element_ref=ref)
                 source_route_read_only = True
-                name, args = "click", {"ref": ref, "expect_navigation": True}
-            if name == "enter_skill_app" and self.knowledge_router is not None:
-                ref, rejection, skill = self.knowledge_router.app_link(
-                    args.get("skill_id"), obs, self._task_skill_ids)
-                if rejection:
-                    self.ledger.append(
-                        "skill_app_rejected", step=step,
-                        skill_id=str(args.get("skill_id") or "")[:200], reason=rejection,
-                        requested_tool_dispatched=False, side_effect_possible=False)
-                    ended = self._refuse_before_dispatch(
-                        "enter_skill_app",
-                        "The server rejected enter_skill_app before dispatch: "
-                        + rejection + ".",
-                        obs=obs, step=step,
-                        no_fresh_detail=("Skill app refusal could not obtain a successful "
-                                         "fresh observation"))
-                    if ended.terminal:
-                        return self._finish(result, t0, ended.reason, ended.detail,
-                                            steps=step)
-                    obs = ended.observation
-                    messages += [_assistant_call(call), _tool_result(call, ended.feedback)]
-                    messages = _trim(messages, self.keep_observations)
-                    continue
-                assert skill is not None
-                source_route_read_only = True
-                source_route_citations = list(skill.provenance)
-                self.ledger.append(
-                    "skill_app_entered", step=step, skill_id=skill.skill_id,
-                    element_ref=ref, skill_sha256=skill.artifact_sha256,
-                    provenance=list(skill.provenance))
-                skill_app_entry = skill
-                name, args = "click", {"ref": ref, "expect_navigation": True}
-            if name == "open_skill_route" and self.knowledge_router is not None:
-                url, rejection, skill = self.knowledge_router.resolve(
-                    args.get("skill_id"), args.get("bindings"), obs.url,
-                    self._task_skill_ids)
-                if rejection:
-                    self.ledger.append(
-                        "skill_route_rejected", step=step,
-                        skill_id=str(args.get("skill_id") or "")[:200],
-                        reason=rejection, requested_tool_dispatched=False,
-                        side_effect_possible=False)
-                    ended = self._refuse_before_dispatch(
-                        "open_skill_route",
-                        "The server rejected open_skill_route before dispatch: "
-                        + rejection + ". Use the current page to satisfy the Skill "
-                        "precondition, or choose another action.",
-                        obs=obs, step=step,
-                        no_fresh_detail=("Skill refusal could not obtain a successful fresh "
-                                         "observation"))
-                    if ended.terminal:
-                        return self._finish(result, t0, ended.reason, ended.detail,
-                                            steps=step)
-                    obs = ended.observation
-                    messages += [_assistant_call(call), _tool_result(call, ended.feedback)]
-                    messages = _trim(messages, self.keep_observations)
-                    continue
-                assert skill is not None
-                source_route_citations = list(skill.provenance)
-                self.ledger.append(
-                    "skill_route_opened", step=step, skill_id=skill.skill_id, url=url,
-                    skill_sha256=skill.artifact_sha256,
-                    artifact_path=skill.artifact_path, provenance=list(skill.provenance))
-                source_route_read_only = True
-                name, args = "goto", {"url": url}
-            if (name == "open_source_candidate"
-                    and self.source_affordance_mode in ("auto", "empty")):
-                candidate_id = args.get("candidate_id")
-                candidate = (self._source_affordances.get(candidate_id)
-                             if isinstance(candidate_id, str) else None)
-                bindings = args.get("bindings")
-                rejection = ""
-                url = ""
-                if candidate is None:
-                    rejection = "candidate_id was not supplied on the current observation"
-                elif (self.source_map is None
-                      or candidate.source_map_digest != self.source_map.content_digest):
-                    rejection = "candidate_id is stale for the current source binding"
-                else:
-                    url, rejection = self._candidate_url(
-                        candidate, bindings,
-                        route_identity=self._contract_route_identity,
-                        handoffs=self.session_handoffs,
-                    )
-                if rejection:
-                    citations = list(candidate.citations) if candidate is not None else []
-                    binding_names = (sorted(str(key)[:100] for key in bindings)
-                                     if isinstance(bindings, dict) else [])
-                    self.ledger.append(
-                        "source_candidate_rejected", step=step,
-                        candidate_id=str(candidate_id or "")[:200], reason=rejection,
-                        binding_names=binding_names, citations=citations,
-                        requested_tool_dispatched=False, side_effect_possible=False)
-                    ended = self._refuse_before_dispatch(
-                        "open_source_candidate",
-                        "The server rejected open_source_candidate before dispatch: "
-                        f"{rejection}. The browser received only observe and returned a "
-                        "fresh page. Choose from the newly delivered candidates or act on "
-                        "that page.",
-                        obs=obs, step=step,
-                        no_fresh_detail=("source-candidate refusal could not obtain a "
-                                         "successful fresh observation"))
-                    if ended.terminal:
-                        return self._finish(result, t0, ended.reason, ended.detail,
-                                            steps=step)
-                    obs = ended.observation
-                    self._sync_plan_message(messages)
-                    messages += [_assistant_call(call), _tool_result(call, ended.feedback)]
-                    messages = _trim(messages, self.keep_observations)
-                    continue
-
-                source_route_citations = list(candidate.citations)
-                self.ledger.append(
-                    "source_candidate_opened", step=step, candidate_id=candidate.candidate_id,
-                    source_digest=candidate.source_map_digest, url=url,
-                    bindings=_safe(bindings, self.session_handoffs),
-                               citations=source_route_citations)
-                source_route_read_only = True
-                name, args = "goto", {"url": url}
+                source_route_citations = list(resolution.citations)
+                skill_app_entry = resolution.skill
+                name, args = resolution.name, dict(resolution.args)
 
             if name == "open_source_route" and self.runtime_source:
                 url = args.get("url")
@@ -1804,6 +1720,137 @@ class ServerAgentSession:
         if len(url) > 2000:
             return "", "the assembled route is too long"
         return url, ""
+
+    # -- routing tools ---------------------------------------------------------------
+    def _route_tools(self) -> dict[str, "_RouteTool"]:
+        """The routing tools this turn actually offers.
+
+        Built from the same capabilities that decide the tool surface, so a tool the model
+        cannot see can never be resolved here either. A name absent from this mapping is
+        not a routing tool, which is the whole check -- there is no second condition buried
+        in the branch to forget.
+        """
+        tools: dict[str, _RouteTool] = {}
+        if self.allow_application_entry:
+            tools["enter_application"] = _RouteTool(
+                resolve=self._resolve_enter_application,
+                explanation=lambda reason: (
+                    "The server rejected enter_application before dispatch: "
+                    + reason + "."),
+                no_fresh_detail=("application-entry refusal did not obtain a fresh "
+                                 "observation"))
+        if self.knowledge_router is not None:
+            tools["enter_skill_app"] = _RouteTool(
+                resolve=self._resolve_enter_skill_app,
+                explanation=lambda reason: (
+                    "The server rejected enter_skill_app before dispatch: " + reason + "."),
+                no_fresh_detail=("Skill app refusal could not obtain a successful "
+                                 "fresh observation"))
+            tools["open_skill_route"] = _RouteTool(
+                resolve=self._resolve_open_skill_route,
+                explanation=lambda reason: (
+                    "The server rejected open_skill_route before dispatch: " + reason
+                    + ". Use the current page to satisfy the Skill precondition, or choose "
+                    "another action."),
+                no_fresh_detail=("Skill refusal could not obtain a successful fresh "
+                                 "observation"))
+        if self.source_affordance_mode in ("auto", "empty"):
+            tools["open_source_candidate"] = _RouteTool(
+                resolve=self._resolve_open_source_candidate,
+                explanation=lambda reason: (
+                    "The server rejected open_source_candidate before dispatch: "
+                    f"{reason}. The browser received only observe and returned a fresh "
+                    "page. Choose from the newly delivered candidates or act on that page."),
+                no_fresh_detail=("source-candidate refusal could not obtain a "
+                                 "successful fresh observation"),
+                resync_plan_on_refusal=True)
+        return tools
+
+    def _resolve_enter_application(self, args: dict, obs: PageObservation,
+                                   step: int) -> "_RouteResolution":
+        ref, rejection = self._application_link_ref(args.get("ref"), obs)
+        if rejection:
+            self.ledger.append(
+                "application_entry_rejected", step=step, reason=rejection,
+                element_ref=str(args.get("ref") or "")[:100],
+                requested_tool_dispatched=False, side_effect_possible=False)
+            return _RouteResolution(rejection=rejection)
+        self.ledger.append("application_entered", step=step, element_ref=ref)
+        return _RouteResolution(name="click", args={"ref": ref, "expect_navigation": True})
+
+    def _resolve_enter_skill_app(self, args: dict, obs: PageObservation,
+                                 step: int) -> "_RouteResolution":
+        ref, rejection, skill = self.knowledge_router.app_link(
+            args.get("skill_id"), obs, self._task_skill_ids)
+        if rejection:
+            self.ledger.append(
+                "skill_app_rejected", step=step,
+                skill_id=str(args.get("skill_id") or "")[:200], reason=rejection,
+                requested_tool_dispatched=False, side_effect_possible=False)
+            return _RouteResolution(rejection=rejection)
+        assert skill is not None
+        self.ledger.append(
+            "skill_app_entered", step=step, skill_id=skill.skill_id,
+            element_ref=ref, skill_sha256=skill.artifact_sha256,
+            provenance=list(skill.provenance))
+        return _RouteResolution(name="click", args={"ref": ref, "expect_navigation": True},
+                                citations=tuple(skill.provenance), skill=skill)
+
+    def _resolve_open_skill_route(self, args: dict, obs: PageObservation,
+                                  step: int) -> "_RouteResolution":
+        url, rejection, skill = self.knowledge_router.resolve(
+            args.get("skill_id"), args.get("bindings"), obs.url, self._task_skill_ids)
+        if rejection:
+            self.ledger.append(
+                "skill_route_rejected", step=step,
+                skill_id=str(args.get("skill_id") or "")[:200],
+                reason=rejection, requested_tool_dispatched=False,
+                side_effect_possible=False)
+            return _RouteResolution(rejection=rejection)
+        assert skill is not None
+        self.ledger.append(
+            "skill_route_opened", step=step, skill_id=skill.skill_id, url=url,
+            skill_sha256=skill.artifact_sha256,
+            artifact_path=skill.artifact_path, provenance=list(skill.provenance))
+        return _RouteResolution(name="goto", args={"url": url},
+                                citations=tuple(skill.provenance))
+
+    def _resolve_open_source_candidate(self, args: dict, _obs: PageObservation,
+                                       step: int) -> "_RouteResolution":
+        candidate_id = args.get("candidate_id")
+        candidate = (self._source_affordances.get(candidate_id)
+                     if isinstance(candidate_id, str) else None)
+        bindings = args.get("bindings")
+        rejection = ""
+        url = ""
+        if candidate is None:
+            rejection = "candidate_id was not supplied on the current observation"
+        elif (self.source_map is None
+              or candidate.source_map_digest != self.source_map.content_digest):
+            rejection = "candidate_id is stale for the current source binding"
+        else:
+            url, rejection = self._candidate_url(
+                candidate, bindings,
+                route_identity=self._contract_route_identity,
+                handoffs=self.session_handoffs,
+            )
+        if rejection:
+            citations = list(candidate.citations) if candidate is not None else []
+            binding_names = (sorted(str(key)[:100] for key in bindings)
+                             if isinstance(bindings, dict) else [])
+            self.ledger.append(
+                "source_candidate_rejected", step=step,
+                candidate_id=str(candidate_id or "")[:200], reason=rejection,
+                binding_names=binding_names, citations=citations,
+                requested_tool_dispatched=False, side_effect_possible=False)
+            return _RouteResolution(rejection=rejection)
+        self.ledger.append(
+            "source_candidate_opened", step=step, candidate_id=candidate.candidate_id,
+            source_digest=candidate.source_map_digest, url=url,
+            bindings=_safe(bindings, self.session_handoffs),
+            citations=list(candidate.citations))
+        return _RouteResolution(name="goto", args={"url": url},
+                                citations=tuple(candidate.citations))
 
     def _settle_write(self, write: dict) -> tuple[str, str]:
         """Decide, in one place, whether an observed write state ends the run.

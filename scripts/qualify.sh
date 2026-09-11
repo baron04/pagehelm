@@ -122,6 +122,28 @@ else
   failed+=("PageAgent deterministic bundle")
 fi
 
+# ---------------------------------------------------------------- frontend gate
+# The assistant panel is built here, not committed. Like the PageAgent bundle, a checkout
+# without the toolchain is BLOCKED with the prerequisite named; it never reuses an unverified
+# build and never reports the panel path as passed.
+printf '\n\033[1m── assistant panel ──\033[0m\n'
+panel_ready=0
+if ! command -v npm >/dev/null 2>&1; then
+  record "assistant panel build" BLOCKED "npm is unavailable"
+  [[ "${require_browser}" == "1" ]] && failed+=("assistant panel build")
+elif [[ ! -d "${ROOT}/frontend/node_modules" ]]; then
+  record "assistant panel build" BLOCKED "run npm ci in frontend"
+  [[ "${require_browser}" == "1" ]] && failed+=("assistant panel build")
+elif ( cd "${ROOT}/frontend" && npm run lint && npm test && npm run build \
+       && npm run build-storybook ) \
+     && "${PYTHON}" scripts/build_panel.py --skip-build; then
+  record "assistant panel build" PASS ""
+  panel_ready=1
+else
+  record "assistant panel build" FAIL "lint, unit tests, bundle or Storybook failed"
+  failed+=("assistant panel build")
+fi
+
 # ---------------------------------------------------------------- packaging gate
 build_and_check_wheel() {
   # setuptools may otherwise copy deleted modules from an ignored build/lib tree into a new
@@ -281,6 +303,19 @@ else
     -m unittest examples.contacts.tests.test_contacts_demo
 fi
 
+# The panel's own Chromium checks: every state, the confirmation card's keyboard and narrow
+# layouts, and that it still constructs under a strict CSP with Trusted Types.
+if [[ "${panel_ready}" != "1" ]]; then
+  record "assistant panel Chromium qualification" BLOCKED "the panel was not built"
+  [[ "${require_browser}" == "1" ]] && failed+=("assistant panel Chromium qualification")
+elif [[ "${chromium_ready}" != "1" ]]; then
+  record "assistant panel Chromium qualification" BLOCKED "Chromium is unavailable"
+  [[ "${require_browser}" == "1" ]] && failed+=("assistant panel Chromium qualification")
+else
+  run_gate "assistant panel Chromium qualification" 1 "${PYTHON}" -m unittest \
+    web_operation_agent.tests.test_panel_ui
+fi
+
 browser_bundle="${WOA_PAGEAGENT_BUNDLE:-${ROOT}/.artifacts/evals/pageagent/pageagent-baseline.js}"
 if [[ "${pageagent_ready}" != "1" ]]; then
   record "PageAgent Chromium qualification" BLOCKED \
@@ -316,7 +351,9 @@ else
   run_gate "embedded Runtime Chromium qualification" 1 \
     env WOA_PAGE_CONTROLLER_MODULE="${page_controller_module}" "${PYTHON}" -m unittest \
     web_operation_agent.tests.test_embedded_runtime.EmbeddedRuntimeTests.test_real_pagecontroller_survives_navigation_without_repeating_action \
-    web_operation_agent.tests.test_embedded_runtime.EmbeddedRuntimeTests.test_same_origin_iframe_form_navigation_is_observed_without_top_level_change
+    web_operation_agent.tests.test_embedded_runtime.EmbeddedRuntimeTests.test_same_origin_iframe_form_navigation_is_observed_without_top_level_change \
+    web_operation_agent.tests.test_embedded_runtime.EmbeddedRuntimeTests.test_real_confirmation_card_posts_authenticated_user_decision \
+    web_operation_agent.tests.test_embedded_runtime.EmbeddedRuntimeTests.test_the_timeline_survives_a_full_page_navigation
 fi
 
 # ---------------------------------------------------------------- live gate

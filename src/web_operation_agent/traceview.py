@@ -7,6 +7,7 @@ from importlib.resources import files
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .panel_view import token_custom_properties
 from .privacy import (has_unredacted_sensitive_assignment,
                       has_unredacted_session_handoff,
                       redact_sensitive_assignments, redact_session_handoffs)
@@ -20,7 +21,6 @@ VISIBLE_EVENTS = frozenset({
 })
 
 _TRACE_TEMPLATE = ("web_runtime", "trace_replay.html")
-_ASSISTANT_COMPONENT = ("web_runtime", "assistant_panel.js")
 
 
 def _safe(value):
@@ -166,12 +166,12 @@ def render_trace_html(bundle: dict, output: str | Path) -> None:
     if template.count(marker) != 1:
         raise ValueError("trace replay template must contain exactly one data marker")
     rendered = template.replace(marker, data)
-    component_marker = "/*__WOA_ASSISTANT_COMPONENT__*/"
-    if rendered.count(component_marker) != 1:
-        raise ValueError("trace replay template must contain exactly one assistant marker")
-    component = files("web_operation_agent").joinpath(*_ASSISTANT_COMPONENT).read_text(
-        encoding="utf-8")
-    rendered = rendered.replace(component_marker, component)
+    token_marker = "/*__WOA_DESIGN_TOKENS__*/"
+    if rendered.count(token_marker) != 1:
+        raise ValueError("trace replay template must contain exactly one design token marker")
+    # The replay page shares the product's palette but none of its code: it renders a past
+    # run from a static bundle, which is a different job from driving a live session.
+    rendered = rendered.replace(token_marker, token_custom_properties())
     # The data is inserted into application/json, then parsed via textContent. Escape any
     # accidental HTML-special characters in the static title only; JSON stays machine-readable.
     if not safe_bundle.get("product"):

@@ -85,9 +85,14 @@ class TraceViewTests(unittest.TestCase):
             self.assertIn("每一步都留下证据", page)
             self.assertIn('id="trace-data"', page)
             self.assertNotIn("__WOA_TRACE_BUNDLE__", page)
-            self.assertNotIn("__WOA_ASSISTANT_COMPONENT__", page)
-            self.assertIn("class AssistantPanel", page)
-            self.assertIn("createAssistantPanel", page)
+            self.assertNotIn("__WOA_DESIGN_TOKENS__", page)
+            # The replay shares the product's palette and none of its code: it renders a
+            # past run from a static bundle, which is a different job from driving a session.
+            self.assertIn("--woa-accent: #1d4ed8;", page)
+            self.assertIn("prefers-color-scheme: dark", page)
+            self.assertNotIn("createAssistantPanel", page)
+            self.assertNotIn("<script src=", page)
+            self.assertNotIn("import ", page)
             self.assertNotIn("answer-secret", page)
             self.assertNotIn("docs/demo", page)
             self.assertEqual(json.loads((root / "trace.json").read_text()), bundle)
@@ -140,7 +145,7 @@ class TraceViewTests(unittest.TestCase):
                 check=False)
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
-    def test_rendered_replay_and_shared_panel_work_from_local_file(self):
+    def test_rendered_replay_runs_from_a_local_file_with_no_dependency(self):
         try:
             from playwright.sync_api import Error as PlaywrightError
             from playwright.sync_api import sync_playwright
@@ -179,20 +184,16 @@ class TraceViewTests(unittest.TestCase):
                 errors = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 page.goto(output.as_uri(), wait_until="load")
-                page.locator("#woa-assistant").wait_for()
-                panel = page.locator("#woa-assistant")
-                self.assertEqual(panel.locator(".panel").get_attribute("data-mode"), "replay")
-                self.assertIn("Acme", panel.locator(".entry").first.inner_text())
-                self.assertEqual(panel.locator("form").evaluate("node => getComputedStyle(node).display"),
-                                 "none")
+                page.locator(".rail .event").first.wait_for()
+                self.assertIn("query_companies", page.locator(".rail").inner_text())
+                self.assertEqual(
+                    page.locator(":root").evaluate(
+                        "node => getComputedStyle(node).getPropertyValue('--woa-accent').trim()"),
+                    "#1d4ed8")
                 page.locator("#play").click()
-                self.assertEqual(panel.locator(".panel").get_attribute("data-state"), "acting")
-                animation = panel.locator(".panel").evaluate(
-                    "node => getComputedStyle(node, '::before').animationName")
-                self.assertEqual(animation, "none")
                 page.locator("#reset").click()
                 self.assertEqual(errors, [])
-                screenshot = Path(tmp) / "replay-shared-panel.png"
+                screenshot = Path(tmp) / "replay.png"
                 page.screenshot(path=str(screenshot), full_page=True)
                 self.assertGreater(screenshot.stat().st_size, 1000)
                 context.close()

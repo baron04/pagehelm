@@ -14,58 +14,38 @@ from pathlib import Path
 
 from web_operation_agent.embedded_gateway import EmbeddedGateway
 from web_operation_agent.ledger import SessionLedger
-from web_operation_agent.remote import RemoteBrowserClient, RemoteSessionRegistry
+from web_operation_agent.remote import (RemoteBrowserClient, RemoteSessionChannel,
+                                        RemoteSessionRegistry)
 from web_operation_agent.schemas import ApprovalRequest
 from web_operation_agent.session import LabApparatus, ServerAgentSession, TaskSpec
 from web_operation_agent.tests.test_session import _Chat, _Control
 
 
 RUNTIME = Path(__file__).resolve().parents[1] / "web_runtime" / "embedded.js"
-PANEL = Path(__file__).resolve().parents[1] / "web_runtime" / "assistant_panel.js"
+PANEL_HOST = Path(__file__).resolve().parents[1] / "web_runtime" / "panel_host.js"
+PANEL_ROOT = Path(__file__).resolve().parents[1] / "web_runtime" / "panel"
 _PAGE_CONTROLLER_PATH = os.environ.get("WOA_PAGE_CONTROLLER_MODULE", "")
 PAGE_CONTROLLER = Path(_PAGE_CONTROLLER_PATH).expanduser() if _PAGE_CONTROLLER_PATH else None
 
 
 def _runtime_source_b64() -> str:
-    panel_url = "data:text/javascript;base64," + base64.b64encode(PANEL.read_bytes()).decode()
+    host_url = "data:text/javascript;base64," + base64.b64encode(PANEL_HOST.read_bytes()).decode()
     source = RUNTIME.read_text(encoding="utf-8")
-    source = source.replace("./assistant_panel.js", panel_url)
+    source = source.replace("./panel_host.js", host_url)
     return base64.b64encode(source.encode()).decode()
 
 
+def _panel_host_source_b64() -> str:
+    return base64.b64encode(PANEL_HOST.read_bytes()).decode()
+
+
+def _panel_configuration_js() -> str:
+    """The real contract, not a second copy of it written into a test."""
+    return json.dumps(RemoteSessionChannel(
+        "configuration-probe", ("https://app.test",))._panel_configuration())
+
+
 class EmbeddedRuntimeTests(unittest.TestCase):
-    @unittest.skipUnless(shutil.which("node"), "Node is needed to execute runtime presentation tests")
-    def test_observe_progress_is_shown_once_per_user_turn(self):
-        source = _runtime_source_b64()
-        script = f"""
-          const mod = await import('data:text/javascript;base64,{source}');
-          const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
-          const entries = [];
-          runtime.stored = {{visibleObserveTurnId:''}};
-          runtime._save = () => {{}};
-          runtime.panel = {{add(text, options) {{ entries.push({{text, kind:options.kind}}); }}}};
-
-          runtime._showActionProgress({{turn_id:'message-1',
-            command:{{action:'observe', args:{{}}}}}});
-          runtime.panel.add('使用知识', {{kind:'progress'}});
-          runtime._showActionProgress({{turn_id:'message-1',
-            command:{{action:'observe', args:{{}}}}}});
-          runtime._showActionProgress({{turn_id:'message-1',
-            command:{{action:'goto', args:{{url:'https://app.test/companies'}}}}}});
-          runtime._showActionProgress({{turn_id:'message-2',
-            command:{{action:'observe', args:{{}}}}}});
-
-          process.stdout.write(JSON.stringify(entries));
-        """
-        proc = subprocess.run(["node", "--input-type=module", "-e", script],
-                              text=True, capture_output=True, timeout=10, check=True)
-        self.assertEqual(json.loads(proc.stdout), [
-            {"text": "重新检查当前页面", "kind": "action"},
-            {"text": "使用知识", "kind": "progress"},
-            {"text": "打开页面：https://app.test/companies", "kind": "action"},
-            {"text": "重新检查当前页面", "kind": "action"},
-        ])
-
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute DOM freshness tests")
     def test_action_fingerprint_rejects_target_or_route_changes_only(self):
         source = _runtime_source_b64()
@@ -144,231 +124,84 @@ class EmbeddedRuntimeTests(unittest.TestCase):
             "code": "stale_observation",
         })
 
-    @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
-    def test_action_progress_is_readable_and_never_echoes_fill_value(self):
-        source = _runtime_source_b64()
-        script = f"""
-          const mod = await import('data:text/javascript;base64,{source}');
-          const rows = [
-            mod.describeAction({{action:'goto', args:{{url:'/orders'}}}}),
-            mod.describeAction({{action:'fill', args:{{ref:'e12', value:'private-value'}}}}),
-            mod.describeAction({{action:'submit', args:{{ref:'e15'}}}}),
-          ];
-          process.stdout.write(JSON.stringify(rows));
-        """
-        proc = subprocess.run(["node", "--input-type=module", "-e", script],
-                              text=True, capture_output=True, timeout=10, check=True)
-        rows = json.loads(proc.stdout)
-        self.assertEqual(rows, ["打开页面：/orders", "填写页面字段：e12", "提交页面表单：e15"])
-        self.assertNotIn("private-value", proc.stdout)
+    @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
+                         "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
+    def test_the_timeline_survives_a_full_page_navigation(self):
+        """F8a: after a document navigation the timeline is replayed from the server.
 
-    @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the panel state model")
-    def test_panel_state_model_and_error_guidance_are_deterministic(self):
-        source = _runtime_source_b64()
-        script = f"""
-          const mod = await import('data:text/javascript;base64,{source}');
-          const snapshots = [];
-          const model = new mod.AssistantPanelViewModel(value => snapshots.push(value));
-          model.transition('acting');
-          model.setBusy(true);
-          model.setStopping(true);
-          model.setBusy(false);
-          let invalid = '';
-          try {{ model.transition('invented'); }} catch (error) {{ invalid = error.message; }}
-          const errors = [
-            mod.panelErrorMessage({{code:'backpressure'}}),
-            mod.panelErrorMessage({{code:'runtime_replaced'}}),
-            mod.panelErrorMessage({{code:'unauthorized'}}),
-            mod.panelErrorMessage({{}}, 'cancel'),
-          ];
-          process.stdout.write(JSON.stringify({{snapshots, final:model.snapshot(), invalid, errors}}));
+        The old panel accumulated its own entries in the document that produced them, so a
+        full navigation left the user staring at an empty panel while a task was still
+        running. Nothing is cached locally now -- the panel asks `/timeline` and renders
+        what the session says happened.
         """
-        proc = subprocess.run(["node", "--input-type=module", "-e", script],
-                              text=True, capture_output=True, timeout=10, check=True)
-        result = json.loads(proc.stdout)
-        self.assertEqual(result["snapshots"][0]["state"], "acting")
-        self.assertEqual(result["snapshots"][0]["tone"], "active")
-        self.assertTrue(result["snapshots"][1]["busy"])
-        self.assertTrue(result["snapshots"][2]["stopping"])
-        self.assertFalse(result["final"]["busy"])
-        self.assertFalse(result["final"]["stopping"])
-        self.assertIn("unknown assistant panel state", result["invalid"])
-        self.assertEqual(len(set(result["errors"])), 4)
-
-    def test_panel_primary_flows_are_keyboard_accessible_and_responsive(self):
         try:
-            from playwright.sync_api import Error as PlaywrightError
             from playwright.sync_api import sync_playwright
         except ImportError:
             self.skipTest("Playwright is not installed")
-        source = _runtime_source_b64()
-        html = f"""<!doctype html><html><body><main><h1>Fixture application</h1></main>
-          <script type="module">
-            const mod = await import('data:text/javascript;base64,{source}');
-            window.hostComposerEvents = [];
-            for (const name of ['beforeinput', 'input', 'change', 'compositionstart',
-              'compositionupdate', 'compositionend', 'keypress', 'keydown', 'keyup', 'submit']) {{
-              document.addEventListener(name, () => window.hostComposerEvents.push(name));
-            }}
-            const panel = mod.createAssistantPanel({{labels:{{
-              assistant:'Operations Copilot', statusActing:'Working', goalPrefix:'Request: ',
-              approve:'Approve this operation', deny:'Return and edit',
-            }}}});
-            panel.onTask(async value => {{
-              if (value === 'retry this') {{ const error = new Error('busy'); error.code = 'backpressure'; throw error; }}
-              panel.setBusy(true); panel.state('acting'); panel.add('Inspecting current page');
-            }});
-            panel.onCancel(async () => {{ panel.state('stopping'); }});
-            window.testPanel = panel; window.panelReady = true;
-          </script></body></html>"""
-        with sync_playwright() as playwright:
-            try:
+        if not (PANEL_ROOT / "panel.js").is_file():
+            self.skipTest("the assistant panel is not built; run scripts/build_panel.py")
+
+        registry = RemoteSessionRegistry()
+        app = _FixtureApplication(PAGE_CONTROLLER)
+        app.start()
+        grant, channel = registry.create(allowed_origins=[app.origin],
+                                         session_id="navigation-session")
+        gateway = EmbeddedGateway(registry, sse_wait_s=0.1).start()
+        app.runtime_url = gateway.runtime_url
+        app.runtime_config = gateway.bootstrap_config(
+            grant, page_controller_module=app.origin + "/page-controller.js")
+        try:
+            with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(headless=True)
-            except PlaywrightError as error:
-                if "Executable doesn't exist" in str(error):
-                    self.skipTest("Playwright Chromium is not installed")
-                raise
-            context = browser.new_context(viewport={"width": 390, "height": 844},
-                                          reduced_motion="reduce")
-            page = context.new_page()
-            page.set_content(html, wait_until="load")
-            page.wait_for_function("window.panelReady === true")
-            host = page.locator("#woa-assistant")
-            self.assertEqual(host.locator("strong").inner_text(), "Operations Copilot")
-            composer = host.locator("textarea")
-            composer.fill("retry this")
-            composer.press("Enter")
-            host.locator(".notice[data-visible=true]").wait_for()
-            self.assertEqual(page.evaluate("window.hostComposerEvents"), [])
-            self.assertEqual(composer.input_value(), "retry this")
-            self.assertIn("稍后重试", host.locator(".notice p").inner_text())
-            self.assertEqual(host.locator(".panel").get_attribute("data-state"), "error")
+                page = browser.new_page(viewport={"width": 1280, "height": 800})
+                errors = []
+                page.on("pageerror", lambda error: errors.append(str(error)))
+                page.goto(app.origin + "/page1", wait_until="domcontentloaded")
+                channel.wait_for_client(5)
+                page.locator(".woa-launcher").click()
+                page.locator("#woa-composer-input").fill("列出所有待开票的销售订单")
+                page.keyboard.press("Enter")
+                message = channel.wait_for_message(timeout_s=5)
+                channel.publish("progress", {"state": "agent_started",
+                                             "message": "正在检查当前页面"},
+                                turn_id=message["message_id"])
+                thread = page.locator(".woa-thread")
+                thread.get_by_text("列出所有待开票的销售订单").wait_for(timeout=8000)
+                thread.get_by_text("正在检查当前页面").wait_for(timeout=8000)
 
-            page.evaluate("""() => {
-              window.testPanel.clearError(); window.testPanel.state('acting');
-              window.testPanel.setBusy(true);
-              window.testPanel.add('第一行\\n' + 'A'.repeat(735));
-            }""")
-            self.assertEqual(host.locator("output").inner_text(), "Working")
-            long_answer = host.locator(".entry").last.locator("span")
-            self.assertEqual(long_answer.text_content(), "第一行\n" + "A" * 735)
-            self.assertEqual(
-                long_answer.evaluate("node => getComputedStyle(node).whiteSpace"),
-                "pre-wrap",
-            )
-            entries_before_repeat = host.locator(".entry").count()
-            page.evaluate("""() => {
-              window.testPanel.add('重新检查当前页面');
-              window.testPanel.add('重新检查当前页面');
-              window.testPanel.add('重新检查当前页面');
-            }""")
-            self.assertEqual(host.locator(".entry").count(), entries_before_repeat + 1)
-            self.assertEqual(
-                host.locator(".entry").last.locator("span").inner_text(),
-                "重新检查当前页面",
-            )
-            page.evaluate("""() => {
-              window.testPanel.clear();
-              window.testPanel.beginTurn('turn-1', 'List every company');
-              for (let index = 0; index < 35; index += 1) {
-                window.testPanel.add(`first-${index}`, {turnId:'turn-1'});
-              }
-              window.testPanel.beginTurn('turn-2', 'Open the second company');
-              window.testPanel.add('Inspecting', {turnId:'turn-2'});
-              window.testPanel.add('Inspecting', {turnId:'turn-2'});
-            }""")
-            self.assertEqual(host.locator(".turn").count(), 2)
-            self.assertEqual(host.locator(".turn > [data-kind=goal] > span").all_inner_texts(), [
-                "Request: List every company", "Request: Open the second company",
-            ])
-            self.assertEqual(host.locator(".turn").nth(0).locator(".turn-events .entry").count(), 30)
-            self.assertEqual(host.locator(".turn").nth(1).locator(".turn-events .entry").count(), 1)
-            animation = host.locator(".panel").evaluate(
-                "node => getComputedStyle(node, '::before').animationName")
-            self.assertEqual(animation, "none")
-            box = host.bounding_box()
-            self.assertIsNotNone(box)
-            self.assertGreaterEqual(box["x"], 0)
-            self.assertLessEqual(box["x"] + box["width"], 390)
-            stop = host.locator(".stop")
-            stop.focus()
-            stop.press("Enter")
-            self.assertEqual(host.locator(".panel").get_attribute("data-state"), "stopping")
-
-            page.evaluate("""() => {
-              window.testPanel.setBusy(false);
-              window.approvalDecision = '';
-              window.testPanel.requestApproval({approval_id:'approval-ui', effect:'Create company',
-                targets:['Acme · acme.example'], expires_at:Date.now()+10000})
-                .then(value => { window.approvalDecision = value });
-            }""")
-            approval = host.locator(".approval")
-            approval.wait_for()
-            self.assertEqual(approval.get_attribute("role"), "alertdialog")
-            self.assertEqual(host.locator(".deny").evaluate("node => node === node.getRootNode().activeElement"),
-                             True)
-            host.locator(".deny").press("Escape")
-            page.wait_for_function("window.approvalDecision === 'denied'")
-            self.assertEqual(composer.input_value(), "retry this")
-            page.evaluate("""() => {
-              window.approvalDecision = '';
-              window.testPanel.requestApproval({approval_id:'approval-ui-2', effect:'Create company',
-                targets:['Acme · acme.example'], expires_at:Date.now()+10000})
-                .then(value => { window.approvalDecision = value });
-            }""")
-            host.locator(".approval").wait_for()
-            host.locator(".approval button:not(.deny)").press("Enter")
-            page.wait_for_function("window.approvalDecision === 'approved'")
-            page.set_viewport_size({"width": 320, "height": 480})
-            page.evaluate("""() => {
-              window.approvalDecision = '';
-              window.testPanel.requestApproval({approval_id:'approval-ui-narrow',
-                effect:'Create a company after checking the exact requested values',
-                targets:['Acme Corporation · acme.example', 'Current authenticated workspace'],
-                expires_at:Date.now()+10000}).then(value => { window.approvalDecision = value });
-            }""")
-            narrow_approval = host.locator(".approval")
-            narrow_approval.wait_for()
-            narrow_approval.scroll_into_view_if_needed()
-            host_box = host.bounding_box()
-            approval_box = narrow_approval.bounding_box()
-            deny_box = host.locator(".deny").bounding_box()
-            approve_box = host.locator(".approval button:not(.deny)").bounding_box()
-            self.assertIsNotNone(host_box)
-            self.assertIsNotNone(approval_box)
-            self.assertGreaterEqual(host_box["y"], 0)
-            self.assertLessEqual(host_box["y"] + host_box["height"], 480)
-            self.assertGreaterEqual(approval_box["x"], 0)
-            self.assertLessEqual(approval_box["x"] + approval_box["width"], 320)
-            self.assertGreaterEqual(deny_box["y"], approve_box["y"] + approve_box["height"])
-            host.locator(".deny").press("Escape")
-            page.wait_for_function("window.approvalDecision === 'denied'")
-            page.evaluate("window.testPanel.state('success')")
-            self.assertEqual(host.locator(".panel").get_attribute("data-tone"), "success")
-            page.evaluate("window.testPanel.state('indeterminate')")
-            self.assertEqual(host.locator(".panel").get_attribute("data-tone"), "warning")
-
-            collapse = host.locator(".collapse")
-            collapse.focus()
-            collapse.press("Enter")
-            self.assertEqual(collapse.get_attribute("aria-expanded"), "false")
-            collapse.press("Enter")
-            self.assertEqual(collapse.get_attribute("aria-expanded"), "true")
-            self.assertEqual(host.locator(".timeline").get_attribute("role"), "log")
-            with tempfile.TemporaryDirectory() as tmp:
-                screenshot = Path(tmp) / "panel-mobile-reduced-motion.png"
-                page.screenshot(path=str(screenshot))
-                self.assertGreater(screenshot.stat().st_size, 1000)
-            context.close()
-            browser.close()
+                # A real, full document navigation: new document, new Runtime, new panel.
+                page.goto(app.origin + "/page2?source=navigation", wait_until="domcontentloaded")
+                page.locator(".woa-window").wait_for(timeout=8000)
+                replayed = page.locator(".woa-thread")
+                replayed.get_by_text("列出所有待开票的销售订单").wait_for(timeout=8000)
+                replayed.get_by_text("正在检查当前页面").wait_for(timeout=8000)
+                # Nothing about the timeline is kept in the document's own storage.
+                stored = page.evaluate(
+                    "Object.keys(window.sessionStorage).map(key => window.sessionStorage[key])"
+                    ".join(' ')")
+                self.assertNotIn("列出所有待开票的销售订单", stored)
+                self.assertEqual(errors, [])
+                browser.close()
+        finally:
+            gateway.close()
+            app.close()
 
     @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
                          "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
     def test_real_confirmation_card_posts_authenticated_user_decision(self):
+        """The whole chain, in a real browser: the server publishes a request, the panel
+        renders the card, a person clicks it, and the decision reaches the session.
+
+        The panel now lives in the host page's realm, so this no longer says the decision
+        is unforgeable -- SECURITY.md says what it does and does not mean. What it still
+        says is that an approval is answered by the page session that was shown it.
+        """
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:
             self.skipTest("Playwright is not installed")
+        if not (PANEL_ROOT / "panel.js").is_file():
+            self.skipTest("the assistant panel is not built; run scripts/build_panel.py")
 
         registry = RemoteSessionRegistry()
         app = _FixtureApplication(PAGE_CONTROLLER)
@@ -382,27 +215,32 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         try:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(headless=True)
-                page = browser.new_page()
+                page = browser.new_page(viewport={"width": 1280, "height": 800})
                 errors = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 page.goto(app.origin + "/page1", wait_until="domcontentloaded")
                 channel.wait_for_client(5)
+                page.locator(".woa-launcher").wait_for(timeout=8000)
+                page.locator(".woa-launcher").click()
                 request = ApprovalRequest(
                     1, "approval-browser", "Accept supplier quote",
-                    ("Quote Q-1042",), int(time.time() * 1000) + 5000)
+                    ("Quote Q-1042",), int(time.time() * 1000) + 20_000)
                 channel.request_approval(request)
-                host = page.locator("#woa-assistant")
-                host.wait_for(state="attached", timeout=5000)
-                page.wait_for_function(
-                    "document.querySelector('#woa-assistant')?.shadowRoot?.querySelector('.approval')",
-                    timeout=5000)
-                card_text = host.evaluate(
-                    "node => node.shadowRoot.querySelector('.approval').textContent")
-                self.assertIn("Accept supplier quote", card_text)
-                self.assertIn("Quote Q-1042", card_text)
-                host.evaluate(
-                    "node => node.shadowRoot.querySelector('.approval button:not(.deny)').click()")
-                decision = channel.wait_for_approval(request.approval_id, timeout_s=2)
+                card = page.locator(".woa-approval")
+                card.wait_for(timeout=8000)
+                self.assertIn("Accept supplier quote", card.inner_text())
+                self.assertIn("Quote Q-1042", card.inner_text())
+                # Deny holds the initial focus: the safe direction is the default one.
+                self.assertEqual(
+                    page.evaluate(
+                        "document.querySelector('#woa-assistant').shadowRoot"
+                        ".activeElement?.textContent"),
+                    "取消")
+                # The card must have been continuously visible before it can be approved;
+                # a click that arrives sooner is refused on purpose.
+                page.wait_for_timeout(700)
+                page.get_by_test_id("woa-approve").click()
+                decision = channel.wait_for_approval(request.approval_id, timeout_s=5)
                 self.assertEqual(decision.decision, "approved")
                 self.assertEqual(errors, [])
                 browser.close()
@@ -410,8 +248,129 @@ class EmbeddedRuntimeTests(unittest.TestCase):
             gateway.close()
             app.close()
 
+    @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the panel host")
+    def test_transport_failures_classify_once_against_the_server_table(self):
+        """Terminal or retryable is decided in one place, from the server's own codes.
+
+        Every reconnect loop used to carry its own list of codes to stop on. A 401 or a 404
+        was in none of them, so an expired credential looked like a network fault and
+        retried forever -- which is what the `embedded.js` 401/404/409 carry-over names.
+        """
+        host = _panel_host_source_b64()
+        script = f"""
+          const mod = await import('data:text/javascript;base64,{host}');
+          const configuration = {_panel_configuration_js()};
+          const rows = [
+            ['session closed', mod.classifyTransportError({{code:'session_closed'}}, configuration)],
+            ['unauthorized', mod.classifyTransportError({{status:401}}, configuration)],
+            ['unknown endpoint', mod.classifyTransportError({{status:404}}, configuration)],
+            ['replaced', mod.classifyTransportError({{status:409}}, configuration)],
+            ['forbidden', mod.classifyTransportError({{status:403}}, configuration)],
+            ['unavailable', mod.classifyTransportError({{status:503}}, configuration)],
+            ['offline', mod.classifyTransportError({{}}, configuration)],
+          ];
+          const delays = [];
+          let previous = 0;
+          for (let index = 0; index < 8; index += 1) {{
+            previous = mod.backoffAfter(previous);
+            delays.push(previous);
+          }}
+          process.stdout.write(JSON.stringify({{rows, delays}}));
+        """
+        proc = subprocess.run(["node", "--input-type=module", "-e", script],
+                              text=True, capture_output=True, timeout=10, check=True)
+        result = json.loads(proc.stdout)
+        verdicts = dict(result["rows"])
+        self.assertEqual([verdicts[name]["terminal"] for name in
+                          ("session closed", "unauthorized", "unknown endpoint",
+                           "replaced", "forbidden")], [True] * 5)
+        self.assertFalse(verdicts["unavailable"]["terminal"])
+        self.assertFalse(verdicts["offline"]["terminal"])
+        self.assertEqual(verdicts["session closed"]["state"], "ended")
+        self.assertEqual(verdicts["unknown endpoint"]["state"], "ended")
+        self.assertEqual(verdicts["replaced"]["state"], "replaced")
+        self.assertEqual(verdicts["unauthorized"]["state"], "error")
+        self.assertTrue(all(not verdicts[name]["retryable"] for name in
+                            ("session closed", "unauthorized", "replaced")))
+        # Bounded, monotonically approaching the ceiling, and jittered so reconnecting tabs
+        # do not return in lockstep.
+        self.assertTrue(all(200 <= delay <= 4800 for delay in result["delays"]))
+        self.assertGreater(result["delays"][4], result["delays"][0])
+        self.assertGreater(len(set(result["delays"][4:])), 1)
+
+    @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the panel host")
+    def test_the_local_echo_is_retired_by_the_server_own_acceptance(self):
+        """A message shown optimistically must stop being shown twice.
+
+        The echo exists because submitting needs a fresh observation first and can fail.
+        It stops existing the moment the session's own `message_accepted` arrives.
+        """
+        host = _panel_host_source_b64()
+        script = f"""
+          const mod = await import('data:text/javascript;base64,{host}');
+          const configuration = {_panel_configuration_js()};
+          const noop = () => {{}};
+          const host = new mod.PanelHost({{configuration, actions:{{
+            submit:noop, cancel:noop, decide:noop, newConversation:noop, loadOlder:noop}}}});
+          host.setOptimistic({{turnId:'turn-1', text:'列出订单', failed:false}});
+          host.applyTimeline({{entries:[{{id:'e1', sequence:1, turn_id:'other', at:0,
+            kind:'progress', tone:'neutral', text:'x'}}], cursor:'e1', has_more:false}});
+          const whileWaiting = host.snapshot().optimistic;
+          host.applyTimeline({{entries:[{{id:'e2', sequence:2, turn_id:'turn-1', at:0,
+            kind:'goal', tone:'neutral', text:'列出订单'}}], cursor:'e2', has_more:false}});
+          const afterAcceptance = host.snapshot().optimistic;
+          process.stdout.write(JSON.stringify({{whileWaiting, afterAcceptance}}));
+        """
+        proc = subprocess.run(["node", "--input-type=module", "-e", script],
+                              text=True, capture_output=True, timeout=10, check=True)
+        result = json.loads(proc.stdout)
+        self.assertEqual(result["whileWaiting"],
+                         {"turnId": "turn-1", "text": "列出订单", "failed": False})
+        self.assertIsNone(result["afterAcceptance"])
+
+    @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the panel host")
+    def test_panel_host_merges_by_event_id_and_holds_a_render_budget(self):
+        """The panel's timeline is the server's projection, merged idempotently."""
+        host = _panel_host_source_b64()
+        script = f"""
+          const mod = await import('data:text/javascript;base64,{host}');
+          const configuration = {_panel_configuration_js()};
+          const noop = () => {{}};
+          const host = new mod.PanelHost({{configuration, actions:{{
+            submit:noop, cancel:noop, decide:noop, newConversation:noop, loadOlder:noop}}}});
+          const page = id => ({{entries:[{{id, sequence:1, turn_id:'t', kind:'progress',
+            tone:'neutral', text:id, at:0}}], cursor:id, has_more:false}});
+          host.applyTimeline(page('e1'));
+          host.applyTimeline(page('e1'));
+          host.applyTimeline(page('e2'));
+          const merged = host.snapshot().entries.map(entry => entry.id);
+          let protocolRefused = '';
+          try {{
+            new mod.PanelHost({{configuration:{{...configuration, protocol:99}}, actions:{{
+              submit:noop, cancel:noop, decide:noop, newConversation:noop, loadOlder:noop}}}});
+          }} catch (error) {{ protocolRefused = error.message; }}
+          let actionsRefused = '';
+          try {{ new mod.PanelHost({{configuration, actions:{{submit:noop}}}}); }}
+          catch (error) {{ actionsRefused = error.message; }}
+          process.stdout.write(JSON.stringify({{merged, protocolRefused, actionsRefused}}));
+        """
+        proc = subprocess.run(["node", "--input-type=module", "-e", script],
+                              text=True, capture_output=True, timeout=10, check=True)
+        result = json.loads(proc.stdout)
+        self.assertEqual(result["merged"], ["e1", "e2"])
+        self.assertIn("panel protocol", result["protocolRefused"])
+        # The contract is checked where it is assembled, not probed for at each call.
+        self.assertIn("missing cancel()", result["actionsRefused"])
+
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
-    def test_approval_decision_is_persisted_before_idempotent_post(self):
+    def test_approval_is_offered_once_and_replayed_without_asking_again(self):
+        """The decision is recorded before it is dispatched, and a reload never re-asks.
+
+        The panel now answers asynchronously -- the card is shown, the person decides, the
+        Runtime posts -- so what has to hold is that arriving at the same request twice
+        cannot produce two questions, and that a document which reloaded between deciding
+        and posting finishes the post instead of asking again.
+        """
         source = _runtime_source_b64()
         script = f"""
           const mod = await import('data:text/javascript;base64,{source}');
@@ -420,35 +379,75 @@ class EmbeddedRuntimeTests(unittest.TestCase):
           runtime.stored = {{approvals:{{}}}};
           let saves = 0;
           runtime._save = () => {{ saves += 1; }};
-          let prompts = 0;
-          runtime.panel = {{
-            add() {{}}, status() {{}},
-            async requestApproval() {{ prompts += 1; return 'approved'; }},
+          const offered = [];
+          runtime.panelHost = {{
+            setConnection() {{}}, clearOptimisticOnce() {{}},
+            setPendingApproval(request) {{ offered.push(request ? request.approval_id : null); }},
           }};
           const posts = [];
           runtime._post = async (path, body) => {{ posts.push({{path, body}}); return {{accepted:true}}; }};
-          const event = {{kind:'approval_required', payload:{{
+          const payload = {{
             schema_version:1, approval_id:'approval-1', effect:'Update quote',
             targets:['Quote Q-1042'], expires_at:Date.now()+10000,
-          }}}};
+          }};
+          const event = {{kind:'approval_required', payload}};
+
           await runtime._handleEvent(event);
+          const beforeDecision = {{offered:[...offered], posts:posts.length, saves}};
+
+          await runtime._postApproval(payload, 'approved');
+          const afterDecision = {{posts:posts.length, saves, stored:{{...runtime.stored.approvals}}}};
+
+          // A document that reloaded between deciding and posting replays the decision.
           await runtime._handleEvent(event);
-          process.stdout.write(JSON.stringify({{prompts, saves, posts,
-            stored:runtime.stored.approvals}}));
+
+          process.stdout.write(JSON.stringify({{
+            beforeDecision, afterDecision, offered, posts,
+            stored:runtime.stored.approvals,
+          }}));
         """
         proc = subprocess.run(["node", "--input-type=module", "-e", script],
                               text=True, capture_output=True, timeout=10, check=True)
         result = json.loads(proc.stdout)
-        self.assertEqual(result["prompts"], 1)
+        # Showing the card is not answering it: nothing is dispatched until a person decides.
+        self.assertEqual(result["beforeDecision"], {"offered": ["approval-1"], "posts": 0, "saves": 0})
+        self.assertEqual(result["afterDecision"]["stored"], {"approval-1": "approved"})
+        self.assertEqual(result["afterDecision"]["saves"], 1)
         self.assertEqual(result["stored"], {"approval-1": "approved"})
-        self.assertEqual(result["saves"], 1)
         self.assertEqual(len(result["posts"]), 2)
-        self.assertEqual(result["posts"][0], {
-            "path": "/approvals",
-            "body": {"schema_version": 1, "session_id": "session-1",
-                     "approval_id": "approval-1", "decision": "approved",
-                     "principal_digest": "", "turn_id": "", "operation_id": ""},
-        })
+        self.assertEqual(result["offered"].count("approval-1"), 1)
+        for post in result["posts"]:
+            self.assertEqual(post, {
+                "path": "/approvals",
+                "body": {"schema_version": 1, "session_id": "session-1",
+                         "approval_id": "approval-1", "decision": "approved",
+                         "principal_digest": "", "turn_id": "", "operation_id": ""},
+            })
+
+    @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
+    def test_a_session_with_no_panel_denies_rather_than_proceeding(self):
+        """Nobody to ask means the write does not happen. Approval fails closed."""
+        source = _runtime_source_b64()
+        script = f"""
+          const mod = await import('data:text/javascript;base64,{source}');
+          const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
+          runtime.sessionId = 'session-1';
+          runtime.stored = {{approvals:{{}}}};
+          runtime._save = () => {{}};
+          runtime.panelHost = null;
+          const posts = [];
+          runtime._post = async (path, body) => {{ posts.push({{path, body}}); return {{accepted:true}}; }};
+          await runtime._handleEvent({{kind:'approval_required', payload:{{
+            schema_version:1, approval_id:'approval-9', effect:'Create invoice',
+            targets:['S00007'], expires_at:Date.now()+10000,
+          }}}});
+          process.stdout.write(JSON.stringify({{posts, stored:runtime.stored.approvals}}));
+        """
+        proc = subprocess.run(["node", "--input-type=module", "-e", script],
+                              text=True, capture_output=True, timeout=10, check=True)
+        result = json.loads(proc.stdout)
+        self.assertEqual(result["stored"], {"approval-9": "denied"})
+        self.assertEqual(result["posts"][0]["body"]["decision"], "denied")
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_first_party_shell_can_submit_through_the_same_panel_api(self):
@@ -461,17 +460,21 @@ class EmbeddedRuntimeTests(unittest.TestCase):
           runtime.stored = {{taskInFlight:false}};
           runtime._save = () => {{}};
           const statuses = [];
-          runtime.panel = {{add() {{}}, state(value) {{statuses.push(value)}}, setBusy() {{}}}};
+          runtime.panelHost = {{
+            setConnection(patch) {{ if ('state' in patch) statuses.push(patch.state); }},
+            setOptimistic() {{}}, failOptimistic() {{}}, clearOptimisticOnce() {{}}, raise() {{}},
+          }};
           const sent = [];
           let epoch = 0;
           runtime.observe = async () => ({{schema_version:1, session_id:'session-1',
             observation_id:`client:${{++epoch}}`, page_epoch:epoch,
             observation:{{url:globalThis.location.href}}}});
           runtime._post = async (path, body) => {{ sent.push({{path, body}}); return {{accepted:true}}; }};
+          runtime.panelConfiguration = {_panel_configuration_js()};
           await runtime.submitTask('  Open deployment details  ');
           let overlapRejected = false;
           try {{ await runtime.submitTask('Open another page'); }} catch {{ overlapRejected = true; }}
-          await runtime._handleEvent({{kind:'progress', payload:{{state:'needs_input', message:'more'}}}});
+          await runtime._handleEvent({{kind:'progress', payload:{{state:'finished', message:'done'}}}});
           globalThis.location.href = 'https://app.test/objects/notes';
           await runtime.submitTask('Open another page');
           process.stdout.write(JSON.stringify({{sent, overlapRejected,
@@ -497,67 +500,76 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                          ["/observations", "/messages", "/observations", "/messages"])
         self.assertTrue(result["overlapRejected"])
         self.assertTrue(result["taskInFlight"])
-        self.assertIn("needs_input", result["statuses"])
+        self.assertIn("success", result["statuses"])
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_product_turn_terminal_states_release_the_panel(self):
+        """Each terminal status maps through the server's table, not a copy of it here."""
         source = _runtime_source_b64()
         script = f"""
           const mod = await import('data:text/javascript;base64,{source}');
-          const expected = {{
-            finished:'ended', refused:'refused', cancelled:'cancelled',
-            indeterminate:'indeterminate', failed:'error',
-          }};
+          const configuration = {_panel_configuration_js()};
           const rows = [];
-          for (const [state, label] of Object.entries(expected)) {{
+          for (const state of ['finished', 'refused', 'cancelled', 'indeterminate', 'failed',
+                               'task_failed']) {{
             const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
             runtime.stored = {{taskInFlight:true}};
             runtime._save = () => {{}};
+            runtime.panelConfiguration = configuration;
             let busy = true;
             let status = '';
-            runtime.panel = {{
-              add() {{}},
-              setBusy(value) {{ busy = value; }},
-              state(value) {{ status = value; }},
+            let cleared = false;
+            runtime.panelHost = {{
+              setConnection(patch) {{
+                if ('busy' in patch) busy = patch.busy;
+                if ('state' in patch) status = patch.state;
+              }},
+              clearOptimisticOnce() {{ cleared = true; }},
             }};
             await runtime._handleEvent({{kind:'progress', payload:{{state, message:'done'}}}});
-            rows.push({{state, label, status, busy, taskInFlight:runtime.stored.taskInFlight}});
+            rows.push({{state, status, busy, cleared,
+              taskInFlight:runtime.stored.taskInFlight}});
           }}
           process.stdout.write(JSON.stringify(rows));
         """
         proc = subprocess.run(["node", "--input-type=module", "-e", script],
                               text=True, capture_output=True, timeout=10, check=True)
         rows = json.loads(proc.stdout)
-        self.assertEqual(
-            [row["status"] for row in rows],
-            ["ended", "refused", "cancelled", "indeterminate", "error"],
-        )
+        contract = RemoteSessionChannel("expectation-probe", ("https://app.test",))
+        table = contract._panel_configuration()["progress_states"]
+        self.assertEqual([row["status"] for row in rows],
+                         [table[row["state"]]["panel_state"] for row in rows])
         self.assertTrue(all(row["busy"] is False for row in rows))
+        self.assertTrue(all(row["cleared"] for row in rows))
         self.assertTrue(all(row["taskInFlight"] is False for row in rows))
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_stop_posts_the_exact_active_message_and_waits_for_terminal(self):
+        """Stopping is a request, not an outcome: the turn stays in flight until the server
+        says how it ended. A pending approval is denied by the server on cancellation, not
+        dismissed locally, so the card clears only once that denial is recorded."""
         source = _runtime_source_b64()
         script = f"""
           const mod = await import('data:text/javascript;base64,{source}');
           const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
           runtime.stopped = false;
           runtime.sessionId = 'session-1';
+          runtime.panelConfiguration = {_panel_configuration_js()};
           runtime.stored = {{taskInFlight:true, activeMessageId:'message-7',
             cancellationPending:false}};
           let saves = 0;
           runtime._save = () => {{ saves += 1; }};
           const statuses = [];
-          const notes = [];
-          let approvalCancelled = 0;
           let stopping = false;
           let busy = true;
-          runtime.panel = {{
-            add(value) {{ notes.push(value); }},
-            state(value) {{ statuses.push(value); }},
-            setBusy(value) {{ busy = value; }},
-            setStopping(value) {{ stopping = value; }},
-            cancelApproval() {{ approvalCancelled += 1; }},
+          runtime.panelHost = {{
+            setConnection(patch) {{
+              if ('state' in patch) statuses.push(patch.state);
+              if ('busy' in patch) busy = patch.busy;
+              if ('stopping' in patch) stopping = patch.stopping;
+            }},
+            clearOptimisticOnce() {{}},
+            raise() {{}},
           }};
           const posts = [];
           runtime._post = async (path, body) => {{ posts.push({{path, body}}); }};
@@ -569,23 +581,22 @@ class EmbeddedRuntimeTests(unittest.TestCase):
             cancellationPending:runtime.stored.cancellationPending}};
           await runtime._handleEvent({{kind:'progress', payload:{{
             state:'cancelled', message:'Stopped'}}}});
-          process.stdout.write(JSON.stringify({{posts, pending, approvalCancelled,
-            statuses, notes, saves, busy, stopping, stored:runtime.stored}}));
+          process.stdout.write(JSON.stringify({{posts, pending,
+            statuses, saves, busy, stopping, stored:runtime.stored}}));
         """
         proc = subprocess.run(["node", "--input-type=module", "-e", script],
                               text=True, capture_output=True, timeout=10, check=True)
         result = json.loads(proc.stdout)
+        # Exactly one cancellation for two presses: stop is idempotent per message.
         self.assertEqual(result["posts"], [{
             "path": "/cancellations",
             "body": {"schema_version": 1, "session_id": "session-1",
                      "message_id": "message-7"},
         }])
-        self.assertEqual(result["approvalCancelled"], 1)
         self.assertEqual(result["pending"], {
             "busy": True, "stopping": True, "taskInFlight": True,
             "activeMessageId": "message-7", "cancellationPending": True})
         self.assertEqual(result["statuses"], ["stopping", "cancelled"])
-        self.assertEqual(result["notes"], ["正在安全停止当前任务", "Stopped"])
         self.assertFalse(result["busy"])
         self.assertFalse(result["stored"]["taskInFlight"])
         self.assertEqual(result["stored"]["activeMessageId"], "")
@@ -634,8 +645,9 @@ class EmbeddedRuntimeTests(unittest.TestCase):
           let sent;
           runtime._post = async (path, body, options) => {{
             sent = {{path, body, options}};
-            return {{lease_id:'lease-1'}};
+            return {{lease_id:'lease-1', panel:{{protocol:1, limits:{{}}, labels:{{}}}}}};
           }};
+          runtime._armExpiry = () => {{}};
           await runtime._hello();
           process.stdout.write(JSON.stringify({{sent, leaseId:runtime.leaseId}}));
         """

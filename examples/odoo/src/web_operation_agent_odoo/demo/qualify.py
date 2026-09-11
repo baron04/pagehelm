@@ -279,8 +279,18 @@ def _database_fixture(args) -> OdooPostgresFixture | None:
                               db_user=args.fixture_db_user)
 
 
-def _blocked_artifact(bound, health: dict, observed: str, baseline: str) -> dict:
-    """Say what stopped the gate, without pretending it produced a measurement."""
+def _blocked_artifact(bound, health: dict, observed: str, baseline: str,
+                      drifted: list[str]) -> dict:
+    """Say what stopped the gate, without pretending it produced a measurement.
+
+    Naming the tables matters: a bare digest mismatch reads as "something wrote to the
+    library" when it may equally be the running Odoo's own bookkeeping. Measured on an idle
+    server, a restore is followed within a minute by one row in `mail_message` and nothing
+    else for at least ten minutes -- so a gate run that is not the first one after a restore
+    is blocked by the application, not by a previous run. Whether that table should still
+    count towards the pre-run baseline identity is a decision for whoever owns this gate;
+    this only makes the answer visible instead of a mystery.
+    """
     return {
         "schema_version": 1,
         "kind": "woa_odoo_live_qualification",
@@ -292,10 +302,12 @@ def _blocked_artifact(bound, health: dict, observed: str, baseline: str) -> dict
         "case_checks": {},
         "fixture_database_digest": observed,
         "fixture_expected_digest": baseline,
+        "fixture_drifted_tables": drifted,
         "checks": {"fixture_matched_its_recorded_baseline_before_the_run": False},
         "status": "BLOCKED",
         "detail": ("the fixture is not on its recorded baseline; restore it before "
-                   "measuring anything against it"),
+                   "measuring anything against it. Drifted: "
+                   + (", ".join(drifted) if drifted else "no table-level difference")),
     }
 
 
@@ -345,14 +357,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     baseline = ""
     fixture_checks: dict = {}
     if database is not None:
-        baseline = load_json(Path(args.fixture_record))["baseline_digest"]
-        started_on = database.capture()["digest"]
+        record = load_json(Path(args.fixture_record))
+        baseline = record["baseline_digest"]
+        captured = database.capture()
+        started_on = captured["digest"]
         fixture_checks["fixture_matched_its_recorded_baseline_before_the_run"] = (
             started_on == baseline)
         if started_on != baseline:
             # Stop rather than measure. A gate that runs anyway produces a number nobody
             # can reproduce, and the last one of those cost this project a whole spike.
-            return _emit(_blocked_artifact(bound, health, started_on, baseline), args)
+            recorded_tables = record.get("baseline_tables") or {}
+            drifted = sorted(
+                name for name, row in captured["tables"].items()
+                if recorded_tables.get(name) != row) if recorded_tables else []
+            return _emit(_blocked_artifact(bound, health, started_on, baseline, drifted),
+                         args)
 
     read_only_before = fixture_state(adapter)
     with tempfile.TemporaryDirectory() as tmp:

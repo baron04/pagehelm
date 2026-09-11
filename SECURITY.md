@@ -46,6 +46,39 @@ Reports are especially valuable for flaws that could cause:
 - audit records to omit, reorder, or misrepresent a consequential action; or
 - package resources to be replaced or loaded from an unintended location.
 
+## The approval surface and the host page
+
+The assistant panel renders inside the host application's page, isolated for style by a
+shadow root but sharing that page's JavaScript realm. Two consequences follow, and neither
+is something a future change to this panel can remove:
+
+**A script in the host application page can complete an approval.** Anything running in
+that realm -- the application's own code, a cross-site scripting defect in it, a third-party
+tag it loads, a browser extension content script -- can read the pending request and produce
+the decision that answers it. The approval therefore establishes that *the authenticated
+page session decided*, not that *a person decided*. The first-party embedded version of
+this product depends on the application page being trustworthy; a deployment that cannot
+assume that does not have a usable confirmation step, and should not enable mutations.
+
+**Content Security Policy and Trusted Types belong to the host page.** They are response
+headers on a document, so the panel cannot turn them on. What it can do, and what a
+regression test pins, is never require them to be relaxed: it constructs and runs a
+confirmation under `script-src 'self'`, `style-src 'self'` and
+`require-trusted-types-for 'script'` with `trusted-types 'none'`, because it writes no
+HTML, injects no inline style or script, and mints no Trusted Types policy. If your
+application can set a strict policy, set one; the panel will not be why you cannot.
+
+What the panel does still enforce is that a confirmation cannot be answered by a press the
+user could not have made or seen: the decision requires a trusted user gesture, and the card
+must have been continuously and substantially visible for a short dwell before it. That
+closes visual deception -- something drawn over the card, or the window shrunk until the
+card is not really on screen -- and closes nothing else. It is not a defence against a
+script that shares the panel's realm, and must not be described as one.
+
+A confirmation that cannot be forged by the page it sits on needs an out-of-band surface: a
+browser extension side panel, or browser chrome. That is a different product with a
+different threat model, and this repository does not ship it.
+
 ## Operational limitations
 
 The current code does not yet provide complete production identity binding, tenant isolation, durable session storage, horizontal scaling, rate limiting, or comprehensive operational monitoring. The Twenty demo binds its configured browser session to the delegated OAuth actor and closes on cookie replacement, but other embedded applications still need a trusted server-side session assertion and no distributed revocation or principal renewal service exists. Browser actions do not provide database transaction or rollback guarantees.

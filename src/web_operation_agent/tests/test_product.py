@@ -48,6 +48,7 @@ class _Channel:
                  cancelled: bool = False,
                  principal: PrincipalContext | None = None):
         self.session_id = "product-session"
+        self.new_conversation_pending = False
         self.published = []
         self.approvals = []
         self.decision = decision
@@ -58,6 +59,11 @@ class _Channel:
 
     def message_cancelled(self, _message_id: str) -> bool:
         return self.cancelled
+
+    def take_new_conversation(self) -> bool:
+        pending = self.new_conversation_pending
+        self.new_conversation_pending = False
+        return pending
 
     def envelope(self, epoch: int, page_url: str) -> ObservationEnvelope:
         return ObservationEnvelope(

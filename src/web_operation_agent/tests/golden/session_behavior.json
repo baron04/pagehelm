@@ -523,6 +523,220 @@
       },
       "why": "prior user intent, and only that, may recover a domain"
     },
+    "a_refusal_that_cannot_see_the_page_stops_the_run": {
+      "audit": [
+        {
+          "event": "control_run_started",
+          "run_id": "a_refusal_that_cannot_see_the_page_stops_the_run",
+          "seq": 1
+        },
+        {
+          "digest": "736fc4d04ab1b9fa74946ea072860059c22f7b8c1a0326608846a27004413f0a",
+          "elements": 0,
+          "epoch": 1,
+          "event": "observation",
+          "run_id": "a_refusal_that_cannot_see_the_page_stops_the_run",
+          "seq": 2,
+          "url": "http://app.test/glasshouse/do/main"
+        },
+        {
+          "contains_raw_payload": false,
+          "data_classes": [
+            "agent_instructions",
+            "application_knowledge",
+            "application_page_observation",
+            "user_intent"
+          ],
+          "event": "provider_egress",
+          "input_bytes": 6407,
+          "input_digest": "b2ebeb2756be56198dc51aa4d23274f467d1552f30625de7a93cc0d424fe1417",
+          "message_count": 2,
+          "roles": {
+            "system": 1,
+            "user": 1
+          },
+          "run_id": "a_refusal_that_cannot_see_the_page_stops_the_run",
+          "schema_version": 1,
+          "seq": 3,
+          "tool_count": 11
+        },
+        {
+          "args": {
+            "skill_id": "unknown-skill"
+          },
+          "event": "tool_call",
+          "run_id": "a_refusal_that_cannot_see_the_page_stops_the_run",
+          "seq": 4,
+          "step": 1,
+          "tool": "open_skill_route"
+        },
+        {
+          "event": "skill_route_rejected",
+          "reason": "skill_id was not supplied for this task",
+          "requested_tool_dispatched": false,
+          "run_id": "a_refusal_that_cannot_see_the_page_stops_the_run",
+          "seq": 5,
+          "side_effect_possible": false,
+          "skill_id": "unknown-skill",
+          "step": 1
+        },
+        {
+          "attribution": "unattributed",
+          "detail": "",
+          "event": "write_outcome",
+          "observed_after_command_id": "c1",
+          "permitted": 0,
+          "permitted_requests": [],
+          "refused": 0,
+          "refused_requests": [],
+          "run_id": "a_refusal_that_cannot_see_the_page_stops_the_run",
+          "seq": 6,
+          "state": "none",
+          "step": 1
+        },
+        {
+          "after_tool": "open_skill_route",
+          "command_id": "c1",
+          "elapsed_ms": 0,
+          "error_code": "",
+          "event": "action_receipt",
+          "fresh_observation": false,
+          "navigated": false,
+          "observation_epoch": 1,
+          "ok": true,
+          "page_epoch_before": 1,
+          "relogin": false,
+          "requested_tool_dispatched": false,
+          "run_id": "a_refusal_that_cannot_see_the_page_stops_the_run",
+          "seq": 7,
+          "server_tool_rejection": "open_skill_route",
+          "side_effect_possible": false,
+          "source_candidate_rejection": false,
+          "step": 1,
+          "tool": "observe",
+          "url_after": "http://app.test/glasshouse/do/main",
+          "write": "none",
+          "write_attribution": "unattributed"
+        },
+        {
+          "event": "control_run_released",
+          "run_id": "a_refusal_that_cannot_see_the_page_stops_the_run",
+          "seq": 8
+        },
+        {
+          "agent_said": "",
+          "arm": "G",
+          "business_answer_projected": false,
+          "business_control": {
+            "approval_denied": 0,
+            "approval_granted": 0,
+            "approval_requested": 0,
+            "mutation_completed": 0,
+            "mutation_execution_started": 0,
+            "mutation_indeterminate": 0
+          },
+          "challenged_false_success": false,
+          "citations": 0,
+          "contract_conflicts": 0,
+          "contract_digest": "6316f35881ff21065516e197e936f28229239be7b9a8965b9235b093ddde5733",
+          "contract_source": "none",
+          "control": {
+            "blocked_requests": [],
+            "consumed_requests": [],
+            "permit_consumed": 0,
+            "trace_events": 0,
+            "write_blocked": 0
+          },
+          "detail": "Skill refusal could not obtain a successful fresh observation",
+          "event": "run_finished",
+          "page_actions": 0,
+          "plan_status": {},
+          "plan_withdrawn": false,
+          "policy_blocks": 0,
+          "run_id": "a_refusal_that_cannot_see_the_page_stops_the_run",
+          "seq": 9,
+          "spend": {
+            "cost_cny": 0.0,
+            "provider_calls": 0
+          },
+          "steps_used": 1,
+          "success_claim": "",
+          "task_ref": "T",
+          "terminal_reason": "transport_error",
+          "wall_seconds": 0.0,
+          "write_refusals": 0
+        }
+      ],
+      "browser_commands": [
+        {
+          "action": "observe",
+          "args": {},
+          "expect_navigation": false
+        }
+      ],
+      "model_calls": [
+        {
+          "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nAPP SKILLS (server-selected read-only knowledge):\n[{\"expected_text\":[\"Seed Trays\"],\"intent\":\"Open the seed tray list.\",\"parameters\":[],\"requires_current_webapp\":\"glasshouse\",\"skill_id\":\"fixture.open-trays\",\"title\":\"Open the seed trays\"}]",
+          "system_chars": 2712,
+          "system_digest": "sha256:341abfc30469cd764ea64d856e686fa35ac78b2ee27b22d39fbc81bdd5f3e93b",
+          "tool_results": [],
+          "tools_offered": [
+            "back",
+            "click",
+            "enter_skill_app",
+            "fill",
+            "finish",
+            "goto",
+            "observe",
+            "open_skill_route",
+            "select",
+            "submit",
+            "wait_for"
+          ]
+        }
+      ],
+      "result": {
+        "agent_said": "",
+        "arm": "G",
+        "business_answer_projected": false,
+        "business_control": {
+          "approval_denied": 0,
+          "approval_granted": 0,
+          "approval_requested": 0,
+          "mutation_completed": 0,
+          "mutation_execution_started": 0,
+          "mutation_indeterminate": 0
+        },
+        "challenged_false_success": false,
+        "citations": 0,
+        "contract_conflicts": 0,
+        "contract_digest": "6316f35881ff21065516e197e936f28229239be7b9a8965b9235b093ddde5733",
+        "contract_source": "none",
+        "control": {
+          "blocked_requests": [],
+          "consumed_requests": [],
+          "permit_consumed": 0,
+          "trace_events": 0,
+          "write_blocked": 0
+        },
+        "detail": "Skill refusal could not obtain a successful fresh observation",
+        "page_actions": 0,
+        "plan_status": {},
+        "plan_withdrawn": false,
+        "policy_blocks": 0,
+        "run_id": "a_refusal_that_cannot_see_the_page_stops_the_run",
+        "spend": {
+          "cost_cny": 0.0,
+          "provider_calls": 0
+        },
+        "steps_used": 1,
+        "success_claim": "",
+        "task_ref": "T",
+        "terminal_reason": "transport_error",
+        "write_refusals": 0
+      },
+      "why": "a refusal with no fresh page is terminal, not a shrug"
+    },
     "a_second_write_while_one_is_unconfirmed_is_indeterminate": {
       "audit": [
         {
@@ -786,6 +1000,282 @@
         "write_refusals": 0
       },
       "why": "the run stops rather than stacking unconfirmed writes"
+    },
+    "application_entry_refused_observes_before_it_answers": {
+      "audit": [
+        {
+          "event": "control_run_started",
+          "run_id": "application_entry_refused_observes_before_it_answers",
+          "seq": 1
+        },
+        {
+          "digest": "e38a0ab97268ccc628e93ccd10ff27cf501f50772c482723604995f575bd3a2c",
+          "elements": 1,
+          "epoch": 1,
+          "event": "observation",
+          "run_id": "application_entry_refused_observes_before_it_answers",
+          "seq": 2,
+          "url": "http://app.test/portal"
+        },
+        {
+          "contains_raw_payload": false,
+          "data_classes": [
+            "agent_instructions",
+            "application_page_observation",
+            "user_intent"
+          ],
+          "event": "provider_egress",
+          "input_bytes": 5534,
+          "input_digest": "70011d3617626cd4498f15d8df73892c14dafa56f2b8f0f7f9befe85004d20f9",
+          "message_count": 2,
+          "roles": {
+            "system": 1,
+            "user": 1
+          },
+          "run_id": "application_entry_refused_observes_before_it_answers",
+          "schema_version": 1,
+          "seq": 3,
+          "tool_count": 10
+        },
+        {
+          "args": {
+            "ref": "e9"
+          },
+          "event": "tool_call",
+          "run_id": "application_entry_refused_observes_before_it_answers",
+          "seq": 4,
+          "step": 1,
+          "tool": "enter_application"
+        },
+        {
+          "element_ref": "e9",
+          "event": "application_entry_rejected",
+          "reason": "ref must identify one observed anchor link",
+          "requested_tool_dispatched": false,
+          "run_id": "application_entry_refused_observes_before_it_answers",
+          "seq": 5,
+          "side_effect_possible": false,
+          "step": 1
+        },
+        {
+          "attribution": "unattributed",
+          "detail": "",
+          "event": "write_outcome",
+          "observed_after_command_id": "c1",
+          "permitted": 0,
+          "permitted_requests": [],
+          "refused": 0,
+          "refused_requests": [],
+          "run_id": "application_entry_refused_observes_before_it_answers",
+          "seq": 6,
+          "state": "none",
+          "step": 1
+        },
+        {
+          "after_tool": "enter_application",
+          "command_id": "c1",
+          "elapsed_ms": 0,
+          "error_code": "",
+          "event": "action_receipt",
+          "fresh_observation": true,
+          "navigated": false,
+          "observation_epoch": 2,
+          "ok": true,
+          "page_epoch_before": 1,
+          "relogin": false,
+          "requested_tool_dispatched": false,
+          "run_id": "application_entry_refused_observes_before_it_answers",
+          "seq": 7,
+          "server_tool_rejection": "enter_application",
+          "side_effect_possible": false,
+          "source_candidate_rejection": false,
+          "step": 1,
+          "tool": "observe",
+          "url_after": "http://app.test/portal",
+          "write": "none",
+          "write_attribution": "unattributed"
+        },
+        {
+          "contains_raw_payload": false,
+          "data_classes": [
+            "agent_instructions",
+            "application_page_observation",
+            "application_tool_result",
+            "user_intent"
+          ],
+          "event": "provider_egress",
+          "input_bytes": 6091,
+          "input_digest": "df0117880b92c9ada008d012d3e8cbb7caeccce1a0a18ca2405a6f909c5d93b2",
+          "message_count": 4,
+          "roles": {
+            "assistant": 1,
+            "system": 1,
+            "tool": 1,
+            "user": 1
+          },
+          "run_id": "application_entry_refused_observes_before_it_answers",
+          "schema_version": 1,
+          "seq": 8,
+          "tool_count": 10
+        },
+        {
+          "args": {
+            "done": false,
+            "why": "there is no application link on this page"
+          },
+          "event": "tool_call",
+          "run_id": "application_entry_refused_observes_before_it_answers",
+          "seq": 9,
+          "step": 2,
+          "tool": "finish"
+        },
+        {
+          "challenged": false,
+          "claim": "not_claimed",
+          "event": "success_claim",
+          "run_id": "application_entry_refused_observes_before_it_answers",
+          "seq": 10,
+          "step": 2
+        },
+        {
+          "event": "control_run_released",
+          "run_id": "application_entry_refused_observes_before_it_answers",
+          "seq": 11
+        },
+        {
+          "agent_said": "there is no application link on this page",
+          "arm": "G",
+          "business_answer_projected": false,
+          "business_control": {
+            "approval_denied": 0,
+            "approval_granted": 0,
+            "approval_requested": 0,
+            "mutation_completed": 0,
+            "mutation_execution_started": 0,
+            "mutation_indeterminate": 0
+          },
+          "challenged_false_success": false,
+          "citations": 0,
+          "contract_conflicts": 0,
+          "contract_digest": "6316f35881ff21065516e197e936f28229239be7b9a8965b9235b093ddde5733",
+          "contract_source": "none",
+          "control": {
+            "blocked_requests": [],
+            "consumed_requests": [],
+            "permit_consumed": 0,
+            "trace_events": 0,
+            "write_blocked": 0
+          },
+          "detail": "there is no application link on this page",
+          "event": "run_finished",
+          "page_actions": 0,
+          "plan_status": {},
+          "plan_withdrawn": false,
+          "policy_blocks": 0,
+          "run_id": "application_entry_refused_observes_before_it_answers",
+          "seq": 12,
+          "spend": {
+            "cost_cny": 0.0,
+            "provider_calls": 0
+          },
+          "steps_used": 2,
+          "success_claim": "not_claimed",
+          "task_ref": "T",
+          "terminal_reason": "agent_refused",
+          "wall_seconds": 0.0,
+          "write_refusals": 0
+        }
+      ],
+      "browser_commands": [
+        {
+          "action": "observe",
+          "args": {},
+          "expect_navigation": false
+        }
+      ],
+      "model_calls": [
+        {
+          "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/portal\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\n  e1 link \"Elsewhere\" href=/other/page\nEND_UNTRUSTED_PAGE_OBSERVATION",
+          "system_chars": 2465,
+          "system_digest": "sha256:02c86da78db08dc2f49e93d450654c82d4bcc4d64d1a07c490b4b6f24b987051",
+          "tool_results": [],
+          "tools_offered": [
+            "back",
+            "click",
+            "enter_application",
+            "fill",
+            "finish",
+            "goto",
+            "observe",
+            "select",
+            "submit",
+            "wait_for"
+          ]
+        },
+        {
+          "system_chars": 2465,
+          "system_digest": "sha256:02c86da78db08dc2f49e93d450654c82d4bcc4d64d1a07c490b4b6f24b987051",
+          "tool_results": [
+            {
+              "name": "enter_application",
+              "text": "The server rejected enter_application before dispatch: ref must identify one observed anchor link.\n\nobserve -> ok\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/portal\ntitle: Glasshouse\nheadings: Main\npage content:\npage 2\nelements (epoch 2):\n  e1 link \"Elsewhere\" href=/other/page\nEND_UNTRUSTED_PAGE_OBSERVATION"
+            }
+          ],
+          "tools_offered": [
+            "back",
+            "click",
+            "enter_application",
+            "fill",
+            "finish",
+            "goto",
+            "observe",
+            "select",
+            "submit",
+            "wait_for"
+          ]
+        }
+      ],
+      "result": {
+        "agent_said": "there is no application link on this page",
+        "arm": "G",
+        "business_answer_projected": false,
+        "business_control": {
+          "approval_denied": 0,
+          "approval_granted": 0,
+          "approval_requested": 0,
+          "mutation_completed": 0,
+          "mutation_execution_started": 0,
+          "mutation_indeterminate": 0
+        },
+        "challenged_false_success": false,
+        "citations": 0,
+        "contract_conflicts": 0,
+        "contract_digest": "6316f35881ff21065516e197e936f28229239be7b9a8965b9235b093ddde5733",
+        "contract_source": "none",
+        "control": {
+          "blocked_requests": [],
+          "consumed_requests": [],
+          "permit_consumed": 0,
+          "trace_events": 0,
+          "write_blocked": 0
+        },
+        "detail": "there is no application link on this page",
+        "page_actions": 0,
+        "plan_status": {},
+        "plan_withdrawn": false,
+        "policy_blocks": 0,
+        "run_id": "application_entry_refused_observes_before_it_answers",
+        "spend": {
+          "cost_cny": 0.0,
+          "provider_calls": 0
+        },
+        "steps_used": 2,
+        "success_claim": "not_claimed",
+        "task_ref": "T",
+        "terminal_reason": "agent_refused",
+        "write_refusals": 0
+      },
+      "why": "a refused routing tool hands back a fresh page, not just a no"
     },
     "application_entry_uses_a_page_local_link": {
       "audit": [
@@ -5908,6 +6398,596 @@
         "write_refusals": 0
       },
       "why": "the route template never reaches the model"
+    },
+    "skill_route_refused_observes_before_it_answers": {
+      "audit": [
+        {
+          "event": "control_run_started",
+          "run_id": "skill_route_refused_observes_before_it_answers",
+          "seq": 1
+        },
+        {
+          "digest": "736fc4d04ab1b9fa74946ea072860059c22f7b8c1a0326608846a27004413f0a",
+          "elements": 0,
+          "epoch": 1,
+          "event": "observation",
+          "run_id": "skill_route_refused_observes_before_it_answers",
+          "seq": 2,
+          "url": "http://app.test/glasshouse/do/main"
+        },
+        {
+          "contains_raw_payload": false,
+          "data_classes": [
+            "agent_instructions",
+            "application_knowledge",
+            "application_page_observation",
+            "user_intent"
+          ],
+          "event": "provider_egress",
+          "input_bytes": 6407,
+          "input_digest": "b2ebeb2756be56198dc51aa4d23274f467d1552f30625de7a93cc0d424fe1417",
+          "message_count": 2,
+          "roles": {
+            "system": 1,
+            "user": 1
+          },
+          "run_id": "skill_route_refused_observes_before_it_answers",
+          "schema_version": 1,
+          "seq": 3,
+          "tool_count": 11
+        },
+        {
+          "args": {
+            "skill_id": "unknown-skill"
+          },
+          "event": "tool_call",
+          "run_id": "skill_route_refused_observes_before_it_answers",
+          "seq": 4,
+          "step": 1,
+          "tool": "open_skill_route"
+        },
+        {
+          "event": "skill_route_rejected",
+          "reason": "skill_id was not supplied for this task",
+          "requested_tool_dispatched": false,
+          "run_id": "skill_route_refused_observes_before_it_answers",
+          "seq": 5,
+          "side_effect_possible": false,
+          "skill_id": "unknown-skill",
+          "step": 1
+        },
+        {
+          "attribution": "unattributed",
+          "detail": "",
+          "event": "write_outcome",
+          "observed_after_command_id": "c1",
+          "permitted": 0,
+          "permitted_requests": [],
+          "refused": 0,
+          "refused_requests": [],
+          "run_id": "skill_route_refused_observes_before_it_answers",
+          "seq": 6,
+          "state": "none",
+          "step": 1
+        },
+        {
+          "after_tool": "open_skill_route",
+          "command_id": "c1",
+          "elapsed_ms": 0,
+          "error_code": "",
+          "event": "action_receipt",
+          "fresh_observation": true,
+          "navigated": false,
+          "observation_epoch": 2,
+          "ok": true,
+          "page_epoch_before": 1,
+          "relogin": false,
+          "requested_tool_dispatched": false,
+          "run_id": "skill_route_refused_observes_before_it_answers",
+          "seq": 7,
+          "server_tool_rejection": "open_skill_route",
+          "side_effect_possible": false,
+          "source_candidate_rejection": false,
+          "step": 1,
+          "tool": "observe",
+          "url_after": "http://app.test/glasshouse/do/main",
+          "write": "none",
+          "write_attribution": "unattributed"
+        },
+        {
+          "contains_raw_payload": false,
+          "data_classes": [
+            "agent_instructions",
+            "application_knowledge",
+            "application_page_observation",
+            "application_tool_result",
+            "user_intent"
+          ],
+          "event": "provider_egress",
+          "input_bytes": 7290,
+          "input_digest": "eb4b96d55a2f9e31cf41092d526f1db5cfb1defd8105d713a5b5b0811d86f8a2",
+          "message_count": 4,
+          "roles": {
+            "assistant": 1,
+            "system": 1,
+            "tool": 1,
+            "user": 1
+          },
+          "run_id": "skill_route_refused_observes_before_it_answers",
+          "schema_version": 1,
+          "seq": 8,
+          "tool_count": 11
+        },
+        {
+          "args": {
+            "done": false,
+            "why": "that Skill is not available to this task"
+          },
+          "event": "tool_call",
+          "run_id": "skill_route_refused_observes_before_it_answers",
+          "seq": 9,
+          "step": 2,
+          "tool": "finish"
+        },
+        {
+          "challenged": false,
+          "claim": "not_claimed",
+          "event": "success_claim",
+          "run_id": "skill_route_refused_observes_before_it_answers",
+          "seq": 10,
+          "step": 2
+        },
+        {
+          "event": "control_run_released",
+          "run_id": "skill_route_refused_observes_before_it_answers",
+          "seq": 11
+        },
+        {
+          "agent_said": "that Skill is not available to this task",
+          "arm": "G",
+          "business_answer_projected": false,
+          "business_control": {
+            "approval_denied": 0,
+            "approval_granted": 0,
+            "approval_requested": 0,
+            "mutation_completed": 0,
+            "mutation_execution_started": 0,
+            "mutation_indeterminate": 0
+          },
+          "challenged_false_success": false,
+          "citations": 0,
+          "contract_conflicts": 0,
+          "contract_digest": "6316f35881ff21065516e197e936f28229239be7b9a8965b9235b093ddde5733",
+          "contract_source": "none",
+          "control": {
+            "blocked_requests": [],
+            "consumed_requests": [],
+            "permit_consumed": 0,
+            "trace_events": 0,
+            "write_blocked": 0
+          },
+          "detail": "that Skill is not available to this task",
+          "event": "run_finished",
+          "page_actions": 0,
+          "plan_status": {},
+          "plan_withdrawn": false,
+          "policy_blocks": 0,
+          "run_id": "skill_route_refused_observes_before_it_answers",
+          "seq": 12,
+          "spend": {
+            "cost_cny": 0.0,
+            "provider_calls": 0
+          },
+          "steps_used": 2,
+          "success_claim": "not_claimed",
+          "task_ref": "T",
+          "terminal_reason": "agent_refused",
+          "wall_seconds": 0.0,
+          "write_refusals": 0
+        }
+      ],
+      "browser_commands": [
+        {
+          "action": "observe",
+          "args": {},
+          "expect_navigation": false
+        }
+      ],
+      "model_calls": [
+        {
+          "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nAPP SKILLS (server-selected read-only knowledge):\n[{\"expected_text\":[\"Seed Trays\"],\"intent\":\"Open the seed tray list.\",\"parameters\":[],\"requires_current_webapp\":\"glasshouse\",\"skill_id\":\"fixture.open-trays\",\"title\":\"Open the seed trays\"}]",
+          "system_chars": 2712,
+          "system_digest": "sha256:341abfc30469cd764ea64d856e686fa35ac78b2ee27b22d39fbc81bdd5f3e93b",
+          "tool_results": [],
+          "tools_offered": [
+            "back",
+            "click",
+            "enter_skill_app",
+            "fill",
+            "finish",
+            "goto",
+            "observe",
+            "open_skill_route",
+            "select",
+            "submit",
+            "wait_for"
+          ]
+        },
+        {
+          "system_chars": 2712,
+          "system_digest": "sha256:341abfc30469cd764ea64d856e686fa35ac78b2ee27b22d39fbc81bdd5f3e93b",
+          "tool_results": [
+            {
+              "name": "open_skill_route",
+              "text": "The server rejected open_skill_route before dispatch: skill_id was not supplied for this task. Use the current page to satisfy the Skill precondition, or choose another action.\n\nobserve -> ok\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 2\nelements (epoch 2):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nAPP SKILLS (server-selected read-only knowledge):\n[{\"expected_text\":[\"Seed Trays\"],\"intent\":\"Open the seed tray list.\",\"parameters\":[],\"requires_current_webapp\":\"glasshouse\",\"skill_id\":\"fixture.open-trays\",\"title\":\"Open the seed trays\"}]"
+            }
+          ],
+          "tools_offered": [
+            "back",
+            "click",
+            "enter_skill_app",
+            "fill",
+            "finish",
+            "goto",
+            "observe",
+            "open_skill_route",
+            "select",
+            "submit",
+            "wait_for"
+          ]
+        }
+      ],
+      "result": {
+        "agent_said": "that Skill is not available to this task",
+        "arm": "G",
+        "business_answer_projected": false,
+        "business_control": {
+          "approval_denied": 0,
+          "approval_granted": 0,
+          "approval_requested": 0,
+          "mutation_completed": 0,
+          "mutation_execution_started": 0,
+          "mutation_indeterminate": 0
+        },
+        "challenged_false_success": false,
+        "citations": 0,
+        "contract_conflicts": 0,
+        "contract_digest": "6316f35881ff21065516e197e936f28229239be7b9a8965b9235b093ddde5733",
+        "contract_source": "none",
+        "control": {
+          "blocked_requests": [],
+          "consumed_requests": [],
+          "permit_consumed": 0,
+          "trace_events": 0,
+          "write_blocked": 0
+        },
+        "detail": "that Skill is not available to this task",
+        "page_actions": 0,
+        "plan_status": {},
+        "plan_withdrawn": false,
+        "policy_blocks": 0,
+        "run_id": "skill_route_refused_observes_before_it_answers",
+        "spend": {
+          "cost_cny": 0.0,
+          "provider_calls": 0
+        },
+        "steps_used": 2,
+        "success_claim": "not_claimed",
+        "task_ref": "T",
+        "terminal_reason": "agent_refused",
+        "write_refusals": 0
+      },
+      "why": "an unavailable Skill refuses through the same sequence"
+    },
+    "source_candidate_refused_observes_before_it_answers": {
+      "audit": [
+        {
+          "epoch": 1,
+          "event": "entry_observed",
+          "run_id": "source_candidate_refused_observes_before_it_answers",
+          "seq": 1,
+          "served_webapps": [],
+          "url": "http://app.test/glasshouse/do/main"
+        },
+        {
+          "event": "control_run_started",
+          "run_id": "source_candidate_refused_observes_before_it_answers",
+          "seq": 2
+        },
+        {
+          "digest": "736fc4d04ab1b9fa74946ea072860059c22f7b8c1a0326608846a27004413f0a",
+          "elements": 0,
+          "epoch": 1,
+          "event": "observation",
+          "run_id": "source_candidate_refused_observes_before_it_answers",
+          "seq": 3,
+          "url": "http://app.test/glasshouse/do/main"
+        },
+        {
+          "candidates": [],
+          "citations": [],
+          "event": "source_affordances_delivered",
+          "page_epoch": 1,
+          "page_url": "http://app.test/glasshouse/do/main",
+          "reason": "entry",
+          "run_id": "source_candidate_refused_observes_before_it_answers",
+          "seq": 4,
+          "source_digest": "4038e914248840176fdc0b7dcdc5d34d0b857f666dfabd029d92c40c13872c3d"
+        },
+        {
+          "contains_raw_payload": false,
+          "data_classes": [
+            "agent_instructions",
+            "application_knowledge",
+            "application_page_observation",
+            "user_intent"
+          ],
+          "event": "provider_egress",
+          "input_bytes": 5796,
+          "input_digest": "3c569e8fea05f3a52cef567e878c93af34e4e484edcc6a263c133b540c65b9b9",
+          "message_count": 2,
+          "roles": {
+            "system": 1,
+            "user": 1
+          },
+          "run_id": "source_candidate_refused_observes_before_it_answers",
+          "schema_version": 1,
+          "seq": 5,
+          "tool_count": 10
+        },
+        {
+          "args": {
+            "candidate_id": "c-not-delivered"
+          },
+          "event": "tool_call",
+          "run_id": "source_candidate_refused_observes_before_it_answers",
+          "seq": 6,
+          "step": 1,
+          "tool": "open_source_candidate"
+        },
+        {
+          "binding_names": [],
+          "candidate_id": "c-not-delivered",
+          "citations": [],
+          "event": "source_candidate_rejected",
+          "reason": "candidate_id was not supplied on the current observation",
+          "requested_tool_dispatched": false,
+          "run_id": "source_candidate_refused_observes_before_it_answers",
+          "seq": 7,
+          "side_effect_possible": false,
+          "step": 1
+        },
+        {
+          "attribution": "unattributed",
+          "detail": "",
+          "event": "write_outcome",
+          "observed_after_command_id": "c1",
+          "permitted": 0,
+          "permitted_requests": [],
+          "refused": 0,
+          "refused_requests": [],
+          "run_id": "source_candidate_refused_observes_before_it_answers",
+          "seq": 8,
+          "state": "none",
+          "step": 1
+        },
+        {
+          "after_tool": "open_source_candidate",
+          "command_id": "c1",
+          "elapsed_ms": 0,
+          "error_code": "",
+          "event": "action_receipt",
+          "fresh_observation": true,
+          "navigated": false,
+          "observation_epoch": 2,
+          "ok": true,
+          "page_epoch_before": 1,
+          "relogin": false,
+          "requested_tool_dispatched": false,
+          "run_id": "source_candidate_refused_observes_before_it_answers",
+          "seq": 9,
+          "server_tool_rejection": "open_source_candidate",
+          "side_effect_possible": false,
+          "source_candidate_rejection": true,
+          "step": 1,
+          "tool": "observe",
+          "url_after": "http://app.test/glasshouse/do/main",
+          "write": "none",
+          "write_attribution": "unattributed"
+        },
+        {
+          "candidates": [],
+          "citations": [],
+          "event": "source_affordances_delivered",
+          "page_epoch": 2,
+          "page_url": "http://app.test/glasshouse/do/main",
+          "reason": "observation",
+          "run_id": "source_candidate_refused_observes_before_it_answers",
+          "seq": 10,
+          "source_digest": "4038e914248840176fdc0b7dcdc5d34d0b857f666dfabd029d92c40c13872c3d"
+        },
+        {
+          "contains_raw_payload": false,
+          "data_classes": [
+            "agent_instructions",
+            "application_knowledge",
+            "application_page_observation",
+            "application_tool_result",
+            "user_intent"
+          ],
+          "event": "provider_egress",
+          "input_bytes": 6578,
+          "input_digest": "5867eb29cbeb3ad2f4e2587ce6fd543686c78b9545f25b80b8a0fc2b978b6a83",
+          "message_count": 4,
+          "roles": {
+            "assistant": 1,
+            "system": 1,
+            "tool": 1,
+            "user": 1
+          },
+          "run_id": "source_candidate_refused_observes_before_it_answers",
+          "schema_version": 1,
+          "seq": 11,
+          "tool_count": 10
+        },
+        {
+          "args": {
+            "done": false,
+            "why": "no such candidate was delivered"
+          },
+          "event": "tool_call",
+          "run_id": "source_candidate_refused_observes_before_it_answers",
+          "seq": 12,
+          "step": 2,
+          "tool": "finish"
+        },
+        {
+          "challenged": false,
+          "claim": "not_claimed",
+          "event": "success_claim",
+          "run_id": "source_candidate_refused_observes_before_it_answers",
+          "seq": 13,
+          "step": 2
+        },
+        {
+          "event": "control_run_released",
+          "run_id": "source_candidate_refused_observes_before_it_answers",
+          "seq": 14
+        },
+        {
+          "agent_said": "no such candidate was delivered",
+          "arm": "G",
+          "business_answer_projected": false,
+          "business_control": {
+            "approval_denied": 0,
+            "approval_granted": 0,
+            "approval_requested": 0,
+            "mutation_completed": 0,
+            "mutation_execution_started": 0,
+            "mutation_indeterminate": 0
+          },
+          "challenged_false_success": false,
+          "citations": 0,
+          "contract_conflicts": 0,
+          "contract_digest": "6316f35881ff21065516e197e936f28229239be7b9a8965b9235b093ddde5733",
+          "contract_source": "none",
+          "control": {
+            "blocked_requests": [],
+            "consumed_requests": [],
+            "permit_consumed": 0,
+            "trace_events": 0,
+            "write_blocked": 0
+          },
+          "detail": "no such candidate was delivered",
+          "event": "run_finished",
+          "page_actions": 0,
+          "plan_status": {},
+          "plan_withdrawn": false,
+          "policy_blocks": 0,
+          "run_id": "source_candidate_refused_observes_before_it_answers",
+          "seq": 15,
+          "spend": {
+            "cost_cny": 0.0,
+            "provider_calls": 0
+          },
+          "steps_used": 2,
+          "success_claim": "not_claimed",
+          "task_ref": "T",
+          "terminal_reason": "agent_refused",
+          "wall_seconds": 0.0,
+          "write_refusals": 0
+        }
+      ],
+      "browser_commands": [
+        {
+          "action": "observe",
+          "args": {},
+          "expect_navigation": false
+        }
+      ],
+      "model_calls": [
+        {
+          "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nSOURCE AFFORDANCES (source-bound read-only candidates; current page wins):\n[]",
+          "system_chars": 2618,
+          "system_digest": "sha256:c57c3e8cbb9013db52115f829c2c49c347d4d3a0cff77429a76db25d13d5bd6c",
+          "tool_results": [],
+          "tools_offered": [
+            "back",
+            "click",
+            "fill",
+            "finish",
+            "goto",
+            "observe",
+            "open_source_candidate",
+            "select",
+            "submit",
+            "wait_for"
+          ]
+        },
+        {
+          "system_chars": 2618,
+          "system_digest": "sha256:c57c3e8cbb9013db52115f829c2c49c347d4d3a0cff77429a76db25d13d5bd6c",
+          "tool_results": [
+            {
+              "name": "open_source_candidate",
+              "text": "The server rejected open_source_candidate before dispatch: candidate_id was not supplied on the current observation. The browser received only observe and returned a fresh page. Choose from the newly delivered candidates or act on that page.\n\nobserve -> ok\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 2\nelements (epoch 2):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nSOURCE AFFORDANCES (source-bound read-only candidates; current page wins):\n[]"
+            }
+          ],
+          "tools_offered": [
+            "back",
+            "click",
+            "fill",
+            "finish",
+            "goto",
+            "observe",
+            "open_source_candidate",
+            "select",
+            "submit",
+            "wait_for"
+          ]
+        }
+      ],
+      "result": {
+        "agent_said": "no such candidate was delivered",
+        "arm": "G",
+        "business_answer_projected": false,
+        "business_control": {
+          "approval_denied": 0,
+          "approval_granted": 0,
+          "approval_requested": 0,
+          "mutation_completed": 0,
+          "mutation_execution_started": 0,
+          "mutation_indeterminate": 0
+        },
+        "challenged_false_success": false,
+        "citations": 0,
+        "contract_conflicts": 0,
+        "contract_digest": "6316f35881ff21065516e197e936f28229239be7b9a8965b9235b093ddde5733",
+        "contract_source": "none",
+        "control": {
+          "blocked_requests": [],
+          "consumed_requests": [],
+          "permit_consumed": 0,
+          "trace_events": 0,
+          "write_blocked": 0
+        },
+        "detail": "no such candidate was delivered",
+        "page_actions": 0,
+        "plan_status": {},
+        "plan_withdrawn": false,
+        "policy_blocks": 0,
+        "run_id": "source_candidate_refused_observes_before_it_answers",
+        "spend": {
+          "cost_cny": 0.0,
+          "provider_calls": 0
+        },
+        "steps_used": 2,
+        "success_claim": "not_claimed",
+        "task_ref": "T",
+        "terminal_reason": "agent_refused",
+        "write_refusals": 0
+      },
+      "why": "a refused candidate refuses through the same sequence"
     },
     "source_candidates_are_delivered_with_citations": {
       "audit": [

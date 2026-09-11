@@ -345,7 +345,11 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 - 模型调用、页面动作和确认有局部超时；provider 排队和 socket 调用共用剩余 deadline，并受进程内并发槽与瞬时故障短路保护。消息级取消已覆盖审批、业务工具和未认领页面动作；provider 请求的主动中断、跨进程取消、分布式租户配额和完整资源回收仍不完整。
 - 目前只有一个窄业务 Adapter 和少量 Skill/API 工具，覆盖面不能代表复杂企业应用的完整操作集。
 - 源码能力存在于 Session 层，但默认产品 Turn Executor 尚未将它作为可配置 Provider 接入。
-- 页面内助手已从 Runtime 的内联渲染中抽出独立的 `AssistantPanelViewModel` 与 `AssistantPanel`。同一组件用于嵌入页面和脱敏回放，状态驱动进度、光谱边缘、停止、错误恢复和确认；确认被拒绝时恢复原始目标供用户修改后重新规划。组件支持响应式布局、深浅色、键盘焦点、live region、Esc 拒绝确认和 `prefers-reduced-motion`。发布前仍需完成 VoiceOver/NVDA 与支持浏览器矩阵测试。
+- 页面内助手是一个独立的 React 19 项目（[frontend/](../../frontend/)），以 npm 入口挂进宿主页的 Shadow DOM。它是纯视图：不持会话、不发自己的请求、不存时间线——时间线是服务端把会话事件投影出来的，因此整页导航之后由服务端回放，而不是随旧文档一起丢掉。上限、文案、状态名与调色板全部来自服务端拥有的 `panel_contract.json` 与 `design_tokens.json`，面板自行声明任何一项都会被契约测试判红。
+
+  面板与宿主页共用同一个 JavaScript realm（不用 iframe，2026-09-11 定）。代价写在 `SECURITY.md`：宿主页里的脚本可以完成一次审批；CSP 与 Trusted Types 是宿主页的响应头，面板按"永不需要放宽"来写并有回归测试（不用 `innerHTML`、不注入内联样式或脚本、样式走 `CSSStyleSheet.replaceSync`），但开不开由宿主页决定。确认卡仍然拒绝非真实手势、以及它无法证明当时可见的按下——这堵住的是视觉欺骗，不是伪造。
+
+  Chromium 覆盖契约里的每个状态、确认卡的键盘路径与 320px 布局、Markdown 渲染与链接策略、减弱动画、窗口拖动缩放，以及 strict CSP + Trusted Types 下的构造。发布前仍需完成 VoiceOver/NVDA 与支持浏览器矩阵测试。
 - 当前嵌入模式假定第一方页面可信；面向第三方页面的隔离执行形态尚未实现。
 
 ## 12. 演进方向
@@ -371,7 +375,10 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 - 当前 Application Adapter 示例：[twenty.py](../../src/web_operation_agent/twenty.py)
 - Embedded Gateway：[embedded_gateway.py](../../src/web_operation_agent/embedded_gateway.py)
 - 浏览器 Runtime：[embedded.js](../../src/web_operation_agent/web_runtime/embedded.js)
-- 助手 UI 与状态模型：[assistant_panel.js](../../src/web_operation_agent/web_runtime/assistant_panel.js)
+- 助手面板（React 19 + Shadow DOM，构建源在 [frontend/](../../frontend/)）：[mount.tsx](../../frontend/src/mount.tsx)
+- 面板与 Runtime 的契约、上限与文案（服务端唯一来源）：[panel_contract.json](../../src/web_operation_agent/web_runtime/panel_contract.json)
+- Runtime 侧的面板宿主与传输失败分类：[panel_host.js](../../src/web_operation_agent/web_runtime/panel_host.js)
+- 服务端把会话事件投影成面板时间线：[panel_view.py](../../src/web_operation_agent/panel_view.py)
 - 会话协议与幂等通道：[remote.py](../../src/web_operation_agent/remote.py)
 - 版本化 wire schema：[schemas.py](../../src/web_operation_agent/schemas.py)
 - 主体与操作上下文：[identity.py](../../src/web_operation_agent/identity.py)
