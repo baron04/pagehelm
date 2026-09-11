@@ -12,6 +12,14 @@ evaluator, and model-free WOA scripted runner are qualified. Seven read, navigat
 refusal cases also pass against local Twenty 2.39.0 in real Chromium. No paid-model success
 rate exists yet.
 
+[`power.py`](power.py) recomputes the checked-in
+[`power-sensitivity-v1.json`](power-sensitivity-v1.json) for paired binary outcomes. The
+artifact treats an independent workflow template as the sample unit, applies a conservative
+Bonferroni allocation for the planned three-hypothesis Holm family, and shows how required
+sample size changes with the unknown paired discordance rate. It is assumptions-only planning,
+not model evidence. Its count must be recomputed from a paired development pilot before a
+formal held-out set is sealed.
+
 The evaluator currently covers only three Companies tasks:
 
 - `query`: the response must list every active company name and domain, and business

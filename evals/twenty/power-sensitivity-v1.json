@@ -1,0 +1,54 @@
+{
+  "artifact_version": 1,
+  "familywise_alpha": 0.05,
+  "interpretation": "This is an assumptions-only sensitivity analysis over independent paired workflow templates. It is not an observed model result. Rephrasings and repeated runs do not increase the independent sample size. A formal count must be recomputed from a paired development pilot before the held-out suite is sealed.",
+  "kind": "paired_binary_power_sensitivity",
+  "method": "paired_difference_normal_approximation",
+  "multiplicity": "bonferroni_conservative_for_holm",
+  "noninferiority_margin_pp": 5,
+  "per_hypothesis_alpha": 0.016666666667,
+  "plan_digest": "sha256:3d85988b9d133b720e7dc438215e53341dbe0b3ada00c47e262c25c021ed01e8",
+  "planned_pairs": 90,
+  "primary_hypotheses": 3,
+  "scenarios": [
+    {
+      "discordance_rate": 0.1,
+      "noninferiority_power_at_planned": 0.273828,
+      "noninferiority_required_pairs": 347,
+      "planned_supports_noninferiority": false,
+      "planned_supports_superiority": true,
+      "superiority_power_at_planned": 0.820984,
+      "superiority_required_pairs": 86
+    },
+    {
+      "discordance_rate": 0.2,
+      "noninferiority_power_at_planned": 0.145932,
+      "noninferiority_required_pairs": 700,
+      "planned_supports_noninferiority": false,
+      "planned_supports_superiority": false,
+      "superiority_power_at_planned": 0.497247,
+      "superiority_required_pairs": 174
+    },
+    {
+      "discordance_rate": 0.3,
+      "noninferiority_power_at_planned": 0.105078,
+      "noninferiority_required_pairs": 1052,
+      "planned_supports_noninferiority": false,
+      "planned_supports_superiority": false,
+      "superiority_power_at_planned": 0.343561,
+      "superiority_required_pairs": 263
+    },
+    {
+      "discordance_rate": 0.5,
+      "noninferiority_power_at_planned": 0.073265,
+      "noninferiority_required_pairs": 1758,
+      "planned_supports_noninferiority": false,
+      "planned_supports_superiority": false,
+      "superiority_power_at_planned": 0.213485,
+      "superiority_required_pairs": 439
+    }
+  ],
+  "status": "READY",
+  "superiority_effect_pp": 10,
+  "target_power": 0.8
+}
