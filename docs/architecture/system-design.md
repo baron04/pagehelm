@@ -201,7 +201,7 @@ Application Adapter 是应用专有事实进入通用 Agent 的组合边界。�
 - 带固定 schema 的业务 API executor；
 - 身份绑定、工具路由、结果数据分类、mutation 后置条件和不确定写入核对端口。
 
-每个 Adapter 必须先通过版本化 `ApplicationDescriptor` 和 `ApplicationPorts` 绑定。Descriptor 固定应用 ID、Origin、导航模式、同源 PageController URL，以及当前 Skill/tool catalog 的 SHA-256。Ports 是会被产品路径实际调用的合同：Identity Port 校验 principal，Route Port 限定 typed tool 可授权的页面路径，Data Port 为结果附加应用声明的数据类别，Postcondition Port 在确认写入后决定能否记录为 completed，Reconciliation Port 为历史不确定写入提供只读核对边界。会话组合在接收用户任务前重新计算 catalog 摘要，并检查端口覆盖所有工具、scope 和 mutation；Descriptor、catalog、端口或运行时接线不一致时拒绝启动。自然语言目标不经过应用专有的正则分类器或有限意图枚举，而是直接交给通用 Agent，由候选 Skill、typed tool 和页面观察逐步收敛。
+每个 Adapter 必须先通过版本化 `ApplicationDescriptor` 和 `ApplicationPorts` 绑定。Descriptor 固定应用 ID、Origin、导航模式、同源 PageController URL，以及当前 Skill/tool catalog 的 SHA-256。Ports 是会被产品路径实际调用的合同：Identity Port 校验 principal，Route Port 限定 typed tool 可授权的页面路径，Data Port 为结果附加应用声明的数据类别，Postcondition Port 在确认写入后决定能否记录为 completed，Reconciliation Port 为历史不确定写入提供只读核对边界。会话组合在接收用户任务前重新计算 catalog 摘要，并检查端口覆盖所有工具、scope 和 mutation；Descriptor、catalog、端口或运行时接线不一致时拒绝启动。自然语言目标不经过应用专有的正则分类器或有限意图枚举。目标先由通用匹配器按 Skill 自己声明的触发词选出候选，这一步会以 `business_skill_candidates` 记账并标出是否用了兜底；匹配为空时退回一个有界的、按能力挑选的候选集，因此一种没被触发词覆盖的说法不会静默地让某项能力从工具面消失。其余交给通用 Agent，由候选 Skill、typed tool 和页面观察逐步收敛。
 
 Adapter 不拥有 ReAct 循环，也不应把具体应用路由写入 Agent 核心。当前仓库中的 `TwentyApplicationAdapter` 是一条窄纵切：它接入公司查询与创建，验证 Origin，把 OAuth 凭据保留在服务端，并构造 `BusinessToolRuntime` 和五类端口。Minimal Contacts 与测试中的发票 Adapter 使用相同绑定暴露不同 Skill、工具和路由，Agent 核心没有应用名或任务类型分支。当前 Reconciliation Port 对不确定写入仍保守返回需要人工处理；持久 reconciliation key、扫描和恢复调度属于后续可靠性工作。
 
