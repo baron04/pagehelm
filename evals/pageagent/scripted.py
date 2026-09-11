@@ -536,17 +536,28 @@ _PAGE_TEMPLATE = """<!doctype html>
       const COMPANIES = __COMPANIES__
       const SESSION_COOKIE = __SESSION_COOKIE__
       const EXPOSE_COMPANY_LIST = __EXPOSE_COMPANY_LIST__
+      const LIVE = __LIVE__
       function node(tag, text) {
         const element = document.createElement(tag)
         element.textContent = text
         return element
       }
+      function companies() {
+        // A real SPA reads records from its API on every route change. The live page does the
+        // same through a synchronous request so that render() stays synchronous for callers.
+        if (!LIVE) return COMPANIES
+        const request = new XMLHttpRequest()
+        request.open('GET', '/__synthetic/companies.json', false)
+        request.send(null)
+        return JSON.parse(request.responseText)
+      }
       function render() {
         const view = document.getElementById('view')
         view.replaceChildren()
+        const current = companies()
         const match = /^\\/object\\/company\\/([^/]+)$/.exec(location.pathname)
         if (match) {
-          const company = COMPANIES.find((item) => item.id === match[1])
+          const company = current.find((item) => item.id === match[1])
           if (!company) {
             view.append(node('h1', 'Record not found'))
             return
@@ -556,7 +567,7 @@ _PAGE_TEMPLATE = """<!doctype html>
         }
         view.append(node('h1', 'Companies'))
         if (EXPOSE_COMPANY_LIST) {
-          for (const company of COMPANIES) {
+          for (const company of current) {
             const link = node('a', company.name)
             link.href = `/object/company/${company.id}`
             link.addEventListener('click', (event) => {
@@ -588,33 +599,66 @@ _PAGE_TEMPLATE = """<!doctype html>
 """
 
 
-class SyntheticTwentyPage:
-    """Serve one SPA document per path, optionally exposing companies on the list page."""
+def synthetic_page_document(companies: list[dict[str, str]], *,
+                            expose_company_list: bool = False, live: bool = False) -> bytes:
+    """Render the synthetic SPA document for the supplied company list."""
+    document = _PAGE_TEMPLATE.replace(
+        "__COMPANIES__", json.dumps(companies, ensure_ascii=False)
+    ).replace("__SESSION_COOKIE__", json.dumps(SESSION_COOKIE)).replace(
+        "__EXPOSE_COMPANY_LIST__", json.dumps(bool(expose_company_list))).replace(
+        "__LIVE__", json.dumps(bool(live)))
+    return document.encode("utf-8")
 
-    def __init__(self, companies: list[dict[str, str]], *, expose_company_list: bool = False):
-        document = _PAGE_TEMPLATE.replace(
-            "__COMPANIES__", json.dumps(companies, ensure_ascii=False)
-        ).replace("__SESSION_COOKIE__", json.dumps(SESSION_COOKIE)).replace(
-            "__EXPOSE_COMPANY_LIST__", json.dumps(bool(expose_company_list)))
-        self._document = document.encode("utf-8")
+
+class SyntheticTwentyPage:
+    """Serve one SPA document per path, optionally exposing companies on the list page.
+
+    By default the document is rendered once from the companies supplied at construction.
+    With ``live=True`` every request renders the list as it is at that moment, so a company
+    created or restored by a shared-state executor becomes visible to the browser the way it
+    would on a real application.
+    """
+
+    def __init__(self, companies: list[dict[str, str]], *, expose_company_list: bool = False,
+                 live: bool = False):
+        self._companies = companies
+        self._expose = bool(expose_company_list)
+        self._live = bool(live)
+        self._document = synthetic_page_document(companies, expose_company_list=self._expose)
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
         self.origin = ""
 
+    def _render(self) -> bytes:
+        if self._live:
+            return synthetic_page_document(
+                self._companies, expose_company_list=self._expose, live=True)
+        return self._document
+
+    def _companies_json(self) -> bytes:
+        return json.dumps(list(self._companies), ensure_ascii=False).encode("utf-8")
+
     def __enter__(self) -> "SyntheticTwentyPage":
-        document = self._document
+        render = self._render
+        companies_json = self._companies_json
 
         class Handler(BaseHTTPRequestHandler):
+            def _send(self, body: bytes, content_type: str) -> None:
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
             def do_GET(self) -> None:  # noqa: N802 - http.server naming
                 if self.path.startswith("/favicon"):
                     self.send_response(404)
                     self.end_headers()
                     return
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(document)))
-                self.end_headers()
-                self.wfile.write(document)
+                if self.path.startswith("/__synthetic/companies.json"):
+                    self._send(companies_json(), "application/json; charset=utf-8")
+                    return
+                self._send(render(), "text/html; charset=utf-8")
 
             def log_message(self, *_args: Any) -> None:
                 return None
