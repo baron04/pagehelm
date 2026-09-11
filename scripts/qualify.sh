@@ -228,7 +228,18 @@ assert ODOO_SOURCE_POLICY["repository_id"] == "odoo/odoo"
 odoo = OdooApplicationAdapter(base_url="http://127.0.0.1:8069",
                               api_key_path=root / "odoo-key.json")
 assert odoo.business_tools.tool_names == frozenset(
-    {"query_sale_orders", "query_customers", "query_products"})
+    {"query_sale_orders", "query_quotations", "query_customers", "query_products",
+     "query_customer_invoices"})
+assert odoo.business_tools.mutation_tool_names == frozenset()
+# The packaged write Skills have to be present in the wheel too, or a mutation-enabled
+# deployment fails at composition time with a missing package-data entry -- exactly the
+# failure a path-shadowed test cannot see.
+from web_operation_agent.mutation import SQLiteMutationJournal as _Journal
+writing = OdooApplicationAdapter(
+    base_url="http://127.0.0.1:8069", api_key_path=root / "odoo-key.json",
+    allow_mutations=True, mutation_journal=_Journal(root / "odoo-mutations.sqlite3"))
+assert writing.business_tools.mutation_tool_names == frozenset(
+    {"create_customer", "confirm_quotation", "invoice_sale_order"})
 assert odoo.source_capability().session_kwargs()["source_affordance_mode"] == "off"
 assert isinstance(odoo.source_capability(), SourceCapability)
 print("ofbiz, twenty and odoo distributions install on top of core "

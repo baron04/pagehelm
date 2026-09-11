@@ -27,6 +27,9 @@ Web Operation Agent 是一个早期阶段的框架，用于在第一方 Web 应�
 | 运行探针 | Loopback 网关用 `/healthz` 表示进程存活，用 `/readyz` 表示可处理工作。Readiness 只返回固定 schema 的数量、准入状态和 provider guard 健康信息；回调畸形时关闭就绪状态，并隐藏错误正文。 |
 | 审计与回放基础能力 | 服务端事件可以写入追加式账本，并转换成脱敏回放。 |
 | Twenty CRM 纵切 | 已打包的适配器通过有界 cursor 分页查询 Companies、People 和 Opportunities，把类型化结果、来源及 API 找到的详情路由交给 Agent。公司创建需单独开启，并要求用户确认及委托 token 回读。OAuth 刷新会在本机线程和进程间串行化，身份解析遇到 GraphQL `UNAUTHENTICATED` 时也会进入受控刷新。 |
+| Odoo 18 纵切 | 五个 typed 读加三个可选开启的写，含一条多步订单生命周期：确认报价单，再通过 Odoo 自己的向导为它开客户发票。一项无模型的 live 门禁在真实 Odoo、真实 Chromium 与真实产品轮次上跑七个脚本化用例、覆盖六类工作流，每次写入都在页面里点面板自己的控件批准。库若已偏离记录基线，它拒绝开始；跑完把夹具恢复回去。 |
+| 带引证的 Skill | 每条 `provenance` 都是可解析的引证——`src:` 指向应用源码的某个发布线，`api:` 指向它公开的接口。一项 live 门禁拿该发布编译出的 `SourceMap` 去解析每一条 `src:` 引证，于是“已经烂掉的引证”与“本来就指向不存在之处的引证”区分得开。`BusinessSkillCompiler` 能从这些描述符起草 Skill，并且**拒绝**代写它的 instructions。 |
+| 了结不确定的写入 | 结果丢失的写入永不重试。日志会列出它走到哪个阶段、adapter 当时抓到的记录 id；运维人员以原始 actor 的身份执行应用自己的读取，再用一次 compare-and-swap 了结它，记录下是谁决定的、依据什么证据，以及“原写入方已不可能再执行”这项由人做出的断言。 |
 
 这些结论只覆盖已经实现的路径。项目还没有规模足够的公开评测，不能据此宣称通用任务成功率、源码检索收益，或优于 PageAgent 等浏览器 Agent。
 
@@ -142,18 +145,22 @@ scripts/qualify.sh
 
 **身份是必须互相对上的两侧。** Odoo 18 把浏览器会话放在 HttpOnly cookie 里，而且只接受 cookie——旧的 `X-Openerp-Session-Id` 头已经不存在——所以页面 JavaScript 无法把凭据交给服务端工具。页面改为通过 `/web/session/get_session_info` **断言**自己是谁（只返回标识符，不含密钥），服务端则用用户在 Odoo 设置里自己签发的 per-user API key 行动。`bind_browser_session` 解析两侧，只有指向同一个 actor 时才产出 principal（`db` → tenant，当前公司 → workspace，`uid` → actor）。签发那把 key 是记录所有者自己完成的部署步骤，没有任何自动化。
 
-**它的源码编译器是真的。** `OdooCompiler` 把菜单、动作、视图和模型读成带引证的 `SourceRelation` 三元组。在装了 `sale`、`sale_management`、`account`、`stock` 的真实 Odoo 18 上，它从 380 个 allowlist 文件里产出 11 882 条关系，而 25 个声明了 URL 段的动作与运行中的数据库**逐个完全一致**。两条局限被如实记录而不是猜测：删除或替换节点的 `inherit_id` 补丁没有被应用（关系带 `root_view`，含义是"在这个视图族里被声明过"，不是"渲染后确实存在"）；跨模块的 `<record id="别的模块.…">` 补丁被列进 `unsupported`，不会当成定义发出。
+**它的源码编译器是真的，而且 Skill 会被拿去对账。** `OdooCompiler` 把菜单、动作、视图和模型读成带引证的 `SourceRelation` 三元组——在带 `sale`、`sale_management`、`account`、`stock`、`product` 及其依赖的源码树上共 14 011 条——而 25 个声明了 URL 段的动作与运行中的数据库**逐个完全一致**。每个随包发出的 Skill 里每一条 `src:` 引证，都由一项 live 门禁拿这张图去解析：这才让"已经烂掉的引证"与"本来就指向不存在之处的引证"区分得开。两条编译器局限被如实记录而不是猜测：删除或替换节点的 `inherit_id` 补丁没有被应用（关系带 `root_view`，含义是"在这个视图族里被声明过"，不是"渲染后确实存在"）；跨模块的 `<record id="别的模块.…">` 补丁被列进 `unsupported`，不会当成定义发出。
 
 **源码配置是 Adapter 下发的一个决定。** `adapter.source_capability(source_root, release=…)` 返回一个 `SourceCapability`，把四个只能一起成立的会话设置装成一个值；不给源码根时它返回"什么都没有"，会话只靠运行时事实工作。源码检索始终是可选的。
 
-typed 工具面是 `query_sale_orders`、`query_customers`、`query_products` 和可选开启的 `create_customer`。每次读取都扫完整个范围，并拿 Odoo 自己的 `search_count` 对账——"我是否看全了"由一个不是从同一页结果里数出来的数字回答。
+typed 工具面是五个读——`query_sale_orders`、`query_quotations`、`query_customers`、`query_products`、`query_customer_invoices`——加三个可选开启的写：`create_customer`、`confirm_quotation`、`invoice_sale_order`。每次读取都扫完整个范围，并拿 Odoo 自己的 `search_count` 对账——"我是否看全了"由一个不是从同一页结果里数出来的数字回答。
+
+其中两个结果携带的东西，页面本身讲不出来。`sale.action_quotations_with_onboarding` **没有**存任何 domain：报价单页面列的是全部销售订单，只是把搜索过滤器默认设成了当前用户的报价单，而这个默认任何人都能清掉。所以 `query_quotations` 会报 `collection_ui_path_shows_this_scope: false` 并给出理由，而不是让模型以为自己打开的页面就是刚才那个答案。`invoice_sale_order` 则始终把开票方式钉在普通发票上：Odoo 已确认销售订单的表单上有两个都叫 "Create Invoice" 的按钮，区别只在各自的 `invisible` 条件，其中一个提出的是按百分比的预付款。
 
 ```bash
 python -m web_operation_agent_odoo.demo --scripted --headless \
   --api-key .private/odoo-api-key.json --storage-state .private/odoo-storage-state.json
 ```
 
-`--scripted` 用真实 Odoo、真实 Chromium 和真实产品轮次跑一遍，不调用 provider、不产生费用。门禁版本（`python -m web_operation_agent_odoo.demo.qualify`）另外核对夹具在运行前后逐字节一致。
+`--scripted` 用真实 Odoo、真实 Chromium 和真实产品轮次跑一遍，不调用 provider、不产生费用。
+
+门禁版本（`python -m web_operation_agent_odoo.demo.qualify`）跑七个脚本化用例，覆盖六类工作流——完整列举、条件查询、打开记录、打开集合、安全拒绝，以及"报价单→确认订单→客户发票"的多步写入。三个写入用例由页面里点击面板自己的确认控件批准，因为只有这一条路可以批准。它在库已经偏离记录基线时**拒绝开始**，运行后把夹具恢复回去，并且逐个去问 Odoo 每次写入是否真的改动了它点名的那条记录，而不是相信这次运行自己的说法。`python -m web_operation_agent_odoo.demo.fixture` 负责取与恢复这个基线；`python -m web_operation_agent_odoo.demo.settle` 是运维人员用来了结一次不确定写入的入口。
 
 ## Twenty CRM 集成
 
