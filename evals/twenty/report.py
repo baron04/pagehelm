@@ -36,7 +36,7 @@ _AGGREGATE_FIELDS = {"count", "total", "median", "maximum"}
 _ARM_FIELDS = {
     "arm_id", "engine", "engine_release", "capability_profile", "source_mode",
     "source_interface", "approval_boundary", "mutation_journal",
-    "trials", "valid_trials", "apparatus_invalid_trials", "outcomes",
+    "trials", "valid_trials", "apparatus_invalid_trials", "outcomes", "outcomes_by_task_kind",
     "terminal_reasons", "page_actions", "business_calls", "model_calls", "wall_ms",
     "known_input_tokens", "known_output_tokens", "usage_unavailable_calls",
     "known_cost_cny", "known_cost_cny_per_trial", "total_cost_cny",
@@ -54,7 +54,7 @@ _REPORT_FIELDS = {
     "protocol_id", "protocol_digest", "development_seal_digest", "test_seal_digest",
     "application_release", "browser_release", "requested_model", "scheduled_pairs",
     "expected_trials", "completed_trials", "batch_status", "stop_reason", "outcomes",
-    "valid_trials", "apparatus_invalid_trials", "apparatus_codes",
+    "outcomes_by_task_kind", "valid_trials", "apparatus_invalid_trials", "apparatus_codes",
     "provider_reported_models", "model_calls", "usage_unavailable_calls",
     "known_input_tokens", "known_output_tokens", "known_cost_cny", "total_cost_cny",
     "safety_events", "safety", "arms", "comparisons", "interpretation", "report_digest",
@@ -72,6 +72,23 @@ _INTERPRETATION = (
 
 def _has_fields(value: Any, fields: set[str] | frozenset[str]) -> bool:
     return isinstance(value, dict) and set(value) == set(fields)
+
+
+def _kind_outcomes_valid(value: Any) -> bool:
+    return isinstance(value, dict) and all(
+        isinstance(kind, str) and _has_fields(counts, frozenset(_OUTCOMES))
+        for kind, counts in value.items())
+
+
+def _outcomes(records: list[dict[str, Any]]) -> dict[str, int]:
+    return {name: sum(record["evaluation_status"] == name for record in records)
+            for name in _OUTCOMES}
+
+
+def _outcomes_by_task_kind(records: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    """Outcome tallies per task kind; the `refuse` row is the refusal-correctness count."""
+    return {kind: _outcomes([record for record in records if record["task_kind"] == kind])
+            for kind in sorted({record["task_kind"] for record in records})}
 
 
 def _aggregate(values: list[int] | list[float], *, digits: int | None = None) -> dict[str, Any]:
@@ -131,8 +148,8 @@ def _arm_summary(arm: Mapping[str, Any], records: list[dict[str, Any]]) -> dict[
         "trials": len(selected),
         "valid_trials": len(valid),
         "apparatus_invalid_trials": len(selected) - len(valid),
-        "outcomes": {name: sum(record["evaluation_status"] == name for record in selected)
-                     for name in _OUTCOMES},
+        "outcomes": _outcomes(selected),
+        "outcomes_by_task_kind": _outcomes_by_task_kind(selected),
         "terminal_reasons": {
             reason: sum(record["terminal_reason"] == reason for record in selected)
             for reason in sorted({record["terminal_reason"] for record in selected})
@@ -196,8 +213,8 @@ def build_report(*, protocol: Mapping[str, Any], development_seal: Mapping[str, 
         "completed_trials": len(records),
         "batch_status": status,
         "stop_reason": stop_reason,
-        "outcomes": {name: sum(record["evaluation_status"] == name for record in records)
-                     for name in _OUTCOMES},
+        "outcomes": _outcomes(records),
+        "outcomes_by_task_kind": _outcomes_by_task_kind(records),
         "valid_trials": sum(record["trial_status"] == "valid" for record in records),
         "apparatus_invalid_trials": sum(
             record["trial_status"] == "apparatus_invalid" for record in records),
@@ -238,12 +255,14 @@ def verify_report(value: Any) -> dict[str, Any]:
             or value.get("interpretation") != _INTERPRETATION):
         raise EvaluationInputError("public report labels are invalid")
     if not _has_fields(value.get("outcomes"), frozenset(_OUTCOMES)) \
-            or not _has_fields(value.get("safety"), frozenset(_SAFETY)):
+            or not _has_fields(value.get("safety"), frozenset(_SAFETY)) \
+            or not _kind_outcomes_valid(value.get("outcomes_by_task_kind")):
         raise EvaluationInputError("public report counters have unexpected fields")
     arms = value.get("arms")
     if not isinstance(arms, list) or any(
             not isinstance(arm, dict) or set(arm) != _ARM_FIELDS
             or not _has_fields(arm.get("outcomes"), frozenset(_OUTCOMES))
+            or not _kind_outcomes_valid(arm.get("outcomes_by_task_kind"))
             or not _has_fields(arm.get("safety"), frozenset(_SAFETY))
             or any(not _has_fields(arm.get(name), frozenset(_AGGREGATE_FIELDS))
                    for name in _ARM_AGGREGATES)

@@ -76,6 +76,11 @@ def project_trial_record(*, protocol: dict[str, Any], test_seal: dict[str, Any],
     trial = run.get("trial")
     if not isinstance(case, dict) or not isinstance(trial, dict):
         raise EvaluationInputError("runner artifact lacks trial projection")
+    evaluator_task = case.get("evaluator_task")
+    task_kind = evaluator_task.get("kind") if isinstance(evaluator_task, dict) else None
+    if (not isinstance(task_kind, str)
+            or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", task_kind)):
+        raise EvaluationInputError("runner case lacks a usable task kind")
     if (case.get("task_id") != pair["task_id"]
             or case.get("task_digest") != seal["task_digests"].get(pair["task_id"])):
         raise EvaluationInputError("runner case does not match the frozen schedule")
@@ -95,9 +100,7 @@ def project_trial_record(*, protocol: dict[str, Any], test_seal: dict[str, Any],
                 or evaluation.get("artifact_version") != 1
                 or evaluation.get("kind") != "twenty_evaluation"):
             raise EvaluationInputError("valid runner outcome lacks a Twenty evaluation")
-        evaluator_task = case.get("evaluator_task")
-        task_kind = evaluator_task.get("kind") if isinstance(evaluator_task, dict) else None
-        if not isinstance(task_kind, str) or evaluation.get("task_kind") != task_kind:
+        if evaluation.get("task_kind") != task_kind:
             raise EvaluationInputError("evaluation task kind does not match the runner case")
         if evaluation.get("before_digest") != before_state.get("digest"):
             raise EvaluationInputError("evaluation is bound to a different baseline")
@@ -133,6 +136,7 @@ def project_trial_record(*, protocol: dict[str, Any], test_seal: dict[str, Any],
         "comparison_id": pair["comparison_id"],
         "task_id": pair["task_id"],
         "task_digest": seal["task_digests"][pair["task_id"]],
+        "task_kind": task_kind,
         "arm_id": arm_id,
         "started_at": run.get("started_at"),
         "finished_at": run.get("finished_at"),

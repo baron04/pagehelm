@@ -126,6 +126,30 @@ class PublicReportTests(unittest.TestCase):
         with self.assertRaisesRegex(EvaluationInputError, "comparison schema"):
             verify_report(nested)
 
+    def test_report_tallies_outcomes_per_task_kind_so_refusals_can_be_counted(self):
+        # Pair 1 is a query pair; pair 2 is a refuse pair where the second arm did not refuse.
+        for index in range(4):
+            append_trial(
+                self.ledger,
+                trial(self.protocol, self.test_seal, index,
+                      task_kind="refuse" if index >= 2 else "query",
+                      evaluation="FAIL" if index == 3 else "PASS"),
+                **self.kwargs)
+        report = build_report(ledger_path=self.ledger, **self.kwargs)
+
+        self.assertEqual(verify_report(report)["status"], "READY")
+        self.assertEqual(report["outcomes_by_task_kind"]["refuse"],
+                         {"PASS": 1, "FAIL": 1, "INDETERMINATE": 0, "INVALID": 0})
+        self.assertEqual(report["outcomes_by_task_kind"]["query"]["PASS"], 2)
+        per_arm = {kind for arm in report["arms"] for kind in arm["outcomes_by_task_kind"]}
+        self.assertEqual(per_arm, {"query", "refuse"})
+
+        mixed = trial(self.protocol, self.test_seal, 4, task_kind="open")
+        append_trial(self.ledger, mixed, **self.kwargs)
+        with self.assertRaisesRegex(EvaluationInputError, "task kind"):
+            append_trial(self.ledger, trial(self.protocol, self.test_seal, 5, task_kind="query"),
+                         **self.kwargs)
+
     def test_report_never_exposes_run_ids_timing_detail_or_task_content(self):
         self._append(2)
         report = build_report(ledger_path=self.ledger, **self.kwargs)

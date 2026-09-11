@@ -221,7 +221,7 @@ def validate_trial_record(value: Any, *, protocol: dict[str, Any],
     fields = {
         "artifact_version", "kind", "batch_id", "run_id", "protocol_id",
         "protocol_digest", "schedule_position", "arm_order", "comparison_id",
-        "task_id", "task_digest", "arm_id", "started_at", "finished_at",
+        "task_id", "task_digest", "task_kind", "arm_id", "started_at", "finished_at",
         "trial_status", "apparatus_code", "evaluation_status", "evaluation_digest",
         "terminal_reason", "metrics", "safety", "evidence",
     }
@@ -275,6 +275,7 @@ def validate_trial_record(value: Any, *, protocol: dict[str, Any],
         "comparison_id": _identifier(raw.get("comparison_id"), "trial.comparison_id"),
         "task_id": task_id,
         "task_digest": seal["task_digests"][task_id],
+        "task_kind": _code(raw.get("task_kind"), "trial.task_kind"),
         "arm_id": arm_id,
         "started_at": started_text,
         "finished_at": finished_text,
@@ -438,6 +439,8 @@ def _validate_entries(values: list[dict[str, Any]], protocol: dict[str, Any],
                 raise EvaluationInputError("first trial starts before its batch")
         if arm_order == 2:
             first = records[-1]
+            if first["task_kind"] != record["task_kind"]:
+                raise EvaluationInputError("paired trials disagree on their task kind")
             _, first_started = _utc(first["started_at"], "trial.started_at")
             window_s = protocol["provider"]["pair_window_minutes"] * 60
             if (current_started - first_started).total_seconds() > window_s:
