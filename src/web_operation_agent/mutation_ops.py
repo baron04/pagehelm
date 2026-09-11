@@ -1,4 +1,20 @@
-"""Read-only adapter reconciliation and explicit, audited operator resolution."""
+"""Read-only adapter reconciliation and explicit, audited operator resolution.
+
+The unresolved half of a write's life. A mutation whose outcome was lost sits in the
+journal as `dispatching` or `indeterminate` and is never retried by anything, because no
+finite read proves an old request stopped executing. Somebody has to look, and this is what
+they look with.
+
+`list` is written for that person rather than for a machine: it carries the phase the write
+reached, the record id the adapter managed to capture before it lost the answer, and the
+exact command to run once they hold evidence. An operator who has to reconstruct a CAS
+protocol from memory at two in the morning will get it wrong.
+
+What this module deliberately cannot do is resolve anything on its own. `reconcile` needs a
+bound application and a live principal -- an authorised read under the original actor -- and
+only a deployment has both, which is why the closing step lives in an application's own
+package (see `web_operation_agent_odoo.demo.settle`).
+"""
 from __future__ import annotations
 
 import argparse
@@ -35,6 +51,39 @@ def reconcile(journal: SQLiteMutationJournal, proposal_digest: str, *,
             "reason": verdict.reason, "dispatches": 0, "journal_changed": False}
 
 
+def unresolved_report(intent, *, journal_path: Path) -> dict:
+    """One unresolved write, as the person who has to settle it needs to see it.
+
+    `phase` and `record_id` are the difference between "a write may have happened" and "go
+    and look at record 42": the adapter records them on the way down precisely so that the
+    person arriving later does not have to guess which record to inspect.
+    """
+    try:
+        metadata = json.loads(intent.reconciliation_json)
+    except json.JSONDecodeError:
+        metadata = {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    return {
+        "proposal_digest": intent.proposal_digest,
+        "state": intent.state,
+        "updated_at": intent.updated_at,
+        "business_key": intent.business_key,
+        "tool": str(metadata.get("tool") or ""),
+        # How far the write got before its answer was lost. `dispatch` means it may never
+        # have been sent; `acknowledgement` and `readback` mean it certainly was.
+        "phase": str(metadata.get("phase") or ""),
+        # The application's own identifier for what was written, when the adapter had one.
+        "record_id": str(metadata.get("record_id") or ""),
+        "resolve_command": (
+            f"python -m web_operation_agent.mutation_ops --journal {journal_path} "
+            f"resolve {intent.proposal_digest} "
+            f"--expected-updated-at {intent.updated_at} "
+            "--outcome completed|failed --operator <you> --evidence <file> "
+            "--writer-stopped --apply"),
+    }
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--journal", required=True, type=Path)
@@ -54,8 +103,7 @@ def main(argv=None) -> int:
         parser.error("journal must already exist")
     journal = SQLiteMutationJournal(args.journal)
     if args.command == "list":
-        result = [{"proposal_digest": item.proposal_digest, "state": item.state,
-                   "updated_at": item.updated_at, "business_key": item.business_key}
+        result = [unresolved_report(item, journal_path=args.journal)
                   for item in journal.unresolved()]
     else:
         raw = args.evidence.read_bytes()

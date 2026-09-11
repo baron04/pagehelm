@@ -78,7 +78,10 @@ tools return their own facts without changing or re-reading the page.
 `goto` with that link's exact href. Otherwise you may click the link. Never use `goto` for \
 a path that is not an exact href on the current page.
 * When a form is what the task needs, fill its fields and then click its submit control.
-* Set expect_navigation=true when the action you are taking should load a new page.
+* Leave expect_navigation unset unless you know the page routes in JavaScript. An ordinary \
+link or a submitting form is recognised without it. Setting it makes the runtime *require* \
+a navigation: if none commits, the action has already reached the page, so the run ends \
+with an uncertain outcome rather than letting you try again.
 * Call `finish` when the task is done, or when you are certain you cannot do it, and say why.
 
 You may be given a contract compiled from the application's source code. It tells you where \
@@ -98,8 +101,11 @@ TOOL_SCHEMAS = [
         "name": "click", "description": "Click an element from the current observation.",
         "parameters": {"type": "object", "properties": {
             "ref": {"type": "string", "description": "element reference, e.g. e12"},
-            "expect_navigation": {"type": "boolean",
-                                  "description": "true if this should load a new page"}},
+            "expect_navigation": {
+                "type": "boolean",
+                "description": ("only for a control that navigates by script rather than "
+                                "by href; a navigation that does not commit ends the run "
+                                "as uncertain")}},
             "required": ["ref"]}}},
     {"type": "function", "function": {
         "name": "fill", "description": "Type a value into a text field.",
@@ -115,7 +121,11 @@ TOOL_SCHEMAS = [
         "name": "submit", "description": "Submit the form that contains this element.",
         "parameters": {"type": "object", "properties": {
             "ref": {"type": "string"},
-            "expect_navigation": {"type": "boolean"}}, "required": ["ref"]}}},
+            "expect_navigation": {
+                "type": "boolean",
+                "description": ("only for a form submitted by script; a navigation that "
+                                "does not commit ends the run as uncertain")}},
+            "required": ["ref"]}}},
     {"type": "function", "function": {
         "name": "goto", "description": "Open an exact same-application path authorized by the current page or a typed tool result.",
         "parameters": {"type": "object", "properties": {"url": {"type": "string"}},
@@ -2080,6 +2090,18 @@ class ServerAgentSession:
     WRITE_CAPABLE = frozenset({"click", "submit", "fill", "select", "goto", "back"})
     # These worker errors are raised before invoking the action. Locator timeouts and
     # origin_refused are excluded: either may occur after dispatch/navigation began.
+    #: Failures that prove the browser never acted, so nothing can have been written. The
+    #: absent one decides a question the carry-over left open (F4): `navigation_timeout`
+    #: stays *out*, because the runtime executes the command and only then waits for the
+    #: navigation -- by the time it times out, the click has reached the page and may have
+    #: fired a request nobody can see. Ending such a run as indeterminate is correct, and
+    #: weakening it so a mispredicted `expect_navigation` reads as harmless would trade the
+    #: project's central guarantee for a cosmetic one.
+    #:
+    #: The cost is that a wrong prediction ends a run, which is a prompt problem, not a
+    #: receipt problem: the tool descriptions now say when the flag is needed (only for
+    #: script-driven navigation, since a native link is recognised without it) and what it
+    #: costs when the prediction is wrong.
     PRE_DISPATCH_ERRORS = frozenset({
         "stale_ref", "unknown_ref", "bad_arguments", "no_such_action",
         "deadline_expired", "stale_observation", "capability_refused", "runtime_replaced",

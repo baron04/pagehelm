@@ -111,7 +111,11 @@ class ScriptedBrowser:
     """A browser whose URL follows `goto` and whose epoch advances on every command."""
 
     def __init__(self, *, start: PageObservation | None = None,
-                 links: tuple[tuple[str, str, str], ...] = ()):
+                 links: tuple[tuple[str, str, str], ...] = (),
+                 navigation_times_out: bool = False):
+        #: The runtime executes a command and only then waits for the navigation the
+        #: server predicted, so a timeout is a command that already reached the page.
+        self.navigation_times_out = navigation_times_out
         self.links = links
         self.start = start or observation(1, links=links)
         self.url = self.start.url
@@ -129,9 +133,14 @@ class ScriptedBrowser:
             target = str(args.get("url") or "")
             self.url = target if target.startswith("http") else "http://app.test" + target
         self.epoch += 1
+        timed_out = self.navigation_times_out and expect_navigation
         return ActionReceipt(
             schema_version=SCHEMA_VERSIONS["ActionReceipt"],
-            command_id=f"c{len(self.commands)}", action=action, args_echo=args, ok=True,
+            command_id=f"c{len(self.commands)}", action=action, args_echo=args,
+            ok=not timed_out,
+            error_code="navigation_timeout" if timed_out else "",
+            error_detail=("navigation_timeout: expected navigation did not commit before "
+                          "deadline" if timed_out else ""),
             url_before=before, url_after=self.url, navigated=self.url != before,
             epoch_before=self.epoch - 1, epoch_after=self.epoch,
             observation=observation(self.epoch, self.url, links=self.links))
@@ -473,6 +482,27 @@ def a_second_write_while_one_is_unconfirmed_is_indeterminate(tmp: Path) -> Prepa
     return Prepared(session=session, chat=chat, browser=browser)
 
 
+def a_mispredicted_navigation_is_uncertain_not_harmless(tmp: Path) -> Prepared:
+    """F4's residual, ruled on rather than quick-fixed.
+
+    The model sets `expect_navigation` on a click that does not change the route. The
+    runtime executed the click *before* it started waiting, so by the time the navigation
+    times out the page has already had it, and an XHR nobody can see may have written. The
+    run therefore ends uncertain. Recorded here so that anyone tempted to add
+    `navigation_timeout` to `PRE_DISPATCH_ERRORS` -- which would make this read as a plain
+    failure the agent could retry -- has to change this file and say why.
+    """
+    chat = ScriptedChat([
+        ("click", {"ref": "e1", "expect_navigation": True}),
+        ("finish", {"done": True, "why": "that should have gone somewhere"}),
+    ])
+    browser = ScriptedBrowser(links=(("e1", "Sprout", "/glasshouse/do/sproutSeedling"),),
+                              navigation_times_out=True)
+    session = _session(tmp, "a_mispredicted_navigation_is_uncertain_not_harmless",
+                       chat=chat, browser=browser)
+    return Prepared(session=session, chat=chat, browser=browser)
+
+
 def business_read_projected_as_a_plain_answer(tmp: Path) -> Prepared:
     skill = read_skill_artifact(tmp / "read-skill.json")
     executor = QueryExecutor()
@@ -684,6 +714,9 @@ SCENARIOS: tuple[Scenario, ...] = (
     Scenario("a_second_write_while_one_is_unconfirmed_is_indeterminate",
              "the run stops rather than stacking unconfirmed writes",
              a_second_write_while_one_is_unconfirmed_is_indeterminate),
+    Scenario("a_mispredicted_navigation_is_uncertain_not_harmless",
+             "a click that reached the page is never a clean failure",
+             a_mispredicted_navigation_is_uncertain_not_harmless),
     Scenario("business_read_projected_as_a_plain_answer",
              "a typed read ends the loop with a projectable answer",
              business_read_projected_as_a_plain_answer),
