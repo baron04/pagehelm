@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Assert each distribution's wheel ships exactly what it should and nothing else.
 
-Run after building all three wheels into their distribution's own ``dist/`` directory. Exits
+Run after building every wheel into their distribution's own ``dist/`` directory. Exits
 1 and prints every violation on failure; the wheel-build gate that calls this must not report
 a pass while this script has anything to say.
 """
@@ -34,7 +34,7 @@ DISTRIBUTIONS = {
         # either application's slug, wherever it appears in the path, is a leak.
         # The core wheel carries no application and no demo: an example application lives in
         # `examples/`, is run from a checkout, and is never installed alongside the framework.
-        "forbidden_name_substrings": ["ofbiz", "twenty", "demo", "contacts"],
+        "forbidden_name_substrings": ["ofbiz", "twenty", "odoo", "demo", "contacts"],
     },
     "web-operation-agent-ofbiz": {
         "glob": "examples/ofbiz/dist/*.whl",
@@ -45,7 +45,7 @@ DISTRIBUTIONS = {
             "web_operation_agent_ofbiz/sourcemap.py",
             "web_operation_agent_ofbiz/policies/ofbiz.json",
         ],
-        "forbidden_name_substrings": ["twenty"],
+        "forbidden_name_substrings": ["twenty", "odoo"],
     },
     "web-operation-agent-twenty": {
         "glob": "examples/twenty/dist/*.whl",
@@ -57,7 +57,22 @@ DISTRIBUTIONS = {
             "web_operation_agent_twenty/skills/people-query.json",
             "web_operation_agent_twenty/skills/opportunities-query.json",
         ],
-        "forbidden_name_substrings": ["ofbiz"],
+        "forbidden_name_substrings": ["ofbiz", "odoo"],
+    },
+    "web-operation-agent-odoo": {
+        "glob": "examples/odoo/dist/*.whl",
+        "required": [
+            "web_operation_agent_odoo/__init__.py",
+            "web_operation_agent_odoo/route.py",
+            "web_operation_agent_odoo/adapter.py",
+            "web_operation_agent_odoo/sourcemap.py",
+            "web_operation_agent_odoo/policies/odoo.json",
+            "web_operation_agent_odoo/skills/sale-orders-query.json",
+            "web_operation_agent_odoo/skills/customers-query.json",
+            "web_operation_agent_odoo/skills/products-query.json",
+            "web_operation_agent_odoo/skills/customers-create.json",
+        ],
+        "forbidden_name_substrings": ["ofbiz", "twenty"],
     },
 }
 

@@ -14,17 +14,21 @@ so it runs from a checkout with nothing provisioned:
 PYTHONPATH=src:. python -m examples.contacts.demo --help
 ```
 
-`twenty/`, `ofbiz/` and any application added later are **reference integrations against
-real applications**. They are packaged as installable distributions because the evaluation
+`odoo/`, `twenty/`, `ofbiz/` and any application added later are **reference integrations
+against real applications**. They are packaged as installable distributions because the evaluation
 harness imports them and because the core wheel must be able to assert that it contains
 none of them. They are larger and carry real concerns — delegated OAuth, pagination
 completeness, session-parameter redaction — so read them second, when the small example
-has stopped answering your questions.
+has stopped answering your questions. Of the three, **`odoo/` is the one to read**: it is the
+only integration that exercises every port including the offline `SourceCompiler`, and its
+identity story — an HttpOnly session the page cannot hand over, plus a per-user API key — is
+closer to what a real application will make you deal with than a bearer token in a file.
 
 | Directory | What it is | Installable |
 |---|---|---|
 | [`contacts/`](contacts/) | The template: synthetic app + adapter + Skill + composition | No — run from a checkout |
-| [`twenty/`](twenty/) | Twenty CRM reference integration | `web-operation-agent-twenty` |
+| [`odoo/`](odoo/) | Odoo 18 reference integration — the main application: two-sided identity, a source compiler, typed reads with completeness, one guarded write | `web-operation-agent-odoo` |
+| [`twenty/`](twenty/) | Twenty CRM reference integration, kept as the second adapter and as the comparison harness's application | `web-operation-agent-twenty` |
 | [`ofbiz/`](ofbiz/) | Apache OFBiz reference integration, kept for MPA/iframe regression | `web-operation-agent-ofbiz` |
 
 The contract these implement is documented in

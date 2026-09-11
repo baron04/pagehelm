@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "skill_id": "odoo.sales.sale-orders-query",
+  "title": "Query confirmed Odoo sales orders",
+  "intent": "Read the confirmed sales orders currently visible to the signed-in Odoo user.",
+  "triggers": [
+    "sales order",
+    "sales orders",
+    "sale order",
+    "order",
+    "orders",
+    "销售订单",
+    "订单"
+  ],
+  "instructions": [
+    "Call query_sale_orders to obtain current Odoo data; do not answer from this Skill or from page text.",
+    "The tool reads the same scope as Odoo's Orders page: confirmed orders only, excluding quotations, sent quotations and cancelled orders. Say so if the user asked about quotations.",
+    "Use name_contains only when the user supplied an order-reference filter.",
+    "When the user asks to open the Orders list, call query_sale_orders once, then call goto with /odoo/orders, the collection route authorized by that ToolResult.",
+    "When the user asks to open one order, call query_sale_orders with its reference, require exactly one match, then call goto with that result's exact ui_path.",
+    "Odoo renders its back office as a single-page application, so after goto call wait_for once when the requested record is not visible yet.",
+    "If the query has zero or multiple matches, ask for clarification; never invent a record path.",
+    "Treat the ToolResult as runtime truth. After the query, respond briefly; the server projects the exact records, source and completeness into the user answer, so do not restate or extend the record set."
+  ],
+  "tool_names": [
+    "query_sale_orders"
+  ],
+  "provenance": [
+    "odoo:18.0:addons/sale/views/sale_order_views.xml#action_orders",
+    "odoo:18.0:addons/sale/models/sale_order.py#sale.order",
+    "Odoo external API: /jsonrpc object.execute_kw"
+  ],
+  "read_only": true
+}

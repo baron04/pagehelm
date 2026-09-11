@@ -1,0 +1,159 @@
+# web-operation-agent-odoo
+
+Odoo 18 support for [`web-operation-agent`](https://github.com/): the `/odoo/<path>` route
+grammar, a source compiler that reads Odoo's own module XML and model Python into a cited
+`SourceMap`, typed business tools over the delegated JSON-RPC API, and the deployment
+composition that serves one turn against a live Odoo.
+
+This package contains no generic Agent code. It implements the core package's ports —
+`ApplicationIdentityPort`, `ApplicationRoutePort`, `BusinessPostconditionVerifier`,
+`ApplicationMutationReconciler`, `BusinessDataClassifier`, and the offline `SourceCompiler` —
+against Odoo, and nothing else.
+
+```python
+from web_operation_agent_odoo import ODOO_ROUTE_PORT, OdooCompiler
+from web_operation_agent_odoo.adapter import OdooApplicationAdapter
+```
+
+## Identity: two sides that must agree
+
+Odoo's session story is not the browser-hand-off shape most integrations use, and the
+difference is the reason this adapter is worth reading:
+
+* the browser's `session_id` cookie is **HttpOnly** and Odoo 18 accepts it **only** as a
+  cookie — `odoo/http.py` reads `cookies.get('session_id')`, and the old
+  `X-Openerp-Session-Id` header no longer exists. Page JavaScript therefore cannot hand its
+  credential to a server-side tool, and should not be able to;
+* the page can still *assert* who it is, with no secret in the answer, through
+  `/web/session/get_session_info`;
+* the server side acts through a **per-user API key** (`res.users.apikeys`) that the user
+  generates in Odoo's own settings and that carries its own expiry.
+
+`bind_browser_session` resolves both and refuses to produce a principal unless they name the
+same actor. The mapping is `db` → tenant, the current company → workspace, `uid` → actor.
+
+Provisioning the API key is a **deployment step performed by the person whose records the
+Agent will act on**: Settings → My Profile → Account Security → New API Key. Store it, the
+database name and the login in one ignored `0600` JSON file:
+
+```json
+{"database": "woa", "login": "you@example.com", "api_key": "…"}
+```
+
+## Routes
+
+Odoo serves its whole back office from one server route and resolves the rest in the
+browser. Three subpath shapes carry meaning:
+
+| Shape | Means |
+|---|---|
+| `/odoo/<action-path>` | a collection, named by `ir.actions.act_window.path` |
+| `/odoo/<action-path>/<id>` | one record inside that action |
+| `/odoo/<model.name>/<id>` | one record addressed by its model |
+
+The action path is a stored field, not a convention this package invented: the compiler's
+output was compared against every one of them in a live database with no mismatch.
+
+## Source
+
+`OdooCompiler` reads menus, actions, views and models into `SourceRelation` triples, each
+with a citation that `SourceTree.verify` can re-check against the exact bytes. What that
+buys is the class of fact a page cannot show. On a confirmed sales order, two buttons are
+both labelled "Create Invoice":
+
+```
+invisible="invoice_status != 'to invoice'"                      → a regular invoice
+invisible="invoice_status != 'no' or state != 'sale'"           → a percentage down payment
+context="{'default_advance_payment_method': 'percentage'}"
+```
+
+The DOM renders one button with one label. `addons/sale/views/sale_order_views.xml:266-271`
+says which one it is.
+
+Two limits are deliberate and are recorded rather than guessed:
+
+* **inheritance is linked, not merged.** Every view-derived relation carries `root_view`, so
+  the union of a view family's declared fields is computable, but an `inherit_id` patch that
+  *removes* or *replaces* a node is not applied. Read `root_view` as "declared somewhere in
+  this view family", never as "present in the rendered arch";
+* **cross-module record patches are not merged into definitions.** A module may write
+  `<record id="other_module.some_action">` to amend a record it does not own; such a record
+  declares no `res_model` and is reported in `unsupported`, never as a definition.
+
+Source retrieval stays optional. `OdooApplicationAdapter.source_capability()` with no source
+root returns "nothing", and the session runs on runtime facts alone.
+
+```python
+capability = adapter.source_capability(source_root, release="18.0-20260908+…")
+session_kwargs = capability.session_kwargs()
+```
+
+## Tools
+
+| Tool | Model | Scope | Route |
+|---|---|---|---|
+| `query_sale_orders` | `sale.order` | confirmed orders (the Orders page's own domain) | `/odoo/orders` |
+| `query_customers` | `res.partner` | customer rank above zero | `/odoo/customers` |
+| `query_products` | `product.template` | saleable products | `/odoo/products` |
+| `create_customer` | `res.partner` | one customer, opt-in | `/odoo/customers/<id>` |
+
+Each read scans its whole scope and checks the row count against the application's own
+`search_count`, so "I saw all of them" is answered by a number that did not come from the
+page of rows being counted. `create_customer` is disabled unless a deployment passes
+`allow_mutations=True` **and** a mutation journal; it normalises the proposal, re-checks
+duplicates over a complete scan immediately before dispatch, and reads the record back under
+the same actor.
+
+## Running it
+
+Serve the pinned page controller from the Odoo origin — any module directory on the addons
+path works, for example `<addons>/woa_runtime/static/src/page-controller.js` — then:
+
+```bash
+python -m web_operation_agent_odoo.demo --scripted --headless \
+  --api-key .private/odoo-api-key.json \
+  --storage-state .private/odoo-storage-state.json
+```
+
+`--scripted` uses a fixed walkthrough with no provider and no spend: it exercises real Odoo,
+real Chromium and the real product turn, and asserts nothing about a model. Drop `--scripted`
+and set `AGENT_OPENAI_BASE_URL`, `AGENT_OPENAI_API_KEY` and `AGENT_OPENAI_MODEL_PRO` to run
+with one.
+
+The gate version writes a schema-fixed artifact of counts, digests and booleans, and checks
+that the fixture is byte-identical before and after:
+
+```bash
+python -m web_operation_agent_odoo.demo.qualify \
+  --api-key .private/odoo-api-key.json \
+  --storage-state .private/odoo-storage-state.json \
+  --output .artifacts/odoo/live-qualification.json
+```
+
+`scripts/qualify.sh` runs it whenever `WOA_ODOO_BASE_URL`, `WOA_ODOO_API_KEY_FILE`,
+`WOA_ODOO_STORAGE_STATE` and `WOA_ODOO_PAGE_CONTROLLER_MODULE` are set; without them the gate
+reports BLOCKED, which is not a pass.
+
+## Session parameters
+
+The adapter declares `session_id`, `access_token` and `token` through
+`ApplicationRoutePort.session_handoff_query_keys`. Odoo 18 does not put its session in a URL,
+so no concrete leak exists on this release — but older Odoo did, portal links still carry
+`access_token`, and the core's static redaction baseline has never heard of any of them. A
+composition must therefore build its provider egress policy from the adapter:
+
+```python
+ProviderEgressPolicy(session_handoff_keys=adapter.ports.routes.session_handoff_query_keys)
+```
+
+`AgentTurnExecutor` refuses to compose without it.
+
+## Tests
+
+```bash
+PYTHONPATH=src:examples/odoo/src python -m unittest discover \
+  -s examples/odoo/src/web_operation_agent_odoo/tests -t examples/odoo/src
+```
+
+Every case runs against a fake JSON-RPC transport or an invented two-module source tree. No
+test in this package requires a reachable Odoo; the live checks are the opt-in gate above.

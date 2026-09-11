@@ -1,0 +1,918 @@
+"""Odoo 18 adapter: delegated JSON-RPC tools, two-sided identity, and bounded routes.
+
+Odoo's identity story is not the one a browser-session hand-off usually gives you, and the
+difference shapes this file:
+
+  * the browser's ``session_id`` cookie is **HttpOnly** and is accepted only as a cookie
+    (``odoo/http.py`` reads ``cookies.get('session_id')``; the old ``X-Openerp-Session-Id``
+    header was removed), so the page can never hand its credential to a server-side tool;
+  * the page can still *assert* who it is, without a secret, through
+    ``/web/session/get_session_info``;
+  * the server side acts through a **per-user API key** (``res.users.apikeys``), which the
+    user generates in Odoo's own settings and which carries its own expiry.
+
+That is exactly the two-sided shape ``bind_matching_identity`` wants: a page assertion and
+a delegated assertion that must resolve to the same actor before any tool runs. Credentials
+stay in ignored 0600 files; the audit record carries digests and counts, never a key, a
+cookie, or a raw result row.
+"""
+from __future__ import annotations
+
+import json
+import re
+import threading
+import time
+import unicodedata
+from datetime import datetime, timezone
+from importlib import resources
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
+
+from web_operation_agent.answering import StructuredQueryAnswer
+from web_operation_agent.application import (APPLICATION_ADAPTER_VERSION,
+                                             ApplicationDescriptor, ApplicationPorts,
+                                             DeclaredDataClassifier,
+                                             MutationReconciliation,
+                                             ResultPostconditionVerifier,
+                                             SourceCapability)
+from web_operation_agent.business import (BusinessMutationIndeterminate,
+                                          BusinessMutationSpec, BusinessSkill,
+                                          BusinessToolAuthenticationError,
+                                          BusinessToolContractError, BusinessToolError,
+                                          BusinessToolIdentityError,
+                                          BusinessToolRequestError, BusinessToolResult,
+                                          BusinessToolRuntime,
+                                          BusinessToolUnavailableError,
+                                          business_text_key, normalize_business_text)
+from web_operation_agent.identity import (IdentityAssertion, OperationContext,
+                                          PrincipalContext, PrincipalError,
+                                          bind_matching_identity)
+from web_operation_agent.mutation import MutationJournal
+
+from .route import ODOO_ROUTE_PORT, ODOO_SOURCE_SCOPE
+from .sourcemap import OdooCompiler, odoo_source_tree
+
+
+APPLICATION_ID = "odoo"
+_MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+_MAX_STORAGE_STATE_BYTES = 2 * 1024 * 1024
+_PAGE_SIZE = 200
+_MAX_PAGES = 25
+_EMAIL = re.compile(r"[^@\s,;<>]{1,64}@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+                    r"[a-z]{2,24}\Z", re.I)
+_SESSION_COOKIE = "session_id"
+_SKILLS = ("sale-orders-query.json", "customers-query.json", "products-query.json",
+           "customers-create.json")
+
+
+def _validated_origin(value: str) -> str:
+    parsed = urlsplit(value if isinstance(value, str) else "")
+    if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+            or parsed.username is not None or parsed.password is not None
+            or parsed.path not in {"", "/"} or parsed.query or parsed.fragment):
+        raise ValueError("Odoo base_url must be an http(s) origin")
+    if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+        raise ValueError("plain HTTP Odoo origins must use loopback")
+    default = 80 if parsed.scheme == "http" else 443
+    port = parsed.port
+    suffix = f":{port}" if port is not None and port != default else ""
+    host = parsed.hostname.casefold()
+    return f"{parsed.scheme}://{f'[{host}]' if ':' in host else host}{suffix}"
+
+
+def _packaged_skill(filename: str) -> BusinessSkill:
+    artifact = resources.files("web_operation_agent_odoo").joinpath("skills", filename)
+    try:
+        raw = artifact.read_bytes()
+    except OSError as exc:
+        raise RuntimeError(f"packaged Odoo Skill is unavailable: {filename}") from exc
+    return BusinessSkill.from_bytes(
+        raw, artifact_uri=f"package://web_operation_agent_odoo/skills/{filename}")
+
+
+# ---------------------------------------------------------------------------- collections
+
+class _Collection:
+    """One typed read: an Odoo model, the exact scope, and the page that shows it.
+
+    ``domain`` is not a convenience filter. It is the adapter's promise that the tool's
+    result set and the route it hands back describe the same records -- the Odoo action at
+    ``action_xml_id`` applies the same restriction, whether as a stored domain or as the
+    search filter its context switches on by default.
+    """
+
+    __slots__ = ("tool", "model", "domain", "fields", "scope", "action_xml_id",
+                 "route", "answer_fields", "data_class")
+
+    def __init__(self, *, tool: str, model: str, domain: list, fields: tuple[str, ...],
+                 scope: str, action_xml_id: str, route: str,
+                 answer_fields: tuple[str, ...], data_class: str):
+        self.tool = tool
+        self.model = model
+        self.domain = domain
+        self.fields = fields
+        self.scope = scope
+        self.action_xml_id = action_xml_id
+        self.route = route
+        self.answer_fields = answer_fields
+        self.data_class = data_class
+
+
+COLLECTIONS: tuple[_Collection, ...] = (
+    _Collection(
+        tool="query_sale_orders", model="sale.order",
+        # `sale.action_orders` stores exactly this domain: the Orders page is confirmed
+        # orders, and quotations are a different page.
+        domain=[("state", "not in", ("draft", "sent", "cancel"))],
+        fields=("name", "partner_id", "state", "amount_total", "invoice_status"),
+        scope="confirmed sales orders visible to the delegated user",
+        action_xml_id="sale.action_orders", route="/odoo/orders",
+        answer_fields=("reference", "customer", "state", "total"),
+        data_class="business.sales_order"),
+    _Collection(
+        tool="query_customers", model="res.partner",
+        domain=[("customer_rank", ">", 0)],
+        fields=("name", "email", "city", "country_id"),
+        scope="customers visible to the delegated user",
+        action_xml_id="account.res_partner_action_customer", route="/odoo/customers",
+        answer_fields=("name", "email"),
+        data_class="business.customer"),
+    _Collection(
+        tool="query_products", model="product.template",
+        domain=[("sale_ok", "=", True)],
+        fields=("name", "default_code", "list_price", "type"),
+        scope="saleable products visible to the delegated user",
+        action_xml_id="sale.product_template_action", route="/odoo/products",
+        answer_fields=("name", "code", "price"),
+        data_class="business.product"),
+)
+_BY_TOOL = {collection.tool: collection for collection in COLLECTIONS}
+CREATE_CUSTOMER_TOOL = "create_customer"
+_CUSTOMERS = _BY_TOOL["query_customers"]
+
+
+def _query_schema(collection: _Collection, description: str) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": collection.tool,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name_contains": {
+                        "type": "string", "maxLength": 100,
+                        "description": "Optional case-insensitive record name substring.",
+                    },
+                    "limit": {
+                        "type": "integer", "minimum": 1, "maximum": 50,
+                        "description": "Maximum rows to return; defaults to 20.",
+                    },
+                },
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+QUERY_SCHEMAS = {
+    "query_sale_orders": _query_schema(
+        _BY_TOOL["query_sale_orders"],
+        "Read confirmed Odoo sales orders visible to the currently delegated user."),
+    "query_customers": _query_schema(
+        _CUSTOMERS,
+        "Read Odoo customers visible to the currently delegated user."),
+    "query_products": _query_schema(
+        _BY_TOOL["query_products"],
+        "Read saleable Odoo products visible to the currently delegated user."),
+}
+
+CREATE_CUSTOMER_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": CREATE_CUSTOMER_TOOL,
+        "description": (
+            "Propose creation of exactly one Odoo customer for explicit user confirmation. "
+            "The server re-checks duplicates immediately before writing and returns the "
+            "created record's route."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "minLength": 1, "maxLength": 200,
+                         "description": "Exact customer name supplied by the user."},
+                "email": {"type": "string", "minLength": 3, "maxLength": 254,
+                          "description": "Customer email address."},
+            },
+            "required": ["name", "email"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+# ---------------------------------------------------------------------------- credentials
+
+class OdooApiKeyStore:
+    """A per-user Odoo API key held in one ignored 0600 file.
+
+    Odoo mints these in Settings -> My Profile -> Account Security -> New API Key, bound to
+    one user and one expiry. Provisioning is therefore a deployment step performed by the
+    person whose records the Agent will act on, not something this adapter can do for them.
+    """
+
+    def __init__(self, key_path: str | Path):
+        self.path = Path(key_path)
+        self._lock = threading.Lock()
+        self._cached: dict | None = None
+
+    def _read(self) -> dict:
+        with self._lock:
+            if self._cached is not None:
+                return self._cached
+            try:
+                raw = self.path.read_bytes()
+            except OSError as exc:
+                raise BusinessToolAuthenticationError(
+                    "the Odoo API key file is unreadable") from exc
+            if len(raw) > 64 * 1024:
+                raise BusinessToolAuthenticationError("the Odoo API key file is oversized")
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise BusinessToolAuthenticationError(
+                    "the Odoo API key file is not valid JSON") from exc
+            if not isinstance(payload, dict):
+                raise BusinessToolAuthenticationError("the Odoo API key file is malformed")
+            values = {}
+            for field, pattern in (("database", r"[A-Za-z0-9_.-]{1,63}"),
+                                   ("login", r"[^\x00-\x1f\x7f]{1,254}"),
+                                   ("api_key", r"[A-Za-z0-9_-]{16,256}")):
+                value = payload.get(field)
+                if not isinstance(value, str) or not re.fullmatch(pattern, value):
+                    raise BusinessToolAuthenticationError(
+                        f"the Odoo API key file has no valid {field}")
+                values[field] = value
+            self._cached = values
+            return values
+
+    @property
+    def database(self) -> str:
+        return self._read()["database"]
+
+    @property
+    def login(self) -> str:
+        return self._read()["login"]
+
+    @property
+    def api_key(self) -> str:
+        return self._read()["api_key"]
+
+
+class OdooPageSessionIdentityResolver:
+    """Resolve who the browser is logged in as, without ever exposing its credential.
+
+    The session cookie is read from the browser context's storage state, used once against
+    ``/web/session/get_session_info``, and never returned: the assertion this produces
+    carries identifiers only.
+    """
+
+    def __init__(self, *, base_url: str, storage_state_path: str | Path | None = None,
+                 storage_state: dict | None = None, timeout_s: float = 15):
+        if (storage_state_path is None) == (storage_state is None):
+            raise ValueError("supply exactly one of storage_state_path or storage_state")
+        self.base_url = _validated_origin(base_url)
+        self.storage_state_path = storage_state_path
+        self._storage_state = storage_state
+        self.timeout_s = timeout_s
+
+    def _load(self) -> dict:
+        if self._storage_state is not None:
+            return self._storage_state
+        path = Path(self.storage_state_path)
+        try:
+            raw = path.read_bytes()
+        except OSError as exc:
+            raise BusinessToolIdentityError(
+                "the Odoo browser storage state is unreadable") from exc
+        if len(raw) > _MAX_STORAGE_STATE_BYTES:
+            raise BusinessToolIdentityError("the Odoo browser storage state is oversized")
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise BusinessToolIdentityError(
+                "the Odoo browser storage state is not valid JSON") from exc
+
+    def _session_cookie(self) -> str:
+        state = self._load()
+        cookies = state.get("cookies") if isinstance(state, dict) else None
+        if not isinstance(cookies, list):
+            raise BusinessToolIdentityError(
+                "the Odoo browser storage state has no cookies")
+        host = urlsplit(self.base_url).hostname or ""
+        for cookie in cookies:
+            if not isinstance(cookie, dict) or cookie.get("name") != _SESSION_COOKIE:
+                continue
+            domain = str(cookie.get("domain") or "").lstrip(".").casefold()
+            if domain and domain != host.casefold():
+                continue
+            value = cookie.get("value")
+            if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_-]{16,512}", value):
+                return value
+        raise BusinessToolIdentityError(
+            "the Odoo browser storage state carries no usable session cookie")
+
+    def binding_digest(self) -> str:
+        """A stable digest of the live session cookie, for detecting a replaced session."""
+        import hashlib
+        return hashlib.sha256(
+            f"odoo:{self.base_url}:{self._session_cookie()}".encode("utf-8")).hexdigest()
+
+    def resolve(self, *, lifetime_s: int = 300,
+                now_ms: int | None = None) -> IdentityAssertion:
+        cookie = self._session_cookie()
+        request = Request(self.base_url + "/web/session/get_session_info",
+                          data=json.dumps({"jsonrpc": "2.0", "method": "call",
+                                           "params": {}}).encode("utf-8"), method="POST")
+        request.add_header("Content-Type", "application/json")
+        request.add_header("Cookie", f"{_SESSION_COOKIE}={cookie}")
+        try:
+            with urlopen(request, timeout=self.timeout_s) as response:
+                payload = json.loads(response.read(_MAX_RESPONSE_BYTES))
+        except HTTPError as exc:
+            raise BusinessToolIdentityError(
+                f"Odoo rejected the page session ({exc.code})") from exc
+        except (URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
+            raise BusinessToolIdentityError(
+                "the Odoo page session could not be resolved") from exc
+        info = payload.get("result") if isinstance(payload, dict) else None
+        if not isinstance(info, dict) or info.get("uid") in (None, False):
+            raise BusinessToolIdentityError(
+                "the Odoo page session is no longer authenticated")
+        companies = info.get("user_companies")
+        company = (companies.get("current_company")
+                   if isinstance(companies, dict) else None)
+        database = info.get("db")
+        uid = info.get("uid")
+        if (not isinstance(database, str) or not database
+                or isinstance(uid, bool) or not isinstance(uid, int)
+                or isinstance(company, bool) or not isinstance(company, int)):
+            raise BusinessToolIdentityError("the Odoo session info is incomplete")
+        issued_at = int(time.time() * 1000) if now_ms is None else now_ms
+        return IdentityAssertion(
+            schema_version=1, source="page_session", application_id=APPLICATION_ID,
+            tenant_id=database, workspace_id=str(company), actor_id=str(uid),
+            issued_at=issued_at, expires_at=issued_at + lifetime_s * 1000)
+
+
+# ------------------------------------------------------------------------------- executor
+
+class OdooBusinessToolExecutor:
+    """Typed reads and one guarded write over Odoo's delegated JSON-RPC endpoint."""
+
+    def __init__(self, *, base_url: str, keys: OdooApiKeyStore, timeout_s: float = 20,
+                 allow_mutations: bool = False):
+        if not isinstance(allow_mutations, bool):
+            raise ValueError("allow_mutations must be a boolean")
+        self.base_url = _validated_origin(base_url)
+        self.keys = keys
+        self.timeout_s = timeout_s
+        self.allow_mutations = allow_mutations
+        self._uid: int | None = None
+        self._lock = threading.Lock()
+
+    # -- tool catalog -------------------------------------------------------------------
+    def tool_schemas(self) -> tuple[dict, ...]:
+        reads = tuple(QUERY_SCHEMAS[collection.tool] for collection in COLLECTIONS)
+        return reads + ((CREATE_CUSTOMER_SCHEMA,) if self.allow_mutations else ())
+
+    def tool_effects(self) -> dict[str, str]:
+        effects = {collection.tool: "read" for collection in COLLECTIONS}
+        if self.allow_mutations:
+            effects[CREATE_CUSTOMER_TOOL] = "write"
+        return effects
+
+    # -- transport ----------------------------------------------------------------------
+    def _rpc(self, params: dict) -> object:
+        body = json.dumps({"jsonrpc": "2.0", "method": "call", "params": params}
+                          ).encode("utf-8")
+        request = Request(self.base_url + "/jsonrpc", data=body, method="POST")
+        request.add_header("Content-Type", "application/json")
+        try:
+            with urlopen(request, timeout=self.timeout_s) as response:
+                payload = json.loads(response.read(_MAX_RESPONSE_BYTES))
+        except HTTPError as exc:
+            if exc.code in (401, 403):
+                raise BusinessToolAuthenticationError(
+                    "Odoo rejected the delegated API key") from exc
+            raise BusinessToolUnavailableError(
+                f"the Odoo API returned HTTP {exc.code}") from exc
+        except (URLError, TimeoutError, OSError) as exc:
+            raise BusinessToolUnavailableError("the Odoo API is unreachable") from exc
+        except json.JSONDecodeError as exc:
+            raise BusinessToolContractError("the Odoo API returned invalid JSON") from exc
+        if not isinstance(payload, dict):
+            raise BusinessToolContractError("the Odoo API response is not an object")
+        error = payload.get("error")
+        if error is not None:
+            name = ""
+            if isinstance(error, dict) and isinstance(error.get("data"), dict):
+                name = str(error["data"].get("name") or "")
+            if "AccessDenied" in name or "AccessError" in name:
+                raise BusinessToolAuthenticationError(
+                    "Odoo denied the delegated user this operation")
+            # The message may quote record content, so only the exception class crosses.
+            raise BusinessToolError(f"Odoo refused the call ({name or 'unknown'})")
+        return payload.get("result")
+
+    def _authenticate(self) -> int:
+        with self._lock:
+            if self._uid is not None:
+                return self._uid
+        uid = self._rpc({"service": "common", "method": "authenticate",
+                         "args": [self.keys.database, self.keys.login,
+                                  self.keys.api_key, {}]})
+        if isinstance(uid, bool) or not isinstance(uid, int) or uid <= 0:
+            raise BusinessToolAuthenticationError(
+                "the Odoo API key did not authenticate a user")
+        with self._lock:
+            self._uid = uid
+        return uid
+
+    def call(self, model: str, method: str, args: list, kwargs: dict | None = None):
+        uid = self._authenticate()
+        return self._rpc({"service": "object", "method": "execute_kw",
+                          "args": [self.keys.database, uid, self.keys.api_key,
+                                   model, method, args, kwargs or {}]})
+
+    # -- identity -----------------------------------------------------------------------
+    def resolve_delegated_identity(self, *, lifetime_s: int = 300,
+                                   now_ms: int | None = None) -> IdentityAssertion:
+        if isinstance(lifetime_s, bool) or not isinstance(lifetime_s, int) \
+                or not 1 <= lifetime_s <= 3_600:
+            raise ValueError("identity lifetime_s must be an integer from 1 to 3600")
+        uid = self._authenticate()
+        rows = self.call("res.users", "read", [[uid]], {"fields": ["login", "company_id"]})
+        if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
+            raise BusinessToolIdentityError("Odoo returned no delegated user record")
+        company = rows[0].get("company_id")
+        company_id = company[0] if isinstance(company, list) and company else None
+        if isinstance(company_id, bool) or not isinstance(company_id, int):
+            raise BusinessToolIdentityError("the Odoo delegated user has no company")
+        issued_at = int(time.time() * 1000) if now_ms is None else now_ms
+        return IdentityAssertion(
+            schema_version=1, source="delegated_api", application_id=APPLICATION_ID,
+            tenant_id=self.keys.database, workspace_id=str(company_id),
+            actor_id=str(uid), issued_at=issued_at,
+            expires_at=issued_at + lifetime_s * 1000)
+
+    @staticmethod
+    def _identity_audit(context: OperationContext | None) -> dict:
+        if context is None:
+            return {"identity_binding": "unverified"}
+        return {"identity_binding": "principal_bound",
+                "identity": context.audit_projection()}
+
+    # -- reads --------------------------------------------------------------------------
+    @staticmethod
+    def _read_args(name: str, args: dict) -> tuple[str, int]:
+        unknown = set(args) - {"name_contains", "limit"}
+        if unknown:
+            raise BusinessToolRequestError(f"{name} received unknown arguments")
+        needle = args.get("name_contains", "")
+        if (not isinstance(needle, str) or len(needle) > 100
+                or re.search(r"[\x00-\x1f\x7f]", needle)):
+            raise BusinessToolRequestError(
+                "name_contains must be a string of at most 100 characters")
+        limit = args.get("limit", 20)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
+            raise BusinessToolRequestError("limit must be an integer from 1 to 50")
+        return needle, limit
+
+    def _scan(self, collection: _Collection) -> tuple[list[dict], int, dict]:
+        """Read the whole scoped collection, and say plainly whether the scan finished.
+
+        `search_count` under the same actor and the same domain is the completeness oracle:
+        a truthful "I saw all of them" needs a number that did not come from the same page
+        of results being counted.
+        """
+        domain = [list(clause) for clause in collection.domain]
+        total = self.call(collection.model, "search_count", [domain])
+        if isinstance(total, bool) or not isinstance(total, int) or total < 0:
+            raise BusinessToolContractError("Odoo returned an invalid record count")
+        rows: list[dict] = []
+        pages = 0
+        while pages < _MAX_PAGES and len(rows) < total:
+            page = self.call(collection.model, "search_read", [domain],
+                             {"fields": list(collection.fields), "limit": _PAGE_SIZE,
+                              "offset": len(rows), "order": "id"})
+            if not isinstance(page, list):
+                raise BusinessToolContractError("Odoo returned an invalid record page")
+            pages += 1
+            rows.extend(row for row in page if isinstance(row, dict))
+            if not page:
+                break
+        complete = len(rows) == total
+        return rows, total, {
+            "pages_scanned": pages,
+            "records_scanned": len(rows),
+            "complete": complete,
+            "incomplete_reason": "" if complete else "page_budget_exhausted",
+        }
+
+    @staticmethod
+    def _label(row: dict, field: str) -> str:
+        value = row.get(field)
+        if isinstance(value, list) and len(value) == 2:
+            value = value[1]
+        if value is False or value is None:
+            return ""
+        if isinstance(value, float):
+            return f"{value:.2f}"
+        return str(value)[:300]
+
+    def _project(self, collection: _Collection, row: dict) -> dict:
+        record_id = row.get("id")
+        item = {"name": self._label(row, "name")}
+        if collection.tool == "query_sale_orders":
+            item = {"reference": self._label(row, "name"),
+                    "customer": self._label(row, "partner_id"),
+                    "state": self._label(row, "state"),
+                    "total": self._label(row, "amount_total"),
+                    "invoice_status": self._label(row, "invoice_status")}
+        elif collection.tool == "query_customers":
+            item = {"name": self._label(row, "name"), "email": self._label(row, "email"),
+                    "city": self._label(row, "city"),
+                    "country": self._label(row, "country_id")}
+        else:
+            item = {"name": self._label(row, "name"),
+                    "code": self._label(row, "default_code"),
+                    "price": self._label(row, "list_price"),
+                    "type": self._label(row, "type")}
+        if not isinstance(record_id, bool) and isinstance(record_id, int) and record_id > 0:
+            item["ui_path"] = f"{collection.route}/{record_id}"
+        return item
+
+    @staticmethod
+    def _match_field(collection: _Collection) -> str:
+        return "reference" if collection.tool == "query_sale_orders" else "name"
+
+    def execute(self, name: str, args: dict, *,
+                context: OperationContext | None = None) -> BusinessToolResult:
+        collection = _BY_TOOL.get(name)
+        if collection is None:
+            raise BusinessToolRequestError("unknown Odoo business tool")
+        needle, limit = self._read_args(name, args)
+        rows, total, scan = self._scan(collection)
+        projected = [self._project(collection, row) for row in rows]
+        field = self._match_field(collection)
+        folded = needle.casefold().strip()
+        if folded:
+            projected = [item for item in projected if folded in item[field].casefold()]
+        matched = len(projected)
+        visible = projected[:limit]
+        allowed_routes = (collection.route,) + tuple(
+            item["ui_path"] for item in visible if isinstance(item.get("ui_path"), str))
+        source_complete = scan["complete"]
+        result_truncated = matched > limit or not source_complete
+        observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        completeness = {
+            "source_total_known": True,
+            "source_complete": source_complete,
+            "result_truncated": result_truncated,
+            "pages_scanned": scan["pages_scanned"],
+            "records_scanned": scan["records_scanned"],
+            "incomplete_reason": scan["incomplete_reason"],
+        }
+        return BusinessToolResult(
+            content={
+                collection.tool.removeprefix("query_"): visible,
+                "collection_ui_path": collection.route,
+                "matched_count": matched,
+                "source_total": total,
+                "scope": collection.scope,
+                "observed_at": observed_at,
+                "completeness": completeness,
+            },
+            audit={
+                "application": APPLICATION_ID,
+                "operation": name,
+                "model": collection.model,
+                "matched_count": matched,
+                "returned_count": len(visible),
+                "source_total": total,
+                "scope": collection.scope,
+                "observed_at": observed_at,
+                **completeness,
+                **self._identity_audit(context),
+            },
+            allowed_routes=allowed_routes,
+            query_answer=StructuredQueryAnswer(
+                collection=collection.tool.removeprefix("query_"),
+                fields=collection.answer_fields,
+                records=tuple(tuple(item.get(key, "") for key in collection.answer_fields)
+                              for item in visible),
+                source=f"Odoo delegated JSON-RPC {collection.model}",
+                scope=collection.scope,
+                observed_at=observed_at,
+                source_complete=source_complete,
+                result_truncated=result_truncated,
+                matched_count=matched,
+                source_total=total,
+                records_scanned=scan["records_scanned"],
+                incomplete_reason=scan["incomplete_reason"],
+            ),
+        )
+
+    # -- the one write ------------------------------------------------------------------
+    @staticmethod
+    def _normalize_customer(args: dict) -> dict:
+        if not isinstance(args, dict) or set(args) != {"name", "email"}:
+            raise BusinessToolError("create_customer requires only name and email")
+        name = normalize_business_text(args.get("name"), field="customer name", maximum=200)
+        email = args.get("email")
+        if not isinstance(email, str):
+            raise BusinessToolError("customer email must be a string")
+        email = unicodedata.normalize("NFKC", email).strip().casefold()
+        if not _EMAIL.fullmatch(email):
+            raise BusinessToolError("customer email must be a plain address")
+        return {"name": name, "email": email}
+
+    def _assert_no_duplicate(self, name: str, email: str) -> None:
+        rows, total, scan = self._scan(_CUSTOMERS)
+        if not scan["complete"] or len(rows) != total:
+            raise BusinessToolError("the Odoo duplicate check was incomplete")
+        for row in rows:
+            existing_email = self._label(row, "email").casefold()
+            if (business_text_key(self._label(row, "name")) == business_text_key(name)
+                    or (existing_email and existing_email == email)):
+                raise BusinessToolError(
+                    "a customer with the same name or email already exists")
+
+    def prepare_mutation(self, name: str, args: dict, *,
+                         context: OperationContext | None = None) -> BusinessMutationSpec:
+        if not self.allow_mutations or name != CREATE_CUSTOMER_TOOL:
+            raise BusinessToolError("unknown Odoo business mutation")
+        normalized = self._normalize_customer(args)
+        self._assert_no_duplicate(normalized["name"], normalized["email"])
+        return BusinessMutationSpec(
+            args=normalized,
+            reconcile_key=normalized["name"].casefold(),
+            effect="在 Odoo 中创建 1 个客户",
+            targets=(f"客户：{normalized['name']}", f"邮箱：{normalized['email']}"),
+        )
+
+    def execute_mutation(self, name: str, args: dict, *,
+                         context: OperationContext | None = None) -> BusinessToolResult:
+        if not self.allow_mutations or name != CREATE_CUSTOMER_TOOL:
+            raise BusinessToolError("unknown Odoo business mutation")
+        normalized = self._normalize_customer(args)
+        # Repeat under the delegated actor immediately before dispatch. This closes the
+        # ordinary time-of-check gap without ever retrying the create itself.
+        self._assert_no_duplicate(normalized["name"], normalized["email"])
+        created = self.call("res.partner", "create", [{
+            "name": normalized["name"], "email": normalized["email"],
+            "customer_rank": 1, "is_company": True,
+        }])
+        record_id = created[0] if isinstance(created, list) and created else created
+        if isinstance(record_id, bool) or not isinstance(record_id, int) or record_id <= 0:
+            raise BusinessMutationIndeterminate(
+                "Odoo accepted the create but returned no record id",
+                phase="acknowledgement")
+        try:
+            rows = self.call("res.partner", "read", [[record_id]],
+                             {"fields": ["name", "email"]})
+        except BusinessToolError as exc:
+            raise BusinessMutationIndeterminate(
+                "the Odoo customer was created but same-user readback failed",
+                phase="readback", record_id=str(record_id)) from exc
+        if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
+            raise BusinessMutationIndeterminate(
+                "the Odoo customer was created but same-user readback was malformed",
+                phase="readback", record_id=str(record_id))
+        actual_name = self._label(rows[0], "name")
+        actual_email = self._label(rows[0], "email").casefold()
+        if actual_name != normalized["name"] or actual_email != normalized["email"]:
+            raise BusinessMutationIndeterminate(
+                "the Odoo customer was created but same-user readback did not match",
+                phase="readback", record_id=str(record_id))
+        ui_path = f"{_CUSTOMERS.route}/{record_id}"
+        observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        return BusinessToolResult(
+            content={
+                "created": True, "readback_verified": True,
+                "customer": {"id": record_id, "name": actual_name,
+                             "email": actual_email, "ui_path": ui_path},
+                "scope": _CUSTOMERS.scope, "observed_at": observed_at,
+            },
+            audit={
+                "application": APPLICATION_ID, "operation": CREATE_CUSTOMER_TOOL,
+                "model": "res.partner", "records_created": 1,
+                "readback_verified": True, "scope": _CUSTOMERS.scope,
+                "observed_at": observed_at, **self._identity_audit(context),
+            },
+            allowed_routes=(ui_path,),
+        )
+
+
+# ---------------------------------------------------------------------------------- ports
+
+class _OdooIdentityPort:
+    required = True
+
+    def __init__(self, executor: OdooBusinessToolExecutor,
+                 required_scopes: frozenset[str]):
+        self._executor = executor
+        self.required_scopes = required_scopes
+
+    def bind(self, page_identity: IdentityAssertion, *, delegation_id: str,
+             lifetime_s: int = 300, now_ms: int | None = None) -> PrincipalContext:
+        delegated = self._executor.resolve_delegated_identity(
+            lifetime_s=lifetime_s, now_ms=now_ms)
+        return bind_matching_identity(
+            page_identity, delegated, delegation_id=delegation_id,
+            scopes=tuple(sorted(self.required_scopes)), now_ms=now_ms)
+
+    def validate(self, principal: PrincipalContext | None, *,
+                 application_id: str) -> None:
+        if principal is None:
+            raise PrincipalError("Odoo requires a verified application principal")
+        principal.require_live(application_id=application_id)
+
+
+class _OdooMutationReconciler:
+    def __init__(self, executor: OdooBusinessToolExecutor, enabled: bool):
+        self._executor = executor
+        self.supported_tools = (frozenset({CREATE_CUSTOMER_TOOL}) if enabled
+                                else frozenset())
+
+    def reconcile(self, name, business_key, *, evidence, principal):
+        if name not in self.supported_tools or principal is None:
+            raise ValueError("reconciliation requires an enabled tool and principal")
+        principal.require_live(application_id=APPLICATION_ID)
+        if "customers:read" not in principal.scopes:
+            raise PrincipalError("reconciliation requires customers:read scope")
+        delegated = self._executor.resolve_delegated_identity()
+        if any(getattr(principal, field) != getattr(delegated, field)
+               for field in ("tenant_id", "workspace_id", "actor_id")):
+            raise PrincipalError("reconciliation delegated identity changed")
+        args = self._executor._normalize_customer(business_key)
+        rows, total, scan = self._executor._scan(_CUSTOMERS)
+        matches = [row for row in rows
+                   if business_text_key(self._executor._label(row, "name"))
+                   == business_text_key(args["name"])
+                   and self._executor._label(row, "email").casefold() == args["email"]]
+        # A matching row is not proof that this proposal created it, and absence cannot rule
+        # out a write still in flight. The journal entry stays unresolved for an operator.
+        return MutationReconciliation(
+            outcome="unknown", requires_human=True,
+            reason=(f"Current matching records: {len(matches)}; complete scan: "
+                    f"{scan['complete'] and len(rows) == total}. Establish the original "
+                    "writer's final outcome before resolving."))
+
+
+class OdooApplicationAdapter:
+    """Application-owned facts and tools for the Odoo 18 reference integration."""
+
+    def __init__(self, *, base_url: str, api_key_path: str | Path,
+                 allow_mutations: bool = False,
+                 mutation_journal: MutationJournal | None = None,
+                 page_controller_module: str | None = None,
+                 timeout_s: float = 20):
+        if not isinstance(allow_mutations, bool):
+            raise ValueError("allow_mutations must be a boolean")
+        if allow_mutations and mutation_journal is None:
+            raise ValueError("allow_mutations=True requires an explicit mutation journal")
+        self.origin = _validated_origin(base_url)
+        self.page_controller_module = (
+            page_controller_module or self.origin + "/woa/page-controller.js")
+        executor = OdooBusinessToolExecutor(
+            base_url=self.origin, keys=OdooApiKeyStore(api_key_path),
+            timeout_s=timeout_s, allow_mutations=allow_mutations)
+        skills = [_packaged_skill(name) for name in _SKILLS[:3]]
+        if allow_mutations:
+            skills.append(_packaged_skill(_SKILLS[3]))
+        required_scopes = {"query_sale_orders": "sale_orders:read",
+                           "query_customers": "customers:read",
+                           "query_products": "products:read"}
+        if allow_mutations:
+            required_scopes[CREATE_CUSTOMER_TOOL] = "customers:write"
+        declarations = [
+            (collection.tool,
+             (collection.data_class, "business.identifier", "application.route"))
+            for collection in COLLECTIONS]
+        if allow_mutations:
+            declarations.append(
+                (CREATE_CUSTOMER_TOOL,
+                 ("business.customer", "business.identifier", "application.route",
+                  "business.mutation_result")))
+        data = DeclaredDataClassifier(tuple(sorted(declarations)))
+        postconditions = ResultPostconditionVerifier(
+            ((CREATE_CUSTOMER_TOOL,
+              ("content.readback_verified", "audit.readback_verified")),)
+            if allow_mutations else ())
+        routes = ODOO_ROUTE_PORT
+        self.business_tools = BusinessToolRuntime(
+            tuple(skills), executor, application_id=APPLICATION_ID,
+            required_scopes=required_scopes, mutation_journal=mutation_journal,
+            data_classifier=data, postcondition_verifier=postconditions,
+            route_validator=routes)
+        self._executor = executor
+        self.ports = ApplicationPorts(
+            identity=_OdooIdentityPort(executor, frozenset(required_scopes.values())),
+            routes=routes,
+            postconditions=postconditions,
+            reconciliation=_OdooMutationReconciler(executor, allow_mutations),
+            data=data,
+        )
+        self.descriptor = ApplicationDescriptor(
+            schema_version=APPLICATION_ADAPTER_VERSION,
+            application_id=APPLICATION_ID,
+            display_name="Odoo 18",
+            origin=self.origin,
+            navigation_mode="spa",
+            page_controller_module=self.page_controller_module,
+            catalog_sha256=self.business_tools.catalog_sha256,
+        )
+
+    def source_capability(self, source_root: str | Path | None = None, *,
+                          release: str = "",
+                          attestation_id: str = "") -> SourceCapability:
+        """Compile this deployment's Odoo source once and return what it enables.
+
+        This is the adapter handing the composition a decision, not a deployment picking
+        four flags by hand. With no source root -- the ordinary case, since source retrieval
+        is optional -- the answer is "nothing", and the session runs on runtime facts alone.
+        """
+        if source_root is None:
+            return SourceCapability.none()
+        if not release:
+            raise ValueError("an Odoo source root must be bound to an exact release")
+        tree = odoo_source_tree(source_root, release=release)
+        if not tree.available():
+            raise ValueError("the Odoo source root does not exist")
+        source_map = OdooCompiler(
+            tree, attestation_id or f"odoo:{release}").compile()
+        return SourceCapability(
+            source_map=source_map,
+            # Odoo's writes are button methods with no URL of their own, so the legacy
+            # route-shaped operation contract has nothing to plan over here. What the map
+            # does support is view-only candidates and cited runtime lookup.
+            source_contract=False,
+            runtime_source=True,
+            source_affordance_mode="auto",
+        )
+
+    @property
+    def source_scopes(self) -> frozenset[str]:
+        """Odoo serves one web client, so every route lives in one scope."""
+        return frozenset({ODOO_SOURCE_SCOPE})
+
+    def health(self) -> dict:
+        request = Request(self.origin + "/web/webclient/version_info",
+                          data=json.dumps({"jsonrpc": "2.0", "method": "call",
+                                           "params": {}}).encode("utf-8"), method="POST")
+        request.add_header("Content-Type", "application/json")
+        try:
+            with urlopen(request, timeout=5) as response:
+                payload = json.loads(response.read(_MAX_RESPONSE_BYTES))
+                info = payload.get("result") if isinstance(payload, dict) else None
+                version = info.get("server_version") if isinstance(info, dict) else None
+                return {"passed": response.status == 200 and isinstance(version, str),
+                        "http_status": response.status,
+                        "server_version": version if isinstance(version, str) else ""}
+        except Exception:  # noqa: BLE001 — health is a boolean, never a leak
+            return {"passed": False, "http_status": 0, "server_version": ""}
+
+    def bind_principal(self, page_identity: IdentityAssertion, *, delegation_id: str,
+                       lifetime_s: int = 300,
+                       now_ms: int | None = None) -> PrincipalContext:
+        """Match a trusted Odoo page-session assertion to the delegated API-key actor.
+
+        The host must obtain ``page_identity`` from Odoo's own authenticated session. DOM
+        text or a browser-supplied user id is not trusted evidence.
+        """
+        return self.ports.identity.bind(
+            page_identity, delegation_id=delegation_id, lifetime_s=lifetime_s,
+            now_ms=now_ms)
+
+    def bind_browser_session(self, storage_state_path: str | Path, *, delegation_id: str,
+                             lifetime_s: int = 300,
+                             now_ms: int | None = None) -> PrincipalContext:
+        """Bind the exact browser storage state to the delegated API-key identity."""
+        page = OdooPageSessionIdentityResolver(
+            base_url=self.origin, storage_state_path=storage_state_path,
+            timeout_s=self._executor.timeout_s).resolve(
+                lifetime_s=lifetime_s, now_ms=now_ms)
+        return self.bind_principal(page, delegation_id=delegation_id,
+                                   lifetime_s=lifetime_s, now_ms=now_ms)
+
+    def page_session_binding(self, storage_state: str | Path | dict) -> str:
+        """Hash the active Odoo session cookie without exposing it to the Agent."""
+        source = ({"storage_state": storage_state} if isinstance(storage_state, dict)
+                  else {"storage_state_path": storage_state})
+        return OdooPageSessionIdentityResolver(
+            base_url=self.origin, timeout_s=self._executor.timeout_s,
+            **source).binding_digest()

@@ -4,7 +4,7 @@
 
 Web Operation Agent 是一个早期阶段的框架，用于在第一方 Web 应用中构建 AI 助手。服务端 Agent 根据最新页面观察进行规划和重规划，轻量的页面内嵌 Runtime 只执行固定的页面操作。应用 Skill 和类型化 API 可以补充业务知识与实时数据；源码检索是可选的知识来源。
 
-> **状态：Alpha。** 仓库已有经过测试的核心模块和一个范围有限的 Twenty CRM 集成，但还不是可用于生产的自主 Agent、托管服务或通用浏览器扩展。
+> **状态：Alpha。** 仓库已有经过测试的核心模块和三个参考接入，其中 Odoo 18 是主应用，但还不是可用于生产的自主 Agent、托管服务或通用浏览器扩展。
 
 ## 当前可以验证的能力
 
@@ -66,7 +66,7 @@ flowchart LR
 | `web_operation_agent.mutation` | 在内存或 SQLite 中原子记录一次性 mutation intent 与终态。 |
 | `web_operation_agent.session` | 实现有步数和时间限制的服务端 Agent 循环。 |
 
-每个应用专有 Adapter 都以独立 distribution 发布，不放在上面的核心包里：[`web-operation-agent-twenty`](examples/twenty) 提供 `TwentyApplicationAdapter`，[`web-operation-agent-ofbiz`](examples/ofbiz) 提供 Apache OFBiz 的路由语法、源码编译器和 App Skill provider。核心包不含任何 OFBiz 或 Twenty 专有代码；接入新应用时实现的是这两者同样实现的端口。
+每个应用专有 Adapter 都以独立 distribution 发布，不放在上面的核心包里：[`web-operation-agent-odoo`](examples/odoo) 提供 `OdooApplicationAdapter` 和 Odoo 源码编译器，[`web-operation-agent-twenty`](examples/twenty) 提供 `TwentyApplicationAdapter`，[`web-operation-agent-ofbiz`](examples/ofbiz) 提供 Apache OFBiz 的路由语法、源码编译器和 App Skill provider。核心包不含任何应用专有代码，`scripts/check_core_boundary.py` 断言核心（含测试）不 import 任何应用 distribution；接入新应用时实现的是这三者同样实现的端口。
 
 Application Adapter 暴露版本化、无敏感信息的描述，由摘要绑定的 Skill/typed-tool catalog，以及身份、路由、结果数据分类、mutation 后置条件和保守核对端口。`bind_application()` 会检查所有工具和 mutation 均被覆盖，并确认运行时使用的就是同一组端口对象。路由端口拥有应用 URL 语法、源码感知的入口发现，以及应用特有 handoff secret 的浏览器出站前脱敏扩展；通用 Agent 不解析具体框架的路由。`AgentTurnExecutor(application=...)` 会在浏览器或模型工作开始前拒绝来自其它应用 Origin 的消息和无效 principal；typed-tool 路由进入 Agent 上下文前必须通过 Adapter 校验，已收到确认的写入也只有通过 Adapter 后置条件后才能记为完成。这是 Adapter contract version 2。自然语言目标直接进入通用 Agent 循环，Adapter 不会先把目标分类成固定的产品意图枚举。软件包 API 仍在演进，稳定版本发布前不承诺向后兼容。
 
@@ -93,10 +93,11 @@ python3.12 -m venv .venv
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 python -m pip install --editable .
 python -m pip install --no-deps --editable examples/ofbiz
 python -m pip install --no-deps --editable examples/twenty
+python -m pip install --no-deps --editable examples/odoo
 python src/web_operation_agent/tests/run_all.py
 ```
 
-测试入口使用 Python `unittest` 自动发现，并防止测试数据写入真实模型费用账本。浏览器测试会在缺少 Chromium 时跳过。依赖上游 PageController 的测试只有在 `WOA_PAGE_CONTROLLER_MODULE` 指向已安装模块时才会运行，否则会跳过。`web-operation-agent-ofbiz` 和 `web-operation-agent-twenty` 是独立 distribution，核心测试套件把它们当作通用路由、grounding 和业务工具合同的真实夹具使用；只跑其中一个应用的部署不需要装另一个包。
+测试入口使用 Python `unittest` 自动发现，并防止测试数据写入真实模型费用账本。浏览器测试会在缺少 Chromium 时跳过。依赖上游 PageController 的测试只有在 `WOA_PAGE_CONTROLLER_MODULE` 指向已安装模块时才会运行，否则会跳过。核心测试套件不 import 任何应用 distribution：它的路由、知识与源码夹具都是合成的，且刻意采用既不是 Odoo 也不是 OFBiz 的路由语法——一个假设了某个应用 URL 写法的核心模块会在那里失败。每个应用 distribution 自己负责自己行为的测试，并作为独立门禁运行。
 
 通过同一受保护入口只运行一个测试模块：
 
@@ -131,7 +132,28 @@ scripts/qualify.sh
 - **Chromium 资格**会端到端运行打包的 minimal demo、用已构建 bundle 运行 PageAgent 浏览器用例，并用固定版本的 PageController 运行嵌入式 Runtime。Runtime 用例同时覆盖顶层文档换页和 OFBiz 风格的同源 iframe 表单换页；后者必须返回新的页面观察，而且不能重复提交表单。这些合成用例都不需要 Twenty 或 OFBiz；CI 用 `--require-browser` 把它们设为必需。不加该参数时，缺少 bundle、PageController 或 Chromium 会被报告出来，而不是计为通过。
 - **本地 Twenty 资格**只在全部前置条件就绪时运行：`WOA_TWENTY_BASE_URL`、`WOA_TWENTY_STORAGE_STATE`、`WOA_TWENTY_OAUTH_TOKEN`、`WOA_TWENTY_OAUTH_REGISTRATION`、`WOA_TWENTY_PAGE_CONTROLLER_MODULE`、`WOA_TWENTY_DB_CONTAINER`、`WOA_TWENTY_DB_NAME`、`WOA_TWENTY_DB_USER`、`WOA_TWENTY_WORKSPACE_SCHEMA`。门禁优先读取进程变量，随后读取与 `demo.sh` 相同的 `WOA_MODEL_ENV` 或被忽略的仓库 `.env`；配置文件按数据解析，不作为 shell 代码执行。否则输出 `BLOCKED` 并列出未设置的变量。BLOCKED 表示未被测试，既不是通过，也不是产品失败。需要该门禁的环境可用 `--require-live` 把缺失变成失败。
 
-本仓库还没有提供 Twenty 实例的准备资产，因此全新 clone 会把本地 Twenty 门禁报告为 `BLOCKED`。
+- **本地 Odoo 资格**是主应用的门禁，只在 `WOA_ODOO_BASE_URL`、`WOA_ODOO_API_KEY_FILE`、`WOA_ODOO_STORAGE_STATE`、`WOA_ODOO_PAGE_CONTROLLER_MODULE` 全部就绪时运行，否则报告 `BLOCKED`。它刻意不调用模型：两个脚本化用例——typed 查询后打开确切记录路由、打开集合——在真实 Chromium 里走真实产品轮次、打真实 Odoo，产物只记录计数、摘要和布尔值，并附夹具运行前后的摘要。通过说明装置成立，不说明模型如何；正因如此，这里失败才值得处理。
+
+本仓库既没有提供 Twenty 实例、也没有提供 Odoo 实例的准备资产，因此全新 clone 会把两个本地门禁都报告为 `BLOCKED`。
+
+## Odoo 18 集成 —— 主应用
+
+`OdooApplicationAdapter` 在独立的 [`web-operation-agent-odoo`](examples/odoo/README.md) distribution 里发布，Skill 与源码策略作为包资源随包。三件事让它成为最值得先读的接入。
+
+**身份是必须互相对上的两侧。** Odoo 18 把浏览器会话放在 HttpOnly cookie 里，而且只接受 cookie——旧的 `X-Openerp-Session-Id` 头已经不存在——所以页面 JavaScript 无法把凭据交给服务端工具。页面改为通过 `/web/session/get_session_info` **断言**自己是谁（只返回标识符，不含密钥），服务端则用用户在 Odoo 设置里自己签发的 per-user API key 行动。`bind_browser_session` 解析两侧，只有指向同一个 actor 时才产出 principal（`db` → tenant，当前公司 → workspace，`uid` → actor）。签发那把 key 是记录所有者自己完成的部署步骤，没有任何自动化。
+
+**它的源码编译器是真的。** `OdooCompiler` 把菜单、动作、视图和模型读成带引证的 `SourceRelation` 三元组。在装了 `sale`、`sale_management`、`account`、`stock` 的真实 Odoo 18 上，它从 380 个 allowlist 文件里产出 11 882 条关系，而 25 个声明了 URL 段的动作与运行中的数据库**逐个完全一致**。两条局限被如实记录而不是猜测：删除或替换节点的 `inherit_id` 补丁没有被应用（关系带 `root_view`，含义是"在这个视图族里被声明过"，不是"渲染后确实存在"）；跨模块的 `<record id="别的模块.…">` 补丁被列进 `unsupported`，不会当成定义发出。
+
+**源码配置是 Adapter 下发的一个决定。** `adapter.source_capability(source_root, release=…)` 返回一个 `SourceCapability`，把四个只能一起成立的会话设置装成一个值；不给源码根时它返回"什么都没有"，会话只靠运行时事实工作。源码检索始终是可选的。
+
+typed 工具面是 `query_sale_orders`、`query_customers`、`query_products` 和可选开启的 `create_customer`。每次读取都扫完整个范围，并拿 Odoo 自己的 `search_count` 对账——"我是否看全了"由一个不是从同一页结果里数出来的数字回答。
+
+```bash
+python -m web_operation_agent_odoo.demo --scripted --headless \
+  --api-key .private/odoo-api-key.json --storage-state .private/odoo-storage-state.json
+```
+
+`--scripted` 用真实 Odoo、真实 Chromium 和真实产品轮次跑一遍，不调用 provider、不产生费用。门禁版本（`python -m web_operation_agent_odoo.demo.qualify`）另外核对夹具在运行前后逐字节一致。
 
 ## Twenty CRM 集成
 
@@ -168,7 +190,8 @@ Evaluator 还包含一套严格的配对实验预注册校验器，用于在运�
 
 - 共享 Runtime 网关及活跃执行仍位于进程内。可选 SQLite 恢复在身份作用域内保存去重与进度并使用 owner lease，重新签发浏览器权限，将旧工作标记为中断而不重跑动作；跨主机扩展和模型对话上下文持久化尚未实现。Session TTL 与硬配额限制资源占用；SQLite 模式只恢复安全历史，不恢复执行权限。已确认的 Twenty API 写入拥有持久的一次性 SQLite journal，但 dispatch 之后发生崩溃仍会标记为 `indeterminate`，必须核对而不能自动重试。Twenty demo 已通过可信 Playwright 宿主强制身份绑定；普通嵌入式应用仍需从自身登录边界提供服务端认证的身份断言，principal 续期和分布式撤销也尚未实现。独立的旧页面控制网关仍使用全局许可与 trace：协作客户端会串行执行完整 run，并在前后边界清空状态，但并发页面写入前仍需在网关内部实现 tenant/session/turn scope。
 - 单轮截止时间同时覆盖 provider 排队和 socket 调用。服务端 Agent 的原生 completion 路径使用可关闭的 HTTP 连接：消息级主动取消会中断进行中的请求、释放 provider guard 名额、阻止后续工具下发，并把已派发调用记为 usage 未知而不自动重试。所有能被单轮触达的实现都满足同一个显式 `ChatPort` 契约，其中取消能力是必需项，并在模型被组装的位置校验，而不是在调用时探测，因此无法取消的实现会被直接拒绝，而不是静默降级。合同规划调用仍走普通 completion 路径，不可取消。并发 guard 只在单进程内生效；可选 SQLite 滚动请求配额可按服务端指定的租户/provider scope 在本机进程间协调，尚无 token 和金额配额。已有初始页面观察绑定，以及 claim 前对目标控件、关联表单和路由的新鲜度检查；目标元素之外的依赖、跨机器恢复和更完整的运行监控仍未完成。
-- 唯一打包的真实应用适配器仍是范围有限的 Twenty CRM 纵切：Companies 支持读取和确认后创建，People 与 Opportunities 目前支持读取及记录导航；Minimal Contacts 只是合成的上手示例。
+- 打包的真实应用适配器都很窄。Odoo 18 支持读取已确认销售订单、客户和可售产品，外加可选开启的创建客户；Twenty CRM 支持 Companies 读取与确认后创建、People/Opportunities 读取与记录导航；OFBiz 只保留 MPA/iframe 回归。Minimal Contacts 只是合成的上手示例。目前没有任何 adapter 覆盖多步业务流程。
+- Odoo 源码编译器只链接视图继承关系，不做 xpath 合并，也不把跨模块的补丁记录并入定义。两条局限都通过编译产物的 `unsupported` 列表或 `root_view` 属性显式暴露，不会静默。
 - 尚未实现任意第三方网站支持和浏览器扩展。
 - 浏览器操作不具备数据库事务或回滚语义。
 - Mutation journal 会阻断同一应用、工具、租户、工作区、actor 业务键的在途与不确定写入，即使 proposal 不同。SQLite 通过同一数据库的事务实现跨进程互斥。Twenty 创建公司使用规范化名称作为业务键；其它 Adapter 可声明 reconcile key，否则使用规范化参数。这不保证跨 actor 或独立数据库的全局唯一性。旧版无业务键的未解决记录会保守阻断新写入；升级前需停止旧进程。已提供只读核对及默认 dry-run 的运维裁决，不确定结果不会自动解除阻断。

@@ -19,6 +19,11 @@
 #   WOA_TWENTY_OAUTH_REGISTRATION WOA_TWENTY_PAGE_CONTROLLER_MODULE
 #   WOA_TWENTY_DB_CONTAINER WOA_TWENTY_DB_NAME WOA_TWENTY_DB_USER
 #   WOA_TWENTY_WORKSPACE_SCHEMA
+#
+# Live-Odoo prerequisites (the main application; all of them, or the gate reports BLOCKED):
+#   WOA_ODOO_BASE_URL WOA_ODOO_API_KEY_FILE WOA_ODOO_STORAGE_STATE
+#   WOA_ODOO_PAGE_CONTROLLER_MODULE
+#   optionally WOA_ODOO_SOURCE_ROOT + WOA_ODOO_SOURCE_RELEASE, which add the source gate
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -65,7 +70,7 @@ run_gate() {   # run_gate <name> <required:0|1> <command...>
   fi
 }
 
-export PYTHONPATH="${ROOT}/src:${ROOT}/examples/ofbiz/src:${ROOT}/examples/twenty/src:${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
+export PYTHONPATH="${ROOT}/src:${ROOT}/examples/ofbiz/src:${ROOT}/examples/twenty/src:${ROOT}/examples/odoo/src:${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 
 # ---------------------------------------------------------------- offline gates
 run_gate "core distribution boundary" 1 "${PYTHON}" scripts/check_core_boundary.py
@@ -76,6 +81,9 @@ run_gate "ofbiz example suite" 1 "${PYTHON}" -m unittest discover \
 run_gate "twenty example suite" 1 "${PYTHON}" -m unittest discover \
   -s examples/twenty/src/web_operation_agent_twenty/tests \
   -t examples/twenty/src
+run_gate "odoo example suite" 1 "${PYTHON}" -m unittest discover \
+  -s examples/odoo/src/web_operation_agent_odoo/tests \
+  -t examples/odoo/src
 run_gate "evals/twenty foundation" 1 "${PYTHON}" -m unittest discover -s evals/twenty/tests
 run_gate "PageAgent host and runner (offline)" 1 "${PYTHON}" -m unittest \
   evals.pageagent.test_host evals.pageagent.test_business_host \
@@ -118,6 +126,8 @@ build_and_check_wheel() {
     examples/ofbiz/src/*.egg-info
   rm -rf examples/twenty/dist examples/twenty/build \
     examples/twenty/src/*.egg-info
+  rm -rf examples/odoo/dist examples/odoo/build \
+    examples/odoo/src/*.egg-info
   "${PYTHON}" -m pip wheel --no-deps --quiet --wheel-dir dist . || return 1
   "${PYTHON}" -m pip wheel --no-deps --quiet \
     --wheel-dir examples/ofbiz/dist examples/ofbiz \
@@ -125,17 +135,22 @@ build_and_check_wheel() {
   "${PYTHON}" -m pip wheel --no-deps --quiet \
     --wheel-dir examples/twenty/dist examples/twenty \
     || return 1
+  "${PYTHON}" -m pip wheel --no-deps --quiet \
+    --wheel-dir examples/odoo/dist examples/odoo \
+    || return 1
   "${PYTHON}" scripts/check_wheel_contents.py || return 1
 
   # Importing from outside the checkout is the part a path-shadowed test cannot prove. Core
   # is installed and probed alone first -- it must compose and run with no application
   # distribution present -- then the two application distributions are added on top of it.
-  local core_wheel ofbiz_wheel twenty_wheel smoke_venv smoke_cwd
+  local core_wheel ofbiz_wheel twenty_wheel odoo_wheel smoke_venv smoke_cwd
   core_wheel="$("${PYTHON}" -c 'import glob, os; print(os.path.abspath(glob.glob("dist/*.whl")[0]))')"
   ofbiz_wheel="$("${PYTHON}" -c \
     'import glob, os; print(os.path.abspath(glob.glob("examples/ofbiz/dist/*.whl")[0]))')"
   twenty_wheel="$("${PYTHON}" -c \
     'import glob, os; print(os.path.abspath(glob.glob("examples/twenty/dist/*.whl")[0]))')"
+  odoo_wheel="$("${PYTHON}" -c \
+    'import glob, os; print(os.path.abspath(glob.glob("examples/odoo/dist/*.whl")[0]))')"
   smoke_venv="$(mktemp -d)/venv"
   smoke_cwd="$(mktemp -d)"
   "${PYTHON}" -m venv "${smoke_venv}" || return 1
@@ -165,7 +180,7 @@ assert reconcile and SourceTree
 # The framework ships no application and no example. Any of these resolving here would mean
 # the core wheel is carrying something a framework has no business carrying.
 for name in ("web_operation_agent_ofbiz", "web_operation_agent_twenty",
-             "web_operation_agent_demo", "examples"):
+             "web_operation_agent_odoo", "web_operation_agent_demo", "examples"):
     import importlib.util
     assert importlib.util.find_spec(name) is None, \
         f"core alone must not resolve {name}; applications and examples install separately"
@@ -173,7 +188,7 @@ print("core wheel alone imports and composes, and carries no application or exam
 PY
   ) || return 1
   env -u PYTHONPATH "${smoke_venv}/bin/python" -m pip install --no-deps \
-    "${ofbiz_wheel}" "${twenty_wheel}" | grep -v "^\[notice\]" || return 1
+    "${ofbiz_wheel}" "${twenty_wheel}" "${odoo_wheel}" | grep -v "^\[notice\]" || return 1
   ( cd "${smoke_cwd}" && env -u PYTHONPATH \
       "${smoke_venv}/bin/python" -I - <<'PY'
 from pathlib import Path
@@ -194,7 +209,25 @@ assert (TwentyApplicationAdapter(
     **common, allow_mutations=True,
     mutation_journal=SQLiteMutationJournal(root / "mutations.sqlite3"),
 ).business_tools.tool_names == frozenset(read_tools | {"create_company"}))
-print("ofbiz and twenty distributions install on top of core and compose outside the checkout")
+from web_operation_agent.application import SourceCapability
+from web_operation_agent_odoo import ODOO_ROUTE_PORT, ODOO_SOURCE_POLICY
+from web_operation_agent_odoo.adapter import OdooApplicationAdapter
+
+# The main application must compose from its own wheel, with its packaged Skills and source
+# policy present -- a missing package-data entry is exactly the failure a path-shadowed test
+# cannot see.
+assert ODOO_ROUTE_PORT.compose_contract_route("odoo", "sales") == "/odoo/sales"
+assert ODOO_SOURCE_POLICY["repository_id"] == "odoo/odoo"
+(root / "odoo-key.json").write_text(
+    '{"database": "woa", "login": "grower", "api_key": "0123456789abcdef0123"}')
+odoo = OdooApplicationAdapter(base_url="http://127.0.0.1:8069",
+                              api_key_path=root / "odoo-key.json")
+assert odoo.business_tools.tool_names == frozenset(
+    {"query_sale_orders", "query_customers", "query_products"})
+assert odoo.source_capability().session_kwargs()["source_affordance_mode"] == "off"
+assert isinstance(odoo.source_capability(), SourceCapability)
+print("ofbiz, twenty and odoo distributions install on top of core "
+      "and compose outside the checkout")
 PY
   ) || return 1
   rm -rf "${smoke_venv}" "${smoke_cwd}"
@@ -332,6 +365,75 @@ else
   else
     record "live Twenty qualification" FAIL "see ${live_out}"
     failed+=("live Twenty qualification")
+  fi
+fi
+
+# ------------------------------------------------------- live Odoo (main application)
+# The main application's gate is model-free on purpose: two scripted cases through the real
+# product turn, in real Chromium, against a real Odoo. A pass says the apparatus holds; it
+# says nothing about a model, which is what makes a failure here worth acting on.
+printf '\n\033[1m── live Odoo qualification ──\033[0m\n'
+odoo_vars=(WOA_ODOO_BASE_URL WOA_ODOO_API_KEY_FILE WOA_ODOO_STORAGE_STATE
+           WOA_ODOO_PAGE_CONTROLLER_MODULE)
+# Optional: with both set, the gate additionally requires the source treatment to be
+# non-empty, which is the check that catches a compiled map nothing consumes.
+odoo_source=()
+while IFS= read -r value; do odoo_source+=("${value}"); done < <(
+  "${PYTHON}" -c '
+import os, sys
+from pathlib import Path
+from web_operation_agent.model import load_env
+root = Path(sys.argv[1])
+configured = os.environ.get("WOA_MODEL_ENV", "").strip()
+loaded = load_env(Path(configured).expanduser() if configured else root / ".env")
+for name in sys.argv[2:]:
+    print(str(os.environ[name] if name in os.environ else loaded.get(name, "")).strip())
+' "${ROOT}" WOA_ODOO_SOURCE_ROOT WOA_ODOO_SOURCE_RELEASE
+)
+odoo_values=()
+while IFS= read -r value; do odoo_values+=("${value}"); done < <(
+  "${PYTHON}" -c '
+import os, sys
+from pathlib import Path
+from web_operation_agent.model import load_env
+root = Path(sys.argv[1])
+configured = os.environ.get("WOA_MODEL_ENV", "").strip()
+loaded = load_env(Path(configured).expanduser() if configured else root / ".env")
+for name in sys.argv[2:]:
+    print(str(os.environ[name] if name in os.environ else loaded.get(name, "")).strip())
+' "${ROOT}" "${odoo_vars[@]}"
+)
+odoo_missing=()
+for ((index=0; index<${#odoo_vars[@]}; index++)); do
+  [[ -z "${odoo_values[${index}]:-}" ]] && odoo_missing+=("${odoo_vars[${index}]}")
+done
+if (( ${#odoo_missing[@]} )); then
+  echo "BLOCKED: no live Odoo environment here."
+  printf '  unset: %s\n' "${odoo_missing[*]}"
+  echo "  This gate did not run. It is not a product failure and not a pass."
+  record "live Odoo qualification" BLOCKED "unset: ${odoo_missing[*]}"
+  if [[ "${require_live}" == "1" ]]; then failed+=("live Odoo qualification"); fi
+elif [[ "${chromium_ready}" != "1" ]]; then
+  record "live Odoo qualification" BLOCKED "Chromium is unavailable"
+  if [[ "${require_live}" == "1" ]]; then failed+=("live Odoo qualification"); fi
+else
+  echo "READY: every prerequisite is present; running the live qualification."
+  odoo_out="$(mktemp -d)"
+  odoo_source_args=()
+  if [[ -n "${odoo_source[0]:-}" && -n "${odoo_source[1]:-}" ]]; then
+    odoo_source_args=(--source-root "${odoo_source[0]}"
+                      --source-release "${odoo_source[1]}")
+  fi
+  if "${PYTHON}" -m web_operation_agent_odoo.demo.qualify \
+      --base-url "${odoo_values[0]}" --api-key "${odoo_values[1]}" \
+      --storage-state "${odoo_values[2]}" \
+      --page-controller-module "${odoo_values[3]}" \
+      "${odoo_source_args[@]}" \
+      --output "${odoo_out}/odoo-live.json"; then
+    record "live Odoo qualification" PASS "artifact ${odoo_out}/odoo-live.json"
+  else
+    record "live Odoo qualification" FAIL "see ${odoo_out}"
+    failed+=("live Odoo qualification")
   fi
 fi
 

@@ -1,0 +1,47 @@
+{
+  "_comment": [
+    "Product-side source policy for a deployed Odoo release.",
+    "",
+    "The allow list names only the declarative descriptors and model definitions parsed by",
+    "sourcemap.py, so the attested surface digest covers exactly the bytes used to derive a",
+    "SourceMap. The deny list excludes credentials, demo and seed data, translations, built",
+    "front-end assets, security rules and tests regardless of an allowed parent path. The",
+    "deployment supplies the matching source root and the exact release identity.",
+    "",
+    "Paths follow the upstream odoo/odoo layout: ordinary modules live under addons/, and",
+    "base lives under odoo/addons/base. A deployment that extracts them from a container",
+    "image must reproduce that layout so citations resolve against the public repository."
+  ],
+  "repository_id": "odoo/odoo",
+  "release": "",
+  "max_bytes_per_read": 8388608,
+  "allow_globs": [
+    "addons/*/__manifest__.py",
+    "addons/*/views/**/*.xml",
+    "addons/*/wizard/**/*.xml",
+    "addons/*/report/**/*.xml",
+    "addons/*/models/**/*.py",
+    "addons/*/wizard/**/*.py",
+    "odoo/addons/base/__manifest__.py",
+    "odoo/addons/base/views/**/*.xml",
+    "odoo/addons/base/models/**/*.py"
+  ],
+  "deny_globs": [
+    "**/.env*",
+    "**/*.key",
+    "**/*.pem",
+    "**/*.p12",
+    "**/secrets/**",
+    "**/i18n/**",
+    "**/static/**",
+    "**/tests/**",
+    "**/demo/**",
+    "**/*_demo.xml",
+    "**/data/**",
+    "**/security/**",
+    "**/*.sql",
+    "**/*.sqlite",
+    "**/*.db",
+    "**/.git/**"
+  ]
+}
