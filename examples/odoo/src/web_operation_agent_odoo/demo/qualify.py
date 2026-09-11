@@ -30,6 +30,7 @@ from web_operation_agent.application import bind_application
 from ..adapter import COLLECTIONS, OdooApplicationAdapter
 from .demo import OdooDemoConfig, run_demo
 from .fixture import OdooPostgresFixture, load_json, restore_snapshot
+from .skills import verify_packaged_skills
 
 #: A read-only run must leave every collection exactly as it found it.
 _FIXTURE_FIELDS = ("id", "name")
@@ -242,6 +243,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "fixture_unchanged": before == after,
         **fixture_checks,
     }
+    citations: dict = {}
     if args.source_root:
         # With a compiled map the treatment must be real: every delivery in every case has
         # to carry at least one cited candidate, or the source arm is measuring nothing.
@@ -249,6 +251,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             row["source_relations"] > 0 and row["source_candidates_delivered"]
             and all(count > 0 for count in row["source_candidates_delivered"])
             for row in results)
+        # And the Skills must still point at something. A citation nobody resolves is
+        # indistinguishable from one that rotted two releases ago, which is how all four
+        # shipped Skills came to cite unqualified Odoo XML ids that name four addons at once.
+        citations = verify_packaged_skills(args.source_root, args.source_release)
+        checks["every_skill_citation_resolves_in_this_release"] = (
+            citations["status"] == "READY")
     artifact = {
         "schema_version": 1,
         "kind": "woa_odoo_live_qualification",
@@ -260,6 +268,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "case_checks": {row["case"]: row for row in results},
         "fixture_baseline_digest": _digest(before),
         "fixture_database_digest": baseline,
+        "skill_citations": {key: value for key, value in citations.items()
+                            if key != "reports"},
         "checks": checks,
         "status": "READY" if all(checks.values()) else "FAILED",
     }

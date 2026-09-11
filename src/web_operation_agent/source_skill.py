@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .application import ApplicationRoutePort
+from .business import Citation
 from .schemas import SourceMap, SourceRelation
 
 
@@ -232,3 +233,324 @@ class SourceEvidenceProvider:
             "excerpt": excerpt[:max_chars],
             "truncated": truncated,
         }
+
+
+# ---------------------------------------------------------------- Business Skill drafts
+
+
+@dataclass(frozen=True)
+class CitationCheck:
+    """One `provenance` entry and what the compiled source had to say about it."""
+
+    citation: str
+    kind: str
+    resolved: bool
+    reason: str
+
+
+@dataclass(frozen=True)
+class SkillVerification:
+    """Whether a Skill's claims still point at something in this release's source."""
+
+    skill_id: str
+    source_digest: str
+    release: str
+    checks: tuple[CitationCheck, ...]
+
+    @property
+    def source_citations(self) -> tuple[CitationCheck, ...]:
+        return tuple(check for check in self.checks if check.kind == "src")
+
+    @property
+    def passed(self) -> bool:
+        """True when every *source* citation resolves.
+
+        An ``api`` citation names the application's published interface, which no source map
+        can confirm; reporting it as a failure would make the gate meaningless, and reporting
+        it as a pass would claim a check nobody ran. It is carried as unchecked.
+        """
+        return all(check.resolved for check in self.source_citations)
+
+    def to_json(self) -> dict:
+        return {
+            "skill_id": self.skill_id,
+            "source_digest": self.source_digest,
+            "release": self.release,
+            "passed": self.passed,
+            "checks": [
+                {"citation": check.citation, "kind": check.kind,
+                 "resolved": check.resolved, "reason": check.reason}
+                for check in self.checks],
+        }
+
+
+@dataclass(frozen=True)
+class BusinessSkillDraft:
+    """A Skill artifact a person still has to read, plus what the source actually said.
+
+    The division is deliberate. Titles, triggers, routes and citations are facts a compiler
+    can take from the application's own descriptors, and taking them by hand is how a Skill
+    comes to cite a file that moved two releases ago. Instructions are not facts: they are a
+    playbook for a model, and a compiler that wrote them would be inventing the one part
+    that needs judgement. So `facts` is what the source declared and `review` is what it
+    could not supply -- a draft is finished by a person reading both.
+    """
+
+    skill: dict
+    source_digest: str
+    release: str
+    facts: tuple[str, ...]
+    review: tuple[str, ...]
+
+    def to_json(self) -> dict:
+        return {"skill": self.skill, "source_digest": self.source_digest,
+                "release": self.release, "facts": list(self.facts),
+                "review": list(self.review)}
+
+
+class BusinessSkillCompiler:
+    """Draft and check typed-tool Skills against one release's compiled descriptors.
+
+    Works over the relation vocabulary every `SourceCompiler` emits -- `request_handler`,
+    `menu_link`, `view_screen`, `service_entity`, `service_parameter` -- so it is not tied
+    to the application whose compiler produced them.
+    """
+
+    def __init__(self, source_map: SourceMap, *, application: str,
+                 route_port: ApplicationRoutePort):
+        if not isinstance(route_port, ApplicationRoutePort):
+            raise TypeError("route_port must implement ApplicationRoutePort")
+        if not re.fullmatch(r"[a-z][a-z0-9_-]{1,39}", application or ""):
+            raise ValueError("application must be a short lowercase identifier")
+        self.source_map = source_map
+        self.application = application
+        self.route_port = route_port
+        self._paths: dict[str, list[SourceRelation]] = {}
+        for relation in source_map.relations:
+            for reference in relation.evidence:
+                self._paths.setdefault(reference.path, []).append(relation)
+
+    # -- verification -------------------------------------------------------------------
+    def verify(self, skill) -> SkillVerification:
+        checks = []
+        for entry in skill.provenance:
+            citation = Citation.parse(entry)
+            if citation.kind != "src":
+                checks.append(CitationCheck(
+                    citation=entry, kind=citation.kind, resolved=True,
+                    reason="an interface citation; no source map can confirm it"))
+                continue
+            checks.append(CitationCheck(
+                citation=entry, kind="src", **self._resolve(citation)))
+        return SkillVerification(
+            skill_id=skill.skill_id, source_digest=self.source_map.content_digest,
+            release=self.source_map.release, checks=tuple(checks))
+
+    def _resolve(self, citation: Citation) -> dict:
+        if citation.application != self.application:
+            return {"resolved": False,
+                    "reason": f"cites {citation.application}, not {self.application}"}
+        # A Skill is written against a release *line*; the map records the exact build it
+        # was compiled from. Requiring equality would force every artifact to be reissued
+        # for every deployment image, which is not what a citation is for.
+        if not self.source_map.release.startswith(citation.release):
+            return {"resolved": False,
+                    "reason": (f"cites release {citation.release}, which this map's "
+                               f"{self.source_map.release} is not a build of")}
+        relations = self._paths.get(citation.locator)
+        if not relations:
+            return {"resolved": False,
+                    "reason": "no relation in this map cites that path"}
+        if not citation.anchor:
+            return {"resolved": True, "reason": f"{len(relations)} relations cite that path"}
+        hits = sum(1 for relation in relations if self._mentions(relation, citation.anchor))
+        if not hits:
+            return {"resolved": False,
+                    "reason": f"the path is cited but nothing in it declares "
+                              f"{citation.anchor!r}"}
+        return {"resolved": True, "reason": f"{hits} relations declare that anchor"}
+
+    @staticmethod
+    def _mentions(relation: SourceRelation, anchor: str) -> bool:
+        if anchor in (relation.subject, relation.object):
+            return True
+        if any(anchor == str(value) for value in relation.attrs.values()):
+            return True
+        # A model method is `<model>.<method>`; the compiler records it as the subject of a
+        # `service_parameter`, and a field as `<model>` plus the field name.
+        return relation.subject.startswith(anchor + ".") or anchor.startswith(
+            relation.subject + ".")
+
+    # -- drafting -----------------------------------------------------------------------
+    def draft(self, *, skill_id: str, subject: str, tool_names: tuple[str, ...],
+              read_only: bool, methods: tuple[str, ...] = ()) -> BusinessSkillDraft:
+        """Compile one declared request, its menu, its views and its model into a draft.
+
+        Keyed on the relation `subject`, which every compiler spells the same way, not on
+        an attribute one of them happens to carry: `action_id` is Odoo's word for this and
+        a core module that keyed on it would work for exactly one application.
+        """
+        handlers = [row for row in self.source_map.by_kind("request_handler")
+                    if row.subject == subject]
+        action = _one(handlers, f"declared request {subject}")
+        # What a handler's `object` slot holds is where the two compilers stop agreeing.
+        # Odoo puts the model an action opens there; OFBiz puts the service a request
+        # invokes, and leaves it empty for a view-only one. So the model is taken only when
+        # the map itself describes it as an entity, and a draft without one keeps every
+        # fact that does not depend on it rather than refusing to compile.
+        entities = {row.subject for row in self.source_map.by_kind("service_entity")}
+        model = action.object if action.object in entities else ""
+        menus = self._menus_for(subject)
+        views = [row for row in self.source_map.by_kind("request_response")
+                 if row.subject == subject]
+        fields = [row for row in self.source_map.by_kind("service_entity")
+                  if model and row.subject == model]
+        method_rows = [row for row in self.source_map.by_kind("service_parameter")
+                       if row.subject in methods]
+
+        title = str(action.attrs.get("name") or "").strip() or humanize(subject)
+        route = self._route(action, menus)
+        facts, review = self._facts(action, menus, views, fields, method_rows,
+                                    model=model, route=route, methods=methods)
+        skill = {
+            "schema_version": 1,
+            "skill_id": skill_id,
+            "title": title,
+            "intent": f"Work with {title} through the typed tools, on current data.",
+            "triggers": list(self._triggers(title, menus, model)),
+            "instructions": [
+                "DRAFT: a person must replace these with a playbook for this task.",
+                *(f"Declared by the source: {fact}" for fact in facts),
+            ],
+            "tool_names": list(tool_names),
+            "provenance": list(self._citations(action, menus, views, fields, method_rows)),
+            "read_only": bool(read_only),
+        }
+        return BusinessSkillDraft(skill=skill, source_digest=self.source_map.content_digest,
+                                  release=self.source_map.release, facts=facts,
+                                  review=review)
+
+    def _menus_for(self, subject: str) -> list[SourceRelation]:
+        """Menus point at a request by its subject, or by its route within the scope.
+
+        Both spellings occur in practice -- Odoo's menu targets the whole identity
+        (`odoo/orders`), OFBiz's targets the bare request (`findTrays`) -- and neither is
+        wrong, so the link accepts either rather than picking one application's habit.
+        """
+        route = subject.split("/", 1)[-1]
+        return [row for row in self.source_map.by_kind("menu_link")
+                if row.object in (subject, route)]
+
+    def _route(self, action: SourceRelation, menus: list[SourceRelation]) -> str:
+        """Compose the subject's `(scope, route)` and let the port say whether it is one.
+
+        A compiler records a subject for every declared request, including ones that are
+        reachable only from inside the application and have no address of their own. The
+        port's own tool-route contract is the only thing that can tell them apart, so the
+        composed path is offered to it rather than pattern-matched here.
+        """
+        for candidate in [action.subject] + [str(menu.object) for menu in menus]:
+            scope, _, route = candidate.partition("/")
+            if not scope or not route:
+                continue
+            composed = self.route_port.compose_contract_route(scope, route)
+            try:
+                self.route_port.validate_tool_route(composed)
+            except ValueError:
+                continue
+            return composed
+        return ""
+
+    def _triggers(self, title: str, menus: list[SourceRelation], model: str) -> list[str]:
+        words: list[str] = []
+        sources = [title, model.replace(".", " ") if model else ""]
+        sources += [str(menu.attrs.get("title") or "").replace("/", " ") for menu in menus]
+        for text in sources:
+            for token in _TOKEN.findall(text.casefold()):
+                token = _ALIASES.get(token, token)
+                if len(token) >= 3 and token not in _GENERIC and token not in words:
+                    words.append(token)
+        return words[:12]
+
+    def _facts(self, action, menus, views, fields, method_rows, *, model, route,
+               methods) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        facts = [f"the request opens {model}"] if model else []
+        domain = str(action.attrs.get("domain") or "").strip()
+        if domain and domain != "[]":
+            # This is the one the prose usually gets wrong: a list page that looks like
+            # "all orders" is a filtered scope, and the filter is only in the descriptor.
+            facts.append(f"the scope is filtered by domain {domain}")
+        else:
+            facts.append("the action declares no domain filter")
+        if route:
+            facts.append(f"its collection route is {route}")
+        if menus:
+            facts.append("it is reached from " + "; ".join(
+                sorted(str(menu.attrs.get("title") or "") for menu in menus)))
+        view_modes = str(action.attrs.get("view_mode") or "")
+        if view_modes:
+            facts.append(f"it offers the views {view_modes}")
+        required = sorted(row.object for row in fields
+                          if str(row.attrs.get("required") or "").strip() == "True")
+        if required:
+            facts.append("its model declares these fields required: " + ", ".join(required))
+        for row in method_rows:
+            # A method may be declared in several modules; which module carries the
+            # docstring is the difference between a useful fact and a bare name.
+            doc = " ".join(str(row.attrs.get("doc") or "").split())
+            module = str(row.attrs.get("module") or "")
+            facts.append(f"{row.subject} is declared in {module}"
+                         + (f": {doc[:300]}" if doc else " with no docstring"))
+
+        review = [
+            "instructions: a compiler cannot write the playbook; this draft only lists "
+            "what the source declared",
+            "tool_names: the typed tool surface comes from the adapter, not the source",
+        ]
+        missing = [name for name in methods
+                   if not any(row.subject == name for row in method_rows)]
+        if missing:
+            review.append("these methods are not in the compiled map: " + ", ".join(missing))
+        if not model:
+            review.append("this map does not describe the record behind the request; "
+                          "required fields and model methods are unavailable")
+        if not views:
+            review.append("the request declares no view; check the route by hand")
+        if not route:
+            review.append("the request declares no route; a Skill that opens a page needs "
+                          "one supplied by hand")
+        return tuple(facts), tuple(review)
+
+    @staticmethod
+    def _anchor(relation: SourceRelation) -> str:
+        """The identifier a reader would search the cited file for.
+
+        Applications name their descriptors differently -- Odoo has globally qualified XML
+        ids, OFBiz has request and menu-item names -- so this prefers whichever identity the
+        compiler recorded and falls back to the relation's own subject.
+        """
+        for key in ("action_id", "menu_id", "view_id", "form_name", "screen_name"):
+            value = str(relation.attrs.get(key) or "")
+            if value:
+                return value
+        return relation.subject
+
+    def _citations(self, action, menus, views, fields, method_rows) -> list[str]:
+        # The release *line*, not the build: `18.0-20260908+image:sha256:...` is one build of
+        # 18.0, and a Skill that cited the build would have to be reissued for every image.
+        release = self.source_map.release.split("+", 1)[0].split("-", 1)[0]
+        cited: list[tuple[SourceRelation, str]] = [(action, self._anchor(action))]
+        cited += [(menu, self._anchor(menu)) for menu in menus]
+        cited += [(view, str(view.object or "")) for view in views]
+        if fields:
+            cited.append((fields[0], fields[0].subject))
+        cited += [(row, row.subject) for row in method_rows]
+
+        entries: list[str] = []
+        for relation, anchor in cited:
+            for reference in relation.evidence:
+                entry = Citation(kind="src", application=self.application, release=release,
+                                 locator=reference.path, anchor=anchor).text
+                if entry not in entries:
+                    entries.append(entry)
+        return entries

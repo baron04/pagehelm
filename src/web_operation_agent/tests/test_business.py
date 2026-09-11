@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 from web_operation_agent.answering import StructuredQueryAnswer
 from web_operation_agent.business import (
-    BusinessMutationIndeterminate, BusinessMutationSpec, BusinessSkill,
+    BusinessMutationIndeterminate, BusinessMutationSpec, BusinessSkill, Citation,
     BusinessToolContractError, BusinessToolError, BusinessToolIdentityError,
     BusinessToolRequestError, BusinessToolResult, BusinessToolRuntime,
     BusinessToolUnavailableError,
@@ -90,7 +90,7 @@ def _skill(path: Path) -> BusinessSkill:
         "triggers": ["companies", "公司"],
         "instructions": ["Call query_companies and trust its current result."],
         "tool_names": ["query_companies"],
-        "provenance": ["fixture:companies"],
+        "provenance": ["src:fixture@v1:companies.json#companies"],
         "read_only": True,
     }) + "\n")
     return BusinessSkill.load(path)
@@ -105,7 +105,7 @@ def _write_skill(path: Path) -> BusinessSkill:
         "triggers": ["create company", "创建公司"],
         "instructions": ["Propose one company and wait for approval."],
         "tool_names": ["create_company"],
-        "provenance": ["fixture:companies:create"],
+        "provenance": ["src:fixture@v1:companies.json#create"],
         "read_only": False,
     }) + "\n")
     return BusinessSkill.load(path)
@@ -215,6 +215,87 @@ class _Chat(CancellableChatDouble):
             return {"content": args["content"]}
         return {"tool_calls": [{"id": str(len(self.messages)), "function": {
             "name": name, "arguments": json.dumps(args)}}]}
+
+
+class SkillCitations(unittest.TestCase):
+    """`provenance` is what makes a hand-written playbook checkable, so it has a grammar.
+
+    Before this it was validated as "a non-empty list of strings", and four spellings had
+    accumulated across nine shipped artifacts. Nothing could resolve any of them, so a
+    citation that had rotted looked exactly like one that never pointed anywhere.
+    """
+
+    def _artifact(self, provenance, path: Path) -> Path:
+        path.write_text(json.dumps({
+            "schema_version": 1, "skill_id": "fixture.companies-query",
+            "title": "Query companies", "intent": "Read current companies.",
+            "triggers": ["companies"], "instructions": ["Call query_companies."],
+            "tool_names": ["query_companies"], "provenance": provenance,
+            "read_only": True,
+        }) + "\n")
+        return path
+
+    def test_a_citation_round_trips_through_its_parts(self):
+        for text in ("src:odoo@18.0:addons/sale/views/sale_order_views.xml#action_orders",
+                     "src:twenty@v2.39.0:packages/twenty-server/src/x.ts",
+                     "api:odoo@18.0:/jsonrpc#object.execute_kw",
+                     "api:twenty@v2.39.0:/rest/open-api/core#/paths/~1companies/post"):
+            with self.subTest(text=text):
+                self.assertEqual(Citation.parse(text).text, text)
+
+    def test_every_spelling_this_repository_used_to_ship_is_now_refused(self):
+        """The point of the grammar is that the old entries do not survive it."""
+        for legacy in ("odoo:18.0:addons/sale/views/sale_order_views.xml#action_orders",
+                       "twenty/v2.39.0:packages/twenty-docs/x.mdx",
+                       "minimal-demo://contacts/v1",
+                       "Odoo external API: /jsonrpc object.execute_kw",
+                       "Twenty self-hosted /rest/companies API"):
+            with self.subTest(legacy=legacy):
+                with self.assertRaises(ValueError):
+                    Citation.parse(legacy)
+
+    def test_a_source_citation_cannot_escape_the_repository(self):
+        for escape in ("src:odoo@18.0:/etc/passwd",
+                       "src:odoo@18.0:addons/../../etc/passwd"):
+            with self.subTest(escape=escape):
+                with self.assertRaisesRegex(ValueError, "relative path inside"):
+                    Citation.parse(escape)
+
+    def test_an_api_citation_must_name_a_path_on_the_origin(self):
+        with self.assertRaisesRegex(ValueError, "path on the application's origin"):
+            Citation.parse("api:odoo@18.0:jsonrpc")
+
+    def test_a_skill_whose_provenance_does_not_parse_does_not_load(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._artifact(["fixture:companies"], Path(tmp) / "skill.json")
+            with self.assertRaisesRegex(ValueError, "provenance entry must read"):
+                BusinessSkill.load(path)
+
+    def test_a_repeated_citation_does_not_load(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._artifact(["src:fixture@v1:a.json#x", "src:fixture@v1:a.json#x"],
+                                  Path(tmp) / "skill.json")
+            with self.assertRaisesRegex(ValueError, "unique"):
+                BusinessSkill.load(path)
+
+    def test_every_shipped_skill_artifact_parses(self):
+        """The nine artifacts in `examples/` are the thing this grammar had to fit.
+
+        Read as files, never imported: the core suite must still run with no application
+        distribution installed, which is the boundary `check_core_boundary.py` guards. From
+        an installed wheel there are no examples to read and this has nothing to say.
+        """
+        root = Path(__file__).resolve().parents[3] / "examples"
+        if not root.is_dir():
+            self.skipTest("running outside the checkout; no example artifacts to read")
+        artifacts = [path for path in root.rglob("skills/*.json")
+                     if "/build/" not in str(path)]
+        self.assertGreaterEqual(len(artifacts), 9, "the example Skills moved")
+        for path in artifacts:
+            with self.subTest(path=path.name):
+                skill = BusinessSkill.load(path)
+                kinds = {Citation.parse(entry).kind for entry in skill.provenance}
+                self.assertTrue(kinds <= {"src", "api"})
 
 
 class BusinessRuntimeValidation(unittest.TestCase):
@@ -346,7 +427,7 @@ class BusinessRuntimeValidation(unittest.TestCase):
                 "triggers": ["invalid"],
                 "instructions": ["Call delete_everything before answering."],
                 "tool_names": ["query_companies"],
-                "provenance": ["fixture:invalid"],
+                "provenance": ["src:fixture@v1:invalid.json#invalid"],
                 "read_only": True,
             }))
             with self.assertRaisesRegex(ValueError, "unavailable.*delete_everything"):

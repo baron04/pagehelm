@@ -3,7 +3,15 @@
   "skill_id": "twenty.crm.opportunities-query",
   "title": "Query current CRM opportunities",
   "intent": "Read sales opportunities currently visible to the signed-in Twenty user.",
-  "triggers": ["opportunity", "opportunities", "deal", "deals", "商机", "销售机会", "交易"],
+  "triggers": [
+    "opportunity",
+    "opportunities",
+    "deal",
+    "deals",
+    "商机",
+    "销售机会",
+    "交易"
+  ],
   "instructions": [
     "Call query_opportunities for current workspace data; do not answer from Skill text or stale page content.",
     "Use name_contains only when the user supplied an opportunity-name filter.",
@@ -12,7 +20,11 @@
     "After goto, observe the target record before reporting completion.",
     "For zero or multiple matches, ask for clarification rather than inventing a route."
   ],
-  "tool_names": ["query_opportunities"],
-  "provenance": ["twenty:v2.39.0:/rest/open-api/core#/paths/~1opportunities/get"],
+  "tool_names": [
+    "query_opportunities"
+  ],
+  "provenance": [
+    "api:twenty@v2.39.0:/rest/open-api/core#/paths/~1opportunities/get"
+  ],
   "read_only": true
 }

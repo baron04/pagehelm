@@ -369,7 +369,7 @@ def synthetic_business_runtime(executor: SyntheticCompanyExecutor) -> BusinessTo
             "then open_allowed_route with that result's exact ui_path.",
         ],
         "tool_names": ["query_companies"],
-        "provenance": ["synthetic:companies"],
+        "provenance": ["src:synthetic@v1:companies.json#companies"],
         "read_only": True,
     }).encode("utf-8"), artifact_uri="memory://synthetic/companies-query.json")]
     required_scopes = {"query_companies": "companies:read"}
@@ -388,7 +388,7 @@ def synthetic_business_runtime(executor: SyntheticCompanyExecutor) -> BusinessTo
                 "After success, open the returned ui_path only when the user requested it.",
             ],
             "tool_names": ["create_company"],
-            "provenance": ["synthetic:companies:create"],
+            "provenance": ["src:synthetic@v1:companies.json#create"],
             "read_only": False,
         }).encode("utf-8"), artifact_uri="memory://synthetic/companies-create.json"))
         required_scopes["create_company"] = "companies:write"

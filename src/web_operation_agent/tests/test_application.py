@@ -60,7 +60,7 @@ def _skill() -> BusinessSkill:
         "triggers": ["invoice", "invoices", "发票"],
         "instructions": ["Load current invoice data through the typed read tool."],
         "tool_names": ["query_invoices"],
-        "provenance": ["mock://ledger/public-api"],
+        "provenance": ["api:mock@v1:/ledger/public-api#get"],
         "read_only": True,
     }, sort_keys=True).encode()
     return BusinessSkill.from_bytes(raw, artifact_uri="package://mock/invoice.json")

@@ -38,7 +38,7 @@ def _skill(*, write: bool = False) -> BusinessSkill:
         "triggers": ["companies"],
         "instructions": [f"Call {name}."],
         "tool_names": [name],
-        "provenance": ["fixture:companies"],
+        "provenance": ["src:fixture@v1:companies.json#companies"],
         "read_only": not write,
     }
     return BusinessSkill.from_bytes(

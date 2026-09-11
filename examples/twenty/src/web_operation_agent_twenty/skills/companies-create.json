@@ -36,8 +36,8 @@
     "create_company"
   ],
   "provenance": [
-    "twenty:v2.39.0:/rest/open-api/core#/paths/~1companies/post",
-    "twenty:v2.39.0:/rest/open-api/core#/paths/~1companies~1{id}/get"
+    "api:twenty@v2.39.0:/rest/open-api/core#/paths/~1companies/post",
+    "api:twenty@v2.39.0:/rest/open-api/core#/paths/~1companies~1{id}/get"
   ],
   "read_only": false
 }

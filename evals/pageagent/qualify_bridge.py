@@ -196,7 +196,7 @@ def _business_proxy(calls: list[dict[str, Any]]) -> PageAgentBusinessProxy:
         "triggers": ["companies"],
         "instructions": ["Call query_companies and use its current result."],
         "tool_names": ["query_companies"],
-        "provenance": ["fixture:companies"],
+        "provenance": ["src:fixture@v1:companies.json#companies"],
         "read_only": True,
     }).encode("utf-8"), artifact_uri="memory://fixture/companies-query.json")
     runtime = BusinessToolRuntime(

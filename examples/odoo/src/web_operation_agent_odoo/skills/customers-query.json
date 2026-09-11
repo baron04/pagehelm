@@ -26,9 +26,9 @@
     "query_customers"
   ],
   "provenance": [
-    "odoo:18.0:addons/account/views/partner_view.xml#res_partner_action_customer",
-    "odoo:18.0:odoo/addons/base/models/res_partner.py#res.partner",
-    "Odoo external API: /jsonrpc object.execute_kw"
+    "src:odoo@18.0:addons/account/views/partner_view.xml#account.res_partner_action_customer",
+    "src:odoo@18.0:odoo/addons/base/models/res_partner.py#res.partner",
+    "api:odoo@18.0:/jsonrpc#object.execute_kw"
   ],
   "read_only": true
 }

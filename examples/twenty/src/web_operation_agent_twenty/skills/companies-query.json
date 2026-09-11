@@ -22,9 +22,9 @@
     "query_companies"
   ],
   "provenance": [
-    "twenty/v2.39.0:packages/twenty-docs/developers/extend/oauth.mdx",
-    "twenty/v2.39.0:packages/twenty-server/src/engine/core-modules/application/application-oauth/oauth.service.ts",
-    "Twenty self-hosted /rest/companies API"
+    "src:twenty@v2.39.0:packages/twenty-docs/developers/extend/oauth.mdx",
+    "src:twenty@v2.39.0:packages/twenty-server/src/engine/core-modules/application/application-oauth/oauth.service.ts",
+    "api:twenty@v2.39.0:/rest/companies#get"
   ],
   "read_only": true
 }

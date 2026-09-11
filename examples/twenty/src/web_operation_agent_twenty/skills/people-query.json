@@ -3,7 +3,15 @@
   "skill_id": "twenty.crm.people-query",
   "title": "Query current CRM people",
   "intent": "Read people currently visible to the signed-in Twenty user.",
-  "triggers": ["person", "people", "contact", "contacts", "联系人", "人员", "客户联系人"],
+  "triggers": [
+    "person",
+    "people",
+    "contact",
+    "contacts",
+    "联系人",
+    "人员",
+    "客户联系人"
+  ],
   "instructions": [
     "Call query_people for current workspace data; do not answer from Skill text or stale page content.",
     "Use name_contains only when the user supplied a person-name filter.",
@@ -12,7 +20,11 @@
     "After goto, observe the target record before reporting completion.",
     "For zero or multiple matches, ask for clarification rather than inventing a route."
   ],
-  "tool_names": ["query_people"],
-  "provenance": ["twenty:v2.39.0:/rest/open-api/core#/paths/~1people/get"],
+  "tool_names": [
+    "query_people"
+  ],
+  "provenance": [
+    "api:twenty@v2.39.0:/rest/open-api/core#/paths/~1people/get"
+  ],
   "read_only": true
 }

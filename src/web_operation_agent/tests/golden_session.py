@@ -279,7 +279,7 @@ def write_skill_artifact(path: Path) -> BusinessSkill:
         "triggers": ["create tray", "new tray"],
         "instructions": ["Propose one tray and wait for the user's confirmation."],
         "tool_names": ["query_trays", "create_tray"],
-        "provenance": ["fixture:trays:create"],
+        "provenance": ["src:fixture@v1:trays.json#create"],
         "read_only": False,
     }, sort_keys=True) + "\n")
     return BusinessSkill.load(path)
@@ -294,7 +294,7 @@ def read_skill_artifact(path: Path) -> BusinessSkill:
         "triggers": ["tray", "trays"],
         "instructions": ["Call query_trays and trust only its current result."],
         "tool_names": ["query_trays"],
-        "provenance": ["fixture:trays"],
+        "provenance": ["src:fixture@v1:trays.json#trays"],
         "read_only": True,
     }, sort_keys=True) + "\n")
     return BusinessSkill.load(path)

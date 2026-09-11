@@ -122,7 +122,7 @@ def synthetic_breadth_runtime(executor: SyntheticBreadthExecutor) -> BusinessToo
                 "Use name_contains only when the user supplied a record-name filter.",
                 "For a record open, use only the exact ui_path returned by that query.",
             ],
-            "tool_names": [config["tool"]], "provenance": [f"synthetic:{entity}"],
+            "tool_names": [config["tool"]], "provenance": [f"src:synthetic@v1:{entity}.json#{entity}"],
             "read_only": True,
         }
         skills.append(BusinessSkill.from_bytes(

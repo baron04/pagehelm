@@ -31,9 +31,9 @@
     "create_customer"
   ],
   "provenance": [
-    "odoo:18.0:odoo/addons/base/models/res_partner.py#res.partner.create",
-    "odoo:18.0:addons/account/views/partner_view.xml#res_partner_action_customer",
-    "Odoo external API: /jsonrpc object.execute_kw create/read"
+    "src:odoo@18.0:odoo/addons/base/models/res_partner.py#res.partner.create",
+    "src:odoo@18.0:addons/account/views/partner_view.xml#account.res_partner_action_customer",
+    "api:odoo@18.0:/jsonrpc#object.execute_kw create,read"
   ],
   "read_only": false
 }

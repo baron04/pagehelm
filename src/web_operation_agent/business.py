@@ -28,6 +28,14 @@ from .schemas import BROWSER_ACTIONS
 
 _SKILL_ID = re.compile(r"^[a-z][a-z0-9_.-]{2,79}$")
 _TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
+#: `<kind>:<application>@<release>:<locator>[#<anchor>]`. Bounded on every part, because a
+#: Skill artifact is untrusted input and a citation is shown to a reviewer.
+_CITATION = re.compile(
+    r"\A(?P<kind>src|api)"
+    r":(?P<application>[a-z][a-z0-9_-]{1,39})"
+    r"@(?P<release>[A-Za-z0-9][A-Za-z0-9_.+:-]{0,99})"
+    r":(?P<locator>[^\x00-\x1f\x7f#]{1,400})"
+    r"(?:#(?P<anchor>[^\x00-\x1f\x7f]{1,200}))?\Z")
 _SENSITIVE_KEY = re.compile(
     r"(?:password|passwd|pwd|secret|token|api[_-]?key|authorization)", re.I)
 _MAX_RESULT_BYTES = 64 * 1024
@@ -237,6 +245,70 @@ def _string_list(value: object, name: str) -> tuple[str, ...]:
             or any(not isinstance(item, str) or not item.strip() for item in value):
         raise ValueError(f"{name} must be a non-empty list of strings")
     return tuple(item.strip() for item in value)
+
+
+@dataclass(frozen=True)
+class Citation:
+    """One checkable place a Skill's claim came from.
+
+    A Skill is a playbook a person wrote, and the only thing that keeps it honest is being
+    able to go and look at what it was written from. Until this existed `provenance` was
+    validated as "a non-empty list of strings", and four spellings had accumulated across
+    nine artifacts -- ``odoo:18.0:path#anchor``, ``twenty/v2.39.0:path``,
+    ``minimal-demo://contacts/v1`` and the sentence ``Odoo external API: /jsonrpc
+    object.execute_kw``. Nothing could resolve any of them, so nothing could tell a citation
+    that had rotted from one that never pointed anywhere.
+
+    The grammar is::
+
+        <kind>:<application>@<release>:<locator>[#<anchor>]
+
+    ``src`` is a path inside the application's own source at that release -- the compiled
+    ``SourceMap`` can resolve it, which is what makes citation rot detectable. ``api`` is an
+    interface the adapter calls, checkable against the application's published contract.
+    Those are the only two kinds because they are the only two things a Skill is ever
+    written from.
+    """
+
+    kind: str
+    application: str
+    release: str
+    locator: str
+    anchor: str = ""
+
+    @property
+    def text(self) -> str:
+        anchor = f"#{self.anchor}" if self.anchor else ""
+        return f"{self.kind}:{self.application}@{self.release}:{self.locator}{anchor}"
+
+    @classmethod
+    def parse(cls, value: object) -> "Citation":
+        if not isinstance(value, str) or not _CITATION.fullmatch(value):
+            raise ValueError(
+                "a provenance entry must read <kind>:<application>@<release>:<locator>"
+                "[#<anchor>], where kind is src or api")
+        kind, rest = value.split(":", 1)
+        application, rest = rest.split("@", 1)
+        release, locator = rest.split(":", 1)
+        locator, _, anchor = locator.partition("#")
+        if not locator:
+            raise ValueError("a provenance entry needs a locator")
+        if kind == "src" and (locator.startswith("/") or ".." in locator.split("/")):
+            raise ValueError("a src citation must be a relative path inside the repository")
+        if kind == "api" and not locator.startswith("/"):
+            raise ValueError("an api citation must be a path on the application's origin")
+        return cls(kind=kind, application=application, release=release,
+                   locator=locator, anchor=anchor)
+
+
+def _provenance(value: object) -> tuple[str, ...]:
+    """Every entry must parse, and no entry may appear twice."""
+    entries = _string_list(value, "provenance")
+    for entry in entries:
+        Citation.parse(entry)
+    if len(set(entries)) != len(entries):
+        raise ValueError("provenance entries must be unique")
+    return entries
 
 
 def _has_sensitive_key(value: object) -> bool:
@@ -482,7 +554,7 @@ class BusinessSkill:
             triggers=_string_list(data.get("triggers"), "triggers"),
             instructions=_string_list(data.get("instructions"), "instructions"),
             tool_names=tool_names,
-            provenance=_string_list(data.get("provenance"), "provenance"),
+            provenance=_provenance(data.get("provenance")),
             read_only=data["read_only"],
             artifact_path=artifact_uri,
             artifact_sha256=hashlib.sha256(raw).hexdigest(),

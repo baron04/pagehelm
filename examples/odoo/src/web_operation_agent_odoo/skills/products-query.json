@@ -26,9 +26,9 @@
     "query_products"
   ],
   "provenance": [
-    "odoo:18.0:addons/sale/views/product_views.xml#product_template_action",
-    "odoo:18.0:addons/product/models/product_template.py#product.template",
-    "Odoo external API: /jsonrpc object.execute_kw"
+    "src:odoo@18.0:addons/sale/views/product_views.xml#sale.product_template_action",
+    "src:odoo@18.0:addons/product/models/product_template.py#product.template",
+    "api:odoo@18.0:/jsonrpc#object.execute_kw"
   ],
   "read_only": true
 }

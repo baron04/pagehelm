@@ -7,7 +7,7 @@
   ],
   "intent": "List or open contacts from the current synthetic workspace.",
   "provenance": [
-    "minimal-demo://contacts/v1"
+    "src:contacts@v1:examples/contacts/application.py#CONTACTS"
   ],
   "read_only": true,
   "schema_version": 1,

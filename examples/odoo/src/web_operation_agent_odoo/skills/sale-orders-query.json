@@ -26,9 +26,9 @@
     "query_sale_orders"
   ],
   "provenance": [
-    "odoo:18.0:addons/sale/views/sale_order_views.xml#action_orders",
-    "odoo:18.0:addons/sale/models/sale_order.py#sale.order",
-    "Odoo external API: /jsonrpc object.execute_kw"
+    "src:odoo@18.0:addons/sale/views/sale_order_views.xml#sale.action_orders",
+    "src:odoo@18.0:addons/sale/models/sale_order.py#sale.order",
+    "api:odoo@18.0:/jsonrpc#object.execute_kw"
   ],
   "read_only": true
 }

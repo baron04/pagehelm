@@ -87,6 +87,8 @@ run_gate "twenty example suite" 1 "${PYTHON}" -m unittest discover \
 run_gate "odoo example suite" 1 "${PYTHON}" -m unittest discover \
   -s examples/odoo/src/web_operation_agent_odoo/tests \
   -t examples/odoo/src
+# Citation resolution needs the deployed release's source, so the authoritative run of it is
+# the live gate's `every_skill_citation_resolves_in_this_release`, not a skippable test.
 run_gate "evals/twenty foundation" 1 "${PYTHON}" -m unittest discover -s evals/twenty/tests
 run_gate "PageAgent host and runner (offline)" 1 "${PYTHON}" -m unittest \
   evals.pageagent.test_host evals.pageagent.test_business_host \
