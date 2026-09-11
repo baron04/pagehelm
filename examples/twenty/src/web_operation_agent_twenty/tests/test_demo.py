@@ -11,10 +11,10 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(ROOT))
+PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+EXAMPLE_ROOT = Path(__file__).resolve().parents[3]
 
-from examples.twenty import demo, login, preflight
+from web_operation_agent_twenty.demo import demo, login, preflight
 from web_operation_agent.identity import PrincipalContext
 from web_operation_agent.live import LiveConversationRunner, LiveTurnOutcome
 from web_operation_agent.product import (AgentTurnExecution, AgentTurnMessage,
@@ -442,8 +442,8 @@ class TwentyDemoCompositionTests(unittest.TestCase):
         self.assertTrue(Live.closed)
 
     def test_public_launcher_and_process_have_no_historical_fixture_dependency(self):
-        source = (ROOT / "examples" / "twenty" / "demo.py").read_text().casefold()
-        launcher = (ROOT / "demo.sh").read_text().casefold()
+        source = (PACKAGE_ROOT / "demo" / "demo.py").read_text().casefold()
+        launcher = (EXAMPLE_ROOT / "demo.sh").read_text().casefold()
         for marker in ("lab/", "m7", "phase", ".q0-cache", "twenty_reset"):
             with self.subTest(marker=marker):
                 self.assertNotIn(marker, source)

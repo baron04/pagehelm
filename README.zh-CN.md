@@ -66,7 +66,7 @@ flowchart LR
 | `web_operation_agent.mutation` | 在内存或 SQLite 中原子记录一次性 mutation intent 与终态。 |
 | `web_operation_agent.session` | 实现有步数和时间限制的服务端 Agent 循环。 |
 
-每个应用专有 Adapter 都以独立 distribution 发布，不放在上面的核心包里：[`web-operation-agent-twenty`](packages/web-operation-agent-twenty) 提供 `TwentyApplicationAdapter`，[`web-operation-agent-ofbiz`](packages/web-operation-agent-ofbiz) 提供 Apache OFBiz 的路由语法、源码编译器和 App Skill provider。核心包不含任何 OFBiz 或 Twenty 专有代码；接入新应用时实现的是这两者同样实现的端口。
+每个应用专有 Adapter 都以独立 distribution 发布，不放在上面的核心包里：[`web-operation-agent-twenty`](examples/twenty) 提供 `TwentyApplicationAdapter`，[`web-operation-agent-ofbiz`](examples/ofbiz) 提供 Apache OFBiz 的路由语法、源码编译器和 App Skill provider。核心包不含任何 OFBiz 或 Twenty 专有代码；接入新应用时实现的是这两者同样实现的端口。
 
 Application Adapter 暴露版本化、无敏感信息的描述，由摘要绑定的 Skill/typed-tool catalog，以及身份、路由、结果数据分类、mutation 后置条件和保守核对端口。`bind_application()` 会检查所有工具和 mutation 均被覆盖，并确认运行时使用的就是同一组端口对象。路由端口拥有应用 URL 语法、源码感知的入口发现，以及应用特有 handoff secret 的浏览器出站前脱敏扩展；通用 Agent 不解析具体框架的路由。`AgentTurnExecutor(application=...)` 会在浏览器或模型工作开始前拒绝来自其它应用 Origin 的消息和无效 principal；typed-tool 路由进入 Agent 上下文前必须通过 Adapter 校验，已收到确认的写入也只有通过 Adapter 后置条件后才能记为完成。这是 Adapter contract version 2。自然语言目标直接进入通用 Agent 循环，Adapter 不会先把目标分类成固定的产品意图枚举。软件包 API 仍在演进，稳定版本发布前不承诺向后兼容。
 
@@ -91,8 +91,8 @@ PageController、身份、静态 Runtime、typed-tool 与验证合同见[应用�
 python3.12 -m venv .venv
 . .venv/bin/activate
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 python -m pip install --editable .
-python -m pip install --no-deps --editable packages/web-operation-agent-ofbiz
-python -m pip install --no-deps --editable packages/web-operation-agent-twenty
+python -m pip install --no-deps --editable examples/ofbiz
+python -m pip install --no-deps --editable examples/twenty
 python src/web_operation_agent/tests/run_all.py
 ```
 
@@ -106,12 +106,12 @@ python src/web_operation_agent/tests/run_all.py -k test_product.py
 
 ### 自包含 minimal demo
 
-打包发布的 [Minimal Contacts 示例](examples/minimal/README.md) 去除了首次运行所需的外部应用配置。它会在 loopback 启动合成的第一方应用和类型化 API，把真实助手 Runtime 注入 Chromium，并运行现有网关、会话 Host 和 ReAct executor：
+[Contacts 示例](examples/contacts/README.md) 去除了首次运行所需的外部应用配置。它会在 loopback 启动合成的第一方应用和类型化 API，把真实助手 Runtime 注入 Chromium，并运行现有网关、会话 Host 和 ReAct executor：
 
 ```bash
-python -m pip install --editable ".[demo]"
+python -m pip install --editable .
 python -m playwright install chromium
-web-operation-agent-demo --scripted
+PYTHONPATH=src:. python -m examples.contacts.demo --scripted
 ```
 
 显式的 `--scripted` 模式只执行一次固定的零费用装置演示：加载 Skill、查询当前 API、打开 API 授权的精确路由、观察新页面并结束。它不衡量模型能力。去掉 `--scripted` 并配置 OpenAI-compatible provider 后，同一个应用会改用真实模型决策并保持浏览器可交互。
@@ -146,7 +146,7 @@ scripts/qualify.sh
 
 公司枚举使用 Twenty 的 `pageInfo.endCursor` 和 `starting_after` 翻页，并设置页数与记录数硬上限，同时检测重复记录、cursor 停滞、总数变化和畸形响应。扫描被有界中断时，工具会明确返回部分结果，不会把它表示成完整公司清单。创建公司的重复项检查只有在完整扫描当前集合后才会继续。Cursor 分页不是数据库快照；如果扫描期间工作区正在变化，结果仍可能被标记为不完整，需要等数据稳定后重试。
 
-根目录 [`demo.sh`](demo.sh) 会启动 [`examples/twenty`](examples/twenty/README.md) 中的公开装配。先运行 `./demo.sh --check`，可以在不打开浏览器、不调用模型的情况下诊断配置、运行时、Twenty 健康状态和浏览器/OAuth 身份。Demo 要求已有一个只包含合成数据的 Twenty 实例，并显式提供浏览器登录状态、委托 OAuth 状态、同源 PageController 模块、审计输出和费用账本的本地路径；这些 `WOA_*` 值可以放在经安全解析的模型环境文件中。这个进程不读取数据库真值、不复位应用，也不会把 Agent 结束当成确定性的业务验收。可由全新 clone 一键部署的公开 Twenty 环境仍属于发布前工作。
+根目录 [`demo.sh`](examples/twenty/demo.sh) 会启动 [`examples/twenty/src/web_operation_agent_twenty/demo`](examples/twenty/src/web_operation_agent_twenty/demo/README.md) 中的公开装配。先运行 `./demo.sh --check`，可以在不打开浏览器、不调用模型的情况下诊断配置、运行时、Twenty 健康状态和浏览器/OAuth 身份。Demo 要求已有一个只包含合成数据的 Twenty 实例，并显式提供浏览器登录状态、委托 OAuth 状态、同源 PageController 模块、审计输出和费用账本的本地路径；这些 `WOA_*` 值可以放在经安全解析的模型环境文件中。这个进程不读取数据库真值、不复位应用，也不会把 Agent 结束当成确定性的业务验收。可由全新 clone 一键部署的公开 Twenty 环境仍属于发布前工作。
 
 ## 独立 Twenty evaluator
 

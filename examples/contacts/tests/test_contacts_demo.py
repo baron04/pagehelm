@@ -8,13 +8,9 @@ import urllib.request
 from pathlib import Path
 
 from web_operation_agent.model import ProviderError, require_chat_port
-from web_operation_agent_demo.app import (
-    DemoConfig,
-    MinimalContactsAdapter,
-    MinimalContactsApplication,
-    ScriptedDemoChat,
-    run_demo,
-)
+from examples.contacts.app import MinimalContactsApplication
+from examples.contacts.adapter import MinimalContactsAdapter
+from examples.contacts.demo import DemoConfig, ScriptedDemoChat, run_demo
 from web_operation_agent.tests.adapter_contract import assert_adapter_contract
 
 

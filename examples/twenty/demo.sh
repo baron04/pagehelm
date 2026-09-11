@@ -1,7 +1,8 @@
 #!/bin/sh
 set -eu
 
-REPO_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+EXAMPLE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPO_DIR=$(CDPATH= cd -- "$EXAMPLE_DIR/../.." && pwd)
 if [ -n "${WOA_DEMO_PYTHON:-}" ]; then
   DEMO_PYTHON=$WOA_DEMO_PYTHON
 elif [ -x "$REPO_DIR/.venv/bin/python" ]; then
@@ -28,12 +29,12 @@ export PYTHONPATH
 
 if [ "${1:-}" = "--check" ]; then
   shift
-  exec "$DEMO_PYTHON" "$REPO_DIR/examples/twenty/preflight.py" "$@"
+  exec "$DEMO_PYTHON" "$EXAMPLE_DIR/src/web_operation_agent_twenty/demo/preflight.py" "$@"
 fi
 
 if [ "${1:-}" = "--login" ]; then
   shift
-  exec "$DEMO_PYTHON" "$REPO_DIR/examples/twenty/login.py" "$@"
+  exec "$DEMO_PYTHON" "$EXAMPLE_DIR/src/web_operation_agent_twenty/demo/login.py" "$@"
 fi
 
-exec "$DEMO_PYTHON" "$REPO_DIR/examples/twenty/demo.py" "$@"
+exec "$DEMO_PYTHON" "$EXAMPLE_DIR/src/web_operation_agent_twenty/demo/demo.py" "$@"

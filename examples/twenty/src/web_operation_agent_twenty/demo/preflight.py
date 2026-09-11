@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from examples.twenty import demo
+from web_operation_agent_twenty.demo import demo
 
 
 _REQUIRED_LOCATIONS = (

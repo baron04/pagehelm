@@ -1,0 +1,29 @@
+{
+  "instructions": [
+    "Call list_contacts for current data; never answer from the Skill or page text.",
+    "Use name_contains only when the user names a contact.",
+    "To open a contact, require exactly one match and call goto with its exact ui_path.",
+    "Treat completeness.source_complete=true as the only basis for an exhaustive list."
+  ],
+  "intent": "List or open contacts from the current synthetic workspace.",
+  "provenance": [
+    "minimal-demo://contacts/v1"
+  ],
+  "read_only": true,
+  "schema_version": 1,
+  "skill_id": "minimal.contacts.query",
+  "title": "Read contacts",
+  "tool_names": [
+    "list_contacts"
+  ],
+  "triggers": [
+    "contact",
+    "contacts",
+    "address book",
+    "people",
+    "person",
+    "联系人",
+    "通讯录",
+    "人员"
+  ]
+}

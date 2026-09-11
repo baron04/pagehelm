@@ -11,7 +11,7 @@ import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from examples.twenty import demo
+from web_operation_agent_twenty.demo import demo
 from web_operation_agent_twenty.adapter import TwentyPageSessionIdentityResolver, _validated_origin
 
 

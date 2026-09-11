@@ -24,7 +24,6 @@ DISTRIBUTIONS = {
             "web_operation_agent/policies/prices.json",
             "web_operation_agent/web_runtime/embedded.js",
             "web_operation_agent/web_runtime/trace_replay.html",
-            "web_operation_agent_demo/assets/page_controller.js",
         ],
         "forbidden": [
             "web_operation_agent/browser_worker.py",
@@ -33,10 +32,12 @@ DISTRIBUTIONS = {
         ],
         # The core package must not carry any application's own assets. A name containing
         # either application's slug, wherever it appears in the path, is a leak.
-        "forbidden_name_substrings": ["ofbiz", "twenty"],
+        # The core wheel carries no application and no demo: an example application lives in
+        # `examples/`, is run from a checkout, and is never installed alongside the framework.
+        "forbidden_name_substrings": ["ofbiz", "twenty", "demo", "contacts"],
     },
     "web-operation-agent-ofbiz": {
-        "glob": "packages/web-operation-agent-ofbiz/dist/*.whl",
+        "glob": "examples/ofbiz/dist/*.whl",
         "required": [
             "web_operation_agent_ofbiz/__init__.py",
             "web_operation_agent_ofbiz/route.py",
@@ -47,7 +48,7 @@ DISTRIBUTIONS = {
         "forbidden_name_substrings": ["twenty"],
     },
     "web-operation-agent-twenty": {
-        "glob": "packages/web-operation-agent-twenty/dist/*.whl",
+        "glob": "examples/twenty/dist/*.whl",
         "required": [
             "web_operation_agent_twenty/__init__.py",
             "web_operation_agent_twenty/adapter.py",

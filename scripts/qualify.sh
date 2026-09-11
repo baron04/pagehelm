@@ -65,17 +65,17 @@ run_gate() {   # run_gate <name> <required:0|1> <command...>
   fi
 }
 
-export PYTHONPATH="${ROOT}/src:${ROOT}/packages/web-operation-agent-ofbiz/src:${ROOT}/packages/web-operation-agent-twenty/src:${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
+export PYTHONPATH="${ROOT}/src:${ROOT}/examples/ofbiz/src:${ROOT}/examples/twenty/src:${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 
 # ---------------------------------------------------------------- offline gates
 run_gate "core distribution boundary" 1 "${PYTHON}" scripts/check_core_boundary.py
 run_gate "product suite" 1 "${PYTHON}" src/web_operation_agent/tests/run_all.py
-run_gate "ofbiz distribution suite" 1 "${PYTHON}" -m unittest discover \
-  -s packages/web-operation-agent-ofbiz/src/web_operation_agent_ofbiz/tests \
-  -t packages/web-operation-agent-ofbiz/src
-run_gate "twenty distribution suite" 1 "${PYTHON}" -m unittest discover \
-  -s packages/web-operation-agent-twenty/src/web_operation_agent_twenty/tests \
-  -t packages/web-operation-agent-twenty/src
+run_gate "ofbiz example suite" 1 "${PYTHON}" -m unittest discover \
+  -s examples/ofbiz/src/web_operation_agent_ofbiz/tests \
+  -t examples/ofbiz/src
+run_gate "twenty example suite" 1 "${PYTHON}" -m unittest discover \
+  -s examples/twenty/src/web_operation_agent_twenty/tests \
+  -t examples/twenty/src
 run_gate "evals/twenty foundation" 1 "${PYTHON}" -m unittest discover -s evals/twenty/tests
 run_gate "PageAgent host and runner (offline)" 1 "${PYTHON}" -m unittest \
   evals.pageagent.test_host evals.pageagent.test_business_host \
@@ -114,16 +114,16 @@ build_and_check_wheel() {
   # setuptools may otherwise copy deleted modules from an ignored build/lib tree into a new
   # wheel. A release gate must build from the current source tree, not incremental residue.
   rm -rf dist build src/*.egg-info
-  rm -rf packages/web-operation-agent-ofbiz/dist packages/web-operation-agent-ofbiz/build \
-    packages/web-operation-agent-ofbiz/src/*.egg-info
-  rm -rf packages/web-operation-agent-twenty/dist packages/web-operation-agent-twenty/build \
-    packages/web-operation-agent-twenty/src/*.egg-info
+  rm -rf examples/ofbiz/dist examples/ofbiz/build \
+    examples/ofbiz/src/*.egg-info
+  rm -rf examples/twenty/dist examples/twenty/build \
+    examples/twenty/src/*.egg-info
   "${PYTHON}" -m pip wheel --no-deps --quiet --wheel-dir dist . || return 1
   "${PYTHON}" -m pip wheel --no-deps --quiet \
-    --wheel-dir packages/web-operation-agent-ofbiz/dist packages/web-operation-agent-ofbiz \
+    --wheel-dir examples/ofbiz/dist examples/ofbiz \
     || return 1
   "${PYTHON}" -m pip wheel --no-deps --quiet \
-    --wheel-dir packages/web-operation-agent-twenty/dist packages/web-operation-agent-twenty \
+    --wheel-dir examples/twenty/dist examples/twenty \
     || return 1
   "${PYTHON}" scripts/check_wheel_contents.py || return 1
 
@@ -133,9 +133,9 @@ build_and_check_wheel() {
   local core_wheel ofbiz_wheel twenty_wheel smoke_venv smoke_cwd
   core_wheel="$("${PYTHON}" -c 'import glob, os; print(os.path.abspath(glob.glob("dist/*.whl")[0]))')"
   ofbiz_wheel="$("${PYTHON}" -c \
-    'import glob, os; print(os.path.abspath(glob.glob("packages/web-operation-agent-ofbiz/dist/*.whl")[0]))')"
+    'import glob, os; print(os.path.abspath(glob.glob("examples/ofbiz/dist/*.whl")[0]))')"
   twenty_wheel="$("${PYTHON}" -c \
-    'import glob, os; print(os.path.abspath(glob.glob("packages/web-operation-agent-twenty/dist/*.whl")[0]))')"
+    'import glob, os; print(os.path.abspath(glob.glob("examples/twenty/dist/*.whl")[0]))')"
   smoke_venv="$(mktemp -d)/venv"
   smoke_cwd="$(mktemp -d)"
   "${PYTHON}" -m venv "${smoke_venv}" || return 1
@@ -156,17 +156,20 @@ from web_operation_agent.mutation import SQLiteMutationJournal
 from web_operation_agent.durable import SQLiteSessionStore, SQLiteProviderQuota
 from web_operation_agent.mutation_ops import reconcile
 from web_operation_agent.sourcetree import SourceTree
-from web_operation_agent_demo import MinimalContactsAdapter
 
 installed = Path(web_operation_agent.__file__).resolve()
 assert Path(sys.prefix).resolve() in installed.parents, installed
 assert Path(os.environ["WOA_CHECKOUT"]).resolve() not in installed.parents, installed
-assert MinimalContactsAdapter
-for name in ("web_operation_agent_ofbiz", "web_operation_agent_twenty"):
+assert SQLiteMutationJournal and SQLiteSessionStore and SQLiteProviderQuota
+assert reconcile and SourceTree
+# The framework ships no application and no example. Any of these resolving here would mean
+# the core wheel is carrying something a framework has no business carrying.
+for name in ("web_operation_agent_ofbiz", "web_operation_agent_twenty",
+             "web_operation_agent_demo", "examples"):
     import importlib.util
     assert importlib.util.find_spec(name) is None, \
-        f"core alone must not resolve {name}; the two must be independently installable"
-print("core wheel alone imports, composes and stays free of both application distributions")
+        f"core alone must not resolve {name}; applications and examples install separately"
+print("core wheel alone imports and composes, and carries no application or example")
 PY
   ) || return 1
   env -u PYTHONPATH "${smoke_venv}/bin/python" -m pip install --no-deps \
@@ -209,17 +212,24 @@ fi
 # test failure can never be downgraded to an optional skip.
 chromium_ready=0
 if ! "${PYTHON}" - <<'PY'
-from web_operation_agent.tests.test_minimal_demo import _chromium_launches
-raise SystemExit(0 if _chromium_launches() else 1)
+# Probed here rather than imported from a test module: the gate must not depend on any one
+# example staying where it is, and a moved import used to read as "Chromium is unavailable".
+try:
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as playwright:
+        playwright.chromium.launch(headless=True).close()
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0)
 PY
 then
-  record "minimal demo Chromium qualification" BLOCKED "Chromium is unavailable"
-  [[ "${require_browser}" == "1" ]] && failed+=("minimal demo Chromium qualification")
+  record "contacts example Chromium qualification" BLOCKED "Chromium is unavailable"
+  [[ "${require_browser}" == "1" ]] && failed+=("contacts example Chromium qualification")
 else
   chromium_ready=1
-  run_gate "minimal demo Chromium qualification" 1 \
-    env WOA_REQUIRE_MINIMAL_DEMO_BROWSER=1 "${PYTHON}" \
-    src/web_operation_agent/tests/run_all.py -k test_minimal_demo.py
+  run_gate "contacts example Chromium qualification" 1 \
+    env WOA_REQUIRE_MINIMAL_DEMO_BROWSER=1 PYTHONPATH="${ROOT}/src:${ROOT}" "${PYTHON}" \
+    -m unittest examples.contacts.tests.test_contacts_demo
 fi
 
 browser_bundle="${WOA_PAGEAGENT_BUNDLE:-${ROOT}/.artifacts/evals/pageagent/pageagent-baseline.js}"

@@ -32,8 +32,8 @@ jobs:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
         run: |
           python -m pip install --editable .
-          python -m pip install --no-deps --editable packages/web-operation-agent-ofbiz
-          python -m pip install --no-deps --editable packages/web-operation-agent-twenty
+          python -m pip install --no-deps --editable examples/ofbiz
+          python -m pip install --no-deps --editable examples/twenty
       - name: Install pinned PageAgent baseline
         working-directory: evals/pageagent
         run: npm ci

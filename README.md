@@ -66,7 +66,7 @@ The main reusable boundaries are:
 | `web_operation_agent.egress` | Enforces and audits the model-provider data boundary without storing request content. |
 | `web_operation_agent.session` | Implements the bounded server-side agent loop. |
 
-Every application-specific adapter ships as its own separate distribution rather than living in the core package above: [`web-operation-agent-twenty`](packages/web-operation-agent-twenty) provides `TwentyApplicationAdapter`, and [`web-operation-agent-ofbiz`](packages/web-operation-agent-ofbiz) provides the Apache OFBiz route grammar, source compiler and App Skill provider. The core package has no OFBiz- or Twenty-specific code; a new application implements the same ports these two do.
+Every application-specific adapter ships as its own separate distribution rather than living in the core package above: [`web-operation-agent-twenty`](examples/twenty) provides `TwentyApplicationAdapter`, and [`web-operation-agent-ofbiz`](examples/ofbiz) provides the Apache OFBiz route grammar, source compiler and App Skill provider. The core package has no OFBiz- or Twenty-specific code; a new application implements the same ports these two do.
 
 Application adapters expose a versioned, non-secret descriptor, a digest-bound Skill and typed-tool catalog, and executable ports for identity, routes, result data classes, mutation postconditions, and conservative reconciliation. `bind_application()` checks that every tool and mutation is covered and that the runtime uses the same port objects. The route port owns application URL syntax, source-aware entry discovery, and browser pre-egress extensions for application-specific handoff secrets; the generic Agent does not parse framework routes. `AgentTurnExecutor(application=...)` rejects another application origin or invalid principal before browser/model work; typed-tool routes are checked before entering the Agent context, and an acknowledged write remains indeterminate until its adapter postcondition passes. Natural-language goals enter the generic Agent loop directly; an adapter does not preclassify them into a fixed product intent enum. This is adapter contract version 2, and the package API is still evolving; no compatibility guarantee is made before a stable release.
 
@@ -91,8 +91,8 @@ From an existing checkout:
 python3.12 -m venv .venv
 . .venv/bin/activate
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 python -m pip install --editable .
-python -m pip install --no-deps --editable packages/web-operation-agent-ofbiz
-python -m pip install --no-deps --editable packages/web-operation-agent-twenty
+python -m pip install --no-deps --editable examples/ofbiz
+python -m pip install --no-deps --editable examples/twenty
 python src/web_operation_agent/tests/run_all.py
 ```
 
@@ -104,15 +104,17 @@ To run one test module through the same guarded runner:
 python src/web_operation_agent/tests/run_all.py -k test_product.py
 ```
 
-### Self-contained minimal demo
+### Self-contained example
 
-The packaged [Minimal Contacts example](examples/minimal/README.md) removes the external application setup from the first run. It starts a synthetic first-party application and typed API on loopback, injects the real assistant runtime into Chromium, and runs the normal gateway, session host and ReAct executor:
+The [Contacts example](examples/contacts/README.md) removes the external application setup from the first run. It starts a synthetic first-party application and typed API on loopback, injects the real assistant runtime into Chromium, and runs the normal gateway, session host and ReAct executor:
 
 ```bash
-python -m pip install --editable ".[demo]"
+python -m pip install --editable .
 python -m playwright install chromium
-web-operation-agent-demo --scripted
+PYTHONPATH=src:. python -m examples.contacts.demo --scripted
 ```
+
+It runs from a checkout and is not installed with the framework. The core distribution ships no application and no demo, which is what lets its wheel assert that it contains neither.
 
 The explicit `--scripted` mode performs one fixed, zero-cost apparatus walkthrough: load a Skill, query the current API, open an API-authorized route, observe the new page, and finish. It does not measure model quality. Omit `--scripted` and configure an OpenAI-compatible provider to use the same application interactively with actual model decisions.
 
@@ -146,7 +148,7 @@ Read access is the default. Creating a company requires opting in at both the Tw
 
 Company enumeration follows Twenty's `pageInfo.endCursor` with `starting_after`, with hard page and record ceilings plus repeated-record, stalled-cursor, changing-total, and malformed-page detection. A bounded interruption is returned as an explicit partial result; it is never represented as a complete company list. Duplicate checks for company creation fail closed unless the complete active set was scanned. Cursor pagination does not provide a database snapshot, so a workspace changing during a scan can still force an incomplete result and a retry after the data settles.
 
-The root [`demo.sh`](demo.sh) launches the public composition in [`examples/twenty`](examples/twenty/README.md). Run `./demo.sh --check` first to diagnose configuration, runtime, Twenty health, and browser/OAuth identity without opening a browser or calling the model. The demo requires an externally provisioned, synthetic Twenty instance and explicit local paths for browser state, delegated OAuth state, the same-origin PageController module, audit output, and spend accounting; these `WOA_*` values may live in the safely parsed model environment file. It does not read database truth, reset the application, or present an Agent completion as deterministic business verification. Provisioning a reproducible public Twenty environment remains release work.
+The root [`demo.sh`](examples/twenty/demo.sh) launches the public composition in [`examples/twenty/src/web_operation_agent_twenty/demo`](examples/twenty/src/web_operation_agent_twenty/demo/README.md). Run `./demo.sh --check` first to diagnose configuration, runtime, Twenty health, and browser/OAuth identity without opening a browser or calling the model. The demo requires an externally provisioned, synthetic Twenty instance and explicit local paths for browser state, delegated OAuth state, the same-origin PageController module, audit output, and spend accounting; these `WOA_*` values may live in the safely parsed model environment file. It does not read database truth, reset the application, or present an Agent completion as deterministic business verification. Provisioning a reproducible public Twenty environment remains release work.
 
 See [Durable local operations](docs/integrations/durable-operations.md) for opt-in recovery, shared request quotas, retention and mutation reconciliation.
 
