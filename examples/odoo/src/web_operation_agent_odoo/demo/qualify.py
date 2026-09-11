@@ -279,17 +279,47 @@ def _database_fixture(args) -> OdooPostgresFixture | None:
                               db_user=args.fixture_db_user)
 
 
+#: Tables a *running* Odoo writes to on its own, with nothing else happening.
+#:
+#: Measured rather than assumed: after a restore of an idle server the digest holds for
+#: about twenty seconds, then one row appears in `mail_message` and nothing moves again for
+#: at least ten minutes. Sampled once a minute for ten minutes, no other table of the
+#: sixteen ever differed.
+#:
+#: This set only relaxes the check that the library is *on its baseline before the run*.
+#: It does not relax what the run itself is measured against: every case still compares the
+#: application's own reads, the post-run comparison still uses the whole digest, and drift in
+#: any table outside this set still stops the gate. No case here writes to `mail_message`
+#: alone -- a confirm or an invoice moves `sale_order` or `account_move` too -- so an earlier
+#: run that wrote and failed to clean up is still caught by the tables it could not avoid.
+SELF_WRITTEN_TABLES = frozenset({"mail_message"})
+
+
+def classify_fixture_drift(captured: dict, record: dict) -> tuple[list[str], bool]:
+    """Name the tables that moved since the baseline, and say who moved them.
+
+    Returns the drifted table names and whether every one of them is a table the running
+    application writes by itself. That second value is the whole decision: the application's
+    own bookkeeping is put back and recorded, anything else stops the gate.
+
+    With no recorded per-table baseline there is nothing to attribute, so the caller is told
+    "not attributable" and stops -- guessing would be the one answer that cannot be checked.
+    """
+    recorded = record.get("baseline_tables") or {}
+    if not recorded:
+        return [], False
+    drifted = sorted(name for name, row in captured["tables"].items()
+                     if recorded.get(name) != row)
+    return drifted, bool(drifted) and set(drifted) <= SELF_WRITTEN_TABLES
+
+
 def _blocked_artifact(bound, health: dict, observed: str, baseline: str,
                       drifted: list[str]) -> dict:
     """Say what stopped the gate, without pretending it produced a measurement.
 
     Naming the tables matters: a bare digest mismatch reads as "something wrote to the
-    library" when it may equally be the running Odoo's own bookkeeping. Measured on an idle
-    server, a restore is followed within a minute by one row in `mail_message` and nothing
-    else for at least ten minutes -- so a gate run that is not the first one after a restore
-    is blocked by the application, not by a previous run. Whether that table should still
-    count towards the pre-run baseline identity is a decision for whoever owns this gate;
-    this only makes the answer visible instead of a mystery.
+    library" when it may equally be the running Odoo's own bookkeeping, and the two call for
+    opposite responses.
     """
     return {
         "schema_version": 1,
@@ -356,22 +386,35 @@ def main(argv: Sequence[str] | None = None) -> int:
     database = _database_fixture(args)
     baseline = ""
     fixture_checks: dict = {}
+    drift_before_run: list[str] = []
     if database is not None:
         record = load_json(Path(args.fixture_record))
         baseline = record["baseline_digest"]
         captured = database.capture()
         started_on = captured["digest"]
-        fixture_checks["fixture_matched_its_recorded_baseline_before_the_run"] = (
-            started_on == baseline)
-        if started_on != baseline:
+        drift_before_run, attributable = classify_fixture_drift(captured, record)
+
+        if started_on != baseline and not attributable:
             # Stop rather than measure. A gate that runs anyway produces a number nobody
             # can reproduce, and the last one of those cost this project a whole spike.
-            recorded_tables = record.get("baseline_tables") or {}
-            drifted = sorted(
-                name for name, row in captured["tables"].items()
-                if recorded_tables.get(name) != row) if recorded_tables else []
-            return _emit(_blocked_artifact(bound, health, started_on, baseline, drifted),
-                         args)
+            return _emit(
+                _blocked_artifact(bound, health, started_on, baseline, drift_before_run),
+                args)
+        if started_on != baseline:
+            # Drift the application produced by itself. Putting the library back is what
+            # makes the measurement reproducible, which is the whole purpose of the check;
+            # refusing here would mean the gate can only ever run once per restore. The
+            # drift is not swallowed -- it is named in the artifact, and any table outside
+            # the set above still stops the run above.
+            put_back = restore_snapshot(
+                fixture=database, snapshot_path=Path(args.fixture_snapshot),
+                record_path=Path(args.fixture_record))
+            if put_back["status"] != "PASS":
+                return _emit(_blocked_artifact(bound, health, put_back["observed_digest"],
+                                               baseline, drift_before_run), args)
+            started_on = put_back["observed_digest"]
+        fixture_checks["fixture_matched_its_recorded_baseline_before_the_run"] = (
+            started_on == baseline)
 
     read_only_before = fixture_state(adapter)
     with tempfile.TemporaryDirectory() as tmp:
@@ -474,6 +517,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "fixture_restore": {key: value for key, value in restored.items()
                             if key != "changed_tables"},
         "fixture_database_digest": baseline,
+        # What the library looked like before this run touched it. Empty is the ordinary
+        # case; anything here was written by the application itself between runs, and a
+        # reviewer should see it rather than have it quietly put back.
+        "fixture_drift_before_run": drift_before_run,
         "skill_citations": {key: value for key, value in citations.items()
                             if key != "reports"},
         "checks": checks,

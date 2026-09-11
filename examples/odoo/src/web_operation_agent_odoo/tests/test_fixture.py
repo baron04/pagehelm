@@ -16,6 +16,8 @@ from web_operation_agent_odoo.demo.fixture import (BUSINESS_TABLES, FixtureMisma
                                                    FixtureUnavailable,
                                                    OdooPostgresFixture, load_json,
                                                    prepare_snapshot, restore_snapshot)
+from web_operation_agent_odoo.demo.qualify import (SELF_WRITTEN_TABLES,
+                                                   classify_fixture_drift)
 
 
 class FakePostgres:
@@ -211,3 +213,73 @@ class RestoringTheFixture(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClassifyingDriftBeforeTheGateRuns(unittest.TestCase):
+    """Who moved the library decides whether the gate may proceed.
+
+    A *running* Odoo writes one row to `mail_message` about twenty seconds after a restore
+    and nothing else for at least ten minutes -- measured, not assumed. Blocking on that
+    means the gate can only ever run once per restore, which is how it came to be reported
+    BLOCKED on a library nobody had written to. Blocking on anything else is the point of
+    the check, and these tests are what keeps the difference from eroding.
+    """
+
+    @staticmethod
+    def _record(tables: dict) -> dict:
+        return {"baseline_digest": "sha256:base", "baseline_tables": tables}
+
+    @staticmethod
+    def _captured(tables: dict) -> dict:
+        return {"digest": "sha256:now", "tables": tables}
+
+    def _baseline(self) -> dict:
+        return {table: {"rows": 1, "digest": "aaaa"} for table in BUSINESS_TABLES}
+
+    def test_a_library_on_its_baseline_has_nothing_to_attribute(self):
+        tables = self._baseline()
+        drifted, attributable = classify_fixture_drift(
+            self._captured(tables), self._record(tables))
+        self.assertEqual(drifted, [])
+        self.assertFalse(attributable)
+
+    def test_the_application_writing_to_itself_is_attributable(self):
+        tables = self._baseline()
+        moved = dict(tables, mail_message={"rows": 2, "digest": "bbbb"})
+        drifted, attributable = classify_fixture_drift(
+            self._captured(moved), self._record(tables))
+        self.assertEqual(drifted, ["mail_message"])
+        self.assertTrue(attributable)
+
+    def test_a_business_table_that_moved_is_never_attributable(self):
+        tables = self._baseline()
+        for table in sorted(set(BUSINESS_TABLES) - SELF_WRITTEN_TABLES):
+            with self.subTest(table=table):
+                moved = dict(tables)
+                moved[table] = {"rows": 2, "digest": "bbbb"}
+                drifted, attributable = classify_fixture_drift(
+                    self._captured(moved), self._record(tables))
+                self.assertEqual(drifted, [table])
+                self.assertFalse(attributable)
+
+    def test_self_written_drift_alongside_a_real_write_still_stops_the_gate(self):
+        """The set is a subset test, not a filter: one foreign table poisons the batch."""
+        tables = self._baseline()
+        moved = dict(tables,
+                     mail_message={"rows": 2, "digest": "bbbb"},
+                     sale_order={"rows": 2, "digest": "cccc"})
+        drifted, attributable = classify_fixture_drift(
+            self._captured(moved), self._record(tables))
+        self.assertEqual(drifted, ["mail_message", "sale_order"])
+        self.assertFalse(attributable)
+
+    def test_no_recorded_per_table_baseline_means_no_attribution(self):
+        """An older record cannot be reasoned about, so it is never waved through."""
+        drifted, attributable = classify_fixture_drift(
+            self._captured(self._baseline()), {"baseline_digest": "sha256:base"})
+        self.assertEqual(drifted, [])
+        self.assertFalse(attributable)
+
+    def test_every_self_written_table_is_one_the_projection_actually_covers(self):
+        self.assertTrue(SELF_WRITTEN_TABLES)
+        self.assertTrue(SELF_WRITTEN_TABLES <= set(BUSINESS_TABLES))
