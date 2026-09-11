@@ -543,7 +543,15 @@ class BusinessSkillCompiler:
         cited += [(menu, self._anchor(menu)) for menu in menus]
         cited += [(view, str(view.object or "")) for view in views]
         if fields:
-            cited.append((fields[0], fields[0].subject))
+            # Several files may declare fields of one record -- Odoo's `account.move` is
+            # extended by a dozen modules -- and citing whichever came first points a
+            # reader at an incidental one. Cite the file that declares the most.
+            by_file: dict[str, list[SourceRelation]] = {}
+            for row in fields:
+                for reference in row.evidence:
+                    by_file.setdefault(reference.path, []).append(row)
+            primary = max(sorted(by_file), key=lambda path: len(by_file[path]))
+            cited.append((by_file[primary][0], fields[0].subject))
         cited += [(row, row.subject) for row in method_rows]
 
         entries: list[str] = []

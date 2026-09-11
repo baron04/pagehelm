@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "skill_id": "odoo.sales.sale-orders-confirm",
+  "title": "Confirm an Odoo quotation",
+  "intent": "Turn exactly one open quotation into a confirmed sales order, after explicit confirmation.",
+  "triggers": [
+    "confirm quotation",
+    "confirm the quotation",
+    "confirm quote",
+    "confirm order",
+    "accept quotation",
+    "确认报价",
+    "确认报价单",
+    "确认订单"
+  ],
+  "instructions": [
+    "Call query_quotations first to establish that the quotation exists, is still open, and is the one the user means.",
+    "Call confirm_quotation with the exact reference. The server re-checks that the quotation is still draft or sent immediately before writing, shows the exact effect and targets for confirmation, executes at most once, and reads the order back under the same user.",
+    "sale.order.action_confirm raises a UserError on a cancelled order, so a quotation the query did not return is a refusal, not something to retry with a different spelling.",
+    "After a successful result, open only the returned ui_path and observe the page before finishing.",
+    "Confirming does not invoice: the confirmed order's invoice_status says whether anything is invoiceable. Do not claim an invoice was produced.",
+    "If confirmation is denied or a write outcome is uncertain, stop; never retry the mutation."
+  ],
+  "tool_names": [
+    "query_quotations",
+    "confirm_quotation"
+  ],
+  "provenance": [
+    "src:odoo@18.0:addons/sale/views/sale_order_views.xml#sale.action_orders",
+    "src:odoo@18.0:addons/sale/models/sale_order.py#sale.order.action_confirm",
+    "src:odoo@18.0:addons/sale/models/sale_order.py#sale.order",
+    "api:odoo@18.0:/jsonrpc#object.execute_kw"
+  ],
+  "read_only": false
+}

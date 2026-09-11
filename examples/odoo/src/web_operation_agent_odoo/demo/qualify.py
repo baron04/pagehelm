@@ -57,7 +57,37 @@ def fixture_state(adapter: OdooApplicationAdapter) -> dict:
     return state
 
 
+#: The six workflow kinds G3 set out to cover, one scripted case each. The scripts are
+#: fixed, so a pass says the apparatus carries that workflow end to end and a failure is a
+#: defect rather than a sampling accident; nothing here says anything about a model.
+#:
+#: Three of them write, and they write in sequence on purpose: `confirm_quotation` takes
+#: S00002 from draft to confirmed, and `invoice_sale_order` invoices S00007, which is the
+#: only order in Odoo's own demo data with anything left to invoice. The fixture is
+#: restored afterwards, which is what makes running them repeatable at all.
 CASES = {
+    "complete_enumeration": {
+        "task": "How many customers are there in total?",
+        "replies": (
+            ("load_skill", {"skill_id": "odoo.sales.customers-query"}),
+            ("query_customers", {"limit": 50}),
+            (None, "The customer list is above."),
+        ),
+        "expect_path": "/odoo/customers",
+        "expect_page_text": (),
+        "expect_complete_scan": True,
+    },
+    "conditional_query": {
+        "task": "Which quotations are still open?",
+        "replies": (
+            ("load_skill", {"skill_id": "odoo.sales.quotations-query"}),
+            ("query_quotations", {}),
+            (None, "The open quotations are above."),
+        ),
+        "expect_path": "/odoo/customers",
+        "expect_page_text": (),
+        "expect_complete_scan": True,
+    },
     "open_record": {
         "task": "Open the customer record for Acme Corporation.",
         "replies": (
@@ -82,7 +112,58 @@ CASES = {
         "expect_path": "/odoo/orders",
         "expect_page_text": ("S00",),
     },
+    "safe_refusal": {
+        # S00006 is confirmed and its invoice status is `no`: nothing left to invoice. The
+        # refusal has to come from the adapter, before any proposal reaches the user --
+        # `sale.advance.payment.inv` raises a UserError *after* they would have approved.
+        "task": "Create an invoice for sales order S00006.",
+        "replies": (
+            ("load_skill", {"skill_id": "odoo.sales.sale-orders-invoice"}),
+            ("invoice_sale_order", {"reference": "S00006"}),
+            ("finish", {"done": False,
+                        "why": "S00006 has nothing left to invoice."}),
+        ),
+        "expect_path": "/odoo/customers",
+        "expect_page_text": (),
+        "writes": True,
+        "expect_refusal": True,
+        "expect_no_approval": True,
+    },
+    "multi_step_write_confirm": {
+        "task": "Confirm quotation S00002.",
+        "replies": (
+            ("load_skill", {"skill_id": "odoo.sales.sale-orders-confirm"}),
+            ("query_quotations", {"name_contains": "S00002"}),
+            ("confirm_quotation", {"reference": "S00002"}),
+            ("finish", {"done": True, "why": "Confirmed quotation S00002."}),
+        ),
+        "expect_path": "/odoo/customers",
+        "expect_page_text": (),
+        "writes": True,
+        "approve": True,
+        "expect_record": ("sale.order", "S00002", "state", "sale"),
+    },
+    "multi_step_write_invoice": {
+        "task": "Create the customer invoice for sales order S00007.",
+        "replies": (
+            ("load_skill", {"skill_id": "odoo.sales.sale-orders-invoice"}),
+            ("query_sale_orders", {"name_contains": "S00007"}),
+            ("invoice_sale_order", {"reference": "S00007"}),
+            ("finish", {"done": True, "why": "Invoiced sales order S00007."}),
+        ),
+        "expect_path": "/odoo/customers",
+        "expect_page_text": (),
+        "writes": True,
+        "approve": True,
+        "expect_invoice_for": "S00007",
+    },
 }
+
+#: The reads first, then the refusal, then the two writes. The refusal runs before anything
+#: has written, so what it refuses is Odoo's demo data exactly as shipped; the writes run
+#: last so that only the fixture restore has to undo them.
+CASE_ORDER = ("complete_enumeration", "conditional_query", "open_record", "open_collection",
+              "safe_refusal", "multi_step_write_confirm", "multi_step_write_invoice")
 
 
 def run_case(name: str, case: dict, args, output_dir: Path) -> dict:
@@ -100,15 +181,39 @@ def run_case(name: str, case: dict, args, output_dir: Path) -> dict:
         output_dir=output_dir,
         turn_timeout_s=args.turn_timeout,
         keep_open_seconds=0.0,
+        allow_mutations=bool(case.get("writes")),
+        mutation_journal_path=(output_dir / f"{name}-mutations.sqlite3"
+                               if case.get("writes") else None),
+        approve_in_page=bool(case.get("approve")),
     ))
     turns = summary.get("turns") or []
     turn = turns[0] if turns else {}
     usage = summary.get("model_usage") or {}
     page_text = summary.get("last_page_text") or ""
+    control = turn.get("business_control") or {}
+    audit = summary.get("audit_projection") or []
+    reads = [row for row in audit if row.get("event") == "business_tool_result"]
+    expected_terminal = ("agent_refused" if case.get("expect_refusal")
+                         else "agent_finished")
     return {
         "case": name,
         "task_kind": name,
-        "turn_finished": turn.get("terminal_reason") == "agent_finished",
+        "turn_finished": turn.get("terminal_reason") == expected_terminal,
+        "terminal_reason": turn.get("terminal_reason", ""),
+        # Every read this turn made said it saw the whole scoped collection. A tool that
+        # answers from a first page and a tool that answers from all of them look the same
+        # in prose; they do not look the same here.
+        "every_read_scanned_its_whole_scope": all(
+            row.get("source_complete") is True for row in reads),
+        "reads": len(reads),
+        "approval_requested": control.get("approval_requested", 0),
+        "approval_granted": control.get("approval_granted", 0),
+        "mutations_completed": control.get("mutation_completed", 0),
+        "mutations_indeterminate": control.get("mutation_indeterminate", 0),
+        "readback_verified": all(
+            row.get("readback_verified") is True for row in audit
+            if row.get("event") == "business_mutation_result"),
+        "audit_projection": audit,
         "final_path": str(summary.get("last_url", "")).split(args.base_url, 1)[-1],
         "final_path_expected": str(summary.get("last_url", "")).endswith(
             case["expect_path"]),
@@ -122,6 +227,43 @@ def run_case(name: str, case: dict, args, output_dir: Path) -> dict:
         "source_relations": summary.get("source_relations", 0),
         "source_candidates_delivered": summary.get("source_candidates_delivered") or [],
     }
+
+
+def verify_effect(adapter: OdooApplicationAdapter, case: dict) -> dict:
+    """Ask the application what happened, rather than believing the run's own account.
+
+    A turn that says it confirmed a quotation and a turn that did are the same string. The
+    only thing that can tell them apart is the record, read afterwards under the delegated
+    actor -- which is also the only evidence that would survive somebody disputing it.
+    """
+    if not case.get("approve"):
+        return {}
+    executor = adapter._executor
+    if case.get("expect_record"):
+        model, reference, field, expected = case["expect_record"]
+        rows = executor.call(model, "search_read", [[["name", "=", reference]]],
+                             {"fields": [field], "limit": 2})
+        observed = (executor._label(rows[0], field)
+                    if isinstance(rows, list) and len(rows) == 1 else "")
+        return {"effect_verified": observed == expected,
+                "effect_observed": f"{model} {reference} {field}={observed or 'absent'}"}
+    if case.get("expect_invoice_for"):
+        reference = case["expect_invoice_for"]
+        rows = executor.call(
+            "sale.order", "search_read", [[["name", "=", reference]]],
+            {"fields": ["invoice_ids", "invoice_status"], "limit": 2})
+        invoices = (rows[0].get("invoice_ids")
+                    if isinstance(rows, list) and len(rows) == 1 else [])
+        moves = executor.call("account.move", "read", [list(invoices or [])],
+                              {"fields": ["move_type", "state"]}) if invoices else []
+        # One ordinary customer invoice, in draft. A down payment would be an
+        # `out_invoice` too, so the count and the order's own status carry the rest.
+        ordinary = [move for move in moves
+                    if isinstance(move, dict) and move.get("move_type") == "out_invoice"]
+        return {"effect_verified": len(ordinary) == 1,
+                "effect_observed": (f"sale.order {reference} now has {len(ordinary)} "
+                                    "customer invoices")}
+    return {"effect_verified": False, "effect_observed": "the case declared no effect"}
 
 
 def _database_fixture(args) -> OdooPostgresFixture | None:
@@ -212,35 +354,78 @@ def main(argv: Sequence[str] | None = None) -> int:
             # can reproduce, and the last one of those cost this project a whole spike.
             return _emit(_blocked_artifact(bound, health, started_on, baseline), args)
 
-    before = fixture_state(adapter)
+    read_only_before = fixture_state(adapter)
     with tempfile.TemporaryDirectory() as tmp:
-        results = [run_case(name, case, args, Path(tmp))
-                   for name, case in CASES.items()]
-    after = fixture_state(adapter)
+        results = []
+        for name in CASE_ORDER:
+            case = CASES[name]
+            if case.get("writes") and database is None:
+                # A write with nothing to undo it is how a demo library drifts. Refusing is
+                # not a failure of the product: it is the gate declining to leave a mess.
+                raise SystemExit(
+                    f"the {name} case writes; run with a resettable fixture or not at all")
+            result = run_case(name, case, args, Path(tmp))
+            result.update(verify_effect(adapter, case))
+            results.append(result)
+            if not case.get("writes"):
+                # A read case must leave the application exactly as it found it. Checked per
+                # case, so a later write cannot mask an earlier read that wrote.
+                result["read_only_kept"] = fixture_state(adapter) == read_only_before
 
+    restored: dict = {}
     if database is not None:
+        wrote = any(case.get("writes") and CASES[case_name].get("approve")
+                    for case_name, case in CASES.items())
         ended_on = database.capture()["digest"]
-        fixture_checks["fixture_returned_to_its_baseline"] = ended_on == baseline
-        if ended_on != baseline:
-            # Every case here is read-only, so this is a defect report, not a cleanup step.
-            # Restore anyway: leaving a drifted library behind is how the next run inherits
-            # this one's mistake.
-            recovery = restore_snapshot(
-                fixture=database, snapshot_path=Path(args.fixture_snapshot),
-                record_path=Path(args.fixture_record))
-            fixture_checks["fixture_was_restored_after_an_unexpected_write"] = (
-                recovery["status"] == "PASS")
+        fixture_checks["fixture_changed_only_where_a_write_was_approved"] = (
+            (ended_on != baseline) if wrote else (ended_on == baseline))
+        restored = restore_snapshot(
+            fixture=database, snapshot_path=Path(args.fixture_snapshot),
+            record_path=Path(args.fixture_record))
+        fixture_checks["fixture_restored_to_its_baseline_afterwards"] = (
+            restored["status"] == "PASS")
 
+    read_cases = [row for row in results if not CASES[row["case"]].get("writes")]
+    write_cases = [row for row in results if CASES[row["case"]].get("approve")]
+    refusal_cases = [row for row in results if CASES[row["case"]].get("expect_refusal")]
     checks = {
         "application_reachable": bool(health["passed"]),
-        "every_case_finished": all(row["turn_finished"] for row in results),
+        "every_workflow_kind_ran": sorted(row["case"] for row in results)
+                                   == sorted(CASES),
+        "every_case_reached_its_expected_terminal_state": all(
+            row["turn_finished"] for row in results),
         "every_case_landed_on_its_authorised_route": all(
             row["final_path_expected"] for row in results),
         "every_case_rendered_its_record": all(row["record_visible"] for row in results),
         "identity_bound_in_every_case": all(row["identity_bound"] for row in results),
         "scripted_provider_zero_cost": all(
             row["provider_calls"] == 0 and row["cost_cny"] == 0.0 for row in results),
-        "fixture_unchanged": before == after,
+        # Only about the cases that read. The refusal never gets that far, which is the
+        # point of it -- folding it in here would make a vacuous false look like a defect.
+        "every_read_saw_its_whole_scope": all(
+            row["every_read_scanned_its_whole_scope"]
+            for row in results if row["reads"]),
+        "every_case_that_should_read_did": all(
+            bool(row["reads"]) is not bool(CASES[row["case"]].get("expect_refusal"))
+            for row in results),
+        "every_read_only_case_left_the_application_alone": all(
+            row.get("read_only_kept") is True for row in read_cases),
+        # Each write asked exactly once, was approved in the page, executed once, and was
+        # read back under the same user. Counting is the point: "asked once" is what
+        # separates a confirmed write from one the model talked its way into repeating.
+        "every_write_asked_once_and_executed_once": all(
+            row["approval_requested"] == 1 and row["approval_granted"] == 1
+            and row["mutations_completed"] == 1 and row["mutations_indeterminate"] == 0
+            for row in write_cases),
+        "every_write_was_read_back_under_the_same_user": all(
+            row["readback_verified"] for row in write_cases),
+        "every_write_changed_the_record_it_named": all(
+            row.get("effect_verified") is True for row in write_cases),
+        # The refusal must happen before the user is asked, not after: the application would
+        # have raised its own error, and by then a person has already approved something.
+        "the_refusal_never_reached_an_approval": all(
+            row["approval_requested"] == 0 and row["mutations_completed"] == 0
+            for row in refusal_cases),
         **fixture_checks,
     }
     citations: dict = {}
@@ -266,7 +451,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "tool_names": sorted(bound.business_tools.tool_names),
         "case_count": len(results),
         "case_checks": {row["case"]: row for row in results},
-        "fixture_baseline_digest": _digest(before),
+        "fixture_baseline_digest": _digest(read_only_before),
+        "fixture_restore": {key: value for key, value in restored.items()
+                            if key != "changed_tables"},
         "fixture_database_digest": baseline,
         "skill_citations": {key: value for key, value in citations.items()
                             if key != "reports"},

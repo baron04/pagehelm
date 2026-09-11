@@ -33,6 +33,31 @@ def _key_file(root: Path) -> Path:
     return path
 
 
+def _matches(row: dict, domain: list) -> bool:
+    """Enough of Odoo's domain language for the clauses the adapter actually declares.
+
+    The fake used to ignore the domain entirely, which meant every collection's scope --
+    the adapter's central promise -- was untested offline: `query_quotations` would happily
+    return confirmed orders. Only the four operators the adapter uses are supported, and an
+    unknown one is an assertion rather than a quiet pass.
+    """
+    for field, operator, value in domain:
+        actual = row.get(field)
+        if operator == "=":
+            matched = actual == value
+        elif operator == "in":
+            matched = actual in tuple(value)
+        elif operator == "not in":
+            matched = actual not in tuple(value)
+        elif operator == ">":
+            matched = isinstance(actual, (int, float)) and actual > value
+        else:
+            raise AssertionError(f"the fake does not implement {operator!r}")
+        if not matched:
+            return False
+    return True
+
+
 class _FakeOdoo(OdooBusinessToolExecutor):
     """Answers `call` from an in-memory table; records every call it was asked to make."""
 
@@ -53,21 +78,42 @@ class _FakeOdoo(OdooBusinessToolExecutor):
     def call(self, model, method, args, kwargs=None):
         self.calls.append((model, method, args, dict(kwargs or {})))
         rows = self.tables.get(model, [])
+        # `search*` takes a domain in args[0]; `read` takes a list of ids. Only the former
+        # is scoped, and a clause is always a triple.
+        domain = (args[0] if method.startswith("search") and args
+                  and isinstance(args[0], list) else [])
+        scoped = [row for row in rows if _matches(row, domain)]
         if method == "search_count":
-            return len(rows)
+            return len(scoped)
         if method == "search_read":
             offset = (kwargs or {}).get("offset", 0)
-            limit = (kwargs or {}).get("limit", len(rows))
-            return rows[offset:offset + limit]
+            limit = (kwargs or {}).get("limit", len(scoped))
+            page = scoped[offset:offset + limit]
+            return [self._fields(row, kwargs) for row in page]
         if method == "read":
             wanted = set(args[0])
-            return [row for row in rows if row["id"] in wanted]
+            return [self._fields(row, kwargs) for row in rows if row["id"] in wanted]
         if method == "create":
             record = {"id": 100 + len(self.created), **args[0]}
             self.created.append(record)
             rows.append(record)
             return record["id"]
         raise AssertionError(f"unexpected call {model}.{method}")
+
+    @staticmethod
+    def _fields(row: dict, kwargs: dict | None) -> dict:
+        """Project the requested fields, as Odoo does, defaulting an absent x2many to [].
+
+        Odoo always returns a requested field; the fake returning nothing for one made
+        `invoice_ids` look like a contract violation rather than an empty relation.
+        """
+        wanted = (kwargs or {}).get("fields")
+        if not wanted:
+            return dict(row)
+        projected = {"id": row["id"]}
+        for field in wanted:
+            projected[field] = row.get(field, [] if field.endswith("_ids") else False)
+        return projected
 
 
 def _orders(count):
@@ -76,9 +122,23 @@ def _orders(count):
              "invoice_status": "no"} for index in range(1, count + 1)]
 
 
+def _quotations(rows):
+    """`rows` is (reference, state); a quotation is a sale.order in draft or sent."""
+    return [{"id": index, "name": reference, "partner_id": [3, "Ready Mat"],
+             "state": state, "amount_total": 500.0 + index, "validity_date": "2026-12-31"}
+            for index, (reference, state) in enumerate(rows, start=2)]
+
+
+def _invoiceable_orders(rows):
+    """`rows` is (reference, invoice_status)."""
+    return [{"id": index, "name": reference, "partner_id": [3, "Acme"], "state": "sale",
+             "amount_total": 100.0 + index, "invoice_status": status}
+            for index, (reference, status) in enumerate(rows, start=1)]
+
+
 def _customers(rows):
     return [{"id": index, "name": name, "email": email, "city": "Paris",
-             "country_id": [1, "France"]}
+             "country_id": [1, "France"], "customer_rank": 1}
             for index, (name, email) in enumerate(rows, start=10)]
 
 
@@ -91,7 +151,8 @@ class AdapterContract(unittest.TestCase):
         self.assertEqual(bound.descriptor.application_id, APPLICATION_ID)
         self.assertEqual(bound.descriptor.navigation_mode, "spa")
         self.assertEqual(sorted(bound.business_tools.tool_names),
-                         ["query_customers", "query_products", "query_sale_orders"])
+                         ["query_customer_invoices", "query_customers", "query_products",
+                          "query_quotations", "query_sale_orders"])
         self.assertEqual(bound.business_tools.mutation_tool_names, frozenset())
 
     def test_a_mutation_adapter_satisfies_the_shared_contract(self):
@@ -100,8 +161,10 @@ class AdapterContract(unittest.TestCase):
                 base_url=BASE, api_key_path=_key_file(Path(tmp)),
                 allow_mutations=True, mutation_journal=MemoryMutationJournal())
             bound = assert_adapter_contract(self, adapter)
-        self.assertEqual(bound.business_tools.mutation_tool_names, {"create_customer"})
-        self.assertIn("customers:write", bound.ports.identity.required_scopes)
+        self.assertEqual(bound.business_tools.mutation_tool_names,
+                         {"create_customer", "confirm_quotation", "invoice_sale_order"})
+        for scope in ("customers:write", "sale_orders:write", "invoices:write"):
+            self.assertIn(scope, bound.ports.identity.required_scopes)
 
     def test_mutations_require_an_explicit_journal(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -241,6 +304,185 @@ class TheOneWrite(unittest.TestCase):
         with self.assertRaises(BusinessToolError):
             executor.prepare_mutation("create_customer",
                                       {"name": "X", "email": "x@example.test"})
+
+
+class TheOrderLifecycleWrites(unittest.TestCase):
+    """Confirming a quotation and invoicing an order: what is checked before, and after."""
+
+    class _Lifecycle(_FakeOdoo):
+        """Enough Odoo to drive both writes: `action_confirm`, and the invoicing wizard."""
+
+        def __init__(self, *, orders=(), quotations=(), invoice_status="to invoice",
+                     wizard_raises=None, confirm_returns=True, invoices_created=1):
+            super().__init__({"sale.order": list(orders) + list(quotations)},
+                             allow_mutations=True)
+            self.invoice_status = invoice_status
+            self.wizard_raises = wizard_raises
+            self.confirm_returns = confirm_returns
+            self.invoices_created = invoices_created
+            self.confirmed: list[int] = []
+            self.invoiced: list[int] = []
+            self._next_invoice = 50
+
+        def call(self, model, method, args, kwargs=None):
+            if model == "sale.order" and method == "action_confirm":
+                self.calls.append((model, method, args, dict(kwargs or {})))
+                for row in self.tables["sale.order"]:
+                    if row["id"] in args[0]:
+                        row["state"] = "sale"
+                        row["invoice_status"] = self.invoice_status
+                self.confirmed.extend(args[0])
+                return self.confirm_returns
+            if model == "sale.advance.payment.inv":
+                self.calls.append((model, method, args, dict(kwargs or {})))
+                if method == "create":
+                    return 1
+                if self.wizard_raises is not None:
+                    raise self.wizard_raises
+                order_id = (kwargs or {}).get("context", {}).get("active_id")
+                for row in self.tables["sale.order"]:
+                    if row["id"] == order_id:
+                        made = [self._next_invoice + step
+                                for step in range(self.invoices_created)]
+                        self._next_invoice += self.invoices_created
+                        row["invoice_ids"] = list(row.get("invoice_ids", [])) + made
+                        row["invoice_status"] = "invoiced"
+                        self.invoiced.extend(made)
+                        self.tables.setdefault("account.move", []).extend(
+                            {"id": invoice, "name": False, "state": "draft",
+                             "move_type": "out_invoice", "amount_total": 173.0,
+                             "partner_id": [3, "Acme"], "invoice_origin": "S00007"}
+                            for invoice in made)
+                return True
+            return super().call(model, method, args, kwargs)
+
+    # -- confirm ------------------------------------------------------------------------
+    def test_the_proposal_names_the_record_the_customer_and_the_amount(self):
+        executor = self._Lifecycle(quotations=_quotations([("S00002", "draft")]))
+        spec = executor.prepare_mutation("confirm_quotation", {"reference": "S00002"})
+        self.assertEqual(spec.args, {"reference": "S00002"})
+        self.assertEqual(spec.targets,
+                         ("报价单：S00002", "客户：Ready Mat", "金额：502.00"))
+        self.assertEqual(executor.confirmed, [], "a proposal writes nothing")
+
+    def test_a_reference_outside_the_open_quotations_is_refused_before_dispatch(self):
+        """An already-confirmed order is not a quotation, and must not be confirmed twice."""
+        executor = self._Lifecycle(orders=_invoiceable_orders([("S00007", "no")]))
+        with self.assertRaisesRegex(BusinessToolError, "no quotation with reference"):
+            executor.prepare_mutation("confirm_quotation", {"reference": "S00007"})
+        self.assertEqual(executor.confirmed, [])
+
+    def test_two_records_sharing_a_reference_are_refused_rather_than_guessed(self):
+        executor = self._Lifecycle(
+            quotations=_quotations([("S00002", "draft"), ("S00002", "sent")]))
+        with self.assertRaisesRegex(BusinessToolError, "share the reference"):
+            executor.prepare_mutation("confirm_quotation", {"reference": "S00002"})
+
+    def test_a_confirm_is_read_back_and_authorises_only_what_it_shows(self):
+        executor = self._Lifecycle(quotations=_quotations([("S00002", "draft")]))
+        result = executor.execute_mutation("confirm_quotation", {"reference": "S00002"})
+        self.assertEqual(executor.confirmed, [2])
+        self.assertTrue(result.content["readback_verified"])
+        self.assertEqual(result.content["sale_order"]["state"], "sale")
+        self.assertEqual(result.allowed_routes, ("/odoo/orders/2", "/odoo/orders"))
+        for route in result.allowed_routes:
+            self.assertIn(route, json.dumps(result.content),
+                          "a route the model may open has to be one it can see")
+
+    def test_an_acknowledged_confirm_that_does_not_read_back_is_indeterminate(self):
+        """`action_confirm` returned True and the record is not confirmed: nobody may retry."""
+        executor = self._Lifecycle(quotations=_quotations([("S00002", "draft")]))
+        executor.invoice_status = "no"
+        original = executor.call
+
+        def confirm_without_effect(model, method, args, kwargs=None):
+            if model == "sale.order" and method == "action_confirm":
+                executor.confirmed.extend(args[0])
+                return True
+            return original(model, method, args, kwargs)
+
+        executor.call = confirm_without_effect
+        with self.assertRaises(BusinessMutationIndeterminate) as raised:
+            executor.execute_mutation("confirm_quotation", {"reference": "S00002"})
+        self.assertEqual(raised.exception.phase, "readback")
+
+    # -- invoice ------------------------------------------------------------------------
+    def test_an_order_with_nothing_to_invoice_is_refused_before_the_user_is_asked(self):
+        """The wizard raises a UserError on this; by then a person has already approved."""
+        executor = self._Lifecycle(orders=_invoiceable_orders([("S00007", "no")]))
+        with self.assertRaisesRegex(BusinessToolError, "invoice status no"):
+            executor.prepare_mutation("invoice_sale_order", {"reference": "S00007"})
+        self.assertEqual(executor.invoiced, [])
+
+    def test_the_invoice_is_always_the_ordinary_one_never_a_down_payment(self):
+        """Odoo's form has two buttons labelled Create Invoice; one is a down payment."""
+        executor = self._Lifecycle(
+            orders=_invoiceable_orders([("S00007", "to invoice")]))
+        result = executor.execute_mutation("invoice_sale_order", {"reference": "S00007"})
+        wizard = [call for call in executor.calls
+                  if call[0] == "sale.advance.payment.inv" and call[1] == "create"]
+        self.assertEqual(len(wizard), 1)
+        self.assertEqual(wizard[0][2][0], {"advance_payment_method": "delivered"})
+        self.assertEqual(result.audit["advance_payment_method"], "delivered")
+        self.assertIn("not a down payment", result.content["invoice_method"])
+
+    def test_the_created_invoice_is_read_back_and_reported_as_an_unnumbered_draft(self):
+        executor = self._Lifecycle(
+            orders=_invoiceable_orders([("S00007", "to invoice")]))
+        result = executor.execute_mutation("invoice_sale_order", {"reference": "S00007"})
+        invoice = result.content["invoice"]
+        self.assertTrue(result.content["readback_verified"])
+        self.assertEqual(invoice["state"], "draft")
+        self.assertEqual(invoice["move_type"], "out_invoice")
+        self.assertEqual(invoice["reference"], "(draft, not yet numbered)",
+                         "Odoo numbers an invoice on posting; False is not a reference")
+        self.assertEqual(result.allowed_routes,
+                         ("/odoo/customer-invoices/50", "/odoo/customer-invoices"))
+
+    def test_a_wizard_that_does_not_report_is_indeterminate_and_never_retried(self):
+        executor = self._Lifecycle(
+            orders=_invoiceable_orders([("S00007", "to invoice")]),
+            wizard_raises=BusinessToolError("Odoo refused the call (unknown)"))
+        with self.assertRaises(BusinessMutationIndeterminate) as raised:
+            executor.execute_mutation("invoice_sale_order", {"reference": "S00007"})
+        self.assertEqual(raised.exception.phase, "dispatch")
+
+    def test_more_than_one_new_invoice_is_indeterminate_not_a_success(self):
+        """One approval buys one invoice. Two is a surprise, and surprises are not settled."""
+        executor = self._Lifecycle(
+            orders=_invoiceable_orders([("S00007", "to invoice")]), invoices_created=2)
+        with self.assertRaises(BusinessMutationIndeterminate) as raised:
+            executor.execute_mutation("invoice_sale_order", {"reference": "S00007"})
+        self.assertIn("2 new invoices", str(raised.exception))
+
+    def test_a_read_only_adapter_has_neither_order_write(self):
+        executor = _FakeOdoo({"sale.order": _orders(1)})
+        for tool in ("confirm_quotation", "invoice_sale_order"):
+            with self.subTest(tool=tool):
+                with self.assertRaises(BusinessToolError):
+                    executor.prepare_mutation(tool, {"reference": "S00001"})
+
+
+class WhatAPageCannotSay(unittest.TestCase):
+    """The scope facts that exist only in a descriptor, carried in the typed result.
+
+    Odoo's Quotations action stores no domain: its page lists every sales order and only
+    defaults its search filter. A tool whose scope is narrower has to say so, or the model
+    opens that page believing it shows the answer it just gave.
+    """
+
+    def test_a_collection_whose_page_shows_more_says_so_in_its_result(self):
+        executor = _FakeOdoo({"sale.order": _quotations([("S00002", "draft")])})
+        result = executor.execute("query_quotations", {})
+        self.assertFalse(result.content["collection_ui_path_shows_this_scope"])
+        self.assertIn("stores no domain", result.content["collection_ui_path_note"])
+        self.assertFalse(result.audit["collection_ui_path_shows_this_scope"])
+
+    def test_a_collection_whose_page_matches_says_that_too(self):
+        executor = _FakeOdoo({"sale.order": _orders(2)})
+        result = executor.execute("query_sale_orders", {})
+        self.assertTrue(result.content["collection_ui_path_shows_this_scope"])
+        self.assertNotIn("collection_ui_path_note", result.content)
 
 
 class Identity(unittest.TestCase):

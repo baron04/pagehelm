@@ -38,6 +38,7 @@ from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.identity import PrincipalContext
 from web_operation_agent.live import LiveConversationRunner, LiveProductSession
 from web_operation_agent.model import ChatModel, ProviderError, SpendMeter, load_env
+from web_operation_agent.mutation import SQLiteMutationJournal
 from web_operation_agent.product import (AgentTurnConfig, AgentTurnExecution,
                                          AgentTurnExecutor)
 
@@ -83,6 +84,11 @@ class ScriptedOdooChat:
             name, arguments = "finish", {"done": False, "why": "Script exhausted."}
         else:
             name, arguments = self.replies[self.calls - 1]
+        if name is None:
+            # A plain answer with no tool call. This is how a tool-calling assistant ends a
+            # typed read, and the product projects the structured result over it; a script
+            # that could only call tools could not reach that path at all.
+            return {"content": str(arguments)}
         return {"tool_calls": [{
             "id": f"scripted-call-{self.calls}",
             "function": {"name": name, "arguments": json.dumps(arguments)},
@@ -129,6 +135,15 @@ class OdooDemoConfig:
     scripted_replies: tuple[tuple[str, dict], ...] = _SCRIPTED_REPLIES
     keep_open_seconds: float = 3.0
     turn_timeout_s: float = 120.0
+    #: Enable the adapter's writes. A journal path is required with it -- a mutation with
+    #: nowhere to record itself is the one composition this project refuses outright.
+    allow_mutations: bool = False
+    mutation_journal_path: Path | None = None
+    #: Approve the write by clicking the panel's own approve button, in the page, as a user
+    #: would. Approving anywhere else would test a path the product does not have: the
+    #: decision must come from the page session that holds the lease (see SECURITY.md).
+    #: Only ever with `scripted`, so the thing being approved is a fixed proposal.
+    approve_in_page: bool = False
 
     def __post_init__(self) -> None:
         for name in ("api_key_path", "storage_state_path", "output_dir"):
@@ -139,6 +154,14 @@ class OdooDemoConfig:
                 raise ValueError("a source root must be bound to an exact release")
         if self.model_env is not None:
             object.__setattr__(self, "model_env", Path(self.model_env).expanduser())
+        if self.mutation_journal_path is not None:
+            object.__setattr__(self, "mutation_journal_path",
+                               Path(self.mutation_journal_path).expanduser())
+        if self.allow_mutations and self.mutation_journal_path is None:
+            raise ValueError("mutations require a durable journal path")
+        if self.approve_in_page and not (self.allow_mutations and self.scripted):
+            raise ValueError(
+                "in-page approval only applies to a scripted mutation walkthrough")
         if self.scripted and self.tasks:
             raise ValueError("scripted mode runs one fixed walkthrough and takes no --task")
         if self.headless and not (self.tasks or self.scripted):
@@ -184,6 +207,48 @@ def _source_candidate_counts(ledger_path: Path) -> list[int]:
     return counts
 
 
+#: The audit events a gate reads back to say what a turn actually did with the application.
+#: Read from the ledger rather than from the model's prose: a turn that *said* it created an
+#: invoice and one that did are indistinguishable in an answer string.
+_AUDIT_PROJECTIONS = ("business_tool_result", "business_mutation_proposed",
+                      "business_mutation_result", "business_mutation_rejected",
+                      "business_mutation_denied", "business_mutation_indeterminate",
+                      "business_tool_rejected")
+
+
+def _audit_projection(ledger_path: Path) -> list[dict]:
+    """What each typed tool call did, in order, with its own completeness signals."""
+    if not ledger_path.exists():
+        return []
+    rows = []
+    for line in ledger_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if row.get("event") not in _AUDIT_PROJECTIONS:
+            continue
+        audit = row.get("audit") if isinstance(row.get("audit"), dict) else {}
+        rows.append({key: value for key, value in {
+            "event": row.get("event"),
+            "tool": row.get("tool") or audit.get("operation", ""),
+            "operation": audit.get("operation", ""),
+            "matched_count": audit.get("matched_count"),
+            "source_total": audit.get("source_total"),
+            "records_scanned": audit.get("records_scanned"),
+            "source_complete": audit.get("source_complete"),
+            "collection_ui_path_shows_this_scope": audit.get(
+                "collection_ui_path_shows_this_scope"),
+            "readback_verified": audit.get("readback_verified"),
+            "records_created": audit.get("records_created"),
+            "records_written": audit.get("records_written"),
+            "reason": str(row.get("reason") or "")[:300],
+        }.items() if value is not None and value != ""})
+    return rows
+
+
 def _outcome_json(outcome) -> dict:
     if outcome.error:
         return {"turn": outcome.turn, "task": outcome.task, "error": outcome.error}
@@ -198,7 +263,37 @@ def _outcome_json(outcome) -> dict:
         "answer": execution.user_answer,
         "steps": execution.agent.steps_used,
         "page_actions": execution.agent.page_actions,
+        "business_control": dict(execution.agent.business_control),
+        "write_refusals": execution.agent.write_refusals,
+        "success_claim": execution.agent.success_claim,
     }
+
+
+#: The panel's own approve control, inside the assistant's shadow root. Reached exactly as
+#: a user reaches it: there is no other way to approve, because the decision has to come
+#: from the page session that holds the lease.
+_APPROVE_IN_PANEL = """() => {
+  const card = document.querySelector('#woa-assistant')?.shadowRoot
+      ?.querySelector('.approval menu button:not(.deny)')
+  if (!card) return false
+  card.click()
+  return true
+}"""
+
+
+def _approve_in_page(page, timeout_s: float) -> None:
+    """Wait for the panel to ask, then click approve, as the person at the keyboard would.
+
+    A scripted run still has to go through the real approval: the write path refuses a
+    decision that did not come from the page session holding the lease, so approving any
+    other way would qualify an apparatus the product does not ship.
+    """
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if page.evaluate(_APPROVE_IN_PANEL):
+            return
+        page.wait_for_timeout(200)
+    raise RuntimeError("the approval card never appeared in the panel")
 
 
 def _assert_session_unchanged(adapter: OdooApplicationAdapter, context,
@@ -246,6 +341,8 @@ def _run_browser(config: OdooDemoConfig, live: LiveProductSession,
                         page.evaluate(
                             "task => window.__WOA_RUNTIME_READY__.then(runtime => "
                             "runtime.submitTask(task))", task)
+                        if config.approve_in_page:
+                            _approve_in_page(page, config.turn_timeout_s)
                         record = _outcome_json(
                             conversation.next_outcome(timeout_s=config.turn_timeout_s))
                         records.append(record)
@@ -287,9 +384,12 @@ def run_demo(config: OdooDemoConfig) -> dict:
     run_dir = config.output_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
 
+    journal = (SQLiteMutationJournal(config.mutation_journal_path)
+               if config.allow_mutations else None)
     adapter = OdooApplicationAdapter(
         base_url=config.base_url, api_key_path=config.api_key_path,
-        page_controller_module=config.page_controller_module)
+        page_controller_module=config.page_controller_module,
+        allow_mutations=config.allow_mutations, mutation_journal=journal)
     bound = bind_application(adapter)
     health = adapter.health()
     if not health["passed"]:
@@ -312,7 +412,11 @@ def run_demo(config: OdooDemoConfig) -> dict:
             config=AgentTurnConfig(
                 supported_scope=(
                     "Read current Odoo records through the typed API and open only an exact "
-                    "route returned by that API. Do not modify records or submit forms."),
+                    "route returned by that API. Do not modify records or submit forms."
+                    if not config.allow_mutations else
+                    "Read current Odoo records through the typed API, and make at most the "
+                    "one record change the user confirms, through a typed write tool. Do "
+                    "not submit page forms. Open only an exact route returned by the API."),
                 ledger_path=run_dir / "audit.jsonl",
                 step_budget=10,
                 wall_budget_s=max(1, int(config.turn_timeout_s)),
@@ -323,6 +427,8 @@ def run_demo(config: OdooDemoConfig) -> dict:
                 policy_block_limit=3,
                 plain_business_answer_min_page_actions=0,
                 require_identity=True,
+                allow_business_mutations=config.allow_mutations,
+                deployment_profile="production",
                 source_affordance_mode=capability.source_affordance_mode,
                 max_user_answer_chars=8_000,
             ),
@@ -369,6 +475,7 @@ def run_demo(config: OdooDemoConfig) -> dict:
         # is the failure this number exists to catch: it is what the product path did for as
         # long as the entry observation was assigned without deriving its scopes.
         "source_candidates_delivered": candidates,
+        "audit_projection": _audit_projection(run_dir / "audit.jsonl"),
         "turns": records,
         "last_url": last_url,
         "last_page_text": last_text,

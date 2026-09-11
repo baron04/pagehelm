@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "skill_id": "odoo.sales.quotations-query",
+  "title": "Query open Odoo quotations",
+  "intent": "Read the quotations that are still open -- draft or sent, not yet confirmed.",
+  "triggers": [
+    "quotation",
+    "quotations",
+    "quote",
+    "quotes",
+    "draft order",
+    "报价",
+    "报价单",
+    "草稿订单"
+  ],
+  "instructions": [
+    "Call query_quotations to obtain current Odoo data; do not answer from this Skill or from page text.",
+    "The tool reads open quotations only: sale.order in state draft or sent. A confirmed or cancelled order is not in scope; use query_sale_orders for confirmed ones.",
+    "Use name_contains only when the user supplied a reference filter.",
+    "The Quotations page at /odoo/sales is not this tool's scope. Its action stores no domain: it lists every sales order and merely defaults the search filter to the signed-in user's quotations, which anyone can clear. The ToolResult says so in collection_ui_path_shows_this_scope; if you open that page, tell the user the page shows more than the answer did.",
+    "When the user asks to open one quotation, call query_quotations with its reference, require exactly one match, then call goto with that result's exact ui_path.",
+    "Odoo renders its back office as a single-page application, so after goto call wait_for once when the requested record is not visible yet.",
+    "If the query has zero or multiple matches, ask for clarification; never invent a record path.",
+    "Treat the ToolResult as runtime truth. After the query, respond briefly; the server projects the exact records, source and completeness into the user answer."
+  ],
+  "tool_names": [
+    "query_quotations"
+  ],
+  "provenance": [
+    "src:odoo@18.0:addons/sale/views/sale_order_views.xml#sale.action_quotations_with_onboarding",
+    "src:odoo@18.0:addons/sale/views/sale_menus.xml#sale.action_quotations_with_onboarding",
+    "src:odoo@18.0:addons/sale/models/sale_order.py#sale.order",
+    "api:odoo@18.0:/jsonrpc#object.execute_kw"
+  ],
+  "read_only": true
+}

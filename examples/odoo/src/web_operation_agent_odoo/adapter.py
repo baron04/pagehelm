@@ -63,8 +63,14 @@ _MAX_PAGES = 25
 _EMAIL = re.compile(r"[^@\s,;<>]{1,64}@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
                     r"[a-z]{2,24}\Z", re.I)
 _SESSION_COOKIE = "session_id"
-_SKILLS = ("sale-orders-query.json", "customers-query.json", "products-query.json",
-           "customers-create.json")
+#: The read Skills a deployment always gets, and the write Skills it gets only when
+#: mutations are explicitly enabled. Split by effect rather than listed and sliced by index:
+#: the previous `_SKILLS[:3]` / `_SKILLS[3]` silently made the fourth entry the only write
+#: Skill, which is a fact no reader could see and a fifth entry would have broken.
+_READ_SKILLS = ("sale-orders-query.json", "customers-query.json", "products-query.json",
+                "quotations-query.json", "customer-invoices-query.json")
+_WRITE_SKILLS = ("customers-create.json", "sale-orders-confirm.json",
+                 "sale-orders-invoice.json")
 
 
 def _validated_origin(value: str) -> str:
@@ -101,14 +107,23 @@ class _Collection:
     result set and the route it hands back describe the same records -- the Odoo action at
     ``action_xml_id`` applies the same restriction, whether as a stored domain or as the
     search filter its context switches on by default.
+
+    ``route_scope_note`` is what happens when that promise cannot be kept. Odoo's Quotations
+    action stores *no* domain at all: its page looks filtered only because its context sets
+    ``search_default_my_quotation``, a default the user can clear. So the page and the tool
+    genuinely describe different sets, and the honest move is to say which -- in the typed
+    result, where the model and the product shell both see it, rather than in Skill prose
+    that the next person will not know to keep true. A page agent cannot know this: the
+    fact exists only in the action descriptor.
     """
 
     __slots__ = ("tool", "model", "domain", "fields", "scope", "action_xml_id",
-                 "route", "answer_fields", "data_class")
+                 "route", "answer_fields", "data_class", "route_scope_note")
 
     def __init__(self, *, tool: str, model: str, domain: list, fields: tuple[str, ...],
                  scope: str, action_xml_id: str, route: str,
-                 answer_fields: tuple[str, ...], data_class: str):
+                 answer_fields: tuple[str, ...], data_class: str,
+                 route_scope_note: str = ""):
         self.tool = tool
         self.model = model
         self.domain = domain
@@ -118,6 +133,8 @@ class _Collection:
         self.route = route
         self.answer_fields = answer_fields
         self.data_class = data_class
+        #: Empty when the page at ``route`` shows exactly this tool's scope.
+        self.route_scope_note = route_scope_note
 
 
 COLLECTIONS: tuple[_Collection, ...] = (
@@ -147,10 +164,52 @@ COLLECTIONS: tuple[_Collection, ...] = (
         action_xml_id="sale.product_template_action", route="/odoo/products",
         answer_fields=("name", "code", "price"),
         data_class="business.product"),
+    _Collection(
+        tool="query_quotations", model="sale.order",
+        # The complement of `query_sale_orders`: what the Orders page excludes.
+        domain=[("state", "in", ("draft", "sent"))],
+        fields=("name", "partner_id", "state", "amount_total", "validity_date"),
+        scope="open quotations, neither confirmed nor cancelled",
+        action_xml_id="sale.action_quotations_with_onboarding", route="/odoo/sales",
+        answer_fields=("reference", "customer", "state", "total"),
+        data_class="business.sales_order",
+        route_scope_note=(
+            "sale.action_quotations_with_onboarding stores no domain: the Quotations page "
+            "lists every sales order and only defaults its search to "
+            "search_default_my_quotation, which the user can clear. This tool's scope is "
+            "narrower than that page's."),),
+    _Collection(
+        tool="query_customer_invoices", model="account.move",
+        # `account.action_move_out_invoice` stores move_type in (out_invoice, out_refund);
+        # this tool takes the invoice half, which is what a sales workflow asks about.
+        domain=[("move_type", "=", "out_invoice")],
+        fields=("name", "partner_id", "state", "amount_total", "invoice_origin"),
+        scope="customer invoices visible to the delegated user",
+        action_xml_id="account.action_move_out_invoice",
+        route="/odoo/customer-invoices",
+        answer_fields=("reference", "customer", "state", "total"),
+        data_class="business.invoice",
+        route_scope_note=(
+            "account.action_move_out_invoice also lists credit notes (out_refund); this "
+            "tool reads invoices only."),),
 )
 _BY_TOOL = {collection.tool: collection for collection in COLLECTIONS}
 CREATE_CUSTOMER_TOOL = "create_customer"
+CONFIRM_QUOTATION_TOOL = "confirm_quotation"
+INVOICE_SALE_ORDER_TOOL = "invoice_sale_order"
+MUTATION_TOOLS = (CREATE_CUSTOMER_TOOL, CONFIRM_QUOTATION_TOOL, INVOICE_SALE_ORDER_TOOL)
 _CUSTOMERS = _BY_TOOL["query_customers"]
+_QUOTATIONS = _BY_TOOL["query_quotations"]
+_ORDERS = _BY_TOOL["query_sale_orders"]
+_INVOICES = _BY_TOOL["query_customer_invoices"]
+
+#: `sale.advance.payment.inv.advance_payment_method` offers three values, and only one of
+#: them is an ordinary invoice. This is the fact the roadmap singled out: the confirmed
+#: sales order form carries two buttons both labelled "Create Invoice", separated only by
+#: their `invisible` conditions, and the second silently proposes a percentage down
+#: payment. The DOM renders one button with one label; the descriptor says which is which,
+#: so the tool pins the value rather than letting a default decide.
+REGULAR_INVOICE = "delivered"
 
 
 def _query_schema(collection: _Collection, description: str) -> dict:
@@ -179,7 +238,7 @@ def _query_schema(collection: _Collection, description: str) -> dict:
 
 QUERY_SCHEMAS = {
     "query_sale_orders": _query_schema(
-        _BY_TOOL["query_sale_orders"],
+        _ORDERS,
         "Read confirmed Odoo sales orders visible to the currently delegated user."),
     "query_customers": _query_schema(
         _CUSTOMERS,
@@ -187,6 +246,13 @@ QUERY_SCHEMAS = {
     "query_products": _query_schema(
         _BY_TOOL["query_products"],
         "Read saleable Odoo products visible to the currently delegated user."),
+    "query_quotations": _query_schema(
+        _QUOTATIONS,
+        "Read open Odoo quotations -- draft and sent sales orders -- visible to the "
+        "currently delegated user."),
+    "query_customer_invoices": _query_schema(
+        _INVOICES,
+        "Read Odoo customer invoices visible to the currently delegated user."),
 }
 
 CREATE_CUSTOMER_SCHEMA = {
@@ -211,6 +277,42 @@ CREATE_CUSTOMER_SCHEMA = {
         },
     },
 }
+
+
+def _reference_schema(tool: str, description: str, subject: str) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": tool,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reference": {
+                        "type": "string", "minLength": 1, "maxLength": 64,
+                        "description": subject,
+                    },
+                },
+                "required": ["reference"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+CONFIRM_QUOTATION_SCHEMA = _reference_schema(
+    CONFIRM_QUOTATION_TOOL,
+    "Propose confirming exactly one open Odoo quotation for explicit user confirmation. "
+    "The server re-checks that the quotation is still open immediately before writing and "
+    "reads the confirmed order back under the same user.",
+    "Exact quotation reference, such as S00012.")
+
+INVOICE_SALE_ORDER_SCHEMA = _reference_schema(
+    INVOICE_SALE_ORDER_TOOL,
+    "Propose creating one ordinary customer invoice for a confirmed Odoo sales order, for "
+    "explicit user confirmation. Refused unless the order still has something to invoice. "
+    "Never a down payment: the regular-invoice method is pinned.",
+    "Exact sales order reference, such as S00007.")
 
 
 # ---------------------------------------------------------------------------- credentials
@@ -386,12 +488,14 @@ class OdooBusinessToolExecutor:
     # -- tool catalog -------------------------------------------------------------------
     def tool_schemas(self) -> tuple[dict, ...]:
         reads = tuple(QUERY_SCHEMAS[collection.tool] for collection in COLLECTIONS)
-        return reads + ((CREATE_CUSTOMER_SCHEMA,) if self.allow_mutations else ())
+        writes = (CREATE_CUSTOMER_SCHEMA, CONFIRM_QUOTATION_SCHEMA,
+                  INVOICE_SALE_ORDER_SCHEMA)
+        return reads + (writes if self.allow_mutations else ())
 
     def tool_effects(self) -> dict[str, str]:
         effects = {collection.tool: "read" for collection in COLLECTIONS}
         if self.allow_mutations:
-            effects[CREATE_CUSTOMER_TOOL] = "write"
+            effects.update({tool: "write" for tool in MUTATION_TOOLS})
         return effects
 
     # -- transport ----------------------------------------------------------------------
@@ -542,6 +646,21 @@ class OdooBusinessToolExecutor:
                     "state": self._label(row, "state"),
                     "total": self._label(row, "amount_total"),
                     "invoice_status": self._label(row, "invoice_status")}
+        elif collection.tool == "query_quotations":
+            item = {"reference": self._label(row, "name"),
+                    "customer": self._label(row, "partner_id"),
+                    "state": self._label(row, "state"),
+                    "total": self._label(row, "amount_total"),
+                    "valid_until": self._label(row, "validity_date")}
+        elif collection.tool == "query_customer_invoices":
+            # A draft `account.move` has no number; Odoo stores `False` there, and a row
+            # that rendered it as "False" would be a fact the model could act on wrongly.
+            item = {"reference": (self._label(row, "name")
+                                  or "(draft, not yet numbered)"),
+                    "customer": self._label(row, "partner_id"),
+                    "state": self._label(row, "state"),
+                    "total": self._label(row, "amount_total"),
+                    "sale_order": self._label(row, "invoice_origin")}
         elif collection.tool == "query_customers":
             item = {"name": self._label(row, "name"), "email": self._label(row, "email"),
                     "city": self._label(row, "city"),
@@ -557,7 +676,7 @@ class OdooBusinessToolExecutor:
 
     @staticmethod
     def _match_field(collection: _Collection) -> str:
-        return "reference" if collection.tool == "query_sale_orders" else "name"
+        return "name" if "reference" not in collection.answer_fields else "reference"
 
     def execute(self, name: str, args: dict, *,
                 context: OperationContext | None = None) -> BusinessToolResult:
@@ -590,6 +709,12 @@ class OdooBusinessToolExecutor:
             content={
                 collection.tool.removeprefix("query_"): visible,
                 "collection_ui_path": collection.route,
+                # Whether that page shows this exact set. Only two of the five collections
+                # can promise it, and the ones that cannot say so here rather than leaving
+                # the model to assume the page and the answer agree.
+                "collection_ui_path_shows_this_scope": not collection.route_scope_note,
+                **({"collection_ui_path_note": collection.route_scope_note}
+                   if collection.route_scope_note else {}),
                 "matched_count": matched,
                 "source_total": total,
                 "scope": collection.scope,
@@ -604,6 +729,7 @@ class OdooBusinessToolExecutor:
                 "returned_count": len(visible),
                 "source_total": total,
                 "scope": collection.scope,
+                "collection_ui_path_shows_this_scope": not collection.route_scope_note,
                 "observed_at": observed_at,
                 **completeness,
                 **self._identity_audit(context),
@@ -651,10 +777,77 @@ class OdooBusinessToolExecutor:
                 raise BusinessToolError(
                     "a customer with the same name or email already exists")
 
+    # -- the two order-lifecycle writes -------------------------------------------------
+    @staticmethod
+    def _reference(name: str, args: dict) -> str:
+        if not isinstance(args, dict) or set(args) != {"reference"}:
+            raise BusinessToolError(f"{name} requires only a reference")
+        return normalize_business_text(args.get("reference"), field="reference", maximum=64)
+
+    def _one_order(self, reference: str, collection: _Collection, what: str) -> dict:
+        """Exactly one record in the tool's own scope, over a scan it knows finished.
+
+        Not `search` with a name filter: a reference that matches two records, or a scan
+        that stopped early, must be an explicit refusal rather than a quiet "first match".
+        A write aimed at the wrong order is the failure this whole project is about.
+        """
+        rows, total, scan = self._scan(collection)
+        if not scan["complete"] or len(rows) != total:
+            raise BusinessToolError(f"the Odoo {what} scan was incomplete")
+        key = business_text_key(reference)
+        matches = [row for row in rows
+                   if business_text_key(self._label(row, "name")) == key]
+        if not matches:
+            raise BusinessToolError(
+                f"no {what} with reference {reference} is open to this user")
+        if len(matches) > 1:
+            raise BusinessToolError(
+                f"{len(matches)} records share the reference {reference}")
+        return matches[0]
+
+    def _invoiceable(self, reference: str) -> dict:
+        """A confirmed order the wizard would accept, or a refusal that says why not.
+
+        `sale.advance.payment.inv` raises `UserError` on an order with nothing to invoice;
+        `sale.order.invoice_status` is a stored computed field that says so beforehand.
+        Refusing here rather than letting Odoo raise is the difference between a proposal
+        the user can act on and an error after they approved one.
+        """
+        order = self._one_order(reference, _ORDERS, "sales order")
+        status = self._label(order, "invoice_status")
+        if status != "to invoice":
+            raise BusinessToolError(
+                f"sales order {reference} has invoice status {status or 'unknown'}; only "
+                "an order with something still to invoice can be invoiced")
+        return order
+
     def prepare_mutation(self, name: str, args: dict, *,
                          context: OperationContext | None = None) -> BusinessMutationSpec:
-        if not self.allow_mutations or name != CREATE_CUSTOMER_TOOL:
+        if not self.allow_mutations or name not in MUTATION_TOOLS:
             raise BusinessToolError("unknown Odoo business mutation")
+        if name == CONFIRM_QUOTATION_TOOL:
+            reference = self._reference(name, args)
+            quotation = self._one_order(reference, _QUOTATIONS, "quotation")
+            return BusinessMutationSpec(
+                args={"reference": reference},
+                reconcile_key=reference.casefold(),
+                effect="在 Odoo 中确认 1 张报价单",
+                targets=(f"报价单：{reference}",
+                         f"客户：{self._label(quotation, 'partner_id')}",
+                         f"金额：{self._label(quotation, 'amount_total')}"),
+            )
+        if name == INVOICE_SALE_ORDER_TOOL:
+            reference = self._reference(name, args)
+            order = self._invoiceable(reference)
+            return BusinessMutationSpec(
+                args={"reference": reference},
+                reconcile_key=reference.casefold(),
+                effect="在 Odoo 中为 1 张销售订单开具 1 张普通客户发票",
+                targets=(f"销售订单：{reference}",
+                         f"客户：{self._label(order, 'partner_id')}",
+                         f"金额：{self._label(order, 'amount_total')}",
+                         "开票方式：普通发票（非预付款）"),
+            )
         normalized = self._normalize_customer(args)
         self._assert_no_duplicate(normalized["name"], normalized["email"])
         return BusinessMutationSpec(
@@ -664,10 +857,165 @@ class OdooBusinessToolExecutor:
             targets=(f"客户：{normalized['name']}", f"邮箱：{normalized['email']}"),
         )
 
+    def _confirm_quotation(self, reference: str,
+                           context: OperationContext | None) -> BusinessToolResult:
+        # Re-checked under the delegated actor immediately before dispatch. This closes the
+        # ordinary time-of-check gap without ever retrying the confirm itself.
+        quotation = self._one_order(reference, _QUOTATIONS, "quotation")
+        record_id = quotation.get("id")
+        if isinstance(record_id, bool) or not isinstance(record_id, int) or record_id <= 0:
+            raise BusinessToolContractError("Odoo returned an invalid quotation id")
+        acknowledged = self.call("sale.order", "action_confirm", [[record_id]])
+        if acknowledged is not True:
+            raise BusinessMutationIndeterminate(
+                "Odoo did not acknowledge the confirmation",
+                phase="acknowledgement", record_id=str(record_id))
+        try:
+            rows = self.call("sale.order", "read", [[record_id]],
+                             {"fields": ["name", "state", "partner_id", "amount_total",
+                                         "invoice_status"]})
+        except BusinessToolError as exc:
+            raise BusinessMutationIndeterminate(
+                "the Odoo quotation was confirmed but same-user readback failed",
+                phase="readback", record_id=str(record_id)) from exc
+        if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
+            raise BusinessMutationIndeterminate(
+                "the Odoo quotation was confirmed but same-user readback was malformed",
+                phase="readback", record_id=str(record_id))
+        state = self._label(rows[0], "state")
+        if self._label(rows[0], "name") != reference or state != "sale":
+            # `action_confirm` returned True and the record is not confirmed. That is not a
+            # failure the run may retry: the write may have landed and been undone, or the
+            # read may be stale, and only an operator can tell which.
+            raise BusinessMutationIndeterminate(
+                f"the Odoo quotation acknowledged confirmation but reads back as {state!r}",
+                phase="readback", record_id=str(record_id))
+        ui_path = f"{_ORDERS.route}/{record_id}"
+        observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        return BusinessToolResult(
+            content={
+                "confirmed": True, "readback_verified": True,
+                # Both authorised routes appear here: the core refuses a result that hands
+                # back a route the model cannot see, and it is right to.
+                "collection_ui_path": _ORDERS.route,
+                "sale_order": {"id": record_id, "reference": reference, "state": state,
+                               "customer": self._label(rows[0], "partner_id"),
+                               "total": self._label(rows[0], "amount_total"),
+                               "invoice_status": self._label(rows[0], "invoice_status"),
+                               "ui_path": ui_path},
+                "scope": _ORDERS.scope, "observed_at": observed_at,
+            },
+            audit={
+                "application": APPLICATION_ID, "operation": CONFIRM_QUOTATION_TOOL,
+                "model": "sale.order", "records_written": 1, "readback_verified": True,
+                "scope": _ORDERS.scope, "observed_at": observed_at,
+                **self._identity_audit(context),
+            },
+            allowed_routes=(ui_path, _ORDERS.route),
+        )
+
+    def _invoice_sale_order(self, reference: str,
+                            context: OperationContext | None) -> BusinessToolResult:
+        order = self._invoiceable(reference)
+        record_id = order.get("id")
+        if isinstance(record_id, bool) or not isinstance(record_id, int) or record_id <= 0:
+            raise BusinessToolContractError("Odoo returned an invalid sales order id")
+        before = self._invoice_ids(record_id)
+        # Odoo's invoice step is a wizard record plus one call on it, both carrying the
+        # order in their context. `REGULAR_INVOICE` is pinned rather than defaulted: the
+        # other two values of this field create down payments.
+        wizard_context = {"active_model": "sale.order", "active_ids": [record_id],
+                          "active_id": record_id}
+        wizard_id = self.call("sale.advance.payment.inv", "create",
+                              [{"advance_payment_method": REGULAR_INVOICE}],
+                              {"context": wizard_context})
+        if isinstance(wizard_id, list) and wizard_id:
+            wizard_id = wizard_id[0]
+        if isinstance(wizard_id, bool) or not isinstance(wizard_id, int) or wizard_id <= 0:
+            # Nothing has been written to the order yet: the wizard record is scratch state.
+            raise BusinessToolContractError("Odoo returned an invalid invoicing wizard id")
+        try:
+            self.call("sale.advance.payment.inv", "create_invoices", [[wizard_id]],
+                      {"context": wizard_context})
+        except BusinessToolError as exc:
+            # The wizard may have created the invoice before failing, so this is uncertain
+            # rather than failed, and it is never retried.
+            raise BusinessMutationIndeterminate(
+                "the Odoo invoicing wizard did not report an outcome",
+                phase="dispatch", record_id=str(record_id)) from exc
+        try:
+            created = [invoice for invoice in self._invoice_ids(record_id)
+                       if invoice not in before]
+        except BusinessToolError as exc:
+            raise BusinessMutationIndeterminate(
+                "the Odoo invoice was requested but same-user readback failed",
+                phase="readback", record_id=str(record_id)) from exc
+        if len(created) != 1:
+            raise BusinessMutationIndeterminate(
+                f"the Odoo invoicing wizard left {len(created)} new invoices on the order",
+                phase="readback", record_id=str(record_id))
+        invoice_id = created[0]
+        rows = self.call("account.move", "read", [[invoice_id]],
+                         {"fields": ["name", "state", "move_type", "amount_total",
+                                     "partner_id", "invoice_origin"]})
+        if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
+            raise BusinessMutationIndeterminate(
+                "the Odoo invoice was created but same-user readback was malformed",
+                phase="readback", record_id=str(invoice_id))
+        move_type = self._label(rows[0], "move_type")
+        if move_type != "out_invoice":
+            raise BusinessMutationIndeterminate(
+                f"the Odoo invoicing wizard produced a {move_type!r}, not a customer invoice",
+                phase="readback", record_id=str(invoice_id))
+        ui_path = f"{_INVOICES.route}/{invoice_id}"
+        observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        return BusinessToolResult(
+            content={
+                "invoiced": True, "readback_verified": True,
+                "invoice": {
+                    "id": invoice_id,
+                    # A draft `account.move` has no reference yet: Odoo assigns one when it
+                    # is posted. Saying so beats reporting `False` as a name.
+                    "reference": self._label(rows[0], "name") or "(draft, not yet numbered)",
+                    "state": self._label(rows[0], "state"),
+                    "move_type": move_type,
+                    "customer": self._label(rows[0], "partner_id"),
+                    "total": self._label(rows[0], "amount_total"),
+                    "sale_order": reference,
+                    "ui_path": ui_path,
+                },
+                "collection_ui_path": _INVOICES.route,
+                "invoice_method": "regular invoice (not a down payment)",
+                "scope": _INVOICES.scope, "observed_at": observed_at,
+            },
+            audit={
+                "application": APPLICATION_ID, "operation": INVOICE_SALE_ORDER_TOOL,
+                "model": "account.move", "records_created": 1, "readback_verified": True,
+                "advance_payment_method": REGULAR_INVOICE,
+                "scope": _INVOICES.scope, "observed_at": observed_at,
+                **self._identity_audit(context),
+            },
+            allowed_routes=(ui_path, _INVOICES.route),
+        )
+
+    def _invoice_ids(self, order_id: int) -> list[int]:
+        rows = self.call("sale.order", "read", [[order_id]], {"fields": ["invoice_ids"]})
+        if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
+            raise BusinessToolContractError("Odoo returned an invalid sales order record")
+        invoices = rows[0].get("invoice_ids")
+        if not isinstance(invoices, list) or any(
+                isinstance(item, bool) or not isinstance(item, int) for item in invoices):
+            raise BusinessToolContractError("Odoo returned invalid invoice references")
+        return list(invoices)
+
     def execute_mutation(self, name: str, args: dict, *,
                          context: OperationContext | None = None) -> BusinessToolResult:
-        if not self.allow_mutations or name != CREATE_CUSTOMER_TOOL:
+        if not self.allow_mutations or name not in MUTATION_TOOLS:
             raise BusinessToolError("unknown Odoo business mutation")
+        if name == CONFIRM_QUOTATION_TOOL:
+            return self._confirm_quotation(self._reference(name, args), context)
+        if name == INVOICE_SALE_ORDER_TOOL:
+            return self._invoice_sale_order(self._reference(name, args), context)
         normalized = self._normalize_customer(args)
         # Repeat under the delegated actor immediately before dispatch. This closes the
         # ordinary time-of-check gap without ever retrying the create itself.
@@ -743,34 +1091,73 @@ class _OdooIdentityPort:
 
 
 class _OdooMutationReconciler:
+    """What the application can still say about a write whose outcome was lost.
+
+    Never a verdict. Every one of these returns `unknown` with `requires_human`: a matching
+    record is not proof that *this* proposal created it, and a missing one cannot rule out a
+    write still in flight. What it does supply is the evidence an operator needs to decide,
+    gathered under the same delegated actor, over a scan that says whether it finished.
+    """
+
+    #: Each write and the read scope its evidence needs.
+    _SCOPES = {CREATE_CUSTOMER_TOOL: "customers:read",
+               CONFIRM_QUOTATION_TOOL: "sale_orders:read",
+               INVOICE_SALE_ORDER_TOOL: "sale_orders:read"}
+
     def __init__(self, executor: OdooBusinessToolExecutor, enabled: bool):
         self._executor = executor
-        self.supported_tools = (frozenset({CREATE_CUSTOMER_TOOL}) if enabled
-                                else frozenset())
+        self.supported_tools = frozenset(self._SCOPES) if enabled else frozenset()
 
     def reconcile(self, name, business_key, *, evidence, principal):
         if name not in self.supported_tools or principal is None:
             raise ValueError("reconciliation requires an enabled tool and principal")
         principal.require_live(application_id=APPLICATION_ID)
-        if "customers:read" not in principal.scopes:
-            raise PrincipalError("reconciliation requires customers:read scope")
+        needed = self._SCOPES[name]
+        if needed not in principal.scopes:
+            raise PrincipalError(f"reconciliation requires {needed} scope")
         delegated = self._executor.resolve_delegated_identity()
         if any(getattr(principal, field) != getattr(delegated, field)
                for field in ("tenant_id", "workspace_id", "actor_id")):
             raise PrincipalError("reconciliation delegated identity changed")
+        if name == CREATE_CUSTOMER_TOOL:
+            reason = self._customer_evidence(business_key)
+        else:
+            reason = self._order_evidence(name, business_key)
+        return MutationReconciliation(
+            outcome="unknown", requires_human=True,
+            reason=reason + " Establish the original writer's final outcome before "
+                            "resolving.")
+
+    def _customer_evidence(self, business_key) -> str:
         args = self._executor._normalize_customer(business_key)
         rows, total, scan = self._executor._scan(_CUSTOMERS)
         matches = [row for row in rows
                    if business_text_key(self._executor._label(row, "name"))
                    == business_text_key(args["name"])
                    and self._executor._label(row, "email").casefold() == args["email"]]
-        # A matching row is not proof that this proposal created it, and absence cannot rule
-        # out a write still in flight. The journal entry stays unresolved for an operator.
-        return MutationReconciliation(
-            outcome="unknown", requires_human=True,
-            reason=(f"Current matching records: {len(matches)}; complete scan: "
-                    f"{scan['complete'] and len(rows) == total}. Establish the original "
-                    "writer's final outcome before resolving."))
+        return (f"Current matching records: {len(matches)}; complete scan: "
+                f"{scan['complete'] and len(rows) == total}.")
+
+    def _order_evidence(self, name: str, business_key) -> str:
+        """For both order writes the evidence is the order's own current state.
+
+        A confirm is visible as `state`, an invoice as the order's `invoice_ids`: both are
+        facts the application owns, read now, rather than anything this process remembers.
+        """
+        reference = self._executor._reference(name, business_key)
+        rows = self._executor.call(
+            "sale.order", "search_read", [[["name", "=", reference]]],
+            {"fields": ["name", "state", "invoice_status", "invoice_ids"], "limit": 5})
+        if not isinstance(rows, list):
+            raise BusinessToolContractError("Odoo returned an invalid reconciliation read")
+        if len(rows) != 1:
+            return (f"{len(rows)} sales orders currently carry the reference {reference}.")
+        row = rows[0]
+        invoices = row.get("invoice_ids")
+        return (f"Sales order {reference} is currently in state "
+                f"{self._executor._label(row, 'state')!r} with invoice status "
+                f"{self._executor._label(row, 'invoice_status')!r} and "
+                f"{len(invoices) if isinstance(invoices, list) else 0} linked invoices.")
 
 
 class OdooApplicationAdapter:
@@ -791,27 +1178,41 @@ class OdooApplicationAdapter:
         executor = OdooBusinessToolExecutor(
             base_url=self.origin, keys=OdooApiKeyStore(api_key_path),
             timeout_s=timeout_s, allow_mutations=allow_mutations)
-        skills = [_packaged_skill(name) for name in _SKILLS[:3]]
+        skills = [_packaged_skill(name) for name in _READ_SKILLS]
         if allow_mutations:
-            skills.append(_packaged_skill(_SKILLS[3]))
+            skills += [_packaged_skill(name) for name in _WRITE_SKILLS]
         required_scopes = {"query_sale_orders": "sale_orders:read",
                            "query_customers": "customers:read",
-                           "query_products": "products:read"}
+                           "query_products": "products:read",
+                           "query_quotations": "sale_orders:read",
+                           "query_customer_invoices": "invoices:read"}
         if allow_mutations:
             required_scopes[CREATE_CUSTOMER_TOOL] = "customers:write"
+            required_scopes[CONFIRM_QUOTATION_TOOL] = "sale_orders:write"
+            required_scopes[INVOICE_SALE_ORDER_TOOL] = "invoices:write"
         declarations = [
             (collection.tool,
              (collection.data_class, "business.identifier", "application.route"))
             for collection in COLLECTIONS]
         if allow_mutations:
-            declarations.append(
+            declarations += [
                 (CREATE_CUSTOMER_TOOL,
                  ("business.customer", "business.identifier", "application.route",
-                  "business.mutation_result")))
+                  "business.mutation_result")),
+                (CONFIRM_QUOTATION_TOOL,
+                 ("business.sales_order", "business.identifier", "application.route",
+                  "business.mutation_result")),
+                (INVOICE_SALE_ORDER_TOOL,
+                 ("business.invoice", "business.identifier", "application.route",
+                  "business.mutation_result")),
+            ]
         data = DeclaredDataClassifier(tuple(sorted(declarations)))
+        # Every write must be able to say the application confirmed it, under the same user.
+        # A mutation without this pair in its result is refused by the core before it can be
+        # reported as done.
         postconditions = ResultPostconditionVerifier(
-            ((CREATE_CUSTOMER_TOOL,
-              ("content.readback_verified", "audit.readback_verified")),)
+            tuple((tool, ("content.readback_verified", "audit.readback_verified"))
+                  for tool in MUTATION_TOOLS)
             if allow_mutations else ())
         routes = ODOO_ROUTE_PORT
         self.business_tools = BusinessToolRuntime(

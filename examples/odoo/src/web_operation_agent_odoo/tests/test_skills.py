@@ -15,8 +15,10 @@ class PackagedSkills(unittest.TestCase):
         skills = packaged_skills()
         self.assertEqual(
             sorted(skill.skill_id for skill in skills),
-            ["odoo.sales.customers-create", "odoo.sales.customers-query",
-             "odoo.sales.products-query", "odoo.sales.sale-orders-query"])
+            ["odoo.sales.customer-invoices-query", "odoo.sales.customers-create",
+             "odoo.sales.customers-query", "odoo.sales.products-query",
+             "odoo.sales.quotations-query", "odoo.sales.sale-orders-confirm",
+             "odoo.sales.sale-orders-invoice", "odoo.sales.sale-orders-query"])
 
     def test_every_citation_names_this_application_and_a_release_line(self):
         """A build-specific citation would have to be reissued for every deployment image."""
