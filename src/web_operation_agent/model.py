@@ -423,7 +423,8 @@ class SpendMeter:
                 rec["provider_request_id"] = request_id
             if selected_reported_model:
                 rec["provider_reported_model"] = selected_reported_model
-            self._append_record(rec)
+            self._append_record(rec, batch_recount=True)
+            next_batch_cost = rec["batch_cost_cny"]
             self.calls = next_calls
             self.total_in = next_total_in
             self.total_out = next_total_out
@@ -475,7 +476,9 @@ class SpendMeter:
             }
             if selected_reported_model:
                 rec["provider_reported_model"] = selected_reported_model
-            self._append_record(rec)
+            # A dispatched call with no usage adds no tokens, but its batch column must still
+            # report the batch's spend rather than this process's share of it.
+            self._append_record(rec, batch_recount=True)
             self.calls = next_calls
             self.unmetered_calls += 1
             self._commit_run_record(
@@ -483,7 +486,73 @@ class SpendMeter:
                 request_id=request_id, unmetered=True)
         return rec
 
-    def _append_record(self, rec: dict) -> None:
+    def _batch_totals_from_ledger(self, fh) -> tuple[int, int, int] | None:
+        """Sum this batch's reported tokens from the ledger. The caller holds the lock.
+
+        Returns ``None`` when the batch has no rows yet, which a fresh ledger and a first
+        call look alike, and lets the caller keep its own totals.
+        """
+        try:
+            fh.seek(0)
+            rows = fh.readlines()
+        except OSError:
+            return None
+        totals, seen = [0, 0, 0], False
+        for line in rows:
+            try:
+                row = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if (not isinstance(row, dict) or row.get("batch_id") != self.batch_id
+                    or row.get("accounting_status") != "reported"):
+                continue
+            seen = True
+            for index, key in enumerate(("in", "out", "cached")):
+                value = row.get(key)
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                    totals[index] += value
+        return (totals[0], totals[1], totals[2]) if seen else None
+
+    def _append_record(self, rec: dict, *, batch_recount: bool = False) -> dict:
+        """Append one record, optionally recomputing its batch column under the lock.
+
+        A batch sharded across processes accounts to one ledger, so process-local batch
+        totals let every shard spend the stop line in full. With a stop line configured the
+        batch column is recomputed from the ledger inside the same exclusive lock that
+        serialises the write, which makes the figure the stop is checked against the batch's
+        real spend rather than this process's share of it.
+        """
+        if not batch_recount or self.batch_cost_stop is None:
+            self._locked_write(rec)
+            return rec
+        with open(self.ledger, "a+", encoding="utf-8") as fh:
+            try:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            except OSError:
+                pass
+            try:
+                totals = self._batch_totals_from_ledger(fh)
+                if totals is not None:
+                    def contribution(key: str) -> int:
+                        value = rec.get(key)
+                        return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+                    rec["batch_cost_cny"] = round(cost_with(
+                        self.price, totals[0] + contribution("in"),
+                        totals[1] + contribution("out"),
+                        totals[2] + contribution("cached")), 4)
+                fh.seek(0, os.SEEK_END)
+                fh.write(json.dumps(rec) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            finally:
+                try:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    pass
+        return rec
+
+    def _locked_write(self, rec: dict) -> None:
         with open(self.ledger, "a", encoding="utf-8") as fh:
             # The lock is between processes, not threads: sharding a batch across isolated
             # environments runs one harness process per worker and they all account to the one
