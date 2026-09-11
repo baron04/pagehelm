@@ -22,6 +22,15 @@ _STATES = {"prepared", "dispatching", "completed", "failed", "indeterminate"}
 _TERMINAL = {"completed", "failed", "indeterminate"}
 
 
+#: How long a journal keeps a row whose outcome is already known. It exists so an operator
+#: can still audit a recent write; nothing depends on it for correctness.
+RESOLVED_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000
+#: States a sweep must never remove. A `dispatching` row may still have a request in flight
+#: upstream and an `indeterminate` one is an unresolved write: deleting either would let a
+#: business key be claimed again, which is the one thing the journal exists to prevent.
+UNRESOLVED_STATES = ("dispatching", "indeterminate")
+
+
 class MutationJournalError(RuntimeError):
     """A mutation intent cannot safely transition to the requested state."""
 
@@ -73,9 +82,13 @@ class MutationJournal(Protocol):
               now_ms: int | None = None) -> None: ...
 
     def finish(self, proposal_digest: str, state: str, *,
-               result_digest: str = "", now_ms: int | None = None) -> None: ...
+               result_digest: str = "", reconciliation: dict | None = None,
+               now_ms: int | None = None) -> None: ...
 
     def get(self, proposal_digest: str) -> MutationIntent | None: ...
+
+    def sweep(self, *, now_ms: int | None = None,
+              retain_resolved_ms: int = RESOLVED_RETENTION_MS) -> dict: ...
 
 
 def _now(value: int | None) -> int:
@@ -84,6 +97,29 @@ def _now(value: int | None) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise MutationJournalError("now_ms must be a non-negative integer")
     return value
+
+
+def merged_reconciliation(stored: str, addition: dict | None) -> str:
+    """Merge post-dispatch facts into a row's reconciliation metadata.
+
+    Registration records what the write intended; only the dispatch learns what it produced,
+    most importantly the identifier an upstream acknowledgement returned before a readback
+    failed. Without merging that in, an operator settling the row has only a localized
+    display string to scan against.
+    """
+    if not addition:
+        return stored
+    try:
+        base = json.loads(stored) if stored else {}
+    except json.JSONDecodeError:
+        base = {}
+    if not isinstance(base, dict):
+        base = {}
+    encoded = json.dumps({**base, **addition}, sort_keys=True,
+                         separators=(",", ":"), allow_nan=False)
+    if len(encoded.encode()) > 16_384:
+        raise MutationJournalError("reconciliation metadata exceeds 16 KiB")
+    return encoded
 
 
 def _registration(proposal_digest: str, operation_context_digest: str,
@@ -129,6 +165,11 @@ class MemoryMutationJournal:
                     raise MutationJournalError("proposal digest registration conflicts")
                 return
             if len(self._records) >= self.max_entries:
+                # An expired proposal was never claimed, so dropping it cannot release a
+                # business key. Without this, one abandoned run per proposal eventually
+                # exhausts the journal and every later write is refused.
+                self._evict(now, RESOLVED_RETENTION_MS)
+            if len(self._records) >= self.max_entries:
                 raise MutationJournalError("mutation journal capacity is exhausted")
             self._records[proposal_digest] = MutationIntent(
                 proposal_digest, operation_context_digest, "prepared",
@@ -157,7 +198,8 @@ class MemoryMutationJournal:
                 intent, state="dispatching", updated_at=now)
 
     def finish(self, proposal_digest: str, state: str, *,
-               result_digest: str = "", now_ms: int | None = None) -> None:
+               result_digest: str = "", reconciliation: dict | None = None,
+               now_ms: int | None = None) -> None:
         now = _now(now_ms)
         if state not in _TERMINAL:
             raise MutationJournalError("mutation finish state is invalid")
@@ -166,7 +208,34 @@ class MemoryMutationJournal:
             if intent is None or intent.state != "dispatching":
                 raise MutationJournalError("only a dispatching mutation can finish")
             self._records[proposal_digest] = replace(
-                intent, state=state, updated_at=now, result_digest=result_digest)
+                intent, state=state, updated_at=now, result_digest=result_digest,
+                reconciliation_json=merged_reconciliation(
+                    intent.reconciliation_json, reconciliation))
+
+    def _evict(self, now: int, retain_resolved_ms: int) -> tuple[int, int]:
+        expired = [digest for digest, intent in self._records.items()
+                   if intent.state == "prepared" and intent.expires_at <= now]
+        resolved = [digest for digest, intent in self._records.items()
+                    if intent.state in {"completed", "failed"}
+                    and intent.updated_at + retain_resolved_ms <= now]
+        for digest in expired + resolved:
+            del self._records[digest]
+        return len(expired), len(resolved)
+
+    def sweep(self, *, now_ms: int | None = None,
+              retain_resolved_ms: int = RESOLVED_RETENTION_MS) -> dict:
+        """Drop expired unclaimed proposals and long-resolved rows. Never drops unresolved."""
+        if (isinstance(retain_resolved_ms, bool) or not isinstance(retain_resolved_ms, int)
+                or retain_resolved_ms < 0):
+            raise MutationJournalError("retain_resolved_ms must be a non-negative integer")
+        now = _now(now_ms)
+        with self._lock:
+            expired, resolved = self._evict(now, retain_resolved_ms)
+            unresolved = sum(intent.state in UNRESOLVED_STATES
+                             for intent in self._records.values())
+            remaining = len(self._records)
+        return {"expired_prepared": expired, "resolved": resolved,
+                "unresolved_kept": unresolved, "remaining": remaining}
 
     def get(self, proposal_digest: str) -> MutationIntent | None:
         with self._lock:
@@ -309,7 +378,8 @@ class SQLiteMutationJournal:
         raise MutationJournalError(f"mutation proposal is already {row['state']}")
 
     def finish(self, proposal_digest: str, state: str, *,
-               result_digest: str = "", now_ms: int | None = None) -> None:
+               result_digest: str = "", reconciliation: dict | None = None,
+               now_ms: int | None = None) -> None:
         now = _now(now_ms)
         if state not in _TERMINAL:
             raise MutationJournalError("mutation finish state is invalid")
@@ -317,10 +387,22 @@ class SQLiteMutationJournal:
             raise MutationJournalError("result digest is invalid")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            changed = connection.execute(
-                "UPDATE mutation_intents SET state = ?, updated_at = ?, result_digest = ? "
+            row = connection.execute(
+                "SELECT reconciliation_json FROM mutation_intents "
                 "WHERE proposal_digest = ? AND state = 'dispatching'",
-                (state, now, result_digest, proposal_digest)).rowcount
+                (proposal_digest,)).fetchone()
+            if row is None:
+                connection.rollback()
+                raise MutationJournalError("only a dispatching mutation can finish")
+            try:
+                encoded = merged_reconciliation(row["reconciliation_json"], reconciliation)
+            except MutationJournalError:
+                connection.rollback()
+                raise
+            changed = connection.execute(
+                "UPDATE mutation_intents SET state = ?, updated_at = ?, result_digest = ?, "
+                "reconciliation_json = ? WHERE proposal_digest = ? AND state = 'dispatching'",
+                (state, now, result_digest, encoded, proposal_digest)).rowcount
             if changed != 1:
                 connection.rollback()
                 raise MutationJournalError("only a dispatching mutation can finish")
@@ -332,6 +414,37 @@ class SQLiteMutationJournal:
                 "SELECT * FROM mutation_intents WHERE proposal_digest = ?",
                 (proposal_digest,)).fetchone()
         return (MutationIntent(**dict(row)) if row is not None else None)
+
+    def sweep(self, *, now_ms: int | None = None,
+              retain_resolved_ms: int = RESOLVED_RETENTION_MS) -> dict:
+        """Drop expired unclaimed proposals and long-resolved rows. Never drops unresolved.
+
+        The `state` predicate is the whole safety argument: a `dispatching` row may still
+        have a request in flight upstream and an `indeterminate` one is an unresolved write,
+        so neither is ever deleted and a sweep cannot release a blocked business key.
+        """
+        if (isinstance(retain_resolved_ms, bool) or not isinstance(retain_resolved_ms, int)
+                or retain_resolved_ms < 0):
+            raise MutationJournalError("retain_resolved_ms must be a non-negative integer")
+        now = _now(now_ms)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            expired = connection.execute(
+                "DELETE FROM mutation_intents WHERE state = 'prepared' AND expires_at <= ?",
+                (now,)).rowcount
+            resolved = connection.execute(
+                "DELETE FROM mutation_intents WHERE state IN ('completed', 'failed') "
+                "AND updated_at + ? <= ?", (retain_resolved_ms, now)).rowcount
+            connection.execute(
+                "DELETE FROM mutation_resolutions WHERE proposal_digest NOT IN "
+                "(SELECT proposal_digest FROM mutation_intents)")
+            counts = connection.execute(
+                "SELECT COUNT(*) AS total, SUM(state IN ('dispatching', 'indeterminate')) "
+                "AS unresolved FROM mutation_intents").fetchone()
+            connection.commit()
+        return {"expired_prepared": max(0, expired), "resolved": max(0, resolved),
+                "unresolved_kept": int(counts["unresolved"] or 0),
+                "remaining": int(counts["total"] or 0)}
 
     def unresolved(self) -> tuple[MutationIntent, ...]:
         with self._connect() as connection:

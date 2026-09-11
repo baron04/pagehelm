@@ -11,6 +11,7 @@ import hashlib
 import json
 import re
 import threading
+import unicodedata
 import time
 import uuid
 from dataclasses import dataclass, replace
@@ -61,6 +62,66 @@ def _trigger_matches(trigger: str, task: str, *, max_gap_tokens: int = 3) -> boo
     return True
 
 
+#: Scripts whose letters are visually interchangeable with Latin ones. A name mixing Latin
+#: with either is a homograph, not a language: "Аcme" with a Cyrillic А renders exactly like
+#: "Acme". Han, Kana and Hangul mix with Latin in ordinary company names and are not listed.
+_CONFUSABLE_WITH_LATIN = frozenset({"CYRILLIC", "GREEK"})
+
+
+def _script_of(character: str) -> str:
+    try:
+        return unicodedata.name(character).split(" ", 1)[0]
+    except ValueError:
+        return ""
+
+
+def business_text_key(value: str) -> str:
+    """Fold one business identifier into the key two records are compared on.
+
+    Applied to both sides of a duplicate check, so a record this product did not create
+    still compares equal to a visually identical name. Lenient by design: it never raises.
+    Use :func:`normalize_business_text` for text this product is about to write.
+    """
+    if not isinstance(value, str):
+        return ""
+    folded = unicodedata.normalize("NFKC", value)
+    folded = "".join(character for character in folded
+                     if unicodedata.category(character) not in {"Cc", "Cf"})
+    return " ".join(folded.split()).casefold()
+
+
+def normalize_business_text(value: object, *, field: str, maximum: int) -> str:
+    """Return `value` as text safe to write and to compare, or refuse it.
+
+    Three defects make two records look identical to a person and different to a byte
+    comparison, so each is removed or refused here rather than at the duplicate check:
+    compatibility forms (fullwidth, ligatures) are folded by NFKC; every run of whitespace,
+    including NBSP and ideographic space, becomes one ordinary space; control and format
+    characters -- zero-width spaces, bidirectional overrides, default-ignorables, all
+    category ``Cc``/``Cf`` -- are refused outright. Category ``Zs`` is deliberately not
+    refused: U+0020 belongs to it.
+
+    A name that mixes Latin letters with Cyrillic or Greek ones is refused as a homograph.
+    """
+    if not isinstance(value, str):
+        raise BusinessToolRequestError(f"{field} must be a string")
+    normalized = unicodedata.normalize("NFKC", value)
+    for character in normalized:
+        if unicodedata.category(character) in {"Cc", "Cf"}:
+            raise BusinessToolRequestError(
+                f"{field} contains an invisible or directional control character")
+    normalized = " ".join(normalized.split())
+    if not normalized:
+        raise BusinessToolRequestError(f"{field} must not be empty")
+    if len(normalized) > maximum:
+        raise BusinessToolRequestError(f"{field} must be 1 to {maximum} visible characters")
+    scripts = {_script_of(character) for character in normalized if character.isalpha()}
+    if "LATIN" in scripts and scripts & _CONFUSABLE_WITH_LATIN:
+        raise BusinessToolRequestError(
+            f"{field} mixes Latin letters with a visually identical alphabet")
+    return normalized
+
+
 class BusinessToolError(RuntimeError):
     """A safe, expected refusal or read failure that the Agent may reason about."""
 
@@ -98,7 +159,26 @@ class BusinessToolContractError(BusinessToolError):
 
 
 class BusinessMutationIndeterminate(RuntimeError):
-    """A dispatched mutation may have landed and therefore must never be retried."""
+    """A dispatched mutation may have landed and therefore must never be retried.
+
+    An application raising this usually knows more than the message says. When an upstream
+    acknowledgement returned a record identifier and only the readback then failed, that
+    identifier settles the row with one authorized read; without it an operator has to scan
+    the whole collection. `phase` and `record_id` carry that forward to the durable journal
+    and the redacted audit ledger, and nowhere else.
+    """
+
+    def __init__(self, message: str, *, phase: str = "", record_id: str = ""):
+        super().__init__(message)
+        self.phase = phase if isinstance(phase, str) and len(phase) <= 64 else ""
+        self.record_id = (record_id if isinstance(record_id, str) and len(record_id) <= 200
+                          else "")
+
+    @property
+    def reconciliation(self) -> dict:
+        """The bounded post-dispatch facts, or an empty mapping when there are none."""
+        return {key: value for key, value in
+                (("phase", self.phase), ("record_id", self.record_id)) if value}
 
 
 @dataclass(frozen=True, slots=True)
@@ -871,21 +951,24 @@ class BusinessToolRuntime:
                 pass
             self._forget_mutation(digest)
             raise
-        except BusinessMutationIndeterminate:
+        except BusinessMutationIndeterminate as exc:
             try:
-                self._mutation_journal.finish(digest, "indeterminate")
+                self._mutation_journal.finish(
+                    digest, "indeterminate", reconciliation=exc.reconciliation)
             except MutationJournalError:
                 pass
             self._forget_mutation(digest)
             raise
         except Exception as exc:
             try:
-                self._mutation_journal.finish(digest, "indeterminate")
+                self._mutation_journal.finish(
+                    digest, "indeterminate", reconciliation={"phase": "dispatch"})
             except MutationJournalError:
                 pass
             self._forget_mutation(digest)
             raise BusinessMutationIndeterminate(
-                f"business mutation outcome is unknown: {type(exc).__name__}") from exc
+                f"business mutation outcome is unknown: {type(exc).__name__}",
+                phase="dispatch") from exc
         if not isinstance(result, BusinessToolResult):
             try:
                 self._mutation_journal.finish(digest, "indeterminate")
@@ -913,21 +996,24 @@ class BusinessToolRuntime:
                         "evidence": postcondition.evidence,
                     },
                 })
-        except BusinessMutationIndeterminate:
+        except BusinessMutationIndeterminate as exc:
             try:
-                self._mutation_journal.finish(digest, "indeterminate")
+                self._mutation_journal.finish(
+                    digest, "indeterminate", reconciliation=exc.reconciliation)
             except MutationJournalError:
                 pass
             self._forget_mutation(digest)
             raise
         except Exception as exc:
             try:
-                self._mutation_journal.finish(digest, "indeterminate")
+                self._mutation_journal.finish(
+                    digest, "indeterminate", reconciliation={"phase": "postcondition"})
             except MutationJournalError:
                 pass
             self._forget_mutation(digest)
             raise BusinessMutationIndeterminate(
-                "business mutation postcondition verification failed") from exc
+                "business mutation postcondition verification failed",
+                phase="postcondition") from exc
         try:
             self._mutation_journal.finish(
                 digest, "completed", result_digest=result.content_digest)

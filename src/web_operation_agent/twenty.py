@@ -14,6 +14,7 @@ import re
 import tempfile
 import threading
 import time
+import unicodedata
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from http.client import HTTPConnection, HTTPSConnection, HTTPException
@@ -33,7 +34,8 @@ from web_operation_agent.business import (BusinessMutationIndeterminate,
                                           BusinessToolRequestError,
                                           BusinessToolResult,
                                           BusinessToolRuntime,
-                                          BusinessToolUnavailableError)
+                                          BusinessToolUnavailableError,
+                                          business_text_key, normalize_business_text)
 from web_operation_agent.application import (
     APPLICATION_ADAPTER_VERSION,
     ApplicationDescriptor,
@@ -804,24 +806,28 @@ class TwentyBusinessToolExecutor:
         record_id = created.get("id") if isinstance(created, dict) else None
         if not isinstance(record_id, str) or not _UUID.fullmatch(record_id):
             raise BusinessMutationIndeterminate(
-                "Twenty accepted the mutation but returned no valid company ID")
+                "Twenty accepted the mutation but returned no valid company ID",
+                phase="acknowledgement")
         try:
             readback = self._authorized_json(f"/rest/companies/{record_id}", token)
         except BusinessToolError as exc:
             raise BusinessMutationIndeterminate(
-                "Twenty company was created but same-user readback failed") from exc
+                "Twenty company was created but same-user readback failed",
+                phase="readback", record_id=record_id) from exc
         readback_data = readback.get("data") if isinstance(readback, dict) else None
         company = readback_data.get("company") if isinstance(readback_data, dict) else None
         if not isinstance(company, dict):
             raise BusinessMutationIndeterminate(
-                "Twenty company was created but same-user readback was malformed")
+                "Twenty company was created but same-user readback was malformed",
+                phase="readback", record_id=record_id)
         actual_name = company.get("name")
         domain_value = company.get("domainName")
         actual_domain = (domain_value.get("primaryLinkLabel")
                          if isinstance(domain_value, dict) else None)
         if actual_name != normalized["name"] or actual_domain != normalized["domain"]:
             raise BusinessMutationIndeterminate(
-                "Twenty company was created but same-user readback did not match")
+                "Twenty company was created but same-user readback did not match",
+                phase="readback", record_id=record_id)
         ui_path = f"/object/company/{record_id}"
         observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         return BusinessToolResult(
@@ -855,17 +861,14 @@ class TwentyBusinessToolExecutor:
     def _normalize_company(args: dict) -> dict:
         if not isinstance(args, dict) or set(args) != {"name", "domain"}:
             raise BusinessToolError("create_company requires only name and domain")
-        name = args.get("name")
+        name = normalize_business_text(args.get("name"), field="company name", maximum=200)
         domain = args.get("domain")
-        if (not isinstance(name, str) or not name.strip() or len(name.strip()) > 200
-                or re.search(r"[\x00-\x1f\x7f]", name)):
-            raise BusinessToolError("company name must be 1 to 200 visible characters")
         if not isinstance(domain, str):
             raise BusinessToolError("company domain must be a string")
-        domain = domain.strip().rstrip(".").casefold()
+        domain = unicodedata.normalize("NFKC", domain).strip().rstrip(".").casefold()
         if not _DOMAIN.fullmatch(domain):
             raise BusinessToolError("company domain must be a bare DNS name")
-        return {"name": name.strip(), "domain": domain}
+        return {"name": name, "domain": domain}
 
     def _assert_no_duplicate(self, name: str, domain: str) -> None:
         payload, _status, _refreshed = self._get_companies()
@@ -889,9 +892,11 @@ class TwentyBusinessToolExecutor:
                                       or domain_value.get("primaryLinkUrl") or "")
                 existing_domain = re.sub(r"^https?://", "", existing_domain,
                                          flags=re.I).rstrip("/").casefold()
-            if ((isinstance(existing_name, str)
-                 and existing_name.strip().casefold() == name.casefold())
-                    or existing_domain == domain):
+            # Both sides are folded the same way: a record this product did not create can
+            # still carry a non-breaking space or a fullwidth letter, and it must not be
+            # possible to add a second company that a person cannot tell apart from it.
+            if (business_text_key(existing_name) == business_text_key(name)
+                    or (existing_domain and existing_domain == domain)):
                 raise BusinessToolError("a company with the same name or domain already exists")
 
     def _get_companies(self) -> tuple[dict, int, bool]:

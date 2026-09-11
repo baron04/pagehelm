@@ -1117,9 +1117,14 @@ class ServerAgentSession:
                     except BusinessMutationIndeterminate as exc:
                         self._business_control["mutation_indeterminate"] += 1
                         detail = str(exc)[:500]
+                        # The digest names the journal row an operator has to settle, and
+                        # the reconciliation names what the application already learned about
+                        # it. Without both, settling a row means scanning the collection.
                         self.ledger.append(
                             "business_mutation_indeterminate", step=step, tool=name,
                             approval_id=approval_id, reason=detail,
+                            proposal_digest=proposal.content_digest,
+                            reconciliation=exc.reconciliation,
                             side_effect_possible=True, identity=operation_identity)
                         return self._finish(
                             result, t0, "indeterminate_write", detail, steps=step)
