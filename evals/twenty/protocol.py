@@ -252,15 +252,32 @@ def _arm(value: Any, source_policy_digest: str) -> dict[str, Any]:
     fields = {
         "arm_id", "engine", "engine_release", "implementation_digest",
         "capability_profile", "source_mode", "source_interface", "source_policy_digest",
-        "skill_digest", "tool_catalog_digest",
+        "skill_digest", "tool_catalog_digest", "approval_boundary", "mutation_journal",
     }
     raw = _exact(value, fields, "protocol.arm")
     engine = raw.get("engine")
     capability = raw.get("capability_profile")
     source_mode = raw.get("source_mode")
     source_interface = raw.get("source_interface")
+    approval = raw.get("approval_boundary")
+    journal = raw.get("mutation_journal")
     if engine not in {"pageagent", "pageagent_core", "web_operation_agent"}:
         raise EvaluationInputError("arm engine is invalid")
+    # The write boundary is preregistered per arm so a create comparison cannot later be
+    # read as evidence about safety. PageAgent approves through a page dialog and keeps no
+    # journal; Web Operation Agent approves a server-side proposal that a journal claims.
+    if approval not in {"none", "page_dialog", "server_proposal"}:
+        raise EvaluationInputError("arm approval boundary is invalid")
+    if journal not in {"none", "volatile", "durable"}:
+        raise EvaluationInputError("arm mutation journal is invalid")
+    if engine != "web_operation_agent" and (approval == "server_proposal" or journal != "none"):
+        raise EvaluationInputError(
+            "only Web Operation Agent proposes writes server-side or keeps a mutation journal")
+    if engine == "web_operation_agent" and approval == "page_dialog":
+        raise EvaluationInputError("Web Operation Agent does not approve writes in a page dialog")
+    if (approval == "server_proposal") != (journal != "none"):
+        raise EvaluationInputError(
+            "a server-side proposal and a mutation journal must be declared together")
     release = _text(raw.get("engine_release"), "arm.engine_release", maximum=100)
     if not _RELEASE.fullmatch(release):
         raise EvaluationInputError("arm engine release is not exact")
@@ -301,6 +318,8 @@ def _arm(value: Any, source_policy_digest: str) -> dict[str, Any]:
         "source_policy_digest": source_digest,
         "skill_digest": skill_digest,
         "tool_catalog_digest": tool_digest,
+        "approval_boundary": approval,
+        "mutation_journal": journal,
     }
 
 
@@ -309,6 +328,7 @@ def _comparison(value: Any, task_ids: set[str], arms: dict[str, dict[str, Any]])
         "comparison_id", "comparison_type", "left_arm", "right_arm",
         "eligible_task_ids", "minimum_useful_effect_pp",
         "success_noninferiority_margin_pp", "efficiency_improvement_percent",
+        "approval_boundary",
     }
     raw = _exact(value, fields, "protocol.comparison")
     comparison_type = raw.get("comparison_type")
@@ -353,11 +373,21 @@ def _comparison(value: Any, task_ids: set[str], arms: dict[str, dict[str, Any]])
         )
     if not valid:
         raise EvaluationInputError(f"{comparison_type} arms violate the fairness contract")
+    # A comparison whose arms approve or journal writes differently can only report what each
+    # side is capable of. The declaration is checked against the arms rather than trusted.
+    boundary = raw.get("approval_boundary")
+    if boundary not in {"equivalent", "capability_only"}:
+        raise EvaluationInputError("comparison approval boundary is invalid")
+    equivalent = (left["approval_boundary"] == right["approval_boundary"]
+                  and left["mutation_journal"] == right["mutation_journal"])
+    if boundary != ("equivalent" if equivalent else "capability_only"):
+        raise EvaluationInputError("comparison approval boundary disagrees with its arms")
     return {
         "comparison_id": _identifier(raw.get("comparison_id"), "comparison.comparison_id"),
         "comparison_type": comparison_type,
         "left_arm": left_id,
         "right_arm": right_id,
+        "approval_boundary": boundary,
         "eligible_task_ids": eligible,
         "minimum_useful_effect_pp": _integer(
             raw.get("minimum_useful_effect_pp"), "comparison.minimum_useful_effect_pp",

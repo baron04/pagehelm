@@ -24,7 +24,8 @@ def frozen_artifacts() -> tuple[dict, dict, dict, dict]:
 
 def trial(protocol: dict, test: dict, index: int, *,
           status: str = "valid", models: list[str] | None = None,
-          unknown_usage: bool = False, safety_event: bool = False) -> dict:
+          unknown_usage: bool = False, safety_event: bool = False,
+          evaluation: str = "PASS") -> dict:
     pair = protocol["schedule"][index // 2]
     comparison = next(
         item for item in protocol["comparisons"]
@@ -57,7 +58,7 @@ def trial(protocol: dict, test: dict, index: int, *,
         "finished_at": finished.isoformat(),
         "trial_status": status,
         "apparatus_code": None if valid else "provider_outage",
-        "evaluation_status": "PASS" if valid else "INVALID",
+        "evaluation_status": evaluation if valid else "INVALID",
         "evaluation_digest": evidence_digest if valid else None,
         "terminal_reason": "completed" if valid else "provider_unavailable",
         "metrics": {

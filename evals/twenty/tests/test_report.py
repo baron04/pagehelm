@@ -66,6 +66,66 @@ class PublicReportTests(unittest.TestCase):
             self.assertNotIn(phrase.casefold(), rendered)
         self.assertLess(4, MINIMUM_COMPARATIVE_TRIALS_PER_ARM)
 
+    def test_report_aggregates_wall_time_cost_and_approvals_per_arm(self):
+        self._append(4)
+        report = build_report(ledger_path=self.ledger, **self.kwargs)
+
+        populated = [arm for arm in report["arms"] if arm["trials"]]
+        self.assertTrue(populated)
+        for arm in populated:
+            self.assertEqual(arm["wall_ms"]["median"], 1000.0)
+            self.assertEqual(arm["known_cost_cny_per_trial"]["count"], arm["trials"])
+            self.assertEqual(arm["known_cost_cny_per_trial"]["median"], 0.001)
+            self.assertEqual(arm["approvals_requested"], 0)
+            self.assertIn(arm["approval_boundary"], {"none", "page_dialog", "server_proposal"})
+            self.assertIn(arm["mutation_journal"], {"none", "volatile", "durable"})
+
+    def test_report_counts_paired_disagreement_without_naming_a_winner(self):
+        """Discordance is the variance input for power planning, not an effect estimate."""
+        # Pair 1: both arms pass. Pair 2: the second arm fails. Pair 3: one arm is invalid.
+        for index in range(6):
+            append_trial(
+                self.ledger,
+                trial(self.protocol, self.test_seal, index,
+                      status="apparatus_invalid" if index == 5 else "valid",
+                      evaluation="FAIL" if index == 3 else "PASS"),
+                **self.kwargs)
+        report = build_report(ledger_path=self.ledger, **self.kwargs)
+
+        self.assertEqual(verify_report(report)["status"], "READY")
+        by_id = {row["comparison_id"]: row for row in report["comparisons"]}
+        self.assertEqual(set(by_id), {c["comparison_id"] for c in self.protocol["comparisons"]})
+        touched = [self.protocol["schedule"][position]["comparison_id"] for position in range(3)]
+        totals = {
+            key: sum(by_id[cid][key] for cid in set(touched))
+            for key in ("pairs_completed", "pairs_both_valid", "concordant_pairs",
+                        "discordant_pairs")
+        }
+        self.assertEqual(totals, {"pairs_completed": 3, "pairs_both_valid": 2,
+                                  "concordant_pairs": 1, "discordant_pairs": 1})
+        discordant = by_id[touched[1]]
+        self.assertEqual(discordant["discordance_rate"],
+                         round(discordant["discordant_pairs"]
+                               / discordant["pairs_both_valid"], 6))
+        for row in report["comparisons"]:
+            self.assertEqual(row["pairs_scheduled"], sum(
+                pair["comparison_id"] == row["comparison_id"]
+                for pair in self.protocol["schedule"]))
+            self.assertIn(row["approval_boundary"], {"equivalent", "capability_only"})
+            self.assertFalse({"left_pass", "right_pass", "winner", "effect"} & set(row))
+        skill = next(row for row in report["comparisons"]
+                     if row["comparison_type"] == "skill_api")
+        self.assertEqual(skill["approval_boundary"], "capability_only")
+
+        nested = {**report, "comparisons": [dict(row) for row in report["comparisons"]]}
+        nested["comparisons"][0]["left_arm_passes"] = 1
+        nested.pop("report_digest")
+        from evals.twenty.evaluator import digest_json
+
+        nested["report_digest"] = digest_json(nested)
+        with self.assertRaisesRegex(EvaluationInputError, "comparison schema"):
+            verify_report(nested)
+
     def test_report_never_exposes_run_ids_timing_detail_or_task_content(self):
         self._append(2)
         report = build_report(ledger_path=self.ledger, **self.kwargs)

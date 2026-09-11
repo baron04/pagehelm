@@ -51,6 +51,8 @@ def protocol_draft() -> dict:
             "source_policy_digest": None,
             "skill_digest": None,
             "tool_catalog_digest": None,
+            "approval_boundary": "none",
+            "mutation_journal": "none",
         },
         {
             "arm_id": "woa-browser",
@@ -63,6 +65,8 @@ def protocol_draft() -> dict:
             "source_policy_digest": None,
             "skill_digest": None,
             "tool_catalog_digest": None,
+            "approval_boundary": "none",
+            "mutation_journal": "none",
         },
         {
             "arm_id": "pageagent-skill",
@@ -75,6 +79,8 @@ def protocol_draft() -> dict:
             "source_policy_digest": None,
             "skill_digest": shared_skill,
             "tool_catalog_digest": shared_tools,
+            "approval_boundary": "page_dialog",
+            "mutation_journal": "none",
         },
         {
             "arm_id": "woa-skill",
@@ -87,6 +93,8 @@ def protocol_draft() -> dict:
             "source_policy_digest": None,
             "skill_digest": shared_skill,
             "tool_catalog_digest": shared_tools,
+            "approval_boundary": "server_proposal",
+            "mutation_journal": "volatile",
         },
         {
             "arm_id": "woa-source-off",
@@ -99,6 +107,8 @@ def protocol_draft() -> dict:
             "source_policy_digest": None,
             "skill_digest": shared_skill,
             "tool_catalog_digest": shared_tools,
+            "approval_boundary": "server_proposal",
+            "mutation_journal": "volatile",
         },
         {
             "arm_id": "woa-skill-source-on",
@@ -111,6 +121,8 @@ def protocol_draft() -> dict:
             "source_policy_digest": source_policy_digest,
             "skill_digest": shared_skill,
             "tool_catalog_digest": shared_tools,
+            "approval_boundary": "server_proposal",
+            "mutation_journal": "volatile",
         },
     ]
     ids = sorted(test["task_digests"])
@@ -123,6 +135,7 @@ def protocol_draft() -> dict:
         {
             "comparison_id": "h1-browser",
             "comparison_type": "browser_execution",
+            "approval_boundary": "equivalent",
             "left_arm": "pageagent-browser",
             "right_arm": "woa-browser",
             "eligible_task_ids": comparison_tasks["h1-browser"],
@@ -133,6 +146,7 @@ def protocol_draft() -> dict:
         {
             "comparison_id": "h2-skill",
             "comparison_type": "skill_api",
+            "approval_boundary": "capability_only",
             "left_arm": "pageagent-skill",
             "right_arm": "woa-skill",
             "eligible_task_ids": comparison_tasks["h2-skill"],
@@ -143,6 +157,7 @@ def protocol_draft() -> dict:
         {
             "comparison_id": "h3-source",
             "comparison_type": "source_runtime",
+            "approval_boundary": "equivalent",
             "left_arm": "woa-source-off",
             "right_arm": "woa-skill-source-on",
             "eligible_task_ids": comparison_tasks["h3-source"],
@@ -302,6 +317,45 @@ class ProtocolQualificationTests(unittest.TestCase):
             freeze_protocol(
                 value, development_seal=development, test_seal=test,
                 split_verification=split)
+
+    def test_write_boundaries_are_declared_per_arm_and_checked_per_comparison(self):
+        development, test, split = artifacts()
+        kwargs = {"development_seal": development, "test_seal": test,
+                  "split_verification": split}
+
+        # The cross-engine Skill/API comparison pairs a page dialog without a journal against
+        # a server-side proposal with one; declaring it equivalent must be refused.
+        value = protocol_draft()
+        skill = next(c for c in value["comparisons"] if c["comparison_type"] == "skill_api")
+        skill["approval_boundary"] = "equivalent"
+        with self.assertRaisesRegex(EvaluationInputError, "disagrees with its arms"):
+            freeze_protocol(value, **kwargs)
+
+        value = protocol_draft()
+        pageagent = next(a for a in value["arms"] if a["arm_id"] == "pageagent-skill")
+        pageagent["approval_boundary"] = "server_proposal"
+        pageagent["mutation_journal"] = "volatile"
+        with self.assertRaisesRegex(EvaluationInputError, "only Web Operation Agent"):
+            freeze_protocol(value, **kwargs)
+
+        value = protocol_draft()
+        woa = next(a for a in value["arms"] if a["arm_id"] == "woa-skill")
+        woa["mutation_journal"] = "none"
+        with self.assertRaisesRegex(EvaluationInputError, "declared together"):
+            freeze_protocol(value, **kwargs)
+
+        value = protocol_draft()
+        for arm in value["arms"]:
+            arm.pop("approval_boundary")
+        with self.assertRaisesRegex(EvaluationInputError, "protocol.arm has unexpected"):
+            freeze_protocol(value, **kwargs)
+
+        frozen = freeze_protocol(protocol_draft(), **kwargs)
+        boundaries = {c["comparison_type"]: c["approval_boundary"]
+                      for c in frozen["comparisons"]}
+        self.assertEqual(boundaries, {"browser_execution": "equivalent",
+                                      "skill_api": "capability_only",
+                                      "source_runtime": "equivalent"})
 
     def test_source_eligibility_must_match_reason_and_comparison(self):
         value = protocol_draft()

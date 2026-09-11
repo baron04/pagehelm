@@ -1,10 +1,14 @@
 """Schema-fixed public recomputation from a verified batch ledger.
 
 The generator reads only the frozen protocol and the append-only ledger, both of which it
-re-verifies. It emits counts, outcome tallies, action and model-call aggregates, token/cost
-completeness, safety counters and the batch stop reason. It never emits prompts, company
-data, per-trial timing, request IDs, run IDs, credentials, raw traces, or any held-out task
-content, and it refuses to phrase a small qualification batch as a comparative result.
+re-verifies. It emits counts, outcome tallies, action, model-call, wall-time and per-trial
+cost aggregates, approval counts, token/cost completeness, safety counters, the batch stop
+reason and, per preregistered comparison, the declared write boundary with paired
+concordance counts. The paired counts carry no direction: they measure how often the two
+arms disagree, which is the variance input `power.py` needs, not which arm won. It never
+emits prompts, company data, per-trial timing, request IDs, run IDs, credentials, raw
+traces, or any held-out task content, and it refuses to phrase a small qualification batch
+as a comparative result.
 """
 from __future__ import annotations
 
@@ -31,11 +35,19 @@ _SAFETY = (
 _AGGREGATE_FIELDS = {"count", "total", "median", "maximum"}
 _ARM_FIELDS = {
     "arm_id", "engine", "engine_release", "capability_profile", "source_mode",
-    "source_interface",
+    "source_interface", "approval_boundary", "mutation_journal",
     "trials", "valid_trials", "apparatus_invalid_trials", "outcomes",
-    "terminal_reasons", "page_actions", "business_calls", "model_calls",
+    "terminal_reasons", "page_actions", "business_calls", "model_calls", "wall_ms",
     "known_input_tokens", "known_output_tokens", "usage_unavailable_calls",
-    "known_cost_cny", "total_cost_cny", "safety",
+    "known_cost_cny", "known_cost_cny_per_trial", "total_cost_cny",
+    "approvals_requested", "approvals_approved", "approvals_denied", "safety",
+}
+_ARM_AGGREGATES = ("page_actions", "business_calls", "model_calls", "wall_ms",
+                   "known_cost_cny_per_trial")
+_COMPARISON_FIELDS = {
+    "comparison_id", "comparison_type", "left_arm", "right_arm", "approval_boundary",
+    "eligible_tasks", "pairs_scheduled", "pairs_completed", "pairs_both_valid",
+    "concordant_pairs", "discordant_pairs", "discordance_rate",
 }
 _REPORT_FIELDS = {
     "artifact_version", "kind", "purpose", "comparative_claim_supported",
@@ -45,13 +57,16 @@ _REPORT_FIELDS = {
     "valid_trials", "apparatus_invalid_trials", "apparatus_codes",
     "provider_reported_models", "model_calls", "usage_unavailable_calls",
     "known_input_tokens", "known_output_tokens", "known_cost_cny", "total_cost_cny",
-    "safety_events", "safety", "arms", "interpretation", "report_digest",
+    "safety_events", "safety", "arms", "comparisons", "interpretation", "report_digest",
 }
 _INTERPRETATION = (
     "This report recomputes one batch from its verified ledger. It qualifies the "
     "execution and evaluation apparatus only. It does not establish a task success "
     "rate, an advantage or disadvantage against PageAgent, a source-retrieval effect, "
-    "or a no-gain conclusion."
+    "or a no-gain conclusion. Paired concordance counts describe how often two arms "
+    "disagree on the same task; they carry no direction and exist to plan sample size. "
+    "A comparison declared capability_only reports what each arm can do and cannot "
+    "support a claim about write safety."
 )
 
 
@@ -59,14 +74,43 @@ def _has_fields(value: Any, fields: set[str] | frozenset[str]) -> bool:
     return isinstance(value, dict) and set(value) == set(fields)
 
 
-def _aggregate(values: list[int]) -> dict[str, Any]:
+def _aggregate(values: list[int] | list[float], *, digits: int | None = None) -> dict[str, Any]:
     if not values:
         return {"count": 0, "total": 0, "median": None, "maximum": None}
+    total, mid, top = sum(values), float(median(values)), max(values)
+    if digits is not None:
+        total, mid, top = round(total, digits), round(mid, digits), round(top, digits)
+    return {"count": len(values), "total": total, "median": mid, "maximum": top}
+
+
+def _comparison_summary(comparison: Mapping[str, Any], protocol: Mapping[str, Any],
+                        records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Count paired agreement for one comparison without saying which arm passed."""
+    comparison_id = comparison["comparison_id"]
+    by_position: dict[int, list[dict[str, Any]]] = {}
+    for record in records:
+        if record["comparison_id"] == comparison_id:
+            by_position.setdefault(record["schedule_position"], []).append(record)
+    completed = [pair for pair in by_position.values() if len(pair) == 2]
+    both_valid = [pair for pair in completed
+                  if all(record["trial_status"] == "valid" for record in pair)]
+    discordant = sum(
+        (pair[0]["evaluation_status"] == "PASS") != (pair[1]["evaluation_status"] == "PASS")
+        for pair in both_valid)
     return {
-        "count": len(values),
-        "total": sum(values),
-        "median": float(median(values)),
-        "maximum": max(values),
+        "comparison_id": comparison_id,
+        "comparison_type": comparison["comparison_type"],
+        "left_arm": comparison["left_arm"],
+        "right_arm": comparison["right_arm"],
+        "approval_boundary": comparison["approval_boundary"],
+        "eligible_tasks": len(comparison["eligible_task_ids"]),
+        "pairs_scheduled": sum(
+            row["comparison_id"] == comparison_id for row in protocol["schedule"]),
+        "pairs_completed": len(completed),
+        "pairs_both_valid": len(both_valid),
+        "concordant_pairs": len(both_valid) - discordant,
+        "discordant_pairs": discordant,
+        "discordance_rate": (round(discordant / len(both_valid), 6) if both_valid else None),
     }
 
 
@@ -82,6 +126,8 @@ def _arm_summary(arm: Mapping[str, Any], records: list[dict[str, Any]]) -> dict[
         "capability_profile": arm["capability_profile"],
         "source_mode": arm["source_mode"],
         "source_interface": arm["source_interface"],
+        "approval_boundary": arm["approval_boundary"],
+        "mutation_journal": arm["mutation_journal"],
         "trials": len(selected),
         "valid_trials": len(valid),
         "apparatus_invalid_trials": len(selected) - len(valid),
@@ -94,11 +140,18 @@ def _arm_summary(arm: Mapping[str, Any], records: list[dict[str, Any]]) -> dict[
         "page_actions": _aggregate([record["metrics"]["page_actions"] for record in valid]),
         "business_calls": _aggregate([record["metrics"]["business_calls"] for record in valid]),
         "model_calls": _aggregate([record["metrics"]["model_calls"] for record in selected]),
+        "wall_ms": _aggregate([record["metrics"]["wall_ms"] for record in valid]),
         "known_input_tokens": sum(record["metrics"]["known_input_tokens"] for record in selected),
         "known_output_tokens": sum(record["metrics"]["known_output_tokens"] for record in selected),
         "usage_unavailable_calls": unknown_calls,
         "known_cost_cny": known_cost,
+        "known_cost_cny_per_trial": _aggregate(
+            [record["metrics"]["known_cost_cny"] for record in selected], digits=6),
         "total_cost_cny": None if unknown_calls else known_cost,
+        "approvals_requested": sum(
+            record["metrics"]["approvals_requested"] for record in selected),
+        "approvals_approved": sum(record["metrics"]["approvals_approved"] for record in selected),
+        "approvals_denied": sum(record["metrics"]["approvals_denied"] for record in selected),
         "safety": {name: sum(record["safety"][name] for record in selected) for name in _SAFETY},
     }
 
@@ -123,6 +176,9 @@ def build_report(*, protocol: Mapping[str, Any], development_seal: Mapping[str, 
         else "schedule_complete" if status == "COMPLETE" else "batch_open")
     arms = [_arm_summary(arm, records)
             for arm in sorted(protocol["arms"], key=lambda item: item["arm_id"])]
+    comparisons = [_comparison_summary(comparison, protocol, records)
+                   for comparison in sorted(protocol["comparisons"],
+                                            key=lambda item: item["comparison_id"])]
     core = {
         "artifact_version": REPORT_VERSION,
         "kind": "twenty_public_report",
@@ -162,6 +218,7 @@ def build_report(*, protocol: Mapping[str, Any], development_seal: Mapping[str, 
         "safety_events": safety_events,
         "safety": {name: sum(record["safety"][name] for record in records) for name in _SAFETY},
         "arms": arms,
+        "comparisons": comparisons,
         "interpretation": _INTERPRETATION,
     }
     if unknown_calls and core["total_cost_cny"] is not None:
@@ -189,9 +246,15 @@ def verify_report(value: Any) -> dict[str, Any]:
             or not _has_fields(arm.get("outcomes"), frozenset(_OUTCOMES))
             or not _has_fields(arm.get("safety"), frozenset(_SAFETY))
             or any(not _has_fields(arm.get(name), frozenset(_AGGREGATE_FIELDS))
-                   for name in ("page_actions", "business_calls", "model_calls"))
+                   for name in _ARM_AGGREGATES)
             for arm in arms):
         raise EvaluationInputError("public report arm schema is invalid")
+    comparisons = value.get("comparisons")
+    if not isinstance(comparisons, list) or any(
+            not _has_fields(comparison, _COMPARISON_FIELDS)
+            or comparison.get("approval_boundary") not in {"equivalent", "capability_only"}
+            for comparison in comparisons):
+        raise EvaluationInputError("public report comparison schema is invalid")
     core = {key: value[key] for key in value if key != "report_digest"}
     if value.get("report_digest") != digest_json(core):
         raise EvaluationInputError("public report digest does not match its content")
