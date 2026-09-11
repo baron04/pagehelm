@@ -20,6 +20,17 @@ sample size changes with the unknown paired discordance rate. It is assumptions-
 not model evidence. Its count must be recomputed from a paired development pilot before a
 formal held-out set is sealed.
 
+Two paired development pilots have since been run on synthetic records with one model: the
+21-pair Companies v1 schedule and 26 breadth templates across five read, navigation and
+refusal kinds. After apparatus asymmetries were removed, every pair agreed. That is not
+evidence that the engines are equivalent; it means the current development tasks do not
+discriminate between them, so a preregistered causal suite built from them would be
+uninformative. The repository therefore publishes breadth results as product breadth
+indicators (outcomes by task kind, latency, cost and refusal correctness) and treats any
+PageAgent comparison as exploratory, with intervals and without a verdict. A causal suite
+would be revisited only if a task family appears on which at least one engine fails
+consistently in development.
+
 The evaluator currently covers only three Companies tasks:
 
 - `query`: the response must list every active company name and domain, and business
