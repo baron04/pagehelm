@@ -103,7 +103,8 @@ from web_operation_agent.tests.route_fixture import (                # noqa: E40
 from web_operation_agent.ledger import SessionLedger                         # noqa: E402
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionReceipt,     # noqa: E402
                                          ElementRef, OperationContract, PageObservation)
-from web_operation_agent.session import ServerAgentSession, TaskSpec         # noqa: E402
+from web_operation_agent.session import (LabApparatus, ServerAgentSession,
+                                         TaskSpec)         # noqa: E402
 from web_operation_agent.tests.test_session import _Chat, _Control           # noqa: E402
 from web_operation_agent.tests.chat_port_contract import (                   # noqa: E402
     CancellableChatDouble)
@@ -169,8 +170,8 @@ class _DeadControl(_Control):
 def _run(chat, browser, control):
     with tempfile.TemporaryDirectory() as tmp:
         s = ServerAgentSession(
-            task=TaskSpec(task_ref="T", prompt="change the delivery address"), arm="S",
-            chat=chat, browser=browser, control=control,
+            task=TaskSpec(task_ref="T", prompt="change the delivery address"),
+            lab=LabApparatus(arm="S"), chat=chat, browser=browser, control=control,
             ledger=SessionLedger(Path(tmp) / "l.jsonl", "r1"),
             step_budget=6, wall_budget_s=120, run_id="r1",
             application_routes=FIXTURE_ROUTE_PORT)
@@ -352,7 +353,8 @@ class TheEvidenceThePlannerHadIsRecorded(unittest.TestCase):
         try:
             session = fixture.session(
                 application_routes=FIXTURE_ROUTE_PORT, chat=_PlanChat(),
-                task=TaskSpec(task_ref="T", prompt="do the thing"), plan_from_page=True)
+                task=TaskSpec(task_ref="T", prompt="do the thing"),
+                lab=LabApparatus(plan_from_page=True))
             session.entry_observation = _page()
             session._plan()
             events = session.ledger.of_kind("evidence_retrieved")

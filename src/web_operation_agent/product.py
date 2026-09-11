@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit
 
-from .application import BoundApplication
+from .application import BoundApplication, SourceCapability
 from .answering import render_structured_query_answer
 from .browser import TransportError
 from .business import BusinessToolResult, BusinessToolRuntime
@@ -488,14 +488,15 @@ class AgentTurnExecutor:
 
         session = ServerAgentSession(
             task=task,
-            arm="U",
             chat=self.chat,
             browser=browser,
             control=self.control,
             ledger=ledger,
-            source_map=self.source_map,
-            source_contract=False,
-            source_affordance_mode=self.config.source_affordance_mode,
+            # No `lab=`: a deployed turn has no arm to define, and the one keyword that
+            # would inject a known-good plan is not reachable from here at all.
+            source=SourceCapability(
+                source_map=self.source_map,
+                source_affordance_mode=self.config.source_affordance_mode),
             step_budget=self.config.step_budget,
             wall_budget_s=self.config.wall_budget_s,
             run_id=run_id,

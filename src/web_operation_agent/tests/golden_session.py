@@ -38,6 +38,7 @@ from types import SimpleNamespace
 from typing import Callable
 
 from web_operation_agent.answering import StructuredQueryAnswer
+from web_operation_agent.application import SourceCapability
 from web_operation_agent.business import (BusinessMutationIndeterminate,
                                           BusinessMutationSpec, BusinessSkill,
                                           BusinessToolError, BusinessToolResult,
@@ -47,7 +48,8 @@ from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionReceipt, ElementRef,
                                          PageObservation)
-from web_operation_agent.session import ServerAgentSession, TaskSpec
+from web_operation_agent.session import (LabApparatus, ServerAgentSession,
+                                         TaskSpec)
 from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
 from web_operation_agent.tests.knowledge_fixture import (FixtureKnowledgeRouter,
                                                          FixtureSkill)
@@ -339,11 +341,11 @@ def _session(tmp: Path, name: str, *, chat, browser, control=None, **overrides):
     arguments = {
         "task": TaskSpec(task_ref="T", prompt="Show the seed trays.",
                          supported_scope="Read the current application only."),
-        "arm": "G", "chat": chat, "browser": browser,
+        "chat": chat, "browser": browser, "lab": LabApparatus(arm="G"),
         "control": control if control is not None else ScriptedControl([[], [], [], []]),
         "ledger": SessionLedger(tmp / f"{name}.jsonl", name),
         "run_id": name, "step_budget": 6, "wall_budget_s": 120,
-        "source_contract": False, "application_routes": FIXTURE_ROUTE_PORT,
+        "application_routes": FIXTURE_ROUTE_PORT,
     }
     arguments.update(overrides)
     session = ServerAgentSession(**arguments)
@@ -600,8 +602,8 @@ def source_candidates_are_delivered_with_citations(tmp: Path) -> Prepared:
     browser = ScriptedBrowser()
     session = _session(
         tmp, "source_candidates_are_delivered_with_citations", chat=chat,
-        browser=browser, source_map=source_map, source_contract=False,
-        source_affordance_mode="auto")
+        browser=browser, source=SourceCapability(
+            source_map=source_map, source_affordance_mode="auto"))
     session.adopt_entry(browser.observe())
     return Prepared(session=session, chat=chat, browser=browser)
 
@@ -615,7 +617,7 @@ def runtime_source_lookup_returns_cited_evidence(tmp: Path) -> Prepared:
     browser = ScriptedBrowser()
     session = _session(
         tmp, "runtime_source_lookup_returns_cited_evidence", chat=chat, browser=browser,
-        source_map=source_map, source_contract=False, runtime_source=True)
+        source=SourceCapability(source_map=source_map, runtime_source=True))
     session.adopt_entry(browser.observe())
     return Prepared(session=session, chat=chat, browser=browser)
 
@@ -739,10 +741,10 @@ def tool_surface_compositions(tmp: Path) -> dict[str, ServerAgentSession]:
     add("browser_without_click", disabled_actions=frozenset({"click"}))
     add("with_knowledge_router", knowledge_router=FixtureKnowledgeRouter((TRAY_SKILL,)))
     add("with_application_entry", allow_application_entry=True)
-    add("with_runtime_source", source_map=source_map, source_contract=False,
-        runtime_source=True)
-    add("with_source_affordances", source_map=source_map, source_contract=False,
-        source_affordance_mode="auto")
+    add("with_runtime_source",
+        source=SourceCapability(source_map=source_map, runtime_source=True))
+    add("with_source_affordances", source=SourceCapability(
+        source_map=source_map, source_affordance_mode="auto"))
     add("with_read_only_business_skill", control=ReadOnlyControl(),
         business_tools=BusinessToolRuntime((read_skill,), QueryExecutor()))
     add("with_mutation_business_skill", control=ReadOnlyControl(),

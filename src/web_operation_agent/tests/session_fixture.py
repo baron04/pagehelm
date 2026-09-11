@@ -32,7 +32,6 @@ class SessionFixture:
         self._sessions += 1
         arguments = {
             "task": TaskSpec("T", "inspect"),
-            "arm": "S",
             "chat": _Chat([]),
             "browser": _Browser([_obs(1)]),
             "control": _Control([[], []]),

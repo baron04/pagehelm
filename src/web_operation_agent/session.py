@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 from urllib.parse import urlencode, urljoin, urlsplit
 
-from .application import ApplicationRoutePort
+from .application import ApplicationRoutePort, SourceCapability
 from .affordance import SourceAffordance, resolve_source_affordances
 from .browser import BrowserExecutor, TransportError, TurnCancelled
 from .business import (BusinessMutationIndeterminate, BusinessToolError,
@@ -269,6 +269,62 @@ inventing a path. A tool refusal is runtime evidence: inspect the returned fresh
 choose a different allowed action.
 """
 
+@dataclass(frozen=True)
+class _StepEnd:
+    """How one refused step ended: a terminal reason, or a fresh page and what to say.
+
+    Exactly one of the two is set. Making that a value rather than a tuple of four is what
+    lets `_run` treat every pre-dispatch refusal identically: terminate, or continue with
+    the page the refusal just obtained.
+    """
+
+    reason: str = ""
+    detail: str = ""
+    observation: "PageObservation | None" = None
+    feedback: str = ""
+
+    @property
+    def terminal(self) -> bool:
+        return bool(self.reason)
+
+
+@dataclass(frozen=True)
+class LabApparatus:
+    """Settings that exist only so a comparison harness can define its arms.
+
+    Keeping them as four independent keywords on a constructor that a deployment also calls
+    was the problem: `oracle_contract` injects a known-good plan, which is hidden expected
+    state AGENTS.md forbids in an agent's context, and it sat in the signature between a
+    budget and an approval callback with nothing to mark it apart. As one value the boundary
+    is in the signature rather than in a docstring, and `product.py` passing no `lab=` at all
+    is a structural fact a test can assert.
+
+    `arm` is only a label: the session does not branch on it. It rides here because naming
+    an arm is a lab's business, and a product turn should not have to invent one.
+    """
+
+    arm: str = "U"
+    #: Plan from the task and the page, with no source evidence -- the control arm.
+    plan_from_page: bool = False
+    #: A known-good contract handed to the run. Hidden expected state; never a product path.
+    oracle_contract: "OperationContract | None" = None
+    #: Query-expansion cache shared across the trials of one source-contract arm.
+    terms_cache: object = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.arm, str) or not self.arm.strip() or len(self.arm) > 64:
+            raise ValueError("arm must be a short non-empty label")
+        if not isinstance(self.plan_from_page, bool):
+            raise ValueError("plan_from_page must be a boolean")
+        if self.oracle_contract is not None and not isinstance(
+                self.oracle_contract, OperationContract):
+            raise TypeError("oracle_contract must be an OperationContract or None")
+
+
+#: What a session gets when nobody is running an experiment.
+NO_LAB = LabApparatus()
+
+
 @dataclass
 class TaskSpec:
     """The public description of the work. Everything here may be shown to the model.
@@ -333,33 +389,33 @@ class RunResult:
 class ServerAgentSession:
     """One task, one browser, one model, one audit ledger.
 
-    The constructor's keywords have three distinct owners, and confusing them is how an
-    experiment leaks into a product:
+    The constructor takes three kinds of thing, and the signature says which is which --
+    confusing them is how an experiment leaks into a product:
 
-    * **Deployment source capability** -- `source_map`, `source_contract`, `runtime_source`,
-      `source_affordance_mode`. These describe what the deployment's compiled source lets a
-      session do. A deployment does not choose them by hand: they follow from whether its
-      application distribution ships a `SourceCompiler` and whether that compiler ran for
-      this release. `web_operation_agent_odoo.OdooApplicationAdapter.source_capability`
-      returns them as one value for exactly this reason.
-    * **Lab apparatus** -- `arm`, `plan_from_page`, `oracle_contract`, `terms_cache`. These
-      exist so the comparison harness can define its arms; `oracle_contract` in particular
-      injects a known-good plan, which is hidden expected state. `product.py` passes none of
-      them, and `test_product.LabApparatusNeverReachesTheProduct` keeps it that way.
-    * **Product policy** -- everything else: budgets, disabled actions, approval, identity.
+    * **`source`** -- a `SourceCapability`: what this deployment's compiled source lets a
+      session do. A deployment does not pick its four settings by hand; they follow from
+      whether the application distribution ships a `SourceCompiler` and whether that
+      compiler ran for this release, which is why an adapter returns them as one value
+      (`OdooApplicationAdapter.source_capability`). Omitting it means no compiled source.
+    * **`lab`** -- a `LabApparatus`: settings that exist only so the comparison harness can
+      define its arms, `oracle_contract` above all. `product.py` passes no `lab=`, and
+      `test_product.LabApparatusNeverReachesTheProduct` keeps it that way by inspecting the
+      keywords a product turn actually uses.
+    * **everything else** -- product policy: budgets, disabled actions, approval, identity.
+
+    These were eight loose keywords until the behaviour gold standard existed to prove the
+    grouping changed nothing (`tests/test_session_golden.py`).
     """
 
-    def __init__(self, *, task: TaskSpec, arm: str, chat, browser: BrowserExecutor,
+    def __init__(self, *, task: TaskSpec, chat, browser: BrowserExecutor,
                  control: ControlPlaneClient, ledger: SessionLedger,
-                 source_map=None, plan_from_page: bool = False,
-                 oracle_contract: OperationContract | None = None,
+                 source: SourceCapability | None = None,
+                 lab: LabApparatus = NO_LAB,
                  step_budget: int = 20, wall_budget_s: int = 300, run_id: str | None = None,
-                 terms_cache=None, keep_observations: int = 3, runtime_source: bool = False,
+                 keep_observations: int = 3,
                  disabled_actions: frozenset[str] | set[str] | None = None,
                  scope_first_policy: bool = False,
                  policy_block_limit: int | None = None,
-                 source_affordance_mode: str = "off",
-                 source_contract: bool | None = None,
                  knowledge_router: ApplicationKnowledgePort | None = None,
                  allow_application_entry: bool = False,
                  application_routes: ApplicationRoutePort | None = None,
@@ -371,18 +427,22 @@ class ServerAgentSession:
                  principal: PrincipalContext | None = None,
                  session_id: str = "", turn_id: str = "",
                  conversation_context: dict | None = None):
-        if not isinstance(source_affordance_mode, str):
-            raise ValueError("source_affordance_mode must be off, auto or empty")
-        if source_affordance_mode not in ("off", "auto", "empty"):
-            raise ValueError("source_affordance_mode must be off, auto or empty")
-        if source_contract is not None and not isinstance(source_contract, bool):
-            raise ValueError("source_contract must be a boolean or None")
-        if runtime_source and source_map is None:
-            raise ValueError("runtime source lookup requires a version-bound SourceMap")
-        if source_affordance_mode == "auto" and source_map is None:
-            raise ValueError("auto source affordances require a version-bound SourceMap")
-        if source_contract is True and source_map is None:
-            raise ValueError("a source contract requires a version-bound SourceMap")
+        if source is not None and not isinstance(source, SourceCapability):
+            raise TypeError("source must be a SourceCapability or None")
+        if not isinstance(lab, LabApparatus):
+            raise TypeError("lab must be a LabApparatus")
+        # `SourceCapability.__post_init__` already refuses every incoherent combination --
+        # a runtime lookup, an auto affordance mode or a source contract without a map --
+        # so there is exactly one place those rules live.
+        source = source if source is not None else SourceCapability.none()
+        source_map = source.source_map
+        source_contract = source.source_contract
+        runtime_source = source.runtime_source
+        source_affordance_mode = source.source_affordance_mode
+        arm = lab.arm
+        plan_from_page = lab.plan_from_page
+        oracle_contract = lab.oracle_contract
+        terms_cache = lab.terms_cache
         disabled = frozenset(disabled_actions or ())
         unknown_disabled = disabled - BROWSER_ACTIONS
         if unknown_disabled:
@@ -435,8 +495,7 @@ class ServerAgentSession:
                 knowledge_router, ApplicationKnowledgePort):
             raise TypeError("knowledge_router must implement ApplicationKnowledgePort or be None")
         source_routes_enabled = bool(
-            runtime_source or source_affordance_mode == "auto" or source_contract is True
-            or (source_contract is None and source_map is not None))
+            runtime_source or source_affordance_mode == "auto" or source_contract)
         if application_routes is None and (
                 source_routes_enabled or knowledge_router is not None or allow_application_entry):
             raise ValueError(
@@ -456,11 +515,11 @@ class ServerAgentSession:
         self.browser = browser
         self.control = control
         self.ledger = ledger
+        self.source = source
         self.source_map = source_map
-        # By default, providing a SourceMap enables source-backed contract compilation. A
-        # caller may disable that path while retaining the map only for runtime resolution.
-        self.source_contract = (source_map is not None
-                                if source_contract is None else source_contract)
+        #: Whether this run compiles its contract from cited source. A capability may carry a
+        #: map for runtime resolution only, so this is declared rather than inferred.
+        self.source_contract = source_contract
         # Explicit opt-in for runtime source retrieval.
         self.runtime_source = runtime_source
         # ``auto`` and ``empty`` are an experimental pair with byte-identical tool schemas.
@@ -564,6 +623,7 @@ class ServerAgentSession:
         self.disabled_actions = disabled
         self.policy_blocks = 0
         self.policy_block_limit = policy_block_limit
+        self.lab = lab
         #: Plan from the task and the page, with no source evidence. The control arm of the
         #: comparison: same planner, same schema, same withdrawal and recovery, nothing to cite.
         self.plan_from_page = plan_from_page
@@ -985,11 +1045,9 @@ class ServerAgentSession:
                                    command_id=receipt.command_id, after_tool="lookup_source",
                                    ok=receipt.ok, error_code=receipt.error_code,
                                    write=write["state"], write_attribution="unattributed")
-                if write["state"] in (WRITE_UNKNOWN, "control_error"):
-                    reason = "indeterminate_write" if write["state"] == WRITE_UNKNOWN else "control_plane_error"
-                    if write["state"] == WRITE_UNKNOWN:
-                        self._uncertain_write = write["detail"]
-                    return self._finish(result, t0, reason, write["detail"], steps=step)
+                reason, detail = self._settle_write(write)
+                if reason:
+                    return self._finish(result, t0, reason, detail, steps=step)
                 if receipt.observation is not None:
                     obs = receipt.observation
                 note = self._ground(obs, receipt, write["state"], write["refused_requests"])
@@ -1213,6 +1271,10 @@ class ServerAgentSession:
                             result, t0, "indeterminate_write",
                             "business mutation completed but fresh page observation failed: "
                             + str(exc), steps=step)
+                    # Deliberately not `_settle_write`: the typed acknowledgement and the
+                    # durable journal already agree this mutation completed, so stashing
+                    # `_uncertain_write` here would downgrade a known write to an unknown
+                    # one and invite reconciliation for something already settled.
                     if write["state"] in (WRITE_UNKNOWN, "control_error"):
                         reason = ("indeterminate_write" if write["state"] == WRITE_UNKNOWN
                                   else "control_plane_error")
@@ -1312,12 +1374,9 @@ class ServerAgentSession:
                                    page_epoch_before=prior_epoch,
                                    observation_epoch=observed_epoch,
                                    fresh_observation=fresh_observation)
-                if write["state"] in (WRITE_UNKNOWN, "control_error"):
-                    reason = ("indeterminate_write" if write["state"] == WRITE_UNKNOWN
-                              else "control_plane_error")
-                    if write["state"] == WRITE_UNKNOWN:
-                        self._uncertain_write = write["detail"]
-                    return self._finish(result, t0, reason, write["detail"], steps=step)
+                reason, detail = self._settle_write(write)
+                if reason:
+                    return self._finish(result, t0, reason, detail, steps=step)
                 if not fresh_observation:
                     return self._finish(
                         result, t0, "transport_error",
@@ -1354,31 +1413,18 @@ class ServerAgentSession:
                         "application_entry_rejected", step=step, reason=rejection,
                         element_ref=str(args.get("ref") or "")[:100],
                         requested_tool_dispatched=False, side_effect_possible=False)
-                    try:
-                        receipt, write, fresh = self._observe_after_source_rejection(
-                            obs, step, "enter_application")
-                    except TransportError as exc:
-                        return self._finish(
-                            result, t0, self._transport_terminal("observe", may_write=False),
-                            str(exc), steps=step)
-                    if write["state"] in (WRITE_UNKNOWN, "control_error"):
-                        reason = ("indeterminate_write" if write["state"] == WRITE_UNKNOWN
-                                  else "control_plane_error")
-                        if write["state"] == WRITE_UNKNOWN:
-                            self._uncertain_write = write["detail"]
-                        return self._finish(result, t0, reason, write["detail"], steps=step)
-                    if not fresh:
-                        return self._finish(
-                            result, t0, "transport_error",
-                            "application-entry refusal did not obtain a fresh observation",
-                            steps=step)
-                    obs = receipt.observation
-                    note = self._ground(obs, receipt, write["state"],
-                                        write["refused_requests"])
-                    messages += [_assistant_call(call), _tool_result(
-                        call, "The server rejected enter_application before dispatch: "
-                              + rejection + ".\n\n"
-                              + self._render(obs, receipt, note, write))]
+                    ended = self._refuse_before_dispatch(
+                        "enter_application",
+                        "The server rejected enter_application before dispatch: "
+                        + rejection + ".",
+                        obs=obs, step=step,
+                        no_fresh_detail=("application-entry refusal did not obtain a fresh "
+                                         "observation"))
+                    if ended.terminal:
+                        return self._finish(result, t0, ended.reason, ended.detail,
+                                            steps=step)
+                    obs = ended.observation
+                    messages += [_assistant_call(call), _tool_result(call, ended.feedback)]
                     messages = _trim(messages, self.keep_observations)
                     continue
                 self.ledger.append("application_entered", step=step, element_ref=ref)
@@ -1392,31 +1438,18 @@ class ServerAgentSession:
                         "skill_app_rejected", step=step,
                         skill_id=str(args.get("skill_id") or "")[:200], reason=rejection,
                         requested_tool_dispatched=False, side_effect_possible=False)
-                    try:
-                        receipt, write, fresh = self._observe_after_source_rejection(
-                            obs, step, "enter_skill_app")
-                    except TransportError as exc:
-                        return self._finish(
-                            result, t0, self._transport_terminal("observe", may_write=False),
-                            str(exc), steps=step)
-                    if write["state"] in (WRITE_UNKNOWN, "control_error"):
-                        reason = ("indeterminate_write" if write["state"] == WRITE_UNKNOWN
-                                  else "control_plane_error")
-                        if write["state"] == WRITE_UNKNOWN:
-                            self._uncertain_write = write["detail"]
-                        return self._finish(result, t0, reason, write["detail"], steps=step)
-                    if not fresh:
-                        return self._finish(
-                            result, t0, "transport_error",
-                            "Skill app refusal could not obtain a successful fresh observation",
-                            steps=step)
-                    obs = receipt.observation
-                    note = self._ground(obs, receipt, write["state"],
-                                        write["refused_requests"])
-                    messages += [_assistant_call(call), _tool_result(
-                        call, "The server rejected enter_skill_app before dispatch: "
-                              + rejection + ".\n\n"
-                              + self._render(obs, receipt, note, write))]
+                    ended = self._refuse_before_dispatch(
+                        "enter_skill_app",
+                        "The server rejected enter_skill_app before dispatch: "
+                        + rejection + ".",
+                        obs=obs, step=step,
+                        no_fresh_detail=("Skill app refusal could not obtain a successful "
+                                         "fresh observation"))
+                    if ended.terminal:
+                        return self._finish(result, t0, ended.reason, ended.detail,
+                                            steps=step)
+                    obs = ended.observation
+                    messages += [_assistant_call(call), _tool_result(call, ended.feedback)]
                     messages = _trim(messages, self.keep_observations)
                     continue
                 assert skill is not None
@@ -1438,32 +1471,19 @@ class ServerAgentSession:
                         skill_id=str(args.get("skill_id") or "")[:200],
                         reason=rejection, requested_tool_dispatched=False,
                         side_effect_possible=False)
-                    try:
-                        receipt, write, fresh = self._observe_after_source_rejection(
-                            obs, step, "open_skill_route")
-                    except TransportError as exc:
-                        return self._finish(
-                            result, t0, self._transport_terminal("observe", may_write=False),
-                            str(exc), steps=step)
-                    if write["state"] in (WRITE_UNKNOWN, "control_error"):
-                        reason = ("indeterminate_write" if write["state"] == WRITE_UNKNOWN
-                                  else "control_plane_error")
-                        if write["state"] == WRITE_UNKNOWN:
-                            self._uncertain_write = write["detail"]
-                        return self._finish(result, t0, reason, write["detail"], steps=step)
-                    if not fresh:
-                        return self._finish(
-                            result, t0, "transport_error",
-                            "Skill refusal could not obtain a successful fresh observation",
-                            steps=step)
-                    obs = receipt.observation
-                    note = self._ground(obs, receipt, write["state"],
-                                        write["refused_requests"])
-                    messages += [_assistant_call(call), _tool_result(
-                        call, "The server rejected open_skill_route before dispatch: "
-                              + rejection + ". Use the current page to satisfy the Skill "
-                              "precondition, or choose another action.\n\n"
-                              + self._render(obs, receipt, note, write))]
+                    ended = self._refuse_before_dispatch(
+                        "open_skill_route",
+                        "The server rejected open_skill_route before dispatch: "
+                        + rejection + ". Use the current page to satisfy the Skill "
+                        "precondition, or choose another action.",
+                        obs=obs, step=step,
+                        no_fresh_detail=("Skill refusal could not obtain a successful fresh "
+                                         "observation"))
+                    if ended.terminal:
+                        return self._finish(result, t0, ended.reason, ended.detail,
+                                            steps=step)
+                    obs = ended.observation
+                    messages += [_assistant_call(call), _tool_result(call, ended.feedback)]
                     messages = _trim(messages, self.keep_observations)
                     continue
                 assert skill is not None
@@ -1502,34 +1522,21 @@ class ServerAgentSession:
                         candidate_id=str(candidate_id or "")[:200], reason=rejection,
                         binding_names=binding_names, citations=citations,
                         requested_tool_dispatched=False, side_effect_possible=False)
-                    try:
-                        receipt, write, fresh = self._observe_after_source_rejection(
-                            obs, step, "open_source_candidate")
-                    except TransportError as e:
-                        return self._finish(result, t0,
-                                            self._transport_terminal("observe", may_write=False),
-                                            str(e), steps=step)
-                    if write["state"] in (WRITE_UNKNOWN, "control_error"):
-                        reason = ("indeterminate_write" if write["state"] == WRITE_UNKNOWN
-                                  else "control_plane_error")
-                        if write["state"] == WRITE_UNKNOWN:
-                            self._uncertain_write = write["detail"]
-                        return self._finish(result, t0, reason, write["detail"], steps=step)
-                    if not fresh:
-                        return self._finish(
-                            result, t0, "transport_error",
-                            "source-candidate refusal could not obtain a successful fresh "
-                            "observation", steps=step)
-                    obs = receipt.observation
-                    note = self._ground(obs, receipt, write["state"],
-                                        write["refused_requests"])
-                    self._sync_plan_message(messages)
-                    feedback = (
+                    ended = self._refuse_before_dispatch(
+                        "open_source_candidate",
                         "The server rejected open_source_candidate before dispatch: "
-                        f"{rejection}. The browser received only observe and returned a fresh "
-                        "page. Choose from the newly delivered candidates or act on that page."
-                        "\n\n" + self._render(obs, receipt, note, write))
-                    messages += [_assistant_call(call), _tool_result(call, feedback)]
+                        f"{rejection}. The browser received only observe and returned a "
+                        "fresh page. Choose from the newly delivered candidates or act on "
+                        "that page.",
+                        obs=obs, step=step,
+                        no_fresh_detail=("source-candidate refusal could not obtain a "
+                                         "successful fresh observation"))
+                    if ended.terminal:
+                        return self._finish(result, t0, ended.reason, ended.detail,
+                                            steps=step)
+                    obs = ended.observation
+                    self._sync_plan_message(messages)
+                    messages += [_assistant_call(call), _tool_result(call, ended.feedback)]
                     messages = _trim(messages, self.keep_observations)
                     continue
 
@@ -1665,12 +1672,9 @@ class ServerAgentSession:
                                # apart from one that was quietly being recovered.
                                relogin=receipt.relogin,
                                source_route_citations=source_route_citations)
-            if write["state"] in (WRITE_UNKNOWN, "control_error"):
-                reason = "indeterminate_write" if write["state"] == WRITE_UNKNOWN else "control_plane_error"
-                if write["state"] == WRITE_UNKNOWN:
-                    self._uncertain_write = write["detail"]
-                return self._finish(result, t0, reason, write["detail"],
-                                    steps=step)
+            reason, detail = self._settle_write(write)
+            if reason:
+                return self._finish(result, t0, reason, detail, steps=step)
             if receipt.observation is not None:
                 obs = receipt.observation
             if skill_app_entry is not None:
@@ -1790,6 +1794,57 @@ class ServerAgentSession:
         if len(url) > 2000:
             return "", "the assembled route is too long"
         return url, ""
+
+    def _settle_write(self, write: dict) -> tuple[str, str]:
+        """Decide, in one place, whether an observed write state ends the run.
+
+        Eight copies of this test lived in `_run`, and each had to remember to stash
+        `_uncertain_write` before returning. A copy that forgets does not fail a test; it
+        silently drops the strongest evidence the run had about a write that may have
+        landed, which is the failure this project cares about most. Seven are now this
+        method; the eighth is the completed typed mutation, which stays different on
+        purpose and says so where it sits.
+
+        Returns an empty reason when the step may continue.
+        """
+        state = write["state"]
+        if state == WRITE_UNKNOWN:
+            # Permission is not an acknowledgement. This survives observations, trimming
+            # and every exit, and `finish` merges it into the mutation journal.
+            self._uncertain_write = write["detail"]
+            return "indeterminate_write", write["detail"]
+        if state == "control_error":
+            return "control_plane_error", write["detail"]
+        return "", ""
+
+    def _refuse_before_dispatch(self, tool: str, explanation: str, *,
+                                obs: PageObservation, step: int,
+                                no_fresh_detail: str) -> "_StepEnd":
+        """Refuse a server-side tool, then hand the agent a page it can actually act on.
+
+        A refusal that only says "no" leaves the model reasoning about a page it can no
+        longer see, so every one of these paths observes first and renders the result. Four
+        call sites wrote the sequence out and differed only in the tool's name and one
+        sentence; a fifth copy is how one of them would come to stop settling its write.
+
+        The caller keeps the ledger line that says *why* it refused -- that reason is
+        specific to the tool -- and decides whether to re-sync the plan message.
+        """
+        try:
+            receipt, write, fresh = self._observe_after_source_rejection(obs, step, tool)
+        except TransportError as exc:
+            return _StepEnd(reason=self._transport_terminal("observe", may_write=False),
+                            detail=str(exc))
+        reason, detail = self._settle_write(write)
+        if reason:
+            return _StepEnd(reason=reason, detail=detail)
+        if not fresh:
+            return _StepEnd(reason="transport_error", detail=no_fresh_detail)
+        fresh_obs = receipt.observation
+        note = self._ground(fresh_obs, receipt, write["state"], write["refused_requests"])
+        return _StepEnd(observation=fresh_obs,
+                        feedback=explanation + "\n\n"
+                                 + self._render(fresh_obs, receipt, note, write))
 
     def _observe_after_source_rejection(self, obs: PageObservation, step: int,
                                         after_tool: str) -> tuple[ActionReceipt, dict, bool]:

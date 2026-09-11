@@ -16,7 +16,7 @@ from web_operation_agent.embedded_gateway import EmbeddedGateway
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.remote import RemoteBrowserClient, RemoteSessionRegistry
 from web_operation_agent.schemas import ApprovalRequest
-from web_operation_agent.session import ServerAgentSession, TaskSpec
+from web_operation_agent.session import LabApparatus, ServerAgentSession, TaskSpec
 from web_operation_agent.tests.test_session import _Chat, _Control
 
 
@@ -1256,7 +1256,8 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                 with tempfile.TemporaryDirectory() as tmp:
                     ledger = SessionLedger(Path(tmp) / "embedded.jsonl", "embedded-react")
                     session = ServerAgentSession(
-                        task=TaskSpec("embedded-runtime", "Open the order details"), arm="P", chat=chat,
+                        task=TaskSpec("embedded-runtime", "Open the order details"),
+                        lab=LabApparatus(arm="P"), chat=chat,
                         browser=remote, control=_Control([[], [], [], []]), ledger=ledger,
                         step_budget=4, wall_budget_s=15,
                         run_id="embedded-react",

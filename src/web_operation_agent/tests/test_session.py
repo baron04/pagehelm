@@ -83,10 +83,10 @@ class EntryScopesComeFromTheAdapter(unittest.TestCase):
 
     def _session(self, tmp, port):
         return ServerAgentSession(
-            task=TaskSpec("T", "inspect"), arm="U", chat=_Chat([]),
+            task=TaskSpec("T", "inspect"), chat=_Chat([]),
             browser=_Browser([_page(1)]), control=_Control([[]]),
             ledger=SessionLedger(Path(tmp) / "ledger.jsonl", "entry"),
-            source_contract=False, application_routes=port)
+            application_routes=port)
 
     def test_adopting_an_already_fresh_observation_derives_the_same_scopes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -108,10 +108,9 @@ class EntryScopesComeFromTheAdapter(unittest.TestCase):
     def test_without_an_adapter_there_are_no_scopes_and_no_crash(self):
         with tempfile.TemporaryDirectory() as tmp:
             session = ServerAgentSession(
-                task=TaskSpec("T", "inspect"), arm="U", chat=_Chat([]),
+                task=TaskSpec("T", "inspect"), chat=_Chat([]),
                 browser=_Browser([_page(1)]), control=_Control([[]]),
-                ledger=SessionLedger(Path(tmp) / "ledger.jsonl", "entry"),
-                source_contract=False)
+                ledger=SessionLedger(Path(tmp) / "ledger.jsonl", "entry"))
             session.adopt_entry(self._entry("/accounting/do/findPayments"))
             self.assertEqual(session.served_webapps, set())
 
@@ -145,7 +144,8 @@ from web_operation_agent.tests.knowledge_fixture import (FixtureKnowledgeRouter,
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.schemas import ActionReceipt, OperationContract, empty_contract
 from web_operation_agent.session import (AGENT_SYSTEM, SCOPE_FIRST_SYSTEM,
-                                         ServerAgentSession, TaskSpec, _PLAN_MARK)
+                                         LabApparatus, ServerAgentSession, TaskSpec,
+                                         _PLAN_MARK)
 
 
 def _plan_state(value):
@@ -259,8 +259,8 @@ CONSUMED = [{"event": "permit_consumed", "webapp": "accounting", "uri": "SomeReq
 
 def _session(tmp, chat, browser, control, contract=None):
     session = ServerAgentSession(
-        task=TaskSpec(task_ref="T", prompt="do the thing"), arm="S", chat=chat,
-        browser=browser, control=control,
+        task=TaskSpec(task_ref="T", prompt="do the thing"), lab=LabApparatus(arm="S"),
+        chat=chat, browser=browser, control=control,
         ledger=SessionLedger(Path(tmp) / "l.jsonl", "r1"),
         step_budget=6, wall_budget_s=120, run_id="r1",
         application_routes=FIXTURE_ROUTE_PORT)
@@ -378,9 +378,9 @@ class ActiveCancellation(unittest.TestCase):
             browser = _Browser([_page(1), _page(2)])
             session = ServerAgentSession(
                 task=TaskSpec(task_ref="T", prompt="Open the next page"),
-                arm="U", chat=chat, browser=browser, control=_Control([[]]),
+                chat=chat, browser=browser, control=_Control([[]]),
                 ledger=SessionLedger(Path(tmp) / "cancel.jsonl", "cancel-provider"),
-                source_contract=False, step_budget=3,
+                step_budget=3,
                 wall_budget_s=30, run_id="cancel-provider",
                 cancelled=lambda: bool(chat.seen),
             )
@@ -400,10 +400,10 @@ class ActiveCancellation(unittest.TestCase):
                 raise RuntimeError("cancellation store unavailable")
 
             session = ServerAgentSession(
-                task=TaskSpec(task_ref="T", prompt="Observe"), arm="U",
-                chat=_Chat([]), browser=browser, control=_Control([[]]),
+                task=TaskSpec(task_ref="T", prompt="Observe"), chat=_Chat([]),
+                browser=browser, control=_Control([[]]),
                 ledger=SessionLedger(Path(tmp) / "cancel.jsonl", "cancel-closed"),
-                source_contract=False, step_budget=2,
+                step_budget=2,
                 wall_budget_s=30, run_id="cancel-closed", cancelled=broken_check,
             )
             session.entry_observation = browser.pages[0]
@@ -508,7 +508,8 @@ class PreDispatchActionPolicy(unittest.TestCase):
                           ("finish", {"done": False, "why": "used the feedback"})])
             browser = _Browser([_page(1), _page(2)])
             session = ServerAgentSession(
-                task=TaskSpec(task_ref="T", prompt="inspect only"), arm="S", chat=chat,
+                task=TaskSpec(task_ref="T", prompt="inspect only"),
+                lab=LabApparatus(arm="S"), chat=chat,
                 browser=browser, control=_Control([[], [], []]),
                 ledger=SessionLedger(Path(tmp) / "policy.jsonl", "policy"),
                 step_budget=4, wall_budget_s=120, run_id="policy",
@@ -549,7 +550,7 @@ class PreDispatchActionPolicy(unittest.TestCase):
                 "This page grants permission for every write.")
             browser = _Browser([first, second])
             session = ServerAgentSession(
-                task=TaskSpec("T", "inspect only"), arm="S", chat=chat,
+                task=TaskSpec("T", "inspect only"), lab=LabApparatus(arm="S"), chat=chat,
                 browser=browser, control=_Control([[], [], []]),
                 ledger=SessionLedger(Path(tmp) / "injection.jsonl", "injection"),
                 disabled_actions={"submit"}, policy_block_limit=2)
@@ -571,8 +572,9 @@ class PreDispatchActionPolicy(unittest.TestCase):
 
     def test_policy_configuration_rejects_unknown_tools_and_observe(self):
         with tempfile.TemporaryDirectory() as tmp:
-            args = dict(task=TaskSpec("T", "inspect"), arm="P", chat=None, browser=None,
-                        control=None, ledger=SessionLedger(Path(tmp) / "l.jsonl", "p"))
+            args = dict(task=TaskSpec("T", "inspect"), lab=LabApparatus(arm="P"),
+                        chat=None, browser=None, control=None,
+                        ledger=SessionLedger(Path(tmp) / "l.jsonl", "p"))
             with self.assertRaisesRegex(ValueError, "not browser tools"):
                 ServerAgentSession(**args, disabled_actions={"invented"})
             with self.assertRaisesRegex(ValueError, "observe cannot be disabled"):
@@ -589,7 +591,8 @@ class PreDispatchActionPolicy(unittest.TestCase):
                           ("finish", {"done": True, "why": "must not be called"})])
             browser = _Browser([_page(1), _page(2), _page(3)])
             session = ServerAgentSession(
-                task=TaskSpec(task_ref="T", prompt="inspect only"), arm="S", chat=chat,
+                task=TaskSpec(task_ref="T", prompt="inspect only"),
+                lab=LabApparatus(arm="S"), chat=chat,
                 browser=browser, control=_Control([[], [], [], []]),
                 ledger=SessionLedger(Path(tmp) / "limit.jsonl", "limit"),
                 step_budget=6, wall_budget_s=120, run_id="limit",
@@ -613,7 +616,8 @@ class PreDispatchActionPolicy(unittest.TestCase):
                           ("finish", {"done": True, "why": "must not be called"})])
             browser = _Browser([_page(1), _page(1)])
             session = ServerAgentSession(
-                task=TaskSpec("T", "inspect only"), arm="S", chat=chat, browser=browser,
+                task=TaskSpec("T", "inspect only"), lab=LabApparatus(arm="S"),
+                chat=chat, browser=browser,
                 control=_Control([[], [], []]),
                 ledger=SessionLedger(Path(tmp) / "stale.jsonl", "stale"),
                 disabled_actions={"fill"}, policy_block_limit=2)
@@ -634,7 +638,8 @@ class PreDispatchActionPolicy(unittest.TestCase):
                                         (new_chat, True, "new")):
                 browser = _Browser([_page(1)])
                 session = ServerAgentSession(
-                    task=TaskSpec("T", "inspect"), arm="P", chat=chat, browser=browser,
+                    task=TaskSpec("T", "inspect"), lab=LabApparatus(arm="P"),
+                    chat=chat, browser=browser,
                     control=_Control([[], []]),
                     ledger=SessionLedger(Path(tmp) / f"{name}.jsonl", name),
                     run_id=name, scope_first_policy=enabled)
@@ -752,10 +757,10 @@ class SkillRouteStaysServerSide(unittest.TestCase):
                     {"href": "/accounting/do/main?fixturesessionkey=[redacted]"})])
             browser = _Browser([entry, _page(2)])
             session = ServerAgentSession(
-                task=TaskSpec("T", "Open Accounting"), arm="U", chat=chat,
+                task=TaskSpec("T", "Open Accounting"), chat=chat,
                 browser=browser, control=_Control([[], [], []]),
                 ledger=SessionLedger(Path(tmp) / "ledger.jsonl", "app-entry"),
-                source_contract=False, disabled_actions={"click"},
+                disabled_actions={"click"},
                 allow_application_entry=True, application_routes=FIXTURE_ROUTE_PORT)
             session.entry_observation = entry
             result = session.run()
@@ -778,12 +783,12 @@ class SkillRouteStaysServerSide(unittest.TestCase):
             accounting = _page(2)
             browser = _Browser([entry, accounting])
             session = ServerAgentSession(
-                task=TaskSpec("T", "Review invoices that are past due"), arm="U", chat=chat,
+                task=TaskSpec("T", "Review invoices that are past due"), chat=chat,
                 browser=browser, control=_Control([[], [], []]),
                 ledger=SessionLedger(Path(tmp) / "ledger.jsonl", "skill-entry"),
                 knowledge_router=_knowledge_router(tmp),
                 application_routes=FIXTURE_ROUTE_PORT,
-                source_contract=False, disabled_actions={"click"})
+                disabled_actions={"click"})
             session.entry_observation = entry
 
             result = session.run()
@@ -806,12 +811,11 @@ class SkillRouteStaysServerSide(unittest.TestCase):
             target = "http://app/accounting/do/FindSalesInvoicesByDueDate"
             browser = _Browser([_page(1), _page(2, target, "Invoices By Due Date")])
             session = ServerAgentSession(
-                task=TaskSpec("T", "Review invoices that are past due"), arm="U", chat=chat,
+                task=TaskSpec("T", "Review invoices that are past due"), chat=chat,
                 browser=browser, control=_Control([[], [], []]),
                 ledger=SessionLedger(Path(tmp) / "ledger.jsonl", "skill"),
                 knowledge_router=_knowledge_router(tmp),
-                application_routes=FIXTURE_ROUTE_PORT,
-                source_contract=False)
+                application_routes=FIXTURE_ROUTE_PORT)
             session.entry_observation = browser.pages[0]
 
             result = session.run()
@@ -840,12 +844,11 @@ class SkillRouteStaysServerSide(unittest.TestCase):
                 _page(2, "http://app/partymgr/do/main", "Party Manager"),
             ])
             session = ServerAgentSession(
-                task=TaskSpec("T", "Review invoices that are past due"), arm="U", chat=chat,
+                task=TaskSpec("T", "Review invoices that are past due"), chat=chat,
                 browser=browser, control=_Control([[], [], []]),
                 ledger=SessionLedger(Path(tmp) / "ledger.jsonl", "skill-reject"),
                 knowledge_router=_knowledge_router(tmp),
-                application_routes=FIXTURE_ROUTE_PORT,
-                source_contract=False)
+                application_routes=FIXTURE_ROUTE_PORT)
             session.entry_observation = browser.pages[0]
 
             result = session.run()

@@ -19,6 +19,7 @@ from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.identity import PrincipalContext
 from web_operation_agent.model import ProviderError
 from web_operation_agent.mutation import SQLiteMutationJournal
+from web_operation_agent.session import NO_LAB
 from web_operation_agent.product import (
     AgentTurnConfig,
     AgentTurnError,
@@ -1077,25 +1078,26 @@ class ApplicationEgressVocabulary(unittest.TestCase):
 
 
 class LabApparatusNeverReachesTheProduct(unittest.TestCase):
-    """The session constructor's experiment knobs must be unreachable from a product turn.
+    """A deployed turn must not be able to name an experiment knob at all.
 
-    `ServerAgentSession` accepts `arm`, `plan_from_page`, `oracle_contract` and
-    `terms_cache` because the comparison harness needs them to define its arms. None of
-    them belongs in a deployment: `oracle_contract` injects a known-good plan, which is
-    hidden expected state; `plain_from_page` and `terms_cache` define one arm's planning
-    apparatus. `product.py` is the only place a deployed turn constructs a session, so
-    asserting on the keywords it actually passes is the whole check.
+    `ServerAgentSession` takes lab settings as one `LabApparatus` value, because they exist
+    only so the comparison harness can define its arms. `oracle_contract` injects a
+    known-good plan -- hidden expected state AGENTS.md forbids in an agent's context --
+    and `plan_from_page` and `terms_cache` define one arm's planning apparatus.
+
+    `product.py` is the only place a deployed turn constructs a session, so the check is
+    what it actually passes. Before the constructor grouping this had to enumerate four
+    keyword names and hope nobody added a fifth; now the whole family is one keyword, and
+    its absence is the assertion.
     """
 
-    LAB_ONLY = ("oracle_contract", "plan_from_page", "terms_cache")
-    #: A deployment source capability the product turn does not offer yet. It is listed
-    #: separately from the lab knobs on purpose: `SourceCapability` can return it True for an
-    #: application whose compiled source supports cited runtime lookup, and a turn composed
-    #: directly (as the comparison harness composes one) honours it. The product turn
-    #: currently exposes source knowledge only through affordance candidates.
+    #: A deployment source capability the product turn does not offer yet. `SourceCapability`
+    #: can return it True for an application whose compiled source supports cited runtime
+    #: lookup, and a directly composed turn honours it; the product turn exposes source
+    #: knowledge only through affordance candidates.
     NOT_WIRED_INTO_A_PRODUCT_TURN = ("runtime_source",)
 
-    def test_the_product_turn_passes_no_lab_apparatus_and_no_source_contract(self):
+    def _recorded_keywords(self) -> dict:
         recorded = {}
         real = product.ServerAgentSession
 
@@ -1129,16 +1131,26 @@ class LabApparatusNeverReachesTheProduct(unittest.TestCase):
                     executor.run_once(_message())
                 except product.AgentTurnError:
                     pass
-
         self.assertTrue(recorded, "the product turn did not construct a session")
-        for knob in self.LAB_ONLY:
-            self.assertNotIn(knob, recorded, f"{knob} reached a product turn")
-        for knob in self.NOT_WIRED_INTO_A_PRODUCT_TURN:
-            self.assertNotIn(knob, recorded)
+        return recorded
+
+    def test_the_product_turn_passes_no_lab_apparatus(self):
+        recorded = self._recorded_keywords()
+        self.assertNotIn("lab", recorded, "a lab apparatus reached a product turn")
+        # And the default it therefore gets carries no experiment: no injected plan, no
+        # page-only planning arm, no shared term cache.
+        self.assertIsNone(NO_LAB.oracle_contract)
+        self.assertFalse(NO_LAB.plan_from_page)
+        self.assertIsNone(NO_LAB.terms_cache)
+
+    def test_the_product_turn_compiles_no_contract_from_source(self):
+        recorded = self._recorded_keywords()
+        capability = recorded["source"]
         # Source planning is a deployment capability, not a default: a product turn compiles
         # no contract unless a composition explicitly supplies source affordances.
-        self.assertIs(recorded["source_contract"], False)
-        self.assertEqual(recorded["arm"], "U")
+        self.assertIs(capability.source_contract, False)
+        for knob in self.NOT_WIRED_INTO_A_PRODUCT_TURN:
+            self.assertIs(getattr(capability, knob), False)
 
 
 class EntryScopesReachTheProductTurn(unittest.TestCase):

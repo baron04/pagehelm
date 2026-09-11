@@ -13,7 +13,7 @@ from pathlib import Path
 
 from web_operation_agent.product import AgentTurnConfig
 from web_operation_agent.ledger import SessionLedger
-from web_operation_agent.session import TOOL_SCHEMAS, ServerAgentSession, TaskSpec
+from web_operation_agent.session import LabApparatus, TOOL_SCHEMAS, ServerAgentSession, TaskSpec
 from web_operation_agent.tests.test_session import _Browser, _Chat, _Control, _obs
 
 
@@ -30,7 +30,7 @@ class TheToolSurfaceFollowsTheActionPolicy(unittest.TestCase):
 
     def _session(self, disabled):
         return ServerAgentSession(
-            task=TaskSpec("T", "inspect"), arm="S", chat=_Chat([]),
+            task=TaskSpec("T", "inspect"), lab=LabApparatus(arm="S"), chat=_Chat([]),
             browser=_Browser([_obs(1)]), control=_Control([[], []]),
             ledger=SessionLedger(Path(self.directory.name) / "audit.jsonl", "t"),
             disabled_actions=frozenset(disabled))

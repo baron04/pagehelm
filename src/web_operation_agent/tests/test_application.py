@@ -247,11 +247,17 @@ class SourceCapabilityTests(unittest.TestCase):
         # how a comparison keeps the tool surface identical across arms.
         self.assertEqual(SourceCapability(source_affordance_mode="empty").source_map, None)
 
-    def test_the_keywords_are_exactly_the_ones_a_session_takes(self):
+    def test_a_session_takes_the_capability_itself_not_its_keywords(self):
+        """`session_kwargs()` survives for adapters that still spread it; a session does not.
+
+        Spreading four keywords is how a composition came to enable three of them. The
+        session now accepts only the whole value, so there is nothing to pick from.
+        """
         import inspect
         from web_operation_agent.session import ServerAgentSession
         accepted = set(inspect.signature(ServerAgentSession.__init__).parameters)
-        self.assertTrue(set(SourceCapability.none().session_kwargs()).issubset(accepted))
+        self.assertIn("source", accepted)
+        self.assertEqual(accepted & set(SourceCapability.none().session_kwargs()), set())
 
 
 if __name__ == "__main__":

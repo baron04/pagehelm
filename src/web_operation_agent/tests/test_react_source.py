@@ -4,11 +4,13 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
+from web_operation_agent.application import SourceCapability
 from web_operation_agent.affordance import (AffordanceParameter,
                                              resolve_source_affordances)
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.schemas import empty_contract
-from web_operation_agent.session import SCOPE_FIRST_SYSTEM, ServerAgentSession, TaskSpec
+from web_operation_agent.session import (LabApparatus, SCOPE_FIRST_SYSTEM,
+                                         ServerAgentSession, TaskSpec)
 from web_operation_agent.tests.route_fixture import (FIXTURE_ROUTE_PORT,
                                                      fixture_route_identity)
 from web_operation_agent.privacy import (SESSION_HANDOFF_QUERY_KEYS,
@@ -31,9 +33,11 @@ class RuntimeSourceLoop(unittest.TestCase):
             chat = _Chat([("finish", {"done": False, "why": "inspect prompt"})])
             browser = _Browser([_obs(1)])
             session = ServerAgentSession(application_routes=FIXTURE_ROUTE_PORT,
-                task=TaskSpec("T", "inspect"), arm="S", chat=chat, browser=browser,
+                task=TaskSpec("T", "inspect"), lab=LabApparatus(arm="S"), chat=chat,
+                browser=browser,
                 control=_Control([[], []]), ledger=SessionLedger(root / "prompt.jsonl", "p"),
-                source_map=_map(root), runtime_source=True,
+                source=SourceCapability(source_map=_map(root), source_contract=True,
+                                        runtime_source=True),
                 scope_first_policy=True)
             session.entry_observation = _obs(1)
             session.run()
@@ -54,10 +58,12 @@ class RuntimeSourceLoop(unittest.TestCase):
                 _obs(1), _obs(2), _obs(3), _obs(4, "http://app" + route),
             ])
             session = ServerAgentSession(application_routes=FIXTURE_ROUTE_PORT,
-                task=TaskSpec("T", "open and inspect trays"), arm="S", chat=chat,
+                task=TaskSpec("T", "open and inspect trays"),
+                lab=LabApparatus(arm="S"), chat=chat,
                 browser=browser, control=_Control([[], [], [], [], []]),
                 ledger=SessionLedger(root / "recovery.jsonl", "recovery"),
-                source_map=_map(root), runtime_source=True,
+                source=SourceCapability(source_map=_map(root), source_contract=True,
+                                        runtime_source=True),
                 disabled_actions={"fill", "select", "submit"}, policy_block_limit=2)
             session.entry_observation = _obs(1)
 
@@ -84,10 +90,13 @@ class RuntimeSourceLoop(unittest.TestCase):
                           ("fill", {"ref": "e1", "value": "new cultivar"}),
                           ("finish", {"done": False, "why": "diagnostic complete"})])
             browser = _Browser([_obs(1), _obs(2), _obs(3)])
-            session = ServerAgentSession(application_routes=FIXTURE_ROUTE_PORT, task=TaskSpec("T", "sprout seedling"), arm="S",
+            session = ServerAgentSession(
+                application_routes=FIXTURE_ROUTE_PORT, task=TaskSpec("T", "sprout seedling"),
+                lab=LabApparatus(arm="S"),
                 chat=chat, browser=browser, control=_Control([[], [], []]),
                 ledger=SessionLedger(root / "run.jsonl", "react-test"),
-                source_map=smap, runtime_source=True)
+                source=SourceCapability(source_map=smap, source_contract=True,
+                                        runtime_source=True))
             session.contract = empty_contract("T")
             session.contract_source = "compiled"
             session.plan_state._withdraw("synthetic counterevidence to the initial route")
@@ -114,10 +123,13 @@ class RuntimeSourceLoop(unittest.TestCase):
             misleading = _obs(1, "http://app/beacon/do/LampSchedule/create")
             misleading.title = "Lamp Schedule Lighthouse"
             browser = _Browser([misleading, _obs(2)])
-            session = ServerAgentSession(application_routes=FIXTURE_ROUTE_PORT, task=TaskSpec("T", "inspect"), arm="S",
+            session = ServerAgentSession(
+                application_routes=FIXTURE_ROUTE_PORT, task=TaskSpec("T", "inspect"),
+                lab=LabApparatus(arm="S"),
                 chat=chat, browser=browser, control=_Control([[], []]),
                 ledger=SessionLedger(root / "run.jsonl", "query-context"),
-                source_map=smap, runtime_source=True)
+                source=SourceCapability(source_map=smap, source_contract=True,
+                                        runtime_source=True))
             session.entry_observation = misleading
             session.served_webapps = {"glasshouse", "beacon"}
             session.run()
@@ -131,10 +143,12 @@ class RuntimeSourceLoop(unittest.TestCase):
             for enabled in (False, True):
                 session = ServerAgentSession(
                     application_routes=FIXTURE_ROUTE_PORT, task=TaskSpec("T", "inspect"),
-                    arm="S", chat=_Chat([]), browser=_Browser([_obs(1)]),
+                    lab=LabApparatus(arm="S"), chat=_Chat([]),
+                    browser=_Browser([_obs(1)]),
                     control=_Control([[], []]),
                     ledger=SessionLedger(root / f"tools-{enabled}.jsonl", "t"),
-                    source_map=_map(root), runtime_source=enabled)
+                    source=SourceCapability(source_map=_map(root), source_contract=True,
+                                            runtime_source=enabled))
                 names = [t["function"]["name"] for t in session.tool_schemas()]
                 self.assertEqual("lookup_source" in names, enabled)
                 self.assertEqual("open_source_route" in names, enabled)
@@ -149,10 +163,13 @@ class RuntimeSourceLoop(unittest.TestCase):
                           ("finish", {"done": False, "why": "mechanism observed"})])
             browser = _Browser([_obs(1), _obs(2),
                                 _obs(3, "http://app/glasshouse/do/findTrays?trayId=42")])
-            session = ServerAgentSession(application_routes=FIXTURE_ROUTE_PORT, task=TaskSpec("T", "inspect trays"), arm="S",
+            session = ServerAgentSession(
+                application_routes=FIXTURE_ROUTE_PORT, task=TaskSpec("T", "inspect trays"),
+                lab=LabApparatus(arm="S"),
                 chat=chat, browser=browser, control=_Control([[], [], []]),
                 ledger=SessionLedger(root / "run.jsonl", "source-route"),
-                source_map=smap, runtime_source=True)
+                source=SourceCapability(source_map=smap, source_contract=True,
+                                        runtime_source=True))
             session.entry_observation = _obs(1)
             result = session.run()
             self.assertEqual(result.terminal_reason, "agent_refused")
@@ -172,10 +189,13 @@ class RuntimeSourceLoop(unittest.TestCase):
                               "url": "https://elsewhere.invalid/glasshouse/do/findTrays"}),
                           ("finish", {"done": False, "why": "rejected as expected"})])
             browser = _Browser([_obs(1), _obs(2)])
-            session = ServerAgentSession(application_routes=FIXTURE_ROUTE_PORT, task=TaskSpec("T", "inspect trays"), arm="S",
+            session = ServerAgentSession(
+                application_routes=FIXTURE_ROUTE_PORT, task=TaskSpec("T", "inspect trays"),
+                lab=LabApparatus(arm="S"),
                 chat=chat, browser=browser, control=_Control([[], []]),
                 ledger=SessionLedger(root / "run.jsonl", "source-route-reject"),
-                source_map=smap, runtime_source=True)
+                source=SourceCapability(source_map=smap, source_contract=True,
+                                        runtime_source=True))
             session.entry_observation = _obs(1)
             session.run()
             self.assertEqual([a for a, _ in browser.done], ["observe"])
@@ -193,10 +213,13 @@ class RuntimeSourceLoop(unittest.TestCase):
                               ("open_source_route", {"url": url}),
                               ("finish", {"done": False, "why": "rejected"})])
                 browser = _Browser([_obs(1), _obs(2)])
-                session = ServerAgentSession(application_routes=FIXTURE_ROUTE_PORT, task=TaskSpec("T", "inspect trays"), arm="S",
+                session = ServerAgentSession(
+                application_routes=FIXTURE_ROUTE_PORT, task=TaskSpec("T", "inspect trays"),
+                lab=LabApparatus(arm="S"),
                     chat=chat, browser=browser, control=_Control([[], []]),
                     ledger=SessionLedger(root / "run.jsonl", "source-route-unsafe"),
-                    source_map=_map(root), runtime_source=True)
+                    source=SourceCapability(source_map=_map(root), source_contract=True,
+                                            runtime_source=True))
                 session.entry_observation = _obs(1)
                 session.run()
                 self.assertEqual([a for a, _ in browser.done], ["observe"])
@@ -214,10 +237,13 @@ class RuntimeSourceLoop(unittest.TestCase):
                           ("finish", {"done": False, "why": "verified read-only page"})])
             browser = _Browser([_obs(1), _obs(2), _obs(3),
                                 _obs(4, "http://app/glasshouse/do/findTrays?trayId=42")])
-            session = ServerAgentSession(application_routes=FIXTURE_ROUTE_PORT, task=TaskSpec("T", "inspect trays"), arm="S",
+            session = ServerAgentSession(
+                application_routes=FIXTURE_ROUTE_PORT, task=TaskSpec("T", "inspect trays"),
+                lab=LabApparatus(arm="S"),
                 chat=chat, browser=browser, control=_Control([[], [permit], [], []]),
                 ledger=SessionLedger(root / "run.jsonl", "source-route-after-write"),
-                source_map=_map(root), runtime_source=True)
+                source=SourceCapability(source_map=_map(root), source_contract=True,
+                                        runtime_source=True))
             session.entry_observation = _obs(1)
             result = session.run()
             self.assertEqual(result.terminal_reason, "agent_refused")
@@ -231,7 +257,9 @@ class RuntimeSourceLoop(unittest.TestCase):
             chat = _Chat([("goto", {"url": "/invented"}),
                           ("finish", {"done": False, "why": "rejected"})])
             browser = _Browser([_obs(1)])
-            session = ServerAgentSession(application_routes=FIXTURE_ROUTE_PORT, task=TaskSpec("T", "inspect"), arm="P",
+            session = ServerAgentSession(
+                application_routes=FIXTURE_ROUTE_PORT, task=TaskSpec("T", "inspect"),
+                lab=LabApparatus(arm="P"),
                 chat=chat, browser=browser, control=_Control([[]]),
                 ledger=SessionLedger(root / "run.jsonl", "page-route-reject"))
             session.entry_observation = _obs(1)
@@ -245,7 +273,9 @@ class RuntimeSourceLoop(unittest.TestCase):
             chat = _Chat([("goto", {"url": "/y"}),
                           ("finish", {"done": False, "why": "opened"})])
             browser = _Browser([_obs(1), _obs(2, "http://app/y")])
-            session = ServerAgentSession(application_routes=FIXTURE_ROUTE_PORT, task=TaskSpec("T", "inspect"), arm="P",
+            session = ServerAgentSession(
+                application_routes=FIXTURE_ROUTE_PORT, task=TaskSpec("T", "inspect"),
+                lab=LabApparatus(arm="P"),
                 chat=chat, browser=browser, control=_Control([[], []]),
                 ledger=SessionLedger(root / "run.jsonl", "page-route-open"))
             session.entry_observation = _obs(1)
@@ -253,26 +283,34 @@ class RuntimeSourceLoop(unittest.TestCase):
             self.assertEqual([a for a, _ in browser.done], ["goto"])
 
     def test_cannot_enable_source_without_a_source_map(self):
-        with self.assertRaises(ValueError):
-            ServerAgentSession(application_routes=FIXTURE_ROUTE_PORT, task=TaskSpec("T", "x"), arm="P", chat=None, browser=None,
-                               control=None, ledger=None, runtime_source=True)
-        with self.assertRaisesRegex(ValueError, "auto source affordances"):
-            ServerAgentSession(application_routes=FIXTURE_ROUTE_PORT, task=TaskSpec("T", "x"), arm="P", chat=None, browser=None,
-                               control=None, ledger=None,
-                               source_affordance_mode="auto")
-        with self.assertRaisesRegex(ValueError, "source_contract"):
-            ServerAgentSession(application_routes=FIXTURE_ROUTE_PORT, task=TaskSpec("T", "x"), arm="P", chat=None, browser=None,
-                               control=None, ledger=None,
-                               source_contract="yes")
+        """Every incoherent combination is refused in one place, by the capability itself.
+
+        The session used to repeat these checks in its own words. Having them only on
+        `SourceCapability` is the point of taking a capability rather than four keywords:
+        a composition that never builds one cannot reach a half-enabled source arm.
+        """
+        for kwargs in ({"runtime_source": True},
+                       {"source_affordance_mode": "auto"},
+                       {"source_contract": True}):
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaisesRegex(ValueError, "version-bound SourceMap"):
+                    SourceCapability(**kwargs)
+        with self.assertRaisesRegex(ValueError, "source_contract must be a boolean"):
+            SourceCapability(source_contract="yes")
+        with self.assertRaisesRegex(TypeError, "SourceCapability"):
+            ServerAgentSession(application_routes=FIXTURE_ROUTE_PORT,
+                               task=TaskSpec("T", "x"), source={"runtime_source": True},
+                               chat=None, browser=None, control=None, ledger=None)
 
     def test_source_navigation_requires_an_application_route_port(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(ValueError, "application route port"):
                 ServerAgentSession(
-                    task=TaskSpec("T", "x"), arm="P", chat=None,
+                    task=TaskSpec("T", "x"), lab=LabApparatus(arm="P"), chat=None,
                     browser=_Browser([_obs(1)]), control=_Control([[]]),
                     ledger=SessionLedger(Path(tmp) / "route-port.jsonl", "route-port"),
-                    source_map=_map(Path(tmp)), runtime_source=True)
+                    source=SourceCapability(source_map=_map(Path(tmp)),
+                                            source_contract=True, runtime_source=True))
 
 
 class SourceAffordanceLoop(unittest.TestCase):
@@ -291,12 +329,13 @@ class SourceAffordanceLoop(unittest.TestCase):
             for mode, source_map in (("auto", smap), ("empty", None)):
                 chats.append(_Chat([("finish", {"done": False, "why": "inspect"})]))
                 session = ServerAgentSession(application_routes=FIXTURE_ROUTE_PORT,
-                    task=TaskSpec("T", "Inspect the seed trays"), arm="P",
+                    task=TaskSpec("T", "Inspect the seed trays"),
+                    lab=LabApparatus(arm="P"),
                     chat=chats[-1],
                     browser=_Browser([_obs(1)]), control=_Control([[], []]),
                     ledger=SessionLedger(root / f"{mode}.jsonl", mode),
-                    source_map=source_map, source_contract=False,
-                    source_affordance_mode=mode)
+                    source=SourceCapability(source_map=source_map,
+                                            source_affordance_mode=mode))
                 session.entry_observation = _obs(1)
                 session.served_webapps = {"glasshouse"}
                 sessions.append(session)
@@ -334,10 +373,12 @@ class SourceAffordanceLoop(unittest.TestCase):
                 _obs(1), _obs(2, "http://app/glasshouse/do/findTrays"),
             ])
             session = ServerAgentSession(application_routes=FIXTURE_ROUTE_PORT,
-                task=TaskSpec("T", "Inspect the seed trays"), arm="P", chat=chat,
+                task=TaskSpec("T", "Inspect the seed trays"),
+                lab=LabApparatus(arm="P"), chat=chat,
                 browser=browser, control=_Control([[], [], []]),
                 ledger=SessionLedger(root / "auto.jsonl", "auto"),
-                source_map=smap, source_contract=False, source_affordance_mode="auto")
+                source=SourceCapability(source_map=smap,
+                                        source_affordance_mode="auto"))
             session.entry_observation = _obs(1)
             session.served_webapps = {"glasshouse"}
 
@@ -365,11 +406,12 @@ class SourceAffordanceLoop(unittest.TestCase):
                           ("finish", {"done": False, "why": "done"})])
             browser = _Browser([_obs(1), _obs(2)])
             session = ServerAgentSession(application_routes=FIXTURE_ROUTE_PORT,
-                task=TaskSpec("T", "Inspect records"), arm="S", chat=chat,
+                task=TaskSpec("T", "Inspect records"), lab=LabApparatus(arm="S"),
+                chat=chat,
                 browser=browser, control=_Control([[], [], []]),
                 ledger=SessionLedger(root / "lookup.jsonl", "lookup"),
-                source_map=_map(root), source_contract=False,
-                runtime_source=True, source_affordance_mode="auto")
+                source=SourceCapability(source_map=_map(root), runtime_source=True,
+                                        source_affordance_mode="auto"))
             session.entry_observation = _obs(1)
             session.served_webapps = {"glasshouse"}
             session.run()
@@ -391,10 +433,11 @@ class SourceAffordanceLoop(unittest.TestCase):
             ])
             browser = _Browser([_obs(1), _obs(2)])
             session = ServerAgentSession(application_routes=FIXTURE_ROUTE_PORT,
-                task=TaskSpec("T", "Inspect records"), arm="P", chat=chat,
+                task=TaskSpec("T", "Inspect records"), lab=LabApparatus(arm="P"),
+                chat=chat,
                 browser=browser, control=_Control([[], [], []]),
                 ledger=SessionLedger(root / "empty.jsonl", "empty"),
-                source_contract=False, source_affordance_mode="empty")
+                source=SourceCapability(source_affordance_mode="empty"))
             session.entry_observation = _obs(1)
             session.run()
             self.assertEqual([action for action, _ in browser.done], ["observe"])
@@ -456,11 +499,12 @@ class SourceAffordanceLoop(unittest.TestCase):
                 '{"task_ref":"T","summary":"page-derived","citations":[]}'
             ])
             session = ServerAgentSession(application_routes=FIXTURE_ROUTE_PORT,
-                task=TaskSpec("T", "Inspect the seed trays"), arm="P", chat=model,
+                task=TaskSpec("T", "Inspect the seed trays"), chat=model,
                 browser=_Browser([_obs(1)]), control=_Control([[]]),
                 ledger=SessionLedger(root / "plan.jsonl", "plan"),
-                source_map=_map(root), source_contract=False, plan_from_page=True,
-                source_affordance_mode="auto")
+                source=SourceCapability(source_map=_map(root),
+                                        source_affordance_mode="auto"),
+                lab=LabApparatus(arm="P", plan_from_page=True))
             session.entry_observation = _obs(1)
             session.served_webapps = {"glasshouse"}
             session.plan()
