@@ -21,10 +21,16 @@ from .privacy import redact_sensitive_assignments, redact_session_handoffs
 
 
 class SessionLedger:
-    def __init__(self, path: str | Path, run_id: str):
+    def __init__(self, path: str | Path, run_id: str, *, base: dict | None = None):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.run_id = run_id
+        # Stamped onto every record. A run id alone does not say which conversation, which
+        # user turn or which tenant a line belongs to, and without that an operator reading a
+        # shared ledger cannot scope an incident. Injected once here rather than threaded
+        # through the call sites, because a caller that can forget it will.
+        self.base = {key: value for key, value in (base or {}).items()
+                     if isinstance(key, str) and isinstance(value, str) and value}
         self._lock = threading.Lock()
         self._seq = 0
         self.events: list[dict] = []
@@ -34,7 +40,7 @@ class SessionLedger:
             self._seq += 1
             fields = redact_sensitive_assignments(redact_session_handoffs(fields))
             rec = {"seq": self._seq, "t": round(time.time(), 3), "run_id": self.run_id,
-                   "event": event, **fields}
+                   **self.base, "event": event, **fields}
             self.events.append(rec)
             with open(self.path, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
@@ -49,5 +55,6 @@ class SessionLedger:
         counts: dict[str, int] = {}
         for e in self.events:
             counts[e["event"]] = counts.get(e["event"], 0) + 1
-        return {"run_id": self.run_id, "events": self._seq, "by_kind": counts,
+        return {"run_id": self.run_id, **self.base,
+                "events": self._seq, "by_kind": counts,
                 "path": str(self.path)}

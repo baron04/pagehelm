@@ -271,7 +271,10 @@ class AgentTurnExecution:
 
 RunIdFactory = Callable[[AgentTurnMessage], str]
 AnswerRenderer = Callable[[AgentAnswerContext], str]
-LedgerFactory = Callable[[Path, str], SessionLedger]
+#: Called as ``factory(path, run_id, base=...)``. The base mapping holds the session, turn
+#: and tenant a record belongs to; a factory that drops it produces an audit trail nobody can
+#: scope to an incident, so the argument is required rather than optional.
+LedgerFactory = Callable[..., SessionLedger]
 
 
 class AgentTurnExecutor:
@@ -396,7 +399,14 @@ class AgentTurnExecutor:
                 retryable=False,
             )
         started_at = time.time()
-        ledger = self.ledger_factory(self.config.ledger_path, run_id)
+        ledger = self.ledger_factory(
+            self.config.ledger_path, run_id,
+            base={"session_id": self.channel.session_id,
+                  "turn_id": turn_message.message_id,
+                  # The same digest the identity projection already publishes, so a line
+                  # can be scoped to a tenant without the ledger holding a tenant name.
+                  "tenant_digest": (principal.audit_projection().get("tenant_digest", "")
+                                    if principal is not None else "")})
         if principal is not None:
             ledger.append(
                 "turn_identity_bound",

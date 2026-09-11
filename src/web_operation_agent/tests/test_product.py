@@ -678,9 +678,9 @@ class AgentTurnExecutorTests(unittest.TestCase):
             root = Path(tmp)
             captured = []
 
-            def ledger_factory(path, run_id):
+            def ledger_factory(path, run_id, *, base=None):
                 from web_operation_agent.ledger import SessionLedger
-                ledger = SessionLedger(path, run_id)
+                ledger = SessionLedger(path, run_id, base=base)
                 captured.append(ledger)
                 return ledger
 
