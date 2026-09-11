@@ -7,13 +7,13 @@ import unittest
 
 from web_operation_agent.grounding import (NOT_APPLICABLE, REFUTED, SATISFIED, WRITE_NONE,
                                            WRITE_PERMITTED, WRITE_REFUSED, PlanState)
-from web_operation_agent_ofbiz.route import ofbiz_route_identity
+from web_operation_agent.tests.route_fixture import fixture_route_identity
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionReceipt, ElementRef,
                                          OperationContract, PageObservation)
 
 
 def _plan_state(value):
-    return PlanState.of(value, route_identity=ofbiz_route_identity)
+    return PlanState.of(value, route_identity=fixture_route_identity)
 
 
 def contract(steps, mutation=None) -> OperationContract:
@@ -22,7 +22,7 @@ def contract(steps, mutation=None) -> OperationContract:
         "summary": "s", "steps": steps, "mutation": mutation, "citations": ["a.xml:1-2"]})
 
 
-def page(url="http://app/accounting/control/main", title="Accounting Manager",
+def page(url="http://app/accounting/do/main", title="Accounting Manager",
          landmarks=("Accounting Manager",), messages=()) -> PageObservation:
     return PageObservation(schema_version=SCHEMA_VERSIONS["PageObservation"], epoch=1,
                            url=url, title=title, landmarks=list(landmarks),
@@ -83,7 +83,7 @@ class Confirmation(unittest.TestCase):
     def test_arriving_at_the_named_request_confirms_it_without_the_landmark(self):
         """The request is the fact; the landmark is a guess about how it will look."""
         st = _plan_state(contract(STEPS))
-        event = st.observe(page(url="http://app/accounting/control/findPayments",
+        event = st.observe(page(url="http://app/accounting/do/findPayments",
                                 title="Something Else", landmarks=["Nothing Familiar"]),
                            receipt(), WRITE_NONE)
         self.assertEqual(event["verdict"], SATISFIED)
@@ -92,10 +92,10 @@ class Confirmation(unittest.TestCase):
 class Refutation(unittest.TestCase):
     def test_a_refused_write_on_the_step_the_plan_named_refutes_it(self):
         st = _plan_state(contract(STEPS, MUTATION))
-        st.observe(page(url="http://app/accounting/control/findPayments"), receipt(), WRITE_NONE)
-        st.observe(page(url="http://app/accounting/control/editPaymentApplications"),
+        st.observe(page(url="http://app/accounting/do/findPayments"), receipt(), WRITE_NONE)
+        st.observe(page(url="http://app/accounting/do/editPaymentApplications"),
                    receipt(), WRITE_NONE)
-        event = st.observe(page(url="http://app/accounting/control/createPaymentApplication"),
+        event = st.observe(page(url="http://app/accounting/do/createPaymentApplication"),
                            receipt(), WRITE_REFUSED,
                            refused_requests=["accounting/createPaymentApplication"])
         self.assertEqual(event["verdict"], REFUTED)
@@ -103,7 +103,7 @@ class Refutation(unittest.TestCase):
 
     def test_a_page_that_says_no_refutes_the_step_it_was_supposed_to_satisfy(self):
         st = _plan_state(contract(STEPS))
-        event = st.observe(page(url="http://app/accounting/control/findPayments",
+        event = st.observe(page(url="http://app/accounting/do/findPayments",
                                 title="Action refused", landmarks=["Action refused"]),
                            receipt(), WRITE_NONE)
         self.assertEqual(event["verdict"], REFUTED)
@@ -131,7 +131,7 @@ class Withdrawal(unittest.TestCase):
         Waiting for an identical refusal adds no evidence and risks repeating the same write.
         """
         st = _plan_state(contract(STEPS, MUTATION))
-        st.observe(page(url="http://app/accounting/control/editInvoiceApplications"),
+        st.observe(page(url="http://app/accounting/do/editInvoiceApplications"),
                    receipt(), WRITE_REFUSED,
                    refused_requests=["accounting/createPaymentApplication"])
         self.assertTrue(st.withdrawn)
@@ -139,10 +139,10 @@ class Withdrawal(unittest.TestCase):
 
     def test_two_contradicted_steps_withdraw_the_plan(self):
         st = _plan_state(contract(STEPS, MUTATION))
-        st.observe(page(url="http://app/accounting/control/findPayments",
+        st.observe(page(url="http://app/accounting/do/findPayments",
                         title="Action refused"), receipt(), WRITE_NONE)
         self.assertFalse(st.withdrawn, "one wrong step is survivable")
-        st.observe(page(url="http://app/accounting/control/editPaymentApplications",
+        st.observe(page(url="http://app/accounting/do/editPaymentApplications",
                         title="Action refused"), receipt(), WRITE_NONE)
         self.assertTrue(st.withdrawn)
         self.assertIn("2 of its steps", st.withdrawn_because)
@@ -164,7 +164,7 @@ class Withdrawal(unittest.TestCase):
     def test_a_refusal_it_cannot_place_does_not_blame_an_unrelated_step(self):
         """An AJAX refusal without request identity cannot be assigned to the current step."""
         st = _plan_state(contract(STEPS, MUTATION))
-        event = st.observe(page(url="http://app/accounting/control/editInvoiceApplications"),
+        event = st.observe(page(url="http://app/accounting/do/editInvoiceApplications"),
                            receipt(), WRITE_REFUSED)
         self.assertEqual(event["verdict"], NOT_APPLICABLE)
         self.assertFalse(st.withdrawn)
@@ -177,10 +177,10 @@ class Withdrawal(unittest.TestCase):
         """An inference from page text is weaker evidence than a refusal, and one wrong
         intermediate step does not condemn a plan that may still be right about the rest."""
         st = _plan_state(contract(STEPS, MUTATION))
-        st.observe(page(url="http://app/accounting/control/findPayments",
+        st.observe(page(url="http://app/accounting/do/findPayments",
                         title="Action refused"), receipt(), WRITE_NONE)
         self.assertFalse(st.withdrawn)
-        st.observe(page(url="http://app/accounting/control/editPaymentApplications",
+        st.observe(page(url="http://app/accounting/do/editPaymentApplications",
                         title="Action refused"), receipt(), WRITE_NONE)
         self.assertTrue(st.withdrawn)
 

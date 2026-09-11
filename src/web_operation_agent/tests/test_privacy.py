@@ -7,6 +7,8 @@ from urllib.parse import quote
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.privacy import (
     SESSION_HANDOFF_KEYS,
+    SESSION_HANDOFF_QUERY_KEYS,
+    SessionHandoffPolicy,
     has_unredacted_sensitive_assignment,
     has_unredacted_session_handoff,
     redact_sensitive_assignments,
@@ -154,6 +156,59 @@ class GenericCredentialPrivacy(unittest.TestCase):
         self.assertEqual(first["business"], fields["business"])
         self.assertEqual(second["payload"]["url"], first["url"])
         self.assertEqual(len(disk.splitlines()), 2)
+
+
+class AdapterSessionVocabulary(unittest.TestCase):
+    """The static baseline is a floor, and an adapter's own vocabulary must reach redaction.
+
+    The review that raised this recorded the failure precisely: "Twenty's own session
+    parameters are not in the redaction scope." The baseline in `privacy.py` names OFBiz's
+    hand-off keys and nothing else, so an application whose session parameter this package
+    has never heard of -- Odoo's `session_id`, historically carried in URLs -- is invisible to
+    every consumer that only calls the module-level functions.
+    """
+
+    #: Declared by an adapter through `ApplicationRoutePort.session_handoff_query_keys`.
+    ADAPTER_KEY = "session_id"
+
+    def test_the_static_baseline_does_not_know_an_application_session_parameter(self):
+        self.assertNotIn(self.ADAPTER_KEY, SESSION_HANDOFF_QUERY_KEYS)
+        # Reverse verification: without the adapter vocabulary this value survives, which is
+        # exactly the leak the widened policy closes.
+        self.assertFalse(has_unredacted_session_handoff(
+            {self.ADAPTER_KEY: "SECRET"}, url_decode_depth=3))
+        self.assertEqual(
+            redact_session_handoffs(f"/web?{self.ADAPTER_KEY}=SECRET"),
+            f"/web?{self.ADAPTER_KEY}=SECRET")
+
+    def test_an_adapter_key_is_detected_and_redacted_in_every_carrier(self):
+        policy = SessionHandoffPolicy.extending({self.ADAPTER_KEY})
+        carriers = (
+            f"/web?{self.ADAPTER_KEY}=SECRET&next=1",
+            f"/web?{self.ADAPTER_KEY}%3DSECRET%26next%3D1",
+            {self.ADAPTER_KEY: "SECRET"},
+            {"name": self.ADAPTER_KEY, "value": "SECRET"},
+            ["outer", {"inner": f"{self.ADAPTER_KEY}=SECRET"}],
+        )
+        for carrier in carriers:
+            with self.subTest(carrier=carrier):
+                self.assertTrue(policy.has_unredacted(carrier, url_decode_depth=3))
+                cleaned = policy.redact(carrier)
+                self.assertNotIn("SECRET", json.dumps(cleaned, ensure_ascii=False))
+                self.assertFalse(policy.has_unredacted(cleaned, url_decode_depth=3))
+
+    def test_widening_keeps_the_baseline_keys(self):
+        policy = SessionHandoffPolicy.extending({self.ADAPTER_KEY})
+        self.assertTrue(SESSION_HANDOFF_QUERY_KEYS.issubset(policy.query_keys))
+        self.assertIn(self.ADAPTER_KEY, policy.query_keys)
+        self.assertEqual(policy.redact("/x?externalLoginKey=OLD"),
+                         "/x?externalLoginKey=[redacted]")
+
+    def test_the_session_ledger_projection_consumes_the_adapter_vocabulary(self):
+        policy = SessionHandoffPolicy.extending({self.ADAPTER_KEY})
+        args = {"url": f"/web?{self.ADAPTER_KEY}=SECRET"}
+        self.assertIn("SECRET", json.dumps(_safe(args)))
+        self.assertNotIn("SECRET", json.dumps(_safe(args, policy)))
 
 
 if __name__ == "__main__":

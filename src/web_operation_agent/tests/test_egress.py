@@ -135,5 +135,41 @@ class AuditedChatTests(unittest.TestCase):
         self.assertEqual(delegate.calls, 0)
 
 
+class AdapterSessionVocabularyReachesEgress(unittest.TestCase):
+    """The outbound provider boundary must know the mounted application's session parameter.
+
+    This is the highest-value place the adapter vocabulary has to arrive: everything else
+    redacts what is *stored*, but this decides what leaves for a third party. The two cases
+    are written as a pair on purpose -- the default policy accepting the same payload is the
+    reverse verification that the widened vocabulary is what closes it.
+    """
+
+    ADAPTER_KEY = "session_id"
+
+    def _messages(self):
+        return [{"role": "user",
+                 "content": f"page: http://app/web?{self.ADAPTER_KEY}=SECRET"}]
+
+    def test_the_default_policy_cannot_see_an_application_session_parameter(self):
+        report = ProviderEgressPolicy().inspect(self._messages(), [])
+        self.assertEqual(report.message_count, 1)
+
+    def test_a_policy_given_the_adapter_vocabulary_refuses_it(self):
+        policy = ProviderEgressPolicy(
+            session_handoff_keys=frozenset({self.ADAPTER_KEY}))
+        with self.assertRaisesRegex(ProviderEgressError, "unredacted credential"):
+            policy.inspect(self._messages(), [])
+        with self.assertRaisesRegex(ProviderEgressError, "unredacted credential"):
+            policy.inspect_completion_body(
+                {"messages": self._messages(), "tools": []})
+
+    def test_the_widened_policy_still_enforces_the_baseline(self):
+        policy = ProviderEgressPolicy(
+            session_handoff_keys=frozenset({self.ADAPTER_KEY}))
+        with self.assertRaisesRegex(ProviderEgressError, "unredacted credential"):
+            policy.inspect(
+                [{"role": "user", "content": "/x?externalLoginKey=OLD"}], [])
+
+
 if __name__ == "__main__":
     unittest.main()

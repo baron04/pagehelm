@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Assert that the core package carries no application-specific execution logic.
 
-Two checks, both scoped to ``src/web_operation_agent`` and its non-test ``.py`` files:
+Three checks scoped to ``src/web_operation_agent``. The first two look at non-test ``.py``
+files; the third deliberately includes the tests, because that is where the boundary broke
+last time -- ten core test modules imported ``web_operation_agent_ofbiz``, so the core suite
+could not run without an application distribution installed and every generic route consumer
+was only ever exercised against one application's URL spelling.
 
-1. No line of *executable code* spells ``ofbiz`` or the OFBiz servlet-path shape
-   ``/control/`` (case-insensitive). A comment or a docstring MAY still explain OFBiz as a
+1. No line of *executable code* spells an application's name (``ofbiz``, ``odoo``,
+   ``twenty``) or an application's route shape (``/control/``, ``/odoo/``), case-insensitive. A comment or a docstring MAY still explain OFBiz as a
    historical example -- the review that set this gate was explicit that explanatory prose is
    good documentation and grep-zeroing names is not the acceptance bar; only application-owned
    execution logic has to be gone. This is why the check is AST/token-aware rather than a bare
@@ -26,7 +30,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CORE = ROOT / "src" / "web_operation_agent"
 
-_PATTERN = re.compile(r"ofbiz|/control/", re.IGNORECASE)
+#: Application names and the servlet/route shapes that belong to one application.
+_PATTERN = re.compile(r"ofbiz|/control/|\bodoo\b|/odoo/|\btwenty\b", re.IGNORECASE)
+#: Every in-repository application distribution. The core imports none of them, anywhere.
+_ADAPTER_IMPORT = re.compile(r"web_operation_agent_[a-z0-9_]+")
 
 
 def _docstring_spans(tree: ast.AST) -> list[tuple[int, int, int, int]]:
@@ -110,8 +117,41 @@ def check_no_evals_import() -> list[str]:
     return violations
 
 
+def check_no_adapter_import() -> list[str]:
+    """Core, tests included, must not import any application distribution.
+
+    A core test that imports an adapter is not a small convenience: it makes the core suite
+    unrunnable without that distribution, and it silently narrows what the generic code is
+    tested against to one application's conventions.
+    """
+    violations = []
+    for path in sorted(CORE.rglob("*.py")):
+        rel = path.relative_to(ROOT)
+        if "__pycache__" in path.parts:
+            continue
+        source = path.read_text(encoding="utf-8")
+        if "web_operation_agent_" not in source:
+            continue
+        try:
+            tree = ast.parse(source, filename=str(path))
+        except SyntaxError as exc:
+            violations.append(f"{rel}: could not parse ({exc})")
+            continue
+        for node in ast.walk(tree):
+            names = []
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [node.module or ""]
+            for name in names:
+                if _ADAPTER_IMPORT.match(name.split(".")[0] or ""):
+                    violations.append(f"{rel}:{node.lineno}: imports {name!r}")
+    return violations
+
+
 def main() -> int:
     execution_violations = check_execution_logic()
+    adapter_violations = check_no_adapter_import()
     evals_violations = check_no_evals_import()
     ok = True
     if execution_violations:
@@ -120,7 +160,7 @@ def main() -> int:
         for v in execution_violations:
             print(f"  {v}")
     else:
-        print("PASS: no 'ofbiz' or '/control/' in core execution logic")
+        print("PASS: no application name or route shape in core execution logic")
     if evals_violations:
         ok = False
         print("FAIL: core imports from evals:")
@@ -128,6 +168,13 @@ def main() -> int:
             print(f"  {v}")
     else:
         print("PASS: core never imports from evals")
+    if adapter_violations:
+        ok = False
+        print("FAIL: core imports an application distribution:")
+        for v in adapter_violations:
+            print(f"  {v}")
+    else:
+        print("PASS: core never imports an application distribution")
     return 0 if ok else 1
 
 

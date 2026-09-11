@@ -1144,8 +1144,14 @@ export class EmbeddedWebRuntime {
       if (!args.url) throw new Error('bad_arguments: goto needs url')
       const href = sameOriginUrl(args.url)
       if (this.config.navigationMode === 'spa') {
-        history.pushState({}, '', href)
-        window.dispatchEvent(new PopStateEvent('popstate'))
+        // The event must carry the state that was just pushed. A router is entitled to read
+        // `event.state` and ignore a stateless popstate as "a click on an anchor" -- Odoo's
+        // does exactly that and returns without routing -- so a bare PopStateEvent changes
+        // the address bar while the application still shows the previous view. That failure
+        // is silent: the URL is right and the page is wrong.
+        const state = {woaNavigation: true}
+        history.pushState(state, '', href)
+        window.dispatchEvent(new PopStateEvent('popstate', {state: history.state ?? state}))
         return {success: true, message: 'SPA navigation requested'}
       }
       location.assign(href)

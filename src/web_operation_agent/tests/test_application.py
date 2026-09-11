@@ -8,10 +8,11 @@ from web_operation_agent.application import (APPLICATION_ADAPTER_VERSION,
                                               AnonymousIdentityPort,
                                               ApplicationDescriptor,
                                               ApplicationPorts,
-                                              DeclaredRoutePort,
                                               ConservativeMutationReconciler,
                                               DeclaredDataClassifier,
+                                              DeclaredRoutePort,
                                               ResultPostconditionVerifier,
+                                              SourceCapability,
                                               bind_application)
 from web_operation_agent.business import (BusinessSkill, BusinessToolContractError,
                                           BusinessToolResult, BusinessToolRuntime)
@@ -213,6 +214,44 @@ class ApplicationAdapterTests(unittest.TestCase):
         routes = DeclaredRoutePort("ledger-demo", (r"/invoices/[a-z0-9-]+",))
         with self.assertRaisesRegex(ValueError, "no contract route template"):
             routes.compose_contract_route("accounting", "findPayments")
+
+
+class SourceCapabilityTests(unittest.TestCase):
+    """Four settings that only make sense together, and only with a map behind them."""
+
+    def _map(self):
+        from web_operation_agent.schemas import SCHEMA_VERSIONS, SourceMap
+        return SourceMap(schema_version=SCHEMA_VERSIONS["SourceMap"],
+                         attestation_id="fixture", repository_id="fixture/invented",
+                         release="v0", relations=[])
+
+    def test_no_compiler_means_no_source_settings_at_all(self):
+        capability = SourceCapability.none()
+        self.assertEqual(capability.session_kwargs(), {
+            "source_map": None, "source_contract": False,
+            "runtime_source": False, "source_affordance_mode": "off"})
+
+    def test_a_source_backed_setting_without_a_map_is_refused(self):
+        for kwargs in ({"source_contract": True}, {"runtime_source": True},
+                       {"source_affordance_mode": "auto"}):
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaisesRegex(ValueError, "version-bound SourceMap"):
+                    SourceCapability(**kwargs)
+
+    def test_an_unknown_affordance_mode_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "source_affordance_mode"):
+            SourceCapability(source_map=self._map(), source_affordance_mode="sometimes")
+
+    def test_the_empty_affordance_mode_needs_no_map(self):
+        # "empty" is the paired control: the interface exists and returns nothing, which is
+        # how a comparison keeps the tool surface identical across arms.
+        self.assertEqual(SourceCapability(source_affordance_mode="empty").source_map, None)
+
+    def test_the_keywords_are_exactly_the_ones_a_session_takes(self):
+        import inspect
+        from web_operation_agent.session import ServerAgentSession
+        accepted = set(inspect.signature(ServerAgentSession.__init__).parameters)
+        self.assertTrue(set(SourceCapability.none().session_kwargs()).issubset(accepted))
 
 
 if __name__ == "__main__":

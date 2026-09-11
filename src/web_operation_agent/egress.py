@@ -5,8 +5,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 
-from .privacy import (has_unredacted_sensitive_assignment,
-                      has_unredacted_session_handoff)
+from .privacy import SessionHandoffPolicy, has_unredacted_sensitive_assignment
 
 
 class ProviderEgressError(ValueError):
@@ -53,10 +52,20 @@ class ProviderEgressPolicy:
     operate. The report records their class and digest without copying their values into the
     audit ledger. Application hosts remain responsible for deciding which business fields a
     configured provider is permitted to receive.
+
+    `session_handoff_keys` is how the mounted application widens the credential vocabulary.
+    The static baseline in `privacy.py` knows nothing about any particular application, so a
+    deployment that does not pass its adapter's `session_handoff_query_keys` here is asking
+    this boundary to catch a secret whose name it has never been told. Composition should
+    pass `ports.routes.session_handoff_query_keys`.
     """
 
     def __init__(self, *, max_request_bytes: int = 2 * 1024 * 1024,
-                 max_messages: int = 256, max_tools: int = 128):
+                 max_messages: int = 256, max_tools: int = 128,
+                 session_handoff_keys=frozenset()):
+        self.handoffs = (session_handoff_keys
+                         if isinstance(session_handoff_keys, SessionHandoffPolicy)
+                         else SessionHandoffPolicy.extending(session_handoff_keys))
         limits = {
             "max_request_bytes": (max_request_bytes, 1_024, 16 * 1024 * 1024),
             "max_messages": (max_messages, 1, 2_048),
@@ -82,8 +91,8 @@ class ProviderEgressPolicy:
             raise ProviderEgressError("provider tool count exceeds the egress limit")
         if any(not isinstance(tool, dict) for tool in selected_tools):
             raise ProviderEgressError("every provider tool must be an object")
-        if (has_unredacted_session_handoff(messages, url_decode_depth=3)
-                or has_unredacted_session_handoff(selected_tools, url_decode_depth=3)
+        if (self.handoffs.has_unredacted(messages, url_decode_depth=3)
+                or self.handoffs.has_unredacted(selected_tools, url_decode_depth=3)
                 or has_unredacted_sensitive_assignment(messages, url_decode_depth=3)
                 or has_unredacted_sensitive_assignment(selected_tools, url_decode_depth=3)):
             raise ProviderEgressError(
@@ -145,7 +154,7 @@ class ProviderEgressPolicy:
         """Inspect a caller-serialized completion without trusting its extra fields."""
         if not isinstance(body, dict):
             raise ProviderEgressError("provider request body must be an object")
-        if (has_unredacted_session_handoff(body, url_decode_depth=3)
+        if (self.handoffs.has_unredacted(body, url_decode_depth=3)
                 or has_unredacted_sensitive_assignment(body, url_decode_depth=3)):
             raise ProviderEgressError(
                 "provider request contains an unredacted credential value")

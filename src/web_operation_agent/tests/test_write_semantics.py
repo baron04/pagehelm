@@ -98,8 +98,8 @@ from pathlib import Path                                                     # n
 from web_operation_agent.browser import TransportError                       # noqa: E402
 from web_operation_agent.controlplane import ControlPlaneError               # noqa: E402
 from web_operation_agent.grounding import PlanState                          # noqa: E402
-from web_operation_agent_ofbiz.route import (                        # noqa: E402
-    OFBIZ_ROUTE_PORT, ofbiz_route_identity)
+from web_operation_agent.tests.route_fixture import (                # noqa: E402
+    FIXTURE_ROUTE_PORT, fixture_route_identity)
 from web_operation_agent.ledger import SessionLedger                         # noqa: E402
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionReceipt,     # noqa: E402
                                          ElementRef, OperationContract, PageObservation)
@@ -119,10 +119,10 @@ CONTRACT = OperationContract.from_json({
 
 
 def _plan_state(value):
-    return PlanState.of(value, route_identity=ofbiz_route_identity)
+    return PlanState.of(value, route_identity=fixture_route_identity)
 
 
-def _page(url="http://app/ordermgr/control/orderview", title="Order"):
+def _page(url="http://app/ordermgr/do/orderview", title="Order"):
     return PageObservation(schema_version=SCHEMA_VERSIONS["PageObservation"], epoch=1, url=url,
                            title=title, landmarks=[title],
                            elements=[ElementRef("e1", "button", "Save", "button", 1)],
@@ -173,7 +173,7 @@ def _run(chat, browser, control):
             chat=chat, browser=browser, control=control,
             ledger=SessionLedger(Path(tmp) / "l.jsonl", "r1"),
             step_budget=6, wall_budget_s=120, run_id="r1",
-            application_routes=OFBIZ_ROUTE_PORT)
+            application_routes=FIXTURE_ROUTE_PORT)
         s.contract = CONTRACT
         s.contract_source = "compiled"
         s.plan_state = _plan_state(CONTRACT)
@@ -351,7 +351,7 @@ class TheEvidenceThePlannerHadIsRecorded(unittest.TestCase):
         fixture = SessionFixture()
         try:
             session = fixture.session(
-                application_routes=OFBIZ_ROUTE_PORT, chat=_PlanChat(),
+                application_routes=FIXTURE_ROUTE_PORT, chat=_PlanChat(),
                 task=TaskSpec(task_ref="T", prompt="do the thing"), plan_from_page=True)
             session.entry_observation = _page()
             session._plan()

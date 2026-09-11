@@ -41,8 +41,7 @@ from .identity import OperationContext, PrincipalContext
 from .knowledge import ApplicationKnowledgePort
 from .ledger import SessionLedger
 from .model import BudgetExhausted, ProviderError
-from .privacy import (has_unredacted_session_handoff, redact_sensitive_assignments,
-                      redact_session_handoffs)
+from .privacy import SessionHandoffPolicy, redact_sensitive_assignments
 from .schemas import (BROWSER_ACTIONS, ActionReceipt, ControlPlan, OperationContract,
                       PageObservation, empty_contract)
 
@@ -332,6 +331,24 @@ class RunResult:
 
 
 class ServerAgentSession:
+    """One task, one browser, one model, one audit ledger.
+
+    The constructor's keywords have three distinct owners, and confusing them is how an
+    experiment leaks into a product:
+
+    * **Deployment source capability** -- `source_map`, `source_contract`, `runtime_source`,
+      `source_affordance_mode`. These describe what the deployment's compiled source lets a
+      session do. A deployment does not choose them by hand: they follow from whether its
+      application distribution ships a `SourceCompiler` and whether that compiler ran for
+      this release. `web_operation_agent_odoo.OdooApplicationAdapter.source_capability`
+      returns them as one value for exactly this reason.
+    * **Lab apparatus** -- `arm`, `plan_from_page`, `oracle_contract`, `terms_cache`. These
+      exist so the comparison harness can define its arms; `oracle_contract` in particular
+      injects a known-good plan, which is hidden expected state. `product.py` passes none of
+      them, and `test_product.LabApparatusNeverReachesTheProduct` keeps it that way.
+    * **Product policy** -- everything else: budgets, disabled actions, approval, identity.
+    """
+
     def __init__(self, *, task: TaskSpec, arm: str, chat, browser: BrowserExecutor,
                  control: ControlPlaneClient, ledger: SessionLedger,
                  source_map=None, plan_from_page: bool = False,
@@ -425,6 +442,11 @@ class ServerAgentSession:
             raise ValueError(
                 "source navigation and application entry require an application route port")
         self.application_routes = application_routes
+        # The static baseline in `privacy.py` knows no application's session parameters.
+        # Widening it here is what keeps an adapter's own secret out of the audit ledger.
+        self.session_handoffs = SessionHandoffPolicy.extending(
+            application_routes.session_handoff_query_keys
+            if application_routes is not None else ())
         self._contract_route_identity = (
             application_routes.contract_route_identity
             if application_routes is not None else opaque_route_identity)
@@ -588,13 +610,22 @@ class ServerAgentSession:
 
     # -- phases ------------------------------------------------------------------------
     def observe_entry(self) -> PageObservation:
-        """First look at the running application, before anything is planned.
+        """First look at the running application, before anything is planned."""
+        return self.adopt_entry(self.browser.observe())
+
+    def adopt_entry(self, obs: PageObservation) -> PageObservation:
+        """Accept an already-fresh entry observation and derive what it tells the planner.
 
         Planning needs one runtime fact that no descriptor can supply: which source-contract
         scopes this deployment actually exposes. The Adapter derives them from entry-page
         navigation, so the core does not interpret an application's URL grammar.
+
+        A product turn already holds a fresh observation from the runtime handshake and must
+        not spend a second browser round trip to get one; assigning `entry_observation`
+        directly, as it used to, skipped this derivation and left `served_webapps` empty --
+        which silently made every source affordance candidate empty in the product path while
+        the same code produced candidates in a session composed directly.
         """
-        obs = self.browser.observe()
         self.entry_observation = obs
         self.served_webapps = set(
             self.application_routes.discover_source_scopes(obs)
@@ -918,7 +949,8 @@ class ServerAgentSession:
             except json.JSONDecodeError:
                 args = {}
             step += 1
-            self.ledger.append("tool_call", step=step, tool=name, args=_safe(args))
+            self.ledger.append("tool_call", step=step, tool=name,
+                               args=_safe(args, self.session_handoffs))
 
             # Decisions can arrive during model inference. Refresh before another browser
             # command or a completion claim; a trace window is not command correlation.
@@ -1252,7 +1284,7 @@ class ServerAgentSession:
                 self.policy_blocks += 1
                 prior_epoch = obs.epoch
                 self.ledger.append("action_policy_blocked", step=step, tool=name,
-                                   args=_safe(args), dispatched=False,
+                                   args=_safe(args, self.session_handoffs), dispatched=False,
                                    side_effect_possible=False,
                                    page_epoch_before=prior_epoch)
                 try:
@@ -1459,9 +1491,7 @@ class ServerAgentSession:
                     url, rejection = self._candidate_url(
                         candidate, bindings,
                         route_identity=self._contract_route_identity,
-                        session_handoff_query_keys=(
-                            self.application_routes.session_handoff_query_keys
-                            if self.application_routes is not None else frozenset()),
+                        handoffs=self.session_handoffs,
                     )
                 if rejection:
                     citations = list(candidate.citations) if candidate is not None else []
@@ -1507,7 +1537,8 @@ class ServerAgentSession:
                 self.ledger.append(
                     "source_candidate_opened", step=step, candidate_id=candidate.candidate_id,
                     source_digest=candidate.source_map_digest, url=url,
-                    bindings=_safe(bindings), citations=source_route_citations)
+                    bindings=_safe(bindings, self.session_handoffs),
+                               citations=source_route_citations)
                 source_route_read_only = True
                 name, args = "goto", {"url": url}
 
@@ -1688,13 +1719,20 @@ class ServerAgentSession:
     @staticmethod
     def _candidate_url(candidate: SourceAffordance, bindings, *,
                        route_identity=opaque_route_identity,
-                       session_handoff_query_keys: frozenset[str] = frozenset()) -> tuple[str, str]:
+                       handoffs: "SessionHandoffPolicy | None" = None) -> tuple[str, str]:
         """Validate bindings and assemble one same-origin URL, without evaluating source.
 
         The second tuple member is an error message; an empty error means the URL is safe.
         Values are encoded by the standard library, so a binding can never replace the path
         or introduce a second query parameter.
+
+        `handoffs` carries the mounted application's session-parameter vocabulary. Both the
+        declared-parameter check and the binding-value check use it, so an application's own
+        session parameter cannot be smuggled in as a candidate binding merely because this
+        package's static baseline has never heard of its name.
         """
+        policy = handoffs or SessionHandoffPolicy.extending(())
+        session_handoff_query_keys = policy.query_keys
         if not isinstance(bindings, dict):
             return "", "bindings must be an object of declared string parameters"
         if len(bindings) > 16:
@@ -1710,7 +1748,7 @@ class ServerAgentSession:
             return "", "every binding value must be a string"
         for name, value in bindings.items():
             if (len(value) > 1000 or re.search(r"[\x00-\x1f\x7f]", value)
-                    or "${" in value or has_unredacted_session_handoff(
+                    or "${" in value or policy.has_unredacted(
                         {name: value}, url_decode_depth=3)):
                 return "", "a binding contains a forbidden value"
 
@@ -1741,7 +1779,7 @@ class ServerAgentSession:
                 if name in bindings and bindings[name] != literal:
                     return "", "a binding attempts to override a fixed parameter value"
                 if (len(literal) > 1000 or re.search(r"[\x00-\x1f\x7f]", literal)
-                        or has_unredacted_session_handoff(
+                        or policy.has_unredacted(
                             {name: literal}, url_decode_depth=3)):
                     return "", "a declared literal contains a forbidden value"
                 values[name] = literal
@@ -2268,8 +2306,14 @@ def _trim(messages: list[dict], keep: int) -> list[dict]:
     return messages
 
 
-def _safe(args: dict) -> dict:
-    cleaned = redact_sensitive_assignments(redact_session_handoffs(args))
+def _safe(args: dict, handoffs: SessionHandoffPolicy | None = None) -> dict:
+    """Project tool arguments for the audit ledger.
+
+    `handoffs` is the mounted application's widened vocabulary; omitting it falls back to
+    the package baseline, which cannot see an application's own session parameter.
+    """
+    policy = handoffs or SessionHandoffPolicy.extending(())
+    cleaned = redact_sensitive_assignments(policy.redact(args))
     sensitive = re.compile(
         r"password|passwd|pwd|secret|token|api[_-]?key|authorization|jsessionid", re.I)
 

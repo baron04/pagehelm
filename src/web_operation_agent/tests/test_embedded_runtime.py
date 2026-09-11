@@ -661,11 +661,16 @@ class EmbeddedRuntimeTests(unittest.TestCase):
           let assigned = '';
           let pushed = '';
           let pops = 0;
-          globalThis.history = {{pushState(_state, _title, value) {{
-            pushed = value; pageLocation.href = value;
+          globalThis.history = {{state:null, pushState(state, _title, value) {{
+            pushed = value; this.state = state; pageLocation.href = value;
           }}}};
-          globalThis.PopStateEvent = class extends Event {{}};
-          window.addEventListener('popstate', () => {{ pops += 1; }});
+          globalThis.PopStateEvent = class extends Event {{
+            constructor(type, init) {{ super(type, init); this.state = init?.state ?? null; }}
+          }};
+          let popState = 'never-fired';
+          window.addEventListener('popstate', (event) => {{
+            pops += 1; popState = event.state;
+          }});
 
           const spa = Object.create(mod.EmbeddedWebRuntime.prototype);
           spa.config = {{navigationMode:'spa'}};
@@ -677,7 +682,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
           documentRuntime.config = {{navigationMode:'document'}};
           const documentResult = await documentRuntime._execute(
             {{action:'goto', args:{{url:'/settings/profile'}}}});
-          process.stdout.write(JSON.stringify({{pushed, pops, assigned,
+          process.stdout.write(JSON.stringify({{pushed, pops, popState, assigned,
             spaResult, documentResult}}));
         """
         proc = subprocess.run(["node", "--input-type=module", "-e", script],
@@ -686,6 +691,10 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         self.assertEqual(result["pushed"],
                          "https://app.test/object/company/company-1")
         self.assertEqual(result["pops"], 1)
+        # A router is entitled to treat a stateless popstate as an anchor click and ignore
+        # it. Odoo's does, so an event with no state moved the address bar while the page
+        # still showed the previous view -- right URL, wrong page, no error anywhere.
+        self.assertEqual(result["popState"], {"woaNavigation": True})
         self.assertEqual(result["assigned"], "https://app.test/settings/profile")
         self.assertEqual(result["spaResult"]["message"], "SPA navigation requested")
         self.assertEqual(result["documentResult"]["message"], "navigation requested")

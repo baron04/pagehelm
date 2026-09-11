@@ -13,21 +13,28 @@ from pathlib import Path
 
 from web_operation_agent.contract import (ContractPlanner, PlanningFailed, SourceRetriever,
                                           _segment_from_template, validate_contract)
-from web_operation_agent_ofbiz.route import OFBIZ_ROUTE_PORT
 from web_operation_agent.schemas import OperationContract
 from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
-from web_operation_agent_ofbiz.sourcemap import OFBizCompiler
-from web_operation_agent.sourcetree import SourceTree
-from web_operation_agent_ofbiz.tests.test_sourcemap import POLICY, build
+from web_operation_agent.tests.route_fixture import FIXTURE_ROUTE_PORT
+from web_operation_agent.tests.source_fixture import fixture_source_map
 
 TASK = "The tray in bay four needs a new cultivar sprouted into it."
-#: Every fixture in this file is compiled from OFBiz-shaped descriptors, so the segment the
-#: production adapter declares is the one these tests must normalise against too.
-SEGMENT = _segment_from_template(OFBIZ_ROUTE_PORT.contract_route_template)
+#: The fixtures here are relation triples, not one application's descriptors, so the
+#: segment comes from the synthetic route grammar. A core module that only works against
+#: OFBiz's `control` segment fails against this one.
+SEGMENT = _segment_from_template(FIXTURE_ROUTE_PORT.contract_route_template)
 
 
 def _map(tmp: Path):
-    return OFBizCompiler(build(tmp, ("greenhouse", "lighthouse")), "fixture").compile()
+    return fixture_source_map(tmp)
+
+
+def _key_supporting(source_map, bundle, identity: str) -> str:
+    """One bundle citation the support index attributes to `identity`."""
+    from web_operation_agent.contract import SupportIndex
+    index = SupportIndex(source_map, segment=SEGMENT)
+    return next(key for key in sorted(bundle.citation_keys)
+                if identity in index.about(key))
 
 
 class _StubModel(CancellableChatDouble):
@@ -110,23 +117,6 @@ class Retrieval(unittest.TestCase):
         bundle = self.r.retrieve("T", "edit lamp schedule", webapps={"beacon"})
         self.assertEqual(len(bundle.lines), len(set(bundle.lines)))
 
-    def test_an_alternate_create_target_reaches_the_bundle_with_its_condition(self):
-        path = Path(self.tmp.name) / "applications/greenhouse/widget/SeedlingEditor.xml"
-        path.write_text('''<forms>
-          <form name="SeedlingEditor" target="Seedling/update">
-            <alt-target target="Seedling/create" use-when="seedling==null"/>
-            <field name="trayId"><text/></field>
-          </form>
-        </forms>''')
-        smap = OFBizCompiler(SourceTree(POLICY, Path(self.tmp.name)), "fixture").compile()
-        bundle = SourceRetriever(smap).retrieve(
-            "T", "create a seedling using the SeedlingEditor form")
-        self.assertIn("uses alternate request `Seedling/create` when `seedling==null`",
-                      bundle.render())
-        alternate = next(r for r in smap.by_kind("form_target")
-                         if r.object == "Seedling/create")
-        self.assertIn(alternate.evidence[0].key, bundle.citation_keys)
-
     def test_an_unrelated_task_gets_a_small_or_empty_bundle(self):
         bundle = self.r.retrieve("T", "Reconcile the quarterly amortisation schedule.")
         self.assertNotIn("sproutSeedling", bundle.render())
@@ -135,51 +125,16 @@ class Retrieval(unittest.TestCase):
         bundle = self.r.retrieve("T", TASK, max_lines=3)
         self.assertLessEqual(len(bundle.lines), 3)
 
-    def test_controller_continuations_reach_planner_with_condition_and_identity(self):
-        """A form submit may continue to a second handler without another browser action.
-
-        Use invented names and an error branch so retrieval cannot learn one task's answer
-        or silently present every continuation as a successful response.
-        """
-        path = Path(self.tmp.name) / "applications/greenhouse/webapp/glasshouse/WEB-INF/controller.xml"
-        path.write_text('''<site-conf>
-          <request-map uri="sproutSeedling"><event type="service" invoke="sproutSeedling"/>
-            <response name="success" type="request" value="attachSeedlingToTray"/>
-            <response name="error" type="request" value="restoreTrayForm"/>
-            <response name="other" type="view" value="NotARequest"/>
-            <response name="redirect" type="request-redirect" value="BrowserRedirect"/>
-          </request-map>
-        </site-conf>''')
-        tree = SourceTree(POLICY, Path(self.tmp.name))
-        smap = OFBizCompiler(tree, "fixture").compile()
-        bundle = SourceRetriever(smap).retrieve("T", TASK)
-        lines = [line for line in bundle.lines if "declares type=request," in line]
-        self.assertEqual(len(lines), 2)
-        self.assertTrue(any("`success`" in line and "`attachSeedlingToTray`" in line for line in lines))
-        self.assertTrue(any("`error`" in line and "`restoreTrayForm`" in line for line in lines))
-        self.assertTrue(all("`glasshouse/sproutSeedling`" in line and
-                            "not a second browser submission" in line for line in lines))
-        self.assertTrue(all("NotARequest" not in line and "BrowserRedirect" not in line for line in lines))
-        for ref in bundle.refs.values():
-            self.assertTrue(tree.verify(ref))
-        key = next(r.evidence[0].key for r in smap.by_kind("request_handler")
-                   if r.subject == "glasshouse/sproutSeedling")
-        model = _StubModel([json.dumps({"task_ref": "T", "summary": "fixture",
-                                       "mutation": {"webapp": "glasshouse",
-                                                    "request": "sproutSeedling", "citations": [key]},
-                                       "citations": [key]})])
-        ContractPlanner(model, smap, segment=SEGMENT).plan("T", TASK, bundle, "fixture-chain")
-        planner_input = model.calls[0][1]["content"]
-        self.assertTrue(all(line in planner_input for line in lines),
-                        "compiled facts must reach the actual planner call, not only the bundle")
-
 
 class Validation(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.map = _map(Path(self.tmp.name))
         self.bundle = SourceRetriever(self.map).retrieve("T", TASK)
-        self.good_key = sorted(self.bundle.citation_keys)[0]
+        # Pick a citation that actually supports the move these tests assert about,
+        # rather than whichever key happens to sort first: "cited" and "supported by
+        # that citation" are two different questions, and only the second is tested here.
+        self.good_key = _key_supporting(self.map, self.bundle, "glasshouse/sproutseedling")
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -222,7 +177,10 @@ class Planning(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.map = _map(Path(self.tmp.name))
         self.bundle = SourceRetriever(self.map).retrieve("T", TASK)
-        self.key = sorted(self.bundle.citation_keys)[0]
+        # Pick a citation that actually supports the move these tests assert about,
+        # rather than whichever key happens to sort first: "cited" and "supported by
+        # that citation" are two different questions, and only the second is tested here.
+        self.key = _key_supporting(self.map, self.bundle, "glasshouse/sproutseedling")
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -279,10 +237,10 @@ if __name__ == "__main__":
 class Normalisation(unittest.TestCase):
     def test_the_servlet_prefix_is_stripped(self):
         from web_operation_agent.contract import normalise_request
-        for spelling in ("/accounting/control/findPayments",
-                         "accounting/control/findPayments",
-                         "http://localhost:18080/accounting/control/findPayments",
-                         "'/accounting/control/findPayments'",
+        for spelling in ("/accounting/do/findPayments",
+                         "accounting/do/findPayments",
+                         "http://localhost:18080/accounting/do/findPayments",
+                         "'/accounting/do/findPayments'",
                          "findPayments?paymentId=8003",
                          "findPayments/"):
             self.assertEqual(normalise_request("accounting", spelling, segment=SEGMENT), "findPayments",
@@ -291,7 +249,7 @@ class Normalisation(unittest.TestCase):
     def test_a_multi_segment_request_name_survives(self):
         from web_operation_agent.contract import normalise_request
         self.assertEqual(
-            normalise_request("workeffort", "/workeffort/control/WorkEffortPartyAssigns/create", segment=SEGMENT),
+            normalise_request("workeffort", "/workeffort/do/WorkEffortPartyAssigns/create", segment=SEGMENT),
             "WorkEffortPartyAssigns/create")
 
     def test_a_bare_name_is_left_alone(self):
@@ -305,7 +263,10 @@ class Pruning(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.map = _map(Path(self.tmp.name))
         self.bundle = SourceRetriever(self.map).retrieve("T", TASK)
-        self.key = sorted(self.bundle.citation_keys)[0]
+        # Pick a citation that actually supports the move these tests assert about,
+        # rather than whichever key happens to sort first: "cited" and "supported by
+        # that citation" are two different questions, and only the second is tested here.
+        self.key = _key_supporting(self.map, self.bundle, "glasshouse/sproutseedling")
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -367,7 +328,7 @@ class Pruning(unittest.TestCase):
     def test_a_contract_written_with_servlet_paths_is_accepted(self):
         model = _StubModel([
             '{"task_ref":"T","summary":"s","steps":[{"intent":"go","webapp":"glasshouse",'
-            f'"request":"/glasshouse/control/sproutSeedling","citations":["{self.key}"]}}],'
+            f'"request":"/glasshouse/do/sproutSeedling","citations":["{self.key}"]}}],'
             f'"citations":["{self.key}"]}}'])
         contract, attempts = ContractPlanner(model, self.map, segment=SEGMENT).plan("T", TASK, self.bundle, "r1")
         self.assertEqual(len(attempts), 1)
@@ -381,7 +342,10 @@ class PlannerBudget(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.map = _map(Path(self.tmp.name))
         self.bundle = SourceRetriever(self.map).retrieve("T", TASK)
-        self.key = sorted(self.bundle.citation_keys)[0]
+        # Pick a citation that actually supports the move these tests assert about,
+        # rather than whichever key happens to sort first: "cited" and "supported by
+        # that citation" are two different questions, and only the second is tested here.
+        self.key = _key_supporting(self.map, self.bundle, "glasshouse/sproutseedling")
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -410,7 +374,10 @@ class CitationNormalisation(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.map = _map(Path(self.tmp.name))
         self.bundle = SourceRetriever(self.map).retrieve("T", TASK)
-        self.key = sorted(self.bundle.citation_keys)[0]
+        # Pick a citation that actually supports the move these tests assert about,
+        # rather than whichever key happens to sort first: "cited" and "supported by
+        # that citation" are two different questions, and only the second is tested here.
+        self.key = _key_supporting(self.map, self.bundle, "glasshouse/sproutseedling")
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -444,7 +411,10 @@ class ReasoningLeakedIntoTheAnswer(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.map = _map(Path(self.tmp.name))
         self.bundle = SourceRetriever(self.map).retrieve("T", TASK)
-        self.key = sorted(self.bundle.citation_keys)[0]
+        # Pick a citation that actually supports the move these tests assert about,
+        # rather than whichever key happens to sort first: "cited" and "supported by
+        # that citation" are two different questions, and only the second is tested here.
+        self.key = _key_supporting(self.map, self.bundle, "glasshouse/sproutseedling")
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -481,7 +451,10 @@ class ReasoningEatsTheBudget(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.map = _map(Path(self.tmp.name))
         self.bundle = SourceRetriever(self.map).retrieve("T", TASK)
-        self.key = sorted(self.bundle.citation_keys)[0]
+        # Pick a citation that actually supports the move these tests assert about,
+        # rather than whichever key happens to sort first: "cited" and "supported by
+        # that citation" are two different questions, and only the second is tested here.
+        self.key = _key_supporting(self.map, self.bundle, "glasshouse/sproutseedling")
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -640,10 +613,10 @@ class CitationsMustBeAboutWhatTheyBack(unittest.TestCase):
         self.assertIn("glasshouse/sproutseedling", self.index.about(param_key))
 
     def test_servlet_paths_and_bare_names_compare_equal(self):
-        """Inter-app menu links carry /webapp/control/name; ordinary ones carry the name."""
+        """Inter-app menu links carry /webapp/do/name; ordinary ones carry the name."""
         from web_operation_agent.contract import bare_request
-        for spelling in ("/accounting/control/findPayments", "accounting/control/findPayments",
-                         "http://host:8080/ap/control/findPayments", "findPayments?x=1"):
+        for spelling in ("/accounting/do/findPayments", "accounting/do/findPayments",
+                         "http://host:8080/ap/do/findPayments", "findPayments?x=1"):
             self.assertEqual(bare_request(spelling, segment=SEGMENT), "findPayments", spelling)
         self.assertEqual(bare_request("WorkEffortPartyAssigns/create", segment=SEGMENT),
                          "WorkEffortPartyAssigns/create")

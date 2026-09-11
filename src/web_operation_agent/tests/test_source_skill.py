@@ -4,7 +4,7 @@ import unittest
 import tempfile
 from pathlib import Path
 
-from web_operation_agent_ofbiz.route import OFBIZ_ROUTE_PORT
+from web_operation_agent.tests.route_fixture import FIXTURE_ROUTE_PORT
 from web_operation_agent.schemas import EvidenceRef, SourceMap, SourceRelation
 from web_operation_agent.source_skill import (SourceEvidenceProvider as _SourceEvidenceProvider,
                                                SourceSkillBootstrapper as _SourceSkillBootstrapper,
@@ -12,11 +12,11 @@ from web_operation_agent.source_skill import (SourceEvidenceProvider as _SourceE
 
 
 def SourceSkillBootstrapper(source_map):
-    return _SourceSkillBootstrapper(source_map, route_port=OFBIZ_ROUTE_PORT)
+    return _SourceSkillBootstrapper(source_map, route_port=FIXTURE_ROUTE_PORT)
 
 
 def SourceEvidenceProvider(source_map, source_root=None):
-    return _SourceEvidenceProvider(source_map, source_root, route_port=OFBIZ_ROUTE_PORT)
+    return _SourceEvidenceProvider(source_map, source_root, route_port=FIXTURE_ROUTE_PORT)
 
 
 def _row(kind, subject, obj, line, **attrs):
@@ -58,7 +58,7 @@ class SourceSkillBootstrapperTests(unittest.TestCase):
     def test_compiles_cited_read_only_route_and_visible_verification_fields(self):
         draft = SourceSkillBootstrapper(_map()).compile("accounting", "FindDue")
         skill = draft.skill
-        self.assertEqual(skill["route_template"], "/accounting/control/FindDue")
+        self.assertEqual(skill["route_template"], "/accounting/do/FindDue")
         self.assertTrue(skill["read_only"])
         self.assertEqual(skill["expected_text"], ["Organization Party ID", "Days Offset"])
         self.assertNotIn("Invoice Type ID", skill["expected_text"])
@@ -74,7 +74,7 @@ class SourceSkillBootstrapperTests(unittest.TestCase):
         candidates, draft = bootstrap.bootstrap(
             "review customer invoices by days past due", "accounting")
         self.assertEqual(candidates[0]["request"], "FindDue")
-        self.assertEqual(draft.skill["route_template"], "/accounting/control/FindDue")
+        self.assertEqual(draft.skill["route_template"], "/accounting/do/FindDue")
         self.assertEqual(bootstrap.search("unrelated warehouse", "accounting"), ())
 
     def test_bootstrap_refuses_no_match_or_tied_top_candidates(self):

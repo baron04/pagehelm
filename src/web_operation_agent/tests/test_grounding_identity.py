@@ -8,8 +8,8 @@ import unittest
 
 from web_operation_agent.grounding import (NOT_APPLICABLE, REFUTED, SATISFIED, WRITE_NONE,
                                            WRITE_REFUSED, PlanState)
-from web_operation_agent_ofbiz.route import OFBIZ_ROUTE_PORT
-from web_operation_agent_ofbiz.route import ofbiz_route_identity as route_of
+from web_operation_agent.tests.route_fixture import (FIXTURE_ROUTE_PORT,
+                                                     fixture_route_identity as route_of)
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionReceipt, ElementRef,
                                          OperationContract, PageObservation)
 
@@ -25,7 +25,7 @@ def contract(steps=(), candidates=(), mutation=None) -> OperationContract:
         "mutation": mutation, "citations": ["a.xml:1-2"]})
 
 
-def page(url="http://app/accounting/control/main", title="Accounting Manager",
+def page(url="http://app/accounting/do/main", title="Accounting Manager",
          landmarks=(), messages=()) -> PageObservation:
     return PageObservation(schema_version=SCHEMA_VERSIONS["PageObservation"], epoch=1, url=url,
                            title=title, landmarks=list(landmarks) or [title],
@@ -51,7 +51,7 @@ class ArrivingIsNotBeingAllowed(unittest.TestCase):
 
     def _observe(self):
         st = _plan_state(contract([STEP_A, STEP_B]))
-        return st, st.observe(page(url="http://app/accounting/control/findPayments",
+        return st, st.observe(page(url="http://app/accounting/do/findPayments",
                                    title="Access denied",
                                    landmarks=["Access denied"]), receipt(), WRITE_NONE)
 
@@ -72,11 +72,11 @@ class ArrivingIsNotBeingAllowed(unittest.TestCase):
 class CompoundRouteIdentity(unittest.TestCase):
     def test_the_full_multi_segment_request_is_preserved(self):
         self.assertEqual(route_of(
-            "http://app/workeffort/control/WorkEffortPartyAssigns/Edit?workEffortId=42"),
+            "http://app/workeffort/do/WorkEffortPartyAssigns/Edit?workEffortId=42"),
             ("workeffort", "workeffortpartyassigns/edit"))
 
     def test_a_trailing_slash_is_not_part_of_the_request(self):
-        self.assertEqual(route_of("/beacon/control/LampSchedule/create/"),
+        self.assertEqual(route_of("/beacon/do/LampSchedule/create/"),
                          ("beacon", "lampschedule/create"))
 
 
@@ -87,7 +87,7 @@ class TheSameObservationIsOnePieceOfEvidence(unittest.TestCase):
         st = _plan_state(contract([STEP_A, STEP_B], mutation={
             "webapp": "accounting", "request": "createPaymentApplication",
             "citations": ["a.xml:1-2"]}))
-        p = page(url="http://app/accounting/control/somewhereElse", title="Action refused")
+        p = page(url="http://app/accounting/do/somewhereElse", title="Action refused")
         st.observe(p, receipt(action="observe"), WRITE_NONE)
         st.observe(p, receipt(action="observe"), WRITE_NONE)
         self.assertLessEqual(st.counts()[REFUTED], 1)
@@ -112,7 +112,7 @@ class CandidatesAreAlternatives(unittest.TestCase):
 
     def test_denied_second_candidate_does_not_discard_the_first(self):
         st = _plan_state(contract([STEP_B], candidates=self.CANDIDATES))
-        event = st.observe(page(url="http://app/accounting/control/findInvoices",
+        event = st.observe(page(url="http://app/accounting/do/findInvoices",
                                 title="Access denied"), receipt(), WRITE_NONE)
         self.assertEqual(event["verdict"], REFUTED)
         self.assertFalse(st.entry_reached)
@@ -120,7 +120,7 @@ class CandidatesAreAlternatives(unittest.TestCase):
 
     def test_matching_landmark_on_another_named_route_is_not_arrival(self):
         st = _plan_state(contract([STEP_A]))
-        event = st.observe(page(url="http://app/beta/control/findPayments",
+        event = st.observe(page(url="http://app/beta/do/findPayments",
                                 title="Find Payment"), receipt(), WRITE_NONE)
         self.assertEqual(event["verdict"], NOT_APPLICABLE)
 
@@ -129,8 +129,8 @@ class RefusalIdentity(unittest.TestCase):
     def test_another_webapps_refusal_never_refutes_mutation_even_after_steps_end(self):
         for steps in ([], [STEP_A]):
             st = _plan_state(contract(steps, mutation={"webapp": "alpha", "request": "edit"}))
-            event = st.observe(page(url="http://app/beta/control/edit"),
-                               receipt(url_after="http://app/alpha/control/edit"),
+            event = st.observe(page(url="http://app/beta/do/edit"),
+                               receipt(url_after="http://app/alpha/do/edit"),
                                WRITE_REFUSED, refused_requests=["beta/edit"])
             self.assertEqual(event["verdict"], NOT_APPLICABLE)
             self.assertFalse(st.withdrawn)
@@ -147,13 +147,13 @@ class SuccessfulCandidates(unittest.TestCase):
 
     def test_reaching_the_second_candidate_satisfies_the_entry(self):
         st = _plan_state(contract([STEP_B], candidates=self.CANDIDATES))
-        event = st.observe(page(url="http://app/accounting/control/findInvoices",
+        event = st.observe(page(url="http://app/accounting/do/findInvoices",
                                 title="Find Invoice"), receipt(), WRITE_NONE)
         self.assertEqual(event["verdict"], SATISFIED)
 
     def test_the_unused_candidate_is_not_left_pending_or_wrong(self):
         st = _plan_state(contract([STEP_B], candidates=self.CANDIDATES))
-        st.observe(page(url="http://app/accounting/control/findInvoices", title="Find Invoice"),
+        st.observe(page(url="http://app/accounting/do/findInvoices", title="Find Invoice"),
                    receipt(), WRITE_NONE)
         self.assertEqual(st.counts()[REFUTED], 0, "not taking a route does not disprove it")
         self.assertIsNotNone(st.current)
@@ -162,7 +162,7 @@ class SuccessfulCandidates(unittest.TestCase):
 
     def test_a_candidate_that_is_never_reached_does_not_block_the_steps(self):
         st = _plan_state(contract([STEP_B], candidates=self.CANDIDATES))
-        st.observe(page(url="http://app/accounting/control/findPayments", title="Find Payment"),
+        st.observe(page(url="http://app/accounting/do/findPayments", title="Find Payment"),
                    receipt(), WRITE_NONE)
         self.assertEqual(st.current.step.intent, STEP_B["intent"])
 
@@ -195,14 +195,14 @@ class WebappIdentityInCitations(unittest.TestCase):
     def test_its_own_applications_evidence_supports_it(self):
         from web_operation_agent.contract import SupportIndex, _segment_from_template
         idx = SupportIndex(self._map(),
-                           segment=_segment_from_template(OFBIZ_ROUTE_PORT.contract_route_template))
+                           segment=_segment_from_template(FIXTURE_ROUTE_PORT.contract_route_template))
         self.assertTrue(idx.supports([_key(idx, "beta")], "edit", "beta"))
 
     def test_a_citation_about_another_application_does_not_support_the_step(self):
         """Request identity includes the application when names overlap."""
         from web_operation_agent.contract import SupportIndex, _segment_from_template
         idx = SupportIndex(self._map(),
-                           segment=_segment_from_template(OFBIZ_ROUTE_PORT.contract_route_template))
+                           segment=_segment_from_template(FIXTURE_ROUTE_PORT.contract_route_template))
         self.assertFalse(idx.supports([_key(idx, "alpha")], "edit", "beta"),
                          "alpha's evidence is not evidence about beta's request")
 

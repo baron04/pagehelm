@@ -72,6 +72,50 @@ class Rendering(unittest.TestCase):
         self.assertIn("whether the button is there", text)
 
 
+class EntryScopesComeFromTheAdapter(unittest.TestCase):
+    """`served_webapps` is a runtime fact no descriptor supplies, and planning needs it."""
+
+    def _entry(self, href):
+        return PageObservation(
+            schema_version=1, epoch=1, url="http://app/accounting/do/main",
+            title="Accounting", landmarks=[], elements=[ElementRef(
+                "e1", "link", "Payments", "a", 1, {"href": href})])
+
+    def _session(self, tmp, port):
+        return ServerAgentSession(
+            task=TaskSpec("T", "inspect"), arm="U", chat=_Chat([]),
+            browser=_Browser([_page(1)]), control=_Control([[]]),
+            ledger=SessionLedger(Path(tmp) / "ledger.jsonl", "entry"),
+            source_contract=False, application_routes=port)
+
+    def test_adopting_an_already_fresh_observation_derives_the_same_scopes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            entry = self._entry("/accounting/do/findPayments")
+            session = self._session(tmp, FIXTURE_ROUTE_PORT)
+            self.assertEqual(session.adopt_entry(entry), entry)
+            self.assertEqual(session.served_webapps, {"accounting"})
+            self.assertIs(session.entry_observation, entry)
+            recorded = session.ledger.of_kind("entry_observed")
+            self.assertEqual(len(recorded), 1)
+            self.assertEqual(recorded[0]["served_webapps"], ["accounting"])
+
+    def test_a_link_outside_the_adapter_grammar_contributes_no_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp, FIXTURE_ROUTE_PORT)
+            session.adopt_entry(self._entry("https://elsewhere.invalid/accounting/do/x"))
+            self.assertEqual(session.served_webapps, set())
+
+    def test_without_an_adapter_there_are_no_scopes_and_no_crash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = ServerAgentSession(
+                task=TaskSpec("T", "inspect"), arm="U", chat=_Chat([]),
+                browser=_Browser([_page(1)]), control=_Control([[]]),
+                ledger=SessionLedger(Path(tmp) / "ledger.jsonl", "entry"),
+                source_contract=False)
+            session.adopt_entry(self._entry("/accounting/do/findPayments"))
+            self.assertEqual(session.served_webapps, set())
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -94,8 +138,10 @@ from pathlib import Path
 
 from web_operation_agent.controlplane import ControlPlaneError
 from web_operation_agent.grounding import PlanState
-from web_operation_agent_ofbiz.route import OFBIZ_ROUTE_PORT, ofbiz_route_identity
-from web_operation_agent_ofbiz.knowledge import AppSkill, KnowledgeRouter
+from web_operation_agent.tests.route_fixture import (FIXTURE_ROUTE_PORT,
+                                                     fixture_route_identity)
+from web_operation_agent.tests.knowledge_fixture import (FixtureKnowledgeRouter,
+                                                         FixtureSkill)
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.schemas import ActionReceipt, OperationContract, empty_contract
 from web_operation_agent.session import (AGENT_SYSTEM, SCOPE_FIRST_SYSTEM,
@@ -103,7 +149,7 @@ from web_operation_agent.session import (AGENT_SYSTEM, SCOPE_FIRST_SYSTEM,
 
 
 def _plan_state(value):
-    return PlanState.of(value, route_identity=ofbiz_route_identity)
+    return PlanState.of(value, route_identity=fixture_route_identity)
 
 
 class _Chat(CancellableChatDouble):
@@ -217,7 +263,7 @@ def _session(tmp, chat, browser, control, contract=None):
         browser=browser, control=control,
         ledger=SessionLedger(Path(tmp) / "l.jsonl", "r1"),
         step_budget=6, wall_budget_s=120, run_id="r1",
-        application_routes=OFBIZ_ROUTE_PORT)
+        application_routes=FIXTURE_ROUTE_PORT)
     if contract is not None:
         session.contract = contract
         session.contract_source = "compiled"
@@ -380,7 +426,7 @@ class WriteRefusalReachesTheAgent(unittest.TestCase):
     def test_a_refused_write_is_reported_without_naming_the_permitted_request(self):
         with tempfile.TemporaryDirectory() as tmp:
             chat = _Chat([("click", {"ref": "e1"}), ("finish", {"done": False, "why": "stuck"})])
-            browser = _Browser([_page(1), _page(2, url="http://app/accounting/control/InvoiceApply")])
+            browser = _Browser([_page(1), _page(2, url="http://app/accounting/do/InvoiceApply")])
             s = _session(tmp, chat, browser, _Control([[], BLOCKED, []]), CONTRACT)
             s.run()
             told = [m["content"] for msgs in chat.seen for m in msgs if m.get("role") == "tool"]
@@ -610,7 +656,7 @@ class WithdrawnPlanLeavesTheContext(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             chat = _Chat([("click", {"ref": "e1"}), ("click", {"ref": "e1"}),
                           ("finish", {"done": False, "why": "stop"})])
-            browser = _Browser([_page(1), _page(2, url="http://app/accounting/control/InvoiceApply")])
+            browser = _Browser([_page(1), _page(2, url="http://app/accounting/do/InvoiceApply")])
             s = _session(tmp, chat, browser, _Control([[], [dict(BLOCKED[0], uri="InvoiceApply")], [], []]), CONTRACT)
             s.run()
             first = "\n".join(m["content"] for m in chat.seen[0] if m["role"] == "user")
@@ -623,7 +669,7 @@ class WithdrawnPlanLeavesTheContext(unittest.TestCase):
     def test_the_disconfirmation_survives_context_trimming(self):
         with tempfile.TemporaryDirectory() as tmp:
             chat = _Chat([("click", {"ref": "e1"})] + [("observe", {})] * 4)
-            browser = _Browser([_page(1), _page(2, url="http://app/accounting/control/InvoiceApply")])
+            browser = _Browser([_page(1), _page(2, url="http://app/accounting/do/InvoiceApply")])
             s = _session(tmp, chat, browser,
                          _Control([[], BLOCKED] + [[]] * 6), CONTRACT)
             s.keep_observations = 1
@@ -656,64 +702,61 @@ class WithdrawnPlanLeavesTheContext(unittest.TestCase):
                                   if str(m.get("content", "")).startswith(_PLAN_MARK)])
 
 
-def _page(epoch, url="http://app/accounting/control/main", title="Accounting Manager"):
+def _page(epoch, url="http://app/accounting/do/main", title="Accounting Manager"):
     return PageObservation(schema_version=1, epoch=epoch, url=url, title=title,
                            landmarks=[title], elements=[ElementRef("e1", "link", "Go", "a", epoch)])
 
 
-def _knowledge_router(tmp: str) -> KnowledgeRouter:
-    import json
-    path = Path(tmp) / "skill.json"
-    path.write_text(json.dumps({
-        "schema_version": 1,
-        "skill_id": "ofbiz.accounting.invoices-by-due-date",
-        "title": "Invoices by due date",
-        "intent": "Open the read-only overdue invoice report options.",
-        "triggers": ["invoices", "past due"],
-        "current_webapp": "accounting",
-        "route_template": "/accounting/control/FindSalesInvoicesByDueDate",
-        "parameters": [],
-        "expected_text": ["Days Offset"],
-        "provenance": ["controller.xml#FindSalesInvoicesByDueDate"],
-        "read_only": True,
-    }))
-    return KnowledgeRouter((AppSkill.load(path),))
+SKILL_ID = "fixture.accounting.invoices-by-due-date"
+
+
+def _knowledge_router(_tmp: str) -> FixtureKnowledgeRouter:
+    return FixtureKnowledgeRouter((FixtureSkill(
+        skill_id=SKILL_ID,
+        title="Invoices by due date",
+        intent="Open the read-only overdue invoice report options.",
+        triggers=("invoices", "past due"),
+        current_webapp="accounting",
+        request="FindSalesInvoicesByDueDate",
+        expected_text=("Days Offset",),
+        provenance=("routes.decl#FindSalesInvoicesByDueDate",),
+    ),))
 
 
 class SkillRouteStaysServerSide(unittest.TestCase):
     def test_generic_application_entry_is_page_grounded_and_token_opaque(self):
         entry = PageObservation(
-            schema_version=1, epoch=1, url="http://app/partymgr/control/main",
+            schema_version=1, epoch=1, url="http://app/partymgr/do/main",
             title="Party Manager", landmarks=[], elements=[ElementRef(
                 "e4", "link", "Accounting", "a", 1,
-                {"href": "/accounting/control/main?externalLoginKey=[redacted]"})])
-        self.assertEqual(OFBIZ_ROUTE_PORT.validate_application_entry("e4", entry), ("e4", ""))
+                {"href": "/accounting/do/main?fixturesessionkey=[redacted]"})])
+        self.assertEqual(FIXTURE_ROUTE_PORT.validate_application_entry("e4", entry), ("e4", ""))
         for href in (
-            "/accounting/control/findInvoices",
-            "/accounting/control/main?externalLoginKey=clear",
-            "https://evil.test/accounting/control/main?externalLoginKey=[redacted]",
+            "/accounting/do/findInvoices",
+            "/accounting/do/main?fixturesessionkey=clear",
+            "https://evil.test/accounting/do/main?fixturesessionkey=[redacted]",
         ):
             entry.elements[0] = ElementRef("e4", "link", "Accounting", "a", 1,
                                            {"href": href})
             self.assertNotEqual(
-                OFBIZ_ROUTE_PORT.validate_application_entry("e4", entry)[1], "")
+                FIXTURE_ROUTE_PORT.validate_application_entry("e4", entry)[1], "")
 
     def test_generic_application_entry_bypasses_static_click_block_only_after_validation(self):
         with tempfile.TemporaryDirectory() as tmp:
             chat = _Chat([("enter_application", {"ref": "e4"}),
                           ("finish", {"done": False, "why": "entry checked"})])
             entry = PageObservation(
-                schema_version=1, epoch=1, url="http://app/partymgr/control/main",
+                schema_version=1, epoch=1, url="http://app/partymgr/do/main",
                 title="Party Manager", landmarks=[], elements=[ElementRef(
                     "e4", "link", "Accounting", "a", 1,
-                    {"href": "/accounting/control/main?externalLoginKey=[redacted]"})])
+                    {"href": "/accounting/do/main?fixturesessionkey=[redacted]"})])
             browser = _Browser([entry, _page(2)])
             session = ServerAgentSession(
                 task=TaskSpec("T", "Open Accounting"), arm="U", chat=chat,
                 browser=browser, control=_Control([[], [], []]),
                 ledger=SessionLedger(Path(tmp) / "ledger.jsonl", "app-entry"),
                 source_contract=False, disabled_actions={"click"},
-                allow_application_entry=True, application_routes=OFBIZ_ROUTE_PORT)
+                allow_application_entry=True, application_routes=FIXTURE_ROUTE_PORT)
             session.entry_observation = entry
             result = session.run()
             self.assertEqual(result.terminal_reason, "agent_refused")
@@ -724,14 +767,14 @@ class SkillRouteStaysServerSide(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             chat = _Chat([
                 ("enter_skill_app", {
-                    "skill_id": "ofbiz.accounting.invoices-by-due-date"}),
+                    "skill_id": SKILL_ID}),
                 ("finish", {"done": False, "why": "entry checked"}),
             ])
             entry = PageObservation(
-                schema_version=1, epoch=1, url="http://app/partymgr/control/main",
+                schema_version=1, epoch=1, url="http://app/partymgr/do/main",
                 title="Party Manager", landmarks=[], elements=[ElementRef(
                     "e7", "link", "Accounting", "a", 1,
-                    {"href": "/accounting/control/main?externalLoginKey=[redacted]"})])
+                    {"href": "/accounting/do/main?fixturesessionkey=[redacted]"})])
             accounting = _page(2)
             browser = _Browser([entry, accounting])
             session = ServerAgentSession(
@@ -739,7 +782,7 @@ class SkillRouteStaysServerSide(unittest.TestCase):
                 browser=browser, control=_Control([[], [], []]),
                 ledger=SessionLedger(Path(tmp) / "ledger.jsonl", "skill-entry"),
                 knowledge_router=_knowledge_router(tmp),
-                application_routes=OFBIZ_ROUTE_PORT,
+                application_routes=FIXTURE_ROUTE_PORT,
                 source_contract=False, disabled_actions={"click"})
             session.entry_observation = entry
 
@@ -757,17 +800,17 @@ class SkillRouteStaysServerSide(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             chat = _Chat([
                 ("open_skill_route", {
-                    "skill_id": "ofbiz.accounting.invoices-by-due-date", "bindings": {}}),
+                    "skill_id": SKILL_ID, "bindings": {}}),
                 ("finish", {"done": True, "why": "report options are visible"}),
             ])
-            target = "http://app/accounting/control/FindSalesInvoicesByDueDate"
+            target = "http://app/accounting/do/FindSalesInvoicesByDueDate"
             browser = _Browser([_page(1), _page(2, target, "Invoices By Due Date")])
             session = ServerAgentSession(
                 task=TaskSpec("T", "Review invoices that are past due"), arm="U", chat=chat,
                 browser=browser, control=_Control([[], [], []]),
                 ledger=SessionLedger(Path(tmp) / "ledger.jsonl", "skill"),
                 knowledge_router=_knowledge_router(tmp),
-                application_routes=OFBIZ_ROUTE_PORT,
+                application_routes=FIXTURE_ROUTE_PORT,
                 source_contract=False)
             session.entry_observation = browser.pages[0]
 
@@ -775,33 +818,33 @@ class SkillRouteStaysServerSide(unittest.TestCase):
 
             self.assertEqual(result.terminal_reason, "agent_finished")
             self.assertEqual(browser.done, [("goto", {"url":
-                "/accounting/control/FindSalesInvoicesByDueDate"})])
+                "/accounting/do/FindSalesInvoicesByDueDate"})])
             self.assertEqual(result.page_actions, 1)
             opened = session.ledger.of_kind("skill_route_opened")
             self.assertEqual(len(opened), 1)
             self.assertEqual(opened[0]["provenance"],
-                             ["controller.xml#FindSalesInvoicesByDueDate"])
+                             ["routes.decl#FindSalesInvoicesByDueDate"])
             opening = next(message["content"] for message in chat.seen[0]
                            if message["role"] == "user")
-            self.assertIn("ofbiz.accounting.invoices-by-due-date", opening)
-            self.assertNotIn("/accounting/control/FindSalesInvoicesByDueDate", opening)
-            self.assertNotIn("controller.xml", opening)
+            self.assertIn(SKILL_ID, opening)
+            self.assertNotIn("/accounting/do/FindSalesInvoicesByDueDate", opening)
+            self.assertNotIn("routes.decl", opening)
 
     def test_wrong_webapp_is_refused_then_freshly_observed(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill_call = ("open_skill_route", {
-                "skill_id": "ofbiz.accounting.invoices-by-due-date", "bindings": {}})
+                "skill_id": SKILL_ID, "bindings": {}})
             chat = _Chat([skill_call, ("finish", {"done": False, "why": "stop"})])
             browser = _Browser([
-                _page(1, "http://app/partymgr/control/main", "Party Manager"),
-                _page(2, "http://app/partymgr/control/main", "Party Manager"),
+                _page(1, "http://app/partymgr/do/main", "Party Manager"),
+                _page(2, "http://app/partymgr/do/main", "Party Manager"),
             ])
             session = ServerAgentSession(
                 task=TaskSpec("T", "Review invoices that are past due"), arm="U", chat=chat,
                 browser=browser, control=_Control([[], [], []]),
                 ledger=SessionLedger(Path(tmp) / "ledger.jsonl", "skill-reject"),
                 knowledge_router=_knowledge_router(tmp),
-                application_routes=OFBIZ_ROUTE_PORT,
+                application_routes=FIXTURE_ROUTE_PORT,
                 source_contract=False)
             session.entry_observation = browser.pages[0]
 
@@ -862,7 +905,7 @@ class APlanWhoseWriteIsAuthorisedPauses(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             chat = _Chat([("submit", {"ref": "e1"}), ("observe", {}),
                           ("finish", {"done": True, "why": "done"})])
-            browser = _Browser([_page(1), _page(2, url="http://app/accounting/control/main")])
+            browser = _Browser([_page(1), _page(2, url="http://app/accounting/do/main")])
             s = _session(tmp, chat, browser, _Control([[], CONSUMED, [], []]), CONTRACT)
             result = s.run()
             self.assertEqual(result.terminal_reason, "agent_finished")

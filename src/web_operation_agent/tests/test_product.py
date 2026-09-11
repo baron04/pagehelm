@@ -1022,5 +1022,186 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 event for event in events if event["event"] == "answer_render_failed"]), 1)
 
 
+class ApplicationEgressVocabulary(unittest.TestCase):
+    """An adapter that declares session parameters must find them at the provider boundary.
+
+    Composition, not runtime: a deployment that forgot to widen the egress policy would
+    otherwise discover the gap by sending the secret. The check is scoped to adapters that
+    actually declare something, so an application with no session parameters of its own -- the
+    common case -- composes exactly as before.
+    """
+
+    def _adapter(self, keys):
+        adapter = _InvoiceAdapter()
+        object.__setattr__(adapter.ports.routes, "session_handoff_query_keys",
+                           frozenset(keys))
+        return bind_application(adapter)
+
+    def _executor(self, application, chat):
+        return AgentTurnExecutor(
+            channel=_Channel(),
+            config=AgentTurnConfig(supported_scope="Read invoice data.",
+                                   ledger_path=self.output / "session.jsonl"),
+            chat=chat, application=application, control=ReadOnlyControl(),
+            run_id_factory=lambda _message: "egress-vocabulary")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.output = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_an_adapter_declaring_nothing_composes_unchanged(self):
+        chat = _Chat([])
+        self.assertIsNotNone(self._executor(self._adapter(()), chat))
+
+    def test_composition_fails_when_the_policy_has_not_been_told(self):
+        from web_operation_agent.egress import ProviderEgressPolicy
+
+        class _ChatWithEgress(_Chat):
+            egress_policy = ProviderEgressPolicy()
+
+        with self.assertRaisesRegex(ValueError, "session_id"):
+            self._executor(self._adapter({"session_id"}), _ChatWithEgress([]))
+
+    def test_composition_succeeds_once_the_policy_covers_the_declaration(self):
+        from web_operation_agent.egress import ProviderEgressPolicy
+
+        class _ChatWithEgress(_Chat):
+            egress_policy = ProviderEgressPolicy(
+                session_handoff_keys=frozenset({"session_id"}))
+
+        self.assertIsNotNone(
+            self._executor(self._adapter({"session_id"}), _ChatWithEgress([])))
+
+
+class LabApparatusNeverReachesTheProduct(unittest.TestCase):
+    """The session constructor's experiment knobs must be unreachable from a product turn.
+
+    `ServerAgentSession` accepts `arm`, `plan_from_page`, `oracle_contract` and
+    `terms_cache` because the comparison harness needs them to define its arms. None of
+    them belongs in a deployment: `oracle_contract` injects a known-good plan, which is
+    hidden expected state; `plain_from_page` and `terms_cache` define one arm's planning
+    apparatus. `product.py` is the only place a deployed turn constructs a session, so
+    asserting on the keywords it actually passes is the whole check.
+    """
+
+    LAB_ONLY = ("oracle_contract", "plan_from_page", "terms_cache")
+    #: A deployment source capability the product turn does not offer yet. It is listed
+    #: separately from the lab knobs on purpose: `SourceCapability` can return it True for an
+    #: application whose compiled source supports cited runtime lookup, and a turn composed
+    #: directly (as the comparison harness composes one) honours it. The product turn
+    #: currently exposes source knowledge only through affordance candidates.
+    NOT_WIRED_INTO_A_PRODUCT_TURN = ("runtime_source",)
+
+    def test_the_product_turn_passes_no_lab_apparatus_and_no_source_contract(self):
+        recorded = {}
+        real = product.ServerAgentSession
+
+        class _Recording(real):
+            def __init__(self, **kwargs):
+                recorded.update(kwargs)
+                super().__init__(**kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = _skill(root / "query-skill.json")
+            executor = AgentTurnExecutor(
+                channel=_Channel(),
+                config=AgentTurnConfig(
+                    supported_scope="Read company data only.",
+                    ledger_path=root / "session.jsonl",
+                    plain_business_answer_min_page_actions=0,
+                    disabled_actions=frozenset({"click", "fill", "select", "submit"}),
+                ),
+                chat=_Chat([("query_companies", {}),
+                            (None, {"content": "done"})]),
+                business_tools=BusinessToolRuntime((skill,), _Executor()),
+                control=ReadOnlyControl(),
+                run_id_factory=lambda message: "turn-lab-apparatus",
+            )
+            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser), \
+                    patch.object(product, "ServerAgentSession", _Recording):
+                # Only the composition matters here; whether this synthetic turn reaches a
+                # terminal result is a different test's subject.
+                try:
+                    executor.run_once(_message())
+                except product.AgentTurnError:
+                    pass
+
+        self.assertTrue(recorded, "the product turn did not construct a session")
+        for knob in self.LAB_ONLY:
+            self.assertNotIn(knob, recorded, f"{knob} reached a product turn")
+        for knob in self.NOT_WIRED_INTO_A_PRODUCT_TURN:
+            self.assertNotIn(knob, recorded)
+        # Source planning is a deployment capability, not a default: a product turn compiles
+        # no contract unless a composition explicitly supplies source affordances.
+        self.assertIs(recorded["source_contract"], False)
+        self.assertEqual(recorded["arm"], "U")
+
+
+class EntryScopesReachTheProductTurn(unittest.TestCase):
+    """A compiled SourceMap the product path never consults is worse than none.
+
+    `resolve_source_affordances` needs the scopes the *entry page* actually exposes, and the
+    adapter derives them from that page. For as long as the product turn assigned
+    `entry_observation` directly, `served_webapps` stayed empty and every candidate in auto
+    mode was silently zero — the mechanism worked in a directly composed session and did
+    nothing in a deployment. This pins the wiring, not the affordance logic.
+    """
+
+    def test_the_turn_derives_served_scopes_from_its_entry_observation(self):
+        from web_operation_agent.schemas import ElementRef, PageObservation
+
+        recorded = {}
+        real = product.ServerAgentSession
+
+        class _Recording(real):
+            def adopt_entry(self, obs):
+                result = super().adopt_entry(obs)
+                recorded["served_webapps"] = set(self.served_webapps)
+                recorded["entry_url"] = self.entry_observation.url
+                return result
+
+        class _EntryLinkBrowser(_RemoteBrowser):
+            def observe(self):
+                return PageObservation(
+                    schema_version=1, epoch=1, url="http://app.test/companies",
+                    title="Companies", landmarks=[], elements=[ElementRef(
+                        "e1", "link", "Invoices", "a", 1,
+                        {"href": "/ledger/do/findInvoices"})])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = _skill(root / "query-skill.json")
+            executor = AgentTurnExecutor(
+                channel=_Channel(),
+                config=AgentTurnConfig(
+                    supported_scope="Read company data only.",
+                    ledger_path=root / "session.jsonl",
+                    plain_business_answer_min_page_actions=0,
+                    disabled_actions=frozenset({"click", "fill", "select", "submit"}),
+                ),
+                chat=_Chat([("query_companies", {}), (None, {"content": "done"})]),
+                business_tools=BusinessToolRuntime((skill,), _Executor()),
+                control=ReadOnlyControl(),
+                run_id_factory=lambda message: "turn-entry-scopes",
+            )
+            with patch.object(product, "RemoteBrowserClient", _EntryLinkBrowser), \
+                    patch.object(product, "ServerAgentSession", _Recording):
+                try:
+                    executor.run_once(_message())
+                except product.AgentTurnError:
+                    pass
+
+        self.assertEqual(recorded.get("entry_url"), "http://app.test/companies")
+        # No adapter is bound in this composition, so the scope set is empty on purpose --
+        # what is asserted is that the derivation ran at all, which is the step that was
+        # missing. The application-bound case is covered by the live Odoo gate's
+        # `source_treatment_is_non_empty` check.
+        self.assertIn("served_webapps", recorded)
+
+
 if __name__ == "__main__":
     unittest.main()

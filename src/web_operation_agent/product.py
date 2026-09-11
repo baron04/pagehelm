@@ -277,6 +277,31 @@ AnswerRenderer = Callable[[AgentAnswerContext], str]
 LedgerFactory = Callable[..., SessionLedger]
 
 
+def _require_egress_covers_application(chat, application: BoundApplication | None) -> None:
+    """An adapter's session parameters must reach the outbound provider boundary.
+
+    `privacy.py` ships a static baseline that names no particular application. An adapter
+    that declares `session_handoff_query_keys` is saying "my application also carries its
+    session in these"; if the provider egress policy has not been told, the boundary is
+    silently blind to exactly the secret the adapter warned about. Checked at composition,
+    like the ChatPort shape, because a deployment that forgot would otherwise only find out
+    by leaking.
+    """
+    if application is None:
+        return
+    declared = frozenset(application.ports.routes.session_handoff_query_keys)
+    if not declared:
+        return
+    policy = getattr(chat, "egress_policy", None)
+    covered = frozenset(getattr(getattr(policy, "handoffs", None), "query_keys", ()))
+    missing = sorted(declared - covered)
+    if missing:
+        raise ValueError(
+            "the provider egress policy does not cover this application's declared session "
+            f"parameters: {missing}. Compose ChatModel with "
+            "ProviderEgressPolicy(session_handoff_keys=ports.routes.session_handoff_query_keys)")
+
+
 class AgentTurnExecutor:
     """Execute one application-selected task without owning the channel lifecycle."""
 
@@ -304,6 +329,7 @@ class AgentTurnExecutor:
                 and not self.config.require_identity):
             raise ValueError(
                 "the application identity port requires require_identity=True")
+        _require_egress_covers_application(self.chat, application)
         if self.config.allow_business_mutations:
             if self.business_tools is None or not self.business_tools.has_mutations:
                 raise ValueError(
@@ -493,7 +519,7 @@ class AgentTurnExecutor:
             turn_id=(turn_message.message_id if principal is not None else ""),
             conversation_context=self.conversation_state.model_context(),
         )
-        session.entry_observation = current.observation
+        session.adopt_entry(current.observation)
         try:
             session.plan()
             self.channel.publish("progress", {
