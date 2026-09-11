@@ -9,6 +9,7 @@ from web_operation_agent.tests.test_session import _Chat, _Control
 from web_operation_agent.tests.test_write_semantics import (
     _Browser, _run, PERMIT, REFUSAL, SUBMIT, FINISH,
 )
+from web_operation_agent.tests.session_fixture import SessionFixture
 
 
 class LateDecisions(unittest.TestCase):

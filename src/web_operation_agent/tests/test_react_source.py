@@ -122,12 +122,18 @@ class RuntimeSourceLoop(unittest.TestCase):
             self.assertFalse(any("LampSchedule/create" in line for line in evidence))
 
     def test_source_tools_are_absent_from_the_default_and_page_only_loop(self):
-        session = object.__new__(ServerAgentSession)
-        for enabled in (False, True):
-            session.runtime_source = enabled
-            names = [t["function"]["name"] for t in session.tool_schemas()]
-            self.assertEqual("lookup_source" in names, enabled)
-            self.assertEqual("open_source_route" in names, enabled)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for enabled in (False, True):
+                session = ServerAgentSession(
+                    application_routes=OFBIZ_ROUTE_PORT, task=TaskSpec("T", "inspect"),
+                    arm="S", chat=_Chat([]), browser=_Browser([_obs(1)]),
+                    control=_Control([[], []]),
+                    ledger=SessionLedger(root / f"tools-{enabled}.jsonl", "t"),
+                    attestation=None, source_map=_map(root), runtime_source=enabled)
+                names = [t["function"]["name"] for t in session.tool_schemas()]
+                self.assertEqual("lookup_source" in names, enabled)
+                self.assertEqual("open_source_route" in names, enabled)
 
     def test_a_cited_view_route_can_be_opened_and_is_a_generic_browser_navigation(self):
         with tempfile.TemporaryDirectory() as tmp:

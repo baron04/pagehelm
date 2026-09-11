@@ -60,9 +60,11 @@ class WhatTheModelIsTold(unittest.TestCase):
         rec = ActionReceipt(schema_version=SCHEMA_VERSIONS["ActionReceipt"], command_id="c",
                             action="click", args_echo={}, ok=ok, error_code=error_code,
                             url_before="a", url_after="b", navigated=True)
-        s = object.__new__(ServerAgentSession)
-        s.write_refusals = 0
-        return ServerAgentSession._render(s, obs, rec, "", {"state": state})
+        fixture = SessionFixture()
+        try:
+            return fixture.session()._render(obs, rec, "", {"state": state})
+        finally:
+            fixture.close()
 
     def test_it_does_not_say_the_action_wrote_to_the_application(self):
         text = self._rendered(WRITE_PERMITTED).lower()
@@ -105,6 +107,7 @@ from web_operation_agent.session import ServerAgentSession, TaskSpec         # n
 from web_operation_agent.tests.test_session import _Chat, _Control           # noqa: E402
 from web_operation_agent.tests.chat_port_contract import (                   # noqa: E402
     CancellableChatDouble)
+from web_operation_agent.tests.session_fixture import SessionFixture
 
 CONTRACT = OperationContract.from_json({
     "schema_version": 1, "task_ref": "T", "summary": "add the address",
@@ -345,25 +348,19 @@ class TheEvidenceThePlannerHadIsRecorded(unittest.TestCase):
                     "mutation": None, "citations": []}),
                     "finish_reason": "stop", "reasoning": ""}
 
-        with tempfile.TemporaryDirectory() as tmp:
-            s = object.__new__(ServerAgentSession)
-            s.oracle_contract = None
-            s.source_map = None
-            s.plan_from_page = True
-            s.chat = _PlanChat()
-            s.task = TaskSpec(task_ref="T", prompt="do the thing")
-            s.run_id = "r1"
-            s.entry_observation = _page()
-            s.served_webapps = set()
-            s._contract_route_identity = ofbiz_route_identity
-            s.terms_cache = None
-            s.ledger = SessionLedger(Path(tmp) / "l.jsonl", "r1")
-            s.bundle = EvidenceBundle(task_ref="T")
-            ServerAgentSession._plan(s)
-            events = s.ledger.of_kind("evidence_retrieved")
+        fixture = SessionFixture()
+        try:
+            session = fixture.session(
+                application_routes=OFBIZ_ROUTE_PORT, chat=_PlanChat(),
+                task=TaskSpec(task_ref="T", prompt="do the thing"), plan_from_page=True)
+            session.entry_observation = _page()
+            session._plan()
+            events = session.ledger.of_kind("evidence_retrieved")
             self.assertEqual(len(events), 1)
             self.assertIn("evidence", events[0],
                           "the ledger must record what the planner saw, not only how much")
+        finally:
+            fixture.close()
 
     def test_the_count_and_the_content_do_not_collide(self):
         """`stats` already carries a `lines` count; the content needs its own key."""

@@ -124,7 +124,12 @@ class AgentTurnConfig:
     transport_timeout_s: float = 60.0
     disabled_actions: frozenset[str] = frozenset()
     scope_first_policy: bool = True
-    policy_block_limit: int | None = 1
+    #: How many pre-dispatch action-policy refusals a turn survives. The product already
+    #: writes the model a recovery message naming the refused tool; a limit of one ended
+    #: the turn before that message could be read, so a deployment that disabled any page
+    #: action lost every turn in which the model reached for one. Two recoveries is enough
+    #: to tell a model that adapts from one that keeps retrying.
+    policy_block_limit: int | None = 3
     plain_business_answer_min_page_actions: int | None = None
     approval_ttl_s: int = 120
     keep_observations: int = 3

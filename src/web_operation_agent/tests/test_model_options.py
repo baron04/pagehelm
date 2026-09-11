@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from web_operation_agent import model as M
+from web_operation_agent.tests.session_fixture import SessionFixture
 
 
 class Policy(unittest.TestCase):
@@ -649,9 +650,11 @@ class WhatTheAgentIsToldAfterAWrite(unittest.TestCase):
         rec = ActionReceipt(schema_version=SCHEMA_VERSIONS["ActionReceipt"], command_id="c",
                             action="click", args_echo={}, ok=True, url_before="a",
                             url_after="b", navigated=True)
-        s = object.__new__(ServerAgentSession)
-        s.write_refusals = 0
-        return ServerAgentSession._render(s, obs, rec, "", {"state": state})
+        fixture = SessionFixture()
+        try:
+            return fixture.session()._render(obs, rec, "", {"state": state})
+        finally:
+            fixture.close()
 
     def test_a_permitted_write_offers_the_choice_of_stopping(self):
         from web_operation_agent.grounding import WRITE_PERMITTED

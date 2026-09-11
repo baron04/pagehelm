@@ -629,7 +629,7 @@ class ServerAgentSession:
         )
 
     def _plan(self) -> OperationContract:
-        source_contract = getattr(self, "source_contract", self.source_map is not None)
+        source_contract = self.source_contract
         if self.oracle_contract is not None:
             self.contract = self.oracle_contract
             self.contract_source = "oracle"
@@ -757,11 +757,11 @@ class ServerAgentSession:
             system += "\n" + REACT_SOURCE_SYSTEM
         if self.source_affordance_mode in ("auto", "empty"):
             system += "\n" + SOURCE_AFFORDANCE_SYSTEM
-        if getattr(self, "knowledge_router", None) is not None:
+        if self.knowledge_router is not None:
             system += "\n" + SKILL_SYSTEM
-        if getattr(self, "allow_application_entry", False):
+        if self.allow_application_entry:
             system += "\n" + APPLICATION_ENTRY_SYSTEM
-        if getattr(self, "_task_business_skills", ()):
+        if self._task_business_skills:
             system += "\n" + BUSINESS_SKILL_SYSTEM
         if self.conversation_context is not None:
             system += "\n" + CONVERSATION_SYSTEM
@@ -968,7 +968,7 @@ class ServerAgentSession:
                 messages = _trim(messages, self.keep_observations)
                 continue
 
-            if name == "load_skill" and getattr(self, "_task_business_skills", ()):
+            if name == "load_skill" and self._task_business_skills:
                 skill, rejection = self.business_tools.load(
                     args.get("skill_id"), self._task_business_skill_ids)
                 if rejection:
@@ -992,7 +992,7 @@ class ServerAgentSession:
                 messages = _trim(messages, self.keep_observations)
                 continue
 
-            if (getattr(self, "business_tools", None) is not None
+            if (self.business_tools is not None
                     and name in self.business_tools.tool_names):
                 operation_context = self._operation_context(step, name)
                 operation_identity = (operation_context.audit_projection()
@@ -1313,7 +1313,7 @@ class ServerAgentSession:
             source_route_citations: list[str] = []
             source_route_read_only = False
             skill_app_entry = None
-            if name == "enter_application" and getattr(self, "allow_application_entry", False):
+            if name == "enter_application" and self.allow_application_entry:
                 ref, rejection = self._application_link_ref(args.get("ref"), obs)
                 if rejection:
                     self.ledger.append(
@@ -1350,7 +1350,7 @@ class ServerAgentSession:
                 self.ledger.append("application_entered", step=step, element_ref=ref)
                 source_route_read_only = True
                 name, args = "click", {"ref": ref, "expect_navigation": True}
-            if name == "enter_skill_app" and getattr(self, "knowledge_router", None) is not None:
+            if name == "enter_skill_app" and self.knowledge_router is not None:
                 ref, rejection, skill = self.knowledge_router.app_link(
                     args.get("skill_id"), obs, self._task_skill_ids)
                 if rejection:
@@ -1394,7 +1394,7 @@ class ServerAgentSession:
                     provenance=list(skill.provenance))
                 skill_app_entry = skill
                 name, args = "click", {"ref": ref, "expect_navigation": True}
-            if name == "open_skill_route" and getattr(self, "knowledge_router", None) is not None:
+            if name == "open_skill_route" and self.knowledge_router is not None:
                 url, rejection, skill = self.knowledge_router.resolve(
                     args.get("skill_id"), args.get("bindings"), obs.url,
                     self._task_skill_ids)
@@ -1660,14 +1660,20 @@ class ServerAgentSession:
 
     # -- grounding ---------------------------------------------------------------------
     def tool_schemas(self) -> list[dict]:
-        tools = TOOL_SCHEMAS + ([SOURCE_TOOL, SOURCE_NAV_TOOL] if self.runtime_source else [])
-        if getattr(self, "source_affordance_mode", "off") in ("auto", "empty"):
+        # A disabled action is refused before dispatch, so offering it in the tool surface
+        # only invites a call the run will refuse: nothing in the schema tells the model the
+        # deployment took the tool away. `observe` cannot be disabled and `finish` is not a
+        # browser action, so a run whose every page action is disabled can still end.
+        tools = [tool for tool in TOOL_SCHEMAS
+                 if tool["function"]["name"] not in self.disabled_actions]
+        tools += [SOURCE_TOOL, SOURCE_NAV_TOOL] if self.runtime_source else []
+        if self.source_affordance_mode in ("auto", "empty"):
             tools += [SOURCE_CANDIDATE_TOOL]
-        if getattr(self, "knowledge_router", None) is not None:
+        if self.knowledge_router is not None:
             tools += [SKILL_APP_TOOL, SKILL_ROUTE_TOOL]
-        if getattr(self, "allow_application_entry", False):
+        if self.allow_application_entry:
             tools += [APPLICATION_ENTRY_TOOL]
-        if getattr(self, "_task_business_skills", ()):
+        if self._task_business_skills:
             tools += [LOAD_SKILL_TOOL]
             tools += self.business_tools.schemas_for(self._loaded_business_skill_ids)
         return tools
@@ -2061,7 +2067,7 @@ class ServerAgentSession:
         return "\n\n".join(body)
 
     def _render_task_skills(self) -> str:
-        if not getattr(self, "_task_skills", ()):
+        if not self._task_skills:
             return ""
         cards = [skill.public_card() for skill in self._task_skills]
         return ("APP SKILLS (server-selected read-only knowledge):\n"
@@ -2069,7 +2075,7 @@ class ServerAgentSession:
                              separators=(",", ":")))
 
     def _render_business_skills(self) -> str:
-        if not getattr(self, "_task_business_skills", ()):
+        if not self._task_business_skills:
             return ""
         cards = [skill.candidate_card(
             loaded=skill.skill_id in self._loaded_business_skill_ids)
@@ -2081,7 +2087,7 @@ class ServerAgentSession:
     def _deliver_source_affordances(self, obs: PageObservation, *, query: str = "",
                                     reason: str) -> str:
         """Refresh the current candidate IDs from one fresh, public observation."""
-        mode = getattr(self, "source_affordance_mode", "off")
+        mode = self.source_affordance_mode
         if mode not in ("auto", "empty"):
             return ""
         candidates: tuple[SourceAffordance, ...] = ()
