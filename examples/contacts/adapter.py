@@ -1,12 +1,34 @@
-"""The part a real integration writes: ports, a typed tool, and a Skill artifact.
+"""The part a real integration writes: ports, typed tools, and Skill artifacts.
 
-This is the file to copy. It implements what `ApplicationPorts` asks for -- identity, route
-validation and result data classification -- exposes one read-only typed tool over the
-application's own data, and loads the Skill that tells the model when that tool applies.
+This is the file to copy. It implements all five of what `ApplicationPorts` asks for --
+identity, route validation, postconditions, reconciliation and data classification -- and
+exposes one read and one write over the application's own data, each with the Skill that
+tells the model when it applies.
 
 Nothing here knows about the Agent, the Runtime, or the model. That is the whole point of
 the SPI: an application author describes their application, and the framework decides what
 to do with it.
+
+**The write is the part worth reading.** It used to be absent, and an example with only a
+read left every author to invent the hard half for themselves. The chain is five steps and
+each one exists because of a specific way writes go wrong:
+
+1. `prepare_mutation` finds exactly one target over a scan it knows finished, and refuses
+   a duplicate. A write aimed at the wrong record, or at a record that already exists, is
+   not something a later check can undo.
+2. It states an exact effect and exact targets. That text is what the user approves; a
+   proposal that said "create a contact" would be approval of anything.
+3. The framework shows it, takes one approval, and consumes it once.
+4. `execute_mutation` re-checks the duplicate immediately before dispatch, closing the
+   ordinary time-of-check gap without ever retrying the write itself.
+5. It reads the record back **under the same actor** and compares it. Anything else --
+   a create with no id, a readback that fails or disagrees -- raises
+   `BusinessMutationIndeterminate`, which the framework records and never retries.
+
+The identity port is real for the same reason: `AgentTurnConfig` refuses to enable business
+mutations without a verified session identity, and it is right to. Two credentials resolve
+independently and must agree, which is the smallest honest version of what Odoo and Twenty
+both do.
 """
 from __future__ import annotations
 
@@ -17,21 +39,34 @@ import urllib.request
 from pathlib import Path
 
 from web_operation_agent.application import (
-    APPLICATION_ADAPTER_VERSION, AnonymousIdentityPort, ApplicationDescriptor, ApplicationPorts, ConservativeMutationReconciler, DeclaredDataClassifier, DeclaredRoutePort, ResultPostconditionVerifier)
+    APPLICATION_ADAPTER_VERSION, ApplicationDescriptor, ApplicationPorts,
+    DeclaredDataClassifier, DeclaredRoutePort, MutationReconciliation,
+    ResultPostconditionVerifier)
 from web_operation_agent.business import (
+    BusinessMutationIndeterminate,
     BusinessMutationSpec,
     BusinessSkill,
     BusinessToolError,
     BusinessToolResult,
     BusinessToolRuntime,
+    business_text_key,
+    normalize_business_text,
 )
+from web_operation_agent.identity import (IdentityAssertion, PrincipalContext,
+                                          PrincipalError, PRINCIPAL_CONTEXT_VERSION,
+                                          bind_matching_identity)
 
 
-#: The Skill is an artifact, not a literal. A real integration ships one file per Skill and
-#: version-controls it alongside the application it describes; loading it through
+#: Skills are artifacts, not literals. A real integration ships one file per Skill and
+#: version-controls it alongside the application it describes; loading through
 #: `BusinessSkill.from_bytes` is what validates its shape and its tool references.
-SKILL_PATH = Path(__file__).parent / "skills" / "contacts-query.json"
-_TOOL_SCHEMA = {
+SKILLS = Path(__file__).parent / "skills"
+APPLICATION_ID = "minimal.contacts"
+CREATE_CONTACT = "create_contact"
+#: What a write needs the principal to carry. Declared here because scopes are the
+#: application's vocabulary, not the framework's.
+SCOPES = {"list_contacts": "contacts:read", CREATE_CONTACT: "contacts:write"}
+_READ_SCHEMA = {
     "type": "function",
     "function": {
         "name": "list_contacts",
@@ -50,17 +85,55 @@ _TOOL_SCHEMA = {
 }
 
 
+_WRITE_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": CREATE_CONTACT,
+        "description": (
+            "Propose creation of exactly one contact for explicit user confirmation. The "
+            "server re-checks for a duplicate immediately before writing and reads the "
+            "created record back under the same actor."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "minLength": 1, "maxLength": 120,
+                         "description": "Exact contact name supplied by the user."},
+                "email": {"type": "string", "minLength": 3, "maxLength": 200,
+                          "description": "Contact email address."},
+            },
+            "required": ["name", "email"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+def _skill(filename: str) -> BusinessSkill:
+    path = SKILLS / filename
+    return BusinessSkill.from_bytes(path.read_bytes(), artifact_uri=f"file://{filename}")
+
+
 class _ContactsToolExecutor:
-    def __init__(self, origin: str):
+    def __init__(self, origin: str, *, api_token: str = "", allow_mutations: bool = False):
         self.origin = origin.rstrip("/")
+        #: The delegated credential. It never leaves this object: it is not in a tool
+        #: schema, not in a result, and not in an audit record.
+        self._api_token = api_token
+        self.allow_mutations = bool(allow_mutations)
+        if self.allow_mutations and not api_token:
+            raise ValueError("a write needs a delegated credential to write with")
 
-    @staticmethod
-    def tool_schemas() -> tuple[dict, ...]:
-        return (_TOOL_SCHEMA,)
+    def tool_schemas(self) -> tuple[dict, ...]:
+        # A read-only composition does not merely refuse the write; it never offers it. A
+        # tool in the surface that the run will always refuse just invites a wasted turn.
+        return (_READ_SCHEMA,) + ((_WRITE_SCHEMA,) if self.allow_mutations else ())
 
-    @staticmethod
-    def tool_effects() -> dict[str, str]:
-        return {"list_contacts": "read"}
+    def tool_effects(self) -> dict[str, str]:
+        effects = {"list_contacts": "read"}
+        if self.allow_mutations:
+            effects[CREATE_CONTACT] = "write"
+        return effects
 
     def execute(self, name: str, args: dict, *, context=None) -> BusinessToolResult:
         if name != "list_contacts" or set(args) - {"name_contains"}:
@@ -110,44 +183,247 @@ class _ContactsToolExecutor:
             allowed_routes=routes,
         )
 
-    @staticmethod
-    def prepare_mutation(_name: str, _args: dict, *, context=None) -> BusinessMutationSpec:
-        raise BusinessToolError("the minimal demo is read-only")
+    # -- the write -----------------------------------------------------------------------
+    def _post(self, path: str, payload: dict) -> dict:
+        request = urllib.request.Request(
+            self.origin + path, json.dumps(payload).encode("utf-8"), method="POST")
+        request.add_header("Content-Type", "application/json")
+        request.add_header("Authorization", f"Bearer {self._api_token}")
+        try:
+            with urllib.request.urlopen(request, timeout=3) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as exc:
+            # The application's own refusal, classified rather than passed through: its
+            # body may quote record content, and only the shape of the answer crosses.
+            if exc.code == 409:
+                raise BusinessToolError("a contact with that name already exists") from exc
+            if exc.code in (401, 403):
+                raise BusinessToolError("the delegated credential was refused") from exc
+            raise BusinessToolError(f"the contacts API returned HTTP {exc.code}") from exc
+        except (OSError, ValueError) as exc:
+            # Unlike the refusals above, this may have arrived and been lost on the way
+            # back. The caller decides; it must not be reported as a plain failure.
+            raise BusinessMutationIndeterminate(
+                "the contacts API did not report an outcome", phase="dispatch") from exc
 
     @staticmethod
-    def execute_mutation(_name: str, _args: dict, *, context=None) -> BusinessToolResult:
-        raise BusinessToolError("the minimal demo is read-only")
+    def _normalise(args: dict) -> dict:
+        if not isinstance(args, dict) or set(args) != {"name", "email"}:
+            raise BusinessToolError(f"{CREATE_CONTACT} requires only name and email")
+        # `normalize_business_text` folds the Unicode tricks that make two different names
+        # look identical to a person and different to a duplicate check.
+        name = normalize_business_text(args.get("name"), field="contact name", maximum=120)
+        email = args.get("email")
+        if not isinstance(email, str) or "@" not in email or len(email) > 200:
+            raise BusinessToolError("contact email must be a plain address")
+        return {"name": name, "email": email.strip().casefold()}
+
+    def _existing(self, name: str) -> list[dict]:
+        """Over the whole collection, read the same way the read tool reads it."""
+        result = self.execute("list_contacts", {})
+        if not result.content["completeness"]["source_complete"]:
+            raise BusinessToolError("the duplicate check could not read every contact")
+        key = business_text_key(name)
+        return [row for row in result.content["contacts"]
+                if business_text_key(row["name"]) == key]
+
+    def prepare_mutation(self, name: str, args: dict, *,
+                         context=None) -> BusinessMutationSpec:
+        if not self.allow_mutations or name != CREATE_CONTACT:
+            raise BusinessToolError("this composition has no such write")
+        proposed = self._normalise(args)
+        if self._existing(proposed["name"]):
+            raise BusinessToolError("a contact with that name already exists")
+        return BusinessMutationSpec(
+            args=proposed,
+            # What reconciliation will look for if the outcome is ever lost. It has to be
+            # something the application can be asked about later, not a local id.
+            reconcile_key=proposed["name"].casefold(),
+            effect="Create exactly one contact",
+            targets=(f"Name: {proposed['name']}", f"Email: {proposed['email']}"),
+        )
+
+    def execute_mutation(self, name: str, args: dict, *,
+                         context=None) -> BusinessToolResult:
+        if not self.allow_mutations or name != CREATE_CONTACT:
+            raise BusinessToolError("this composition has no such write")
+        proposed = self._normalise(args)
+        # Again, immediately before dispatch. The proposal may have waited on a person.
+        if self._existing(proposed["name"]):
+            raise BusinessToolError("a contact with that name already exists")
+        created = self._post("/api/contacts", proposed).get("contact")
+        if not isinstance(created, dict) or not created.get("id"):
+            raise BusinessMutationIndeterminate(
+                "the contacts API accepted the create but returned no record",
+                phase="acknowledgement")
+        record_id = str(created["id"])
+        readback = [row for row in self._existing(proposed["name"])
+                    if row["id"] == record_id]
+        if len(readback) != 1 or readback[0]["email"] != proposed["email"]:
+            # Created, and not what was approved. Not a failure -- a failure would invite a
+            # retry, and something is already there.
+            raise BusinessMutationIndeterminate(
+                "the contact was created but the same-actor readback did not match",
+                phase="readback", record_id=record_id)
+        ui_path = f"/contacts/{record_id}"
+        return BusinessToolResult(
+            content={
+                "created": True, "readback_verified": True,
+                "contact": {**readback[0]},
+                "scope": "synthetic_local_workspace",
+            },
+            audit={
+                "application": "minimal-contacts", "operation": name,
+                "records_created": 1, "readback_verified": True,
+            },
+            allowed_routes=(ui_path,),
+        )
+
+
+class _ContactsIdentityPort:
+    """Two credentials, resolved independently, that have to agree.
+
+    This is the smallest honest identity port. The browser holds a session it cannot read
+    out of itself, the server holds a delegated token the page never sees, and each is asked
+    *the application* who it is. `bind_matching_identity` then refuses unless both answers
+    name the same actor -- which is what stops a page from borrowing the server's authority
+    or a stolen token from acting as somebody who is not at the keyboard.
+
+    An application with no authenticated actor uses `AnonymousIdentityPort` instead and
+    cannot enable writes: `AgentTurnConfig` refuses business mutations without a verified
+    session identity.
+    """
+
+    required = True
+
+    def __init__(self, origin: str, *, api_token: str, scopes: frozenset[str],
+                 lifetime_s: int = 300):
+        self.origin = origin.rstrip("/")
+        self._api_token = api_token
+        # Exactly the scopes the tool catalog needs -- the framework compares them, and it
+        # is right to: a principal carrying a write scope a read-only composition never uses
+        # is authority nobody asked for.
+        self.required_scopes = frozenset(scopes)
+        self.lifetime_s = lifetime_s
+
+    def _whoami(self, headers: dict, expected_source: str) -> IdentityAssertion:
+        request = urllib.request.Request(self.origin + "/api/whoami", headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=3) as response:
+                payload = json.load(response)
+        except (OSError, ValueError, urllib.error.URLError) as exc:
+            raise PrincipalError("the contacts identity endpoint is unavailable") from exc
+        if not isinstance(payload, dict) or payload.get("source") != expected_source:
+            raise PrincipalError("the contacts identity answer is not the expected side")
+        import time
+        issued = int(time.time() * 1000)
+        return IdentityAssertion(
+            schema_version=PRINCIPAL_CONTEXT_VERSION, source=expected_source,
+            application_id=APPLICATION_ID, tenant_id="synthetic",
+            workspace_id=str(payload["workspace"]), actor_id=str(payload["actor"]),
+            issued_at=issued, expires_at=issued + self.lifetime_s * 1000)
+
+    def page_identity(self, session_cookie: str) -> IdentityAssertion:
+        """What the *browser* is, asked of the application with the browser's own cookie."""
+        return self._whoami({"Cookie": session_cookie}, "page_session")
+
+    def bind(self, page_identity: IdentityAssertion, *, delegation_id: str,
+             lifetime_s: int = 300, now_ms: int | None = None) -> PrincipalContext:
+        delegated = self._whoami({"Authorization": f"Bearer {self._api_token}"},
+                                 "delegated_api")
+        return bind_matching_identity(
+            page_identity, delegated, delegation_id=delegation_id,
+            scopes=tuple(sorted(self.required_scopes)), now_ms=now_ms)
+
+    def validate(self, principal: PrincipalContext | None, *,
+                 application_id: str) -> None:
+        if principal is None:
+            raise PrincipalError("this application requires a verified principal")
+        principal.require_live(application_id=application_id)
+
+
+class _ContactsReconciler:
+    """What the application can still say about a write whose outcome was lost.
+
+    Never a verdict, always evidence. A matching record is not proof that *this* proposal
+    created it -- a person may have created the same contact by hand in between -- and its
+    absence cannot rule out a write still in flight. So the answer is always `unknown` with
+    `requires_human`, carrying the counts an operator needs to decide. An adapter that
+    answered "completed" here would be guessing on the one question this project refuses to
+    guess about.
+    """
+
+    supported_tools = frozenset({CREATE_CONTACT})
+
+    def __init__(self, executor: "_ContactsToolExecutor", enabled: bool):
+        self._executor = executor
+        if not enabled:
+            self.supported_tools = frozenset()
+
+    def reconcile(self, name, business_key, *, evidence, principal):
+        if name not in self.supported_tools or principal is None:
+            raise ValueError("reconciliation requires an enabled tool and principal")
+        principal.require_live(application_id=APPLICATION_ID)
+        if SCOPES["list_contacts"] not in principal.scopes:
+            raise PrincipalError("reconciliation requires the read scope")
+        proposed = self._executor._normalise(business_key)
+        matches = self._executor._existing(proposed["name"])
+        return MutationReconciliation(
+            outcome="unknown", requires_human=True,
+            reason=(f"{len(matches)} contacts currently carry the name "
+                    f"{proposed['name']!r}. Establish the original writer's final outcome "
+                    "before resolving."))
 
 
 class MinimalContactsAdapter:
     """A second application adapter implemented only through the public SPI."""
 
-    def __init__(self, origin: str):
-        skill = BusinessSkill.from_bytes(
-            SKILL_PATH.read_bytes(), artifact_uri=f"file://{SKILL_PATH.name}")
-        data = DeclaredDataClassifier((
-            ("list_contacts", (
-                "synthetic.contact", "business.identifier", "application.route")),
-        ))
-        postconditions = ResultPostconditionVerifier(())
+    def __init__(self, origin: str, *, api_token: str = "",
+                 allow_mutations: bool = False, mutation_journal=None):
+        if allow_mutations and mutation_journal is None:
+            raise ValueError("allow_mutations=True requires an explicit mutation journal")
+        skills = [_skill("contacts-query.json")]
+        if allow_mutations:
+            skills.append(_skill("contacts-create.json"))
+        executor = _ContactsToolExecutor(origin, api_token=api_token,
+                                         allow_mutations=allow_mutations)
+        declarations = [("list_contacts", ("synthetic.contact", "business.identifier",
+                                           "application.route"))]
+        if allow_mutations:
+            declarations.append(
+                (CREATE_CONTACT, ("synthetic.contact", "business.identifier",
+                                  "application.route", "business.mutation_result")))
+        data = DeclaredDataClassifier(tuple(sorted(declarations)))
+        # A write that cannot say the application confirmed it is refused by the framework
+        # before it can be reported as done. An empty tuple here is what a read-only
+        # integration declares, and it is not the same thing as having no opinion.
+        postconditions = ResultPostconditionVerifier(
+            ((CREATE_CONTACT, ("content.readback_verified", "audit.readback_verified")),)
+            if allow_mutations else ())
         routes = DeclaredRoutePort(
-            application_id="minimal.contacts",
+            application_id=APPLICATION_ID,
             tool_route_patterns=(r"/contacts/[a-z0-9-]+",),
         )
         self.business_tools = BusinessToolRuntime(
-            (skill,), _ContactsToolExecutor(origin), application_id="minimal.contacts",
+            tuple(skills), executor, application_id=APPLICATION_ID,
+            required_scopes={tool: scope for tool, scope in SCOPES.items()
+                             if allow_mutations or tool != CREATE_CONTACT},
+            mutation_journal=mutation_journal,
             data_classifier=data, postcondition_verifier=postconditions,
             route_validator=routes)
+        self.identity = _ContactsIdentityPort(
+            origin, api_token=api_token,
+            scopes=frozenset(self.business_tools.required_scopes.values()))
         self.ports = ApplicationPorts(
-            identity=AnonymousIdentityPort(),
+            identity=self.identity,
             routes=routes,
             postconditions=postconditions,
-            reconciliation=ConservativeMutationReconciler(),
+            reconciliation=_ContactsReconciler(executor, allow_mutations),
             data=data,
         )
         self.descriptor = ApplicationDescriptor(
             schema_version=APPLICATION_ADAPTER_VERSION,
-            application_id="minimal.contacts",
+            application_id=APPLICATION_ID,
             display_name="Minimal Contacts",
             origin=origin,
             navigation_mode="spa",

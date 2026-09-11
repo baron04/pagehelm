@@ -23,11 +23,14 @@ from pathlib import Path
 from typing import Any
 
 from examples.contacts.adapter import MinimalContactsAdapter
-from examples.contacts.app import MinimalContactsApplication
+from examples.contacts.app import (DEMO_API_TOKEN, DEMO_SESSION_COOKIE,
+                                   DEMO_SESSION_VALUE,
+                                   MinimalContactsApplication)
 from web_operation_agent.application import bind_application
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.live import LiveConversationRunner, LiveProductSession
 from web_operation_agent.model import ChatModel, ProviderError, SpendMeter, load_env
+from web_operation_agent.mutation import MemoryMutationJournal
 from web_operation_agent.product import AgentTurnConfig, AgentTurnExecution, AgentTurnExecutor
 
 _MODEL_ENV_KEYS = (
@@ -38,25 +41,38 @@ _MODEL_ENV_KEYS = (
 )
 
 
+#: What the fixed walkthrough does, read-only and with the write enabled. The write script
+#: is what an author reads to see the shape of the chain from the model's side: load the
+#: Skill, look first, propose once, then open only the route the result handed back.
+READ_WALKTHROUGH: tuple[tuple[str, dict], ...] = (
+    ("load_skill", {"skill_id": "minimal.contacts.query"}),
+    ("list_contacts", {"name_contains": "Grace Hopper"}),
+    ("goto", {"url": "/contacts/grace-hopper"}),
+    ("finish", {"done": True, "why": "Opened Grace Hopper's current contact record."}),
+)
+WRITE_WALKTHROUGH: tuple[tuple[str, dict], ...] = (
+    ("load_skill", {"skill_id": "minimal.contacts-create"}),
+    ("list_contacts", {"name_contains": "Radia"}),
+    ("create_contact", {"name": "Radia Perlman", "email": "radia@example.test"}),
+    ("goto", {"url": "/contacts/radia-perlman"}),
+    ("finish", {"done": True, "why": "Created and opened Radia Perlman's contact."}),
+)
+
+
 class ScriptedDemoChat:
     """Deterministic apparatus probe; it never contacts a provider or a spend ledger."""
 
     model = "scripted-demo/no-provider"
 
-    def __init__(self):
+    def __init__(self, replies: tuple[tuple[str, dict], ...] = READ_WALKTHROUGH):
         self.calls = 0
+        self.replies = replies
 
     def complete(self, messages: list[dict], tools: list[dict] | None, run_id: str,
                  max_tokens: int | None = None, options: dict | None = None,
                  timeout_s: float | None = None) -> dict[str, Any]:
         self.calls += 1
-        replies: tuple[tuple[str, dict], ...] = (
-            ("load_skill", {"skill_id": "minimal.contacts.query"}),
-            ("list_contacts", {"name_contains": "Grace Hopper"}),
-            ("goto", {"url": "/contacts/grace-hopper"}),
-            ("finish", {"done": True,
-                        "why": "Opened Grace Hopper's current contact record."}),
-        )
+        replies = self.replies
         if self.calls > len(replies):
             name, arguments = "finish", {"done": False, "why": "Script exhausted."}
         else:
@@ -93,6 +109,10 @@ class DemoConfig:
     model: str | None = None
     keep_open_seconds: float = 3.0
     turn_timeout_s: float = 90.0
+    #: Offer the write. Off by default: the read-only composition is what most integrations
+    #: start from, and a template that enabled writes by default would teach the wrong
+    #: default.
+    allow_mutations: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "output_dir", Path(self.output_dir).expanduser())
@@ -107,9 +127,32 @@ class DemoConfig:
             raise ValueError("demo timeouts are invalid")
 
 
+#: The panel's own approve control, inside the assistant's shadow root. There is no other
+#: way to approve: the decision has to come from the page session that holds the lease, and
+#: an integration that found a way around that would be testing a product it does not ship.
+_APPROVE_IN_PANEL = """() => {
+  const approve = document.querySelector('#woa-assistant')?.shadowRoot
+      ?.querySelector('.approval menu button:not(.deny)')
+  if (!approve) return false
+  approve.click()
+  return true
+}"""
+
+
+def _approve_in_page(page, timeout_s: float) -> None:
+    """Click approve, as the person at the keyboard would, once the panel asks."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if page.evaluate(_APPROVE_IN_PANEL):
+            return
+        page.wait_for_timeout(200)
+    raise RuntimeError("the approval card never appeared in the panel")
+
+
 def _chat(config: DemoConfig, run_dir: Path):
     if config.scripted:
-        return ScriptedDemoChat(), None
+        return ScriptedDemoChat(
+            WRITE_WALKTHROUGH if config.allow_mutations else READ_WALKTHROUGH), None
     loaded = load_env(config.model_env) if config.model_env is not None else {}
     env = {key: value for key, value in loaded.items() if key in _MODEL_ENV_KEYS}
     for key in _MODEL_ENV_KEYS:
@@ -163,13 +206,18 @@ def _run_browser(config: DemoConfig, live: LiveProductSession,
                     "mode": "scripted_apparatus" if config.scripted else "provider",
                     "url": page.url,
                 }, sort_keys=True), flush=True)
-                tasks = config.tasks or (("Open Grace Hopper's contact record.",)
-                                         if config.scripted else ())
+                scripted_task = ("Create a contact for Radia Perlman at "
+                                 "radia@example.test."
+                                 if config.allow_mutations else
+                                 "Open Grace Hopper's contact record.")
+                tasks = config.tasks or ((scripted_task,) if config.scripted else ())
                 if tasks:
                     for task in tasks:
                         page.evaluate(
                             "task => window.__WOA_RUNTIME_READY__.then(runtime => "
                             "runtime.submitTask(task))", task)
+                        if config.allow_mutations and config.scripted:
+                            _approve_in_page(page, config.turn_timeout_s)
                         outcome = conversation.next_outcome(timeout_s=config.turn_timeout_s)
                         record = _outcome_json(outcome)
                         records.append(record)
@@ -212,10 +260,21 @@ def run_demo(config: DemoConfig) -> dict:
     run_dir = config.output_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
     with MinimalContactsApplication() as application:
-        adapter = MinimalContactsAdapter(application.origin)
+        journal = MemoryMutationJournal() if config.allow_mutations else None
+        adapter = MinimalContactsAdapter(
+            application.origin, api_token=DEMO_API_TOKEN,
+            allow_mutations=config.allow_mutations, mutation_journal=journal)
         bound = bind_application(adapter)
         if not adapter.health()["passed"]:
             raise RuntimeError("the synthetic contacts application is not ready")
+        # Both halves of the identity, resolved by the application itself and required to
+        # agree. A real integration reads the cookie out of the browser context it is about
+        # to drive; this demo knows its own synthetic session, which is the only part of
+        # this a real application replaces.
+        principal = adapter.ports.identity.bind(
+            adapter.identity.page_identity(
+                f"{DEMO_SESSION_COOKIE}={DEMO_SESSION_VALUE}"),
+            delegation_id=f"minimal-contacts-{uuid.uuid4().hex}")
         chat, meter = _chat(config, run_dir)
         holder: dict[str, LiveConversationRunner] = {}
 
@@ -225,7 +284,10 @@ def run_demo(config: DemoConfig) -> dict:
                 config=AgentTurnConfig(
                     supported_scope=(
                         "Read current contacts through the typed API and open only an exact "
-                        "route returned by that API. Do not modify records or submit forms."),
+                        "route returned by that API. Do not modify records or submit forms."
+                        if not config.allow_mutations else
+                        "Read current contacts through the typed API, and create at most "
+                        "the one contact the user confirms. Do not submit page forms."),
                     ledger_path=run_dir / "audit.jsonl",
                     step_budget=8,
                     wall_budget_s=max(1, int(config.turn_timeout_s)),
@@ -235,6 +297,12 @@ def run_demo(config: DemoConfig) -> dict:
                     policy_block_limit=2,
                     plain_business_answer_min_page_actions=0,
                     max_user_answer_chars=8_000,
+                    require_identity=True,
+                    allow_business_mutations=config.allow_mutations,
+                    # A synthetic application with an in-memory journal is not a
+                    # deployment, and saying so is what keeps the production profile's
+                    # durable-journal requirement meaningful.
+                    deployment_profile="test" if config.allow_mutations else "production",
                 ),
                 chat=chat,
                 application=bound,
@@ -251,6 +319,7 @@ def run_demo(config: DemoConfig) -> dict:
             runner_factory=runner_factory,
             navigation_mode=bound.descriptor.navigation_mode,
             sensitive_query_keys=bound.ports.routes.session_handoff_query_keys,
+            principal=principal,
         ).start()
         try:
             records, last_url, last_page_text = _run_browser(
@@ -300,6 +369,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", help="provider model override")
     parser.add_argument("--keep-open-seconds", type=float, default=3.0)
     parser.add_argument("--turn-timeout", type=float, default=90.0)
+    parser.add_argument("--allow-mutations", action="store_true",
+                        help="offer the write tool; the panel still asks before it runs")
     return parser
 
 
@@ -315,6 +386,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             model=args.model,
             keep_open_seconds=args.keep_open_seconds,
             turn_timeout_s=args.turn_timeout,
+            allow_mutations=args.allow_mutations,
         )
         summary = run_demo(config)
         print(json.dumps(summary, ensure_ascii=False, sort_keys=True), flush=True)
