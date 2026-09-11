@@ -61,13 +61,15 @@ _SKILL_OUTPUT_CONTRACT = (
     "EVALUATION OUTPUT CONTRACT\n"
     "For a company-list goal, query once and return a brief explanation; the product projects "
     "the exact records, source and completeness from the typed ToolResult. Do not restate or "
-    "extend the record set. For an open goal, finish only after the requested "
-    "company name and domain are visible on the opened record page."
+    "extend the record set. For an open goal, query the company, then open its record with "
+    "goto using the exact route the typed result returned; page clicks are disabled in this "
+    "configuration. Finish only after the requested company name and domain are visible on "
+    "the opened record page."
 )
 _BROWSER_OUTPUT_CONTRACT = (
     "EVALUATION OUTPUT CONTRACT\n"
-    "Use only the current page and ordinary browser tools. For a company-list goal, answer "
-    "with exactly one JSON object and no Markdown: "
+    "Use only the current page and ordinary browser tools. For a company-list goal, call "
+    "finish with why containing exactly one JSON object and no Markdown: "
     '{"artifact_version":1,"execution_status":"completed","complete":true,'
     '"companies":[{"name":"Company","domain":"company.example"}]}. Set complete true only '
     "when the visible page establishes the complete list. For an open goal, use an exact "
@@ -181,7 +183,10 @@ def turn_config(config: WoaTwentyConfig, ledger_path: Path) -> AgentTurnConfig:
         disabled_actions=(
             _BROWSER_DISABLED_ACTIONS if browser_only else _SKILL_DISABLED_BROWSER_ACTIONS),
         scope_first_policy=True,
-        policy_block_limit=1,
+        # The product default ends a turn on the first pre-dispatch refusal. The comparison
+        # arm allows the refusal feedback to reach the model twice so the measurement is
+        # whether the agent follows the stated action policy, not whether it guesses it.
+        policy_block_limit=3,
         plain_business_answer_min_page_actions=(None if browser_only else 0),
         keep_observations=config.keep_observations,
         allow_business_mutations=config.allow_create,
