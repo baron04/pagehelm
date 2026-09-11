@@ -467,9 +467,6 @@ export class EmbeddedWebRuntime {
     this.currentObservation = null
     this.observationFingerprints = new Map()
     this.observedUrl = ''
-    this.domMutationRevision = 0
-    this.observedDomMutationRevision = 0
-    this.domMutationObserver = null
     this.stopped = false
     this.eventAbortController = null
     this.controller = null
@@ -539,17 +536,7 @@ export class EmbeddedWebRuntime {
       ],
       interactiveBlacklist: this.panel ? [this.panel.host] : [],
     })
-    this._startDomMutationObserver()
     return this._startConnectedRuntime()
-  }
-
-  _startDomMutationObserver() {
-    if (this.domMutationObserver || typeof globalThis.MutationObserver !== 'function') return
-    this.domMutationObserver = new globalThis.MutationObserver(
-      () => { this.domMutationRevision += 1 })
-    this.domMutationObserver.observe(document.documentElement, {
-      subtree: true, childList: true, attributes: true, characterData: true,
-    })
   }
 
   async _startConnectedRuntime() {
@@ -711,8 +698,6 @@ export class EmbeddedWebRuntime {
     this.eventAbortController = null
     window.removeEventListener?.('pageshow', this._onPageShow)
     this.controller?.dispose()
-    this.domMutationObserver?.disconnect()
-    this.domMutationObserver = null
     if (removePanel) this.panel?.host.remove()
   }
 
@@ -776,7 +761,6 @@ export class EmbeddedWebRuntime {
     this.currentObservation = envelope
     this.observationFingerprints = fingerprints
     this.observedUrl = canonicalUrl(state.url)
-    this.observedDomMutationRevision = this.domMutationRevision
     return envelope
   }
 

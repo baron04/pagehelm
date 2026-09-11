@@ -89,7 +89,10 @@ class EmbeddedRuntimeTests(unittest.TestCase):
           ]);
           const command = {{action:'click', args:{{ref:'e0'}}}};
           const initial = runtime._actionFreshness(command);
-          runtime.domMutationRevision = 4;
+          // A presentational change must not make an action stale. Freshness is decided by
+          // the route and the target's identity, type, state and associated form, none of
+          // which a class name touches, so this holds by construction rather than by luck.
+          target.className = 'is-highlighted';
           const unrelatedMutation = runtime._actionFreshness(command);
           target.disabled = true;
           const targetMutation = runtime._actionFreshness(command);
@@ -123,21 +126,8 @@ class EmbeddedRuntimeTests(unittest.TestCase):
           const staleDispatch = {{executed, paths:posts.map(row => row.path),
             status:posts.at(-1)?.body?.status, code:posts.at(-1)?.body?.error_code}};
 
-          let observer = null;
-          globalThis.document = {{documentElement:{{}}}};
-          globalThis.MutationObserver = class {{
-            constructor(callback) {{ this.callback = callback; observer = this; }}
-            observe(target, options) {{ this.target = target; this.options = options; }}
-            disconnect() {{}}
-          }};
-          const watched = Object.create(mod.EmbeddedWebRuntime.prototype);
-          watched.domMutationObserver = null;
-          watched.domMutationRevision = 0;
-          watched._startDomMutationObserver();
-          observer.callback();
           process.stdout.write(JSON.stringify({{initial, unrelatedMutation, targetMutation,
-            formMutation, routeMutation, staleDispatch, revision:watched.domMutationRevision,
-            observesSubtree:observer.options.subtree}}));
+            formMutation, routeMutation, staleDispatch}}));
         """
         proc = subprocess.run(["node", "--input-type=module", "-e", script],
                               text=True, capture_output=True, timeout=10, check=True)
@@ -153,8 +143,6 @@ class EmbeddedRuntimeTests(unittest.TestCase):
             "status": "rejected",
             "code": "stale_observation",
         })
-        self.assertEqual(result["revision"], 1)
-        self.assertTrue(result["observesSubtree"])
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_action_progress_is_readable_and_never_echoes_fill_value(self):

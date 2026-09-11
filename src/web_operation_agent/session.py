@@ -1,6 +1,6 @@
 """ServerAgentSession: the one logical agent.
 
-It holds the environment attestation, the source evidence, the contract, the model loop,
+It holds the source evidence, the contract, the model loop,
 the runtime grounding that overrides the contract when the page disagrees, the hidden
 control plan and the append-only ledger. The browser holds a page.
 
