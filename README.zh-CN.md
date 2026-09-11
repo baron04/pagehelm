@@ -64,8 +64,9 @@ flowchart LR
 | `web_operation_agent.business` | 加载 Skill，并代理类型化的读取和写入工具。 |
 | `web_operation_agent.egress` | 执行模型 provider 数据边界，并在不保存请求内容的前提下生成审计记录。 |
 | `web_operation_agent.mutation` | 在内存或 SQLite 中原子记录一次性 mutation intent 与终态。 |
-| `web_operation_agent.twenty` | 提供当前 Twenty CRM Companies、People 和 Opportunities 适配器。 |
 | `web_operation_agent.session` | 实现有步数和时间限制的服务端 Agent 循环。 |
+
+每个应用专有 Adapter 都以独立 distribution 发布，不放在上面的核心包里：[`web-operation-agent-twenty`](packages/web-operation-agent-twenty) 提供 `TwentyApplicationAdapter`，[`web-operation-agent-ofbiz`](packages/web-operation-agent-ofbiz) 提供 Apache OFBiz 的路由语法、源码编译器和 App Skill provider。核心包不含任何 OFBiz 或 Twenty 专有代码；接入新应用时实现的是这两者同样实现的端口。
 
 Application Adapter 暴露版本化、无敏感信息的描述，由摘要绑定的 Skill/typed-tool catalog，以及身份、路由、结果数据分类、mutation 后置条件和保守核对端口。`bind_application()` 会检查所有工具和 mutation 均被覆盖，并确认运行时使用的就是同一组端口对象。路由端口拥有应用 URL 语法、源码感知的入口发现，以及应用特有 handoff secret 的浏览器出站前脱敏扩展；通用 Agent 不解析具体框架的路由。`AgentTurnExecutor(application=...)` 会在浏览器或模型工作开始前拒绝来自其它应用 Origin 的消息和无效 principal；typed-tool 路由进入 Agent 上下文前必须通过 Adapter 校验，已收到确认的写入也只有通过 Adapter 后置条件后才能记为完成。这是 Adapter contract version 2。自然语言目标直接进入通用 Agent 循环，Adapter 不会先把目标分类成固定的产品意图枚举。软件包 API 仍在演进，稳定版本发布前不承诺向后兼容。
 
@@ -90,10 +91,12 @@ PageController、身份、静态 Runtime、typed-tool 与验证合同见[应用�
 python3.12 -m venv .venv
 . .venv/bin/activate
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 python -m pip install --editable .
+python -m pip install --no-deps --editable packages/web-operation-agent-ofbiz
+python -m pip install --no-deps --editable packages/web-operation-agent-twenty
 python src/web_operation_agent/tests/run_all.py
 ```
 
-测试入口使用 Python `unittest` 自动发现，并防止测试数据写入真实模型费用账本。浏览器测试会在缺少 Chromium 时跳过。依赖上游 PageController 的测试只有在 `WOA_PAGE_CONTROLLER_MODULE` 指向已安装模块时才会运行，否则会跳过。
+测试入口使用 Python `unittest` 自动发现，并防止测试数据写入真实模型费用账本。浏览器测试会在缺少 Chromium 时跳过。依赖上游 PageController 的测试只有在 `WOA_PAGE_CONTROLLER_MODULE` 指向已安装模块时才会运行，否则会跳过。`web-operation-agent-ofbiz` 和 `web-operation-agent-twenty` 是独立 distribution，核心测试套件把它们当作通用路由、grounding 和业务工具合同的真实夹具使用；只跑其中一个应用的部署不需要装另一个包。
 
 通过同一受保护入口只运行一个测试模块：
 
@@ -132,7 +135,7 @@ scripts/qualify.sh
 
 ## Twenty CRM 集成
 
-`TwentyApplicationAdapter` 将只读和写入 Skill 作为包资源分发，因此从仓库外安装 wheel 后也能加载。加载 Skill 或查询类型化 API 不会触发浏览器动作；页面动作仍会返回新的页面观察，写入完成后也会执行一次后续观察用于验证。完整运行仍需要：
+`TwentyApplicationAdapter` 现在随独立的 `web-operation-agent-twenty` distribution 发布，将只读和写入 Skill 作为包资源分发，因此从仓库外安装 wheel 后也能加载。加载 Skill 或查询类型化 API 不会触发浏览器动作；页面动作仍会返回新的页面观察，写入完成后也会执行一次后续观察用于验证。完整运行仍需要：
 
 - 独立部署的兼容 Twenty CRM 实例；
 - 测试用户的 OAuth token 和客户端注册文件；

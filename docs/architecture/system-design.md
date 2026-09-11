@@ -242,7 +242,7 @@ Twenty Adapter 通过 `/metadata` 查询 `currentUser` 与 `currentWorkspace`，
 
 App Skill 适合描述当前菜单不可见、但已审核的只读页面入口。路由模板和 provenance 留在服务端；Agent 只拿到有限的 Skill 卡片，通过当前页面的真实应用入口进入目标应用，再由服务端验证参数并组装同源只读路径。
 
-源码 Provider 是另一种可选知识来源。现有 Session 支持基于版本绑定 SourceMap 的预先 contract、运行时查询和只读候选路由。每条证据携带发布标识、仓库相对路径、行范围和内容摘要。源码内容始终是先验，不能代替页面观察、业务 API 或写后验证。
+源码 Provider 是另一种可选知识来源。现有 Session 支持基于版本绑定 SourceMap 的预先 contract、运行时查询和只读候选路由。每条证据携带发布标识、仓库相对路径、行范围和内容摘要。源码内容始终是先验，不能代替页面观察、业务 API 或写后验证。这套机制在 Session 层已经实现，但当前公开组合（`product.py`）从未调用 `observe_entry()`，因此 auto 模式的只读候选路由在产品路径上始终交付空候选集；这条能力目前只能通过直接编排 Session 使用，尚未接入产品组合。
 
 应用无关的 `AgentTurnExecutor` 当前默认关闭 source contract，也没有默认注入运行时源码 Provider。应用不接入源码仍可使用页面和 Business Skill/API 主链路；需要源码能力的产品组合必须显式提供并验证版本绑定。
 
@@ -265,13 +265,13 @@ Business Skill 候选只根据当前用户文本和受限的历史用户文本�
 3. 生成包含 effect、targets、规范化参数和随机 nonce 的 mutation proposal；
 4. 在页面面板展示 effect 与 targets；
 5. 将当前受认证浏览器会话的决定在服务端绑定到 proposal digest；
-6. 在持久 mutation journal 中原子地将 proposal 从 `prepared` 认领为 `dispatching`，使并发调用和进程重启都不能再次执行同一 proposal digest；
+6. 在持久 mutation journal 中原子地将 proposal 从 `prepared` 认领为 `dispatching`，使并发调用和进程重启都不能再次执行同一 proposal digest；当 proposal 携带 `business_key` 时，认领还会检查同一 `business_key` 下是否已有 `dispatching` 或 `indeterminate` 状态的另一个 proposal，阻止针对同一业务对象的两个并发 proposal 同时通过；
 7. 最多发送一次写请求；
 8. 将确定结果持久记录为 `completed` 或 `failed`，将无法确定的结果记录为 `indeterminate`；需要业务成功判定的集成还应由 Adapter 进行同用户回读。
 
 `allow_business_mutations` 默认是 `false`。启用时，turn 配置必须同时要求经过验证的 principal；组合还必须提供写工具。`deployment_profile` 默认为 `production`，该 profile 只接受明确声明为跨重启持久的 mutation journal。内存 journal 仅可在显式 `test` profile 中使用，且 test profile 不放宽身份或确认要求。Twenty Adapter 自身也拒绝启用写入却省略 journal。没有显式启用或没有确认通道时，写工具在 dispatch 前终止。用户拒绝对应 `CANCELLED`。
 
-任何发生在 dispatch 后、又无法确定结果的异常都必须对应 `INDETERMINATE`。系统不会因为超时、连接丢失、回执格式错误、回读失败或进程在 dispatch 后崩溃而自动重试写请求。公开 Twenty composition 要求独立的私有 SQLite journal；它持久保留 proposal digest、operation context digest、状态、期限和结果摘要，不保存原始业务参数或身份字段。journal 解决的是重复发送风险，不提供应用数据库事务或自动判断崩溃前的请求是否已经生效。
+任何发生在 dispatch 后、又无法确定结果的异常都必须对应 `INDETERMINATE`。系统不会因为超时、连接丢失、回执格式错误、回读失败或进程在 dispatch 后崩溃而自动重试写请求。公开 Twenty composition 要求独立的私有 SQLite journal；它持久保留 proposal digest、operation context digest、状态、期限、结果摘要，以及一份供 reconciliation 使用的元数据：按 application id、工具名、租户/工作区/执行者摘要和规范化参数算出的 `business_key`，和包含归一化调用参数（`args`）的 reconciliation 记录。journal 不保存原始身份字段，身份只以租户/工作区/执行者摘要形式保留。journal 解决的是重复发送风险，不提供应用数据库事务或自动判断崩溃前的请求是否已经生效。
 
 这项一次性保证以 proposal digest 为单位。每次 proposal 都包含新的服务端 nonce，因此两个会话分别为同一业务对象生成的新 proposal 目前不会互斥。基于应用声明的业务键和 actor 的跨会话在途互斥属于后续持久恢复工作；在此之前，部署方不应把 proposal 幂等描述为业务语义上的全局 exactly-once。
 

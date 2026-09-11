@@ -64,8 +64,9 @@ The main reusable boundaries are:
 | `web_operation_agent.business` | Loads Skills and mediates typed read and mutation tools. |
 | `web_operation_agent.mutation` | Atomically records single-use mutation intent and terminal outcome in memory or SQLite. |
 | `web_operation_agent.egress` | Enforces and audits the model-provider data boundary without storing request content. |
-| `web_operation_agent.twenty` | Provides the current Twenty CRM Companies, People, and Opportunities adapter. |
 | `web_operation_agent.session` | Implements the bounded server-side agent loop. |
+
+Every application-specific adapter ships as its own separate distribution rather than living in the core package above: [`web-operation-agent-twenty`](packages/web-operation-agent-twenty) provides `TwentyApplicationAdapter`, and [`web-operation-agent-ofbiz`](packages/web-operation-agent-ofbiz) provides the Apache OFBiz route grammar, source compiler and App Skill provider. The core package has no OFBiz- or Twenty-specific code; a new application implements the same ports these two do.
 
 Application adapters expose a versioned, non-secret descriptor, a digest-bound Skill and typed-tool catalog, and executable ports for identity, routes, result data classes, mutation postconditions, and conservative reconciliation. `bind_application()` checks that every tool and mutation is covered and that the runtime uses the same port objects. The route port owns application URL syntax, source-aware entry discovery, and browser pre-egress extensions for application-specific handoff secrets; the generic Agent does not parse framework routes. `AgentTurnExecutor(application=...)` rejects another application origin or invalid principal before browser/model work; typed-tool routes are checked before entering the Agent context, and an acknowledged write remains indeterminate until its adapter postcondition passes. Natural-language goals enter the generic Agent loop directly; an adapter does not preclassify them into a fixed product intent enum. This is adapter contract version 2, and the package API is still evolving; no compatibility guarantee is made before a stable release.
 
@@ -90,10 +91,12 @@ From an existing checkout:
 python3.12 -m venv .venv
 . .venv/bin/activate
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 python -m pip install --editable .
+python -m pip install --no-deps --editable packages/web-operation-agent-ofbiz
+python -m pip install --no-deps --editable packages/web-operation-agent-twenty
 python src/web_operation_agent/tests/run_all.py
 ```
 
-The test runner uses Python `unittest` discovery and guards the real model-spend ledger from test writes. Browser-backed tests skip when Chromium is absent. Tests that exercise the upstream PageController run only when `WOA_PAGE_CONTROLLER_MODULE` names an installed module; otherwise they skip.
+The test runner uses Python `unittest` discovery and guards the real model-spend ledger from test writes. Browser-backed tests skip when Chromium is absent. Tests that exercise the upstream PageController run only when `WOA_PAGE_CONTROLLER_MODULE` names an installed module; otherwise they skip. `web-operation-agent-ofbiz` and `web-operation-agent-twenty` are separate distributions the core test suite uses as concrete, real-world fixtures for its own generic route, grounding and business-tool contracts; a deployment that runs neither application does not need either package.
 
 To run one test module through the same guarded runner:
 
@@ -132,7 +135,7 @@ This repository does not yet provision a Twenty instance, so a fresh clone repor
 
 ## Twenty CRM integration
 
-`TwentyApplicationAdapter` ships with read-only and mutation Skills as package resources, so it can be imported from an installed wheel outside the repository. Loading a Skill or querying its typed API does not dispatch a browser action; page actions still return fresh observations, and a completed mutation performs one follow-up observation for verification. It still needs:
+`TwentyApplicationAdapter` ships in the separate `web-operation-agent-twenty` distribution with read-only and mutation Skills as package resources, so it can be imported from an installed wheel outside the repository. Loading a Skill or querying its typed API does not dispatch a browser action; page actions still return fresh observations, and a completed mutation performs one follow-up observation for verification. It still needs:
 
 - a separately provisioned compatible Twenty CRM instance;
 - OAuth token and client-registration files for a delegated test user;

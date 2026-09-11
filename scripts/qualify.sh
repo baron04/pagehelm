@@ -65,10 +65,17 @@ run_gate() {   # run_gate <name> <required:0|1> <command...>
   fi
 }
 
-export PYTHONPATH="${ROOT}/src:${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
+export PYTHONPATH="${ROOT}/src:${ROOT}/packages/web-operation-agent-ofbiz/src:${ROOT}/packages/web-operation-agent-twenty/src:${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 
 # ---------------------------------------------------------------- offline gates
+run_gate "core distribution boundary" 1 "${PYTHON}" scripts/check_core_boundary.py
 run_gate "product suite" 1 "${PYTHON}" src/web_operation_agent/tests/run_all.py
+run_gate "ofbiz distribution suite" 1 "${PYTHON}" -m unittest discover \
+  -s packages/web-operation-agent-ofbiz/src/web_operation_agent_ofbiz/tests \
+  -t packages/web-operation-agent-ofbiz/src
+run_gate "twenty distribution suite" 1 "${PYTHON}" -m unittest discover \
+  -s packages/web-operation-agent-twenty/src/web_operation_agent_twenty/tests \
+  -t packages/web-operation-agent-twenty/src
 run_gate "evals/twenty foundation" 1 "${PYTHON}" -m unittest discover -s evals/twenty/tests
 run_gate "PageAgent host and runner (offline)" 1 "${PYTHON}" -m unittest \
   evals.pageagent.test_host evals.pageagent.test_business_host \
@@ -107,51 +114,39 @@ build_and_check_wheel() {
   # setuptools may otherwise copy deleted modules from an ignored build/lib tree into a new
   # wheel. A release gate must build from the current source tree, not incremental residue.
   rm -rf dist build src/*.egg-info
+  rm -rf packages/web-operation-agent-ofbiz/dist packages/web-operation-agent-ofbiz/build \
+    packages/web-operation-agent-ofbiz/src/*.egg-info
+  rm -rf packages/web-operation-agent-twenty/dist packages/web-operation-agent-twenty/build \
+    packages/web-operation-agent-twenty/src/*.egg-info
   "${PYTHON}" -m pip wheel --no-deps --quiet --wheel-dir dist . || return 1
-  "${PYTHON}" - <<'PY' || return 1
-import glob, zipfile
-paths = glob.glob("dist/*.whl")
-assert len(paths) == 1, paths
-names = zipfile.ZipFile(paths[0]).namelist()
-required = ["web_operation_agent/durable.py",
-            "web_operation_agent/mutation_ops.py",
-            "web_operation_agent/policies/model_options.json",
-            "web_operation_agent/policies/ofbiz.json",
-            "web_operation_agent/policies/prices.json",
-            "web_operation_agent/integrations/ofbiz.py",
-            "web_operation_agent/integrations/ofbiz_knowledge.py",
-            "web_operation_agent/skills/twenty/companies-query.json",
-            "web_operation_agent/skills/twenty/companies-create.json",
-            "web_operation_agent/skills/twenty/people-query.json",
-            "web_operation_agent/skills/twenty/opportunities-query.json",
-            "web_operation_agent/web_runtime/embedded.js",
-            "web_operation_agent/web_runtime/trace_replay.html",
-            "web_operation_agent_demo/assets/page_controller.js"]
-missing = [name for name in required if name not in names]
-assert not missing, f"wheel is missing {missing}"
-retired = ["web_operation_agent/browser_worker.py", "web_operation_agent/cli.py"]
-present = [name for name in retired if name in names]
-assert not present, f"wheel contains retired browser executors: {present}"
-assert "web_operation_agent/policies/enforcement.json" not in names, \
-    "the enforcement policy must not ship in the wheel"
-leaked = [name for name in names if "/tests/" in name]
-assert not leaked, f"tests must not ship in the wheel: {leaked[:5]}"
-print(f"wheel contents verified: {paths[0]}")
-PY
-  # Importing from outside the checkout is the part a path-shadowed test cannot prove.
-  local wheel smoke_venv smoke_cwd
-  wheel="$("${PYTHON}" -c 'import glob, os; print(os.path.abspath(glob.glob("dist/*.whl")[0]))')"
+  "${PYTHON}" -m pip wheel --no-deps --quiet \
+    --wheel-dir packages/web-operation-agent-ofbiz/dist packages/web-operation-agent-ofbiz \
+    || return 1
+  "${PYTHON}" -m pip wheel --no-deps --quiet \
+    --wheel-dir packages/web-operation-agent-twenty/dist packages/web-operation-agent-twenty \
+    || return 1
+  "${PYTHON}" scripts/check_wheel_contents.py || return 1
+
+  # Importing from outside the checkout is the part a path-shadowed test cannot prove. Core
+  # is installed and probed alone first -- it must compose and run with no application
+  # distribution present -- then the two application distributions are added on top of it.
+  local core_wheel ofbiz_wheel twenty_wheel smoke_venv smoke_cwd
+  core_wheel="$("${PYTHON}" -c 'import glob, os; print(os.path.abspath(glob.glob("dist/*.whl")[0]))')"
+  ofbiz_wheel="$("${PYTHON}" -c \
+    'import glob, os; print(os.path.abspath(glob.glob("packages/web-operation-agent-ofbiz/dist/*.whl")[0]))')"
+  twenty_wheel="$("${PYTHON}" -c \
+    'import glob, os; print(os.path.abspath(glob.glob("packages/web-operation-agent-twenty/dist/*.whl")[0]))')"
   smoke_venv="$(mktemp -d)/venv"
   smoke_cwd="$(mktemp -d)"
   "${PYTHON}" -m venv "${smoke_venv}" || return 1
   # Without -u PYTHONPATH pip finds the checkout's own metadata on the path, reports the
   # requirement as already satisfied, and installs nothing -- so the import below would prove
   # only that the checkout is importable, which is the opposite of what this gate is for.
-  env -u PYTHONPATH "${smoke_venv}/bin/python" -m pip install --no-deps "${wheel}" \
+  env -u PYTHONPATH "${smoke_venv}/bin/python" -m pip install --no-deps "${core_wheel}" \
     | grep -v "^\[notice\]" || return 1
   env -u PYTHONPATH "${smoke_venv}/bin/python" -c \
     "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('web_operation_agent') else 1)" \
-    || { echo "the wheel did not install into the smoke venv" >&2; return 1; }
+    || { echo "the core wheel did not install into the smoke venv" >&2; return 1; }
   ( cd "${smoke_cwd}" && env -u PYTHONPATH WOA_CHECKOUT="${ROOT}" \
       "${smoke_venv}/bin/python" -I - <<'PY'
 import os, sys
@@ -161,14 +156,33 @@ from web_operation_agent.mutation import SQLiteMutationJournal
 from web_operation_agent.durable import SQLiteSessionStore, SQLiteProviderQuota
 from web_operation_agent.mutation_ops import reconcile
 from web_operation_agent.sourcetree import SourceTree
-from web_operation_agent.twenty import TwentyApplicationAdapter
 from web_operation_agent_demo import MinimalContactsAdapter
 
 installed = Path(web_operation_agent.__file__).resolve()
 assert Path(sys.prefix).resolve() in installed.parents, installed
 assert Path(os.environ["WOA_CHECKOUT"]).resolve() not in installed.parents, installed
+assert MinimalContactsAdapter
+for name in ("web_operation_agent_ofbiz", "web_operation_agent_twenty"):
+    import importlib.util
+    assert importlib.util.find_spec(name) is None, \
+        f"core alone must not resolve {name}; the two must be independently installable"
+print("core wheel alone imports, composes and stays free of both application distributions")
+PY
+  ) || return 1
+  env -u PYTHONPATH "${smoke_venv}/bin/python" -m pip install --no-deps \
+    "${ofbiz_wheel}" "${twenty_wheel}" | grep -v "^\[notice\]" || return 1
+  ( cd "${smoke_cwd}" && env -u PYTHONPATH \
+      "${smoke_venv}/bin/python" -I - <<'PY'
+from pathlib import Path
+from web_operation_agent.mutation import SQLiteMutationJournal
+from web_operation_agent.sourcetree import SourceTree
+from web_operation_agent_ofbiz import OFBIZ_ROUTE_PORT
+from web_operation_agent_twenty import TwentyApplicationAdapter
+
 root = Path.cwd().resolve()
-assert SourceTree.load("ofbiz", root).root == root
+assert SourceTree.load("ofbiz", root, package="web_operation_agent_ofbiz").root == root
+assert OFBIZ_ROUTE_PORT.compose_contract_route("accounting", "findPayments") == \
+    "/accounting/control/findPayments"
 common = dict(base_url="http://127.0.0.1:3000", token_path="tokens.json",
               registration_path="registration.json")
 read_tools = {"query_companies", "query_people", "query_opportunities"}
@@ -177,8 +191,7 @@ assert (TwentyApplicationAdapter(
     **common, allow_mutations=True,
     mutation_journal=SQLiteMutationJournal(root / "mutations.sqlite3"),
 ).business_tools.tool_names == frozenset(read_tools | {"create_company"}))
-assert MinimalContactsAdapter
-print("installed wheel imports and composes outside the checkout")
+print("ofbiz and twenty distributions install on top of core and compose outside the checkout")
 PY
   ) || return 1
   rm -rf "${smoke_venv}" "${smoke_cwd}"
