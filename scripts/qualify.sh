@@ -24,6 +24,9 @@
 #   WOA_ODOO_BASE_URL WOA_ODOO_API_KEY_FILE WOA_ODOO_STORAGE_STATE
 #   WOA_ODOO_PAGE_CONTROLLER_MODULE
 #   optionally WOA_ODOO_SOURCE_ROOT + WOA_ODOO_SOURCE_RELEASE, which add the source gate
+#   optionally WOA_ODOO_FIXTURE_CONTAINER + WOA_ODOO_FIXTURE_DATABASE +
+#     WOA_ODOO_FIXTURE_SNAPSHOT + WOA_ODOO_FIXTURE_RECORD, which make the gate refuse to
+#     run against a library that has drifted off its recorded baseline
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -390,6 +393,22 @@ for name in sys.argv[2:]:
     print(str(os.environ[name] if name in os.environ else loaded.get(name, "")).strip())
 ' "${ROOT}" WOA_ODOO_SOURCE_ROOT WOA_ODOO_SOURCE_RELEASE
 )
+# The resettable fixture. Without it the gate still runs, but nothing stops it measuring
+# against a library some earlier run wrote to -- which is how G2 left a drifted baseline.
+odoo_fixture=()
+while IFS= read -r value; do odoo_fixture+=("${value}"); done < <(
+  "${PYTHON}" -c '
+import os, sys
+from pathlib import Path
+from web_operation_agent.model import load_env
+root = Path(sys.argv[1])
+configured = os.environ.get("WOA_MODEL_ENV", "").strip()
+loaded = load_env(Path(configured).expanduser() if configured else root / ".env")
+for name in sys.argv[2:]:
+    print(str(os.environ[name] if name in os.environ else loaded.get(name, "")).strip())
+' "${ROOT}" WOA_ODOO_FIXTURE_CONTAINER WOA_ODOO_FIXTURE_DATABASE \
+    WOA_ODOO_FIXTURE_SNAPSHOT WOA_ODOO_FIXTURE_RECORD
+)
 odoo_values=()
 while IFS= read -r value; do odoo_values+=("${value}"); done < <(
   "${PYTHON}" -c '
@@ -424,11 +443,22 @@ else
     odoo_source_args=(--source-root "${odoo_source[0]}"
                       --source-release "${odoo_source[1]}")
   fi
+  odoo_fixture_args=()
+  if [[ -n "${odoo_fixture[0]:-}" && -n "${odoo_fixture[1]:-}" \
+        && -n "${odoo_fixture[2]:-}" && -n "${odoo_fixture[3]:-}" ]]; then
+    odoo_fixture_args=(--fixture-container "${odoo_fixture[0]}"
+                       --fixture-database "${odoo_fixture[1]}"
+                       --fixture-snapshot "${odoo_fixture[2]}"
+                       --fixture-record "${odoo_fixture[3]}")
+  else
+    echo "  note: no resettable fixture configured; this run cannot tell a clean library"
+    echo "        from one an earlier run wrote to."
+  fi
   if "${PYTHON}" -m web_operation_agent_odoo.demo.qualify \
       --base-url "${odoo_values[0]}" --api-key "${odoo_values[1]}" \
       --storage-state "${odoo_values[2]}" \
       --page-controller-module "${odoo_values[3]}" \
-      "${odoo_source_args[@]}" \
+      "${odoo_source_args[@]}" "${odoo_fixture_args[@]}" \
       --output "${odoo_out}/odoo-live.json"; then
     record "live Odoo qualification" PASS "artifact ${odoo_out}/odoo-live.json"
   else
