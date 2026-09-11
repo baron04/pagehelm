@@ -77,7 +77,8 @@ run_gate "WOA runner and schedule driver (offline)" 1 "${PYTHON}" -m unittest \
   evals.woa.test_chat_port evals.woa.test_assembler evals.woa.test_twenty_runner \
   evals.woa.test_breadth_runner evals.woa.test_pilot_breadth \
   evals.woa.test_qualify_schedule \
-  evals.woa.test_pilot_paired_synthetic.PairedPilotProtocolTests
+  evals.woa.test_pilot_paired_synthetic.PairedPilotProtocolTests \
+  evals.woa.test_pilot_paired_breadth.PairedBreadthPilotTests
 
 # ---------------------------------------------------------------- PageAgent bundle gate
 # `npm ci` is environment preparation. Reproducibility verification and the build itself are
@@ -223,7 +224,8 @@ else
   run_gate "PageAgent Chromium qualification" 1 \
     env WOA_REQUIRE_PAGEAGENT_BROWSER=1 "${PYTHON}" -m unittest \
     evals.pageagent.test_twenty_runner_browser \
-    evals.woa.test_pilot_paired_synthetic.PairedPilotChromiumTests
+    evals.woa.test_pilot_paired_synthetic.PairedPilotChromiumTests \
+    evals.woa.test_pilot_paired_breadth.PairedBreadthPilotChromiumTests
 fi
 
 page_controller_module="${ROOT}/evals/pageagent/node_modules/@page-agent/page-controller/dist/lib/page-controller.js"

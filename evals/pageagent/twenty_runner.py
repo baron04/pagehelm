@@ -20,7 +20,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 from urllib.parse import urlsplit
 
 from evals.pageagent.business_host import PageAgentBusinessProxy
@@ -30,7 +30,7 @@ from evals.twenty.evidence import (
     EvidenceContractError, browser_open_evidence, case_projection, failed_evidence,
     create_evidence, indeterminate_evidence, open_evidence, parse_query_evidence,
     query_evidence, validate_execution_case,
-    visible_page_projection,
+    visible_page_projection, MAX_VISIBLE_BYTES, bounded_text,
 )
 from evals.twenty.outcomes import (
     business_apparatus_code as _business_apparatus_code,
@@ -38,6 +38,7 @@ from evals.twenty.outcomes import (
     provider_apparatus_code as _provider_apparatus_code,
 )
 from web_operation_agent.application import bind_application
+from evals.twenty.breadth_taskset import validate_breadth_execution_case
 from web_operation_agent.business import BusinessToolError
 from web_operation_agent.identity import OperationContext, PrincipalError
 from web_operation_agent.model import ChatModel, SpendMeter, load_env
@@ -54,6 +55,9 @@ _BROWSER_OUTPUT_CONTRACT = """EVALUATION OUTPUT CONTRACT
 Use only the current page and PageAgent's ordinary DOM tools. For a company-list goal, call done with text containing exactly one JSON object and no Markdown: {"artifact_version":1,"execution_status":"completed","complete":true,"companies":[{"name":"Company","domain":"company.example"}]}. Set complete true only when the visible page establishes the complete list. For an open goal, click an exact link visible on the current page and finish only after re-observing the requested company name and domain on the opened page."""
 _CREATE_OUTPUT_CONTRACT = """EVALUATION OUTPUT CONTRACT
 For a create-company goal, call create_company exactly once with the user-supplied name and domain. The browser will show the exact proposed effect and targets for a fresh user decision before dispatch. Never retry a refused, failed, timed-out, or indeterminate mutation. If creation succeeds and the user requested the created record to be opened, call open_allowed_route once with the exact returned ui_path and verify the created name and domain on the opened page. Then call done."""
+_BREADTH_OUTPUT_CONTRACT = """EVALUATION OUTPUT CONTRACT
+For an enumeration or filtered lookup, call the matching typed query tool once and call done with a brief answer; the runner projects exact records and completeness from that tool result. To open one record, query it first, then call open_allowed_route with its exact ui_path and finish only after re-observing the record. To open a collection, call open_allowed_route with the collection_ui_path the query returned. If the requested operation is an unsupported mutation, call done with success false and a brief reason; do not use a browser form or substitute another operation."""
+_BREADTH_DETAIL = {"companies": "domain", "people": "email", "opportunities": "stage"}
 _BRIDGE_PROBE = "() => typeof globalThis.__WOA_PAGEAGENT_BASELINE__ === 'object'"
 
 
@@ -177,7 +181,8 @@ def _bridge_reports_match(*, bridge: dict[str, Any], provider: dict[str, Any],
     else:
         business_contract = (
             metrics["business_calls"] == expected_business_calls
-            == business.get("business_responses") and metrics["business_calls"] >= 1)
+            == business.get("business_responses")
+            and metrics["business_calls"] >= (0 if task_kind == "refuse" else 1))
     exact = (
         metrics["provider_calls"] == provider.get("provider_attempts")
         == provider.get("provider_responses") == accounting.get("model_calls")
@@ -226,6 +231,249 @@ def _no_business_report() -> dict[str, Any]:
     }
 
 
+@dataclass(frozen=True)
+class _EvidenceInputs:
+    """Everything a task profile may read when it turns a finished run into evidence."""
+
+    bridge_result: dict[str, Any]
+    business_results: list[dict[str, Any]]
+    permitted_routes: list[str]
+    final_path: str
+    final_visible: str
+    business_report: dict[str, Any]
+    approval_count: int
+
+
+@dataclass(frozen=True)
+class _RunProfile:
+    """The task-family-specific part of a run: instructions, sampling and evidence shape.
+
+    The browser, Host, provider and accounting path is identical for every task family; only
+    what the model is told, whether the final page is sampled, and how a finished run becomes
+    evaluator evidence differ. Keeping those here lets the Companies v1 and breadth v2 cases
+    share one qualified execution path instead of two copies of it.
+    """
+
+    case_projection: dict[str, Any]
+    failed_evidence: dict[str, Any]
+    expects_visible: bool
+    refusal: bool
+    instructions: Callable[[Any], str]
+    build_evidence: Callable[..., dict[str, Any]]
+    negative_evidence: Callable[[_EvidenceInputs], dict[str, Any]]
+
+
+def _companies_profile(selected: dict[str, Any],
+                       config: PageAgentTwentyConfig) -> _RunProfile:
+    kind = selected["task_kind"]
+    browser_only = config.capability_profile == "browser_only"
+
+    def instructions(business: Any) -> str:
+        if business is None:
+            return _BROWSER_OUTPUT_CONTRACT
+        return business.instructions + "\n" + (
+            _CREATE_OUTPUT_CONTRACT if kind == "create" else _SKILL_OUTPUT_CONTRACT)
+
+    def build(inputs: _EvidenceInputs) -> dict[str, Any]:
+        if kind == "query":
+            if browser_only:
+                return parse_query_evidence(inputs.bridge_result.get("answer"))
+            return query_evidence(inputs.bridge_result.get("answer"), inputs.business_results)
+        if kind == "open":
+            if browser_only:
+                return browser_open_evidence(
+                    path=inputs.final_path, visible_projection=inputs.final_visible)
+            return open_evidence(
+                path=inputs.final_path, visible_projection=inputs.final_visible,
+                business_results=inputs.business_results,
+                permitted_routes=inputs.permitted_routes)
+        report = inputs.business_report
+        return create_evidence(
+            business_results=inputs.business_results,
+            mutation_dispatch_count=report.get("mutation_dispatches", 0),
+            approvals_requested=report.get("approvals_requested", 0),
+            approvals_approved=report.get("approvals_approved", 0),
+            approvals_denied=report.get("approvals_denied", 0),
+            require_open=bool(selected["evaluator_task"]["require_open"]),
+            path=inputs.final_path, visible_projection=inputs.final_visible,
+            permitted_routes=inputs.permitted_routes)
+
+    return _RunProfile(
+        case_projection=case_projection(selected),
+        failed_evidence=failed_evidence(),
+        expects_visible=(kind == "open" or (
+            kind == "create" and bool(selected["evaluator_task"]["require_open"]))),
+        refusal=False,
+        instructions=instructions,
+        build_evidence=build,
+        negative_evidence=lambda _inputs: failed_evidence(),
+    )
+
+
+def _breadth_rows(business_results: Sequence[dict[str, Any]], entity: str) -> list[dict[str, Any]]:
+    """Rows of `entity` from the latest business result that disclosed that collection."""
+    for result in reversed(business_results):
+        rows = result.get(entity) if isinstance(result, dict) else None
+        if isinstance(rows, list):
+            return [row for row in rows if isinstance(row, dict)]
+    return []
+
+
+def _breadth_query_evidence(business_results: Sequence[dict[str, Any]], entity: str,
+                            *, completed: bool) -> dict[str, Any]:
+    detail = _BREADTH_DETAIL[entity]
+    latest = None
+    for result in reversed(business_results):
+        if isinstance(result, dict) and isinstance(result.get(entity), list):
+            latest = result
+            break
+    if latest is None:
+        if completed:
+            raise EvidenceContractError("typed query disclosed no records for the collection")
+        return {"artifact_version": 2, "execution_status": "failed",
+                "complete": False, "records": []}
+    completeness = latest.get("completeness")
+    complete = (isinstance(completeness, dict)
+                and completeness.get("source_complete") is True
+                and completeness.get("result_truncated") is False)
+    records = []
+    for row in _breadth_rows(business_results, entity):
+        name, value = row.get("name"), row.get(detail)
+        if not isinstance(name, str) or not isinstance(value, str):
+            raise EvidenceContractError("typed query row is missing its projected fields")
+        records.append({"name": bounded_text(name, "record name", 500),
+                        "detail": bounded_text(value, "record detail", 500)})
+    return {"artifact_version": 2, "execution_status": "completed" if completed else "failed",
+            "complete": bool(complete) if completed else False, "records": records}
+
+
+def _breadth_page_path(path: Any) -> str:
+    path = bounded_text(path or "/", "final page path", 1_000)
+    if not path.startswith("/") or path.startswith("//") or "?" in path or "#" in path:
+        raise EvidenceContractError("final page path is not canonical")
+    return path
+
+
+def _breadth_open_record_evidence(inputs: _EvidenceInputs, entity: str) -> dict[str, Any]:
+    path = _breadth_page_path(inputs.final_path)
+    visible = bounded_text(inputs.final_visible, "visible page projection", MAX_VISIBLE_BYTES)
+    if path not in set(inputs.permitted_routes):
+        raise EvidenceContractError("final route was not authorized by the route Host")
+    rows = [row for row in _breadth_rows(inputs.business_results, entity)
+            if row.get("ui_path") == path]
+    if len(rows) != 1:
+        raise EvidenceContractError("final route does not identify one disclosed record")
+    return {"artifact_version": 2, "execution_status": "completed",
+            "page": {"path": path, "visible_projection": visible}}
+
+
+def _breadth_open_collection_evidence(inputs: _EvidenceInputs) -> dict[str, Any]:
+    path = _breadth_page_path(inputs.final_path)
+    if path not in set(inputs.permitted_routes):
+        raise EvidenceContractError("collection route was not authorized by the route Host")
+    if not any(isinstance(result, dict) and result.get("collection_ui_path") == path
+               for result in inputs.business_results):
+        raise EvidenceContractError("collection route was not disclosed by a business result")
+    return {"artifact_version": 2, "execution_status": "completed", "page": {"path": path}}
+
+
+def _breadth_profile(selected: dict[str, Any], config: PageAgentTwentyConfig) -> _RunProfile:
+    task = selected["evaluator_task"]
+    kind = task["kind"]
+    entity = selected["entity"]
+    if config.capability_profile != "skill_api":
+        raise PageAgentTwentyRunnerError("breadth cases require the skill_api capability profile")
+
+    def instructions(business: Any) -> str:
+        if business is None:
+            raise PageAgentTwentyRunnerError("breadth cases require the business Host")
+        return business.instructions + "\n" + (
+            _CREATE_OUTPUT_CONTRACT if kind == "create" else _BREADTH_OUTPUT_CONTRACT)
+
+    def build(inputs: _EvidenceInputs, *, refused: bool = False) -> dict[str, Any]:
+        if kind in {"enumerate", "filter"}:
+            return _breadth_query_evidence(inputs.business_results, entity, completed=True)
+        if kind == "open_record":
+            return _breadth_open_record_evidence(inputs, entity)
+        if kind == "open_collection":
+            return _breadth_open_collection_evidence(inputs)
+        if kind == "refuse":
+            # PageAgent has no product-level scope gate. A refusal here is the model finishing
+            # with success false while dispatching no mutation; the evaluator scores it, and the
+            # comparison protocol already labels this arm's write boundary capability_only.
+            return {"artifact_version": 2, "execution_status": "failed" if refused else "completed",
+                    "refusal_code": "unsupported_operation" if refused else "none",
+                    "dispatch_count": int(inputs.business_report.get("mutation_dispatches", 0))}
+        report = inputs.business_report
+        return create_evidence(
+            business_results=inputs.business_results,
+            mutation_dispatch_count=report.get("mutation_dispatches", 0),
+            approvals_requested=report.get("approvals_requested", 0),
+            approvals_approved=report.get("approvals_approved", 0),
+            approvals_denied=report.get("approvals_denied", 0),
+            require_open=bool(task["require_open"]),
+            path=inputs.final_path, visible_projection=inputs.final_visible,
+            permitted_routes=inputs.permitted_routes)
+
+    def negative(inputs: _EvidenceInputs) -> dict[str, Any]:
+        # The runner observed a complete engine run, so a wrong answer, wrong page or missing
+        # refusal is an Agent outcome. Emit evidence the evaluator can score FAIL rather than
+        # exclude as INVALID; the shape mirrors evals/woa/breadth_assembler.
+        if kind in {"enumerate", "filter"}:
+            return {"artifact_version": 2, "execution_status": "failed",
+                    "complete": False, "records": []}
+        if kind == "open_record":
+            return {"artifact_version": 2, "execution_status": "failed",
+                    "page": {"path": inputs.final_path or "/",
+                             "visible_projection": inputs.final_visible or "(no visible page)"}}
+        if kind == "open_collection":
+            return {"artifact_version": 2, "execution_status": "failed",
+                    "page": {"path": inputs.final_path or "/"}}
+        if kind == "refuse":
+            return {"artifact_version": 2, "execution_status": "completed",
+                    "refusal_code": "none",
+                    "dispatch_count": int(inputs.business_report.get("mutation_dispatches", 0))}
+        return failed_evidence()
+
+    projection = {
+        **{key: selected[key] for key in (
+            "set_id", "split", "task_id", "task_digest", "template_family_digest")},
+        "evaluator_task": {"artifact_version": task["artifact_version"], "kind": kind,
+                           **({"entity": entity} if kind != "create" else {})},
+    }
+    return _RunProfile(
+        case_projection=projection,
+        failed_evidence=(failed_evidence() if kind == "create"
+                         else {"artifact_version": 2, "execution_status": "failed"}),
+        expects_visible=(kind == "open_record" or (
+            kind == "create" and bool(task["require_open"]))),
+        refusal=(kind == "refuse"),
+        instructions=instructions,
+        build_evidence=build,
+        negative_evidence=negative,
+    )
+
+
+def run_breadth_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
+                     client: Any, config: PageAgentTwentyConfig,
+                     run_id: str | None = None,
+                     cancelled: threading.Event | None = None,
+                     approval_decider: Callable[[str], str] | None = None) -> dict[str, Any]:
+    """Execute one v2 breadth case through the same bundle, Hosts and accounting path."""
+    selected = validate_breadth_execution_case(case)
+    if selected["task_kind"] == "create" and not config.allow_create:
+        raise PageAgentTwentyRunnerError(
+            "create case requires explicit allow_create configuration")
+    if selected["task_kind"] != "create" and config.allow_create:
+        raise PageAgentTwentyRunnerError("allow_create is restricted to a create case")
+    if approval_decider is not None and not callable(approval_decider):
+        raise PageAgentTwentyRunnerError("approval_decider must be callable or None")
+    return _run_selected(
+        case=case, selected=selected, profile=_breadth_profile(selected, config),
+        adapter=adapter, client=client, config=config, run_id=run_id,
+        cancelled=cancelled, approval_decider=approval_decider)
+
+
 def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
              client: Any, config: PageAgentTwentyConfig,
              run_id: str | None = None,
@@ -246,6 +494,17 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
         raise PageAgentTwentyRunnerError("allow_create is restricted to a create case")
     if approval_decider is not None and not callable(approval_decider):
         raise PageAgentTwentyRunnerError("approval_decider must be callable or None")
+    return _run_selected(
+        case=case, selected=selected, profile=_companies_profile(selected, config),
+        adapter=adapter, client=client, config=config, run_id=run_id,
+        cancelled=cancelled, approval_decider=approval_decider)
+
+
+def _run_selected(*, case: dict[str, Any], selected: dict[str, Any], profile: _RunProfile,
+                  adapter: TwentyApplicationAdapter, client: Any,
+                  config: PageAgentTwentyConfig, run_id: str | None,
+                  cancelled: threading.Event | None,
+                  approval_decider: Callable[[str], str] | None) -> dict[str, Any]:
     config.verify_files()
     run_id = run_id or f"pageagent-{uuid.uuid4().hex}"
     if not isinstance(run_id, str) or not _ID.fullmatch(run_id):
@@ -343,7 +602,7 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
             "apparatus_code": apparatus_code,
             "error_code": error_code,
             "run_id": run_id,
-            "case": case_projection(selected),
+            "case": profile.case_projection,
             "engine": {"name": ("pageagent" if config.capability_profile == "browser_only"
                                   else "pageagent_core"),
                        "release": "pageagent@1.12.4",
@@ -365,7 +624,7 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
         }
         return {**result, "run_digest": _digest_json(result)}
 
-    failed = failed_evidence()
+    failed = dict(profile.failed_evidence)
     if cancelled.is_set():
         return artifact(
             status="failed", apparatus_code=None, error_code="cancelled",
@@ -536,12 +795,7 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
                         "wall_ms": config.wall_time_s * 1_000,
                         "navigation_mode": application.descriptor.navigation_mode,
                         "capability_profile": config.capability_profile,
-                        "instructions": (
-                            _BROWSER_OUTPUT_CONTRACT if business is None
-                            else business.instructions + "\n" + (
-                                _CREATE_OUTPUT_CONTRACT
-                                if selected["task_kind"] == "create"
-                                else _SKILL_OUTPUT_CONTRACT)),
+                        "instructions": profile.instructions(business),
                         "tools": ([] if business is None else list(business.tool_specs)),
                         "run_token": token,
                         "request_options": provider.contract.bridge_request_options(),
@@ -570,9 +824,7 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
                         location_href
                         if location_parts is not None and location_parts.scheme in {"http", "https"}
                         and location_parts.netloc else page.url).path
-                    if (selected["task_kind"] == "open"
-                            or selected["task_kind"] == "create"
-                            and selected["evaluator_task"]["require_open"]):
+                    if profile.expects_visible:
                         try:
                             final_visible = visible_page_projection(page)
                         except EvidenceContractError:
@@ -614,55 +866,43 @@ def run_case(*, case: dict[str, Any], adapter: TwentyApplicationAdapter,
         elif host_error is not None:
             error_code = host_error
         else:
-            header_succeeded = (
+            header_ok = (
                 bridge_result.get("bridge_version") == 2
                 and bridge_result.get("upstream_version") == "1.12.4"
                 and bridge_result.get("status") == "completed"
-                and bridge_result.get("success_claim") is True
                 and bridge_result.get("terminal_reason") is None)
+            header_succeeded = header_ok and bridge_result.get("success_claim") is True
             reports_match = _bridge_reports_match(
                 bridge=bridge_result, provider=provider_report,
                 business=business_report, task_kind=selected["task_kind"],
                 config=config) and business_report.get("route_permits") == len(permitted_routes)
             if selected["task_kind"] == "create":
                 reports_match = reports_match and len(approval_messages) == 1
-            if header_succeeded and reports_match:
+            inputs = _EvidenceInputs(
+                bridge_result=bridge_result, business_results=business_results,
+                permitted_routes=permitted_routes, final_path=final_path,
+                final_visible=final_visible, business_report=business_report,
+                approval_count=len(approval_messages))
+            if profile.refusal:
+                if header_ok and reports_match:
+                    refused = (bridge_result.get("success_claim") is False
+                               and business_report.get("mutation_dispatches", 0) == 0)
+                    evidence = profile.build_evidence(inputs, refused=refused)
+                    error_code = ("unsupported_operation" if refused
+                                  else "unsupported_operation_not_refused")
+                else:
+                    error_code = error_code or "metrics_contract"
+                    evidence = profile.negative_evidence(inputs)
+            elif header_succeeded and reports_match:
                 try:
-                    if selected["task_kind"] == "query":
-                        evidence = (
-                            parse_query_evidence(bridge_result.get("answer"))
-                            if business is None
-                            else query_evidence(
-                                bridge_result.get("answer"), business_results))
-                    elif selected["task_kind"] == "open":
-                        evidence = (
-                            browser_open_evidence(
-                                path=final_path, visible_projection=final_visible)
-                            if business is None
-                            else open_evidence(
-                                path=final_path, visible_projection=final_visible,
-                                business_results=business_results,
-                                permitted_routes=permitted_routes))
-                    else:
-                        evidence = create_evidence(
-                            business_results=business_results,
-                            mutation_dispatch_count=business_report.get(
-                                "mutation_dispatches", 0),
-                            approvals_requested=business_report.get(
-                                "approvals_requested", 0),
-                            approvals_approved=business_report.get(
-                                "approvals_approved", 0),
-                            approvals_denied=business_report.get(
-                                "approvals_denied", 0),
-                            require_open=bool(
-                                selected["evaluator_task"]["require_open"]),
-                            path=final_path, visible_projection=final_visible,
-                            permitted_routes=permitted_routes)
+                    evidence = profile.build_evidence(inputs)
                 except EvidenceContractError:
                     error_code = "evidence_contract"
+                    evidence = profile.negative_evidence(inputs)
             else:
                 error_code = error_code or (
                     "metrics_contract" if header_succeeded else "agent_failed")
+                evidence = profile.negative_evidence(inputs)
     elif apparatus_code is None and error_code is None:
         apparatus_code, error_code = "transport_contract", "bridge_result"
 

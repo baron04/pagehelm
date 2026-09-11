@@ -679,6 +679,140 @@ class SyntheticTwentyPage:
             self._thread.join(timeout=5)
 
 
+
+_BREADTH_PAGE_TEMPLATE = """<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><title>Synthetic Twenty</title></head>
+  <body>
+    <main id="view"></main>
+    <script>
+      const ENTITIES = __ENTITIES__
+      function node(tag, text) {
+        const element = document.createElement(tag)
+        element.textContent = text
+        return element
+      }
+      function records() {
+        // Every route change reads the current records, the way a real SPA reads its API.
+        const request = new XMLHttpRequest()
+        request.open('GET', '/__synthetic/breadth.json', false)
+        request.send(null)
+        return JSON.parse(request.responseText)
+      }
+      function render() {
+        const view = document.getElementById('view')
+        view.replaceChildren()
+        const current = records()
+        for (const [entity, config] of Object.entries(ENTITIES)) {
+          if (location.pathname === `/objects/${entity}`) {
+            view.append(node('h1', config.title))
+            for (const row of current[entity]) {
+              const link = node('a', row.name)
+              link.href = `/object/${config.singular}/${row.id}`
+              link.addEventListener('click', (event) => {
+                event.preventDefault()
+                history.pushState({}, '', link.getAttribute('href'))
+                render()
+              })
+              const detail = node('span', row[config.detail])
+              const line = document.createElement('p')
+              line.append(link, ' — ', detail)
+              view.append(line)
+            }
+            return
+          }
+          const prefix = `/object/${config.singular}/`
+          if (location.pathname.startsWith(prefix)) {
+            const id = location.pathname.slice(prefix.length)
+            const row = current[entity].find((item) => item.id === id)
+            if (!row) {
+              view.append(node('h1', 'Record not found'))
+              return
+            }
+            view.append(node('h1', row.name), node('p', config.detail_title), node('p', row[config.detail]))
+            return
+          }
+        }
+        view.append(node('h1', 'Synthetic Twenty'))
+      }
+      window.addEventListener('popstate', render)
+      render()
+    </script>
+  </body>
+</html>
+"""
+_BREADTH_ENTITIES = {
+    "companies": {"title": "Companies", "singular": "company", "detail": "domain",
+                  "detail_title": "Domain"},
+    "people": {"title": "People", "singular": "person", "detail": "email",
+               "detail_title": "Email"},
+    "opportunities": {"title": "Opportunities", "singular": "opportunity", "detail": "stage",
+                      "detail_title": "Stage"},
+}
+
+
+class SyntheticBreadthPage:
+    """Serve a three-object synthetic SPA whose every route reads the shared record lists.
+
+    The visible text of a record page is the record name, the detail title and the detail
+    value, which is what `evals.woa.breadth_scripted.SyntheticBreadthPageModel` renders for
+    the simulated runtime, so both engines see the same facts on the same routes.
+    """
+
+    def __init__(self, records: dict[str, list[dict[str, str]]]):
+        if set(records) != set(_BREADTH_ENTITIES):
+            raise ValueError("synthetic breadth records are incomplete")
+        self._records = records
+        self._document = _BREADTH_PAGE_TEMPLATE.replace(
+            "__ENTITIES__", json.dumps(_BREADTH_ENTITIES)).encode("utf-8")
+        self._server: ThreadingHTTPServer | None = None
+        self._thread: threading.Thread | None = None
+        self.origin = ""
+
+    def _records_json(self) -> bytes:
+        return json.dumps({name: list(rows) for name, rows in self._records.items()},
+                          ensure_ascii=False).encode("utf-8")
+
+    def __enter__(self) -> "SyntheticBreadthPage":
+        document = self._document
+        records_json = self._records_json
+
+        class Handler(BaseHTTPRequestHandler):
+            def _send(self, body: bytes, content_type: str) -> None:
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self) -> None:  # noqa: N802 - http.server naming
+                if self.path.startswith("/favicon"):
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                if self.path.startswith("/__synthetic/breadth.json"):
+                    self._send(records_json(), "application/json; charset=utf-8")
+                    return
+                self._send(document, "text/html; charset=utf-8")
+
+            def log_message(self, *_args: Any) -> None:
+                return None
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.daemon_threads = True
+        self._server = server
+        self._thread = threading.Thread(target=server.serve_forever, daemon=True)
+        self._thread.start()
+        self.origin = f"http://127.0.0.1:{server.server_address[1]}"
+        return self
+
+    def __exit__(self, *_args: Any) -> None:
+        if self._server is not None:
+            self._server.shutdown()
+            self._server.server_close()
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+
 DEVELOPMENT_TASKSET = (
     Path(__file__).resolve().parents[1] / "twenty" / "tasksets"
     / "twenty-companies-development-v1.json")
