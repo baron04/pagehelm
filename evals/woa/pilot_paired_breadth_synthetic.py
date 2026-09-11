@@ -193,6 +193,8 @@ class PairedBreadthPilot:
         self.storage_state: dict[str, Any] | None = None
         self.runtimes: list[SimulatedRuntime] = []
         self._directory: tempfile.TemporaryDirectory | None = None
+        self.pageagent_actions = scripted_pageagent_actions
+        self.woa_replies = scripted_woa_replies
 
     def _client(self, model_env: Path | None):
         if self.provider == "scripted":
@@ -242,7 +244,7 @@ class PairedBreadthPilot:
 
     def run_woa(self, case: dict[str, Any], run_id: str) -> dict[str, Any]:
         client = (self.client if self.provider == "real"
-                  else ScriptedWoaChat(scripted_woa_replies(case, self.records)))
+                  else ScriptedWoaChat(self.woa_replies(case, self.records)))
         return woa_runner.run_breadth_case(
             case=case, adapter=self.adapter, client=client,
             config=WoaTwentyConfig(
@@ -254,7 +256,7 @@ class PairedBreadthPilot:
 
     def run_pageagent(self, case: dict[str, Any], run_id: str) -> dict[str, Any]:
         client = (self.client if self.provider == "real"
-                  else ScriptedProviderClient(scripted_pageagent_actions(case, self.records)))
+                  else ScriptedProviderClient(self.pageagent_actions(case, self.records)))
         return pageagent_runner.run_breadth_case(
             case=case, adapter=self.adapter, client=client,
             config=PageAgentTwentyConfig(

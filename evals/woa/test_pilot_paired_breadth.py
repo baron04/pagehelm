@@ -118,6 +118,38 @@ class PairedBreadthPilotChromiumTests(unittest.TestCase):
                 self.assertEqual(summary["approval_boundary"], "capability_only")
                 self.assertEqual(summary["purpose"], "development_diagnostic_not_benchmark")
 
+    def test_a_collection_that_is_already_open_needs_no_typed_call_on_either_engine(self):
+        """The paid pilot's only discordance was this apparatus asymmetry, not a product one."""
+        def finish_only_pageagent(case, records):
+            if case["evaluator_task"]["kind"] == "open_collection" and \
+                    case["evaluator_task"]["entity"] == "companies":
+                return [{"done": {"text": "The companies module is already open.",
+                                  "success": True}}]
+            return scripted_pageagent_actions(case, records)
+
+        def finish_only_woa(case, records):
+            if case["evaluator_task"]["kind"] == "open_collection" and \
+                    case["evaluator_task"]["entity"] == "companies":
+                return [("finish", {"done": True, "why": "The companies module is already open."})]
+            return scripted_woa_replies(case, records)
+
+        with tempfile.TemporaryDirectory() as directory:
+            with PairedBreadthPilot(
+                    output_dir=Path(directory) / "pilot", bundle_path=BUNDLE,
+                    provider="scripted", model_env=None, max_cost_cny=1.0, wall_time_s=60,
+                    kinds=("open_collection",)) as pilot:
+                pilot.pageagent_actions = finish_only_pageagent
+                pilot.woa_replies = finish_only_woa
+                summary = pilot.run()
+
+        companies = [pair for pair in summary["pairs"] if pair["entity"] == "companies"]
+        self.assertTrue(companies)
+        for pair in companies:
+            for arm_id, row in pair["arms"].items():
+                self.assertEqual(row["evaluation_status"], "PASS", (arm_id, row))
+                self.assertEqual(row["business_calls"], 0, (arm_id, row))
+        self.assertEqual(summary["concordance"]["overall"]["discordant_pairs"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

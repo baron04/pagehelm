@@ -163,7 +163,7 @@ def _utc_now() -> str:
 
 def _bridge_reports_match(*, bridge: dict[str, Any], provider: dict[str, Any],
                           business: dict[str, Any], task_kind: str,
-                          config: PageAgentTwentyConfig) -> bool:
+                          config: PageAgentTwentyConfig, min_business_calls: int = 1) -> bool:
     metrics = bridge.get("metrics")
     fields = {"provider_calls", "page_actions", "business_calls", "retries", "steps"}
     if (not isinstance(metrics, dict) or set(metrics) != fields
@@ -182,7 +182,7 @@ def _bridge_reports_match(*, bridge: dict[str, Any], provider: dict[str, Any],
         business_contract = (
             metrics["business_calls"] == expected_business_calls
             == business.get("business_responses")
-            and metrics["business_calls"] >= (0 if task_kind == "refuse" else 1))
+            and metrics["business_calls"] >= min_business_calls)
     exact = (
         metrics["provider_calls"] == provider.get("provider_attempts")
         == provider.get("provider_responses") == accounting.get("model_calls")
@@ -261,6 +261,9 @@ class _RunProfile:
     instructions: Callable[[Any], str]
     build_evidence: Callable[..., dict[str, Any]]
     negative_evidence: Callable[[_EvidenceInputs], dict[str, Any]]
+    #: Skill/API runs normally prove at least one typed call. A refusal and a collection that
+    #: is already open need none, so those profiles lower this to zero.
+    min_business_calls: int = 1
 
 
 def _companies_profile(selected: dict[str, Any],
@@ -368,12 +371,10 @@ def _breadth_open_record_evidence(inputs: _EvidenceInputs, entity: str) -> dict[
 
 
 def _breadth_open_collection_evidence(inputs: _EvidenceInputs) -> dict[str, Any]:
+    # A collection may already be open when the run starts, so no permit or disclosure is
+    # required here; any route the engine did navigate to still went through the route Host.
+    # The independent evaluator scores the final route, exactly as it does for the other engine.
     path = _breadth_page_path(inputs.final_path)
-    if path not in set(inputs.permitted_routes):
-        raise EvidenceContractError("collection route was not authorized by the route Host")
-    if not any(isinstance(result, dict) and result.get("collection_ui_path") == path
-               for result in inputs.business_results):
-        raise EvidenceContractError("collection route was not disclosed by a business result")
     return {"artifact_version": 2, "execution_status": "completed", "page": {"path": path}}
 
 
@@ -451,6 +452,7 @@ def _breadth_profile(selected: dict[str, Any], config: PageAgentTwentyConfig) ->
         instructions=instructions,
         build_evidence=build,
         negative_evidence=negative,
+        min_business_calls=(0 if kind in {"refuse", "open_collection"} else 1),
     )
 
 
@@ -875,7 +877,8 @@ def _run_selected(*, case: dict[str, Any], selected: dict[str, Any], profile: _R
             reports_match = _bridge_reports_match(
                 bridge=bridge_result, provider=provider_report,
                 business=business_report, task_kind=selected["task_kind"],
-                config=config) and business_report.get("route_permits") == len(permitted_routes)
+                config=config, min_business_calls=profile.min_business_calls,
+            ) and business_report.get("route_permits") == len(permitted_routes)
             if selected["task_kind"] == "create":
                 reports_match = reports_match and len(approval_messages) == 1
             inputs = _EvidenceInputs(
