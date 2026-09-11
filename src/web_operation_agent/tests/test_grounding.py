@@ -7,7 +7,7 @@ import unittest
 
 from web_operation_agent.grounding import (NOT_APPLICABLE, REFUTED, SATISFIED, WRITE_NONE,
                                            WRITE_PERMITTED, WRITE_REFUSED, PlanState)
-from web_operation_agent.integrations.ofbiz import ofbiz_route_identity
+from web_operation_agent_ofbiz.route import ofbiz_route_identity
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionReceipt, ElementRef,
                                          OperationContract, PageObservation)
 

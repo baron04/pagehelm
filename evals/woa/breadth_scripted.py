@@ -12,7 +12,7 @@ from web_operation_agent.answering import StructuredQueryAnswer
 from web_operation_agent.business import (BusinessSkill, BusinessToolRequestError,
                                            BusinessToolResult, BusinessToolRuntime)
 from web_operation_agent.schemas import ElementRef
-from web_operation_agent.twenty import (QUERY_COMPANIES_SCHEMA, QUERY_OPPORTUNITIES_SCHEMA,
+from web_operation_agent_twenty.adapter import (QUERY_COMPANIES_SCHEMA, QUERY_OPPORTUNITIES_SCHEMA,
                                         QUERY_PEOPLE_SCHEMA)
 
 

@@ -12,14 +12,18 @@ import unittest
 from pathlib import Path
 
 from web_operation_agent.contract import (ContractPlanner, PlanningFailed, SourceRetriever,
-                                          validate_contract)
+                                          _segment_from_template, validate_contract)
+from web_operation_agent_ofbiz.route import OFBIZ_ROUTE_PORT
 from web_operation_agent.schemas import OperationContract
 from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
-from web_operation_agent.sourcemap import OFBizCompiler
+from web_operation_agent_ofbiz.sourcemap import OFBizCompiler
 from web_operation_agent.sourcetree import SourceTree
-from web_operation_agent.tests.test_sourcemap import POLICY, build
+from web_operation_agent_ofbiz.tests.test_sourcemap import POLICY, build
 
 TASK = "The tray in bay four needs a new cultivar sprouted into it."
+#: Every fixture in this file is compiled from OFBiz-shaped descriptors, so the segment the
+#: production adapter declares is the one these tests must normalise against too.
+SEGMENT = _segment_from_template(OFBIZ_ROUTE_PORT.contract_route_template)
 
 
 def _map(tmp: Path):
@@ -164,7 +168,7 @@ class Retrieval(unittest.TestCase):
                                        "mutation": {"webapp": "glasshouse",
                                                     "request": "sproutSeedling", "citations": [key]},
                                        "citations": [key]})])
-        ContractPlanner(model, smap).plan("T", TASK, bundle, "fixture-chain")
+        ContractPlanner(model, smap, segment=SEGMENT).plan("T", TASK, bundle, "fixture-chain")
         planner_input = model.calls[0][1]["content"]
         self.assertTrue(all(line in planner_input for line in lines),
                         "compiled facts must reach the actual planner call, not only the bundle")
@@ -203,7 +207,7 @@ class Validation(unittest.TestCase):
         c = self._contract(mutation={"webapp": "glasshouse", "request": "harvestEverything",
                                      "citations": [self.good_key]})
         self.assertEqual(validate_contract(c, self.bundle, self.map), [])
-        pruned, dropped = prune_contract(c, self.map)
+        pruned, dropped = prune_contract(c, self.map, segment=SEGMENT)
         self.assertIsNone(pruned.mutation)
         self.assertTrue(dropped)
 
@@ -232,14 +236,14 @@ class Planning(unittest.TestCase):
 
     def test_a_good_answer_is_accepted_in_one_call(self):
         model = _StubModel([self._json(self.key)])
-        contract, attempts = ContractPlanner(model, self.map).plan("T", TASK, self.bundle, "r1")
+        contract, attempts = ContractPlanner(model, self.map, segment=SEGMENT).plan("T", TASK, self.bundle, "r1")
         self.assertEqual(len(attempts), 1)
         self.assertEqual(contract.mutation.request, "sproutSeedling")
         self.assertEqual(contract.unknowns, ["which bay maps to which tray"])
 
     def test_a_bad_answer_is_returned_to_the_model_with_the_reason(self):
         model = _StubModel([self._json("made/up.xml:1-2"), self._json(self.key)])
-        contract, attempts = ContractPlanner(model, self.map).plan("T", TASK, self.bundle, "r1")
+        contract, attempts = ContractPlanner(model, self.map, segment=SEGMENT).plan("T", TASK, self.bundle, "r1")
         self.assertEqual(len(attempts), 2)
         self.assertTrue(attempts[0]["problems"])
         repair = model.calls[1][-1]["content"]
@@ -249,19 +253,19 @@ class Planning(unittest.TestCase):
     def test_two_bad_answers_are_a_product_failure(self):
         model = _StubModel([self._json("made/up.xml:1-2"), self._json("also/made/up.xml:3-4")])
         with self.assertRaises(PlanningFailed):
-            ContractPlanner(model, self.map).plan("T", TASK, self.bundle, "r1")
+            ContractPlanner(model, self.map, segment=SEGMENT).plan("T", TASK, self.bundle, "r1")
 
     def test_prose_around_the_json_is_tolerated_but_nonsense_is_not(self):
         model = _StubModel(["```json\n" + self._json(self.key) + "\n```"])
-        contract, _ = ContractPlanner(model, self.map).plan("T", TASK, self.bundle, "r1")
+        contract, _ = ContractPlanner(model, self.map, segment=SEGMENT).plan("T", TASK, self.bundle, "r1")
         self.assertEqual(contract.task_ref, "T")
         model = _StubModel(["I would rather not.", "Still no."])
         with self.assertRaises(PlanningFailed):
-            ContractPlanner(model, self.map).plan("T", TASK, self.bundle, "r1")
+            ContractPlanner(model, self.map, segment=SEGMENT).plan("T", TASK, self.bundle, "r1")
 
     def test_the_planner_is_shown_the_task_and_the_bundle_and_nothing_else(self):
         model = _StubModel([self._json(self.key)])
-        ContractPlanner(model, self.map).plan("T", TASK, self.bundle, "r1")
+        ContractPlanner(model, self.map, segment=SEGMENT).plan("T", TASK, self.bundle, "r1")
         blob = "\n".join(m["content"] for m in model.calls[0])
         self.assertIn(TASK, blob)
         for forbidden in ("PASS", "postcondition", "evaluator", "ControlPlan", "permit"):
@@ -281,18 +285,18 @@ class Normalisation(unittest.TestCase):
                          "'/accounting/control/findPayments'",
                          "findPayments?paymentId=8003",
                          "findPayments/"):
-            self.assertEqual(normalise_request("accounting", spelling), "findPayments",
+            self.assertEqual(normalise_request("accounting", spelling, segment=SEGMENT), "findPayments",
                              f"{spelling!r} should normalise to the bare request name")
 
     def test_a_multi_segment_request_name_survives(self):
         from web_operation_agent.contract import normalise_request
         self.assertEqual(
-            normalise_request("workeffort", "/workeffort/control/WorkEffortPartyAssigns/create"),
+            normalise_request("workeffort", "/workeffort/control/WorkEffortPartyAssigns/create", segment=SEGMENT),
             "WorkEffortPartyAssigns/create")
 
     def test_a_bare_name_is_left_alone(self):
         from web_operation_agent.contract import normalise_request
-        self.assertEqual(normalise_request("accounting", "createPaymentApplication"),
+        self.assertEqual(normalise_request("accounting", "createPaymentApplication", segment=SEGMENT),
                          "createPaymentApplication")
 
 
@@ -318,7 +322,7 @@ class Pruning(unittest.TestCase):
              "citations": [self.key]},
             {"intent": "invented", "webapp": "glasshouse", "request": "harvestEverything",
              "citations": [self.key]}])
-        pruned, dropped = prune_contract(c, self.map)
+        pruned, dropped = prune_contract(c, self.map, segment=SEGMENT)
         self.assertEqual([s.intent for s in pruned.steps], ["real"])
         self.assertEqual(len(dropped), 1)
         self.assertIn("harvestEverything", pruned.unknowns[0])
@@ -327,7 +331,7 @@ class Pruning(unittest.TestCase):
         from web_operation_agent.contract import prune_contract
         c = self._contract([], {"webapp": "glasshouse", "request": "nope",
                                 "citations": [self.key]})
-        pruned, dropped = prune_contract(c, self.map)
+        pruned, dropped = prune_contract(c, self.map, segment=SEGMENT)
         self.assertIsNone(pruned.mutation)
         self.assertTrue(dropped)
 
@@ -337,12 +341,12 @@ class Pruning(unittest.TestCase):
         The citation must still be about it -- existing and being cited for are two questions.
         """
         from web_operation_agent.contract import SupportIndex, prune_contract
-        index = SupportIndex(self.map)
+        index = SupportIndex(self.map, segment=SEGMENT)
         key = next(k for k in self.map.evidence_index()
                    if "beacon/lampschedule/create" in index.about(k))
         c = self._contract([{"intent": "post the form", "webapp": "beacon",
                              "request": "LampSchedule/create", "citations": [key]}])
-        pruned, dropped = prune_contract(c, self.map)
+        pruned, dropped = prune_contract(c, self.map, segment=SEGMENT)
         self.assertEqual(dropped, [])
         self.assertEqual(len(pruned.steps), 1)
 
@@ -358,14 +362,14 @@ class Pruning(unittest.TestCase):
             '{"task_ref":"T","summary":"s","steps":[{"intent":"x","webapp":"glasshouse",'
             f'"request":"alsonope","citations":["{self.key}"]}}],"citations":["{self.key}"]}}'])
         with self.assertRaises(PlanningFailed):
-            ContractPlanner(model, self.map).plan("T", TASK, self.bundle, "r1")
+            ContractPlanner(model, self.map, segment=SEGMENT).plan("T", TASK, self.bundle, "r1")
 
     def test_a_contract_written_with_servlet_paths_is_accepted(self):
         model = _StubModel([
             '{"task_ref":"T","summary":"s","steps":[{"intent":"go","webapp":"glasshouse",'
             f'"request":"/glasshouse/control/sproutSeedling","citations":["{self.key}"]}}],'
             f'"citations":["{self.key}"]}}'])
-        contract, attempts = ContractPlanner(model, self.map).plan("T", TASK, self.bundle, "r1")
+        contract, attempts = ContractPlanner(model, self.map, segment=SEGMENT).plan("T", TASK, self.bundle, "r1")
         self.assertEqual(len(attempts), 1)
         self.assertEqual(contract.steps[0].request, "sproutSeedling")
 
@@ -387,15 +391,15 @@ class PlannerBudget(unittest.TestCase):
         model = _StubModel([
             '{"task_ref":"T","summary":"s","steps":[{"intent":"go","webapp":"glasshouse",'
             f'"request":"sproutSeedling","citations":["{self.key}"]}}],"citations":["{self.key}"]}}'])
-        ContractPlanner(model, self.map).plan("T", TASK, self.bundle, "r1")
+        ContractPlanner(model, self.map, segment=SEGMENT).plan("T", TASK, self.bundle, "r1")
         self.assertEqual(model.budgets, [PLANNER_START_TOKENS])
         self.assertGreater(PLANNER_START_TOKENS, 2048)
 
     def test_the_webapp_named_twice_is_still_one_request(self):
         from web_operation_agent.contract import normalise_request
-        self.assertEqual(normalise_request("accounting", "accounting/createPaymentApplication"),
+        self.assertEqual(normalise_request("accounting", "accounting/createPaymentApplication", segment=SEGMENT),
                          "createPaymentApplication")
-        self.assertEqual(normalise_request("workeffort", "workeffort/WorkEffortPartyAssigns/create"),
+        self.assertEqual(normalise_request("workeffort", "workeffort/WorkEffortPartyAssigns/create", segment=SEGMENT),
                          "WorkEffortPartyAssigns/create")
 
 
@@ -421,7 +425,7 @@ class CitationNormalisation(unittest.TestCase):
             '{"task_ref":"T","summary":"s","steps":[{"intent":"go","webapp":"glasshouse",'
             f'"request":"sproutSeedling","citations":["[{self.key}]"]}}],'
             f'"citations":["[{self.key}]"]}}'])
-        contract, attempts = ContractPlanner(model, self.map).plan("T", TASK, self.bundle, "r1")
+        contract, attempts = ContractPlanner(model, self.map, segment=SEGMENT).plan("T", TASK, self.bundle, "r1")
         self.assertEqual(len(attempts), 1)
         self.assertEqual(contract.cited_keys(), {self.key})
 
@@ -429,7 +433,7 @@ class CitationNormalisation(unittest.TestCase):
         model = _StubModel(['{"task_ref":"T","summary":"s","citations":["[made/up.xml:1-2]"]}',
                             '{"task_ref":"T","summary":"s","citations":["[also/made/up.xml:1-2]"]}'])
         with self.assertRaises(PlanningFailed):
-            ContractPlanner(model, self.map).plan("T", TASK, self.bundle, "r1")
+            ContractPlanner(model, self.map, segment=SEGMENT).plan("T", TASK, self.bundle, "r1")
 
 
 class ReasoningLeakedIntoTheAnswer(unittest.TestCase):
@@ -451,20 +455,20 @@ class ReasoningLeakedIntoTheAnswer(unittest.TestCase):
 
     def test_a_closed_think_block_is_ignored(self):
         model = _StubModel(["<think>\nWe need {careful} JSON.\n</think>\n" + self._json()])
-        contract, attempts = ContractPlanner(model, self.map).plan("T", TASK, self.bundle, "r1")
+        contract, attempts = ContractPlanner(model, self.map, segment=SEGMENT).plan("T", TASK, self.bundle, "r1")
         self.assertEqual(len(attempts), 1)
         self.assertEqual(contract.steps[0].request, "sproutSeedling")
 
     def test_a_think_block_after_the_answer_is_ignored_too(self):
         model = _StubModel([self._json() + "\n<think>done {ok}</think>"])
-        contract, _ = ContractPlanner(model, self.map).plan("T", TASK, self.bundle, "r1")
+        contract, _ = ContractPlanner(model, self.map, segment=SEGMENT).plan("T", TASK, self.bundle, "r1")
         self.assertEqual(contract.task_ref, "T")
 
     def test_thinking_with_no_answer_eventually_fails_after_growing(self):
         """It is given more room first -- that is the fix -- but the room is bounded."""
         model = _StubModel(["<think>\nI am not sure {what} to do.\n</think>"] * 8)
         with self.assertRaises(PlanningFailed):
-            ContractPlanner(model, self.map, max_growths=2).plan("T", TASK, self.bundle, "r1")
+            ContractPlanner(model, self.map, max_growths=2, segment=SEGMENT).plan("T", TASK, self.bundle, "r1")
         self.assertEqual(model.budgets, [4096, 8192, 16384, 16384],
                          "grow twice, then one repair at the last budget, then give up")
 
@@ -495,7 +499,7 @@ class ReasoningEatsTheBudget(unittest.TestCase):
         good = ('{"task_ref":"T","summary":"s","steps":[{"intent":"go","webapp":"glasshouse",'
                 f'"request":"sproutSeedling","citations":["{self.key}"]}}],"citations":["{self.key}"]}}')
         model = _StubModel(["<think>\n" + "deliberating {a lot} " * 200 + "\n</think>\n", good])
-        contract, attempts = ContractPlanner(model, self.map).plan("T", TASK, self.bundle, "r1")
+        contract, attempts = ContractPlanner(model, self.map, segment=SEGMENT).plan("T", TASK, self.bundle, "r1")
         self.assertEqual(len(attempts), 2)
         self.assertIn("reasoning", attempts[0]["problems"][0])
         self.assertGreater(attempts[0]["reasoning_chars"], 0)
@@ -514,7 +518,7 @@ class ReasoningEatsTheBudget(unittest.TestCase):
                 f'"request":"sproutSeedling","citations":["{self.key}"]}}],"citations":["{self.key}"]}}')
         model = _StubModel([{"content": '{"task_ref":"T","summ',
                              "finish_reason": "length"}, good])
-        contract, attempts = ContractPlanner(model, self.map).plan("T", TASK, self.bundle, "r1")
+        contract, attempts = ContractPlanner(model, self.map, segment=SEGMENT).plan("T", TASK, self.bundle, "r1")
         self.assertIn("cut off", attempts[0]["problems"][0])
         self.assertEqual(attempts[0]["finish_reason"], "length")
         self.assertEqual(model.budgets, [4096, 8192])
@@ -528,7 +532,7 @@ class ReasoningEatsTheBudget(unittest.TestCase):
         good = ('{"task_ref":"T","summary":"s","steps":[{"intent":"go","webapp":"glasshouse",'
                 f'"request":"sproutSeedling","citations":["{self.key}"]}}],"citations":["{self.key}"]}}')
         model = _StubModel([{"content": "", "finish_reason": "length"}, wrong, good])
-        contract, attempts = ContractPlanner(model, self.map).plan("T", TASK, self.bundle, "r1")
+        contract, attempts = ContractPlanner(model, self.map, segment=SEGMENT).plan("T", TASK, self.bundle, "r1")
         self.assertEqual([a["problems"] != [] for a in attempts], [True, True, False])
         self.assertEqual(model.budgets, [4096, 8192, 8192],
                          "one growth, then the repair reuses the grown budget")
@@ -583,7 +587,7 @@ class CitationsMustBeAboutWhatTheyBack(unittest.TestCase):
         self.map = _map(Path(self.tmp.name))
         self.bundle = SourceRetriever(self.map).retrieve("T", TASK)
         from web_operation_agent.contract import SupportIndex
-        self.index = SupportIndex(self.map)
+        self.index = SupportIndex(self.map, segment=SEGMENT)
         # The index is keyed by the full `webapp/request`: two applications can both declare
         # `edit`, and a bare name cannot tell their evidence apart.
         sprout, trays = "glasshouse/sproutseedling", "glasshouse/findtrays"
@@ -605,7 +609,7 @@ class CitationsMustBeAboutWhatTheyBack(unittest.TestCase):
         from web_operation_agent.contract import prune_contract
         c = self._contract([{"intent": "sprout it", "webapp": "glasshouse",
                              "request": "sproutSeedling", "citations": [self.about_other]}])
-        pruned, dropped = prune_contract(c, self.map)
+        pruned, dropped = prune_contract(c, self.map, segment=SEGMENT)
         self.assertEqual(pruned.steps, [])
         self.assertEqual(len(dropped), 1)
         self.assertIn("is evidence about", dropped[0])
@@ -616,7 +620,7 @@ class CitationsMustBeAboutWhatTheyBack(unittest.TestCase):
         from web_operation_agent.contract import prune_contract
         c = self._contract([{"intent": "sprout it", "webapp": "glasshouse",
                              "request": "sproutSeedling", "citations": [self.about_sprout]}])
-        pruned, dropped = prune_contract(c, self.map)
+        pruned, dropped = prune_contract(c, self.map, segment=SEGMENT)
         self.assertEqual(dropped, [])
         self.assertEqual(len(pruned.steps), 1)
 
@@ -624,7 +628,7 @@ class CitationsMustBeAboutWhatTheyBack(unittest.TestCase):
         from web_operation_agent.contract import prune_contract
         c = self._contract([], {"webapp": "glasshouse", "request": "sproutSeedling",
                                 "citations": [self.about_other]})
-        pruned, dropped = prune_contract(c, self.map)
+        pruned, dropped = prune_contract(c, self.map, segment=SEGMENT)
         self.assertIsNone(pruned.mutation)
         self.assertIn("the write endpoint is unsupported", dropped[0])
 
@@ -640,8 +644,8 @@ class CitationsMustBeAboutWhatTheyBack(unittest.TestCase):
         from web_operation_agent.contract import bare_request
         for spelling in ("/accounting/control/findPayments", "accounting/control/findPayments",
                          "http://host:8080/ap/control/findPayments", "findPayments?x=1"):
-            self.assertEqual(bare_request(spelling), "findPayments", spelling)
-        self.assertEqual(bare_request("WorkEffortPartyAssigns/create"),
+            self.assertEqual(bare_request(spelling, segment=SEGMENT), "findPayments", spelling)
+        self.assertEqual(bare_request("WorkEffortPartyAssigns/create", segment=SEGMENT),
                          "WorkEffortPartyAssigns/create")
 
 
@@ -655,7 +659,7 @@ class TheTwoArmsShareEverythingButTheEvidence(unittest.TestCase):
         self.bundle = SourceRetriever(self.map).retrieve("T", TASK)
         from web_operation_agent.contract import EvidenceBundle, SupportIndex
         self.empty = EvidenceBundle(task_ref="T")
-        index = SupportIndex(self.map)
+        index = SupportIndex(self.map, segment=SEGMENT)
         # A citation the bundle really contains and that is really about the step it backs;
         # a source-arm contract with no surviving move is rejected, as it should be.
         self.key = next(k for k in sorted(self.bundle.citation_keys)
@@ -682,7 +686,7 @@ class TheTwoArmsShareEverythingButTheEvidence(unittest.TestCase):
     def test_the_page_only_arm_is_not_asked_for_facts_it_does_not_have(self):
         model = _StubModel(['{"task_ref":"T","summary":"from the page","steps":[],'
                             '"citations":[]}'])
-        contract, attempts = ContractPlanner(model, None).plan("T", TASK, self.empty, "r1",
+        contract, attempts = ContractPlanner(model, None, segment=SEGMENT).plan("T", TASK, self.empty, "r1",
                                                                page=None)
         self.assertEqual(attempts[0]["problems"], [])
         self.assertEqual(contract.summary, "from the page")
@@ -692,7 +696,7 @@ class TheTwoArmsShareEverythingButTheEvidence(unittest.TestCase):
 
     def test_the_source_arm_is_still_asked_for_facts(self):
         model = _StubModel([self.sourced])
-        ContractPlanner(model, self.map).plan("T", TASK, self.bundle, "r1")
+        ContractPlanner(model, self.map, segment=SEGMENT).plan("T", TASK, self.bundle, "r1")
         sent = "\n".join(m["content"] for m in model.calls[0])
         self.assertIn("FACTS FROM THE DEPLOYED SOURCE", sent)
 
@@ -701,7 +705,7 @@ class TheTwoArmsShareEverythingButTheEvidence(unittest.TestCase):
         model = _StubModel(['{"task_ref":"T","summary":"s","citations":["made/up.xml:1-2"]}',
                             '{"task_ref":"T","summary":"s","citations":["still/made/up.xml:1-2"]}'])
         with self.assertRaises(PlanningFailed):
-            ContractPlanner(model, None).plan("T", TASK, self.empty, "r1")
+            ContractPlanner(model, None, segment=SEGMENT).plan("T", TASK, self.empty, "r1")
 
     def test_the_page_only_arm_is_not_filtered_by_the_source_map(self):
         """Pruning against the descriptors is a use of source evidence and belongs to the arm
@@ -715,7 +719,7 @@ class TheTwoArmsShareEverythingButTheEvidence(unittest.TestCase):
         self.assertEqual(attempts[0]["dropped"], [])
         self.assertEqual(contract.steps[0].request, "harvestEverything")
         # the same contract, in the source arm, would lose that step
-        pruned, dropped = prune_contract(contract, self.map)
+        pruned, dropped = prune_contract(contract, self.map, segment=SEGMENT)
         self.assertEqual(pruned.steps, [])
         self.assertTrue(dropped)
         self.assertIs(model.map if hasattr(model, "map") else None, None)
@@ -724,6 +728,6 @@ class TheTwoArmsShareEverythingButTheEvidence(unittest.TestCase):
         good = '{"task_ref":"T","summary":"s","steps":[],"citations":[]}'
         page = _StubModel([{"content": "", "finish_reason": "length"}, good])
         src = _StubModel([{"content": "", "finish_reason": "length"}, self.sourced])
-        ContractPlanner(page, None).plan("T", TASK, self.empty, "r1")
-        ContractPlanner(src, self.map).plan("T", TASK, self.bundle, "r1")
+        ContractPlanner(page, None, segment=SEGMENT).plan("T", TASK, self.empty, "r1")
+        ContractPlanner(src, self.map, segment=SEGMENT).plan("T", TASK, self.bundle, "r1")
         self.assertEqual(page.budgets, src.budgets)

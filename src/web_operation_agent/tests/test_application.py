@@ -182,6 +182,38 @@ class ApplicationAdapterTests(unittest.TestCase):
                 "ledger-demo", (r"/invoices/[a-z0-9-]+",),
                 contract_route_pattern=r"/invoices/(?P<route>[^/]+)")
 
+    def test_contract_route_pattern_and_template_must_be_configured_together(self):
+        with self.assertRaisesRegex(ValueError, "configured together"):
+            DeclaredRoutePort(
+                "ledger-demo", (r"/invoices/[a-z0-9-]+",),
+                contract_route_pattern=r"/(?P<scope>[a-z]+)/control/(?P<route>[^/]+)")
+        with self.assertRaisesRegex(ValueError, "configured together"):
+            DeclaredRoutePort(
+                "ledger-demo", (r"/invoices/[a-z0-9-]+",),
+                contract_route_template="/{scope}/control/{route}")
+
+    def test_contract_route_template_requires_both_placeholders(self):
+        with self.assertRaisesRegex(ValueError, "requires"):
+            DeclaredRoutePort(
+                "ledger-demo", (r"/invoices/[a-z0-9-]+",),
+                contract_route_pattern=r"/(?P<scope>[a-z]+)/control/(?P<route>[^/]+)",
+                contract_route_template="/{scope}/control/")
+
+    def test_compose_contract_route_inverts_contract_route_identity(self):
+        routes = DeclaredRoutePort(
+            "ledger-demo", (r"/invoices/[a-z0-9-]+",),
+            contract_route_pattern=r"/(?P<scope>[A-Za-z0-9_]+)/control/(?P<route>[^?;#]+)",
+            contract_route_template="/{scope}/control/{route}")
+        composed = routes.compose_contract_route("accounting", "findPayments")
+        self.assertEqual(composed, "/accounting/control/findPayments")
+        self.assertEqual(routes.contract_route_identity(composed),
+                         ("accounting", "findpayments"))
+
+    def test_compose_contract_route_refuses_an_unconfigured_adapter(self):
+        routes = DeclaredRoutePort("ledger-demo", (r"/invoices/[a-z0-9-]+",))
+        with self.assertRaisesRegex(ValueError, "no contract route template"):
+            routes.compose_contract_route("accounting", "findPayments")
+
 
 if __name__ == "__main__":
     unittest.main()

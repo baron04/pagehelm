@@ -20,7 +20,7 @@ from evals.twenty.taskset import instantiate_task, validate_task_set
 from evals.woa.browser_host import playwright_runtime_factory, sample_visible_page
 from evals.woa.scripted import ScriptedWoaChat
 from evals.woa.twenty_runner import WoaTwentyConfig, run_case
-from web_operation_agent.twenty import TwentyApplicationAdapter
+from web_operation_agent_twenty.adapter import TwentyApplicationAdapter
 
 
 QUALIFICATION_VERSION = 1

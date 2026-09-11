@@ -38,7 +38,7 @@ from web_operation_agent.remote import (
     RemoteSessionChannel, RemoteSessionRegistry, SessionGrant,
 )
 from web_operation_agent.schemas import SourceMap
-from web_operation_agent.twenty import TwentyApplicationAdapter
+from web_operation_agent_twenty.adapter import TwentyApplicationAdapter
 
 
 _ID = re.compile(r"[a-z0-9][a-z0-9_.-]{2,159}\Z")

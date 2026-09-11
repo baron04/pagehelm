@@ -98,7 +98,7 @@ from pathlib import Path                                                     # n
 from web_operation_agent.browser import TransportError                       # noqa: E402
 from web_operation_agent.controlplane import ControlPlaneError               # noqa: E402
 from web_operation_agent.grounding import PlanState                          # noqa: E402
-from web_operation_agent.integrations.ofbiz import (                        # noqa: E402
+from web_operation_agent_ofbiz.route import (                        # noqa: E402
     OFBIZ_ROUTE_PORT, ofbiz_route_identity)
 from web_operation_agent.ledger import SessionLedger                         # noqa: E402
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionReceipt,     # noqa: E402
@@ -171,7 +171,7 @@ def _run(chat, browser, control):
         s = ServerAgentSession(
             task=TaskSpec(task_ref="T", prompt="change the delivery address"), arm="S",
             chat=chat, browser=browser, control=control,
-            ledger=SessionLedger(Path(tmp) / "l.jsonl", "r1"), attestation=None,
+            ledger=SessionLedger(Path(tmp) / "l.jsonl", "r1"),
             step_budget=6, wall_budget_s=120, run_id="r1",
             application_routes=OFBIZ_ROUTE_PORT)
         s.contract = CONTRACT

@@ -32,7 +32,7 @@ from web_operation_agent.business import (
     BusinessToolResult, BusinessToolRuntime,
 )
 from web_operation_agent.identity import PRINCIPAL_CONTEXT_VERSION, PrincipalContext
-from web_operation_agent.twenty import (
+from web_operation_agent_twenty.adapter import (
     CREATE_COMPANY_SCHEMA, QUERY_COMPANIES_SCHEMA, TwentyApplicationAdapter,
 )
 

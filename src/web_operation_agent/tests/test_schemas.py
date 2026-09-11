@@ -46,7 +46,7 @@ def _reasons_emitted_by(cls) -> set[str]:
     found |= set(re.findall(r'"(agent_finished|agent_refused|step_budget|wall_clock_budget|'
                             r'token_budget|action_policy_budget|provider_error|transport_error|'
                             r'indeterminate_write|'
-                            r'planning_failed|attestation_failed|control_plane_error)"', src))
+                            r'planning_failed|control_plane_error)"', src))
     return found
 
 

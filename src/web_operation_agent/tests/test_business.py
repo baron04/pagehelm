@@ -22,7 +22,7 @@ from web_operation_agent.identity import OperationContext, PrincipalContext
 from web_operation_agent.mutation import MemoryMutationJournal, MutationJournalError
 from web_operation_agent.schemas import ActionReceipt, PageObservation
 from web_operation_agent.session import ServerAgentSession, TaskSpec
-from web_operation_agent.twenty import TwentyBusinessToolExecutor
+from web_operation_agent_twenty.adapter import TwentyBusinessToolExecutor
 from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
 
 
@@ -666,7 +666,7 @@ class BusinessReActTransition(unittest.TestCase):
                 arm="U", chat=_Chat([]), browser=_Browser(),
                 control=ReadOnlyControl(),
                 ledger=ledger,
-                attestation=None, source_contract=False,
+                source_contract=False,
                 business_tools=runtime,
                 conversation_context={
                     "schema_version": 1,
@@ -696,7 +696,7 @@ class BusinessReActTransition(unittest.TestCase):
                 arm="U", chat=_Chat([]), browser=_Browser(),
                 control=ReadOnlyControl(),
                 ledger=ledger,
-                attestation=None, source_contract=False,
+                source_contract=False,
                 business_tools=runtime,
                 conversation_context={
                     "schema_version": 1,
@@ -734,7 +734,7 @@ class BusinessReActTransition(unittest.TestCase):
                 task=TaskSpec(task_ref="T", prompt="Create company Acme.",
                               supported_scope="Create exactly one company."),
                 arm="U", chat=chat, browser=_Browser(), control=ReadOnlyControl(),
-                ledger=ledger, attestation=None, source_contract=False,
+                ledger=ledger, source_contract=False,
                 step_budget=3, wall_budget_s=30, run_id="write-denied",
                 business_tools=runtime, business_mutation_approval=deny)
             session.entry_observation = _observation(1)
@@ -769,7 +769,7 @@ class BusinessReActTransition(unittest.TestCase):
                 task=TaskSpec(task_ref="T", prompt="Create company Acme.",
                               supported_scope="Create exactly one company."),
                 arm="U", chat=chat, browser=_Browser(), control=ReadOnlyControl(),
-                ledger=ledger, attestation=None, source_contract=False,
+                ledger=ledger, source_contract=False,
                 step_budget=3, wall_budget_s=30, run_id="write-cancelled",
                 business_tools=runtime, business_mutation_approval=approve_then_cancel,
                 cancelled=lambda: cancelled["value"])
@@ -805,7 +805,7 @@ class BusinessReActTransition(unittest.TestCase):
                     ("query_companies", {}),
                 ]), browser=browser, control=ReadOnlyControl(),
                 ledger=SessionLedger(Path(tmp) / "session.jsonl", "read-cancelled"),
-                attestation=None, source_contract=False, step_budget=3,
+                source_contract=False, step_budget=3,
                 wall_budget_s=30, run_id="read-cancelled",
                 business_tools=BusinessToolRuntime((skill,), CancellingExecutor()),
                 cancelled=lambda: cancelled["value"])
@@ -839,7 +839,7 @@ class BusinessReActTransition(unittest.TestCase):
                 task=TaskSpec(task_ref="T", prompt="Create company Acme.",
                               supported_scope="Create exactly one company."),
                 arm="U", chat=chat, browser=browser, control=ReadOnlyControl(),
-                ledger=ledger, attestation=None, source_contract=False,
+                ledger=ledger, source_contract=False,
                 step_budget=4, wall_budget_s=30, run_id="write-approved",
                 business_tools=runtime, business_mutation_approval=approve,
                 plain_business_answer_min_page_actions=1)
@@ -883,7 +883,7 @@ class BusinessReActTransition(unittest.TestCase):
                 task=TaskSpec(task_ref="T", prompt="Create company Acme.",
                               supported_scope="Create exactly one company."),
                 arm="U", chat=chat, browser=_Browser(), control=ReadOnlyControl(),
-                ledger=ledger, attestation=None, source_contract=False,
+                ledger=ledger, source_contract=False,
                 step_budget=3, wall_budget_s=30, run_id="write-followup-cancelled",
                 business_tools=runtime, business_mutation_approval=approve,
                 cancelled=lambda: cancelled["value"])
@@ -926,7 +926,7 @@ class BusinessReActTransition(unittest.TestCase):
                 task=TaskSpec(task_ref="T", prompt="Create company Acme.",
                               supported_scope="Create exactly one company."),
                 arm="U", chat=chat, browser=_Browser(), control=ReadOnlyControl(),
-                ledger=ledger, attestation=None, source_contract=False,
+                ledger=ledger, source_contract=False,
                 step_budget=4, wall_budget_s=30, run_id="write-unknown",
                 business_tools=runtime, business_mutation_approval=approve)
             session.entry_observation = _observation(1)
@@ -956,7 +956,7 @@ class BusinessReActTransition(unittest.TestCase):
                 task=TaskSpec(task_ref="T", prompt="Which companies are in this workspace?",
                               supported_scope="Read current business data only."),
                 arm="U", chat=chat, browser=browser, control=ReadOnlyControl(),
-                ledger=ledger, attestation=None, source_contract=False,
+                ledger=ledger, source_contract=False,
                 step_budget=4, wall_budget_s=30, run_id="business-react",
                 business_tools=runtime,
                 plain_business_answer_min_page_actions=0)
@@ -1007,7 +1007,7 @@ class BusinessReActTransition(unittest.TestCase):
                 task=TaskSpec(task_ref="T", prompt="Which companies are in this workspace?",
                               supported_scope="Read current business data only."),
                 arm="U", chat=chat, browser=_Browser(), control=ReadOnlyControl(),
-                ledger=ledger, attestation=None, source_contract=False,
+                ledger=ledger, source_contract=False,
                 step_budget=3, wall_budget_s=30, run_id="plain-business-answer",
                 business_tools=runtime,
                 plain_business_answer_min_page_actions=0)
@@ -1046,7 +1046,7 @@ class BusinessReActTransition(unittest.TestCase):
                     ("query_companies", {}),
                     ("finish", {"done": False, "why": "The data source failed."}),
                 ]), browser=_Browser(), control=ReadOnlyControl(), ledger=ledger,
-                attestation=None, source_contract=False, step_budget=4,
+                source_contract=False, step_budget=4,
                 wall_budget_s=30, run_id="typed-read-failure",
                 business_tools=BusinessToolRuntime((skill,), UnavailableExecutor()))
             session.entry_observation = _observation(1)
@@ -1074,7 +1074,7 @@ class BusinessReActTransition(unittest.TestCase):
                 task=TaskSpec(task_ref="T", prompt="Open Acme from companies.",
                               supported_scope="Read and open one company record."),
                 arm="U", chat=chat, browser=browser, control=ReadOnlyControl(),
-                ledger=ledger, attestation=None, source_contract=False,
+                ledger=ledger, source_contract=False,
                 step_budget=4, wall_budget_s=30, run_id="business-route",
                 business_tools=runtime,
                 plain_business_answer_min_page_actions=1)
@@ -1108,7 +1108,7 @@ class BusinessReActTransition(unittest.TestCase):
                 task=TaskSpec(task_ref="T", prompt="Open the requested item from companies.",
                               supported_scope="Read and open one company record."),
                 arm="U", chat=chat, browser=browser, control=ReadOnlyControl(),
-                ledger=ledger, attestation=None, source_contract=False,
+                ledger=ledger, source_contract=False,
                 step_budget=4, wall_budget_s=30, run_id="route-refusal",
                 business_tools=runtime,
                 plain_business_answer_min_page_actions=1)
@@ -1137,7 +1137,7 @@ class BusinessReActTransition(unittest.TestCase):
                 task=TaskSpec(task_ref="T", prompt="Open Acme from companies.",
                               supported_scope="Read and open one company record."),
                 arm="U", chat=chat, browser=_Browser(), control=ReadOnlyControl(),
-                ledger=ledger, attestation=None, source_contract=False,
+                ledger=ledger, source_contract=False,
                 step_budget=5, wall_budget_s=30, run_id="route-before-answer",
                 business_tools=runtime,
                 plain_business_answer_min_page_actions=1)

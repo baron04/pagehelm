@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Iterable
 from urllib.parse import urlsplit
 
+from .application import ApplicationRoutePort
 from .schemas import SourceMap, SourceRelation, canonical_json
 
 
@@ -85,9 +86,9 @@ class SourceAffordance:
             _require_string(getattr(self, name), name)
         _require_string(self.view, "view", empty=True)
         _require_string(self.screen, "screen", empty=True)
-        if (not self.route_template.startswith(f"/{self.webapp}/control/")
+        if (not self.route_template.startswith(f"/{self.webapp}/")
                 or "\\" in self.route_template):
-            raise ValueError("route_template must be a same-webapp relative control route")
+            raise ValueError("route_template must be a same-webapp relative route")
         if not self.citations:
             raise ValueError("a source affordance must cite its SourceMap facts")
         if not isinstance(self.rank_score, int) or self.rank_score <= 0:
@@ -250,6 +251,7 @@ def _menu_variants(menus: Iterable[SourceRelation], request: str
 
 def resolve_source_affordances(source_map: SourceMap, *, task: str, query: str = "",
                                page_text: str = "", served_webapps: Iterable[str],
+                               route_port: ApplicationRoutePort,
                                limit: int = 5) -> tuple[SourceAffordance, ...]:
     """Return at most ``limit`` deterministic, view-only candidates.
 
@@ -257,9 +259,13 @@ def resolve_source_affordances(source_map: SourceMap, *, task: str, query: str =
     has no filesystem, browser, evaluator, database or model access.  A controller identity
     is eligible only when every declaration for that identity is explicitly ``view-only``;
     a conflicting write handler therefore removes the route rather than being guessed away.
+    ``route_port`` composes each candidate's route the way its adapter's typed tools would
+    accept it; this module carries no application-specific route grammar of its own.
     """
     if not isinstance(source_map, SourceMap):
         raise TypeError("source_map must be a SourceMap")
+    if not isinstance(route_port, ApplicationRoutePort):
+        raise TypeError("route_port must implement ApplicationRoutePort")
     for value, name in ((task, "task"), (query, "query"), (page_text, "page_text")):
         _require_string(value, name, empty=True)
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 12:
@@ -344,7 +350,7 @@ def resolve_source_affordances(source_map: SourceMap, *, task: str, query: str =
             chain = (list(handlers) + list(menu_relations) + list(response_relations)
                      + list(screen_relations) + list(includes))
             citations = tuple(sorted(_refs(chain)))
-            route_template = f"/{webapp}/control/{request}"
+            route_template = route_port.compose_contract_route(webapp, request)
             identity_payload = {
                 "source_map_digest": source_digest,
                 "route": route_template,

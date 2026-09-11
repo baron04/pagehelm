@@ -10,6 +10,7 @@ from .business import (BusinessDataClassifier, BusinessPostconditionVerifier,
                        BusinessRouteValidator, BusinessToolResult, BusinessToolRuntime,
                        MutationPostcondition)
 from .identity import IdentityAssertion, PrincipalContext, PrincipalError
+from .schemas import SourceMap
 
 
 APPLICATION_ADAPTER_VERSION = 2
@@ -165,6 +166,8 @@ class ApplicationRoutePort(BusinessRouteValidator, Protocol):
 
     def contract_route_identity(self, url: str) -> tuple[str, str]: ...
 
+    def compose_contract_route(self, scope: str, route: str) -> str: ...
+
     def discover_source_scopes(self, observation: object) -> frozenset[str]: ...
 
     def validate_application_entry(self, ref: object, observation: object) -> tuple[str, str]: ...
@@ -179,6 +182,7 @@ class DeclaredRoutePort:
     session_handoff_query_keys: frozenset[str] = frozenset()
     allowed_tool_query_keys: frozenset[str] = frozenset()
     contract_route_pattern: str = ""
+    contract_route_template: str = ""
     application_entry_patterns: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -206,6 +210,15 @@ class DeclaredRoutePort:
                 raise ValueError("contract route pattern is invalid") from exc
             if not {"scope", "route"}.issubset(compiled.groupindex):
                 raise ValueError("contract route pattern requires scope and route groups")
+        if not isinstance(self.contract_route_template, str):
+            raise ValueError("contract route template must be a string")
+        if bool(self.contract_route_pattern) != bool(self.contract_route_template):
+            raise ValueError(
+                "contract route pattern and template must be configured together")
+        if self.contract_route_template and (
+                "{scope}" not in self.contract_route_template
+                or "{route}" not in self.contract_route_template):
+            raise ValueError("contract route template requires {scope} and {route}")
         for pattern in self.application_entry_patterns:
             try:
                 re.compile(pattern)
@@ -265,6 +278,14 @@ class DeclaredRoutePort:
         if match is None:
             return "", ""
         return match.group("scope").casefold(), match.group("route").rstrip("/").casefold()
+
+    def compose_contract_route(self, scope: str, route: str) -> str:
+        """The inverse of `contract_route_identity`: build the route for one (scope, route)."""
+        if not self.contract_route_template:
+            raise ValueError("this adapter declares no contract route template")
+        if not isinstance(scope, str) or not scope or not isinstance(route, str) or not route:
+            raise ValueError("scope and route must be non-empty strings")
+        return self.contract_route_template.format(scope=scope, route=route)
 
     def discover_source_scopes(self, observation: object) -> frozenset[str]:
         scopes = set()
@@ -443,6 +464,22 @@ class ApplicationPorts:
         )
         if not all(checks):
             raise TypeError("application ports do not implement the required contracts")
+
+
+@runtime_checkable
+class SourceCompiler(Protocol):
+    """Read one application's own declarative configuration into a cited ``SourceMap``.
+
+    Unlike the five ``ApplicationPorts``, a compiler has no place in a live session: it runs
+    offline, once per deployment release, against a version-bound source tree, and its output
+    -- a ``SourceMap`` of ``SourceRelation`` triples, each carrying a checkable citation -- is
+    what a session is later handed as ``source_map``. Every application distribution that
+    offers source-backed knowledge implements this against its own declarative shape (OFBiz's
+    ``web_operation_agent_ofbiz.OFBizCompiler`` reads XML controller and widget descriptors);
+    the core Agent never reads application source itself.
+    """
+
+    def compile(self) -> SourceMap: ...
 
 
 @runtime_checkable

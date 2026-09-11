@@ -33,7 +33,7 @@ class TheToolSurfaceFollowsTheActionPolicy(unittest.TestCase):
             task=TaskSpec("T", "inspect"), arm="S", chat=_Chat([]),
             browser=_Browser([_obs(1)]), control=_Control([[], []]),
             ledger=SessionLedger(Path(self.directory.name) / "audit.jsonl", "t"),
-            attestation=None, disabled_actions=frozenset(disabled))
+            disabled_actions=frozenset(disabled))
 
     def test_a_disabled_action_is_absent_from_the_tools_the_model_sees(self):
         offered = _names(self._session({"click", "fill"}).tool_schemas())

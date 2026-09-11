@@ -8,7 +8,8 @@ import unittest
 
 from web_operation_agent.grounding import (NOT_APPLICABLE, REFUTED, SATISFIED, WRITE_NONE,
                                            WRITE_REFUSED, PlanState)
-from web_operation_agent.integrations.ofbiz import ofbiz_route_identity as route_of
+from web_operation_agent_ofbiz.route import OFBIZ_ROUTE_PORT
+from web_operation_agent_ofbiz.route import ofbiz_route_identity as route_of
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionReceipt, ElementRef,
                                          OperationContract, PageObservation)
 
@@ -192,14 +193,16 @@ class WebappIdentityInCitations(unittest.TestCase):
                                         (20, 22))])
 
     def test_its_own_applications_evidence_supports_it(self):
-        from web_operation_agent.contract import SupportIndex
-        idx = SupportIndex(self._map())
+        from web_operation_agent.contract import SupportIndex, _segment_from_template
+        idx = SupportIndex(self._map(),
+                           segment=_segment_from_template(OFBIZ_ROUTE_PORT.contract_route_template))
         self.assertTrue(idx.supports([_key(idx, "beta")], "edit", "beta"))
 
     def test_a_citation_about_another_application_does_not_support_the_step(self):
         """Request identity includes the application when names overlap."""
-        from web_operation_agent.contract import SupportIndex
-        idx = SupportIndex(self._map())
+        from web_operation_agent.contract import SupportIndex, _segment_from_template
+        idx = SupportIndex(self._map(),
+                           segment=_segment_from_template(OFBIZ_ROUTE_PORT.contract_route_template))
         self.assertFalse(idx.supports([_key(idx, "alpha")], "edit", "beta"),
                          "alpha's evidence is not evidence about beta's request")
 

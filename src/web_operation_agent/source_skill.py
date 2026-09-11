@@ -10,6 +10,7 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
+from .application import ApplicationRoutePort
 from .schemas import SourceMap, SourceRelation
 
 
@@ -72,8 +73,11 @@ class SourceSkillDraft:
 class SourceSkillBootstrapper:
     """Build one route Skill from unambiguous, cited descriptor relations."""
 
-    def __init__(self, source_map: SourceMap):
+    def __init__(self, source_map: SourceMap, *, route_port: ApplicationRoutePort):
+        if not isinstance(route_port, ApplicationRoutePort):
+            raise TypeError("route_port must implement ApplicationRoutePort")
         self.source_map = source_map
+        self.route_port = route_port
 
     def search(self, query: str, webapp: str, limit: int = 5) -> tuple[dict, ...]:
         """Rank declared view-only requests from task words; page/menu links are not required."""
@@ -165,7 +169,7 @@ class SourceSkillBootstrapper:
             "intent": f"Open the read-only {title} screen and stop before submitting its form.",
             "triggers": triggers,
             "current_webapp": webapp,
-            "route_template": f"/{webapp}/control/{request}",
+            "route_template": self.route_port.compose_contract_route(webapp, request),
             "parameters": [],
             "expected_text": list(expected_text),
             "provenance": list(_refs(used)),
@@ -186,10 +190,11 @@ class SourceSkillBootstrapper:
 class SourceEvidenceProvider:
     """Bounded search and slice reads over evidence already admitted to the SourceMap."""
 
-    def __init__(self, source_map: SourceMap, source_root: str | Path | None = None):
+    def __init__(self, source_map: SourceMap, source_root: str | Path | None = None, *,
+                 route_port: ApplicationRoutePort):
         self.source_map = source_map
         self._evidence = source_map.evidence_index()
-        self._search = SourceSkillBootstrapper(source_map)
+        self._search = SourceSkillBootstrapper(source_map, route_port=route_port)
         self.source_root = Path(source_root).resolve() if source_root is not None else None
 
     def search_source(self, query: str, webapp: str, limit: int = 5) -> tuple[dict, ...]:

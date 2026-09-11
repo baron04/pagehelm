@@ -286,7 +286,6 @@ class AgentTurnExecutor:
                  run_id_factory: RunIdFactory,
                  answer_renderer: AnswerRenderer = render_neutral_user_answer,
                  ledger_factory: LedgerFactory = SessionLedger,
-                 attestation=None,
                  source_map=None,
                  conversation_state: ConversationState | None = None):
         self.channel = channel
@@ -318,7 +317,6 @@ class AgentTurnExecutor:
         self.run_id_factory = run_id_factory
         self.answer_renderer = answer_renderer
         self.ledger_factory = ledger_factory
-        self.attestation = attestation
         self.source_map = source_map
         if self.config.source_affordance_mode == "auto" and source_map is None:
             raise ValueError("auto source affordances require a version-bound SourceMap")
@@ -469,7 +467,6 @@ class AgentTurnExecutor:
             browser=browser,
             control=self.control,
             ledger=ledger,
-            attestation=self.attestation,
             source_map=self.source_map,
             source_contract=False,
             source_affordance_mode=self.config.source_affordance_mode,

@@ -1249,7 +1249,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                     session = ServerAgentSession(
                         task=TaskSpec("embedded-runtime", "Open the order details"), arm="P", chat=chat,
                         browser=remote, control=_Control([[], [], [], []]), ledger=ledger,
-                        attestation=None, step_budget=4, wall_budget_s=15,
+                        step_budget=4, wall_budget_s=15,
                         run_id="embedded-react",
                     )
                     session.entry_observation = first

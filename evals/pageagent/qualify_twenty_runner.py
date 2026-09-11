@@ -12,7 +12,7 @@ from evals.pageagent.twenty_runner import PageAgentTwentyConfig, run_case
 from evals.twenty.evaluator import digest_json, evaluate, validate_state
 from evals.twenty.fixture import TwentyPostgresFixture, atomic_write_json, utc_now
 from evals.twenty.taskset import instantiate_task, validate_task_set
-from web_operation_agent.twenty import TwentyApplicationAdapter
+from web_operation_agent_twenty.adapter import TwentyApplicationAdapter
 
 
 QUALIFICATION_VERSION = 1

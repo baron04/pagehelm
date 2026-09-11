@@ -155,7 +155,6 @@ SCORABLE_TERMINAL_REASONS = frozenset({
 
 #: Reasons that invalidate a run: apparatus, not behaviour. Never scored.
 INVALIDATING_TERMINAL_REASONS = frozenset({
-    "attestation_failed",
     "transport_error",
     "browser_crashed",
     "control_plane_error",

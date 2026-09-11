@@ -8,8 +8,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from web_operation_agent.sourcemap import OFBizCompiler
+from web_operation_agent.application import SourceCompiler
 from web_operation_agent.sourcetree import SourceTree
+from web_operation_agent_ofbiz.sourcemap import OFBizCompiler
 
 POLICY = {
     "repository_id": "fixture/invented", "release": "v0",
@@ -147,6 +148,13 @@ def build(tmp: Path, which) -> SourceTree:
 
 def compile_fixture(tmp: Path, *which):
     return OFBizCompiler(build(tmp, which), "fixture-attestation").compile()
+
+
+class PortConformance(unittest.TestCase):
+    def test_ofbiz_compiler_satisfies_the_core_source_compiler_port(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            compiler = OFBizCompiler(build(Path(tmp), ()), "fixture-attestation")
+        self.assertIsInstance(compiler, SourceCompiler)
 
 
 class Extraction(unittest.TestCase):

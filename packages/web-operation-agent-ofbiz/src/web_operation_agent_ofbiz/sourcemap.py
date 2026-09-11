@@ -31,9 +31,9 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 
-from .schemas import SCHEMA_VERSIONS, EvidenceRef, SourceMap, SourceRelation
-from .sourcetree import AccessDenied, SourceTree
-from .xmlscan import XMLScanError, parse
+from web_operation_agent.schemas import SCHEMA_VERSIONS, EvidenceRef, SourceMap, SourceRelation
+from web_operation_agent.sourcetree import AccessDenied, SourceTree
+from web_operation_agent.xmlscan import XMLScanError, parse
 
 LABEL_RE = re.compile(r"\$\{uiLabelMap\.([A-Za-z0-9_]+)\}")
 CONTROLLER_RE = re.compile(r"^(applications|framework|plugins)/([^/]+)/webapp/([^/]+)/WEB-INF/[^/]*controller[^/]*\.xml$")

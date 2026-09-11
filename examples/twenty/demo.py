@@ -28,7 +28,7 @@ from web_operation_agent.model import ChatModel, SpendMeter, load_env
 from web_operation_agent.mutation import SQLiteMutationJournal
 from web_operation_agent.privacy import redact_sensitive_assignments, redact_session_handoffs
 from web_operation_agent.product import AgentTurnConfig, AgentTurnExecution, AgentTurnExecutor
-from web_operation_agent.twenty import TwentyApplicationAdapter
+from web_operation_agent_twenty.adapter import TwentyApplicationAdapter
 from web_operation_agent.application import bind_application
 
 
@@ -421,7 +421,6 @@ def build_conversation(
         application=application,
         control=ReadOnlyControl(),
         run_id_factory=lambda _message: f"{run_prefix}-{uuid.uuid4().hex[:12]}",
-        attestation=None,
     )
     return LiveConversationRunner(channel, executor=executor)
 

@@ -147,7 +147,7 @@ _UUID = re.compile(
 _DOMAIN = re.compile(
     r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
     r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?", re.I)
-_SKILL_RESOURCE_ROOT = ("skills", "twenty")
+_SKILL_RESOURCE_ROOT = ("skills",)
 _QUERY_SKILL_RESOURCE = "companies-query.json"
 _PEOPLE_SKILL_RESOURCE = "people-query.json"
 _OPPORTUNITIES_SKILL_RESOURCE = "opportunities-query.json"
@@ -163,10 +163,10 @@ _MAX_COMPANY_RECORDS = 2_000
 
 
 def _packaged_skill(filename: str) -> BusinessSkill:
-    artifact = resources.files("web_operation_agent")
+    artifact = resources.files("web_operation_agent_twenty")
     for part in (*_SKILL_RESOURCE_ROOT, filename):
         artifact = artifact.joinpath(part)
-    artifact_uri = "package://web_operation_agent/" + "/".join(
+    artifact_uri = "package://web_operation_agent_twenty/" + "/".join(
         (*_SKILL_RESOURCE_ROOT, filename))
     try:
         raw = artifact.read_bytes()

@@ -1,8 +1,14 @@
 """Typed source affordances are conservative, deterministic and source-bound."""
 import unittest
 
-from web_operation_agent.affordance import resolve_source_affordances
+from web_operation_agent.affordance import resolve_source_affordances as _resolve_source_affordances
+from web_operation_agent_ofbiz.route import OFBIZ_ROUTE_PORT
 from web_operation_agent.schemas import EvidenceRef, SourceMap, SourceRelation
+
+
+def resolve_source_affordances(*args, **kwargs):
+    kwargs.setdefault("route_port", OFBIZ_ROUTE_PORT)
+    return _resolve_source_affordances(*args, **kwargs)
 
 
 def ref(line: int) -> EvidenceRef:

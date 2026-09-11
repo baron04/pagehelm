@@ -85,17 +85,24 @@ class SourceTree:
         self._files: list[str] | None = None
 
     @staticmethod
-    def load(name: str, source_root: Path | str) -> "SourceTree":
-        """Load packaged allow/deny policy and bind it to a caller-owned source root."""
+    def load(name: str, source_root: Path | str, *,
+             package: str = "web_operation_agent") -> "SourceTree":
+        """Load one distribution's packaged allow/deny policy, bound to a caller-owned root.
+
+        ``package`` is the importable package that ships ``policies/<name>.json`` -- the core
+        package ships none of its own; an application distribution such as
+        ``web_operation_agent_ofbiz`` ships its own policy under its own package name.
+        """
         if (not isinstance(name, str) or not name
                 or not re.fullmatch(r"[A-Za-z0-9_.-]+", name)):
             raise ValueError("source policy name is invalid")
-        policy_file = resources.files("web_operation_agent").joinpath(
-            "policies", f"{name}.json")
+        if not isinstance(package, str) or not re.fullmatch(r"[A-Za-z0-9_.]+", package):
+            raise ValueError("source policy package is invalid")
+        policy_file = resources.files(package).joinpath("policies", f"{name}.json")
         try:
             policy = json.loads(policy_file.read_text(encoding="utf-8"))
         except FileNotFoundError as exc:
-            raise ValueError(f"unknown source policy {name!r}") from exc
+            raise ValueError(f"unknown source policy {name!r} in package {package!r}") from exc
         return SourceTree(policy, source_root)
 
     def available(self) -> bool:

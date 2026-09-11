@@ -37,7 +37,6 @@ class SessionFixture:
             "browser": _Browser([_obs(1)]),
             "control": _Control([[], []]),
             "ledger": SessionLedger(self.root / f"audit-{self._sessions}.jsonl", "fixture"),
-            "attestation": None,
         }
         arguments.update(overrides)
         return ServerAgentSession(**arguments)

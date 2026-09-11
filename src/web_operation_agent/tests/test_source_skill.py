@@ -4,9 +4,19 @@ import unittest
 import tempfile
 from pathlib import Path
 
+from web_operation_agent_ofbiz.route import OFBIZ_ROUTE_PORT
 from web_operation_agent.schemas import EvidenceRef, SourceMap, SourceRelation
-from web_operation_agent.source_skill import (SourceEvidenceProvider,
-                                               SourceSkillBootstrapper, humanize)
+from web_operation_agent.source_skill import (SourceEvidenceProvider as _SourceEvidenceProvider,
+                                               SourceSkillBootstrapper as _SourceSkillBootstrapper,
+                                               humanize)
+
+
+def SourceSkillBootstrapper(source_map):
+    return _SourceSkillBootstrapper(source_map, route_port=OFBIZ_ROUTE_PORT)
+
+
+def SourceEvidenceProvider(source_map, source_root=None):
+    return _SourceEvidenceProvider(source_map, source_root, route_port=OFBIZ_ROUTE_PORT)
 
 
 def _row(kind, subject, obj, line, **attrs):

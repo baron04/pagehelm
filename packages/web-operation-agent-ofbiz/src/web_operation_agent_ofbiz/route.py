@@ -1,7 +1,7 @@
 """Apache OFBiz route semantics for the optional legacy source integration."""
 from __future__ import annotations
 
-from ..application import DeclaredRoutePort
+from web_operation_agent.application import DeclaredRoutePort
 
 
 OFBIZ_ROUTE_PORT = DeclaredRoutePort(
@@ -12,6 +12,7 @@ OFBIZ_ROUTE_PORT = DeclaredRoutePort(
     }),
     contract_route_pattern=(
         r"/(?P<scope>[A-Za-z0-9_]+)/control/(?P<route>[^?;#]+)"),
+    contract_route_template="/{scope}/control/{route}",
     application_entry_patterns=(r"/[A-Za-z0-9_]+/control/main",),
 )
 

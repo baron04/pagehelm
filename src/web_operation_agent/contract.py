@@ -455,8 +455,8 @@ Rules:
 worth more than a confident guess.
 * "landmark" is the visible text you expect on the page after that step, when a fact \
 tells you what it is; otherwise leave it "".
-* Write a request as the bare name the facts use -- `findPayments`, not \
-`/accounting/control/findPayments` -- and never name one you were not shown.
+* Write a request as the bare name the facts use -- `findPayments`, not a full path such as \
+the deployment's own servlet prefix -- and never name one you were not shown.
 * "mutation" predicts the request the browser submits to change data, not a downstream \
 server-side continuation. A controller response with type=request runs its target on the \
 server; describe that dependency in a note, not as another browser action. It is NOT \
@@ -603,29 +603,48 @@ class PlanningFailed(Exception):
     pass
 
 
-def normalise_request(webapp: str, request: str) -> str:
+def _segment_from_template(template: str) -> str:
+    """The literal path segment an adapter's `contract_route_template` wraps around routes.
+
+    A template shaped `/{scope}/<segment>/{route}` yields `<segment>`. Deriving it from the
+    one template an adapter already declares avoids a second field that could disagree with it.
+    """
+    if not template:
+        return ""
+    _before, _, rest = template.partition("{scope}")
+    middle, _, _after = rest.partition("{route}")
+    return middle.strip("/")
+
+
+def normalise_request(webapp: str, request: str, *, segment: str) -> str:
     """Accept the request name in either spelling the page presents it in.
 
-    A form's action reads `/accounting/control/findPayments`, and a model that copies it
-    verbatim is being reasonable -- it is quoting the deployment. Stripping the servlet
-    prefix is syntax, not task knowledge: it says nothing about *which* request is right,
-    it is applied identically to every planning mode, and multi-segment request names such as
-    `WorkEffortPartyAssigns/create` come through untouched. A request must not be rejected
-    merely because the model copied the deployment's servlet prefix.
+    A form's action reads a full path such as `/accounting/<segment>/findPayments`, and a
+    model that copies it verbatim is being reasonable -- it is quoting the deployment.
+    Stripping the servlet prefix is syntax, not task knowledge: it says nothing about *which*
+    request is right, it is applied identically to every planning mode, and multi-segment
+    request names such as `WorkEffortPartyAssigns/create` come through untouched. A request
+    must not be rejected merely because the model copied the deployment's servlet prefix.
+    `segment` is the adapter-declared path segment that wraps a route; an adapter with no such
+    convention passes an empty `segment` and only the bare-name fallback below ever applies.
     """
     u = (request or "").strip().strip("'\"")
     if u.startswith("http://") or u.startswith("https://"):
         u = u.split("://", 1)[1]
         u = u.split("/", 1)[1] if "/" in u else ""
     u = u.lstrip("/")
-    prefix = f"{webapp}/control/"
-    if u.startswith(prefix):
-        u = u[len(prefix):]
-    elif "/control/" in u:
-        u = u.split("/control/", 1)[1]
+    if segment:
+        prefix = f"{webapp}/{segment}/"
+        wrapped = f"/{segment}/"
+        if u.startswith(prefix):
+            u = u[len(prefix):]
+        elif wrapped in u:
+            u = u.split(wrapped, 1)[1]
+        elif u.startswith(f"{webapp}/"):
+            # `accounting/createPaymentApplication` -- the webapp named twice, once by the
+            # field and once in the value. Same concession, one segment shorter.
+            u = u[len(webapp) + 1:]
     elif u.startswith(f"{webapp}/"):
-        # `accounting/createPaymentApplication` -- the webapp named twice, once by the field
-        # and once in the value. Same concession, one segment shorter.
         u = u[len(webapp) + 1:]
     return u.split("?", 1)[0].rstrip("/")
 
@@ -634,9 +653,9 @@ def normalise_citation(key: str) -> str:
     """Accept a citation key however the model copied it out of the facts.
 
     The facts are rendered as `[path:start-end] text`, so a model that quotes its source
-    verbatim writes `[path:start-end]`. Rejecting that is the same mistake as rejecting
-    `/accounting/control/findPayments`: punctuation the model copied from our own
-    presentation rather than a claim about the application.
+    verbatim writes `[path:start-end]`. Rejecting that is the same mistake `normalise_request`
+    avoids: punctuation the model copied from our own presentation is not a claim about the
+    application.
     """
     return (key or "").strip().strip("[]").strip().strip("`").strip()
 
@@ -651,54 +670,60 @@ def split_handler_subject(subject: str) -> tuple[str, str]:
     return webapp.lower(), request.lower()
 
 
-def qualified_request(uri: str, default_webapp: str = "") -> str:
+def qualified_request(uri: str, *, segment: str, default_webapp: str = "") -> str:
     """`webapp/request`, lowercased, for comparing one deployment's requests with each other.
 
     A target that carries its own application keeps it: inter-application menu links are real
     and re-homing them to the linking application would lose the very fact they record. A bare
-    name takes the application of whatever declared it.
+    name takes the application of whatever declared it. `segment` is the same adapter-declared
+    wrapper `normalise_request` takes; without one, nothing proves an application prefix and
+    every uri is treated as a bare request.
     """
     u = (uri or "").strip().strip("'\"")
     if "://" in u:
         u = u.split("://", 1)[1]
         u = u.split("/", 1)[1] if "/" in u else ""
     cleaned = u.strip("/")
-    if "/control/" in cleaned:
-        head, _, rest = cleaned.partition("/control/")
+    wrapped = f"/{segment}/" if segment else ""
+    if wrapped and wrapped in cleaned:
+        head, _, rest = cleaned.partition(wrapped)
         webapp = head.rsplit("/", 1)[-1]
     else:
-        # Only `/control/` proves an application prefix. A bare `a/b` is ambiguous and is far
-        # more often a request name that contains a slash -- OFBiz has `LampSchedule/create` --
-        # than an application. Reading the first segment as the application turned that request
-        # into an application called LampSchedule and dropped the step that named it.
+        # Only the adapter's own wrapper proves an application prefix. A bare `a/b` is
+        # ambiguous and is far more often a request name that contains a slash -- OFBiz has
+        # `LampSchedule/create` -- than an application. Reading the first segment as the
+        # application turned that request into an application called LampSchedule and dropped
+        # the step that named it.
         webapp, rest = "", cleaned
-    return f"{(webapp or default_webapp or '').lower()}/{bare_request(rest).lower()}"
+    return f"{(webapp or default_webapp or '').lower()}/{bare_request(rest, segment=segment).lower()}"
 
 
-def bare_request(uri: str) -> str:
+def bare_request(uri: str, *, segment: str) -> str:
     """A request name with any servlet path stripped, without knowing the webapp.
 
-    `normalise_request` needs the webapp to strip `<webapp>/control/`; the source map holds
+    `normalise_request` needs the webapp to strip `<webapp>/<segment>/`; the source map holds
     targets written by whoever authored the descriptor -- inter-app menu links carry the full
-    `/ap/control/findPayments`, ordinary ones carry the bare name. Both must compare equal or
-    a citation that is genuinely about a request is read as being about nothing.
+    `/ap/<segment>/findPayments`, ordinary ones carry the bare name. Both must compare equal
+    or a citation that is genuinely about a request is read as being about nothing.
     """
     u = (uri or "").strip().strip("'\"")
     if "://" in u:
         u = u.split("://", 1)[1]
         u = u.split("/", 1)[1] if "/" in u else ""
-    if "/control/" in u:
-        u = u.split("/control/", 1)[1]
+    wrapped = f"/{segment}/" if segment else ""
+    if wrapped and wrapped in u:
+        u = u.split(wrapped, 1)[1]
     return u.lstrip("/").split("?", 1)[0].rstrip("/")
 
 
-def normalise_contract(contract: OperationContract) -> OperationContract:
+def normalise_contract(contract: OperationContract, *, segment: str) -> OperationContract:
     def cites(seq):
         return tuple(normalise_citation(c) for c in seq)
 
     def fix(step):
         return ContractStep(intent=step.intent, webapp=step.webapp,
-                            request=normalise_request(step.webapp, step.request),
+                            request=normalise_request(step.webapp, step.request,
+                                                      segment=segment),
                             landmark=step.landmark, note=step.note,
                             citations=cites(step.citations))
     m = contract.mutation
@@ -709,7 +734,8 @@ def normalise_contract(contract: OperationContract) -> OperationContract:
         preconditions=list(contract.preconditions),
         steps=[fix(s) for s in contract.steps],
         mutation=(MutationSignature(webapp=m.webapp,
-                                    request=normalise_request(m.webapp, m.request),
+                                    request=normalise_request(m.webapp, m.request,
+                                                              segment=segment),
                                     required_params=m.required_params, service=m.service,
                                     citations=cites(m.citations)) if m else None),
         unknowns=list(contract.unknowns),
@@ -729,14 +755,15 @@ class SupportIndex:
     wrongly in prose, and it is not claimed to.
     """
 
-    def __init__(self, smap: SourceMap):
+    def __init__(self, smap: SourceMap, *, segment: str):
+        self._segment = segment
         # Key by the full `webapp/request`: request names such as `edit` and `view` can occur
         # in more than one application, and evidence from one must not support another.
         self.requests: dict[str, set[str]] = {}
         self.services: dict[str, set[str]] = {}
         service_requests: dict[str, set[str]] = {}
         # Which applications declare a controller entry of each bare name. A form or menu
-        # names its target the way its author wrote it -- sometimes `/ap/control/findPayments`,
+        # names its target the way its author wrote it -- sometimes `/ap/<segment>/findPayments`,
         # usually just `findPayments` -- and a form descriptor's subject is a file path, not an
         # application, so the owning application has to come from the declarations themselves.
         by_bare: dict[str, set[str]] = {}
@@ -766,8 +793,7 @@ class SupportIndex:
             for svc in services:
                 self.requests.setdefault(key, set()).update(service_requests.get(svc, set()))
 
-    @staticmethod
-    def _targets_of(obj: str, by_bare: dict[str, set[str]]) -> set[str]:
+    def _targets_of(self, obj: str, by_bare: dict[str, set[str]]) -> set[str]:
         """Which `webapp/request` a form or menu target refers to.
 
         A reference that carries its own application keeps it: inter-application menu links
@@ -776,7 +802,7 @@ class SupportIndex:
         declared by multiple applications -- resolves to neither, because its evidence cannot
         be attributed safely to a single application.
         """
-        qualified = qualified_request(obj)
+        qualified = qualified_request(obj, segment=self._segment)
         if not qualified.startswith("/"):
             return {qualified}
         bare = qualified.lstrip("/")
@@ -790,11 +816,11 @@ class SupportIndex:
         """Is any of these citations evidence about this application's request?"""
         if not request:
             return True
-        want = qualified_request(request, default_webapp=webapp)
+        want = qualified_request(request, segment=self._segment, default_webapp=webapp)
         return any(want in self.about(key) for key in citations)
 
 
-def prune_contract(contract: OperationContract, smap: SourceMap
+def prune_contract(contract: OperationContract, smap: SourceMap, *, segment: str
                    ) -> tuple[OperationContract, list[str]]:
     """Drop the moves this deployment does not have, or that nothing cited supports.
 
@@ -808,7 +834,7 @@ def prune_contract(contract: OperationContract, smap: SourceMap
     """
     handlers = {r.subject for r in smap.by_kind("request_handler")}
     targets = {r.object for r in smap.by_kind("form_target")}
-    support = SupportIndex(smap)
+    support = SupportIndex(smap, segment=segment)
     dropped: list[str] = []
 
     def keep(step, label):
@@ -956,11 +982,12 @@ class ContractPlanner:
     in machinery.
     """
 
-    def __init__(self, chat, smap: SourceMap | None = None,
+    def __init__(self, chat, smap: SourceMap | None = None, *, segment: str = "",
                  start_tokens: int = PLANNER_START_TOKENS,
                  max_growths: int = PLANNER_MAX_GROWTHS,
                  thinking_factor: float = PLANNER_THINKING_FACTOR):
         self.chat = chat
+        self.segment = segment
         self.map = smap
         self.start_tokens = start_tokens
         self.max_growths = max_growths
@@ -1014,14 +1041,16 @@ class ContractPlanner:
                     data = _extract_json(raw)
                     data.setdefault("schema_version", SCHEMA_VERSIONS["OperationContract"])
                     data.setdefault("task_ref", task_ref)
-                    contract = normalise_contract(OperationContract.from_json(data))
+                    contract = normalise_contract(
+                        OperationContract.from_json(data), segment=self.segment)
                     problems = validate_contract(contract, bundle, self.map)
                     if not problems and self.map is not None:
                         # Checking a plan against the deployment's descriptors is itself a use
                         # of source evidence, so it belongs to the arm that has it. Applying it
                         # to the page-only arm would quietly hand that arm the very thing the
                         # comparison is manipulating.
-                        contract, dropped = prune_contract(contract, self.map)
+                        contract, dropped = prune_contract(
+                            contract, self.map, segment=self.segment)
                         if not (contract.steps or contract.entry_candidates or contract.mutation):
                             problems = ["none of the moves in that contract are supported by "
                                         "the facts you cited for them"]

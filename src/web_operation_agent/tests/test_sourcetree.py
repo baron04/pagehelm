@@ -1,37 +1,9 @@
-import json
 import os
 import tempfile
 import unittest
-from importlib import resources
 from pathlib import Path
 
 from web_operation_agent.sourcetree import AccessDenied, SourceTree, _glob_match
-
-PRODUCT_POLICY = json.loads(
-    resources.files("web_operation_agent").joinpath("policies/ofbiz.json").read_text()
-)
-
-# This is the reviewed package contract. Keeping it in the product test makes widening the
-# source surface an explicit security change instead of inheriting another tool's registry.
-EXPECTED_ALLOW_GLOBS = {
-    "applications/**/webapp/**/WEB-INF/*controller*.xml",
-    "applications/**/widget/**/*.xml",
-    "applications/**/servicedef/*.xml",
-    "applications/**/config/*UiLabels.xml",
-    "framework/**/webapp/**/WEB-INF/*controller*.xml",
-    "framework/**/widget/**/*.xml",
-    "framework/**/servicedef/*.xml",
-    "framework/**/config/*UiLabels.xml",
-    "plugins/*/webapp/**/WEB-INF/*controller*.xml",
-    "plugins/*/widget/**/*.xml",
-}
-REQUIRED_DENY_GLOBS = {
-    "**/.env*", "**/*.key", "**/*.pem", "**/*.p12", "**/*.jks",
-    "**/secrets/**", "**/runtime/**", "**/upload/**", "**/uploads/**",
-    "**/cache/**", "**/*.sql", "**/*.sqlite", "**/*.db", "**/.git/**",
-    "**/node_modules/**", "**/build/**", "**/testdef/**", "**/data/demo/**",
-    "**/data/seed/**", "**/security/data/**",
-}
 
 
 def _tree(tmp: Path, policy_overrides=None) -> SourceTree:
@@ -94,29 +66,22 @@ class Policy(unittest.TestCase):
             with self.assertRaises(AccessDenied):
                 t.resolve("app/escape.xml")
 
-    def test_packaged_allowlist_cannot_be_widened_silently(self):
-        self.assertEqual(set(PRODUCT_POLICY["allow_globs"]), EXPECTED_ALLOW_GLOBS)
-
-    def test_packaged_policy_keeps_every_required_deny_rule(self):
-        missing = REQUIRED_DENY_GLOBS - set(PRODUCT_POLICY["deny_globs"])
-        self.assertEqual(missing, set(), f"product policy dropped deny rules: {sorted(missing)}")
-
-    def test_packaged_policy_contains_no_checkout_or_runtime_version(self):
-        self.assertNotIn("root", PRODUCT_POLICY)
-        self.assertNotIn("application_version", PRODUCT_POLICY)
-
-    def test_source_root_is_required_and_explicit(self):
-        with tempfile.TemporaryDirectory() as d:
-            root = Path(d).resolve()
-            tree = SourceTree.load("ofbiz", root)
-        self.assertEqual(tree.root, root)
+    def test_source_root_is_a_required_keyword_only_argument(self):
         with self.assertRaises(TypeError):
-            SourceTree.load("ofbiz")  # type: ignore[call-arg]
+            SourceTree.load("anything")  # type: ignore[call-arg]
+
+    def test_load_rejects_an_unknown_policy_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaisesRegex(ValueError, "unknown source policy"):
+                SourceTree.load("no-such-policy", Path(d).resolve())
 
     def test_a_policy_cannot_smuggle_in_a_local_source_root(self):
+        policy = {"repository_id": "fixture/app", "release": "v1",
+                  "allow_globs": ["app/*.xml"], "deny_globs": [],
+                  "root": ".q0-cache/old-checkout"}
         with tempfile.TemporaryDirectory() as d, self.assertRaisesRegex(
                 ValueError, "must not contain a local root"):
-            SourceTree({**PRODUCT_POLICY, "root": ".q0-cache/old-checkout"}, Path(d).resolve())
+            SourceTree(policy, Path(d).resolve())
 
 
 class Citations(unittest.TestCase):

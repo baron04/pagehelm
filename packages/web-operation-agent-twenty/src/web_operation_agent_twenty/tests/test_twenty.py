@@ -20,7 +20,7 @@ from web_operation_agent.business import (BusinessMutationIndeterminate,
 from web_operation_agent.identity import IdentityAssertion, PrincipalError
 from web_operation_agent.mutation import (MemoryMutationJournal,
                                           SQLiteMutationJournal)
-from web_operation_agent.twenty import (TwentyApplicationAdapter,
+from web_operation_agent_twenty.adapter import (TwentyApplicationAdapter,
                                         TwentyBusinessToolExecutor,
                                         TwentyOAuthTokenStore,
                                         TwentyPageSessionIdentityResolver,
@@ -65,7 +65,7 @@ class TwentyPackagedSkillTests(unittest.TestCase):
         ))
         self.assertEqual(
             skills[0].artifact_uri,
-            "package://web_operation_agent/skills/twenty/companies-query.json",
+            "package://web_operation_agent_twenty/skills/companies-query.json",
         )
         self.assertEqual(adapter.descriptor.application_id, "twenty")
         self.assertIs(bound.business_tools, adapter.business_tools)
@@ -139,11 +139,11 @@ class TwentyPackagedSkillTests(unittest.TestCase):
         self.assertEqual(card["tools"], ["query_companies", "create_company"])
         self.assertTrue(all(
             skill.artifact_uri.startswith(
-                "package://web_operation_agent/skills/twenty/")
+                "package://web_operation_agent_twenty/skills/")
             for skill in relevant))
 
     def test_explicit_filesystem_skill_paths_remain_supported(self):
-        packaged = resources.files("web_operation_agent").joinpath("skills", "twenty")
+        packaged = resources.files("web_operation_agent_twenty").joinpath("skills")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             query = root / "companies-query.json"
@@ -215,7 +215,7 @@ class TwentyNormalizationTests(unittest.TestCase):
         }}).encode())
         executor = TwentyBusinessToolExecutor(
             base_url="http://127.0.0.1:3000", tokens=Tokens())
-        with patch("web_operation_agent.twenty.urlopen", return_value=response) as opened:
+        with patch("web_operation_agent_twenty.adapter.urlopen", return_value=response) as opened:
             identity = executor.resolve_delegated_identity(now_ms=1_000_000)
 
         request = opened.call_args.args[0]
@@ -259,7 +259,7 @@ class TwentyNormalizationTests(unittest.TestCase):
         }}).encode())
         executor = TwentyBusinessToolExecutor(
             base_url="http://127.0.0.1:3000", tokens=Tokens())
-        with patch("web_operation_agent.twenty.urlopen",
+        with patch("web_operation_agent_twenty.adapter.urlopen",
                    side_effect=[expired, success]) as opened:
             identity = executor.resolve_delegated_identity(now_ms=1_000_000)
 
@@ -332,7 +332,7 @@ class TwentyPageSessionIdentityTests(unittest.TestCase):
                 base_url="http://127.0.0.1:3000",
                 storage_state=json.loads(state.read_text()),
             ).binding_digest(now_ms=1_000_000)
-            with patch("web_operation_agent.twenty.HTTPConnection", Connection):
+            with patch("web_operation_agent_twenty.adapter.HTTPConnection", Connection):
                 identity = resolver.resolve(lifetime_s=60, now_ms=1_000_000)
 
         connection = Connection.instance
@@ -515,7 +515,7 @@ class TwentyPaginationTests(unittest.TestCase):
                         "pageInfo": {"hasNextPage": True,
                                      "endCursor": "same-cursor"}}
 
-        with patch("web_operation_agent.twenty._COMPANY_PAGE_SIZE", 2):
+        with patch("web_operation_agent_twenty.adapter._COMPANY_PAGE_SIZE", 2):
             result = FixtureTwenty().execute("query_companies", {"limit": 5})
 
         completeness = result.content["completeness"]
@@ -548,8 +548,8 @@ class TwentyPaginationTests(unittest.TestCase):
                                      "endCursor": f"cursor-{self.page}"}}
 
         executor = FixtureTwenty()
-        with patch("web_operation_agent.twenty._COMPANY_PAGE_SIZE", 2), \
-                patch("web_operation_agent.twenty._MAX_COMPANY_PAGES", 2):
+        with patch("web_operation_agent_twenty.adapter._COMPANY_PAGE_SIZE", 2), \
+                patch("web_operation_agent_twenty.adapter._MAX_COMPANY_PAGES", 2):
             result = executor.execute("query_companies", {"limit": 5})
             self.assertEqual(
                 result.content["completeness"]["incomplete_reason"],
@@ -591,7 +591,7 @@ class TwentyMutationFaultTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             journal = SQLiteMutationJournal(Path(directory) / "mutations.sqlite3")
             executor = LostAcknowledgementTwenty()
-            skill_root = resources.files("web_operation_agent").joinpath("skills", "twenty")
+            skill_root = resources.files("web_operation_agent_twenty").joinpath("skills")
             skills = tuple(BusinessSkill.load(skill_root.joinpath(name)) for name in (
                 "companies-create.json", "people-query.json", "opportunities-query.json"))
             runtime = BusinessToolRuntime(
@@ -659,7 +659,7 @@ class TwentyOAuthRefreshTests(unittest.TestCase):
                 except BaseException as exc:  # pragma: no cover - asserted below
                     errors.append(exc)
 
-            with patch("web_operation_agent.twenty.urlopen", side_effect=open_refresh):
+            with patch("web_operation_agent_twenty.adapter.urlopen", side_effect=open_refresh):
                 threads = [threading.Thread(target=worker) for _ in range(8)]
                 for thread in threads:
                     thread.start()

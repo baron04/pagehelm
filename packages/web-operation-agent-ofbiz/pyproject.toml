@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "web-operation-agent-ofbiz"
+dynamic = ["version"]
+description = "Apache OFBiz route grammar, source compiler and App Skill provider for web-operation-agent"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = "MIT"
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Operating System :: POSIX",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+  "web-operation-agent",
+]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+include-package-data = true
+
+[tool.setuptools.dynamic]
+version = { attr = "web_operation_agent_ofbiz.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+exclude = ["web_operation_agent_ofbiz.tests*"]
+
+[tool.setuptools.package-data]
+web_operation_agent_ofbiz = [
+  "policies/*.json",
+]

@@ -32,7 +32,7 @@ from .browser import BrowserExecutor, TransportError, TurnCancelled
 from .business import (BusinessMutationIndeterminate, BusinessToolError,
                        BusinessToolResult, BusinessToolRuntime)
 from .contract import (ContractPlanner, EvidenceBundle, PlanningFailed, SourceRetriever,
-                       expand_terms)
+                       _segment_from_template, expand_terms)
 from .controlplane import ControlPlaneClient, ControlPlaneError
 from .egress import AuditedChat, ProviderEgressError
 from .grounding import (NOT_APPLICABLE, REFUTED, WRITE_MIXED, WRITE_PERMITTED, WRITE_REFUSED,
@@ -334,7 +334,7 @@ class RunResult:
 class ServerAgentSession:
     def __init__(self, *, task: TaskSpec, arm: str, chat, browser: BrowserExecutor,
                  control: ControlPlaneClient, ledger: SessionLedger,
-                 attestation, source_map=None, plan_from_page: bool = False,
+                 source_map=None, plan_from_page: bool = False,
                  oracle_contract: OperationContract | None = None,
                  step_budget: int = 20, wall_budget_s: int = 300, run_id: str | None = None,
                  terms_cache=None, keep_observations: int = 3, runtime_source: bool = False,
@@ -434,7 +434,6 @@ class ServerAgentSession:
         self.browser = browser
         self.control = control
         self.ledger = ledger
-        self.attestation = attestation
         self.source_map = source_map
         # By default, providing a SourceMap enables source-backed contract compilation. A
         # caller may disable that path while retaining the map only for runtime resolution.
@@ -648,7 +647,10 @@ class ServerAgentSession:
             # the same slice later.
             self.ledger.append("evidence_retrieved", **self.bundle.stats,
                                evidence=list(self.bundle.lines))
-            planner = ContractPlanner(self.chat, self.source_map if source_contract else None)
+            segment = (_segment_from_template(self.application_routes.contract_route_template)
+                      if self.application_routes is not None else "")
+            planner = ContractPlanner(self.chat, self.source_map if source_contract else None,
+                                      segment=segment)
             # The planner receives the same public task, scope and current entry observation
             # as the acting agent. The test suite guards this complete input contract.
             self.contract, attempts = planner.plan(self.task.task_ref, self.task.public_text(),
@@ -2094,7 +2096,8 @@ class ServerAgentSession:
         if mode == "auto" and self.served_webapps:
             candidates = resolve_source_affordances(
                 self.source_map, task=self.task.public_text(), query=query,
-                page_text=_render_observation(obs), served_webapps=self.served_webapps)
+                page_text=_render_observation(obs), served_webapps=self.served_webapps,
+                route_port=self.application_routes)
         self._source_affordances = {candidate.candidate_id: candidate
                                     for candidate in candidates}
         payload = [candidate.to_json() for candidate in candidates]

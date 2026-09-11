@@ -42,7 +42,7 @@ from evals.twenty.breadth_taskset import validate_breadth_execution_case
 from web_operation_agent.business import BusinessToolError
 from web_operation_agent.identity import OperationContext, PrincipalError
 from web_operation_agent.model import ChatModel, SpendMeter, load_env
-from web_operation_agent.twenty import TwentyApplicationAdapter
+from web_operation_agent_twenty.adapter import TwentyApplicationAdapter
 
 
 RUNNER_VERSION = 1
