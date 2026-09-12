@@ -33,10 +33,12 @@ both do.
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from datetime import datetime, timezone
 
 from web_operation_agent.application import (
     APPLICATION_ADAPTER_VERSION, ApplicationDescriptor, ApplicationPorts,
@@ -55,6 +57,7 @@ from web_operation_agent.business import (
 from web_operation_agent.identity import (IdentityAssertion, PrincipalContext,
                                           PrincipalError, PRINCIPAL_CONTEXT_VERSION,
                                           bind_matching_identity)
+from web_operation_agent.evidence import Origin, QueryEvidence, RecordEvidence
 
 
 #: Skills are artifacts, not literals. A real integration ships one file per Skill and
@@ -139,7 +142,8 @@ class _ContactsToolExecutor:
         if name != "list_contacts" or set(args) - {"name_contains"}:
             raise BusinessToolError("invalid contact query")
         query = args.get("name_contains", "")
-        if not isinstance(query, str) or len(query) > 120:
+        if (not isinstance(query, str) or len(query) > 120
+                or re.search(r"[\x00-\x1f\x7f]", query)):
             raise BusinessToolError("name_contains must be a string of at most 120 characters")
         try:
             with urllib.request.urlopen(self.origin + "/api/contacts", timeout=3) as response:
@@ -150,9 +154,15 @@ class _ContactsToolExecutor:
         if not isinstance(source, list):
             raise BusinessToolError("the contacts API returned an invalid document")
         matched = []
+        identities = set()
         for raw in source:
             if not isinstance(raw, dict) or set(raw) != {"id", "name", "email"}:
                 raise BusinessToolError("the contacts API returned an invalid record")
+            if (any(not isinstance(raw[key], str) for key in ("id", "name", "email"))
+                    or not re.fullmatch(r"[a-z0-9-]{1,120}", raw["id"])
+                    or raw["id"] in identities):
+                raise BusinessToolError("the contacts API returned an invalid record identity or field")
+            identities.add(raw["id"])
             if query and query.casefold() not in str(raw["name"]).casefold():
                 continue
             matched.append({
@@ -162,6 +172,18 @@ class _ContactsToolExecutor:
                 "ui_path": f"/contacts/{raw['id']}",
             })
         routes = tuple(item["ui_path"] for item in matched)
+        conditions = (f"name case-insensitive substring {query!r}",) if query else ("no filter",)
+        origin = Origin(kind="typed", reference="list_contacts", observed_at=datetime.now(timezone.utc).isoformat(),
+                        scope="synthetic_local_workspace; " + "; ".join(conditions))
+        evidence = [QueryEvidence(evidence_id="query#1", origin=origin, collection="contacts",
+                                  conditions=conditions, matched_count=len(matched),
+                                  records_scanned=len(source), covers_whole_scope=True)]
+        for row in matched:
+            for field in ("name", "email"):
+                evidence.append(RecordEvidence(
+                    evidence_id=f"record#{len(evidence)}", origin=origin,
+                    record_id=f"contact/{row['id']}", field_name=field, field_meaning=field,
+                    field_was_read=True, value=row[field] or None, value_type="text"))
         return BusinessToolResult(
             content={
                 "contacts": matched,
@@ -181,6 +203,7 @@ class _ContactsToolExecutor:
                 "source_complete": True,
             },
             allowed_routes=routes,
+            evidence=tuple(evidence),
         )
 
     # -- the write -----------------------------------------------------------------------

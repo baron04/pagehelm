@@ -48,14 +48,14 @@ READ_WALKTHROUGH: tuple[tuple[str, dict], ...] = (
     ("load_skill", {"skill_id": "minimal.contacts.query"}),
     ("list_contacts", {"name_contains": "Grace Hopper"}),
     ("goto", {"url": "/contacts/grace-hopper"}),
-    ("finish", {"done": True, "why": "Opened Grace Hopper's current contact record."}),
+    ("finish", {"outcome": "acted"}),
 )
 WRITE_WALKTHROUGH: tuple[tuple[str, dict], ...] = (
     ("load_skill", {"skill_id": "minimal.contacts-create"}),
     ("list_contacts", {"name_contains": "Radia"}),
     ("create_contact", {"name": "Radia Perlman", "email": "radia@example.test"}),
     ("goto", {"url": "/contacts/radia-perlman"}),
-    ("finish", {"done": True, "why": "Created and opened Radia Perlman's contact."}),
+    ("finish", {"outcome": "acted"}),
 )
 
 

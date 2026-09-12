@@ -6,6 +6,7 @@ import tempfile
 import unittest
 import urllib.request
 from pathlib import Path
+from unittest.mock import patch
 
 from web_operation_agent.model import ProviderError, require_chat_port
 from examples.contacts.app import (DEMO_API_TOKEN, DEMO_SESSION_COOKIE,
@@ -99,6 +100,27 @@ class MinimalDemoBrowserTests(unittest.TestCase):
             self.assertIn("business_skill_loaded", events)
             self.assertIn("business_tool_result", events)
             self.assertIn("action_receipt", events)
+
+    def test_default_product_renders_a_computed_answer_without_page_actions(self):
+        script = (
+            ("load_skill", {"skill_id": "minimal.contacts.query"}),
+            ("list_contacts", {}),
+            ("compute", {"operation": "count", "dataset_ref": "call2-query#1"}),
+            ("finish", {"outcome": "answered", "answer": {
+                "version": 1, "coverage": "complete", "conclusions": [
+                    {"kind": "aggregate", "evidence_ref": "calc#3"}]}}),
+        )
+        with tempfile.TemporaryDirectory() as directory, patch(
+                "examples.contacts.demo._chat", return_value=(ScriptedDemoChat(script), None)):
+            summary = run_demo(DemoConfig(
+                tasks=("How many contacts are there?",), headless=True,
+                output_dir=Path(directory), keep_open_seconds=0, turn_timeout_s=30))
+        turn = summary["turns"][0]
+        self.assertEqual(turn["status"], "finished")
+        self.assertIn("Count", turn["answer"])
+        self.assertIn("3", turn["answer"])
+        self.assertNotIn("grace@example.test", turn["answer"])
+        self.assertEqual(turn["page_actions"], 0)
 
 
 if __name__ == "__main__":
