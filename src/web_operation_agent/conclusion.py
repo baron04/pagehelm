@@ -191,7 +191,23 @@ class Undetermined:
                 "scope": item.origin.scope, "source_kind": item.origin.kind}
 
 
-Conclusion = Union[FieldValue, Selection, Aggregate, NotFound, Undetermined]
+@dataclass(frozen=True, slots=True)
+class PageFact:
+    """Quote what this page observation contained, without assigning business meaning."""
+
+    evidence_id: str
+    kind = "page_observation"
+
+    def verify(self, turn: TurnEvidence) -> dict:
+        item = _one(turn, self.evidence_id, PageEvidence, "a page observation")
+        if item.saw == "control_only" or item.value is None:
+            raise ConclusionRefused("the page showed only a control; its value is undetermined")
+        return {"kind": self.kind, "detail": item.detail, "value": item.value,
+                "page_route": item.page_route, "scope": item.origin.scope,
+                "source_kind": "page"}
+
+
+Conclusion = Union[FieldValue, Selection, Aggregate, NotFound, Undetermined, PageFact]
 
 #: `action_succeeded` is deliberately absent. Whether a write happened already comes from the
 #: mutation journal's terminal state and a same-actor readback, and routing it through a

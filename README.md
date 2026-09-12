@@ -38,6 +38,8 @@ For integrations that return typed answer evidence, read-only answers use a vers
 
 The Odoo read tools additionally expose phone/mobile/email, order and invoice dates, and invoice amounts due. Date and customer-ID filters execute in the adapter; currency follows each record rather than the company default. See [Odoo tool semantics](examples/odoo/README.md#tools) for date boundaries, supported scopes and scan consistency.
 
+The default product also offers `observe(answer_evidence=true)` for bounded page-local answers. It distinguishes a returned control value from a label with no readable value, and renders literal page excerpts with their page source. Page references expire on the next observation; they cannot be used as API records or as a complete dataset for arithmetic. This explicit path is independent of business tools. It does not automatically verify every free-form answer from a legacy page-only turn.
+
 ## Architecture
 
 ```mermaid

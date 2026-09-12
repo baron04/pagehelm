@@ -311,6 +311,19 @@ class TurnEvidence:
 
     _items: dict[str, Evidence] = field(default_factory=dict)
 
+    def discard_pages(self) -> None:
+        """A newer observation invalidates page-local facts, never typed API reads."""
+        removed = {key for key, value in self._items.items() if isinstance(value, PageEvidence)}
+        # Defensive transitive invalidation also handles application-provided derivations.
+        while True:
+            derived = {key for key, value in self._items.items()
+                       if isinstance(value, (ComputationEvidence, SelectionEvidence))
+                       and removed.intersection(value.inputs)}
+            if derived <= removed:
+                break
+            removed |= derived
+        self._items = {key: value for key, value in self._items.items() if key not in removed}
+
     def capture(self, items: tuple[Evidence, ...], *, namespace: str) -> tuple[str, ...]:
         """Atomically import call-local evidence under host-owned identities.
 

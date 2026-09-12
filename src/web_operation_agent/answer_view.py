@@ -135,11 +135,16 @@ def render(answer: VerifiedAnswer, *, user_text: str, max_chars: int,
 
 def _one(words: dict, item: dict, *, presentation: str) -> list[str]:
     kind = item["kind"]
+    if kind == "page_observation":
+        label = "页面显示" if words is _WORDS["zh"] else "The page shows"
+        return [f"**{label}**（{_literal(item['detail'])}）：{_literal(item['value'])}",
+                f"> {_source_line(words, item)} · {_literal(item['page_route'])} · "
+                f"{_literal(item['scope'])}"]
     if kind == "field_value":
         shown = _literal(item["value"]) if not item["empty"] else words["empty"]
         unit = f" {_literal(item['unit'])}" if item.get("unit") else ""
         return [f"**{_literal(item['field_meaning'])}**（{_literal(item['record_id'])}）：{shown}{unit}",
-                f"> {_source_line(words, item)} · {words['scope']}：{item['scope']}"]
+                f"> {_source_line(words, item)} · {words['scope']}：{_literal(item['scope'])}"]
     if kind == "selection":
         head = f"**{_literal(item['condition'])}**：{item['matched']} {words['matched']}"
         if item.get("fields"):
@@ -159,7 +164,7 @@ def _one(words: dict, item: dict, *, presentation: str) -> list[str]:
                     f"> {_source_line(words, item)} · {words['scope']}：{_literal(item['scope'])}"]
         rows = "".join(f"\n- {_literal(name)}" for name in item["members"])
         return [head + rows,
-                f"> {_source_line(words, item)} · {words['scope']}：{item['scope']}"]
+                f"> {_source_line(words, item)} · {words['scope']}：{_literal(item['scope'])}"]
     if kind == "aggregate":
         operation = item["operation"].partition("(")[0]
         chinese = words is _WORDS["zh"]
@@ -171,11 +176,11 @@ def _one(words: dict, item: dict, *, presentation: str) -> list[str]:
             label += "（仅限已读取范围）" if chinese else " (observed scope only)"
         unit = f" {_literal(item['unit'])}" if item.get("unit") else ""
         return [f"**{label}**：{_literal(item['value'])}{unit}",
-                f"> {_source_line(words, item)} · {words['scope']}：{item['scope']}"]
+                f"> {_source_line(words, item)} · {words['scope']}：{_literal(item['scope'])}"]
     if kind == "not_found":
         conditions = "；".join(_literal(x) for x in item["conditions"])
         return [f"**{words['not_found']}**：{_literal(item['looked_for'])}",
-                f"> {_source_line(words, item)} · {words['scope']}：{item['scope']}"
+                f"> {_source_line(words, item)} · {words['scope']}：{_literal(item['scope'])}"
                 f" · {conditions}"]
     if kind == "undetermined":
         return [f"**{words['undetermined']}**：{_literal(item['about'])}",

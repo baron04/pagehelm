@@ -28,6 +28,7 @@ from urllib.parse import urlencode, urljoin, urlsplit
 
 from .application import ApplicationRoutePort, SourceCapability
 from . import answer_protocol
+from . import page_answer
 from .answer_view import render_payload, unavailable_answer
 from .affordance import SourceAffordance, resolve_source_affordances
 from .browser import BrowserExecutor, TransportError, TurnCancelled
@@ -467,6 +468,7 @@ class ServerAgentSession:
                  keep_observations: int = 3,
                  disabled_actions: frozenset[str] | set[str] | None = None,
                  scope_first_policy: bool = False,
+                 page_answer_evidence: bool = False,
                  policy_block_limit: int | None = None,
                  knowledge_router: ApplicationKnowledgePort | None = None,
                  allow_application_entry: bool = False,
@@ -657,6 +659,10 @@ class ServerAgentSession:
         self._evidence_feedback = ""
         self._answer_repairs = 0
         self._answer_mode = False
+        if not isinstance(page_answer_evidence, bool):
+            raise ValueError("page_answer_evidence must be a boolean")
+        self.page_answer_evidence = page_answer_evidence
+        self._page_answer_digest = ""
         self._answer_action_receipt: dict | None = None
         self._latest_business_query_page_actions: int | None = None
         self.plain_business_answer_min_page_actions = \
@@ -931,6 +937,9 @@ class ServerAgentSession:
         step = 0
         successful_business_tools = 0
         while True:
+            if self._page_answer_digest and self._page_answer_digest != obs.content_digest:
+                self.evidence.discard_pages()
+                self._page_answer_digest = ""
             if self._cancel_requested():
                 return self._finish(
                     result, t0, "user_cancelled", "the user stopped this task",
@@ -1639,6 +1648,20 @@ class ServerAgentSession:
                                                 f"Available: {sorted(BROWSER_ACTIONS)} and finish.")]
                 continue
 
+            collect_page_answer = False
+            if name == "observe" and self.page_answer_evidence:
+                if (set(args) - {"answer_evidence"}
+                        or not isinstance(args.get("answer_evidence", False), bool)):
+                    messages += [_assistant_call(call), _tool_result(
+                        call, "observe accepts only an optional boolean answer_evidence.")]
+                    continue
+                collect_page_answer = args.get("answer_evidence", False)
+                if collect_page_answer:
+                    self._answer_mode = True
+                    self.evidence.discard_pages()
+                    self._page_answer_digest = ""
+                args = {}
+
             if name == "goto" and not source_route_read_only:
                 url = args.get("url")
                 if isinstance(url, str) and url in self._business_routes:
@@ -1669,6 +1692,7 @@ class ServerAgentSession:
                 return self._finish(
                     result, t0, "user_cancelled",
                     "the user stopped this task before browser dispatch", steps=step)
+            prior_page_epoch = obs.epoch
             try:
                 self._browser_attempts += 1
                 self._awaiting_control = action_may_write
@@ -1722,8 +1746,32 @@ class ServerAgentSession:
                 self.ledger.append("plan_awaiting_confirmation", step=step)
             note = self._ground(obs, receipt, write["state"], write["refused_requests"])
             self._sync_plan_message(messages)
-            messages += [_assistant_call(call),
-                         _tool_result(call, self._render(obs, receipt, note, write))]
+            page_feedback = ""
+            rendered_observation = obs
+            if collect_page_answer:
+                self._answer_mode = True
+                if (receipt.ok and receipt.action == "observe" and receipt.observation is not None
+                        and receipt.observation.epoch > prior_page_epoch):
+                    self.evidence.discard_pages()
+                    self._page_answer_digest = obs.content_digest
+                    clean = PageObservation.from_json(
+                        redact_sensitive_assignments(self.session_handoffs.redact(obs.to_json())))
+                    rendered_observation = clean
+                    try:
+                        refs = self.evidence.capture(page_answer.collect(clean, observed_at=str(time.time())),
+                                                     namespace=f"obs{step}")
+                        page_feedback = (answer_protocol.ANSWER_INSTRUCTIONS + "\n" +
+                                         answer_protocol.evidence_index(self.evidence, refs))
+                        self.ledger.append("page_answer_evidence", step=step, epoch=obs.epoch,
+                                           recorded=len(refs), digest=obs.content_digest)
+                    except (ValueError, TypeError, EvidenceUnknown):
+                        page_feedback = "PAGE EVIDENCE UNAVAILABLE: the observation could not support an answer."
+                else:
+                    page_feedback = "PAGE EVIDENCE UNAVAILABLE: observe did not return a successful fresh page."
+            feedback = self._render(rendered_observation, receipt, note, write)
+            if page_feedback:
+                feedback += "\n" + page_feedback
+            messages += [_assistant_call(call), _tool_result(call, feedback)]
             messages = _trim(messages, self.keep_observations)
 
     # -- grounding ---------------------------------------------------------------------
@@ -1760,6 +1808,9 @@ class ServerAgentSession:
         # browser action, so a run whose every page action is disabled can still end.
         tools = [tool for tool in TOOL_SCHEMAS
                  if tool["function"]["name"] not in self.disabled_actions]
+        if self.page_answer_evidence:
+            tools = [page_answer.OBSERVE_TOOL if tool["function"]["name"] == "observe"
+                     else tool for tool in tools]
         if self._structured_answer_required():
             tools = [answer_protocol.FINISH_ANSWER_TOOL if tool["function"]["name"] == "finish"
                      else tool for tool in tools]

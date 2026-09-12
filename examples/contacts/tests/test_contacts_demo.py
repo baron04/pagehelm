@@ -122,6 +122,22 @@ class MinimalDemoBrowserTests(unittest.TestCase):
         self.assertNotIn("grace@example.test", turn["answer"])
         self.assertEqual(turn["page_actions"], 0)
 
+    def test_page_answer_uses_a_real_observation_without_calling_the_contacts_api(self):
+        script = (("observe", {"answer_evidence": True}),
+                  ("finish", {"outcome": "answered", "answer": {
+                      "version": 1, "coverage": "complete", "conclusions": [
+                          {"kind": "page_observation", "evidence_ref": "obs1-page#1"}]}}))
+        with tempfile.TemporaryDirectory() as directory, patch(
+                "examples.contacts.demo._chat", return_value=(ScriptedDemoChat(script), None)):
+            summary = run_demo(DemoConfig(
+                tasks=("Quote the first text on this page.",), headless=True,
+                output_dir=Path(directory), keep_open_seconds=0, turn_timeout_s=30))
+            events = [json.loads(line) for line in next(Path(directory).glob("*/audit.jsonl")).read_text().splitlines()]
+        self.assertEqual(summary["turns"][0]["status"], "finished")
+        self.assertIn("source: page observation", summary["turns"][0]["answer"])
+        self.assertFalse(any(row["event"] == "business_tool_result" for row in events))
+        self.assertEqual(sum(row["event"] == "page_answer_evidence" for row in events), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

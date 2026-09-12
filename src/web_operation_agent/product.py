@@ -125,6 +125,7 @@ class AgentTurnConfig:
     transport_timeout_s: float = 60.0
     disabled_actions: frozenset[str] = frozenset()
     scope_first_policy: bool = True
+    page_answer_evidence: bool = True
     #: How many pre-dispatch action-policy refusals a turn survives. The product already
     #: writes the model a recovery message naming the refused tool; a limit of one ended
     #: the turn before that message could be read, so a deployment that disabled any page
@@ -152,6 +153,7 @@ class AgentTurnConfig:
         if not isinstance(self.supported_scope, str) or not self.supported_scope.strip():
             raise ValueError("supported_scope must be a non-empty string")
         if (not isinstance(self.scope_first_policy, bool)
+                or not isinstance(self.page_answer_evidence, bool)
                 or not isinstance(self.allow_application_entry, bool)
                 or not isinstance(self.allow_business_mutations, bool)
                 or not isinstance(self.require_identity, bool)):
@@ -518,6 +520,7 @@ class AgentTurnExecutor:
             keep_observations=self.config.keep_observations,
             disabled_actions=self.config.disabled_actions,
             scope_first_policy=self.config.scope_first_policy,
+            page_answer_evidence=self.config.page_answer_evidence,
             policy_block_limit=self.config.policy_block_limit,
             business_tools=self.business_tools,
             business_mutation_approval=(
