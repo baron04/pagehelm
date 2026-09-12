@@ -1253,6 +1253,17 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                 password = next(element for element in first.elements if element.role == "password")
                 self.assertNotIn("fixture-password", first.content)
                 self.assertNotIn("描述你想完成的目标", first.content)
+                page.locator(".woa-launcher").click()
+                page.locator("#woa-composer-input").fill("private assistant draft")
+                opened = remote.execute("observe").observation
+                self.assertNotIn("private assistant draft", opened.content)
+                self.assertNotIn("描述你想完成的目标", opened.content)
+                self.assertFalse(any("描述你想完成的目标" in element.name
+                                     for element in opened.elements))
+                first = opened
+                link = next(element for element in first.elements if element.role == "link")
+                password = next(element for element in first.elements if element.role == "password")
+                initial_commands = remote.command_count
                 self.assertIn("...", first.content)
                 self.assertEqual(
                     link.attrs["href"],
@@ -1282,7 +1293,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                     self.assertNotIn(secret, ledger.path.read_text())
 
                 self.assertEqual(outcome.terminal_reason, "agent_finished")
-                self.assertEqual(remote.command_count, 2)
+                self.assertEqual(remote.command_count - initial_commands, 2)
                 fill_receipt = next(item for item in receipts if item.action == "fill")
                 receipt = next(item for item in receipts if item.action == "click")
                 self.assertTrue(fill_receipt.ok)

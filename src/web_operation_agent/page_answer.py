@@ -1,4 +1,6 @@
 """Bounded, literal page evidence; no business identity or completeness is inferred."""
+import re
+
 from .evidence import Origin, PageEvidence
 from .schemas import PageObservation
 
@@ -19,6 +21,23 @@ OBSERVE_TOOL = {"type": "function", "function": {
         "Do not observe again for questions already answered by a typed API read."),
     "parameters": {"type": "object", "additionalProperties": False,
                    "properties": {"answer_evidence": {"type": "boolean"}}}}}
+
+
+def _has_page_text(line: str) -> bool:
+    """Do not spend the excerpt window on the controller's layout and empty markup.
+
+    This only selects lines. The evidence retains the original line, without inventing
+    field associations or rewriting application text as parsed business values.
+    """
+    text = line.strip()
+    if (not text or text in ("[Start of page]", "[End of page]")
+            or text.startswith(("Current Page: [", "Page info: ",
+                                "Interactive elements from top layer of the current page"))):
+        return False
+    candidate = re.sub(r"^\[\d+\]", "", text)
+    candidate = re.sub(r"</?[A-Za-z][^>]*>", "", candidate)
+    candidate = re.sub(r"\s*/>$", "", candidate)
+    return bool(candidate.strip())
 
 
 def collect(observation: PageObservation, *, observed_at: str) -> tuple[PageEvidence, ...]:
@@ -46,7 +65,7 @@ def collect(observation: PageObservation, *, observed_at: str) -> tuple[PageEvid
     # Exact bounded excerpts, not inferred key/value pairs or extracted table records.
     # The model can cite a line, but cannot rename it into an API field or aggregate it.
     for line_number, line in enumerate(observation.content.splitlines(), 1):
-        if not line.strip():
+        if not _has_page_text(line):
             continue
         items.append(PageEvidence(
             evidence_id=f"page#{len(items) + 1}", origin=origin, page_route=observation.url,

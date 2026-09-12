@@ -53,6 +53,7 @@ export function mountPanel(options: MountOptions): PanelHandle {
   element.id = 'woa-assistant'
   // The executor must never treat its own UI as part of the application page.
   element.setAttribute('data-page-agent-not-interactive', 'true')
+  element.setAttribute('data-page-agent-ignore', 'true')
   element.setAttribute('role', 'complementary')
   element.setAttribute('aria-label', host.configuration.labels.assistant);
   (options.container ?? documentRef.body).appendChild(element)

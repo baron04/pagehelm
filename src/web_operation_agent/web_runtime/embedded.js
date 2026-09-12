@@ -472,6 +472,8 @@ export class EmbeddedWebRuntime {
       this.panelContainer = document.createElement('div')
       this.panelContainer.id = 'woa-assistant-root'
       this.panelContainer.setAttribute('data-page-agent-not-interactive', 'true')
+      // A non-interactive parent does not exclude its descendants or shadow text.
+      this.panelContainer.setAttribute('data-page-agent-ignore', 'true')
       document.body?.appendChild(this.panelContainer)
     }
     this._onPageShow = event => {

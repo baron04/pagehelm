@@ -73,6 +73,18 @@ class PageEvidenceContract(unittest.TestCase):
         self.assertIn("page observation", text)
         self.assertNotIn("source: the application's typed read", text)
 
+    def test_controller_markup_cannot_exhaust_the_window_before_visible_records(self):
+        observation = page()
+        observation.elements = []
+        observation.content = ("Current Page: [Vendors](http://app.test/vendors)\n"
+                               "Page info: viewport\n[Start of page]\n" +
+                               "\n".join(f"[{i}]<button aria-label=Control{i} />" for i in range(50)) +
+                               "\n[51]<article >Azure Interior\nSupplier owes: 652.27 USD />\n[End of page]")
+        items = collect(observation, observed_at="now")
+        self.assertEqual([item.value for item in items],
+                         ["[51]<article >Azure Interior", "Supplier owes: 652.27 USD />"])
+        self.assertTrue(all("Current Page:" not in item.value for item in items))
+
 
 class DefaultPageAnswerPath(unittest.TestCase):
     def execute(self, script, browser=_PageBrowser):
