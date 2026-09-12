@@ -1587,11 +1587,13 @@ class ServerAgentSession:
                     elif isinstance(args, dict) and args.get("done") is False:
                         args = {"outcome": "unable"}
                     if isinstance(args, dict) and args.get("outcome") == "acted":
-                        if (set(args) != {"outcome"} or self._answer_action_receipt is None
+                        if (set(args) - {"outcome", "answer"} or self._answer_action_receipt is None
                                 or self._should_challenge_completion()):
                             raise ValueError("no successful action receipt supports this outcome")
-                        verified = {"conclusions": (), "coverage": "complete", "prose": "",
-                                    "lowered_because": (), "action": self._answer_action_receipt}
+                        verified = (answer_protocol.submit(self.evidence, {
+                            "outcome": "answered", "answer": args["answer"]}) if "answer" in args else
+                            {"conclusions": (), "coverage": "complete", "prose": "", "lowered_because": ()})
+                        verified["action"] = self._answer_action_receipt
                     else:
                         verified = answer_protocol.submit(self.evidence, args)
                 except (ValueError, TypeError, EvidenceUnknown) as exc:
@@ -2443,7 +2445,8 @@ class ServerAgentSession:
                 json.dumps(self._answer_action_receipt, ensure_ascii=False) +
                 '\nTo report this action, call finish with {"outcome":"acted"}. '
                 "Do not turn a URL, record name or action claim into a field evidence reference. "
-                "If the user also requested data, read/cite those facts separately.")
+                "If the user also requested data, include validated evidence conclusions "
+                "in the optional answer field of that same finish call.")
 
     def _render_task_skills(self) -> str:
         if not self._task_skills:

@@ -75,19 +75,20 @@ def render_payload(payload: dict, *, user_text: str, max_chars: int) -> str:
     data = dict(payload)
     presentation = data.pop("presentation", "brief")
     action = data.pop("action", None)
+    action_text = ""
     if action is not None:
         if action["kind"] == "navigation":
             label = "已打开页面" if _language(user_text) == "zh" else "Opened the page"
-            return f"{label}：{_literal(action['url'])}"[:max_chars]
-        label = "已完成已批准的操作" if _language(user_text) == "zh" else "Completed the approved action"
-        text = (f"{label}：{_literal(action['effect'])}\n" +
-                "、".join(_literal(x) for x in action["targets"]))
-        if action.get("navigation_url"):
-            opened = "已打开页面" if _language(user_text) == "zh" else "Opened the page"
-            text += f"\n{opened}：{_literal(action['navigation_url'])}"
-        return text[:max_chars]
+            action_text = f"{label}：{_literal(action['url'])}"
+        else:
+            label = "已完成已批准的操作" if _language(user_text) == "zh" else "Completed the approved action"
+            action_text = (f"{label}：{_literal(action['effect'])}\n" +
+                           "、".join(_literal(x) for x in action["targets"]))
+            if action.get("navigation_url"):
+                opened = "已打开页面" if _language(user_text) == "zh" else "Opened the page"
+                action_text += f"\n{opened}：{_literal(action['navigation_url'])}"
     return render(VerifiedAnswer(**data), user_text=user_text,
-                  max_chars=max_chars, presentation=presentation)
+                  max_chars=max_chars, presentation=presentation, action_text=action_text)
 
 
 def _literal(value: object) -> str:
@@ -97,14 +98,14 @@ def _literal(value: object) -> str:
 
 
 def render(answer: VerifiedAnswer, *, user_text: str, max_chars: int,
-           presentation: str = "brief") -> str:
+           presentation: str = "brief", action_text: str = "") -> str:
     """Lay out the conclusions, then the prose, then what the answer does not cover."""
     if not isinstance(answer, VerifiedAnswer):
         raise TypeError("render takes a VerifiedAnswer")
     if isinstance(max_chars, bool) or not isinstance(max_chars, int) or max_chars < 512:
         raise ValueError("answer max_chars must be at least 512")
     words = _WORDS[_language(user_text)]
-    lines: list[str] = []
+    lines: list[str] = [action_text, ""] if action_text else []
 
     for item in answer.conclusions:
         lines.extend(_one(words, item, presentation=presentation))

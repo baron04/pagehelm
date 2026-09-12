@@ -127,6 +127,27 @@ class DefaultProductAnswerPath(unittest.TestCase):
         result, _ = self.execute([("finish", {"outcome": "acted"})] * 3)
         self.assertEqual(result.status, AgentTurnStatus.REFUSED)
 
+    def test_completed_navigation_can_include_verified_facts(self):
+        answer = _answer("selection", "call2-query#1", fields=["name", "amount"])
+        answer["outcome"] = "acted"
+        result, _ = self.execute([
+            ("goto", {"url": "/object/company/company-1"}), ("finish", answer),
+        ])
+        self.assertEqual(result.status, AgentTurnStatus.FINISHED)
+        self.assertIn("已打开页面", result.user_answer)
+        self.assertIn("Acme", result.user_answer)
+        self.assertIn("12.50 USD", result.user_answer)
+
+    def test_a_completed_action_does_not_authorize_fabricated_answer_facts(self):
+        answer = _answer("field_value", "forged#1")
+        answer["outcome"] = "acted"
+        result, _ = self.execute([
+            ("goto", {"url": "/object/company/company-1"}),
+            *[("finish", answer)] * 3,
+        ])
+        self.assertEqual(result.status, AgentTurnStatus.REFUSED)
+        self.assertIsNone(result.agent.verified_answer)
+
     def test_selection_fields_survive_query_context_trimming_after_navigation(self):
         result, chat = self.execute([
             ("compute", {"operation": "argmax", "dataset_ref": "call2-query#1", "field": "amount"}),

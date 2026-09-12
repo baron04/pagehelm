@@ -26,13 +26,14 @@ ANSWER_SCHEMA = {
         "coverage": {"type": "string", "enum": ["complete", "partial", "undetermined"]},
         "presentation": {"type": "string", "enum": ["brief", "list", "table"]},
         "conclusions": {"type": "array", "minItems": 1, "maxItems": MAX_CONCLUSIONS,
-                        "items": {"type": "object", "additionalProperties": False,
-                                  "properties": {
-                                      "kind": {"type": "string", "enum": [
-                                          "field_value", "selection", "aggregate",
-                                          "not_found", "undetermined", "page_observation"]},
-                                      "evidence_ref": _REF, "fields": _FIELDS},
-                                  "required": ["kind", "evidence_ref"]}},
+                        "items": {"anyOf": [
+                            {"type": "object", "additionalProperties": False,
+                             "properties": {"kind": {"type": "string", "enum": [kind]},
+                                            "evidence_ref": _REF,
+                                            **({"fields": _FIELDS} if kind == "selection" else {})},
+                             "required": ["kind", "evidence_ref"]}
+                            for kind in ("field_value", "selection", "aggregate", "not_found",
+                                         "undetermined", "page_observation")]}},
     }, "required": ["version", "coverage", "conclusions"],
 }
 FINISH_ANSWER_TOOL = {"type": "function", "function": {
@@ -40,6 +41,8 @@ FINISH_ANSWER_TOOL = {"type": "function", "function": {
         "Answer the user's question with evidence-backed conclusions. Use compute for "
         "arithmetic or filtering, then cite its result. Never submit facts as free prose. "
         "Answer only what was asked: for a total, one aggregate is enough, without a table. "
+        "Use outcome=acted for a completed navigation or approved mutation, optionally "
+        "including additional evidence-backed conclusions in answer. "
         "Use outcome=unable if the available evidence/tools cannot answer."),
     "parameters": {"type": "object", "additionalProperties": False,
                    "properties": {"outcome": {"type": "string", "enum": [

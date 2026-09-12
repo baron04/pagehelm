@@ -82,6 +82,16 @@ class AnswerWireContract(unittest.TestCase):
         self.assertIn("部分回答", text)
         self.assertIn("显示限制", text)
 
+    def test_action_prefix_does_not_hide_partial_answer_or_its_display_limit(self):
+        turn = _turn(whole=False, records=tuple((f"record/{i}", "100") for i in range(50)))
+        answer = submit(turn, _draft("selection", "query#1", fields=["amount_total"]))
+        answer["action"] = {"kind": "navigation", "url": "http://app.test/records"}
+        text = render_payload(answer, user_text="打开并列出所有金额", max_chars=512)
+        self.assertLessEqual(len(text), 512)
+        self.assertIn("已打开页面", text)
+        self.assertIn("部分回答", text)
+        self.assertIn("显示限制", text)
+
 
 if __name__ == "__main__":
     unittest.main()
