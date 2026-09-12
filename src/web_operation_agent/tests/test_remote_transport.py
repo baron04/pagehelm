@@ -117,6 +117,23 @@ class ChannelTests(unittest.TestCase):
         self.first = observation(self.grant.session_id, 1)
         self.channel.accept_observation(self.first, lease_id=self.lease)
 
+    def await_action_event(self, cursor: str = "e00000001", *, timeout_s: float = 5.0):
+        """Wait for the action a worker thread is about to enqueue.
+
+        `events_after` returns as soon as *anything* follows the cursor, and a turn emits
+        `message_accepted` before the runtime is ever asked to act. Taking the first batch
+        therefore raced the worker thread and lost often enough to make the suite flaky.
+        """
+        deadline = time.monotonic() + timeout_s
+        while True:
+            events = self.channel.events_after(cursor, lease_id=self.lease, wait_s=0.2)
+            for event in events:
+                if event.kind == "action":
+                    return event
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"no action event after {cursor}; saw {[e.kind for e in events]}")
+
     def test_event_replay_is_same_action_and_result_is_idempotent(self):
         action = action_for(self.grant.session_id, self.first)
         event = self.channel.enqueue_action(action)
@@ -474,9 +491,7 @@ class ChannelTests(unittest.TestCase):
 
         worker = threading.Thread(target=run_action)
         worker.start()
-        events = self.channel.events_after(
-            "e00000001", lease_id=self.lease, wait_s=1)
-        self.assertTrue(any(event.kind == "action" for event in events))
+        self.await_action_event()
         self.channel.accept_cancellation(
             CancellationRequest(1, self.grant.session_id, "message-browser"),
             lease_id=self.lease)
@@ -581,9 +596,7 @@ class ChannelTests(unittest.TestCase):
 
         worker = threading.Thread(target=run_action)
         worker.start()
-        events = self.channel.events_after(
-            "e00000001", lease_id=self.lease, wait_s=1)
-        envelope = next(event.action() for event in events if event.kind == "action")
+        envelope = self.await_action_event().action()
         self.assertEqual(envelope.command, ActionCommand(
             command_id=envelope.action_id,
             action="click",
@@ -676,8 +689,7 @@ class ChannelTests(unittest.TestCase):
 
         worker = threading.Thread(target=run_action)
         worker.start()
-        envelope = next(event.action() for event in self.channel.events_after(
-            "e00000001", lease_id=self.lease, wait_s=1) if event.kind == "action")
+        envelope = self.await_action_event().action()
         after = observation(self.grant.session_id, 2, caused_by=envelope.action_id)
         rejected = ActionResultEnvelope(
             schema_version=SCHEMA_VERSIONS["ActionResultEnvelope"],
@@ -708,10 +720,7 @@ class ChannelTests(unittest.TestCase):
 
         worker = threading.Thread(target=run_action)
         worker.start()
-        envelope = next(event.action() for event in
-                        self.channel.events_after(
-                            "e00000001", lease_id=self.lease, wait_s=1)
-                        if event.kind == "action")
+        envelope = self.await_action_event().action()
         self.channel.claim_action({"action_id": envelope.action_id},
                                   lease_id=self.lease)
         result = ActionResultEnvelope(
