@@ -44,6 +44,7 @@ from .model import BudgetExhausted, ProviderError
 from .privacy import SessionHandoffPolicy, redact_sensitive_assignments
 from .schemas import (BROWSER_ACTIONS, ActionReceipt, ControlPlan, OperationContract,
                       PageObservation, empty_contract)
+from .evidence import EvidenceUnknown, TurnEvidence
 
 #: Describe a plan by its actual origin. A page-only plan must never be presented to the model
 #: as source-derived, because that would change the information available to that mode.
@@ -645,6 +646,10 @@ class ServerAgentSession:
         # render requested facts directly.  The audit ledger intentionally stores only its
         # digest and projection; model prose is not a reliable transport for table rows.
         self.latest_business_tool_result: BusinessToolResult | None = None
+        # What this turn established, as opposed to what its last call returned. Held here
+        # rather than on either result type: a typed read and a page observation back an
+        # answer alike and arrive through different doors with different trust roots.
+        self.evidence = TurnEvidence()
         self._latest_business_query_page_actions: int | None = None
         self.plain_business_answer_min_page_actions = \
             plain_business_answer_min_page_actions
@@ -1290,6 +1295,7 @@ class ServerAgentSession:
                         identity=operation_identity)
                     self._business_routes.update(tool_result.allowed_routes)
                     self.latest_business_tool_result = tool_result
+                    self._collect_evidence(tool_result, step=step)
                     self._latest_business_query_page_actions = (
                         self.page_actions if tool_result.query_answer is not None else None)
                     successful_business_tools += 1
@@ -1361,6 +1367,7 @@ class ServerAgentSession:
                         side_effect_possible=False, identity=operation_identity)
                     self._business_routes.update(tool_result.allowed_routes)
                     self.latest_business_tool_result = tool_result
+                    self._collect_evidence(tool_result, step=step)
                     self._latest_business_query_page_actions = (
                         self.page_actions if tool_result.query_answer is not None else None)
                     successful_business_tools += 1
@@ -1625,6 +1632,25 @@ class ServerAgentSession:
             messages = _trim(messages, self.keep_observations)
 
     # -- grounding ---------------------------------------------------------------------
+    def _collect_evidence(self, tool_result, *, step: int) -> None:
+        """Take what a read established into the turn, or record that it offered nothing.
+
+        An adapter that produces no evidence is not an error: most do not yet, and the
+        turn simply has nothing for an answer to cite. Saying so in the ledger is what
+        keeps that state from being mistaken for evidence nobody looked at.
+        """
+        items = getattr(tool_result, "evidence", ()) or ()
+        recorded, refused = [], []
+        for item in items:
+            try:
+                recorded.append(self.evidence.record(item))
+            except (ValueError, TypeError, EvidenceUnknown) as exc:
+                refused.append(str(exc)[:200])
+        if recorded or refused:
+            self.ledger.append("turn_evidence", step=step,
+                               recorded=recorded, refused=refused,
+                               held=len(self.evidence))
+
     def tool_schemas(self) -> list[dict]:
         # A disabled action is refused before dispatch, so offering it in the tool surface
         # only invites a call the run will refuse: nothing in the schema tells the model the

@@ -329,6 +329,11 @@ class BusinessToolResult:
     allowed_routes: tuple[str, ...] = ()
     query_answer: StructuredQueryAnswer | None = None
     data_classes: tuple[str, ...] = ()
+    #: What this read established, in a form an answer can cite. Optional, and empty for an
+    #: adapter that has not been taught to produce it: the projection above is a display
+    #: view -- positional strings with no record identity, type or currency -- and an answer
+    #: built on it can say what a table said, never what a reader asked.
+    evidence: tuple = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.content, dict) or not isinstance(self.audit, dict):

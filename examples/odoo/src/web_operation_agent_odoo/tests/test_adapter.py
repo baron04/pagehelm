@@ -69,6 +69,10 @@ class _FakeOdoo(OdooBusinessToolExecutor):
         self.calls = []
         self.created = []
         self._uid = uid
+        # The executor reads the company currency once and caches it here. A double that
+        # skipped this would send every money field's unit through a `getattr` guard in the
+        # product, which is the shape this repository keeps removing.
+        self._currency_cache = "USD"
         self.keys = type("K", (), {"database": "woa", "login": "grower",
                                    "api_key": "0123456789abcdef0123"})()
 

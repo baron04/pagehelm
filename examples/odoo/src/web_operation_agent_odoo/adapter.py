@@ -53,6 +53,7 @@ from web_operation_agent.mutation import MutationJournal
 
 from .route import ODOO_ROUTE_PORT, ODOO_SOURCE_SCOPE
 from .sourcemap import OdooCompiler, odoo_source_tree
+from web_operation_agent.evidence import Origin, QueryEvidence, RecordEvidence
 
 
 APPLICATION_ID = "odoo"
@@ -483,6 +484,7 @@ class OdooBusinessToolExecutor:
         self.timeout_s = timeout_s
         self.allow_mutations = allow_mutations
         self._uid: int | None = None
+        self._currency_cache: str | None = None
         self._lock = threading.Lock()
 
     # -- tool catalog -------------------------------------------------------------------
@@ -637,6 +639,66 @@ class OdooBusinessToolExecutor:
             return f"{value:.2f}"
         return str(value)[:300]
 
+    @property
+    def _currency(self) -> str:
+        """The company currency, read from the application rather than assumed.
+
+        Every monetary field these collections carry is in it. Reading it costs one call per
+        executor and is cached, because a number whose currency this guessed is exactly the
+        kind of number a total should refuse to combine.
+        """
+        if self._currency_cache is None:
+            rows = self.call("res.company", "search_read", [[]],
+                             {"fields": ["currency_id"], "limit": 1})
+            found = rows[0].get("currency_id") if rows else None
+            self._currency_cache = (found[1] if isinstance(found, list) and len(found) > 1
+                                    else "")
+        return self._currency_cache
+
+    #: Which of a collection's own fields carry business numbers, and in what. Odoo keeps
+    #: every monetary field of these models in the company currency, which the deployment
+    #: reports once; a field listed here without a currency would be a number an answer
+    #: could total across currencies without noticing.
+    _NUMERIC_FIELDS = {"amount_total": "money", "list_price": "money"}
+
+    def _evidence(self, collection: _Collection, pairs, *, name: str, observed_at: str,
+                  matched: int, scanned, whole: bool) -> tuple:
+        """Turn what this read returned into evidence an answer can cite.
+
+        The projection beside it stays a display view. This is the same read expressed so a
+        conclusion can stand on it: the record's own identity, the field's own name, whether
+        the field was actually read, and -- for a number -- what it is denominated in.
+        """
+        reference = f"{name}#{len(pairs)}"
+        origin = Origin(kind="typed", reference=reference, observed_at=observed_at,
+                        scope=collection.scope)
+        items = [QueryEvidence(
+            evidence_id="query#1", origin=origin, collection=collection.tool.removeprefix("query_"),
+            conditions=tuple(f"{part[0]} {part[1]} {part[2]}" for part in collection.domain)
+                       or ("no filter",),
+            matched_count=matched, records_scanned=scanned, covers_whole_scope=whole)]
+        index = 0
+        for row, _item in pairs:
+            record_id = row.get("id")
+            if not isinstance(record_id, int):
+                # Without the application's own identity there is nothing stable to cite,
+                # and a row number would be an identity this invented.
+                continue
+            for field_name in collection.fields:
+                value_type = self._NUMERIC_FIELDS.get(field_name, "text")
+                raw = row.get(field_name)
+                index += 1
+                items.append(RecordEvidence(
+                    evidence_id=f"record#{index}", origin=origin,
+                    record_id=f"{collection.model}/{record_id}",
+                    field_name=field_name, field_meaning=field_name.replace("_", " "),
+                    field_was_read=field_name in row,
+                    value=(self._label(row, field_name) if field_name in row and raw not in
+                           (False, None) else None),
+                    value_type=value_type if field_name in row else "",
+                    unit=self._currency if value_type == "money" else ""))
+        return tuple(items)
+
     def _project(self, collection: _Collection, row: dict) -> dict:
         record_id = row.get("id")
         item = {"name": self._label(row, "name")}
@@ -685,13 +747,17 @@ class OdooBusinessToolExecutor:
             raise BusinessToolRequestError("unknown Odoo business tool")
         needle, limit = self._read_args(name, args)
         rows, total, scan = self._scan(collection)
-        projected = [self._project(collection, row) for row in rows]
+        # Kept paired with the row it came from: the projection is a display view -- labels
+        # for people -- while evidence needs the record's own identity, and re-deriving one
+        # from the other after filtering is how they drift apart.
+        pairs = [(row, self._project(collection, row)) for row in rows]
         field = self._match_field(collection)
         folded = needle.casefold().strip()
         if folded:
-            projected = [item for item in projected if folded in item[field].casefold()]
-        matched = len(projected)
-        visible = projected[:limit]
+            pairs = [pair for pair in pairs if folded in pair[1][field].casefold()]
+        matched = len(pairs)
+        visible_pairs = pairs[:limit]
+        visible = [item for _row, item in visible_pairs]
         allowed_routes = (collection.route,) + tuple(
             item["ui_path"] for item in visible if isinstance(item.get("ui_path"), str))
         source_complete = scan["complete"]
@@ -735,6 +801,10 @@ class OdooBusinessToolExecutor:
                 **self._identity_audit(context),
             },
             allowed_routes=allowed_routes,
+            evidence=self._evidence(collection, visible_pairs, name=name,
+                                    observed_at=observed_at, matched=matched,
+                                    scanned=scan["records_scanned"],
+                                    whole=source_complete and not result_truncated),
             query_answer=StructuredQueryAnswer(
                 collection=collection.tool.removeprefix("query_"),
                 fields=collection.answer_fields,
