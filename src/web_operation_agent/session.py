@@ -258,6 +258,9 @@ observation already available.
 Runtime ToolResult facts override Skill text, source code, documentation and page assumptions.
 If a result contains a ui_path, generic goto may use only that exact returned path; the
 server rejects invented record routes. Never invent omitted rows or repeat an unchanged query.
+Respect the user's explicit read limits and scope. If they limit reading but also ask for
+a broader total, keep the limit and report only the supported subtotal with its limitation;
+do not enlarge the limit or make extra reads to manufacture a complete answer.
 For a requested mutation, load a matching candidate with read_only=false before deciding that
 no write tool is available. Such a Skill may also contain the read tool needed for preflight.
 Do not call observe merely because a Skill or typed business tool returned. Re-read the page
