@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 
 from .application import BoundApplication, SourceCapability
 from .answering import render_structured_query_answer
-from .answer_view import render_payload
+from .answer_view import render_payload, render_sources
 from .browser import TransportError
 from .business import BusinessToolResult, BusinessToolRuntime
 from .conversation import ConversationState
@@ -640,10 +640,15 @@ class AgentTurnExecutor:
                 if session.latest_business_tool_result is not None else ""),
         )
         try:
+            source_details = (render_sources(agent.verified_answer, user_text=turn_message.text,
+                                            max_chars=self.config.max_user_answer_chars)
+                              if status is AgentTurnStatus.FINISHED and agent.verified_answer else "")
+            source_details = redact_sensitive_assignments(redact_session_handoffs(source_details))
             self.channel.publish("progress", {
                 "state": status.value,
                 "terminal_reason": agent.terminal_reason,
                 "message": user_answer,
+                **({"source_details": source_details} if source_details else {}),
             }, turn_id=turn_message.message_id)
         except Exception as exc:
             # The browser or event transport may disappear after a write or after the

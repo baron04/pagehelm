@@ -38,6 +38,7 @@ export interface TimelineEntry {
   approval_id?: string
   authored?: 'model' | 'server'
   replayed?: boolean
+  source_details?: string
 }
 
 export interface ApprovalRequest {

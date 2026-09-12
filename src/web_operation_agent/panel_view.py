@@ -1,6 +1,6 @@
 """Server-owned projection of session events onto the assistant panel's timeline.
 
-The panel is a cross-origin document with no session state of its own.  Everything it
+The embedded panel is a view over server-owned session state. Everything it
 renders in the timeline is produced here, so that a full page navigation replays the same
 timeline from the server instead of losing it with the previous document (F8a), and so that
 no user-visible string or bound is written down twice (F8b).
@@ -186,7 +186,14 @@ def project_event(event: TaskEvent, *, at: int) -> dict | None:
         text = "正在执行" if not mapping["terminal"] else "任务结束"
     return {**base, "kind": "result" if mapping["terminal"] else "progress",
             "tone": mapping["tone"], "text": text,
-            "panel_state": mapping["panel_state"]}
+            "panel_state": mapping["panel_state"], **_source_details(payload, state, limits)}
+
+
+def _source_details(payload: dict, state: str, limits: dict) -> dict:
+    text = payload.get("source_details")
+    if state != "finished" or not isinstance(text, str) or not text.strip():
+        return {}
+    return {"source_details": _clip(text, limits["result_max_chars"])}
 
 
 def project_history_record(record: dict, *, index: int) -> dict | None:
@@ -214,7 +221,8 @@ def project_history_record(record: dict, *, index: int) -> dict | None:
     if not text:
         return None
     return {**base, "kind": "result" if mapping["terminal"] else "progress",
-            "tone": mapping["tone"], "text": text, "panel_state": mapping["panel_state"]}
+            "tone": mapping["tone"], "text": text, "panel_state": mapping["panel_state"],
+            **_source_details(payload, state, limits)}
 
 
 def collapse_timeline(entries: list[dict]) -> list[dict]:

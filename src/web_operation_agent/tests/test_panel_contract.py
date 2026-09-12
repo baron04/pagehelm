@@ -100,6 +100,17 @@ class PanelContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "no panel projection"):
             project_event(_event("progress", {"state": "invented"}), at=0)
 
+    def test_source_details_are_redacted_bounded_and_survive_history_projection(self):
+        payload = {"state": "finished", "message": "12.50 USD",
+                   "source_details": "token=secret-value\n" + "source " * 1000}
+        live = project_event(_event("progress", payload), at=0)
+        replay = project_history_record({"kind": "progress", "payload": payload}, index=1)
+        self.assertEqual(live["source_details"], replay["source_details"])
+        self.assertNotIn("secret-value", live["source_details"])
+        self.assertLessEqual(len(live["source_details"]), panel_limits()["result_max_chars"])
+        payload["state"] = "agent_started"
+        self.assertNotIn("source_details", project_event(_event("progress", payload), at=0))
+
     def test_the_projection_shows_prose_and_never_a_capability(self):
         action = project_event(
             _action({"action": "fill", "args": {"ref": "e12", "value": "private-value"}}), at=7)

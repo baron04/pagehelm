@@ -370,6 +370,17 @@ button:disabled { cursor: not-allowed; }
 .woa-step[data-now] svg { color: var(--woa-accent); }
 
 /* ─────────────────────────────────────────────── answer */
+.woa-answer-sources {
+  margin-block-start: 10px;
+  color: var(--woa-ink-muted);
+  overflow-wrap: anywhere;
+}
+.woa-answer-sources > summary { cursor: pointer; padding-block: 5px; }
+.woa-answer-sources[open] > summary { margin-block-end: 8px; }
+.woa-answer-sources > .woa-md {
+  border-inline-start: 2px solid var(--woa-line);
+  padding-inline-start: 10px;
+}
 .woa-md { display: flex; flex-direction: column; gap: 8px; overflow-wrap: anywhere; }
 .woa-md p, .woa-md h2, .woa-md h3, .woa-md blockquote, .woa-md ul, .woa-md ol { margin: 0; }
 .woa-md h2 { font-size: 14px; font-weight: 600; }

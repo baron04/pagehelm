@@ -94,6 +94,7 @@
     "emptyGreeting": "告诉我你想完成什么",
     "emptyDetail": "我会在每一步之后重新观察页面。需要写入时，先把要改的那条记录摆给你看，等你点头。",
     "workProcess": "工作过程",
+    "answerSources": "查看来源与范围",
     "elapsedPrefix": "用时",
     "stepCount": "步",
     "approvalCount": "次确认",

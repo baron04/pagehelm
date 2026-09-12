@@ -74,6 +74,7 @@ def unavailable_answer(user_text: str) -> str:
 def render_payload(payload: dict, *, user_text: str, max_chars: int) -> str:
     data = dict(payload)
     presentation = data.pop("presentation", "brief")
+    data.pop("sources", None)
     action = data.pop("action", None)
     action_text = ""
     if action is not None:
@@ -95,6 +96,32 @@ def _literal(value: object) -> str:
     """Application values are data, including any Markdown punctuation inside them."""
     text = str(value).replace("\r", " ").replace("\n", " ")
     return re.sub(r"([\\`*_{}\[\]()<>#!|])", r"\\\1", text)
+
+
+def render_sources(payload: dict, *, user_text: str, max_chars: int) -> str:
+    """Optional provenance view; limitations remain visible in the main answer."""
+    chinese = _language(user_text) == "zh"
+    words = _WORDS["zh" if chinese else "en"]
+    blocks = []
+    for source in payload.get("sources", ()):
+        lines = [f"**{_source_line(words, {'source_kind': source['kind']})}**",
+                 f"{'读取或计算时间' if chinese else 'Read or computation time'}: {_literal(source['observed_at'])}",
+                 f"{words['scope']}: {_literal(source['scope'])}"]
+        if "operation" in source:
+            lines.append(f"{'运算' if chinese else 'Operation'}: {_literal(source['operation'])}")
+        if "collection" in source:
+            lines.append(f"{'集合' if chinese else 'Collection'}: {_literal(source['collection'])}")
+            lines.append(f"{'扫描记录' if chinese else 'Records scanned'}: {source['records_scanned']}; "
+                         f"{'匹配记录' if chinese else 'Matches'}: {source['matched']}")
+            coverage = ("覆盖该次读取范围" if source['covers_whole_scope'] else "只覆盖部分读取范围") if chinese else (
+                "Covers this read scope" if source['covers_whole_scope'] else "Covers only part of this read scope")
+            lines.append(coverage)
+        blocks.append("\n\n".join(lines))
+    text = "\n\n---\n\n".join(blocks)
+    if len(text) <= max_chars:
+        return text
+    suffix = "\n\n来源详情达到显示限制。" if chinese else "\n\nSource details reached the display limit."
+    return text[:max(0, max_chars - len(suffix))] + suffix
 
 
 def render(answer: VerifiedAnswer, *, user_text: str, max_chars: int,

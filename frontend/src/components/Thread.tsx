@@ -154,9 +154,18 @@ function Outcome({entry, labels, limits, live, allowedOrigins}: {
     : entry.panel_state === 'refused' ? 'refused' : 'plain'
   if (kind === 'plain') {
     return (
+      <>
       <Answer text={entry.text.slice(0, limits.result_max_chars)}
               authored={entry.authored ?? 'server'} live={live}
               labels={labels} allowedOrigins={allowedOrigins} />
+      {entry.source_details && (
+        <details className="woa-answer-sources">
+          <summary>{labels.answerSources}</summary>
+          <Answer text={entry.source_details.slice(0, limits.result_max_chars)}
+                  authored="server" live={false} labels={labels} allowedOrigins={allowedOrigins} />
+        </details>
+      )}
+      </>
     )
   }
   const Icon = kind === 'indeterminate' ? AlertTriangle : CircleAlert

@@ -400,6 +400,26 @@ class PanelUITests(_PanelBrowser):
         self.assertEqual(self.errors, [])
 
     # ---------------------------------------------------------------- the work process
+    def test_source_details_expand_by_keyboard_without_hiding_partial_answer(self):
+        page = self.open(_snapshot(entries=[
+            _entry("e1", "goal", "未确认报价合计？"),
+            _entry("e2", "result", "**小计**：12.50 USD\n\n这是部分回答", panel_state="success",
+                   source_details="读取时间：2026-09-13T00:00:00Z\n\n扫描记录：2；匹配记录：2"),
+        ]), width=390, height=844)
+        page.locator(".woa-launcher").click()
+        details = page.locator(".woa-answer-sources")
+        summary = details.locator("summary")
+        self.assertEqual(summary.inner_text(), panel_contract()["label_keys"]["answerSources"])
+        self.assertFalse(details.evaluate("node => node.open"))
+        self.assertTrue(page.get_by_text("这是部分回答", exact=True).is_visible())
+        summary.focus()
+        summary.press("Enter")
+        self.assertTrue(details.evaluate("node => node.open"))
+        self.assertIn("2026-09-13", details.inner_text())
+        summary.press("Enter")
+        self.assertFalse(details.evaluate("node => node.open"))
+        self.assertEqual(self.errors, [])
+
     def test_a_turn_that_only_ran_offers_no_expander_and_a_turn_that_acted_does(self):
         page = self.open(_snapshot(entries=[
             _entry("e1", "goal", "列出所有待开票的销售订单"),

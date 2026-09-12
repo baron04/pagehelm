@@ -22,6 +22,20 @@ class AnswerWireContract(unittest.TestCase):
         self.assertEqual(answer["conclusions"][0]["value"], "7210.00")
         self.assertEqual(answer["prose"], "")
 
+    def test_source_details_follow_cited_computation_without_leaking_values_or_other_reads(self):
+        turn = _turn()
+        turn.record(replace(turn.get("record#1"), evidence_id="unrelated#1",
+                            origin=replace(turn.get("record#1").origin, reference="other-call",
+                                           scope="unrelated-private-scope"), value="private-value"))
+        compute(turn, {"operation": "sum", "dataset_ref": "query#1", "field": "amount_total"},
+                result_ref="calc#1", observed_at=AT)
+        sources = submit(turn, _draft())["sources"]
+        self.assertEqual({item["kind"] for item in sources}, {"typed", "computed"})
+        self.assertNotIn("private", str(sources))
+        self.assertNotIn("record#", str(sources))
+        self.assertTrue(all(item["observed_at"] == AT for item in sources))
+        self.assertTrue(any(item.get("records_scanned") == 5 for item in sources))
+
     def test_factual_prose_and_model_supplied_amounts_are_not_accepted(self):
         for location, key, value in (("answer", "prose", "The total is 90000"),
                                      ("conclusion", "value", "90000")):
