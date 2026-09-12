@@ -187,21 +187,60 @@ def _odoo_answers(timeout_s: float) -> bool:
     return False
 
 
-def start_stack(*, timeout_s: float = 240) -> dict:
-    """Start Compose and wait until Odoo answers, rather than until Compose returns."""
+def _service_logs(service: str, lines: int = 40) -> str:
+    """The tail of a service's own log, for an error that would otherwise say nothing.
+
+    Telling a person to go and run `docker compose logs` is a worse answer than showing
+    them the log: the container is often gone by the time they read the message, and then
+    the reason is gone with it.
+    """
+    try:
+        return _compose("logs", "--no-color", f"--tail={lines}", service, timeout=120).strip()
+    except ProvisioningError:
+        return "(the container is gone; its log went with it)"
+
+
+def start_stack(*, timeout_s: float = 420) -> dict:
+    """Start Compose and wait until Odoo answers, rather than until Compose returns.
+
+    A first boot on an empty volume initialises the data directory and can take minutes on a
+    busy machine, so the wait is generous. What it is not is silent: whichever way this
+    fails, the failure carries the log that explains it.
+    """
     _require_checkout()
-    _compose("up", "-d", "--wait", timeout=900)
+    try:
+        _compose("up", "-d", "--wait", timeout=900)
+    except ProvisioningError as exc:
+        raise ProvisioningError(
+            f"{exc}\n\n--- docker compose logs odoo ---\n{_service_logs('odoo')}") from None
     if not _odoo_answers(timeout_s):
         raise ProvisioningError(
-            f"Odoo did not answer on {BASE_URL} within {timeout_s:.0f}s; "
-            f"`docker compose -f {COMPOSE_FILE} logs odoo` says why")
+            f"Odoo did not answer on {BASE_URL} within {timeout_s:.0f}s.\n\n"
+            f"--- docker compose logs odoo ---\n{_service_logs('odoo')}")
     return {"step": "up", "base_url": BASE_URL, "project": COMPOSE_PROJECT}
 
 
 def stop_stack(*, destroy: bool = False) -> dict:
-    """Stop the fixture, optionally discarding its volumes as well."""
+    """Stop the fixture, optionally discarding its volumes as well.
+
+    With `destroy`, this does not return until the volumes are actually gone. Compose reports
+    the removal it asked for rather than the removal that finished, and provisioning that
+    started while one was still in flight would fail on a volume nobody could see.
+    """
     _compose("down", *(["-v"] if destroy else []), timeout=300)
-    return {"step": "down", "volumes_removed": destroy}
+    if not destroy:
+        return {"step": "down", "volumes_removed": False}
+    deadline = time.monotonic() + 120
+    while time.monotonic() < deadline:
+        listed = _run(["docker", "volume", "ls", "--quiet", "--filter",
+                       f"label=com.docker.compose.project={COMPOSE_PROJECT}"],
+                      timeout=60).split()
+        if not listed:
+            return {"step": "down", "volumes_removed": True}
+        time.sleep(2)
+    raise ProvisioningError(
+        f"the {COMPOSE_PROJECT} volumes are still present two minutes after `down -v`; "
+        "provisioning now would build on data that is about to disappear")
 
 
 # ------------------------------------------------------------------------ database

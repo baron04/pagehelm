@@ -193,7 +193,38 @@ installed, and without it the fixture lands exactly where the qualified baseline
 S00001/S00002/S00003/S00005 draft, S00007 the one order with something to invoice, Acme as
 partner 10, four customer invoices.
 
-## Running it
+## Driving it by hand
+
+After `provision`, this opens a real Chromium on the Odoo web client with the assistant
+panel mounted, and waits for you:
+
+```bash
+python -m web_operation_agent_odoo.demo --allow-mutations
+```
+
+No flags to set: every path comes from the `.env` that `provision` printed, and the provider
+credentials come from the same file. Type a goal in the panel; close the window to end the
+session. Each turn prints one JSON line — the answer, the approval counts, the page actions —
+and the run directory keeps the audit ledger.
+
+Things worth trying, in the order that shows the most:
+
+| Type this | What to watch for |
+|---|---|
+| `哪些报价单还没确认？` | The answer is the typed projection, not the model's prose: it names the source, the scope, the observation time and every record. `source_complete` in the audit line says the scan saw the whole collection |
+| `打开 Acme Corporation 的客户记录` | It queries first and navigates to the exact route the tool returned. It cannot invent a URL |
+| `把报价单 S00002 确认掉` | **The approval card appears and waits for you.** Read the effect and the target, then click it — or dismiss it and watch the write not happen |
+| `删除客户 Acme Corporation` | Refused. There is no delete tool on the surface, so the refusal is the product's rather than the model's good manners |
+| `把报价单 S00001 也确认掉`, then ask again | The second identical request meets the journal, not the application |
+
+`--allow-mutations` offers the three typed write tools. It does not make writes automatic:
+each one still needs a fresh approval clicked in the page, and composition refuses to enable
+them at all without a durable journal.
+
+Without `--allow-mutations` the same command is strictly read-only, which is the safer thing
+to hand someone who just wants to look.
+
+## Running it non-interactively
 
 Against the provisioned fixture, or against your own Odoo with the pinned page controller
 served from its origin — any module directory on the addons path works, for example

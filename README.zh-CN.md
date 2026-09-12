@@ -138,7 +138,7 @@ scripts/qualify.sh
 
 - **本地 Odoo 资格**是主应用的门禁，只在 `WOA_ODOO_BASE_URL`、`WOA_ODOO_API_KEY_FILE`、`WOA_ODOO_STORAGE_STATE`、`WOA_ODOO_PAGE_CONTROLLER_MODULE` 全部就绪时运行，否则报告 `BLOCKED`。它刻意不调用模型：两个脚本化用例——typed 查询后打开确切记录路由、打开集合——在真实 Chromium 里走真实产品轮次、打真实 Odoo，产物只记录计数、摘要和布尔值，并附夹具运行前后的摘要。通过说明装置成立，不说明模型如何；正因如此，这里失败才值得处理。
 
-Odoo 装置现在由本仓库自己建起来：`python -m web_operation_agent_odoo.deploy provision` 一条命令建好应用、数据库、服务 PageController 的 addon、凭据，以及门禁恢复用的快照，然后打印要追加到 `.env` 的配置。需要 Docker 和几分钟；它按构造只走 loopback，任何会把装置口令发给别人够得着的主机的步骤都会先拒绝。全新 clone 仍会把 live Twenty 门禁报成 `BLOCKED`——那个实例本仓库没有提供准备资产。
+Odoo 装置现在由本仓库自己建起来：`python -m web_operation_agent_odoo.deploy provision` 一条命令建好应用、数据库、服务 PageController 的 addon、凭据，以及门禁恢复用的快照，然后打印要追加到 `.env` 的配置。需要 Docker 和几分钟；它按构造只走 loopback，任何会把装置口令发给别人够得着的主机的步骤都会先拒绝。之后 `python -m web_operation_agent_odoo.demo --allow-mutations` 会开一个真实 Chromium、把面板挂在那个 Odoo 上等你输入：读取的答案来自 typed 投影，写入会停在一张要你自己点的确认卡上，而删除会被拒绝——工具面上根本没有这个工具。全新 clone 仍会把 live Twenty 门禁报成 `BLOCKED`——那个实例本仓库没有提供准备资产。
 
 ## Odoo 18 集成 —— 主应用
 

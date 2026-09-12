@@ -184,7 +184,10 @@ def _chat(config: OdooDemoConfig, run_dir: Path, adapter: OdooApplicationAdapter
         session_handoff_keys=adapter.ports.routes.session_handoff_query_keys)
     if config.scripted:
         return ScriptedOdooChat(config.scripted_replies, egress_policy=egress), None
-    loaded = load_env(config.model_env) if config.model_env is not None else {}
+    # The same file the rest of the configuration comes from, unless one was named. A
+    # provider credential that had to be exported by hand while every other setting came
+    # from `.env` is the kind of inconsistency that reads as a broken command.
+    loaded = load_env(config.model_env) if config.model_env is not None else _dotenv()
     env = {key: value for key, value in loaded.items() if key in _MODEL_ENV_KEYS}
     for key in _MODEL_ENV_KEYS:
         if os.environ.get(key):
@@ -540,8 +543,36 @@ def run_demo(config: OdooDemoConfig) -> dict:
     return summary
 
 
+#: Read once, so a CLI with a dozen defaults does not read the file a dozen times.
+_DOTENV: dict[str, str] | None = None
+
+
+def _dotenv() -> dict[str, str]:
+    """The repository's ignored `.env`, which is where provisioning puts its answers.
+
+    `scripts/qualify.sh` already reads this file for exactly these keys, and
+    `deploy provision` prints them into it. Reading only the process environment meant the
+    one command a person runs by hand was the one that made them export a dozen variables
+    first -- the friction the provisioning step exists to remove.
+    """
+    global _DOTENV
+    if _DOTENV is None:
+        configured = os.environ.get("WOA_MODEL_ENV", "").strip()
+        # demo/demo.py -> demo -> web_operation_agent_odoo -> src -> odoo -> examples -> root
+        root = Path(__file__).resolve().parents[5]
+        _DOTENV = load_env(Path(configured).expanduser() if configured else root / ".env")
+    return _DOTENV
+
+
 def _env_default(name: str, fallback: str = "") -> str:
-    return os.environ.get(name, fallback)
+    """A default from the environment first, then from that file.
+
+    Process values win, so a deliberate `WOA_ODOO_BASE_URL=… python -m …` still does what
+    it says.
+    """
+    if name in os.environ:
+        return os.environ[name]
+    return str(_dotenv().get(name, fallback)).strip() or fallback
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -571,6 +602,15 @@ def build_parser() -> argparse.ArgumentParser:
         Path(tempfile.gettempdir()) / "web-operation-agent-odoo"))
     parser.add_argument("--model-env")
     parser.add_argument("--model")
+    parser.add_argument("--allow-mutations", action="store_true",
+                        help="offer the three typed write tools. Every write still needs a "
+                             "fresh approval clicked in the page, and a durable journal is "
+                             "required, so this opens the approval card rather than the "
+                             "writes themselves")
+    parser.add_argument("--mutation-journal", default=_env_default("WOA_MUTATION_JOURNAL"),
+                        help="where the durable mutation journal lives; required with "
+                             "--allow-mutations because a production write without one is "
+                             "refused at composition")
     parser.add_argument("--keep-open-seconds", type=float, default=3.0)
     parser.add_argument("--turn-timeout", type=float, default=120.0)
     return parser
@@ -592,6 +632,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             source_release=args.source_release,
             scripted=args.scripted,
             headless=args.headless,
+            allow_mutations=args.allow_mutations,
+            mutation_journal_path=(Path(args.mutation_journal)
+                                   if args.mutation_journal else
+                                   Path(args.output_dir) / "mutations.sqlite3"),
             tasks=tuple(args.task),
             output_dir=Path(args.output_dir),
             model_env=Path(args.model_env) if args.model_env else None,
