@@ -16,6 +16,7 @@
       .bar { display:flex; align-items:center; gap:8px; padding:10px 14px;
         border-bottom:1px solid var(--line); flex-wrap:wrap; }
       .bar b { font-weight:600; margin-right:6px; }
+      .bar .sep { width:1px; height:18px; background:var(--line); margin:0 2px; }
       button { font:inherit; padding:4px 11px; border-radius:6px; cursor:pointer;
         border:1px solid var(--line); background:var(--soft); color:var(--ink); }
       button:hover { border-color:#9aa1ac; }
@@ -34,10 +35,18 @@
       <b>dev</b>
       <button data-scenario="read">只读一轮</button>
       <button data-scenario="write">写入并确认</button>
+      <button data-scenario="refused">安全拒绝</button>
       <button data-scenario="indeterminate">结果不确定</button>
+      <button data-scenario="many">多轮堆叠</button>
+      <button data-scenario="longtext">超长文本</button>
+      <button data-scenario="older">可加载更早</button>
+      <button data-scenario="undelivered">发送失败</button>
+      <button data-scenario="reconnecting">重连中</button>
+      <button data-scenario="offline">离线</button>
       <button data-scenario="disconnect">会话被接管</button>
       <button data-scenario="clear">清空</button>
-      <button data-theme-toggle>☀ 亮色</button>
+      <span class="sep"></span>
+      <button data-theme-toggle>深色</button>
     </div>
     <table>
       <thead><tr><th>编号</th><th>客户</th><th>创建日期</th><th>销售员</th><th class="n">总计</th><th>状态</th></tr></thead>

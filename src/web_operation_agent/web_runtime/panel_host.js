@@ -81,6 +81,8 @@ export class PanelHost {
       optimistic: null,
     }
     this._byId = new Map()
+    // Sequence below which projected entries belong to a conversation the user ended.
+    this._floor = 0
   }
 
   snapshot() { return this._state }
@@ -103,7 +105,8 @@ export class PanelHost {
   /** Merge one projected page. Identity is the server's event id, so this is idempotent. */
   applyTimeline(page, {prepend = false} = {}) {
     const incoming = Array.isArray(page?.entries) ? page.entries : []
-    const fresh = incoming.filter(entry => !this._byId.has(entry.id))
+    const fresh = incoming.filter(
+      entry => !this._byId.has(entry.id) && entry.sequence > this._floor)
     for (const entry of fresh) this._byId.set(entry.id, entry)
     let entries = this._state.entries
     if (fresh.length) {
@@ -131,6 +134,21 @@ export class PanelHost {
   }
 
   setPendingApproval(request) { this._commit({pendingApproval: request ?? null}) }
+
+  /**
+   * Drop everything above a new conversation.
+   *
+   * The panel's *view* is what clears. The server's event log is untouched -- it is the
+   * record of what this session did, and a person changing topic does not unmake it, nor
+   * could the panel delete it if they wanted to. The floor stops the next projected page
+   * from paging the old turns straight back in.
+   */
+  clearTimeline() {
+    const latest = this._state.entries.at(-1)
+    this._floor = Math.max(this._floor, latest ? latest.sequence : 0)
+    this._byId.clear()
+    this._commit({entries: [], hasOlder: false, loadingOlder: false, optimistic: null})
+  }
 
   setOptimistic(optimistic) { this._commit({optimistic}) }
 
@@ -168,7 +186,11 @@ export class PanelHost {
 
   decide(approvalId, decision) { this._actions.decide(String(approvalId), decision) }
 
-  newConversation() { this._actions.newConversation() }
+  newConversation() {
+    this.clearTimeline()
+    this.clearNotice()
+    this._actions.newConversation()
+  }
 
   loadOlder() {
     if (this._state.loadingOlder || !this._state.hasOlder) return

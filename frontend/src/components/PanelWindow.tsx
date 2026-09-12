@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
-import {ChevronDown, Plus} from 'lucide-react'
+import {Plus, X} from 'lucide-react'
 import {toneOf} from '../contract/panel'
 import type {PanelHost} from '../bridge/host'
 import {useHostSnapshot} from '../state/useHost'
@@ -109,9 +109,6 @@ export function PanelWindow({host, allowedOrigins}: {
       <header className="woa-titlebar" onPointerDown={onPointerDown('move')}>
         <span className="woa-brand"><Mark size={19} />
           <span className="woa-brand__word">{labels.product}</span></span>
-        <span className="woa-grip" aria-hidden="true">
-          {[0, 1, 2, 3, 4, 5].map(dot => <i key={dot} />)}
-        </span>
         <button type="button" className="woa-icon-button" aria-label={labels.newChat}
                 onClick={host.newConversation}>
           <Plus size={15} strokeWidth={1.6} aria-hidden="true" />
@@ -121,14 +118,13 @@ export function PanelWindow({host, allowedOrigins}: {
                   setOpen(false)
                   setUnread(0)
                 }}>
-          <ChevronDown size={15} strokeWidth={1.6} aria-hidden="true" />
+          <X size={15} strokeWidth={1.7} aria-hidden="true" />
         </button>
       </header>
 
       <Thread snapshot={snapshot} labels={labels} limits={limits}
               allowedOrigins={allowedOrigins}
-              onLoadOlder={host.loadOlder} onRetry={host.retrySubmit}
-              afterFreshBoundary={<EmptyState labels={labels} onPick={setDraft} compact />}>
+              onLoadOlder={host.loadOlder} onRetry={host.retrySubmit}>
         <EmptyState labels={labels} onPick={setDraft} />
       </Thread>
 

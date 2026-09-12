@@ -15,6 +15,13 @@ import {DEFAULT_CONFIGURATION, type ApprovalRequest, type TimelineEntry} from '.
 import type {PanelHost, PanelSnapshot} from '../src/bridge/host'
 
 let sequence = 0
+let turn = 1
+
+/** Start a new user turn. Deriving it from the entry count guessed wrong. */
+function nextTurn(): string {
+  turn += 1
+  return `turn-${turn}`
+}
 
 function entry(kind: TimelineEntry['kind'], text: string,
                extra: Partial<TimelineEntry> = {}): TimelineEntry {
@@ -22,7 +29,7 @@ function entry(kind: TimelineEntry['kind'], text: string,
   return {
     id: `e${String(sequence).padStart(8, '0')}`,
     sequence,
-    turn_id: `turn-${Math.max(1, Math.ceil(sequence / 6))}`,
+    turn_id: `turn-${turn}`,
     at: Date.now(),
     kind,
     tone: 'neutral',
@@ -41,9 +48,14 @@ const ANSWER = `已扫完全部 12 条，命中 3 条。
 
 这三张都处于 \`to invoice\` 状态。`
 
+export type Scenario =
+  | 'read' | 'write' | 'refused' | 'indeterminate'
+  | 'reconnecting' | 'offline' | 'disconnect' | 'undelivered'
+  | 'many' | 'older' | 'longtext' | 'clear'
+
 export interface DevHost extends PanelHost {
   /** Drive a scripted turn from the dev page, the way a real session would. */
-  scenario(name: 'read' | 'write' | 'indeterminate' | 'disconnect' | 'clear'): void
+  scenario(name: Scenario): void
 }
 
 export function createDevHost(): DevHost {
@@ -69,6 +81,7 @@ export function createDevHost(): DevHost {
   let pendingWrite: ApprovalRequest | null = null
 
   async function runRead(goal: string): Promise<void> {
+    nextTurn()
     commit({connection: {...state.connection, busy: true, state: 'observing'}})
     push(entry('goal', goal))
     commit({optimistic: null})
@@ -86,6 +99,7 @@ export function createDevHost(): DevHost {
   }
 
   async function runWrite(goal: string): Promise<void> {
+    nextTurn()
     commit({connection: {...state.connection, busy: true, state: 'observing'}})
     push(entry('goal', goal))
     commit({optimistic: null})
@@ -140,7 +154,7 @@ export function createDevHost(): DevHost {
       return () => listeners.delete(listener)
     },
     submit(text) {
-      commit({optimistic: {turnId: `turn-${sequence + 1}`, text, failed: false}})
+      commit({optimistic: {turnId: `turn-${turn + 1}`, text, failed: false}})
       const write = /确认|开票|新建|创建|删除/.test(text)
       void (write ? runWrite(text) : runRead(text))
     },
@@ -163,7 +177,13 @@ export function createDevHost(): DevHost {
       void settleWrite(decision)
     },
     newConversation() {
-      push(entry('notice', DEFAULT_CONFIGURATION.labels.newChatDivider))
+      // The real host clears the panel's view and tells the server; the server's own event
+      // log keeps what happened. Nothing here is the record, so clearing is the whole job.
+      sequence = 0
+      turn = 1
+      commit({entries: [], pendingApproval: null, notice: null, optimistic: null,
+              hasOlder: false,
+              connection: {state: 'ready', busy: false, stopping: false, online: true}})
     },
     loadOlder() {
       commit({loadingOlder: true})
@@ -176,32 +196,85 @@ export function createDevHost(): DevHost {
       commit({notice: null, connection: {...state.connection, state: 'ready', online: true}})
     },
     scenario(name) {
-      if (name === 'clear') {
-        sequence = 0
-        commit({entries: [], pendingApproval: null, notice: null, optimistic: null,
-                connection: {state: 'ready', busy: false, stopping: false, online: true}})
-        return
+      switch (name) {
+        case 'clear':
+          sequence = 0
+          turn = 1
+          commit({entries: [], pendingApproval: null, notice: null, optimistic: null,
+                  hasOlder: false,
+                  connection: {state: 'ready', busy: false, stopping: false, online: true}})
+          return
+        case 'read':
+          void runRead('列出所有待开票的销售订单，带金额')
+          return
+        case 'write':
+          void runWrite('把 Acme Corporation 的报价单 S00002 确认成销售订单')
+          return
+        case 'refused':
+          nextTurn()
+          push(entry('goal', '把所有客户的信用额度改成 0'))
+          push(entry('result',
+            '这个请求会一次改动全部客户记录，超出我能代你执行的范围。没有执行任何写入。',
+            {tone: 'error', panel_state: 'refused', authored: 'server'}))
+          commit({connection: {...state.connection, busy: false, state: 'refused'}})
+          return
+        case 'indeterminate':
+          nextTurn()
+          push(entry('goal', '给 S00007 开一张客户发票'))
+          push(entry('result',
+            '这次写入已经发出，但没有拿到可信回执。不会自动重试。请到 Odoo 里核对这条记录后再决定下一步。',
+            {tone: 'warning', panel_state: 'indeterminate', authored: 'server'}))
+          commit({connection: {...state.connection, busy: false, state: 'indeterminate'}})
+          return
+        case 'reconnecting':
+          commit({
+            notice: {code: 'reconnecting', retryable: true},
+            connection: {...state.connection, state: 'reconnecting', online: true},
+          })
+          return
+        case 'offline':
+          commit({
+            notice: {code: 'offline', retryable: true},
+            connection: {...state.connection, state: 'reconnecting', online: false},
+          })
+          return
+        case 'disconnect':
+          commit({
+            notice: {code: 'runtime_replaced', retryable: false},
+            connection: {...state.connection, state: 'replaced', online: true},
+          })
+          return
+        case 'undelivered':
+          commit({optimistic: {turnId: 'turn-failed', text: '再带上金额', failed: true}})
+          return
+        case 'many':
+          for (let index = 0; index < 6; index += 1) {
+            nextTurn()
+            push(entry('goal', `第 ${index + 1} 轮：列出第 ${index + 1} 页销售订单`))
+            push(entry('action', '重新检查当前页面', {tone: 'active'}))
+            push(entry('action', `query_sale_orders · 扫完 12 / 12 条`, {tone: 'active'}))
+            push(entry('result', `第 ${index + 1} 页共 12 张，其中 3 张待开票。`, {
+              tone: 'success', panel_state: 'success', authored: 'server',
+            }))
+          }
+          return
+        case 'older':
+          commit({hasOlder: true})
+          return
+        case 'longtext':
+          nextTurn()
+          push(entry('goal',
+            '把 Nordwind-Handelsgesellschaft-mbH-und-Co-Kommanditgesellschaft-Muenchen 的'
+            + '报价单确认成销售订单并立刻开票然后把结果发给财务'))
+          push(entry('result',
+            '`sale.order.line.product_uom_qty` 这种没有空格的超长标识符不能把面板撑破：'
+            + 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n\n'
+            + '| 单号 | 客户 | 金额 |\n| --- | --- | ---: |\n'
+            + '| S00007 | Nordwind Handelsgesellschaft mbH & Co. KG | 1,231.00 |',
+            {tone: 'success', panel_state: 'success', authored: 'model'}))
+          commit({connection: {...state.connection, busy: false, state: 'success'}})
+          return
       }
-      if (name === 'read') {
-        void runRead('列出所有待开票的销售订单，带金额')
-        return
-      }
-      if (name === 'write') {
-        void runWrite('把 Acme Corporation 的报价单 S00002 确认成销售订单')
-        return
-      }
-      if (name === 'indeterminate') {
-        push(entry('goal', '给 S00007 开一张客户发票'))
-        push(entry('result',
-          '这次写入已经发出，但没有拿到可信回执。不会自动重试。请到 Odoo 里核对这条记录后再决定下一步。',
-          {tone: 'warning', panel_state: 'indeterminate', authored: 'server'}))
-        commit({connection: {...state.connection, busy: false, state: 'indeterminate'}})
-        return
-      }
-      commit({
-        notice: {code: 'runtime_replaced', retryable: false},
-        connection: {...state.connection, state: 'replaced', online: true},
-      })
     },
   }
   return host

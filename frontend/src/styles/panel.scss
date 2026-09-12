@@ -138,32 +138,40 @@ button:disabled { cursor: not-allowed; }
 .woa-handle[data-handle='ne'] { top: 0; right: 0; width: 14px; height: 14px; cursor: nesw-resize; }
 .woa-handle[data-handle='sw'] { bottom: 0; left: 0; width: 14px; height: 14px; cursor: nesw-resize; }
 
+/* The affordance is a hint, not a control: short, pale, and well inside the corner
+   radius, because the window clips to it and a mark sitting on the curve reads as a
+   rendering fault rather than a handle. */
 .woa-handle::after {
   content: '';
   position: absolute;
   opacity: 0;
-  background: var(--woa-accent);
+  background: var(--woa-line-strong);
   transition: opacity var(--woa-motion-fast) var(--woa-motion-easing);
 }
-.woa-handle:hover::after { opacity: 0.9; }
+.woa-handle:hover::after { opacity: 1; }
 .woa-handle[data-handle='n']::after,
-.woa-handle[data-handle='s']::after { left: 14px; right: 14px; height: 3px; border-radius: 99px; }
-.woa-handle[data-handle='n']::after { top: 0; }
-.woa-handle[data-handle='s']::after { bottom: 0; }
+.woa-handle[data-handle='s']::after {
+  left: 50%; transform: translateX(-50%);
+  width: 28px; height: 2px; border-radius: 99px;
+}
+.woa-handle[data-handle='n']::after { top: 2px; }
+.woa-handle[data-handle='s']::after { bottom: 2px; }
 .woa-handle[data-handle='w']::after,
-.woa-handle[data-handle='e']::after { top: 14px; bottom: 14px; width: 3px; border-radius: 99px; }
-.woa-handle[data-handle='w']::after { left: 0; }
-.woa-handle[data-handle='e']::after { right: 0; }
+.woa-handle[data-handle='e']::after {
+  top: 50%; transform: translateY(-50%);
+  height: 28px; width: 2px; border-radius: 99px;
+}
+.woa-handle[data-handle='w']::after { left: 2px; }
+.woa-handle[data-handle='e']::after { right: 2px; }
 .woa-handle[data-handle^='n']:not([data-handle='n'])::after,
 .woa-handle[data-handle^='s']:not([data-handle='s'])::after {
-  width: 8px; height: 8px; border-radius: 50%;
-  background: var(--woa-bg);
-  box-shadow: 0 0 0 2px var(--woa-accent);
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--woa-line-strong);
 }
-.woa-handle[data-handle='nw']::after { top: -1px; left: -1px; }
-.woa-handle[data-handle='ne']::after { top: -1px; right: -1px; }
-.woa-handle[data-handle='sw']::after { bottom: -1px; left: -1px; }
-.woa-handle[data-handle='se']::after { bottom: -1px; right: -1px; }
+.woa-handle[data-handle='nw']::after { top: 5px; left: 5px; }
+.woa-handle[data-handle='ne']::after { top: 5px; right: 5px; }
+.woa-handle[data-handle='sw']::after { bottom: 5px; left: 5px; }
+.woa-handle[data-handle='se']::after { bottom: 5px; right: 5px; }
 
 /* ─────────────────────────────────────────────── title bar */
 .woa-titlebar {
@@ -190,17 +198,6 @@ button:disabled { cursor: not-allowed; }
   user-select: none;
 }
 .woa-mark { color: var(--woa-ink); }
-
-.woa-grip {
-  position: absolute;
-  left: 50%; top: 50%;
-  transform: translate(-50%, -50%);
-  display: flex; gap: 3px;
-  opacity: 0;
-  transition: opacity var(--woa-motion-fast) var(--woa-motion-easing);
-}
-.woa-titlebar:hover .woa-grip { opacity: 1; }
-.woa-grip i { width: 3px; height: 3px; border-radius: 50%; background: var(--woa-ink-faint); }
 
 .woa-icon-button {
   width: 25px; height: 25px;
@@ -244,22 +241,6 @@ button:disabled { cursor: not-allowed; }
 
 /* A boundary the server drew: everything above it is still readable, and no longer
    context for the model. */
-.woa-divider {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin: 0;
-  font-size: 11px;
-  color: var(--woa-ink-faint);
-  white-space: nowrap;
-}
-.woa-divider::before, .woa-divider::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: var(--woa-line);
-}
-
 .woa-pending { display: flex; flex-direction: column; gap: 5px; margin-top: 15px; }
 .woa-sending, .woa-undelivered {
   align-self: flex-end;

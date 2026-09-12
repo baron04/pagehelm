@@ -50,7 +50,14 @@ const host = {
   retrySubmit: record('retrySubmit'),
   cancel: record('cancel'),
   decide: record('decide'),
-  newConversation: record('newConversation'),
+  // The real store clears the view here before it tells the server. A double that only
+  // recorded the call would let the panel pass a test the product would fail -- the same
+  // shape of hole as a fixture that ignores the scope it claims to enforce.
+  newConversation() {
+    window.__calls.push(['newConversation'])
+    window.__setSnapshot({entries: [], pendingApproval: null, notice: null, optimistic: null,
+                          hasOlder: false})
+  },
   loadOlder: record('loadOlder'),
   dismissNotice: record('dismissNotice'),
   reload: record('reload'),
@@ -463,27 +470,31 @@ class PanelUITests(_PanelBrowser):
                         durations)
         self.assertEqual(self.errors, [])
 
-    def test_a_new_conversation_draws_a_boundary_without_deleting_what_came_before(self):
-        """Starting over ends the model's reference history, not the record of the session.
+    def test_a_new_conversation_clears_the_view_and_tells_the_server(self):
+        """Starting over empties what the panel shows, and says so to the server.
 
-        The turns above the boundary stay readable and scrollable: they are what happened,
-        and a person choosing a new topic does not unmake them.
+        Only the *view* clears. The session's event log is what happened and the panel has
+        no way to delete it -- which is why this asserts the call was made rather than
+        asserting anything was erased anywhere else.
         """
         labels = panel_contract()["label_keys"]
         page = self.open(_snapshot(entries=[
             _entry("e1", "goal", "把报价单 S00002 确认成销售订单"),
             _entry("e2", "result", "报价单 S00002 已确认为销售订单。",
                    authored="server", panel_state="success"),
-            _entry("e3", "notice", labels["newChatDivider"], turn_id=""),
         ]))
         page.locator(".woa-launcher").click()
-        divider = page.locator(".woa-divider")
-        divider.wait_for()
-        self.assertEqual(divider.inner_text(), labels["newChatDivider"])
-        # What happened before is still there, above the line.
+        page.locator(".woa-window").wait_for()
         self.assertIn("S00002", page.locator(".woa-thread").inner_text())
-        # And below it the panel offers a fresh start rather than an empty box.
-        self.assertEqual(page.locator(".woa-empty[data-compact]").count(), 1)
+
+        page.get_by_role("button", name=labels["newChat"]).click()
+        page.locator(".woa-empty").wait_for(timeout=3000)
+        # Assert on the turns, not on the thread's text: one of the suggestions the empty
+        # state offers names S00002 too, so a substring check here passes for the wrong
+        # reason and would keep passing if nothing had cleared at all.
+        self.assertEqual(page.locator(".woa-turns").count(), 0)
+        self.assertEqual(page.locator(".woa-user").count(), 0)
+        self.assertEqual([call[0] for call in self.calls(page)], ["newConversation"])
         self.assertEqual(self.errors, [])
 
     def test_the_title_bar_controls_still_work_while_it_is_also_the_drag_handle(self):

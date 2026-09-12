@@ -5,7 +5,7 @@
  * shadow root, same adopted stylesheet -- so what you see here is what a host page gets.
  */
 import {mountPanel} from '../src/mount'
-import {createDevHost} from './host'
+import {createDevHost, type Scenario} from './host'
 
 const host = createDevHost()
 mountPanel({host, allowedOrigins: [window.location.origin]})
@@ -13,7 +13,7 @@ mountPanel({host, allowedOrigins: [window.location.origin]})
 for (const button of document.querySelectorAll<HTMLButtonElement>('[data-scenario]')) {
   button.addEventListener('click', () => {
     const name = button.dataset.scenario
-    if (name) host.scenario(name as Parameters<typeof host.scenario>[0])
+    if (name) host.scenario(name as Scenario)
   })
 }
 
@@ -22,5 +22,6 @@ theme?.addEventListener('click', () => {
   const root = document.documentElement
   const next = root.dataset.theme === 'dark' ? 'light' : 'dark'
   root.dataset.theme = next
-  theme.textContent = next === 'dark' ? '☾ 暗色' : '☀ 亮色'
+  // The button says where it goes, not where it is.
+  theme.textContent = next === 'dark' ? '浅色' : '深色'
 })

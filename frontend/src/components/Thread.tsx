@@ -37,8 +37,6 @@ interface Turn {
   steps: TimelineEntry[]
   outcome: TimelineEntry | null
   running: boolean
-  /** A boundary the server drew, not a turn: "everything above is no longer context". */
-  divider: TimelineEntry | null
 }
 
 function group(entries: TimelineEntry[], busy: boolean): Turn[] {
@@ -46,21 +44,16 @@ function group(entries: TimelineEntry[], busy: boolean): Turn[] {
   for (const entry of entries) {
     let turn = turns.at(-1)
     if (!turn || turn.id !== entry.turn_id) {
-      turn = {id: entry.turn_id, goal: null, steps: [], outcome: null, running: false,
-              divider: null}
+      turn = {id: entry.turn_id, goal: null, steps: [], outcome: null, running: false}
       turns.push(turn)
     }
-    if (entry.kind === 'notice') {
-      // A boundary is its own row, not a step inside the turn that happened to precede it.
-      turns.push({id: entry.id, goal: null, steps: [], outcome: null, running: false,
-                  divider: entry})
-    } else if (entry.kind === 'goal') turn.goal = entry
+    if (entry.kind === 'goal') turn.goal = entry
     else if (entry.kind === 'result') turn.outcome = entry
     else turn.steps.push(entry)
   }
   // Only the newest turn can still be running, and only the Runtime knows whether it is.
   const last = turns.at(-1)
-  if (last && busy && last.outcome === null && last.divider === null) last.running = true
+  if (last && busy && last.outcome === null) last.running = true
   return turns
 }
 
@@ -147,7 +140,6 @@ export interface ThreadProps {
   onRetry: () => void
   children?: React.ReactNode
   /** Shown when the newest thing in the thread is a boundary and nothing has followed it. */
-  afterFreshBoundary?: React.ReactNode
 }
 
 export function Thread(props: ThreadProps): React.JSX.Element {
@@ -216,9 +208,6 @@ export function Thread(props: ThreadProps): React.JSX.Element {
           {turns.map(turn => (
             <li className="woa-turn" key={turn.id || 'session'}
                 data-settled={turn.running ? undefined : 'true'}>
-              {turn.divider && (
-                <p className="woa-divider" role="separator">{turn.divider.text}</p>
-              )}
               {turn.goal && <p className="woa-user">{turn.goal.text}</p>}
               <div className="woa-agent">
                 {turn.steps.length > 0 && (
@@ -252,7 +241,6 @@ export function Thread(props: ThreadProps): React.JSX.Element {
             )}
         </div>
       )}
-      {turns.at(-1)?.divider && props.afterFreshBoundary}
       <div ref={bottom} aria-hidden="true" />
       {!atBottom && unseen > 0 && (
         <button type="button" className="woa-jump"

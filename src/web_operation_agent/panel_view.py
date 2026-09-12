@@ -160,8 +160,10 @@ def project_event(event: TaskEvent, *, at: int) -> dict | None:
         # panel should paper over with a generic line. test_panel_contract pins the set.
         raise ValueError(f"progress state {state!r} has no panel projection")
     if state == "new_conversation":
-        return {**base, "kind": "notice", "tone": "neutral",
-                "text": panel_contract()["label_keys"]["newChatDivider"]}
+        # Recorded in the event log because it happened, and because it is what ended the
+        # model's reference history. Not rendered: the panel clears its view instead, so a
+        # divider would be a line above nothing.
+        return None
     if state == "message_accepted":
         return {**base, "kind": "goal", "tone": "neutral",
                 "text": _clip(payload.get("text"), limits["goal_max_chars"])}
