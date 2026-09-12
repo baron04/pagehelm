@@ -321,6 +321,57 @@ def _outcome_json(outcome) -> dict:
 _APPROVE_CONTROL = '[data-testid="woa-approve"]'
 
 
+def _capture(page, shots: Path, name: str) -> str:
+    """Save what a person would have seen, next to the ledger that says what happened.
+
+    A demo is the one artifact whose whole job is to be looked at, and this one produced
+    nothing to look at: whether the panel rendered could only be settled by a person being
+    in front of the window at the time. When the window does not appear -- a run started
+    from a non-interactive session puts it on another desktop, and there is no way to
+    attach to it afterwards -- there was no evidence at all.
+
+    Never raises. A screenshot that fails must not end a run that is otherwise working, and
+    the missing file is itself the report.
+    """
+    try:
+        shots.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(shots / f"{name}.png"))
+        return f"{name}.png"
+    except Exception:
+        return ""
+
+
+def _await_outcome(conversation: LiveConversationRunner, page, shots: Path, *,
+                   timeout_s: float, taken: list[str], turn: int):
+    """Wait for the turn, and photograph the approval card if one appears while waiting.
+
+    The wait is the same one it replaces -- same total budget, same `TimeoutError` -- but
+    split into short polls so the card, which is the one thing a person is here to see, is
+    captured at the moment it is on screen rather than after the turn has moved on.
+    """
+    deadline = time.monotonic() + timeout_s
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("timed out waiting for a completed conversation turn")
+        try:
+            return conversation.next_outcome(timeout_s=min(0.5, remaining))
+        except TimeoutError:
+            pass
+        name = f"turn-{turn}-approval"
+        if f"{name}.png" not in taken and _approval_on_screen(page):
+            shot = _capture(page, shots, name)
+            if shot:
+                taken.append(shot)
+
+
+def _approval_on_screen(page) -> bool:
+    try:
+        return page.locator(_APPROVE_CONTROL).is_visible()
+    except Exception:
+        return False
+
+
 def _approve_in_page(page, timeout_s: float) -> None:
     """Wait for the panel to ask, then click approve, as the person at the keyboard would.
 
@@ -346,11 +397,12 @@ def _assert_session_unchanged(adapter: OdooApplicationAdapter, context,
 
 def _run_browser(config: OdooDemoConfig, live: LiveProductSession,
                  conversation: LiveConversationRunner, *,
-                 adapter: OdooApplicationAdapter,
-                 expected_binding: str) -> tuple[list[dict], str, str]:
+                 adapter: OdooApplicationAdapter, expected_binding: str,
+                 shots: Path) -> tuple[list[dict], str, str, list[str]]:
     from playwright.sync_api import Error as PlaywrightError, sync_playwright
 
     records: list[dict] = []
+    taken: list[str] = []
     last_url = last_text = ""
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=config.headless)
@@ -379,10 +431,17 @@ def _run_browser(config: OdooDemoConfig, live: LiveProductSession,
                     "async () => { await window.__WOA_RUNTIME_READY__; return true; }")
                 page.locator("#woa-assistant").wait_for(state="visible", timeout=60_000)
                 _assert_session_unchanged(adapter, context, expected_binding)
+                # `wait_for(visible)` returning is what this used to report as "the panel is
+                # up". It is not the same claim: a locator can be visible in a window nobody
+                # can see. The file is.
+                ready_shot = _capture(page, shots, "ready")
+                if ready_shot:
+                    taken.append(ready_shot)
                 print(json.dumps({
                     "event": "odoo_demo_ready",
                     "mode": "scripted_apparatus" if config.scripted else "provider",
                     "url": page.url,
+                    "screenshots": str(shots),
                 }, sort_keys=True), flush=True)
                 tasks = config.tasks or (
                     (config.scripted_task,) if config.scripted else ())
@@ -393,8 +452,13 @@ def _run_browser(config: OdooDemoConfig, live: LiveProductSession,
                             "runtime.submitTask(task))", task)
                         if config.approve_in_page:
                             _approve_in_page(page, config.turn_timeout_s)
-                        record = _outcome_json(
-                            conversation.next_outcome(timeout_s=config.turn_timeout_s))
+                        turn = len(records) + 1
+                        record = _outcome_json(_await_outcome(
+                            conversation, page, shots,
+                            timeout_s=config.turn_timeout_s, taken=taken, turn=turn))
+                        shot = _capture(page, shots, f"turn-{turn}")
+                        if shot:
+                            taken.append(shot)
                         records.append(record)
                         print(json.dumps(record, ensure_ascii=False, sort_keys=True),
                               flush=True)
@@ -409,8 +473,18 @@ def _run_browser(config: OdooDemoConfig, live: LiveProductSession,
                             for outcome in conversation.outcomes_nowait():
                                 record = _outcome_json(outcome)
                                 records.append(record)
+                                shot = _capture(page, shots, f"turn-{len(records)}")
+                                if shot:
+                                    taken.append(shot)
                                 print(json.dumps(record, ensure_ascii=False,
                                                  sort_keys=True), flush=True)
+                            # The person is typing their own goals here, so the card can
+                            # appear at any time; this is the only chance to photograph it.
+                            name = f"turn-{len(records) + 1}-approval"
+                            if f"{name}.png" not in taken and _approval_on_screen(page):
+                                shot = _capture(page, shots, name)
+                                if shot:
+                                    taken.append(shot)
                             page.wait_for_timeout(250)
                     except KeyboardInterrupt:
                         pass
@@ -424,7 +498,7 @@ def _run_browser(config: OdooDemoConfig, live: LiveProductSession,
                 context.close()
         finally:
             browser.close()
-    return records, last_url, last_text
+    return records, last_url, last_text, taken
 
 
 def run_demo(config: OdooDemoConfig) -> dict:
@@ -503,9 +577,9 @@ def run_demo(config: OdooDemoConfig) -> dict:
         principal=principal,
     ).start()
     try:
-        records, last_url, last_text = _run_browser(
+        records, last_url, last_text, taken = _run_browser(
             config, live, holder["conversation"], adapter=adapter,
-            expected_binding=expected_binding)
+            expected_binding=expected_binding, shots=run_dir / "screens")
     finally:
         live.close()
         live.wait(timeout_s=10)
@@ -535,6 +609,9 @@ def run_demo(config: OdooDemoConfig) -> dict:
                                  (chat.tool_surfaces if isinstance(chat, ScriptedOdooChat)
                                   else [])
                                  for name in surface}),
+        # The demo's own evidence that it had something to show. An empty list after a
+        # run that reported ready means the window never rendered.
+        "screenshots": list(taken),
         "audit_projection": _audit_projection(run_dir / "audit.jsonl"),
         "turns": records,
         "last_url": last_url,
