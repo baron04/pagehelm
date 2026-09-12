@@ -217,7 +217,33 @@ button:disabled { cursor: not-allowed; }
   overflow-x: hidden;
   overflow-anchor: auto;
   padding: 15px 13px 4px;
+}
+
+/* Scrollbars are chrome, not content: thin, on the panel's own neutrals, and never a
+   dark overlay pill sitting on top of the composer. */
+.woa-thread, .woa-field textarea, .woa-md__tablewrap, .woa-md__block pre, .woa-approval {
   scrollbar-width: thin;
+  scrollbar-color: var(--woa-line-strong) transparent;
+}
+.woa-thread::-webkit-scrollbar,
+.woa-field textarea::-webkit-scrollbar,
+.woa-md__tablewrap::-webkit-scrollbar,
+.woa-md__block pre::-webkit-scrollbar,
+.woa-approval::-webkit-scrollbar { width: 8px; height: 8px; }
+.woa-thread::-webkit-scrollbar-track,
+.woa-field textarea::-webkit-scrollbar-track,
+.woa-md__tablewrap::-webkit-scrollbar-track,
+.woa-md__block pre::-webkit-scrollbar-track,
+.woa-approval::-webkit-scrollbar-track { background: transparent; }
+.woa-thread::-webkit-scrollbar-thumb,
+.woa-field textarea::-webkit-scrollbar-thumb,
+.woa-md__tablewrap::-webkit-scrollbar-thumb,
+.woa-md__block pre::-webkit-scrollbar-thumb,
+.woa-approval::-webkit-scrollbar-thumb {
+  background: var(--woa-line-strong);
+  border: 2px solid transparent;
+  background-clip: content-box;
+  border-radius: 99px;
 }
 
 .woa-turns { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 15px; }
@@ -585,10 +611,12 @@ button:disabled { cursor: not-allowed; }
 .woa-field textarea {
   flex: 1;
   min-width: 0;
+  /* The one place this ceiling is written; Composer.tsx reads it back. */
   max-height: 168px;
   padding: 4px 0;
   border: 0;
   resize: none;
+  overflow-y: hidden;
   background: transparent;
   color: var(--woa-ink);
   font: inherit;

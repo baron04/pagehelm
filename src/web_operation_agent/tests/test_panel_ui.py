@@ -497,6 +497,39 @@ class PanelUITests(_PanelBrowser):
         self.assertEqual([call[0] for call in self.calls(page)], ["newConversation"])
         self.assertEqual(self.errors, [])
 
+    def test_the_composer_grows_and_only_scrolls_once_it_has_stopped_growing(self):
+        """A single line must not be sitting next to a scrollbar.
+
+        The box sizes itself to its content, so anything left over is sub-pixel: at 13px
+        with a line height of 1.5 the rounding is half a pixel, which is enough for a
+        permanent scrollbar on the machines that do not use overlay ones.
+        """
+        page = self.open(_snapshot())
+        page.locator(".woa-launcher").click()
+        field = page.locator(".woa-field textarea")
+        field.wait_for()
+
+        one_line = field.evaluate(
+            "node => ({overflow: getComputedStyle(node).overflowY,"
+            " overflowing: node.scrollHeight > node.clientHeight + 1,"
+            " ceiling: parseFloat(getComputedStyle(node).maxHeight),"
+            " height: node.clientHeight})")
+        self.assertEqual(one_line["overflow"], "hidden")
+        self.assertFalse(one_line["overflowing"], one_line)
+
+        field.fill("\n".join(f"第 {index} 行" for index in range(40)))
+        tall = field.evaluate(
+            "node => ({overflow: getComputedStyle(node).overflowY,"
+            " height: node.clientHeight,"
+            " ceiling: parseFloat(getComputedStyle(node).maxHeight)})")
+        # Past the ceiling it scrolls, and it stops at exactly the height the stylesheet
+        # declares -- the value the component reads back rather than repeating.
+        self.assertEqual(tall["overflow"], "auto")
+        self.assertLessEqual(tall["height"], tall["ceiling"])
+        self.assertGreater(tall["height"], one_line["height"])
+        self.assertEqual(tall["ceiling"], one_line["ceiling"])
+        self.assertEqual(self.errors, [])
+
     def test_the_title_bar_controls_still_work_while_it_is_also_the_drag_handle(self):
         """A window you can drag by its title bar must still have usable buttons in it."""
         page = self.open(_snapshot(entries=[_entry("e1", "goal", "列出订单")]))

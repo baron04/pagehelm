@@ -25,7 +25,14 @@ export function Composer(props: ComposerProps): React.JSX.Element {
     const node = input.current
     if (!node) return
     node.style.height = 'auto'
-    node.style.height = `${Math.min(node.scrollHeight, 168)}px`
+    // The ceiling lives in the stylesheet; reading it back keeps one value in one place.
+    const ceiling = parseFloat(getComputedStyle(node).maxHeight)
+    const needed = node.scrollHeight
+    node.style.height = `${Number.isFinite(ceiling) ? Math.min(needed, ceiling) : needed}px`
+    // And the box only scrolls once it has stopped growing. Left on `auto`, the half pixel
+    // a fractional line height leaves over is enough to park a scrollbar next to a single
+    // line of placeholder -- permanently, for anyone who asks for non-overlay scrollbars.
+    node.style.overflowY = Number.isFinite(ceiling) && needed > ceiling ? 'auto' : 'hidden'
   }, [draft])
 
   useEffect(() => {
