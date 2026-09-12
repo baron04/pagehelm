@@ -33,8 +33,10 @@ function elapsed(turn: Turn, now: number): string {
   // `0.0s` for all twelve of them: nothing had happened yet, so nothing moved.
   const to = turn.running ? now : (turn.outcome?.at ?? turn.steps.at(-1)?.at ?? 0)
   if (!from || !to || to < from) return ''
+  // Whole seconds. A tenth of a second is below the resolution of anything a person
+  // decides from here, and a digit that flickers ten times a second reads as noise.
   const seconds = (to - from) / 1000
-  return seconds < 60 ? `${seconds.toFixed(1)}s`
+  return seconds < 60 ? `${Math.round(seconds)}s`
     : `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`
 }
 

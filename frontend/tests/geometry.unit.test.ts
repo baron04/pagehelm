@@ -60,10 +60,10 @@ describe('the window stays reachable', () => {
 })
 
 describe('a window nobody has moved yet', () => {
-  it('opens centred and below the middle, not in the corner', () => {
+  it('opens at the right edge, below the middle, and clear of the floor', () => {
     withViewport(1440, 900, () => {
       const {left, top, width, height} = defaultGeometry()
-      expect(Math.abs(left + width / 2 - 720)).toBeLessThanOrEqual(1)
+      expect(1440 - (left + width)).toBeLessThanOrEqual(24)
       // Below the middle of the viewport...
       expect(top + height / 2).toBeGreaterThan(450)
       // ...and clear of its floor, which is where the composer lives.

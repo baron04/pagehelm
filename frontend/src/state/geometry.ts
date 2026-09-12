@@ -74,13 +74,14 @@ export function clamp(geometry: Geometry, preferred: {width: number; height: num
 }
 
 /**
- * Where a window nobody has moved yet opens: horizontally centred, sitting below the
+ * Where a window nobody has moved yet opens: against the right edge, sitting below the
  * middle of the viewport.
  *
- * It used to open in the bottom-right corner with the composer a hair above the viewport
- * floor. That is the classic support-widget position, and it is wrong for this product:
- * the one control a person has to find is the input, and in the corner it is both the
- * easiest thing on screen to miss and the first thing a shorter viewport clips.
+ * An assistant belongs at the side -- it is a companion to the application, not a modal
+ * over it, and no product of this kind parks itself across the middle of the page the
+ * user is working in. What was wrong before was the *vertical* placement, not the side:
+ * pinned 16px off the floor, the one control a person has to find sat in the last sliver
+ * of the viewport and was the first thing a shorter window clipped.
  */
 export function defaultGeometry(): Geometry {
   const view = viewport()
@@ -88,7 +89,7 @@ export function defaultGeometry(): Geometry {
   const height = Math.min(DEFAULT_HEIGHT, Math.max(MIN_HEIGHT, view.height - EDGE_INSET * 2))
   const room = view.height - height
   return clamp({
-    left: Math.round((view.width - width) / 2),
+    left: Math.max(EDGE_INSET, view.width - width - EDGE_INSET),
     // Below centre, but never past the inset: on a viewport barely taller than the window
     // the fraction would push the composer off the bottom, which is what this fixes.
     top: Math.round(Math.max(0, Math.min(room * BELOW_CENTRE, room - EDGE_INSET))),

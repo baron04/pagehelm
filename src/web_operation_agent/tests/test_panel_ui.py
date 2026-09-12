@@ -40,32 +40,42 @@ const configuration = JSON.parse(document.getElementById('configuration').textCo
 let snapshot = JSON.parse(document.getElementById('snapshot').textContent)
 const listeners = new Set()
 window.__calls = []
-const record = name => (...args) => { window.__calls.push([name, ...args]) }
 
-const host = {
-  configuration,
-  snapshot: () => snapshot,
-  subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener) },
-  submit: record('submit'),
-  retrySubmit: record('retrySubmit'),
-  cancel: record('cancel'),
-  decide: record('decide'),
+// A class, and every method reads `this` -- because the real `PanelHost` is a class and
+// every one of its methods reads `this`. The double used to be an object literal of
+// receiver-free arrows, so `onClick={host.newConversation}` worked here and threw in
+// production: the panel handed React a bare function reference, the real host lost its
+// receiver, and the TypeError escaped into the host application, which raised its own
+// "something went wrong" dialog. A double more forgiving than the thing it stands in for
+// does not test the thing it stands in for.
+class ScriptedHost {
+  constructor(configuration) { this.configuration = configuration }
+  snapshot() { return this.read() }
+  read() { return snapshot }
+  subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener) }
+  submit(text) { this.note('submit', text) }
+  retrySubmit() { this.note('retrySubmit') }
+  cancel() { this.note('cancel') }
+  decide(id, decision) { this.note('decide', id, decision) }
   // The real store clears the view here before it tells the server. A double that only
-  // recorded the call would let the panel pass a test the product would fail -- the same
-  // shape of hole as a fixture that ignores the scope it claims to enforce.
+  // recorded the call would let the panel pass a test the product would fail.
   newConversation() {
-    window.__calls.push(['newConversation'])
+    this.note('newConversation')
     window.__setSnapshot({entries: [], pendingApproval: null, notice: null, optimistic: null,
                           hasOlder: false})
-  },
-  loadOlder: record('loadOlder'),
-  dismissNotice: record('dismissNotice'),
-  reload: record('reload'),
+  }
+  loadOlder(before) { this.note('loadOlder', before) }
+  dismissNotice() { this.note('dismissNotice') }
+  reload() { this.note('reload') }
+  note(...args) { window.__calls.push(args) }
 }
+
+const host = new ScriptedHost(configuration)
 window.__setSnapshot = patch => {
   snapshot = {...snapshot, ...patch}
   for (const listener of listeners) listener(snapshot)
 }
+window.__host = host
 window.__panel = mountPanel({host, allowedOrigins: [location.origin]})
 """
 
@@ -617,8 +627,13 @@ class PanelUITests(_PanelBrowser):
         self.assertEqual(page.locator(".woa-window").count(), 0)
         self.assertEqual(self.errors, [])
 
-    def test_a_window_nobody_has_moved_opens_where_the_composer_is_obvious(self):
-        """The corner is where a support widget goes, and where an input gets missed."""
+    def test_a_window_nobody_has_moved_opens_at_the_side_and_clear_of_the_floor(self):
+        """An assistant sits beside the application, not across the middle of it.
+
+        The vertical placement is the part that was wrong: pinned 16px off the floor, the
+        composer was in the last sliver of the viewport and the first thing a shorter
+        window clipped.
+        """
         page = self.open(_snapshot(), width=1440, height=900)
         page.locator(".woa-launcher").click()
         box = page.evaluate("""() => {
@@ -628,10 +643,41 @@ class PanelUITests(_PanelBrowser):
           return {window: rect(root.querySelector('.woa-window')),
                   composer: rect(root.querySelector('textarea'))}
         }""")
-        self.assertLess(abs(box["window"]["x"] + box["window"]["w"] / 2 - 720), 2)
+        self.assertLess(1440 - (box["window"]["x"] + box["window"]["w"]), 24)
         self.assertGreater(box["window"]["y"] + box["window"]["h"] / 2, 450)
         # The one control a person has to find is well clear of the viewport floor.
         self.assertGreater(900 - (box["composer"]["y"] + box["composer"]["h"]), 60)
+        self.assertEqual(self.errors, [])
+
+    def test_a_control_calls_its_host_as_a_method_and_never_escapes_the_panel(self):
+        """Two failures, one click.
+
+        `onClick={host.newConversation}` hands React a bare reference; the real host is a
+        class, so it lost its receiver and threw. With no iframe the TypeError landed in
+        the host application's realm, and Odoo raised its own error dialog over a page
+        nothing had gone wrong on.
+        """
+        page = self.open(_snapshot(entries=[
+            _entry("e1", "goal", "列出所有待开票的销售订单"),
+            _entry("e2", "result", "十六张。", panel_state="success"),
+        ]))
+        page.locator(".woa-launcher").click()
+        page.locator(".woa-turn").wait_for()
+        page.get_by_label(panel_contract()["label_keys"]["newChat"]).click()
+        self.assertEqual([call[0] for call in self.calls(page)], ["newConversation"])
+        self.assertEqual(page.locator(".woa-turn").count(), 0)
+        self.assertEqual(self.errors, [])
+
+    def test_a_host_that_throws_is_the_panel_s_problem_not_the_application_s(self):
+        page = self.open(_snapshot())
+        page.locator(".woa-launcher").click()
+        page.evaluate("() => { window.__host.newConversation = () => "
+                      "{ throw new Error('the host failed') } }")
+        page.get_by_label(panel_contract()["label_keys"]["newChat"]).click()
+        notice = page.locator(".woa-inline-error")
+        notice.wait_for()
+        self.assertIn(panel_contract()["notices"]["unexpected"], notice.inner_text())
+        # Nothing reached the page: the host application never hears about this.
         self.assertEqual(self.errors, [])
 
     def test_the_window_moves_and_resizes_and_stays_in_the_viewport(self):

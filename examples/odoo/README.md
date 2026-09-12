@@ -205,8 +205,8 @@ python -m web_operation_agent_odoo.demo --allow-mutations
 No flags to set: every path comes from the `.env` that `provision` printed, and the provider
 credentials come from the same file.
 
-The panel opens centred and a little below the middle of the page, already expanded,
-showing three suggested goals and a composer. Type a goal; close the window to end the
+The panel opens against the right edge, a little below the middle of the page, already
+expanded, showing three suggested goals and a composer. Type a goal; close the window to end the
 session. Each turn prints one JSON line — the answer, the approval counts, the page actions
 — and the run directory keeps the audit ledger.
 

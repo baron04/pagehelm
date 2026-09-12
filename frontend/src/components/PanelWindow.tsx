@@ -1,7 +1,7 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import {Plus, X} from 'lucide-react'
 import {toneOf} from '../contract/panel'
-import type {PanelHost} from '../bridge/host'
+import type {HostNotice, PanelHost} from '../bridge/host'
 import {useHostSnapshot} from '../state/useHost'
 import {loadOpen, saveOpen, useWindowGeometry, type Handle} from '../state/geometry'
 import {ApprovalCard} from './ApprovalCard'
@@ -25,7 +25,34 @@ export function PanelWindow({host, allowedOrigins}: {
   const [draft, setDraft] = useState('')
   const [unread, setUnread] = useState(0)
   const [deciding, setDeciding] = useState(false)
+  const [panelFailure, setPanelFailure] = useState<HostNotice | null>(null)
   const {geometry, dragging, onPointerDown} = useWindowGeometry(open)
+
+  /**
+   * Every call into the host goes through here, for two reasons.
+   *
+   * The host's methods are methods: `onClick={host.newConversation}` hands React a bare
+   * function reference, and the real `PanelHost` -- unlike the object literal the tests
+   * used to stand in for it -- loses its receiver that way and throws on `this`.
+   *
+   * And there is no iframe, so an exception the panel lets escape is an exception in the
+   * host application's realm, where the host application's own error handler catches it:
+   * clicking "new conversation" in Odoo raised its "Oops! Something went wrong" dialog
+   * over a page nothing had gone wrong on. The panel owns its failures.
+   */
+  const call = useCallback((run: () => void) => {
+    try {
+      run()
+      setPanelFailure(null)
+    } catch {
+      setPanelFailure({code: 'unexpected', retryable: false})
+    }
+  }, [])
+  const newConversation = useCallback(() => call(() => host.newConversation()), [call, host])
+  const loadOlder = useCallback(() => call(() => host.loadOlder()), [call, host])
+  const retrySubmit = useCallback(() => call(() => host.retrySubmit()), [call, host])
+  const cancel = useCallback(() => call(() => host.cancel()), [call, host])
+  const reload = useCallback(() => call(() => host.reload()), [call, host])
   const setOpen = useCallback((value: boolean) => {
     setOpenState(value)
     saveOpen(value)
@@ -62,14 +89,14 @@ export function PanelWindow({host, allowedOrigins}: {
   const decide = useCallback((decision: 'approved' | 'denied') => {
     if (!pending) return
     setDeciding(true)
-    host.decide(pending.approval_id, decision)
+    call(() => host.decide(pending.approval_id, decision))
     window.setTimeout(() => setDeciding(false), 400)
-  }, [host, pending])
+  }, [call, host, pending])
 
   const submit = useCallback((text: string) => {
     setDraft('')
-    host.submit(text)
-  }, [host])
+    call(() => host.submit(text))
+  }, [call, host])
 
   const placeholder = useMemo(() => {
     if (closed) return labels.composerClosed
@@ -110,7 +137,7 @@ export function PanelWindow({host, allowedOrigins}: {
         <span className="woa-brand"><Mark size={19} />
           <span className="woa-brand__word">{labels.product}</span></span>
         <button type="button" className="woa-icon-button" aria-label={labels.newChat}
-                onClick={host.newConversation}>
+                onClick={newConversation}>
           <Plus size={15} strokeWidth={1.6} aria-hidden="true" />
         </button>
         <button type="button" className="woa-icon-button" aria-label={labels.collapse}
@@ -124,7 +151,7 @@ export function PanelWindow({host, allowedOrigins}: {
 
       <Thread snapshot={snapshot} labels={labels} limits={limits}
               allowedOrigins={allowedOrigins}
-              onLoadOlder={host.loadOlder} onRetry={host.retrySubmit}>
+              onLoadOlder={loadOlder} onRetry={retrySubmit}>
         <EmptyState labels={labels} onPick={setDraft} />
       </Thread>
 
@@ -134,9 +161,9 @@ export function PanelWindow({host, allowedOrigins}: {
                       onDecide={decide} onRefused={() => undefined} />
       )}
 
-      {snapshot.notice && (
-        <InlineError notice={snapshot.notice} configuration={host.configuration}
-                     labels={labels} limits={limits} onRetry={host.reload}
+      {(snapshot.notice ?? panelFailure) && (
+        <InlineError notice={(snapshot.notice ?? panelFailure)!} configuration={host.configuration}
+                     labels={labels} limits={limits} onRetry={reload}
                      offline={!snapshot.connection.online} />
       )}
 
@@ -144,7 +171,7 @@ export function PanelWindow({host, allowedOrigins}: {
                 busy={snapshot.connection.busy} stopping={snapshot.connection.stopping}
                 disabled={closed || pending !== null}
                 placeholder={placeholder} draft={draft} onDraft={setDraft}
-                onSubmit={submit} onCancel={host.cancel} />
+                onSubmit={submit} onCancel={cancel} />
     </section>
   )
 }
