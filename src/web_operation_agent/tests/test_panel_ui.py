@@ -36,6 +36,11 @@ DRIVER_HTML = """<!doctype html>
 DRIVER_JS = """
 import {mountPanel} from './panel.js'
 
+// If the panel installs its own global handler this stops being the page's.
+const pageHandler = () => {}
+window.onerror = pageHandler
+window.__onerrorIsOurs = () => window.onerror === pageHandler
+
 const configuration = JSON.parse(document.getElementById('configuration').textContent)
 let snapshot = JSON.parse(document.getElementById('snapshot').textContent)
 const listeners = new Set()
@@ -448,6 +453,32 @@ class PanelUITests(_PanelBrowser):
             .shadowRoot.querySelector('.woa-thread')
             return t.scrollHeight - t.scrollTop - t.clientHeight }""")
         self.assertLessEqual(distance, 30)
+        self.assertEqual(self.errors, [])
+
+    def test_a_crash_inside_the_panel_never_reaches_the_page(self):
+        """The panel has no iframe, so its realm is the host application's realm.
+
+        Anything it lets escape is caught by whatever the host application installed --
+        Odoo answers with its own "something went wrong" dialog. Containment has to be at
+        the panel's own edges; installing a global handler would be the same trespass in
+        the other direction.
+        """
+        page = self.open(_snapshot())
+        page.locator(".woa-launcher").click()
+        page.evaluate("() => { window.__host.snapshot = () => "
+                      "{ throw new Error('the panel failed') } }")
+        page.evaluate("() => window.__setSnapshot({})")
+        page.wait_for_timeout(400)
+        self.assertEqual(self.errors, [])
+        # And it says so, rather than vanishing from the page without explanation.
+        fatal = page.locator(".woa-fatal")
+        fatal.wait_for(timeout=4000)
+        self.assertTrue(fatal.is_visible())
+
+    def test_the_panel_installs_no_global_error_handler(self):
+        page = self.open(_snapshot())
+        page.locator(".woa-launcher").click()
+        self.assertTrue(page.evaluate("() => window.__onerrorIsOurs()"))
         self.assertEqual(self.errors, [])
 
     def test_an_undelivered_message_carries_its_own_retry(self):

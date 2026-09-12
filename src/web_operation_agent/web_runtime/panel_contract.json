@@ -84,6 +84,8 @@
     "approvalObscured": "确认卡当前不完全可见，无法确认。请移开遮挡内容或把窗口拉大后重试。",
     "retry": "重试",
     "dismiss": "关闭提示",
+    "panelFailed": "助手界面出错了。刷新页面可以恢复，应用本身不受影响。",
+    "reload": "刷新页面",
     "goalPrefix": "目标：",
     "loadingTimeline": "正在载入任务进度",
     "newChat": "新对话",

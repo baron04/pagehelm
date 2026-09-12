@@ -704,7 +704,22 @@ button:disabled { cursor: not-allowed; }
   color: var(--woa-ink-faint);
 }
 
-.woa-fatal { display: none; }
+/* A panel that vanished read as one that never loaded. It says which it is. */
+.woa-fatal {
+  position: absolute;
+  right: 16px; bottom: 16px;
+  max-width: min(360px, calc(100vw - 32px));
+  pointer-events: auto;
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 10px 12px;
+  border-radius: 11px;
+  background: var(--woa-bg);
+  color: var(--woa-ink);
+  font-size: 12.5px; line-height: 1.5;
+  box-shadow: 0 0 0 1px var(--woa-line-strong), var(--woa-shadow-2);
+}
+.woa-fatal > svg { flex: none; margin-top: 2px; color: var(--woa-warning); }
+.woa-fatal button { color: var(--woa-accent); font-weight: 500; white-space: nowrap; }
 
 /* ─────────────────────────────────────────────── narrow and reduced motion */
 @media (max-width: 360px) {

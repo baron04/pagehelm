@@ -6,6 +6,7 @@ import {
 import type {Labels, PanelLimits, TimelineEntry} from '../contract/panel'
 import type {PanelSnapshot} from '../bridge/host'
 import {Answer} from './Answer'
+import {guarded} from './ErrorBoundary'
 
 /** Inside this many pixels of the floor counts as "at the newest line". */
 const NEAR_BOTTOM = 28
@@ -222,7 +223,7 @@ export function Thread(props: ThreadProps): React.JSX.Element {
     const root = scroller.current
     if (!root) return
     const note = () => { gesture.current = Date.now() }
-    const onScroll = () => {
+    const onScroll = guarded('thread scroll', () => {
       const distance = root.scrollHeight - root.scrollTop - root.clientHeight
       const near = distance <= NEAR_BOTTOM
       if (near) {
@@ -232,7 +233,7 @@ export function Thread(props: ThreadProps): React.JSX.Element {
         follow.current = false
       }
       setDetached(!near)
-    }
+    })
     root.addEventListener('scroll', onScroll, {passive: true})
     root.addEventListener('wheel', note, {passive: true})
     root.addEventListener('touchmove', note, {passive: true})
@@ -252,9 +253,9 @@ export function Thread(props: ThreadProps): React.JSX.Element {
   useEffect(() => {
     const node = content.current
     if (!node || typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(() => {
+    const observer = new ResizeObserver(guarded('thread resize', () => {
       if (follow.current) pin()
-    })
+    }))
     observer.observe(node)
     return () => observer.disconnect()
   }, [pin])
@@ -268,9 +269,10 @@ export function Thread(props: ThreadProps): React.JSX.Element {
     const node = top.current
     const root = scroller.current
     if (!node || !root || !snapshot.hasOlder || typeof IntersectionObserver === 'undefined') return
-    const observer = new IntersectionObserver(records => {
-      if (records.at(-1)?.isIntersecting) onLoadOlder()
-    }, {root, rootMargin: '160px 0px 0px 0px'})
+    const observer = new IntersectionObserver(
+      guarded('load older', (records: IntersectionObserverEntry[]) => {
+        if (records.at(-1)?.isIntersecting) onLoadOlder()
+      }), {root, rootMargin: '160px 0px 0px 0px'})
     observer.observe(node)
     return () => observer.disconnect()
   }, [snapshot.hasOlder, onLoadOlder])

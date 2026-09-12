@@ -12,7 +12,7 @@ import {createRoot, type Root} from 'react-dom/client'
 import css from './styles/panel.scss?inline'
 import {requirePanelHost, type PanelHost} from './bridge/host'
 import {PANEL_PROTOCOL} from './contract/panel'
-import {ErrorBoundary} from './components/ErrorBoundary'
+import {ErrorBoundary, guarded, PanelFailure, reportPanelFailure} from './components/ErrorBoundary'
 import {PanelWindow} from './components/PanelWindow'
 
 export interface PanelHandle {
@@ -66,7 +66,7 @@ export function mountPanel(options: MountOptions): PanelHandle {
     else delete element.dataset.theme
   }
   mirrorTheme()
-  const themeWatch = new MutationObserver(mirrorTheme)
+  const themeWatch = new MutationObserver(guarded('theme mirror', mirrorTheme))
   themeWatch.observe(documentRef.documentElement,
                      {attributes: true, attributeFilter: ['data-theme']})
 
@@ -76,10 +76,19 @@ export function mountPanel(options: MountOptions): PanelHandle {
   mountPoint.className = 'woa-root'
   shadow.appendChild(mountPoint)
 
-  const root: Root = createRoot(mountPoint)
+  // React's defaults for these send an uncaught error to `reportError()`, which is the
+  // page's `window.onerror` -- the host application's. Naming them keeps this root's
+  // failures inside this root without the panel touching anything global.
+  const root: Root = createRoot(mountPoint, {
+    onUncaughtError: (error, info) => reportPanelFailure('uncaught', error, info),
+    onCaughtError: (error, info) => reportPanelFailure('caught', error, info),
+    onRecoverableError: (error, info) => reportPanelFailure('recovered from', error, info),
+  })
+  const labels = host.configuration.labels
   root.render(
     <StrictMode>
-      <ErrorBoundary fallback={<div className="woa-fatal" />}>
+      <ErrorBoundary fallback={
+        <PanelFailure text={labels.panelFailed} reloadLabel={labels.reload} />}>
         <PanelWindow host={host} allowedOrigins={options.allowedOrigins ?? []} />
       </ErrorBoundary>
     </StrictMode>,
