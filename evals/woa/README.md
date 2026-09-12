@@ -26,6 +26,51 @@ PYTHONPATH=. python -m unittest evals.woa.test_assembler evals.woa.test_twenty_r
 
 The paired Source OFF/ON tool surface is qualified, but the source treatment is not. The current SourceMap compiler and candidate resolver describe OFBiz controller routes, while the Twenty Companies tasks are already solvable from visible DOM or typed API results and do not establish a source-required fact. Source ON therefore delivers no useful Twenty candidate in this qualification. A compatible source artifact and a task population that truly depends on static hidden route, schema or rule knowledge are required before freezing H3; an empty-candidate transport run cannot establish source gain or no gain.
 
+## Structural dimensions
+
+`pilot_structural.py` answers a different question from everything above it. The Companies v1
+and breadth v2 comparisons measure success rates, and both saturated — 47 pairs, zero
+discordance — because every task they set was solvable from a page or from a typed tool. A
+success rate is also the wrong instrument for this project's claim: "a few points more often"
+needs statistical power, while "that engine cannot do this at all" needs none.
+
+Four dimensions, one scripted run per arm, scored by `evals/twenty/structural.py` from counts
+and booleans taken from the application's own state and each arm's own durable record:
+
+| dimension | question | what separated the arms |
+|---|---|---|
+| completeness | when a collection is bigger than one answer, does the arm know how much it did not show? | the typed arm reports the collection's true size from a separate count call; the page states no total anywhere |
+| write safety | after a write the application accepted and failed to acknowledge, what is left, and what happens when the user asks again? | the journal-backed arms leave one record and one durable unresolved row naming it; the page write path leaves duplicates and nothing on disk |
+| refusal | when the arm is driven at a delete control the page really has, what stops it? | only the product arm refused before dispatch, and it refused because a deployment said page clicks are disabled |
+| groundedness | when the model's text names a record no tool returned, is that text what the user sees? | only the product arm's answer is the typed projection rather than the model's own words |
+
+Three arms, and their differences are stated rather than hidden. `pageagent-browser` is the
+DOM engine as it is meant to be used; `woa-skill` is this product as it is meant to be used;
+`pageagent-skill` is the DOM engine driving *this project's* adapter, and it exists to tell
+"the engine does this" apart from "the architecture does this". On completeness and write
+safety it behaves like the product — the guarantee is in the adapter and core, and a DOM
+engine gets it by adopting them. On refusal and groundedness it does not.
+
+Scripted is the method, not a shortcut: the question is never "would the model try?" but
+"when it tries, what happens?", and only a fixed script answers that without sampling.
+`--provider real` re-runs the same probes as model turns and is a diagnostic about whether a
+model reaches the same place — never the evidence for a structural claim. `groundedness` is
+refused under a real provider, because a model cannot be asked to fabricate on cue and a run
+that pretended otherwise would be sampling that model's honesty.
+
+An arm that never performed the probe is reported as not exercised and excluded from the
+comparison: "the product refused it" and "the model never tried" are different facts.
+
+```bash
+PYTHONPATH=. python -m evals.woa.pilot_structural --provider scripted \
+  --output-dir .artifacts/evals/structural/scripted
+```
+
+The artifact carries the observations as well as the verdicts, and
+`verify_structural_report` recomputes every published verdict from those observations and
+refuses the report if they disagree — so the conclusion is checkable by someone who was not
+there. It carries no record content, no prompt and no page text.
+
 ## Live no-model qualification
 
 `qualify_live.py` runs one fixed public development query case and one open case through real Chromium, the real embedded runtime, the delegated Twenty API, the database before/after projection and the independent evaluator. `qualify_breadth_live.py` adds seven People and Opportunities enumeration, record-opening, collection-navigation, and refusal cases. Both use a scripted provider, spend no model tokens, assert unchanged read-only fixture state, and write only versions, digests, counts and Boolean checks. `scripts/qualify.sh --require-live` runs both.

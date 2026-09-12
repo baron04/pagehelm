@@ -375,7 +375,16 @@ class SimulatedRuntime:
                  if item.ref == ref and item.epoch == epoch), None)
             href = element.attrs.get("href") if element is not None else None
             parsed = urlsplit(href) if isinstance(href, str) else None
-            if (parsed is None or not href.startswith("/") or href.startswith("//")
+            # A page model may declare what one of its own controls does when clicked. The
+            # default is still "links only": an apparatus that silently cannot activate a
+            # button would make "the record survived" look like a guarantee when it was a
+            # limitation of the simulation.
+            activate = getattr(self.page_model, "activate", None)
+            activated = (element is not None and callable(activate)
+                         and activate(self.current_path, element.ref))
+            if activated:
+                self.current_path = activated if isinstance(activated, str) else self.current_path
+            elif (parsed is None or not href.startswith("/") or href.startswith("//")
                     or parsed.scheme or parsed.netloc):
                 ok, error_code = False, "element_not_actionable"
                 error_detail = "the referenced element is not a same-origin link"

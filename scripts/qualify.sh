@@ -90,6 +90,11 @@ run_gate "odoo example suite" 1 "${PYTHON}" -m unittest discover \
 # Citation resolution needs the deployed release's source, so the authoritative run of it is
 # the live gate's `every_skill_citation_resolves_in_this_release`, not a skippable test.
 run_gate "evals/twenty foundation" 1 "${PYTHON}" -m unittest discover -s evals/twenty/tests
+# The structural apparatus and scorer, model-free. It belongs with the offline gates rather
+# than the browser ones: the apparatus half needs no browser at all, and the probe half
+# skips itself with a named prerequisite when the PageAgent bundle is absent.
+run_gate "structural dimensions (offline)" 1 "${PYTHON}" -m unittest \
+  evals.woa.test_pilot_structural
 run_gate "PageAgent host and runner (offline)" 1 "${PYTHON}" -m unittest \
   evals.pageagent.test_host evals.pageagent.test_business_host \
   evals.pageagent.test_twenty_runner evals.pageagent.test_qualify_twenty_runner
