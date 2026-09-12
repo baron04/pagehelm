@@ -302,13 +302,21 @@ def verify_structural_report(report: Any) -> dict[str, Any]:
         provider=report.get("provider", ""),
         dimensions={name: (row or {}).get("observations")
                     for name, row in stored.items()})
-    # Compare the whole published body, not only its digest. A digest that travels with the
-    # artifact proves nothing against an edit that leaves the digest field alone -- and the
-    # published verdicts, not the digest, are what a reader would act on.
-    if digest_json({key: value for key, value in recomputed.items()
-                    if key != "report_digest"}) != digest_json(
-                        {key: value for key, value in report.items()
-                         if key != "report_digest"}):
+    # Compare every field the report itself defines, not only its digest: a digest that
+    # travels with the artifact proves nothing against an edit that leaves the digest field
+    # alone, and the published verdicts are what a reader would act on.
+    #
+    # Only those fields. A run writes its cost, its ceiling and its clock alongside them, and
+    # none of that is a verdict or is claimed to follow from an observation -- demanding that
+    # it match would make the file a pilot writes unverifiable by the verifier, which is the
+    # defect this comparison exists to prevent rather than to cause.
+    owned = {key for key in recomputed if key != "report_digest"}
+    missing = sorted(owned - set(report))
+    if missing:
+        raise EvaluationInputError(
+            f"the structural report is missing the fields it is judged on: {missing}")
+    if digest_json({key: recomputed[key] for key in sorted(owned)}) != digest_json(
+            {key: report[key] for key in sorted(owned)}):
         raise EvaluationInputError(
             "the published structural report does not follow from its own observations")
     if recomputed["report_digest"] != report.get("report_digest"):

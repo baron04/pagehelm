@@ -187,6 +187,42 @@ class EveryDimensionTellsTheArmsApart(unittest.TestCase):
         self.assertTrue(rows["pageagent-skill"]["answer_contradicted_its_tool_results"])
         self.assertFalse(rows["woa-skill"]["answer_contradicted_its_tool_results"])
 
+    def test_the_file_the_pilot_writes_is_the_file_the_verifier_accepts(self):
+        """The artifact on disk, not the report in memory, is what anyone else will check.
+
+        A pilot writes its cost and its clock alongside the report, and an earlier version
+        of the verifier compared the whole body -- so the object `main` verified passed and
+        the file it then wrote did not. Verifying the wrong one of those is indistinguishable
+        from verifying nothing.
+        """
+        import tempfile as _tempfile
+        from evals.twenty.structural import build_structural_report
+        from evals.woa.pilot_structural import PILOT_VERSION
+
+        report = build_structural_report(
+            apparatus="test", model="scripted", provider="scripted",
+            dimensions=self.results)
+        with _tempfile.TemporaryDirectory() as tmp:
+            written = Path(tmp) / "structural.json"
+            written.write_text(json.dumps(
+                {**report, "pilot_version": PILOT_VERSION, "collection_size": 240,
+                 "known_cost_cny": 0.0, "cost_ceiling_cny": 20.0,
+                 "finished_at": "2026-09-12T00:00:00Z"}, indent=2) + "\n")
+            recovered = verify_structural_report(json.loads(written.read_text()))
+        self.assertEqual(recovered["report_digest"], report["report_digest"])
+
+    def test_a_verdict_edited_in_the_written_file_is_still_refused(self):
+        """Tolerating a run's own metadata must not tolerate an edited conclusion."""
+        from evals.twenty.evaluator import EvaluationInputError
+        from evals.twenty.structural import build_structural_report
+
+        report = build_structural_report(
+            apparatus="test", model="scripted", provider="scripted",
+            dimensions=self.results)
+        tampered = {**report, "known_cost_cny": 0.0, "separated_count": 0}
+        with self.assertRaises(EvaluationInputError):
+            verify_structural_report(tampered)
+
     def test_every_dimension_separates_and_the_report_recomputes(self):
         from evals.twenty.structural import build_structural_report
 
