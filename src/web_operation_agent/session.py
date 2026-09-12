@@ -1641,11 +1641,10 @@ class ServerAgentSession:
         """
         items = getattr(tool_result, "evidence", ()) or ()
         recorded, refused = [], []
-        for item in items:
-            try:
-                recorded.append(self.evidence.record(item))
-            except (ValueError, TypeError, EvidenceUnknown) as exc:
-                refused.append(str(exc)[:200])
+        try:
+            recorded = list(self.evidence.capture(items, namespace=f"call{step}"))
+        except (ValueError, TypeError, EvidenceUnknown) as exc:
+            refused.append(str(exc)[:200])
         if recorded or refused:
             self.ledger.append("turn_evidence", step=step,
                                recorded=recorded, refused=refused,

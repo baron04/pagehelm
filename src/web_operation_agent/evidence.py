@@ -18,8 +18,9 @@ again.
 """
 from __future__ import annotations
 
+import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Union
 
 #: An evidence id is opaque to the reader and never leaves the server in a public answer.
@@ -32,6 +33,7 @@ _EVIDENCE_ID = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*#[0-9]{1,6}")
 #: evidence. The distinction is load-bearing: a page observation must never be described as
 #: an API read, which is exactly what one failing answer did.
 SOURCE_KINDS = ("typed", "page", "computed")
+MAX_TURN_EVIDENCE_BYTES = 256 * 1024
 
 
 def _text(value: object, name: str, *, allow_empty: bool = False) -> str:
@@ -308,6 +310,41 @@ class TurnEvidence:
     """
 
     _items: dict[str, Evidence] = field(default_factory=dict)
+
+    def capture(self, items: tuple[Evidence, ...], *, namespace: str) -> tuple[str, ...]:
+        """Atomically import call-local evidence under host-owned identities.
+
+        Adapters may start their IDs at one on every call. The call namespace belongs to
+        the session, so a second read cannot collide with, or borrow authority from, the
+        first. A malformed batch never leaves behind a query claiming unrecorded members.
+        """
+        if not re.fullmatch(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*", namespace):
+            raise ValueError("invalid evidence namespace")
+        if not isinstance(items, tuple):
+            raise TypeError("an evidence batch must be a tuple")
+        if any(not isinstance(item, (RecordEvidence, QueryEvidence, PageEvidence,
+                                     ComputationEvidence, SelectionEvidence)) for item in items):
+            raise TypeError("an evidence batch may only contain evidence")
+        local_ids = [item.evidence_id for item in items]
+        if len(set(local_ids)) != len(local_ids):
+            raise ValueError("an evidence batch contains duplicate IDs")
+        mapping = {name: f"{namespace}-{name}" for name in local_ids}
+        staged = TurnEvidence(dict(self._items))
+        for item in items:
+            changes = {"evidence_id": mapping[item.evidence_id],
+                       "origin": replace(item.origin,
+                                         reference=f"{namespace}:{item.origin.reference}")}
+            if isinstance(item, (ComputationEvidence, SelectionEvidence)):
+                if any(name not in mapping for name in item.inputs):
+                    raise EvidenceUnknown("imported derived evidence must use its own batch")
+                changes["inputs"] = tuple(mapping[name] for name in item.inputs)
+            staged.record(replace(item, **changes))
+        encoded = json.dumps([asdict(item) for item in staged._items.values()],
+                             ensure_ascii=False, allow_nan=False).encode("utf-8")
+        if len(encoded) > MAX_TURN_EVIDENCE_BYTES:
+            raise ValueError("turn evidence byte limit exceeded; narrow the query")
+        self._items = staged._items
+        return tuple(mapping.values())
 
     def record(self, item: Evidence) -> str:
         if not isinstance(item, (RecordEvidence, QueryEvidence, PageEvidence,

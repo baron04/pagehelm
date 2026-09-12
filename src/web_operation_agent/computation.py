@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 
 from .evidence import (
     ComputationEvidence, Origin, QueryEvidence, RecordEvidence, SelectionEvidence,
@@ -32,11 +32,11 @@ from .evidence import (
 #: a set; the rest reduce one. Difference, ratio, ordering and joins wait for a case that
 #: needs them -- each adds a way for two inputs to be incomparable, and this is the layer
 #: where incomparable inputs turn into confident wrong answers.
-OPERATIONS = ("read", "filter", "count", "sum", "min", "max")
+OPERATIONS = ("read", "filter", "count", "sum", "min", "max", "argmin", "argmax")
 
 #: Comparisons a filter may apply. Enough for "over 2000" and for the equality checks a
 #: preflight makes; deliberately not an expression language.
-COMPARISONS = ("gt", "ge", "lt", "le", "eq", "ne")
+COMPARISONS = ("gt", "ge", "lt", "le", "eq", "ne", "in")
 
 _NUMERIC = ("money", "quantity", "number")
 
@@ -54,6 +54,7 @@ class ComputationRequest:
     field_name: str = ""
     comparison: str = ""
     threshold: str = ""
+    choices: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.operation not in OPERATIONS:
@@ -61,18 +62,25 @@ class ComputationRequest:
                 f"{self.operation!r} is not an operation this runs; it knows {OPERATIONS}")
         if not isinstance(self.over, tuple) or not self.over:
             raise ComputationRefused("a computation must name the evidence it runs on")
-        if self.operation in ("read", "filter", "sum", "min", "max") and not self.field_name:
+        if (self.operation in ("read", "filter", "sum", "min", "max", "argmin", "argmax")
+                and not self.field_name):
             raise ComputationRefused(f"{self.operation} needs the field it applies to")
         if self.operation == "filter":
             if self.comparison not in COMPARISONS:
                 raise ComputationRefused(
                     f"a filter compares with one of {COMPARISONS}")
-            if not str(self.threshold).strip():
+            if self.comparison == "in":
+                if (not isinstance(self.choices, tuple) or not self.choices
+                        or len(self.choices) > 50
+                        or any(not isinstance(x, str) for x in self.choices)):
+                    raise ComputationRefused("in needs at most 50 text choices")
+            elif not isinstance(self.threshold, str) or not self.threshold.strip():
                 raise ComputationRefused("a filter needs something to compare against")
 
     def describe(self) -> str:
         if self.operation == "filter":
-            return f"{self.field_name} {self.comparison} {self.threshold}"
+            operand = repr(self.choices) if self.comparison == "in" else self.threshold
+            return f"{self.field_name} {self.comparison} {operand}"
         if self.operation == "count":
             return "count()"
         return f"{self.operation}({self.field_name})"
@@ -80,8 +88,10 @@ class ComputationRequest:
 
 def _decimal(value: str, *, where: str) -> Decimal:
     """Parse exactly, or refuse. A number this cannot read is not a number it may total."""
-    text = value.strip().replace(",", "")
-    if not re.fullmatch(r"-?\d+(?:\.\d+)?", text):
+    original = value.strip()
+    text = original.replace(",", "")
+    if (len(text) > 128 or not re.fullmatch(
+            r"-?(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?:\.[0-9]+)?", original)):
         raise ComputationRefused(
             f"{where} is {value!r}, which this cannot read as a number without guessing")
     try:
@@ -90,23 +100,37 @@ def _decimal(value: str, *, where: str) -> Decimal:
         raise ComputationRefused(f"{where} is not a number: {value!r}") from None
 
 
-def _partition(turn: TurnEvidence, over: tuple[str, ...]):
-    """Split the named evidence into the one query that governs it and its records."""
+def _partition(turn: TurnEvidence, over: tuple[str, ...], field_name: str):
+    """Resolve one original query or its derived selection, never join separate reads."""
     items = turn.require_all(over)
-    queries = [item for item in items if isinstance(item, QueryEvidence)]
+    datasets = [item for item in items if isinstance(item, (QueryEvidence, SelectionEvidence))]
     records = [item for item in items if isinstance(item, RecordEvidence)]
-    others = [item for item in items
-              if not isinstance(item, (QueryEvidence, RecordEvidence))]
-    if others:
-        raise ComputationRefused(
-            "this runs on record reads within one query; it was given "
-            + ", ".join(sorted(type(item).__name__ for item in others)))
-    if len(queries) != 1:
-        # Two queries are two scopes, and a result that spans them describes neither. One
-        # query and no records is legitimate: that is how a count of a zero match is taken.
-        raise ComputationRefused(
-            f"a computation runs within exactly one query; it was given {len(queries)}")
-    return queries[0], records
+    if len(datasets) != 1 or len(datasets) + len(records) != len(items):
+        raise ComputationRefused("a computation runs within exactly one query or selection")
+    dataset = datasets[0]
+    query = dataset
+    seen = set()
+    while isinstance(query, SelectionEvidence):
+        if query.evidence_id in seen or len(seen) >= 32:
+            raise ComputationRefused("selection lineage is cyclic or too deep")
+        seen.add(query.evidence_id)
+        parents = [item for item in turn.require_all(query.inputs)
+                   if isinstance(item, (QueryEvidence, SelectionEvidence))]
+        if len(parents) != 1:
+            raise ComputationRefused("selection must descend from exactly one query")
+        query = parents[0]
+    if not isinstance(query, QueryEvidence):
+        raise ComputationRefused("selection has no query root")
+    if not records and field_name:
+        records = [item for name in turn.ids()
+                   if isinstance(item := turn.get(name), RecordEvidence)
+                   and item.origin == query.origin and item.field_name == field_name
+                   and (not isinstance(dataset, SelectionEvidence)
+                        or item.record_id in dataset.members)]
+    if isinstance(dataset, SelectionEvidence):
+        if any(item.record_id not in dataset.members for item in records):
+            raise ComputationRefused("a record is outside the selected population")
+    return query, dataset, records
 
 
 def _combinable(query: QueryEvidence, records: list[RecordEvidence],
@@ -153,17 +177,30 @@ def run(turn: TurnEvidence, request: ComputationRequest, *,
     renders it: a sum over one page of records is a subtotal, and the distance between
     "subtotal" and "total" is the distance between a useful answer and a wrong one.
     """
-    query, records = _partition(turn, request.over)
+    query, dataset, records = _partition(turn, request.over, request.field_name)
     unit = _combinable(query, records, request.field_name) if request.field_name else ""
+    if any(item.origin != query.origin for item in records):
+        raise ComputationRefused("records came from a different read than this query")
+    if len({(item.record_id, item.field_name) for item in records}) != len(records):
+        raise ComputationRefused("the same record field was given twice")
+    expected = (len(dataset.members) if isinstance(dataset, SelectionEvidence)
+                else query.matched_count)
+    whole = dataset.covers_whole_scope
+    if records or request.field_name:
+        whole = whole and len({item.record_id for item in records}) == expected
+    scope = query.origin.scope
+    if isinstance(dataset, SelectionEvidence):
+        scope += "; " + dataset.condition
     origin = Origin(kind="computed", reference=request.describe(),
-                    observed_at=observed_at, scope=query.origin.scope)
-    whole = query.covers_whole_scope
+                    observed_at=observed_at, scope=scope)
 
     if request.operation == "read":
         if len(records) != 1:
             raise ComputationRefused(
                 f"reading one field wants one record; it was given {len(records)}")
         only = records[0]
+        if only.value is None:
+            raise ComputationRefused("the field is known empty; cite its field evidence directly")
         return turn_record(turn, ComputationEvidence(
             evidence_id=evidence_id, origin=origin, operation=request.describe(),
             inputs=request.over, value=only.value if only.value is not None else "",
@@ -172,18 +209,21 @@ def run(turn: TurnEvidence, request: ComputationRequest, *,
     if request.operation == "count":
         return turn_record(turn, ComputationEvidence(
             evidence_id=evidence_id, origin=origin, operation="count()",
-            inputs=request.over, value=str(len(records)), value_type="count",
+            inputs=request.over,
+            value=str(len({item.record_id for item in records}) if records else expected),
+            value_type="count",
             covers_whole_scope=whole))
 
     if request.operation == "filter":
-        threshold = _decimal(request.threshold, where="the value compared against")
-        kept = tuple(
-            item.record_id for item in records
-            if _compare(_decimal(item.value or "", where=f"{item.record_id}.{item.field_name}"),
-                        request.comparison, threshold))
+        if not records and expected:
+            raise ComputationRefused("the requested filter field was not returned")
+        kept = tuple(item.record_id for item in records if _matches(item, request))
         return turn_record(turn, SelectionEvidence(
             evidence_id=evidence_id, origin=origin, operation="filter",
-            inputs=request.over, condition=request.describe(), members=kept,
+            inputs=request.over,
+            condition=(dataset.condition + "; " + request.describe()
+                       if isinstance(dataset, SelectionEvidence) else request.describe()),
+            members=kept,
             covers_whole_scope=whole))
 
     values = [_decimal(item.value or "", where=f"{item.record_id}.{item.field_name}")
@@ -195,8 +235,21 @@ def run(turn: TurnEvidence, request: ComputationRequest, *,
     if not numeric <= set(_NUMERIC):
         raise ComputationRefused(
             "these values are " + ", ".join(sorted(numeric)) + ", which do not add or order")
-    result = {"sum": sum(values, Decimal(0)), "min": min(values), "max": max(values)}[
-        request.operation]
+    if len(numeric) != 1:
+        raise ComputationRefused("mixed numeric field types are not comparable")
+    if request.operation in ("argmin", "argmax"):
+        extreme = min(values) if request.operation == "argmin" else max(values)
+        return turn_record(turn, SelectionEvidence(
+            evidence_id=evidence_id, origin=origin, operation=request.operation,
+            inputs=request.over,
+            condition=(dataset.condition + "; " + request.describe()
+                       if isinstance(dataset, SelectionEvidence) else request.describe()),
+            members=tuple(item.record_id for item, value in zip(records, values)
+                          if value == extreme), covers_whole_scope=whole))
+    with localcontext() as context:
+        context.prec = 512
+        result = {"sum": lambda: sum(values, Decimal(0)), "min": lambda: min(values),
+                  "max": lambda: max(values)}[request.operation]()
     # Keep the scale the inputs had: a money total that gained or lost a decimal place is a
     # different number, and rounding it here would hide which.
     scale = max((-item.as_tuple().exponent for item in values), default=0)
@@ -204,6 +257,22 @@ def run(turn: TurnEvidence, request: ComputationRequest, *,
         evidence_id=evidence_id, origin=origin, operation=request.describe(),
         inputs=request.over, value=f"{result:.{scale}f}",
         value_type=records[0].value_type, unit=unit, covers_whole_scope=whole))
+
+
+def _matches(item: RecordEvidence, request: ComputationRequest) -> bool:
+    if item.value is None:
+        raise ComputationRefused("an empty value cannot be compared to a nonempty operand")
+    if item.value_type in _NUMERIC:
+        if request.comparison == "in":
+            raise ComputationRefused("in currently supports text and enum fields only")
+        return _compare(_decimal(item.value, where=item.field_name), request.comparison,
+                        _decimal(request.threshold, where="the value compared against"))
+    if item.value_type not in ("text", "enum") or request.comparison not in ("eq", "ne", "in"):
+        raise ComputationRefused("text and enum fields support exact eq, ne or in only")
+    if request.comparison == "in":
+        return item.value in request.choices
+    return (item.value == request.threshold if request.comparison == "eq"
+            else item.value != request.threshold)
 
 
 def _compare(left: Decimal, comparison: str, right: Decimal) -> bool:
