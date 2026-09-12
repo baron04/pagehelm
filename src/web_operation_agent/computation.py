@@ -108,19 +108,10 @@ def _partition(turn: TurnEvidence, over: tuple[str, ...], field_name: str):
     if len(datasets) != 1 or len(datasets) + len(records) != len(items):
         raise ComputationRefused("a computation runs within exactly one query or selection")
     dataset = datasets[0]
-    query = dataset
-    seen = set()
-    while isinstance(query, SelectionEvidence):
-        if query.evidence_id in seen or len(seen) >= 32:
-            raise ComputationRefused("selection lineage is cyclic or too deep")
-        seen.add(query.evidence_id)
-        parents = [item for item in turn.require_all(query.inputs)
-                   if isinstance(item, (QueryEvidence, SelectionEvidence))]
-        if len(parents) != 1:
-            raise ComputationRefused("selection must descend from exactly one query")
-        query = parents[0]
-    if not isinstance(query, QueryEvidence):
-        raise ComputationRefused("selection has no query root")
+    try:
+        query = turn.query_for(dataset.evidence_id)
+    except ValueError as exc:
+        raise ComputationRefused(str(exc)) from None
     if not records and field_name:
         records = [item for name in turn.ids()
                    if isinstance(item := turn.get(name), RecordEvidence)

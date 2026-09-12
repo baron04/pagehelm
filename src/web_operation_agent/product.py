@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 
 from .application import BoundApplication, SourceCapability
 from .answering import render_structured_query_answer
+from .answer_view import render_payload
 from .browser import TransportError
 from .business import BusinessToolResult, BusinessToolRuntime
 from .conversation import ConversationState
@@ -206,6 +207,9 @@ def render_neutral_user_answer(context: AgentAnswerContext) -> str:
     status = _status_for(context.agent.terminal_reason)
     if status is AgentTurnStatus.INDETERMINATE:
         return "The action outcome is uncertain. It was not retried automatically."
+    if status is AgentTurnStatus.FINISHED and context.agent.verified_answer is not None:
+        return render_payload(context.agent.verified_answer, user_text=context.message.text,
+                              max_chars=context.max_chars)
     projection = (context.business_result.query_answer
                   if context.business_result is not None else None)
     if (status is AgentTurnStatus.FINISHED
@@ -564,7 +568,7 @@ class AgentTurnExecutor:
             # A server-trusted renderer may customize ordinary terminal prose. It cannot
             # replace facts already projected by a typed query with model-authored prose.
             rendered = (render_neutral_user_answer(answer_context)
-                        if authoritative_projection is not None
+                        if authoritative_projection is not None or agent.verified_answer is not None
                         else self.answer_renderer(answer_context))
             if not isinstance(rendered, str) or not rendered.strip():
                 raise ValueError("answer renderer returned no text")

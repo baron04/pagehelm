@@ -2,6 +2,25 @@ import {describe, expect, it} from 'vitest'
 import {countCharacters, parseInline, parseMarkdown} from '../src/markdown/parse'
 
 describe('the markdown grammar is closed', () => {
+  it('renders escaped evidence values literally without making links or emphasis', () => {
+    const input = String.raw`amount\_total \[name\]\(https://example.test\) \*literal\*`
+    expect(parseInline(input)).toEqual([{type: 'text',
+      value: 'amount_total [name](https://example.test) *literal*'}])
+  })
+
+  it('keeps an escaped pipe inside its original table cell', () => {
+    const blocks = parseMarkdown(String.raw`| name | value |
+| --- | --- |
+| Ac\|me | 12.50 |`)
+    const table = blocks[0]
+    expect(table?.type).toBe('table')
+    if (table?.type === 'table') {
+      expect(table.rows[0]).toEqual([
+        [{type: 'text', value: 'Ac|me'}], [{type: 'text', value: '12.50'}],
+      ])
+    }
+  })
+
   it('produces nodes, never html, for the constructs an answer uses', () => {
     const blocks = parseMarkdown([
       '## 结果',

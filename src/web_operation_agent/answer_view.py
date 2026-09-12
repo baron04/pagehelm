@@ -64,7 +64,36 @@ def _source_line(words: dict, item: dict) -> str:
             "computed": words["source_computed"]}[item["source_kind"]]
 
 
-def render(answer: VerifiedAnswer, *, user_text: str, max_chars: int) -> str:
+def unavailable_answer(user_text: str) -> str:
+    return ("目前掌握的信息还不足以可靠回答这个问题。可以缩小查询范围，或补充需要查询的对象。"
+            if _language(user_text) == "zh" else
+            "The available information is not enough to answer reliably. "
+            "Try narrowing the scope or specifying the record to look up.")
+
+
+def render_payload(payload: dict, *, user_text: str, max_chars: int) -> str:
+    data = dict(payload)
+    presentation = data.pop("presentation", "brief")
+    action = data.pop("action", None)
+    if action is not None:
+        if action["kind"] == "navigation":
+            label = "已打开页面" if _language(user_text) == "zh" else "Opened the page"
+            return f"{label}：{_literal(action['url'])}"[:max_chars]
+        label = "已完成已批准的操作" if _language(user_text) == "zh" else "Completed the approved action"
+        return (f"{label}：{_literal(action['effect'])}\n" +
+                "、".join(_literal(x) for x in action["targets"]))[:max_chars]
+    return render(VerifiedAnswer(**data), user_text=user_text,
+                  max_chars=max_chars, presentation=presentation)
+
+
+def _literal(value: object) -> str:
+    """Application values are data, including any Markdown punctuation inside them."""
+    text = str(value).replace("\r", " ").replace("\n", " ")
+    return re.sub(r"([\\`*_{}\[\]()<>#!|])", r"\\\1", text)
+
+
+def render(answer: VerifiedAnswer, *, user_text: str, max_chars: int,
+           presentation: str = "brief") -> str:
     """Lay out the conclusions, then the prose, then what the answer does not cover."""
     if not isinstance(answer, VerifiedAnswer):
         raise TypeError("render takes a VerifiedAnswer")
@@ -74,44 +103,81 @@ def render(answer: VerifiedAnswer, *, user_text: str, max_chars: int) -> str:
     lines: list[str] = []
 
     for item in answer.conclusions:
-        lines.extend(_one(words, item))
+        lines.extend(_one(words, item, presentation=presentation))
         lines.append("")
 
     if answer.prose.strip():
         lines.append(answer.prose.strip())
         lines.append("")
 
+    footer = []
     if answer.coverage != "complete":
-        lines.append(f"> **{words['partial']}**")
+        footer.append(f"> **{words['partial']}**")
         for reason in answer.lowered_because:
-            lines.append(f"> - {words['partial_why']}: {reason}")
-    text = "\n".join(lines).strip()
-    return text if len(text) <= max_chars else text[:max_chars - 1].rstrip() + "…"
+            footer.append(f"> - {words['partial_why']}: {_literal(reason)}")
+    text = "\n".join(lines + footer).strip()
+    if len(text) <= max_chars:
+        return text
+    notice = ("显示限制：部分内容未展示。" if _language(user_text) == "zh"
+              else "Display limit: some content is not shown.")
+    # Preserve the partial-result qualification even when a long table reaches the bound.
+    footer_text = "\n".join(footer)
+    if len(footer_text) > max_chars // 2:
+        footer_text = f"> **{words['partial']}**"
+    suffix = "\n\n" + notice + ("\n" + footer_text if footer_text else "")
+    kept = []
+    for line in "\n".join(lines).splitlines():
+        if len("\n".join(kept + [line])) + len(suffix) > max_chars:
+            break
+        kept.append(line)
+    return "\n".join(kept).rstrip() + suffix
 
 
-def _one(words: dict, item: dict) -> list[str]:
+def _one(words: dict, item: dict, *, presentation: str) -> list[str]:
     kind = item["kind"]
     if kind == "field_value":
-        shown = item["value"] if not item["empty"] else words["empty"]
-        unit = f" {item['unit']}" if item.get("unit") else ""
-        return [f"**{item['field_meaning']}**（{item['record_id']}）：{shown}{unit}",
+        shown = _literal(item["value"]) if not item["empty"] else words["empty"]
+        unit = f" {_literal(item['unit'])}" if item.get("unit") else ""
+        return [f"**{_literal(item['field_meaning'])}**（{_literal(item['record_id'])}）：{shown}{unit}",
                 f"> {_source_line(words, item)} · {words['scope']}：{item['scope']}"]
     if kind == "selection":
-        head = f"**{item['condition']}**：{item['matched']} {words['matched']}"
-        rows = "".join(f"\n- {name}" for name in item["members"])
+        head = f"**{_literal(item['condition'])}**：{item['matched']} {words['matched']}"
+        if item.get("fields"):
+            rows = []
+            if presentation != "list":
+                rows += ["| " + " | ".join(_literal(x) for x in item["fields"]) + " |",
+                         "| " + " | ".join("---" for _ in item["fields"]) + " |"]
+            for values in item["rows"]:
+                cells = [(words["empty"] if x["value"] is None else _literal(x["value"])) +
+                         (" " + _literal(x["unit"]) if x["unit"] else "") for x in values]
+                if presentation == "list":
+                    rows.append("- " + "; ".join(f"{_literal(key)}: {value}"
+                                                for key, value in zip(item["fields"], cells)))
+                else:
+                    rows.append("| " + " | ".join(cells) + " |")
+            return [head, "", *rows, "",
+                    f"> {_source_line(words, item)} · {words['scope']}：{_literal(item['scope'])}"]
+        rows = "".join(f"\n- {_literal(name)}" for name in item["members"])
         return [head + rows,
                 f"> {_source_line(words, item)} · {words['scope']}：{item['scope']}"]
     if kind == "aggregate":
-        label = words["total"] if item["covers_whole_scope"] else words["subtotal"]
-        unit = f" {item['unit']}" if item.get("unit") else ""
-        return [f"**{item['operation']}** {label}：{item['value']}{unit}",
+        operation = item["operation"].partition("(")[0]
+        chinese = words is _WORDS["zh"]
+        labels = ({"count": "数量", "min": "最小值", "max": "最大值"} if chinese else
+                  {"count": "Count", "min": "Minimum", "max": "Maximum"})
+        label = (words["total"] if item["covers_whole_scope"] else words["subtotal"]
+                 ) if operation == "sum" else labels.get(operation, _literal(item["operation"]))
+        if operation != "sum" and not item["covers_whole_scope"]:
+            label += "（仅限已读取范围）" if chinese else " (observed scope only)"
+        unit = f" {_literal(item['unit'])}" if item.get("unit") else ""
+        return [f"**{label}**：{_literal(item['value'])}{unit}",
                 f"> {_source_line(words, item)} · {words['scope']}：{item['scope']}"]
     if kind == "not_found":
-        conditions = "；".join(item["conditions"])
-        return [f"**{words['not_found']}**：{item['looked_for']}",
+        conditions = "；".join(_literal(x) for x in item["conditions"])
+        return [f"**{words['not_found']}**：{_literal(item['looked_for'])}",
                 f"> {_source_line(words, item)} · {words['scope']}：{item['scope']}"
                 f" · {conditions}"]
     if kind == "undetermined":
-        return [f"**{words['undetermined']}**：{item['about']}",
-                f"> {words['gap']}：{item['gap']}"]
+        return [f"**{words['undetermined']}**：{_literal(item['about'])}",
+                f"> {words['gap']}：{_literal(item['gap'])}"]
     raise ValueError(f"no way to render a {kind!r} conclusion")  # pragma: no cover

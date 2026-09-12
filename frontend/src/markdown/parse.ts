@@ -38,7 +38,20 @@ const DELIMITER = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/
 function cells(line: string): string[] {
   const match = ROW.exec(line)
   const body = match ? match[1] ?? '' : line
-  return body.split('|').map(cell => cell.trim())
+  const out: string[] = []
+  let cell = ''
+  for (let index = 0; index < body.length; index += 1) {
+    const ch = body[index] ?? ''
+    if (ch === '\\' && index + 1 < body.length) {
+      cell += ch + body[index + 1]
+      index += 1
+    } else if (ch === '|') {
+      out.push(cell.trim())
+      cell = ''
+    } else cell += ch
+  }
+  out.push(cell.trim())
+  return out
 }
 
 /** Inline parsing is a single left-to-right scan; no backtracking, no regex on user text. */
@@ -52,6 +65,13 @@ export function parseInline(source: string): Inline[] {
   let index = 0
   while (index < source.length) {
     const rest = source.slice(index)
+    // Escaped punctuation is literal application data, never formatting or a link.
+    const escaped = /^\\([!"#$%&'()*+,\-./:;<=>?@[\]\\^_`{|}~])/.exec(rest)
+    if (escaped) {
+      text += escaped[1]
+      index += escaped[0].length
+      continue
+    }
     const code = /^`([^`]+)`/.exec(rest)
     if (code) {
       flush()

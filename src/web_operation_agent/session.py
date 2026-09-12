@@ -27,6 +27,8 @@ from typing import Callable
 from urllib.parse import urlencode, urljoin, urlsplit
 
 from .application import ApplicationRoutePort, SourceCapability
+from . import answer_protocol
+from .answer_view import render_payload, unavailable_answer
 from .affordance import SourceAffordance, resolve_source_affordances
 from .browser import BrowserExecutor, TransportError, TurnCancelled
 from .business import (BusinessMutationIndeterminate, BusinessToolError,
@@ -428,10 +430,12 @@ class RunResult:
     #: factual prose with the application-supplied structured query projection. A later page
     #: action does not qualify.
     business_answer_projected: bool = False
+    verified_answer: dict | None = None
     detail: str = ""
 
     def to_json(self) -> dict:
-        return {k: getattr(self, k) for k in self.__dataclass_fields__}
+        return {k: getattr(self, k) for k in self.__dataclass_fields__
+                if k != "verified_answer" or self.verified_answer is not None}
 
 
 class ServerAgentSession:
@@ -650,6 +654,10 @@ class ServerAgentSession:
         # rather than on either result type: a typed read and a page observation back an
         # answer alike and arrive through different doors with different trust roots.
         self.evidence = TurnEvidence()
+        self._evidence_feedback = ""
+        self._answer_repairs = 0
+        self._answer_mode = False
+        self._answer_action_receipt: dict | None = None
         self._latest_business_query_page_actions: int | None = None
         self.plain_business_answer_min_page_actions = \
             plain_business_answer_min_page_actions
@@ -661,7 +669,7 @@ class ServerAgentSession:
         self._turn_deadline_ms = 0
         if business_tools is not None:
             reserved = set(BROWSER_ACTIONS) | {
-                "finish", "load_skill", "lookup_source", "open_source_route",
+                "finish", "compute", "load_skill", "lookup_source", "open_source_route",
                 "open_source_candidate", "open_skill_route", "enter_skill_app",
                 "enter_application",
             }
@@ -1005,6 +1013,21 @@ class ServerAgentSession:
             calls = reply.get("tool_calls") or []
             if not calls:
                 said = str(reply.get("content") or "").strip()
+                if self._structured_answer_required():
+                    step += 1
+                    self._answer_repairs += 1
+                    self.ledger.append("answer_contract_refused", step=step,
+                                       reason="plain_content", repair=self._answer_repairs)
+                    if self._answer_repairs > answer_protocol.MAX_ANSWER_REPAIRS:
+                        result.agent_said = unavailable_answer(self.task.prompt)
+                        return self._finish(result, t0, "agent_refused", result.agent_said,
+                                            steps=step)
+                    messages += [{"role": "assistant", "content": said},
+                                 {"role": "user", "content":
+                                  "Submit finish with outcome and an evidence-backed answer. "
+                                  "Use compute if needed; do not repeat the page observation. "
+                                  "Use outcome=unable if you cannot support the answer."}]
+                    continue
                 minimum_page_actions = self.plain_business_answer_min_page_actions
                 if (successful_business_tools and said
                         and minimum_page_actions is not None
@@ -1143,6 +1166,7 @@ class ServerAgentSession:
                 operation_identity = (operation_context.audit_projection()
                                       if operation_context is not None else {})
                 if self.business_tools.is_mutation(name):
+                    self._answer_action_receipt = None
                     try:
                         proposal = self.business_tools.prepare_mutation(
                             name, args, self._loaded_business_skill_ids,
@@ -1295,12 +1319,20 @@ class ServerAgentSession:
                         identity=operation_identity)
                     self._business_routes.update(tool_result.allowed_routes)
                     self.latest_business_tool_result = tool_result
+                    # A successful write invalidates values read before it. The receipt
+                    # remains authoritative even when this adapter supplies no new fields.
+                    self.evidence = TurnEvidence()
+                    self._answer_action_receipt = {
+                        "kind": "mutation", "effect": proposal.effect,
+                        "targets": list(proposal.targets)}
                     self._collect_evidence(tool_result, step=step)
                     self._latest_business_query_page_actions = (
                         self.page_actions if tool_result.query_answer is not None else None)
                     successful_business_tools += 1
                     feedback = ("BUSINESS MUTATION RESULT (approved, executed once, "
                                 "current runtime fact):\n" + tool_result.render())
+                    if self._evidence_feedback:
+                        feedback += "\n\n" + self._evidence_feedback
                     try:
                         receipt, write, fresh = self._observe_after_business_mutation(
                             obs, step, name)
@@ -1373,6 +1405,8 @@ class ServerAgentSession:
                     successful_business_tools += 1
                     feedback = ("BUSINESS TOOL RESULT (current runtime fact):\n"
                                 + tool_result.render())
+                    if self._evidence_feedback:
+                        feedback += "\n\n" + self._evidence_feedback
                     if tool_result.query_answer is not None:
                         feedback += (
                             "\n\nSERVER QUERY ANSWER READY: For a list or filtered lookup, "
@@ -1509,6 +1543,62 @@ class ServerAgentSession:
                 source_route_read_only = True
                 name, args = "goto", {"url": url}
 
+            if name == "compute" and len(self.evidence):
+                try:
+                    computed = answer_protocol.compute(
+                        self.evidence, args, result_ref=f"calc#{step}",
+                        observed_at=str(time.time()))
+                    feedback = answer_protocol.evidence_index(self.evidence, (computed.evidence_id,))
+                    self.ledger.append("answer_computed", step=step,
+                                       result_ref=computed.evidence_id,
+                                       covers_whole_scope=computed.covers_whole_scope)
+                except (ValueError, TypeError, EvidenceUnknown) as exc:
+                    feedback = "COMPUTATION REFUSED: " + str(exc)[:500]
+                    self.ledger.append("answer_computation_refused", step=step,
+                                       error_type=type(exc).__name__)
+                messages += [_assistant_call(call), _tool_result(call, feedback)]
+                continue
+
+            if name == "finish" and self._structured_answer_required():
+                try:
+                    # Existing scripted navigation callers still use done/why. Never render
+                    # their free prose once evidence mode is active; use the actual receipt.
+                    if (isinstance(args, dict) and args.get("done") is True
+                            and self._answer_action_receipt is not None):
+                        args = {"outcome": "acted"}
+                    elif isinstance(args, dict) and args.get("done") is False:
+                        args = {"outcome": "unable"}
+                    if isinstance(args, dict) and args.get("outcome") == "acted":
+                        if (set(args) != {"outcome"} or self._answer_action_receipt is None
+                                or self._should_challenge_completion()):
+                            raise ValueError("no successful action receipt supports this outcome")
+                        verified = {"conclusions": (), "coverage": "complete", "prose": "",
+                                    "lowered_because": (), "action": self._answer_action_receipt}
+                    else:
+                        verified = answer_protocol.submit(self.evidence, args)
+                except (ValueError, TypeError, EvidenceUnknown) as exc:
+                    self._answer_repairs += 1
+                    self.ledger.append("answer_contract_refused", step=step,
+                                       reason=type(exc).__name__, repair=self._answer_repairs)
+                    if self._answer_repairs > answer_protocol.MAX_ANSWER_REPAIRS:
+                        result.agent_said = unavailable_answer(self.task.prompt)
+                        return self._finish(result, t0, "agent_refused", result.agent_said,
+                                            steps=step)
+                    messages += [_assistant_call(call), _tool_result(
+                        call, "ANSWER REFUSED: " + str(exc)[:500] +
+                        ". Correct the evidence reference or perform a supported read/compute; "
+                        "otherwise finish with outcome=unable.")]
+                    continue
+                result.verified_answer = verified
+                result.agent_said = (render_payload(verified, user_text=self.task.prompt,
+                                                   max_chars=max(512, self.max_agent_said_chars))
+                                     if verified is not None else unavailable_answer(self.task.prompt))
+                self.ledger.append("answer_verified", step=step,
+                                   conclusions=len(verified["conclusions"]) if verified else 0,
+                                   coverage=verified["coverage"] if verified else "undetermined")
+                return self._finish(result, t0, "agent_finished" if verified else "agent_refused",
+                                    result.agent_said, steps=step)
+
             if name == "finish":
                 done = bool(args.get("done"))
                 result.agent_said = str(args.get("why") or "")[:self.max_agent_said_chars]
@@ -1582,6 +1672,8 @@ class ServerAgentSession:
             try:
                 self._browser_attempts += 1
                 self._awaiting_control = action_may_write
+                if name not in ("observe", "wait_for"):
+                    self._answer_action_receipt = None
                 receipt = self.browser.execute(name, args, expect_navigation=expect_nav)
             except TurnCancelled as exc:
                 self.ledger.append(
@@ -1613,6 +1705,9 @@ class ServerAgentSession:
                 return self._finish(result, t0, reason, detail, steps=step)
             if receipt.observation is not None:
                 obs = receipt.observation
+            if (name in ("goto", "back") and receipt.ok
+                    and receipt.observation is not None):
+                self._answer_action_receipt = {"kind": "navigation", "url": obs.url}
             if skill_app_entry is not None:
                 gap = self.knowledge_router.gap_evidence(skill_app_entry, obs)
                 self.ledger.append(
@@ -1640,11 +1735,19 @@ class ServerAgentSession:
         keeps that state from being mistaken for evidence nobody looked at.
         """
         items = getattr(tool_result, "evidence", ()) or ()
+        self._evidence_feedback = ""
+        if items:
+            self._answer_mode = True
         recorded, refused = [], []
         try:
             recorded = list(self.evidence.capture(items, namespace=f"call{step}"))
         except (ValueError, TypeError, EvidenceUnknown) as exc:
             refused.append(str(exc)[:200])
+        if recorded:
+            self._evidence_feedback = (answer_protocol.ANSWER_INSTRUCTIONS + "\n" +
+                                      answer_protocol.evidence_index(self.evidence, tuple(recorded)))
+        elif refused:
+            self._evidence_feedback = "ANSWER EVIDENCE UNAVAILABLE: narrow or repeat the read."
         if recorded or refused:
             self.ledger.append("turn_evidence", step=step,
                                recorded=recorded, refused=refused,
@@ -1657,6 +1760,11 @@ class ServerAgentSession:
         # browser action, so a run whose every page action is disabled can still end.
         tools = [tool for tool in TOOL_SCHEMAS
                  if tool["function"]["name"] not in self.disabled_actions]
+        if self._structured_answer_required():
+            tools = [answer_protocol.FINISH_ANSWER_TOOL if tool["function"]["name"] == "finish"
+                     else tool for tool in tools]
+        if len(self.evidence):
+            tools += [answer_protocol.COMPUTE_TOOL]
         tools += [SOURCE_TOOL, SOURCE_NAV_TOOL] if self.runtime_source else []
         if self.source_affordance_mode in ("auto", "empty"):
             tools += [SOURCE_CANDIDATE_TOOL]
@@ -2304,6 +2412,9 @@ class ServerAgentSession:
         return ("SOURCE AFFORDANCES (source-bound read-only candidates; current page wins):\n"
                 + json.dumps(public_payload, ensure_ascii=False, sort_keys=True,
                              separators=(",", ":")))
+
+    def _structured_answer_required(self) -> bool:
+        return self._answer_mode
 
     def _business_answer_is_projectable(self) -> bool:
         """Whether the latest typed query still describes this turn's terminal answer."""

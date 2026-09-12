@@ -73,7 +73,10 @@ CASES = {
         "replies": (
             ("load_skill", {"skill_id": "odoo.sales.customers-query"}),
             ("query_customers", {"limit": 50}),
-            (None, "The customer list is above."),
+            ("compute", {"operation": "count", "dataset_ref": "call2-query#1"}),
+            ("finish", {"outcome": "answered", "answer": {
+                "version": 1, "coverage": "complete", "conclusions": [
+                    {"kind": "aggregate", "evidence_ref": "calc#3"}]}}),
         ),
         "expect_path": "/odoo/customers",
         "expect_page_text": (),
@@ -84,7 +87,10 @@ CASES = {
         "replies": (
             ("load_skill", {"skill_id": "odoo.sales.quotations-query"}),
             ("query_quotations", {}),
-            (None, "The open quotations are above."),
+            ("finish", {"outcome": "answered", "answer": {
+                "version": 1, "coverage": "complete", "conclusions": [
+                    {"kind": "selection", "evidence_ref": "call2-query#1",
+                     "fields": ["name", "partner_id", "state", "amount_total"]}]}}),
         ),
         "expect_path": "/odoo/customers",
         "expect_page_text": (),
@@ -132,7 +138,10 @@ CASES = {
              {"query": "which fields does the customer invoice form declare"}),
             ("load_skill", {"skill_id": "odoo.sales.customer-invoices-query"}),
             ("query_customer_invoices", {}),
-            (None, "The declared fields are cited above; the current invoices are below."),
+            ("compute", {"operation": "count", "dataset_ref": "call3-query#1"}),
+            ("finish", {"outcome": "partial", "answer": {
+                "version": 1, "coverage": "partial", "conclusions": [
+                    {"kind": "aggregate", "evidence_ref": "calc#4"}]}}),
         ),
         "expect_path": "/odoo/customers",
         "expect_page_text": (),

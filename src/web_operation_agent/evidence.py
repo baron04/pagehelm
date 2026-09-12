@@ -378,6 +378,23 @@ class TurnEvidence:
                 "this turn recorded no evidence " + ", ".join(repr(x) for x in sorted(missing)))
         return tuple(self._items[name] for name in ids)
 
+    def query_for(self, evidence_id: str) -> QueryEvidence:
+        """Find the one read behind a query or a chain of selections."""
+        item = self.get(evidence_id)
+        seen = set()
+        while isinstance(item, SelectionEvidence):
+            if item.evidence_id in seen or len(seen) >= 32:
+                raise ValueError("selection lineage is cyclic or too deep")
+            seen.add(item.evidence_id)
+            parents = [parent for parent in self.require_all(item.inputs)
+                       if isinstance(parent, (QueryEvidence, SelectionEvidence))]
+            if len(parents) != 1:
+                raise ValueError("selection must descend from exactly one query")
+            item = parents[0]
+        if not isinstance(item, QueryEvidence):
+            raise ValueError("evidence has no query root")
+        return item
+
     def __len__(self) -> int:
         return len(self._items)
 

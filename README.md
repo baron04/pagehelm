@@ -34,6 +34,8 @@ The repository currently verifies these behaviors with local automated tests and
 
 These claims describe the implemented paths only. The project does not yet have a public benchmark large enough to establish general task success, a source-retrieval advantage, or superiority over PageAgent or other browser agents.
 
+For integrations that return typed answer evidence, read-only answers use a versioned conclusion contract. The agent can filter, count, sum and find extrema within one current dataset; the server resolves the cited fields and renders the supported conclusions instead of replacing them with the last query table. Invalid references receive bounded correction feedback. Coverage describes the evidence scope, not a guarantee that an arbitrary user question was fully answered. Integrations without answer evidence retain their existing answer path; navigation and write outcomes remain governed by their execution receipts and approval controls.
+
 ## Architecture
 
 ```mermaid

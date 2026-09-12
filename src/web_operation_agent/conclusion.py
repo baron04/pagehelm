@@ -68,15 +68,46 @@ class Selection:
     """These records met this condition, and no others in what was looked at did."""
 
     evidence_id: str
+    fields: tuple[str, ...] = ()
 
     kind = "selection"
 
     def verify(self, turn: TurnEvidence) -> dict:
-        item = _one(turn, self.evidence_id, SelectionEvidence, "a selection")
-        return {"kind": self.kind, "condition": item.condition,
-                "members": item.members, "matched": len(item.members),
-                "covers_whole_scope": item.covers_whole_scope,
-                "scope": item.origin.scope, "source_kind": "computed"}
+        item = _resolve(turn, self.evidence_id)
+        if not isinstance(item, (QueryEvidence, SelectionEvidence)):
+            raise ConclusionRefused("a selection requires a query or computed selection")
+        try:
+            query = turn.query_for(self.evidence_id)
+        except ValueError as exc:
+            raise ConclusionRefused(str(exc)) from None
+        records = [record for name in turn.ids()
+                   if isinstance(record := turn.get(name), RecordEvidence)
+                   and record.origin == query.origin]
+        members = (item.members if isinstance(item, SelectionEvidence)
+                   else tuple(dict.fromkeys(record.record_id for record in records)))
+        condition = (item.condition if isinstance(item, SelectionEvidence)
+                     else "; ".join(item.conditions) or item.collection)
+        cells = {}
+        for record in records:
+            key = (record.record_id, record.field_name)
+            if key in cells:
+                raise ConclusionRefused("conflicting field evidence within one read")
+            cells[key] = record
+        rows = []
+        for member in members:
+            values = []
+            for field_name in self.fields:
+                record = cells.get((member, field_name))
+                if record is None or not record.field_was_read:
+                    raise ConclusionRefused(f"{member}.{field_name} was not read")
+                values.append({"value": record.value, "unit": record.unit})
+            rows.append(values)
+        return {"kind": self.kind, "condition": condition,
+                "members": members, "matched": len(members), "fields": self.fields,
+                "rows": rows,
+                "covers_whole_scope": (item.covers_whole_scope and (
+                    isinstance(item, SelectionEvidence) or len(members) == query.matched_count)),
+                "scope": query.origin.scope, "source_kind": item.origin.kind}
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,7 +257,9 @@ def verify(draft: AnswerDraft, turn: TurnEvidence) -> VerifiedAnswer:
     coverage = draft.coverage
     for item in verified:
         if item["kind"] == "undetermined":
-            coverage = _lower(coverage, "undetermined")
+            floor = ("undetermined" if all(x["kind"] == "undetermined" for x in verified)
+                     else "partial")
+            coverage = _lower(coverage, floor)
             lowered.append(f"{item['about']}: {item['gap']}")
         elif item["kind"] in ("aggregate", "selection") and not item["covers_whole_scope"]:
             coverage = _lower(coverage, "partial")
