@@ -60,7 +60,7 @@
         },
         {
           "name": "woa:direct",
-          "value": "false"
+          "value": "true"
         },
         {
           "name": "woa:shipped",

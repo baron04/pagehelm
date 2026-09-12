@@ -30,7 +30,7 @@ it; see *The assistant panel bundle* below.
 
 | Component | Constraint | License | Source | Use |
 | --- | --- | --- | --- | --- |
-| [Playwright for Python](https://github.com/microsoft/playwright-python) | `>=1.52,<1.53` | Apache-2.0 | PyPI and the linked source repository | Browser worker and browser-build attestation; installed separately from this wheel |
+| [Playwright for Python](https://github.com/microsoft/playwright-python) (`playwright`) | `>=1.52,<1.53` | Apache-2.0 | PyPI and the linked source repository | Browser worker and browser-build attestation; installed separately from this wheel |
 
 Playwright 1.52 metadata declares `pyee>=13,<14` and
 `greenlet>=3.1.1,<4.0.0`; pyee in turn requires `typing-extensions`.
