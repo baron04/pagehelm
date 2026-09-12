@@ -20,34 +20,43 @@ import unittest
 from pathlib import Path
 
 from evals.twenty.structural import verify_structural_report
-from evals.woa.pilot_structural import (DEFAULT_BUNDLE, DIMENSIONS, PROBES, SCRIPTED_ONLY,
-                                        StructuralPilot, _domain_of, main)
+from evals.woa.pilot_structural import (DEFAULT_BUNDLE, DIMENSIONS, NOT_YET_PRODUCIBLE,
+                                        PROBES, SCRIPTED_ONLY, StructuralPilot, _domain_of,
+                                        main)
 from evals.woa.structural_apparatus import (CompanyStore, CursorCompanyPageModel, MAX_ROWS,
                                             PAGE_SIZE, ScanningCompanyExecutor,
                                             structural_business_runtime, structural_companies)
 from web_operation_agent.business import BusinessMutationIndeterminate
 
 
-class AProbeThatNeedsAScriptSaysSo(unittest.TestCase):
-    """A dimension measured by making the model do something cannot use a real model.
+class ADimensionThisRunCannotObserveIsNamedRatherThanDropped(unittest.TestCase):
+    """Two separate reasons `answer_quality` goes unmeasured, and both must reach the reader.
 
-    Groundedness works by having the model name a record its tools never returned. A real
-    model will not do that on cue, and if one did, the run would be a sample of that model's
-    honesty rather than evidence about an engine. Refusing is the only honest option; the
-    quiet failure this prevents is a real-provider run that reports the dimension as measured
-    while comparing the published answer against a script the model never saw.
+    Its method is to hand an arm the right answer and see whether it survives to the reader,
+    so a real model would be measuring the script rather than the engine. It is also not
+    producible at all yet: the probe asks for a count, and the evaluator's `query` kind judges
+    an answer by the records it restates, so an arm given a total fails on the evidence
+    contract for want of a task kind rather than for anything about the engine.
+
+    Either way the run says so instead of quietly listing three dimensions, which would read
+    as a three-dimension instrument.
     """
 
-    def test_groundedness_is_declared_scripted_only(self):
-        self.assertIn("groundedness", SCRIPTED_ONLY)
+    def test_the_probe_is_declared_scripted_only(self):
+        self.assertIn("answer_quality", SCRIPTED_ONLY)
         self.assertTrue(set(SCRIPTED_ONLY) <= set(DIMENSIONS))
 
-    def test_a_real_provider_run_of_it_alone_stops_rather_than_reporting_a_number(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaises(SystemExit) as caught:
-                main(["--provider", "real", "--dimensions", "groundedness",
-                      "--output-dir", tmp])
-            self.assertIn("no dimension is measurable", str(caught.exception))
+    def test_the_probe_is_declared_not_yet_producible_with_its_reason(self):
+        self.assertTrue(set(NOT_YET_PRODUCIBLE) <= set(DIMENSIONS))
+        self.assertTrue(NOT_YET_PRODUCIBLE["answer_quality"].strip())
+
+    def test_a_run_of_it_alone_stops_rather_than_reporting_a_number(self):
+        for provider in ("scripted", "real"):
+            with self.subTest(provider=provider), tempfile.TemporaryDirectory() as tmp:
+                with self.assertRaises(SystemExit) as caught:
+                    main(["--provider", provider, "--dimensions", "answer_quality",
+                          "--output-dir", tmp])
+                self.assertIn("no dimension is measurable", str(caught.exception))
 
 
 class TheApplicationBehavesTheWayTheProbesAssume(unittest.TestCase):
@@ -148,8 +157,20 @@ class EveryDimensionTellsTheArmsApart(unittest.TestCase):
         cls.pilot.__exit__(None, None, None)
         cls._directory.cleanup()
 
+    #: The dimensions a report can be built from. `answer_quality` is defined, is probed, and
+    #: yields one arm; a report is built from the rest and names it as unmeasured.
+    PRODUCIBLE = tuple(name for name in DIMENSIONS if name not in NOT_YET_PRODUCIBLE)
+
     def _by_arm(self, dimension: str) -> dict[str, dict]:
         return {row["arm_id"]: row for row in self.results[dimension]}
+
+    def _report(self) -> dict:
+        from evals.twenty.structural import build_structural_report
+
+        return build_structural_report(
+            apparatus="test", model="scripted", provider="scripted",
+            dimensions={name: self.results[name] for name in self.PRODUCIBLE},
+            not_measured=NOT_YET_PRODUCIBLE)
 
     def test_only_the_typed_arm_knows_how_big_the_collection_is(self):
         rows = self._by_arm("completeness")
@@ -178,14 +199,37 @@ class EveryDimensionTellsTheArmsApart(unittest.TestCase):
                 self.assertEqual(rows[arm]["durable_unresolved_rows"], 1)
                 self.assertTrue(rows[arm]["unresolved_record_is_named"])
 
-    def test_only_the_product_arm_shows_the_user_something_other_than_the_model_text(self):
-        rows = self._by_arm("groundedness")
-        self.assertTrue(rows["pageagent-skill"]["user_answer_is_the_model_text"])
-        self.assertFalse(rows["woa-skill"]["user_answer_is_the_model_text"])
-        # The fabricated record contradicted the run's own tool results, and only a check
-        # outside the engine noticed for the arm whose answer was the model's text.
-        self.assertTrue(rows["pageagent-skill"]["answer_contradicted_its_tool_results"])
-        self.assertFalse(rows["woa-skill"]["answer_contradicted_its_tool_results"])
+    def test_the_right_count_never_reaches_the_reader_and_one_arm_cannot_be_asked(self):
+        """What replaced the withdrawn construct, and why it yields no comparison yet.
+
+        Both arms are handed the correct conclusion -- the count, taken from the store -- so
+        nothing here depends on a model getting it right. The product publishes its typed
+        projection, the count is not in it, and the reader who asked how many is left to
+        count rows. That is the defect the answer contract exists for, recorded as an
+        observation rather than asserted.
+
+        The PageAgent arm cannot be asked at all: `query_evidence` requires the answer to
+        restate the rows the run disclosed, and a sentence stating a total does not, so the
+        run fails on the evidence contract. That is a missing task kind, not a finding about
+        the engine, and the probe records no observation for it.
+        """
+        rows = self._by_arm("answer_quality")
+        self.assertEqual(sorted(rows), ["woa-skill"])
+        self.assertFalse(rows["woa-skill"]["answered_what_was_asked"])
+        self.assertEqual(rows["woa-skill"]["correct_conclusions_dropped"], 1)
+        # And the conclusion that was dropped was right, so this is not a model answering
+        # wrongly and an engine correctly declining to publish it.
+        self.assertTrue(rows["woa-skill"]["facts_and_arithmetic_correct"])
+
+    def test_one_arm_is_not_a_comparison_and_the_scorer_refuses_to_pretend(self):
+        """The claim in `NOT_YET_PRODUCIBLE`, made checkable instead of only written down."""
+        from evals.twenty.evaluator import EvaluationInputError
+        from evals.twenty.structural import build_structural_report
+
+        with self.assertRaises(EvaluationInputError):
+            build_structural_report(
+                apparatus="test", model="scripted", provider="scripted",
+                dimensions={"answer_quality": self.results["answer_quality"]})
 
     def test_the_file_the_pilot_writes_is_the_file_the_verifier_accepts(self):
         """The artifact on disk, not the report in memory, is what anyone else will check.
@@ -196,12 +240,9 @@ class EveryDimensionTellsTheArmsApart(unittest.TestCase):
         from verifying nothing.
         """
         import tempfile as _tempfile
-        from evals.twenty.structural import build_structural_report
         from evals.woa.pilot_structural import PILOT_VERSION
 
-        report = build_structural_report(
-            apparatus="test", model="scripted", provider="scripted",
-            dimensions=self.results)
+        report = self._report()
         with _tempfile.TemporaryDirectory() as tmp:
             written = Path(tmp) / "structural.json"
             written.write_text(json.dumps(
@@ -214,22 +255,33 @@ class EveryDimensionTellsTheArmsApart(unittest.TestCase):
     def test_a_verdict_edited_in_the_written_file_is_still_refused(self):
         """Tolerating a run's own metadata must not tolerate an edited conclusion."""
         from evals.twenty.evaluator import EvaluationInputError
-        from evals.twenty.structural import build_structural_report
 
-        report = build_structural_report(
-            apparatus="test", model="scripted", provider="scripted",
-            dimensions=self.results)
-        tampered = {**report, "known_cost_cny": 0.0, "separated_count": 0}
+        tampered = {**self._report(), "known_cost_cny": 0.0, "separated_count": 0}
         with self.assertRaises(EvaluationInputError):
             verify_structural_report(tampered)
 
-    def test_every_dimension_separates_and_the_report_recomputes(self):
-        from evals.twenty.structural import build_structural_report
+    def test_a_dimension_dropped_from_the_unmeasured_list_is_refused(self):
+        """Deleting the line that says a dimension went unobserved is an edited conclusion.
 
-        report = build_structural_report(
-            apparatus="test", model="scripted", provider="scripted",
-            dimensions=self.results)
-        self.assertEqual(report["dimensions_that_separated_the_arms"], sorted(DIMENSIONS))
+        Without this the cheapest way to make a three-dimension run look like the whole
+        instrument is to remove one key, and the digest would have travelled with the edit.
+        """
+        from evals.twenty.evaluator import EvaluationInputError
+
+        report = self._report()
+        self.assertTrue(report["dimensions_defined_but_not_measured"])
+        with self.assertRaises(EvaluationInputError):
+            verify_structural_report({**report, "dimensions_defined_but_not_measured": {}})
+
+    def test_every_producible_dimension_separates_and_the_report_recomputes(self):
+        report = self._report()
+        # `answer_quality` is absent from this list, and that is the finding rather than a
+        # gap: the product drops the correct conclusion, and the other arm cannot be asked
+        # the question at all. One arm is not a comparison.
+        self.assertEqual(report["dimensions_that_separated_the_arms"],
+                         ["completeness", "refusal", "write_safety"])
+        self.assertEqual(sorted(report["dimensions_defined_but_not_measured"]),
+                         ["answer_quality"])
         self.assertEqual(verify_structural_report(report)["report_digest"],
                          report["report_digest"])
         self.assertNotIn("Structural Company", json.dumps(report, ensure_ascii=False))
