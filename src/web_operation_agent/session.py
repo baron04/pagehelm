@@ -913,6 +913,8 @@ class ServerAgentSession:
                            elements=len(obs.elements), digest=obs.content_digest)
 
         system = AGENT_SYSTEM
+        if self.page_answer_evidence:
+            system += "\n" + page_answer.SYSTEM
         if self.runtime_source:
             system += "\n" + REACT_SOURCE_SYSTEM
         if self.source_affordance_mode in ("auto", "empty"):
@@ -940,6 +942,13 @@ class ServerAgentSession:
             if self._page_answer_digest and self._page_answer_digest != obs.content_digest:
                 self.evidence.discard_pages()
                 self._page_answer_digest = ""
+            if (self._answer_action_receipt is not None
+                    and self._answer_action_receipt["kind"] == "navigation"
+                    and self._answer_action_receipt["url"] != obs.url):
+                self._answer_action_receipt = None
+            if (self._answer_action_receipt is not None
+                    and self._answer_action_receipt.get("navigation_url", obs.url) != obs.url):
+                self._answer_action_receipt.pop("navigation_url", None)
             if self._cancel_requested():
                 return self._finish(
                     result, t0, "user_cancelled", "the user stopped this task",
@@ -1557,7 +1566,7 @@ class ServerAgentSession:
                     computed = answer_protocol.compute(
                         self.evidence, args, result_ref=f"calc#{step}",
                         observed_at=str(time.time()))
-                    feedback = answer_protocol.evidence_index(self.evidence, (computed.evidence_id,))
+                    feedback = answer_protocol.computation_feedback(self.evidence, computed.evidence_id)
                     self.ledger.append("answer_computed", step=step,
                                        result_ref=computed.evidence_id,
                                        covers_whole_scope=computed.covers_whole_scope)
@@ -1596,7 +1605,7 @@ class ServerAgentSession:
                     messages += [_assistant_call(call), _tool_result(
                         call, "ANSWER REFUSED: " + str(exc)[:500] +
                         ". Correct the evidence reference or perform a supported read/compute; "
-                        "otherwise finish with outcome=unable.")]
+                        "otherwise finish with outcome=unable. " + self._render_answer_action())]
                     continue
                 result.verified_answer = verified
                 result.agent_said = (render_payload(verified, user_text=self.task.prompt,
@@ -1696,7 +1705,11 @@ class ServerAgentSession:
             try:
                 self._browser_attempts += 1
                 self._awaiting_control = action_may_write
-                if name not in ("observe", "wait_for"):
+                preserve_completed_write = bool(
+                    self._answer_action_receipt is not None
+                    and self._answer_action_receipt["kind"] == "mutation"
+                    and name in ("goto", "back"))
+                if name not in ("observe", "wait_for") and not preserve_completed_write:
                     self._answer_action_receipt = None
                 receipt = self.browser.execute(name, args, expect_navigation=expect_nav)
             except TurnCancelled as exc:
@@ -1731,7 +1744,10 @@ class ServerAgentSession:
                 obs = receipt.observation
             if (name in ("goto", "back") and receipt.ok
                     and receipt.observation is not None):
-                self._answer_action_receipt = {"kind": "navigation", "url": obs.url}
+                if self._answer_action_receipt is not None and self._answer_action_receipt["kind"] == "mutation":
+                    self._answer_action_receipt["navigation_url"] = obs.url
+                else:
+                    self._answer_action_receipt = {"kind": "navigation", "url": obs.url}
             if skill_app_entry is not None:
                 gap = self.knowledge_router.gap_evidence(skill_app_entry, obs)
                 self.ledger.append(
@@ -2404,6 +2420,9 @@ class ServerAgentSession:
                         "potentially writing action will stop the run as indeterminate.")
         if note:
             body.append(note)
+        action = self._render_answer_action()
+        if action:
+            body.append(action)
         body.append("CURRENT PAGE:\n" + _render_observation(obs))
         affordances = self._deliver_source_affordances(
             obs, query=affordance_query, reason="lookup" if affordance_query else "observation")
@@ -2416,6 +2435,15 @@ class ServerAgentSession:
         if business_skills:
             body.append(business_skills)
         return "\n\n".join(body)
+
+    def _render_answer_action(self) -> str:
+        if not self._answer_mode or self._answer_action_receipt is None:
+            return ""
+        return ("COMPLETED ACTION RECEIPT (server-observed; not proof of other task goals):\n" +
+                json.dumps(self._answer_action_receipt, ensure_ascii=False) +
+                '\nTo report this action, call finish with {"outcome":"acted"}. '
+                "Do not turn a URL, record name or action claim into a field evidence reference. "
+                "If the user also requested data, read/cite those facts separately.")
 
     def _render_task_skills(self) -> str:
         if not self._task_skills:

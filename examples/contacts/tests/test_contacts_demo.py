@@ -173,6 +173,9 @@ class TheWriteWalkthroughInARealBrowser(unittest.TestCase):
             # which is the only evidence that the write reached the application.
             self.assertIn("Radia Perlman", summary["last_page_text"])
             self.assertIn("radia@example.test", summary["last_page_text"])
+            self.assertIn("Create exactly one contact", turn["answer"])
+            self.assertIn("Radia Perlman", turn["answer"])
+            self.assertIn("Opened the page", turn["answer"])
             audit = next(Path(directory).glob("*/audit.jsonl"))
             events = [json.loads(line) for line in audit.read_text().splitlines()]
             kinds = [row["event"] for row in events]

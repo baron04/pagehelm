@@ -80,8 +80,12 @@ def render_payload(payload: dict, *, user_text: str, max_chars: int) -> str:
             label = "已打开页面" if _language(user_text) == "zh" else "Opened the page"
             return f"{label}：{_literal(action['url'])}"[:max_chars]
         label = "已完成已批准的操作" if _language(user_text) == "zh" else "Completed the approved action"
-        return (f"{label}：{_literal(action['effect'])}\n" +
-                "、".join(_literal(x) for x in action["targets"]))[:max_chars]
+        text = (f"{label}：{_literal(action['effect'])}\n" +
+                "、".join(_literal(x) for x in action["targets"]))
+        if action.get("navigation_url"):
+            opened = "已打开页面" if _language(user_text) == "zh" else "Opened the page"
+            text += f"\n{opened}：{_literal(action['navigation_url'])}"
+        return text[:max_chars]
     return render(VerifiedAnswer(**data), user_text=user_text,
                   max_chars=max_chars, presentation=presentation)
 

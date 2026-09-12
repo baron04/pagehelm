@@ -127,6 +127,23 @@ class DefaultProductAnswerPath(unittest.TestCase):
         result, _ = self.execute([("finish", {"outcome": "acted"})] * 3)
         self.assertEqual(result.status, AgentTurnStatus.REFUSED)
 
+    def test_selection_fields_survive_query_context_trimming_after_navigation(self):
+        result, chat = self.execute([
+            ("compute", {"operation": "argmax", "dataset_ref": "call2-query#1", "field": "amount"}),
+            ("goto", {"url": "/object/company/company-1"}),
+            ("wait_for", {"ms": 0}),
+            ("finish", _answer("selection", "calc#3", fields=["name", "amount"])),
+        ])
+        self.assertEqual(result.status, AgentTurnStatus.FINISHED)
+        self.assertIn("Acme", result.user_answer)
+        final_context = chat.messages[-1]
+        query = next(x for x in final_context if x.get("role") == "tool" and x.get("name") == "query_companies")
+        computed = next(x for x in final_context if x.get("role") == "tool" and x.get("name") == "compute")
+        self.assertTrue(query["content"].startswith("(earlier)"))
+        self.assertIn("call2-record#2", computed["content"])
+        self.assertIn('"field_name":"name"', computed["content"])
+        self.assertIn('"outcome":"acted"', str(final_context))
+
 
 if __name__ == "__main__":
     unittest.main()

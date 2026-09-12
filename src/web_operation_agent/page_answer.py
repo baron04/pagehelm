@@ -5,6 +5,12 @@ from .schemas import PageObservation
 MAX_PAGE_ITEMS = 32
 MAX_PAGE_EXCERPT_CHARS = 300
 
+SYSTEM = """For factual questions about what the page displays, use observe with
+answer_evidence=true and cite the resulting page_observation or undetermined references.
+Quote the observed text/value; do not infer that a label means an empty field. Explanations
+without claims about current data can use ordinary prose. Prefer a suitable typed read for
+business facts, and do not repeat page observations after a sufficient API read."""
+
 OBSERVE_TOOL = {"type": "function", "function": {
     "name": "observe", "description": (
         "Re-read the current page without changing it. Set answer_evidence=true when "

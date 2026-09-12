@@ -195,3 +195,16 @@ def evidence_index(turn: TurnEvidence, refs: tuple[str, ...]) -> str:
     return header + json.dumps(
         {"evidence": rows, "index_truncated": truncated}, ensure_ascii=False,
         separators=(",", ":"))
+
+
+def computation_feedback(turn: TurnEvidence, result_ref: str) -> str:
+    """A selection remains usable when the older query message leaves the context window."""
+    item = turn.get(result_ref)
+    refs = [result_ref]
+    if isinstance(item, SelectionEvidence):
+        query = turn.query_for(result_ref)
+        refs.append(query.evidence_id)
+        refs.extend(ref for ref in turn.ids()
+                    if isinstance(record := turn.get(ref), RecordEvidence)
+                    and record.origin == query.origin and record.record_id in item.members)
+    return evidence_index(turn, tuple(refs))
