@@ -39,7 +39,7 @@ DEMO_ACTOR = {"workspace": "northstar", "actor": "ada-lovelace"}
 _MODEL_ENV_KEYS = (
     "AGENT_OPENAI_BASE_URL",
     "AGENT_OPENAI_API_KEY",
-    "AGENT_OPENAI_MODEL_PRO",
+    "AGENT_OPENAI_MODEL",
     "AGENT_PROVIDER",
 )
 def _json_bytes(value: object) -> bytes:

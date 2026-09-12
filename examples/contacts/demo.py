@@ -36,7 +36,7 @@ from web_operation_agent.product import AgentTurnConfig, AgentTurnExecution, Age
 _MODEL_ENV_KEYS = (
     "AGENT_OPENAI_BASE_URL",
     "AGENT_OPENAI_API_KEY",
-    "AGENT_OPENAI_MODEL_PRO",
+    "AGENT_OPENAI_MODEL",
     "AGENT_PROVIDER",
 )
 
@@ -353,7 +353,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="web-operation-agent-demo",
         description="Run the self-contained Minimal Contacts application and embedded Agent.",
         epilog=("Without --scripted, set AGENT_OPENAI_BASE_URL, AGENT_OPENAI_API_KEY and "
-                "AGENT_OPENAI_MODEL_PRO. Scripted mode checks plumbing only."),
+                "AGENT_OPENAI_MODEL. Scripted mode checks plumbing only."),
     )
     parser.add_argument("--scripted", action="store_true",
                         help="use the fixed zero-cost apparatus walkthrough")

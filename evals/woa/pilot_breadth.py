@@ -38,9 +38,9 @@ DEVELOPMENT_TASKSET = (
     Path(__file__).resolve().parents[1] / "twenty" / "tasksets"
     / "twenty-breadth-development-v2.json")
 _MODEL_KEYS = {"AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY",
-               "AGENT_OPENAI_MODEL_PRO", "AGENT_PROVIDER"}
+               "AGENT_OPENAI_MODEL", "AGENT_PROVIDER"}
 _REQUIRED_MODEL_KEYS = {"AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY",
-                        "AGENT_OPENAI_MODEL_PRO"}
+                        "AGENT_OPENAI_MODEL"}
 _LIVE_KEYS = {
     "base_url": "WOA_TWENTY_BASE_URL",
     "storage_state": "WOA_TWENTY_STORAGE_STATE",
@@ -241,7 +241,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         batch_cost_stop=args.max_cost_cny)
     client = ChatModel(
         meter, env={key: env[key] for key in _MODEL_KEYS},
-        model=env["AGENT_OPENAI_MODEL_PRO"], max_completion_tokens=2_048, timeout=180)
+        model=env["AGENT_OPENAI_MODEL"], max_completion_tokens=2_048, timeout=180)
     result = run_pilot(
         fixture=TwentyPostgresFixture(
             container=env[_LIVE_KEYS["container"]],

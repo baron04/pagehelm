@@ -726,12 +726,17 @@ class ChatModel:
         env = env if env is not None else load_env()
         raw_base = env.get("AGENT_OPENAI_BASE_URL") or ""
         self._key = env.get("AGENT_OPENAI_API_KEY") or ""
-        self.model = model or env.get("AGENT_OPENAI_MODEL_PRO") or ""
+        self.model = model or env.get("AGENT_OPENAI_MODEL") or ""
         # A label for the ledger, nothing more. It has no behavioural meaning -- the code path
         # is the same for every OpenAI-compatible endpoint -- and defaults to the host in the
         # base URL so switching providers needs no code change, only .env.
         if not (raw_base and self._key and self.model):
-            raise ProviderError("AGENT_OPENAI_BASE_URL / _API_KEY / _MODEL_PRO are not all set")
+            raise ProviderError(
+                "AGENT_OPENAI_BASE_URL / _API_KEY / _MODEL are not all set. "
+                "`AGENT_OPENAI_MODEL_PRO` was renamed to `AGENT_OPENAI_MODEL`: nothing "
+                "ever used a second tier, and the old name made a flash model only "
+                "settable through a key called PRO. It is not read as a fallback -- an "
+                "unnoticed old name would silently pick a different model than intended.")
         if (not isinstance(raw_base, str) or not isinstance(self._key, str)
                 or not isinstance(self.model, str)
                 or any(re.search(r"[\x00-\x1f\x7f]", value)

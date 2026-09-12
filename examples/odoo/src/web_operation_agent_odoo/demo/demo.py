@@ -45,7 +45,7 @@ from web_operation_agent.product import (AgentTurnConfig, AgentTurnExecution,
 from ..adapter import OdooApplicationAdapter
 
 _MODEL_ENV_KEYS = ("AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY",
-                   "AGENT_OPENAI_MODEL_PRO", "AGENT_PROVIDER")
+                   "AGENT_OPENAI_MODEL", "AGENT_PROVIDER")
 _PRINCIPAL_LIFETIME_S = 900
 #: The walkthrough the scripted mode performs: read the typed API, then open exactly the
 #: route that result authorised. Nothing here is Odoo trivia -- it is the product's contract.
@@ -499,7 +499,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="web-operation-agent-odoo-demo",
         description="Run the embedded Agent against a live Odoo 18 deployment.",
         epilog=("Without --scripted, set AGENT_OPENAI_BASE_URL, AGENT_OPENAI_API_KEY and "
-                "AGENT_OPENAI_MODEL_PRO. Scripted mode checks the apparatus only."))
+                "AGENT_OPENAI_MODEL. Scripted mode checks the apparatus only."))
     parser.add_argument("--base-url", default=_env_default(
         "WOA_ODOO_BASE_URL", "http://127.0.0.1:8069"))
     parser.add_argument("--api-key", default=_env_default("WOA_ODOO_API_KEY_FILE"),

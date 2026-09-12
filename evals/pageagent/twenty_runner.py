@@ -950,7 +950,7 @@ def _write_json(path: Path, value: dict[str, Any]) -> None:
 def _environment(path: Path | None, environ: Mapping[str, str]) -> dict[str, str]:
     loaded = load_env(path) if path is not None else {}
     keys = {"AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY",
-            "AGENT_OPENAI_MODEL_PRO", "AGENT_PROVIDER"}
+            "AGENT_OPENAI_MODEL", "AGENT_PROVIDER"}
     result = {key: value for key, value in loaded.items() if key in keys}
     result.update({key: environ[key] for key in keys if environ.get(key)})
     return result
@@ -983,7 +983,7 @@ def main(argv: Sequence[str] | None = None,
     try:
         env = _environment(Path(args.model_env) if args.model_env else None,
                            os.environ if environ is None else environ)
-        model = args.model or env.get("AGENT_OPENAI_MODEL_PRO")
+        model = args.model or env.get("AGENT_OPENAI_MODEL")
         meter = SpendMeter(ledger=Path(args.spend_ledger), batch_id="pageagent-twenty")
         client = ChatModel(meter, env=env, model=model, max_completion_tokens=2_048)
         adapter = TwentyApplicationAdapter(

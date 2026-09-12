@@ -26,7 +26,7 @@ Before opening the browser, run `./demo.sh --check` for read-only mode or `./dem
 
 If preflight reports that the browser session is missing or expired, run `./demo.sh --login`. It opens a visible Twenty window for manual sign-in and replaces the configured storage-state file only after the expected live HttpOnly session appears. It does not receive or store the password itself. Run preflight again after the window closes.
 
-The environment file may contain the `WOA_*` locations above together with `AGENT_OPENAI_BASE_URL`, `AGENT_OPENAI_API_KEY`, and `AGENT_OPENAI_MODEL_PRO`; explicit process values take precedence. Keep the file outside the repository and restrict it to the local user. When a repository-local `.env` exists, `demo.sh` selects it automatically and parses assignments as data rather than executing it as a shell script.
+The environment file may contain the `WOA_*` locations above together with `AGENT_OPENAI_BASE_URL`, `AGENT_OPENAI_API_KEY`, and `AGENT_OPENAI_MODEL`; explicit process values take precedence. Keep the file outside the repository and restrict it to the local user. When a repository-local `.env` exists, `demo.sh` selects it automatically and parses assignments as data rather than executing it as a shell script.
 
 The application files may also be passed as command-line options; run `./demo.sh --help` for the complete list. Command-line values take precedence over their `WOA_*` counterparts. The browser opens the Companies page by default; use `--entry-path` or `WOA_TWENTY_ENTRY_PATH` to select another same-origin starting page.
 

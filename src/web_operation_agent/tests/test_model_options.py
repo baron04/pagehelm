@@ -140,7 +140,7 @@ class ProviderDeadline(unittest.TestCase):
 class NativeCompletionTransport(unittest.TestCase):
     ENV = {"AGENT_OPENAI_BASE_URL": "https://provider.example/v1",
            "AGENT_OPENAI_API_KEY": "test-key",
-           "AGENT_OPENAI_MODEL_PRO": "MiniMax-M3"}
+           "AGENT_OPENAI_MODEL": "MiniMax-M3"}
 
     @staticmethod
     def _response(payload):
@@ -277,7 +277,7 @@ class ProviderRuntimeProtection(unittest.TestCase):
                     M.SpendMeter(ledger=Path(directory) / "spend.jsonl"),
                     env={"AGENT_OPENAI_BASE_URL": f"http://127.0.0.1:{server.server_port}/v1",
                          "AGENT_OPENAI_API_KEY": "key",
-                         "AGENT_OPENAI_MODEL_PRO": "MiniMax-M3"},
+                         "AGENT_OPENAI_MODEL": "MiniMax-M3"},
                     runtime_guard=guard,
                 )
                 cancelled = threading.Event()
@@ -348,7 +348,7 @@ class ProviderRuntimeProtection(unittest.TestCase):
                     M.SpendMeter(ledger=Path(directory) / "spend.jsonl"),
                     env={"AGENT_OPENAI_BASE_URL": f"http://127.0.0.1:{server.server_port}/v1",
                          "AGENT_OPENAI_API_KEY": "key",
-                         "AGENT_OPENAI_MODEL_PRO": "MiniMax-M3"},
+                         "AGENT_OPENAI_MODEL": "MiniMax-M3"},
                     runtime_guard=guard,
                 )
                 with self.assertRaises(M.ProviderError) as timed_out:
@@ -458,7 +458,7 @@ class ProviderRuntimeProtection(unittest.TestCase):
                 M.SpendMeter(ledger=ledger),
                 env={"AGENT_OPENAI_BASE_URL": "http://127.0.0.1:9/v1",
                      "AGENT_OPENAI_API_KEY": "key",
-                     "AGENT_OPENAI_MODEL_PRO": "MiniMax-M3"},
+                     "AGENT_OPENAI_MODEL": "MiniMax-M3"},
                 runtime_guard=guard,
             )
             cancelled = threading.Event()
@@ -499,7 +499,7 @@ class ProviderRuntimeProtection(unittest.TestCase):
                 M.SpendMeter(ledger=Path(directory) / "spend.jsonl"),
                 env={"AGENT_OPENAI_BASE_URL": "https://provider.example/v1",
                      "AGENT_OPENAI_API_KEY": "key",
-                     "AGENT_OPENAI_MODEL_PRO": "MiniMax-M3"},
+                     "AGENT_OPENAI_MODEL": "MiniMax-M3"},
                 runtime_guard=guard,
             )
 
@@ -537,7 +537,7 @@ class ProviderRuntimeProtection(unittest.TestCase):
                 M.SpendMeter(ledger=Path(directory) / "spend.jsonl"),
                 env={"AGENT_OPENAI_BASE_URL": "https://provider.example/v1",
                      "AGENT_OPENAI_API_KEY": "key",
-                     "AGENT_OPENAI_MODEL_PRO": "MiniMax-M3"},
+                     "AGENT_OPENAI_MODEL": "MiniMax-M3"},
                 runtime_guard=GuardWithMeasuredWait(max_concurrent_requests=1),
             )
             payload = {"usage": {"prompt_tokens": 0, "completion_tokens": 0}, "choices": [{
@@ -571,7 +571,7 @@ class ProviderRuntimeProtection(unittest.TestCase):
                 M.SpendMeter(ledger=Path(directory) / "spend.jsonl"),
                 env={"AGENT_OPENAI_BASE_URL": "https://provider.example/v1",
                      "AGENT_OPENAI_API_KEY": "key",
-                     "AGENT_OPENAI_MODEL_PRO": "MiniMax-M3"},
+                     "AGENT_OPENAI_MODEL": "MiniMax-M3"},
             )
             payload = {"choices": [{
                 "finish_reason": "stop", "message": {"content": "done"}}]}
@@ -593,7 +593,7 @@ class ProviderRuntimeProtection(unittest.TestCase):
                 M.SpendMeter(ledger=Path(directory) / "spend.jsonl"),
                 env={"AGENT_OPENAI_BASE_URL": "https://provider.example/v1",
                      "AGENT_OPENAI_API_KEY": "key",
-                     "AGENT_OPENAI_MODEL_PRO": "MiniMax-M3"},
+                     "AGENT_OPENAI_MODEL": "MiniMax-M3"},
             )
             payload = {"model": "snapshot-without-usage", "choices": [{
                 "finish_reason": "stop", "message": {"content": "done"}}]}

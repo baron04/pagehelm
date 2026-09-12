@@ -35,7 +35,7 @@ from web_operation_agent.application import bind_application
 _MODEL_ENV_KEYS = (
     "AGENT_OPENAI_BASE_URL",
     "AGENT_OPENAI_API_KEY",
-    "AGENT_OPENAI_MODEL_PRO",
+    "AGENT_OPENAI_MODEL",
     "AGENT_PROVIDER",
 )
 _DISABLED_BROWSER_ACTIONS = frozenset({"click", "fill", "select", "submit", "back"})
@@ -260,7 +260,7 @@ def build_parser(environ: Mapping[str, str] | None = None) -> argparse.ArgumentP
     parser.add_argument(
         "--model",
         default=_configured(env, "WOA_MODEL"),
-        help="model override (or WOA_MODEL; otherwise AGENT_OPENAI_MODEL_PRO)",
+        help="model override (or WOA_MODEL; otherwise AGENT_OPENAI_MODEL)",
     )
     parser.add_argument(
         "--browser-executable",

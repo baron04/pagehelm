@@ -96,7 +96,7 @@ class _ChatModelCase(unittest.TestCase):
             M.SpendMeter(ledger=Path(self.directory.name) / f"spend-{len(self.servers)}.jsonl"),
             env={"AGENT_OPENAI_BASE_URL": f"http://127.0.0.1:{server.server_port}/v1",
                  "AGENT_OPENAI_API_KEY": "key",
-                 "AGENT_OPENAI_MODEL_PRO": "MiniMax-M3"},
+                 "AGENT_OPENAI_MODEL": "MiniMax-M3"},
             runtime_guard=guard or M.ProviderRuntimeGuard(),
         )
 
@@ -245,7 +245,7 @@ class AuditedChatNeverDegradesCancellation(_ChatModelCase):
             M.SpendMeter(ledger=ledger_path),
             env={"AGENT_OPENAI_BASE_URL": f"http://127.0.0.1:{server.server_port}/v1",
                  "AGENT_OPENAI_API_KEY": "key",
-                 "AGENT_OPENAI_MODEL_PRO": "MiniMax-M3"},
+                 "AGENT_OPENAI_MODEL": "MiniMax-M3"},
             runtime_guard=guard), _Ledger())
 
         cancelled, outcome = threading.Event(), []

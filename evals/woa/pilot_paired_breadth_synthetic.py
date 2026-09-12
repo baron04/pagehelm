@@ -208,7 +208,7 @@ class PairedBreadthPilot:
                            batch_cost_stop=self.max_cost_cny)
         return ChatModel(
             meter, env={key: env[key] for key in _MODEL_KEYS if env.get(key)},
-            model=env["AGENT_OPENAI_MODEL_PRO"], max_completion_tokens=2_048, timeout=180)
+            model=env["AGENT_OPENAI_MODEL"], max_completion_tokens=2_048, timeout=180)
 
     def __enter__(self) -> "PairedBreadthPilot":
         self.page.__enter__()

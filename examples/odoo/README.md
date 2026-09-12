@@ -117,7 +117,7 @@ python -m web_operation_agent_odoo.demo --scripted --headless \
 
 `--scripted` uses a fixed walkthrough with no provider and no spend: it exercises real Odoo,
 real Chromium and the real product turn, and asserts nothing about a model. Drop `--scripted`
-and set `AGENT_OPENAI_BASE_URL`, `AGENT_OPENAI_API_KEY` and `AGENT_OPENAI_MODEL_PRO` to run
+and set `AGENT_OPENAI_BASE_URL`, `AGENT_OPENAI_API_KEY` and `AGENT_OPENAI_MODEL` to run
 with one.
 
 The gate version writes a schema-fixed artifact of counts, digests and booleans, and checks

@@ -217,7 +217,7 @@ class TheClientIsNotTiedToOneProvider(unittest.TestCase):
     """Swapping models must be a .env change, not a code change."""
 
     ENV = {"AGENT_OPENAI_BASE_URL": "https://api.example-vendor.com/v1",
-           "AGENT_OPENAI_API_KEY": "k", "AGENT_OPENAI_MODEL_PRO": "MiniMax-M3"}
+           "AGENT_OPENAI_API_KEY": "k", "AGENT_OPENAI_MODEL": "MiniMax-M3"}
 
     def _chat(self, **over):
         from web_operation_agent.model import ChatModel
@@ -257,7 +257,7 @@ class TheClientIsNotTiedToOneProvider(unittest.TestCase):
         """Better to stop before the first call than to book the run at the wrong rates."""
         from web_operation_agent.model import UnpricedModel
         with self.assertRaises(UnpricedModel):
-            self._chat(AGENT_OPENAI_MODEL_PRO="a-model-with-no-price")
+            self._chat(AGENT_OPENAI_MODEL="a-model-with-no-price")
 
     def test_the_meter_is_given_the_price_of_the_model_actually_in_use(self):
         from web_operation_agent.model import PRICES

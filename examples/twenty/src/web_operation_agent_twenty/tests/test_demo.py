@@ -197,7 +197,7 @@ class TwentyDemoPreflightTests(unittest.TestCase):
                 "WOA_OUTPUT_DIR": str(root / "output"),
                 "AGENT_OPENAI_BASE_URL": "https://provider.example/v1",
                 "AGENT_OPENAI_API_KEY": "test-key-not-a-secret",
-                "AGENT_OPENAI_MODEL_PRO": "test-model",
+                "AGENT_OPENAI_MODEL": "test-model",
             }
             code, report = preflight.run(["--offline"], env)
 
@@ -347,20 +347,20 @@ class TwentyDemoCompositionTests(unittest.TestCase):
             model_env.write_text(
                 "AGENT_OPENAI_BASE_URL=https://provider.example/v1\n"
                 "AGENT_OPENAI_API_KEY=file-secret\n"
-                "AGENT_OPENAI_MODEL_PRO=file-model\n"
+                "AGENT_OPENAI_MODEL=file-model\n"
                 "UNRELATED_VALUE=not-forwarded\n",
                 encoding="utf-8",
             )
             config = replace(self._config(root), model_env_path=model_env)
             values = demo.model_environment(config, {
-                "AGENT_OPENAI_MODEL_PRO": "process-model",
+                "AGENT_OPENAI_MODEL": "process-model",
                 "ANOTHER_VALUE": "not-forwarded",
             })
 
         self.assertEqual(values, {
             "AGENT_OPENAI_BASE_URL": "https://provider.example/v1",
             "AGENT_OPENAI_API_KEY": "file-secret",
-            "AGENT_OPENAI_MODEL_PRO": "process-model",
+            "AGENT_OPENAI_MODEL": "process-model",
         })
 
     def test_live_host_uses_configured_controller_and_spa_navigation(self):
