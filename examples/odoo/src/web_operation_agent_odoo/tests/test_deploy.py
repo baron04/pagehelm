@@ -161,6 +161,33 @@ class TheStepsRunInTheOnlyOrderThatWorks(unittest.TestCase):
                 self.assertIn(name, choices)
 
 
+class TheDemoOpensWhereAPersonCanSeeIt(unittest.TestCase):
+    """A demo nobody can find is a demo that does not work.
+
+    The panel remembers whether a viewer left it open, in `localStorage`, and defaults to a
+    small unlabelled launcher in the corner. A demo launches a throwaway browser profile, so
+    there is never anything to remember: every run started collapsed, and the first thing a
+    person saw was a page that looked like nothing had loaded.
+    """
+
+    def test_the_demo_seeds_the_remembered_open_state(self):
+        from web_operation_agent_odoo.demo import demo as demo_module
+
+        source = Path(demo_module.__file__).read_text()
+        self.assertIn("woa.panel.open.v1", source)
+        self.assertIn("localStorage.setItem", source)
+
+    def test_it_is_seeded_in_the_demo_and_nowhere_in_the_product(self):
+        """Remembering the viewer's own choice is right in a real deployment."""
+        import web_operation_agent
+
+        product = Path(web_operation_agent.__file__).resolve().parent
+        offenders = [path for path in product.rglob("*.js")
+                     if "panel/" not in path.as_posix()
+                     and "woa.panel.open.v1" in path.read_text(errors="ignore")]
+        self.assertEqual(offenders, [])
+
+
 class TheSourceTreeIsACopyOfWhatIsCompiled(unittest.TestCase):
     def test_the_modules_are_the_set_the_citations_need(self):
         """Not "all of them": G3 measured which set makes every packaged citation resolve."""

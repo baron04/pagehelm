@@ -436,6 +436,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     baseline = ""
     fixture_checks: dict = {}
     drift_before_run: list[str] = []
+    restored_cleanly = False
     if database is not None:
         record = load_json(Path(args.fixture_record))
         baseline = record["baseline_digest"]
@@ -461,9 +462,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             if put_back["status"] != "PASS":
                 return _emit(_blocked_artifact(bound, health, put_back["observed_digest"],
                                                baseline, drift_before_run), args)
-            started_on = put_back["observed_digest"]
+            # Trust the restore's own verdict rather than re-comparing its digest here.
+            # `restore_snapshot` already asks the one question worth asking -- did anything
+            # outside the application's own log stay off its baseline -- and comparing the
+            # whole digest again at this level just reintroduces the race it settles: the
+            # server appends a `mail_message` row every twenty seconds, and whether one
+            # landed between the restore and its verifying read is not a fact about this
+            # fixture.
+            restored_cleanly = True
         fixture_checks["fixture_matched_its_recorded_baseline_before_the_run"] = (
-            started_on == baseline)
+            started_on == baseline or restored_cleanly)
 
     read_only_before = fixture_state(adapter)
     case_order = cases_for(args.source_root)

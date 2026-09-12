@@ -203,9 +203,17 @@ python -m web_operation_agent_odoo.demo --allow-mutations
 ```
 
 No flags to set: every path comes from the `.env` that `provision` printed, and the provider
-credentials come from the same file. Type a goal in the panel; close the window to end the
-session. Each turn prints one JSON line — the answer, the approval counts, the page actions —
-and the run directory keeps the audit ledger.
+credentials come from the same file.
+
+The panel opens on the right, already expanded, showing three suggested goals and a
+composer. Type a goal; close the window to end the session. Each turn prints one JSON line —
+the answer, the approval counts, the page actions — and the run directory keeps the audit
+ledger.
+
+(In a real deployment the panel remembers whether you left it open and otherwise sits as a
+small launcher in the corner. A demo runs in a throwaway browser profile with nothing to
+remember, so it seeds that state open: a demo you have to hunt for is one that looks
+broken.)
 
 Things worth trying, in the order that shows the most:
 

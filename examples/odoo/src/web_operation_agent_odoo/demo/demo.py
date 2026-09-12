@@ -360,6 +360,16 @@ def _run_browser(config: OdooDemoConfig, live: LiveProductSession,
                 viewport={"width": 1440, "height": 1000})
             try:
                 context.add_init_script(script=live.bootstrap_script)
+                # The panel remembers whether a viewer left it open, in `localStorage`. A
+                # demo launches a throwaway profile, so there is never anything to remember
+                # and every run starts collapsed behind a small unlabelled launcher -- which
+                # reads, to someone opening the window for the first time, as nothing having
+                # loaded at all. Seeding the remembered state is a demo concern only: a real
+                # deployment has a profile, and honouring the viewer's own choice is right
+                # there.
+                context.add_init_script(
+                    script="try { localStorage.setItem('woa.panel.open.v1', 'true') } "
+                           "catch (error) { /* a profile that blocks site data still works */ }")
                 page = context.new_page()
                 page.goto(config.base_url.rstrip("/") + config.entry_path,
                           wait_until="domcontentloaded", timeout=60_000)
