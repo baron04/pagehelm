@@ -31,6 +31,10 @@ DISTRIBUTIONS = {
             # absence is a packaging failure, not something to discover at runtime.
             "web_operation_agent/web_runtime/panel/manifest.json",
             "web_operation_agent/web_runtime/panel/panel.js",
+            # The pinned PageController contract. Without it an installed package carries no
+            # statement of which build it is qualified against, which is the state this file
+            # was added to end.
+            "web_operation_agent/policies/page_controller.json",
         ],
         "forbidden": [
             "web_operation_agent/browser_worker.py",
@@ -81,6 +85,10 @@ DISTRIBUTIONS = {
             "web_operation_agent_odoo/skills/products-query.json",
             "web_operation_agent_odoo/skills/customers-create.json",
         ],
+        # The fixture provisioner reads a Compose file and an addon from a checkout. Shipping
+        # it would put a fixture master password in a wheel and offer a command that cannot
+        # work once installed.
+        "forbidden_prefixes": ["web_operation_agent_odoo/deploy/"],
         "forbidden_name_substrings": ["ofbiz", "twenty"],
     },
 }
@@ -100,6 +108,12 @@ def check_one(label: str, spec: dict) -> list[str]:
     present = [name for name in spec.get("forbidden", []) if name in names]
     if present:
         problems.append(f"{label}: wheel must not contain {present}")
+
+    for prefix in spec.get("forbidden_prefixes", []):
+        shipped = [name for name in names if name.startswith(prefix)]
+        if shipped:
+            problems.append(
+                f"{label}: wheel must not contain anything under {prefix!r}: {shipped[:5]}")
 
     for needle in spec.get("forbidden_name_substrings", []):
         leaked = [name for name in names if needle in name.lower()]

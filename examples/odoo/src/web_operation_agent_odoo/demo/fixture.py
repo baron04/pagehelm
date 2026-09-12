@@ -171,12 +171,33 @@ class OdooPostgresFixture:
             timeout_s=timeout_s).decode("utf-8", "replace")
 
     # -- reading ------------------------------------------------------------------------
+    def present_tables(self) -> tuple[str, ...]:
+        """Which of the tracked tables this deployment actually has.
+
+        `BUSINESS_TABLES` covers any Odoo this integration might be pointed at, and no
+        deployment has all of them: the reference fixture installs sales and accounting and
+        not warehouse operations, so the three `stock_*` tables do not exist. Asking the
+        catalogue rather than assuming is what lets one tracked list serve both, and the
+        answer is recorded in the state so a module appearing or disappearing between a
+        baseline and an observation is drift rather than a silent change of subject.
+        """
+        wanted = ", ".join(f"'{table}'" for table in BUSINESS_TABLES)
+        raw = self._psql(
+            "select table_name from information_schema.tables where table_schema = 'public' "
+            f"and table_name in ({wanted}) order by table_name")
+        return tuple(line.strip() for line in raw.splitlines() if line.strip())
+
     def capture(self) -> dict:
         """A per-table row count and whole-row digest, plus one digest over all of them."""
+        present = self.present_tables()
+        if not present:
+            raise FixtureUnavailable(
+                f"{self.database} has none of the tracked business tables; is it the right "
+                "database, and are its modules installed?")
         selects = " union all ".join(
             f"select '{table}' as t, count(*)::text as n, "
             f"md5(coalesce(string_agg(x::text, '|' order by x.id), '')) as d from {table} x"
-            for table in BUSINESS_TABLES)
+            for table in present)
         raw = self._psql(f"select t || ' ' || n || ' ' || d from ({selects}) rows order by t")
         tables: dict[str, dict] = {}
         for line in raw.splitlines():
@@ -184,7 +205,7 @@ class OdooPostgresFixture:
                 continue
             name, count, content = line.split(" ", 2)
             tables[name] = {"rows": int(count), "digest": content}
-        missing = sorted(set(BUSINESS_TABLES) - set(tables))
+        missing = sorted(set(present) - set(tables))
         if missing:
             raise FixtureUnavailable(f"fixture projection is incomplete: {missing}")
         return {
@@ -192,6 +213,8 @@ class OdooPostgresFixture:
             "kind": "woa_odoo_fixture_state",
             "fixture": self.identity,
             "tables": tables,
+            # Part of the digest, so a `stock_picking` that appears because someone installed
+            # a module moves the baseline instead of quietly joining it.
             "digest": digest_json(tables),
         }
 

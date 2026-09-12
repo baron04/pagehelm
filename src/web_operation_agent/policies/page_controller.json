@@ -1,0 +1,39 @@
+{
+  "_comment": [
+    "The exact PageController build this Runtime is qualified against, pinned by version and",
+    "by the digest of every file a deployment has to serve.",
+    "",
+    "`web_runtime/embedded.js` imports PageController from an absolute module URL the",
+    "application deployment supplies. Nothing in that URL says which build answered it, so",
+    "until this file existed the project's only statement about the version was prose -- and",
+    "that prose was wrong: THIRD_PARTY.md and the Runtime name both said 1.12.2 while every",
+    "qualified environment served 1.12.4.",
+    "",
+    "Two digests rather than one because the module lazily imports its mask chunk; a",
+    "deployment that serves only the entry file has a Runtime that breaks the first time",
+    "that import resolves. The LICENSE is listed with them because serving the asset",
+    "redistributes it, and MIT requires the notice to travel with it.",
+    "",
+    "Updating this is a deliberate act: change the version, record the new digests from the",
+    "npm tarball, and re-run the qualification that the old ones were qualified by."
+  ],
+  "package": "@page-agent/page-controller",
+  "version": "1.12.4",
+  "license": "MIT",
+  "registry_tarball": "https://registry.npmjs.org/@page-agent/page-controller/-/page-controller-1.12.4.tgz",
+  "integrity": "sha512-I8se6/QMhg1wMZp52fkX37xbv/lkUnBihtadcoZKOQ9xvL562/sd141mu5ANPGvaCosPlXxJQ3HGIwA2VM4bwQ==",
+  "served_files": {
+    "page-controller.js": {
+      "tarball_path": "package/dist/lib/page-controller.js",
+      "sha256": "8d7e4cee8b3435ac431f2a5b15ab5fa74080162a93f799ce0f6e93f43efb10a3"
+    },
+    "SimulatorMask-Dq2GJqJc.js": {
+      "tarball_path": "package/dist/lib/SimulatorMask-Dq2GJqJc.js",
+      "sha256": "26f70ee9cb6352ff4ef87a1c063af7533df89d6de79ad83d5fc03e19eb0e0205"
+    },
+    "LICENSE": {
+      "tarball_path": "package/LICENSE",
+      "sha256": "393ad563ce5dd0bbe283ec40f9f5d631817262bc9bbd5eb17ed038a9d9f44803"
+    }
+  }
+}

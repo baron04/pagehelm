@@ -1,0 +1,49 @@
+# The Odoo 18 reference fixture: what `scripts/qualify.sh`'s live gate runs against.
+#
+# It binds loopback only and carries fixture credentials in the clear, because that is what
+# it is -- a disposable local application to point the agent at. Do not put it anywhere
+# another machine can reach, and do not give it data you would mind losing.
+#
+# Bring it up with `python -m web_operation_agent_odoo.deploy provision`, which also fetches
+# the pinned PageController into ./addons/woa_runtime/static/src, creates the database from
+# Odoo's own demo data, mints an API key, and captures a browser session.
+name: woa-odoo-reference
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: odoo
+      POSTGRES_PASSWORD: odoo
+      POSTGRES_DB: postgres
+    volumes:
+      - odoo-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odoo"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  odoo:
+    image: odoo:18
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      # Loopback only. The agent, the gate and the browser all run on this machine.
+      - "127.0.0.1:8069:8069"
+    environment:
+      HOST: db
+      USER: odoo
+      PASSWORD: odoo
+    volumes:
+      - odoo-web-data:/var/lib/odoo
+      - ./odoo.conf:/etc/odoo/odoo.conf:ro
+      # The addon serves the pinned PageController from Odoo's own origin, which is the only
+      # place the embedded Runtime may import it from.
+      - ./addons:/mnt/extra-addons:ro
+    command: ["odoo", "--config=/etc/odoo/odoo.conf"]
+
+volumes:
+  odoo-db:
+  odoo-web-data:

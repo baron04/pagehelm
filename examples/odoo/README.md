@@ -141,10 +141,63 @@ page of rows being counted. `create_customer` is disabled unless a deployment pa
 duplicates over a complete scan immediately before dispatch, and reads the record back under
 the same actor.
 
+## Provisioning the fixture
+
+One command builds the whole thing from nothing — the Odoo, its database, the addon that
+serves PageController, the credentials and the snapshot the gate restores to:
+
+```bash
+python -m web_operation_agent_odoo.deploy provision
+```
+
+It needs Docker and a checkout; it prints the configuration lines to append to `.env` and
+takes a few minutes, most of it Odoo building a demo database. Seven steps, each runnable on
+its own when one of them is what you are debugging:
+
+| Step | What it does |
+|---|---|
+| `assets` | Downloads the pinned PageController tarball, checks its npm integrity, extracts the three files a deployment serves and checks each one's sha256 |
+| `up` | Starts Compose and waits until Odoo answers, not until Compose returns |
+| `database` | Creates `woa_reference` from Odoo's own demo data, installs `sale_management`, `account` and the Runtime addon, then asks the running server for the asset and hashes what it actually served |
+| `source` | Copies the compiler's reading material out of the image — 570 files, the ten addons whose descriptors the packaged Skills cite |
+| `credentials` | Mints an API key through the container's own Odoo shell and captures a browser session |
+| `baseline` | Records the snapshot the gate restores to |
+| `env` | Prints the configuration |
+
+The order matters in exactly one place, and it is the reason `provision` exists rather than
+a list of instructions: **the snapshot has to be taken after the API key is minted.** A
+restore puts the whole database back, so a baseline recorded first would delete the
+credential on the gate's first run and the fixture would work exactly once.
+
+Everything about it is loopback-only and refuses to be otherwise. It writes a master
+password in the clear and types Odoo's own well-known demo password, so every step that
+does either checks the host first. It is a disposable application to point the agent at.
+
+`down` stops it; `down --destroy` discards the volumes as well.
+
+### What is not committed
+
+`page-controller.js`, its mask chunk and its MIT `LICENSE` are fetched from the pinned npm
+release and checked against
+[`policies/page_controller.json`](../../src/web_operation_agent/policies/page_controller.json),
+never tracked here. This repository serves that asset; it does not redistribute it, and a
+committed copy would drift from the pin without anyone noticing. The extracted Odoo source
+is not committed either — it is 570 files reproducible from the pinned image, and the
+release string the compiler binds to is derived from that image's digest, so a fixture
+rebuilt on a newer `odoo:18` gets a different release and the citation gate notices.
+
+`stock` is deliberately not installed. With it, 22 of the 36 saleable demo products invoice
+on delivery and nothing has been delivered, so no order is left invoiceable and the gate's
+invoicing case has no target. It is still compiled — citations reach it — just not
+installed, and without it the fixture lands exactly where the qualified baseline was:
+S00001/S00002/S00003/S00005 draft, S00007 the one order with something to invoice, Acme as
+partner 10, four customer invoices.
+
 ## Running it
 
-Serve the pinned page controller from the Odoo origin — any module directory on the addons
-path works, for example `<addons>/woa_runtime/static/src/page-controller.js` — then:
+Against the provisioned fixture, or against your own Odoo with the pinned page controller
+served from its origin — any module directory on the addons path works, for example
+`<addons>/woa_runtime/static/src/page-controller.js`:
 
 ```bash
 python -m web_operation_agent_odoo.demo --scripted --headless \

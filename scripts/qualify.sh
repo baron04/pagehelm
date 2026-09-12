@@ -77,6 +77,10 @@ export PYTHONPATH="${ROOT}/src:${ROOT}/examples/ofbiz/src:${ROOT}/examples/twent
 
 # ---------------------------------------------------------------- offline gates
 run_gate "core distribution boundary" 1 "${PYTHON}" scripts/check_core_boundary.py
+# Offline on purpose: it reads what is committed. Regenerating the lock and the SBOM needs
+# the index and is a deliberate release step, `scripts/lock_and_sbom.py --write`.
+run_gate "dependency lock, SBOM and licence notice" 1 \
+  "${PYTHON}" scripts/lock_and_sbom.py --check
 run_gate "product suite" 1 "${PYTHON}" src/web_operation_agent/tests/run_all.py
 run_gate "ofbiz example suite" 1 "${PYTHON}" -m unittest discover \
   -s examples/ofbiz/src/web_operation_agent_ofbiz/tests \

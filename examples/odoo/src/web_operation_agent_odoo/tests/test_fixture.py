@@ -28,6 +28,9 @@ class FakePostgres:
         self.archive = b"PGDMP" + b"\x00" * 16
         self.calls: list[str] = []
         self.restores = 0
+        #: Tables the catalogue reports but the projection query does not answer for. Only
+        #: a test builds this: it is the inconsistency, not a deployment shape.
+        self.absent_from_projection: set[str] = set()
         self.restore_raises: Exception | None = None
         self.on_capture = None
 
@@ -38,11 +41,16 @@ class FakePostgres:
             sql = argv[-1]
             if "nextval" in sql:
                 return b"1\n"
+            if "information_schema" in sql:
+                # Which tracked tables this deployment has. The double answers with the
+                # ones it is pretending to hold, the way a database without `stock`
+                # installed answers with fewer than the tracked list.
+                return "".join(f"{table}\n" for table in sorted(self.state)).encode("utf-8")
             if self.on_capture is not None:
                 self.on_capture()
             return "".join(f"{table} {rows} {digest}\n"
                            for table, (rows, digest) in sorted(self.state.items())
-                           ).encode("utf-8")
+                           if table not in self.absent_from_projection).encode("utf-8")
         if program == "pg_dump":
             return self.archive
         if program == "pg_restore":
@@ -75,11 +83,41 @@ class CapturingTheFixture(unittest.TestCase):
         self.assertEqual(sorted(state["tables"]), sorted(BUSINESS_TABLES))
         self.assertTrue(state["digest"].startswith("sha256:"))
 
-    def test_a_missing_table_is_unavailable_not_a_smaller_projection(self):
+    def test_a_table_the_database_does_not_have_is_simply_absent(self):
+        """The tracked list covers any Odoo; no deployment has all of it.
+
+        The reference fixture installs sales and accounting and not warehouse operations,
+        so the three `stock_*` tables do not exist there. Refusing to capture would make
+        the tracked list a deployment requirement, which is the opposite of its purpose.
+        """
         postgres = FakePostgres()
-        del postgres.state["sale_order"]
+        for table in ("stock_picking", "stock_move", "stock_move_line"):
+            del postgres.state[table]
+        state = _fixture(postgres).capture()
+        self.assertNotIn("stock_picking", state["tables"])
+        self.assertIn("sale_order", state["tables"])
+
+    def test_a_deployment_with_none_of_them_is_refused(self):
+        """An empty answer is a wrong database or an uninstalled one, not a small fixture."""
+        postgres = FakePostgres()
+        postgres.state.clear()
+        with self.assertRaisesRegex(FixtureUnavailable, "none of the tracked"):
+            _fixture(postgres).capture()
+
+    def test_a_table_that_exists_but_did_not_answer_is_unavailable(self):
+        """The catalogue and the projection must agree, or the digest covers less than it says."""
+        postgres = FakePostgres()
+        postgres.absent_from_projection = {"sale_order"}
         with self.assertRaisesRegex(FixtureUnavailable, "incomplete"):
             _fixture(postgres).capture()
+
+    def test_installing_a_module_moves_the_baseline_rather_than_joining_it(self):
+        """A table appearing must change the digest, or drift would arrive unnoticed."""
+        postgres = FakePostgres()
+        del postgres.state["stock_picking"]
+        without = _fixture(postgres).capture()["digest"]
+        postgres.state["stock_picking"] = (1, "aaaa")
+        self.assertNotEqual(_fixture(postgres).capture()["digest"], without)
 
     def test_a_changed_row_changes_the_digest(self):
         postgres = FakePostgres()

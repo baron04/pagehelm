@@ -1,0 +1,6 @@
+# Third-party assets, fetched by `python -m web_operation_agent_odoo.deploy provision` from
+# the npm release pinned in web_operation_agent/policies/page_controller.json and checked
+# by digest. They are deliberately not tracked: this repository serves them, it does not
+# redistribute them, and a committed copy would drift from the pin without anyone noticing.
+*
+!.gitignore

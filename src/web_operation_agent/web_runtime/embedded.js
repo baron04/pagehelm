@@ -20,7 +20,10 @@ const MAX_WAIT_MS = 10_000
 const PAGE_CONTROLLER_ANNOTATION_STYLE_ID = 'woa-hide-page-controller-annotations'
 const MAX_CONTENT_CHARS = 120_000
 const RESULT_POST_RESERVE_MS = 500
-const RUNTIME_NAME = 'woa-embedded/page-controller-1.12.2'
+// The build this Runtime is qualified against. It is stated once in
+// `policies/page_controller.json`; `test_page_controller.py` fails if this string
+// drifts from it, because the two used to disagree silently and did.
+const RUNTIME_NAME = 'woa-embedded/page-controller-1.12.4'
 const GENERIC_SENSITIVE_NAME = '(?:password|passwd|pwd|secret|token|api[_-]?key|authorization)'
 let SENSITIVE_NAME = new RegExp(GENERIC_SENSITIVE_NAME, 'i')
 let HANDOFF_ASSIGNMENT = /(?!)/g

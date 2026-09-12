@@ -140,7 +140,7 @@ Two gates depend on the environment and are reported, never assumed:
 
 - **Live Odoo qualification** — the main application's gate — runs only when `WOA_ODOO_BASE_URL`, `WOA_ODOO_API_KEY_FILE`, `WOA_ODOO_STORAGE_STATE` and `WOA_ODOO_PAGE_CONTROLLER_MODULE` are all set, and reports `BLOCKED` otherwise. It is model-free by design: two scripted cases — a typed read into an exact-route open, and a collection open — run through the real product turn in real Chromium against a real Odoo, and the artifact records counts, digests and booleans plus a before/after fixture digest. A pass says the apparatus holds; it says nothing about a model, which is what makes a failure there worth acting on.
 
-This repository provisions neither a Twenty nor an Odoo instance, so a fresh clone reports both live gates as `BLOCKED`.
+The Odoo fixture is provisioned from this repository: `python -m web_operation_agent_odoo.deploy provision` builds the application, its database, the addon that serves PageController, the credentials and the snapshot the gate restores to, then prints the configuration to append to `.env`. It needs Docker and a few minutes, is loopback-only by construction, and refuses every step that would type a fixture password at a host anyone else can reach. A fresh clone still reports the live Twenty gate as `BLOCKED`; that instance is not provisioned here.
 
 ## Odoo 18 integration — the main application
 
@@ -222,6 +222,10 @@ Two things are stated rather than hidden. A third arm runs the DOM engine on *th
 
 - [中文说明](README.zh-CN.md)
 - [System design](docs/architecture/system-design.md)
+- [Writing an application adapter](docs/integrations/application-adapter.md) · [中文](docs/integrations/application-adapter.zh-CN.md)
+- [Durable operations](docs/integrations/durable-operations.md) · [中文](docs/integrations/durable-operations.zh-CN.md)
+- [HTTP contract feasibility](docs/integrations/http-contract-feasibility.md)
+- [Third-party components and licences](THIRD_PARTY.md) · [dependency lock](requirements.lock) · [SBOM](sbom.json)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 - [License](LICENSE)

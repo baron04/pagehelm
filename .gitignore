@@ -34,6 +34,11 @@ frontend/src/styles/_tokens.generated.scss
 target/
 .mvn/repository/
 
+# The reference fixture's extracted Odoo source. Provisioned by
+# `python -m web_operation_agent_odoo.deploy source`, reproducible from the pinned image,
+# and far too large to carry in Git.
+.fixture/
+
 # Runtime output
 .artifacts/
 logs/
@@ -47,3 +52,4 @@ coverage/
 .env*
 !.env.example
 .private/
+.sbom-index/
