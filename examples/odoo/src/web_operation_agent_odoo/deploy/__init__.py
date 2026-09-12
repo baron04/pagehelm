@@ -383,20 +383,83 @@ def capture_browser_session(*, storage_state: Path, key_path: Path) -> dict:
 
 # ------------------------------------------------------------------------ baseline
 
-def record_baseline(*, snapshot: Path, record: Path, database: str = DATABASE) -> dict:
+def warm_up(*, storage_state: Path, entry_path: str = "/odoo/customers") -> None:
+    """Open the page the gate opens, so whatever Odoo writes on first use has happened.
+
+    A fresh database has work it has not done yet. The first time a real browser renders the
+    web client, Odoo settles company-level defaults and writes `res_company` once -- and a
+    baseline recorded before that lands leaves the gate blocked on drift it caused itself,
+    on the very first run, with a message about a library someone had written to.
+    """
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            context = browser.new_context(storage_state=str(storage_state))
+            page = context.new_page()
+            # Not `networkidle`: Odoo's bus holds a long-poll open, so the network is never
+            # idle and waiting for it only ever times out. The web client's own root is the
+            # signal that it rendered, which is the thing being waited for.
+            page.goto(BASE_URL + entry_path, wait_until="domcontentloaded", timeout=120_000)
+            page.wait_for_selector(".o_web_client", timeout=120_000)
+            page.wait_for_timeout(3_000)
+        finally:
+            browser.close()
+
+
+def settle(*, database: str = DATABASE, attempts: int = 6, pause_s: float = 3.0) -> dict:
+    """Wait until nothing but the application's own bookkeeping is still moving.
+
+    Two consecutive captures have to agree everywhere outside `SELF_WRITTEN_TABLES`; that set
+    is excluded because `mail_message` grows on an idle server and waiting for it would never
+    return. Failing loudly after a bounded wait is the point -- a fixture that never settles
+    is one whose baseline would mean nothing, and finding that out here is much cheaper than
+    finding it out from a gate that blocks.
+    """
+    from ..demo.fixture import SELF_WRITTEN_TABLES, OdooPostgresFixture
+
+    fixture = OdooPostgresFixture(container=_container(DB_SERVICE), database=database,
+                                  db_user="odoo")
+
+    def watched() -> dict:
+        return {name: row for name, row in fixture.capture()["tables"].items()
+                if name not in SELF_WRITTEN_TABLES}
+
+    previous = watched()
+    for attempt in range(1, attempts + 1):
+        time.sleep(pause_s)
+        current = watched()
+        if current == previous:
+            return {"step": "settle", "attempts": attempt,
+                    "detail": "the application stopped writing to anything but its own log"}
+        previous = current
+    raise ProvisioningError(
+        f"{database} was still changing after {attempts} checks; a baseline taken now would "
+        "not be one. Look at what is writing to it before provisioning again.")
+
+
+def record_baseline(*, snapshot: Path, record: Path, storage_state: Path,
+                    database: str = DATABASE) -> dict:
     """Take the snapshot the gate restores to -- after the API key exists, never before.
 
     `restore_snapshot` puts the whole database back, so a snapshot taken before the key was
     minted would delete that key on the first restore and every later run would fail on a
     credential the provisioning step thought it had written.
+
+    Warmed up and settled first, for the same class of reason: a baseline is a claim that the
+    application is at rest, and a fresh one is not until it has been used once.
     """
     from ..demo.fixture import OdooPostgresFixture, prepare_snapshot
 
+    warm_up(storage_state=Path(storage_state))
+    settled = settle(database=database)
     fixture = OdooPostgresFixture(container=_container(DB_SERVICE), database=database,
                                   db_user="odoo")
     result = prepare_snapshot(fixture=fixture, snapshot_path=Path(snapshot),
                               record_path=Path(record))
     return {"step": "baseline", "snapshot": str(snapshot), "record": str(record),
+            "settle_attempts": settled["attempts"],
             "digest": result.get("baseline_digest", "")}
 
 

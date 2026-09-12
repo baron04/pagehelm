@@ -31,6 +31,7 @@ class FakePostgres:
         #: Tables the catalogue reports but the projection query does not answer for. Only
         #: a test builds this: it is the inconsistency, not a deployment shape.
         self.absent_from_projection: set[str] = set()
+        self.after_restore = None
         self.restore_raises: Exception | None = None
         self.on_capture = None
 
@@ -59,6 +60,10 @@ class FakePostgres:
                 raise self.restore_raises
             assert input_bytes == self.archive
             self.state = {table: (1, "aaaa") for table in BUSINESS_TABLES}
+            if self.after_restore is not None:
+                # What the database looks like once the restore has run. Only a test sets
+                # this: it is how "the restore ran and something is still off" is expressed.
+                self.after_restore(self)
             return b""
         raise AssertionError(program)
 
@@ -118,6 +123,39 @@ class CapturingTheFixture(unittest.TestCase):
         without = _fixture(postgres).capture()["digest"]
         postgres.state["stock_picking"] = (1, "aaaa")
         self.assertNotEqual(_fixture(postgres).capture()["digest"], without)
+
+    def test_a_restore_is_not_failed_by_the_log_the_server_writes_itself(self):
+        """The running server appends a `mail_message` row every twenty seconds or so.
+
+        Comparing the whole digest made a successful restore depend on whether the verifying
+        read landed before that write -- a gate that fails at random by design. The exact
+        digest is still recorded; only what counts as a failed restore changed.
+        """
+        postgres = FakePostgres()
+        fixture = _fixture(postgres)
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot, record = Path(tmp) / "b.pgdump", Path(tmp) / "r.json"
+            prepare_snapshot(fixture=fixture, snapshot_path=snapshot, record_path=record)
+            postgres.after_restore = lambda db: db.state.__setitem__(
+                "mail_message", (2, "cccc"))
+            result = restore_snapshot(fixture=fixture, snapshot_path=snapshot,
+                                      record_path=record)
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["changed_tables"], ["mail_message"])
+        self.assertEqual(result["unexpected_tables"], [])
+
+    def test_a_restore_that_left_a_business_table_off_its_baseline_still_fails(self):
+        postgres = FakePostgres()
+        fixture = _fixture(postgres)
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot, record = Path(tmp) / "b.pgdump", Path(tmp) / "r.json"
+            prepare_snapshot(fixture=fixture, snapshot_path=snapshot, record_path=record)
+            postgres.after_restore = lambda db: db.state.__setitem__(
+                "sale_order", (2, "cccc"))
+            result = restore_snapshot(fixture=fixture, snapshot_path=snapshot,
+                                      record_path=record)
+        self.assertEqual(result["status"], "FAIL")
+        self.assertEqual(result["unexpected_tables"], ["sale_order"])
 
     def test_a_changed_row_changes_the_digest(self):
         postgres = FakePostgres()

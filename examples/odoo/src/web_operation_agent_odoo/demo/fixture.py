@@ -66,6 +66,21 @@ BUSINESS_TABLES = (
     "ir_attachment",
 )
 
+#: Tables a *running* Odoo writes to on its own, with nothing else happening.
+#:
+#: Measured rather than assumed: after a restore of an idle server the digest holds for
+#: about twenty seconds, then one row appears in `mail_message` and nothing moves again for
+#: at least ten minutes. Sampled once a minute for ten minutes, no other table of the
+#: sixteen ever differed.
+#:
+#: It lives here rather than with the gate because it qualifies `capture()`: it is the set a
+#: caller must exclude when asking "has anything *else* changed". It relaxes only the check
+#: that a library is on its baseline before a run. It does not relax what a run is measured
+#: against -- the post-run comparison still uses the whole digest, and no gate case writes to
+#: `mail_message` alone, so a run that wrote and failed to clean up is still caught by the
+#: tables it could not avoid.
+SELF_WRITTEN_TABLES = frozenset({"mail_message"})
+
 #: Sequences Odoo polls to decide whether its in-process registry and caches are stale.
 #: Bumping them after a restore is what makes the running server agree with the database.
 _SIGNALLING = (
@@ -367,7 +382,16 @@ def restore_snapshot(*, fixture: OdooPostgresFixture, snapshot_path: Path,
                                    "updated_at": utc_now()}))
         return {"kind": "woa_odoo_restore", "status": "INDETERMINATE",
                 "reason": "the restore outcome is uncertain"}
-    passed = observed["digest"] == record["baseline_digest"]
+    changed = sorted(name for name, row in observed["tables"].items()
+                     if record["baseline_tables"].get(name) != row)
+    # The same rule the pre-run check uses. A restore that put every business table back is a
+    # successful restore, and the running server writes one `mail_message` row every twenty
+    # seconds or so -- comparing the whole digest here made success depend on whether the
+    # verifying read happened to land before that write, which is a gate that fails at
+    # random by design. The exact digest is still recorded, so nothing is hidden; what
+    # changes is only which difference counts as a failed restore.
+    unexpected = [name for name in changed if name not in SELF_WRITTEN_TABLES]
+    passed = not unexpected
     atomic_write_json(record_path, _sealed({
         **{key: value for key, value in record.items() if key != "record_digest"},
         "status": "READY" if passed else "FAILED",
@@ -379,9 +403,10 @@ def restore_snapshot(*, fixture: OdooPostgresFixture, snapshot_path: Path,
         "status": "PASS" if passed else "FAIL",
         "baseline_digest": record["baseline_digest"],
         "observed_digest": observed["digest"],
-        "changed_tables": sorted(
-            name for name, row in observed["tables"].items()
-            if record["baseline_tables"].get(name) != row),
+        "changed_tables": changed,
+        # Named separately from `changed_tables`: a reviewer wants to see that the log grew
+        # *and* that nothing else did, not a single boolean that merged the two.
+        "unexpected_tables": unexpected,
     }
 
 

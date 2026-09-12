@@ -30,7 +30,8 @@ from web_operation_agent.application import bind_application
 from ..adapter import COLLECTIONS, OdooApplicationAdapter
 from ..sourcemap import OdooCompiler, odoo_source_tree
 from .demo import OdooDemoConfig, run_demo
-from .fixture import OdooPostgresFixture, load_json, restore_snapshot
+from .fixture import (SELF_WRITTEN_TABLES, OdooPostgresFixture, load_json,
+                      restore_snapshot)
 from .skills import verify_packaged_skills
 
 #: A read-only run must leave every collection exactly as it found it.
@@ -341,22 +342,6 @@ def _database_fixture(args) -> OdooPostgresFixture | None:
     return OdooPostgresFixture(container=args.fixture_container,
                               database=args.fixture_database,
                               db_user=args.fixture_db_user)
-
-
-#: Tables a *running* Odoo writes to on its own, with nothing else happening.
-#:
-#: Measured rather than assumed: after a restore of an idle server the digest holds for
-#: about twenty seconds, then one row appears in `mail_message` and nothing moves again for
-#: at least ten minutes. Sampled once a minute for ten minutes, no other table of the
-#: sixteen ever differed.
-#:
-#: This set only relaxes the check that the library is *on its baseline before the run*.
-#: It does not relax what the run itself is measured against: every case still compares the
-#: application's own reads, the post-run comparison still uses the whole digest, and drift in
-#: any table outside this set still stops the gate. No case here writes to `mail_message`
-#: alone -- a confirm or an invoice moves `sale_order` or `account_move` too -- so an earlier
-#: run that wrote and failed to clean up is still caught by the tables it could not avoid.
-SELF_WRITTEN_TABLES = frozenset({"mail_message"})
 
 
 def classify_fixture_drift(captured: dict, record: dict) -> tuple[list[str], bool]:

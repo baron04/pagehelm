@@ -89,7 +89,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     def baseline() -> None:
         _say(record_baseline(snapshot=paths["snapshot"], record=paths["record"],
-                             database=database))
+                             storage_state=paths["storage_state"], database=database))
 
     def env() -> None:
         lines = environment_lines(database=database, **paths)
