@@ -22,12 +22,24 @@ something the server does not send.
 
 ```bash
 npm ci
-npm run dev          # Vite, against a stub host
+npm run dev          # http://localhost:5173 — the panel over a stand-in host page
 npm run storybook    # every state, including the ones a normal run rarely reaches
 npm test             # unit tests: the markdown grammar, geometry, the host contract
 npm run lint
 npm run build        # dist/panel/panel.js
 ```
+
+`npm run dev` serves `index.html`, a page that stands in for a host application, and mounts
+the panel into it through the same `mountPanel` the Runtime uses — same shadow root, same
+adopted stylesheet. `dev/host.ts` answers the `PanelHost` contract without a server, so if
+the panel ever needs something that file cannot provide, the contract is wrong rather than
+the harness. It fakes the transport and nothing else: approvals still expire, and a write
+still blocks the composer until it is answered. The buttons along the top drive a scripted
+read, a write with a confirmation, an indeterminate outcome, and a session taken over by
+another page.
+
+Neither `index.html` nor `dev/` reaches the product: `vite build` runs in library mode with
+`src/index.ts` as its only entry.
 
 `npm run build` produces one ES module. `python scripts/build_panel.py` runs that build and
 copies the result into the Python package with a manifest, which is how the gateway comes to
@@ -51,6 +63,8 @@ src/
   components/   the window, the launcher, the thread, the confirmation card, the composer
   styles/       SCSS over the generated token properties
   mount.tsx     shadow root, adopted stylesheet, React root
+dev/            a stub Runtime and a stand-in host page, for `npm run dev` only
+stories/        Storybook, over the same host double
 ```
 
 Three rules the code follows and the tests enforce:

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>panel dev — 宿主页替身</title>
+    <style>
+      :root { color-scheme: light; --bg:#fff; --ink:#2b313c; --line:#e6e8ec; --soft:#f5f6f8; }
+      :root[data-theme='dark'] { color-scheme: dark; --bg:#0f1216; --ink:#d7dbe3; --line:#232830; --soft:#161a20; }
+      * { box-sizing: border-box; }
+      body { margin:0; background:var(--bg); color:var(--ink); min-height:100vh;
+        font:13px/1.5 Inter, -apple-system, "PingFang SC", sans-serif; }
+      header { height:34px; display:flex; align-items:center; gap:14px; padding:0 14px;
+        background:#714b67; color:#fff; font-weight:600; }
+      header span { font-weight:400; opacity:.8; }
+      .bar { display:flex; align-items:center; gap:8px; padding:10px 14px;
+        border-bottom:1px solid var(--line); flex-wrap:wrap; }
+      .bar b { font-weight:600; margin-right:6px; }
+      button { font:inherit; padding:4px 11px; border-radius:6px; cursor:pointer;
+        border:1px solid var(--line); background:var(--soft); color:var(--ink); }
+      button:hover { border-color:#9aa1ac; }
+      table { width:100%; border-collapse:collapse; font-size:12px; }
+      th { text-align:left; font-weight:500; color:#7a8291; padding:8px 14px;
+        border-bottom:1px solid var(--line); font-size:11px; }
+      td { padding:8px 14px; border-bottom:1px solid var(--line); white-space:nowrap; }
+      td.n { text-align:right; font-variant-numeric:tabular-nums; }
+      .pill { border-radius:3px; padding:1px 6px; font-size:10px; background:#eef0fb; color:#4b5bbd; }
+      .pill.s { background:#e7f6ee; color:#17794f; }
+    </style>
+  </head>
+  <body>
+    <header>销售 <span>订单</span> <span>开票</span> <span>产品</span> <span>报表</span></header>
+    <div class="bar">
+      <b>dev</b>
+      <button data-scenario="read">只读一轮</button>
+      <button data-scenario="write">写入并确认</button>
+      <button data-scenario="indeterminate">结果不确定</button>
+      <button data-scenario="disconnect">会话被接管</button>
+      <button data-scenario="clear">清空</button>
+      <button data-theme-toggle>☀ 亮色</button>
+    </div>
+    <table>
+      <thead><tr><th>编号</th><th>客户</th><th>创建日期</th><th>销售员</th><th class="n">总计</th><th>状态</th></tr></thead>
+      <tbody>
+        <tr><td>S00001</td><td>Acme Corporation</td><td>2026-09-02</td><td>Mitchell Admin</td><td class="n">725.50</td><td><span class="pill">报价单</span></td></tr>
+        <tr><td>S00002</td><td>Acme Corporation</td><td>2026-09-03</td><td>Mitchell Admin</td><td class="n">1,231.00</td><td><span class="pill">报价单</span></td></tr>
+        <tr><td>S00005</td><td>Deco Addict</td><td>2026-09-04</td><td>Marc Demo</td><td class="n">2,980.00</td><td><span class="pill s">销售订单</span></td></tr>
+        <tr><td>S00007</td><td>Deco Addict</td><td>2026-09-05</td><td>Marc Demo</td><td class="n">1,231.00</td><td><span class="pill s">销售订单</span></td></tr>
+        <tr><td>S00012</td><td>Gemini Furniture</td><td>2026-09-07</td><td>Mitchell Admin</td><td class="n">4,080.00</td><td><span class="pill s">销售订单</span></td></tr>
+        <tr><td>S00019</td><td>Ready Mat</td><td>2026-09-09</td><td>Marc Demo</td><td class="n">725.50</td><td><span class="pill s">销售订单</span></td></tr>
+      </tbody>
+    </table>
+    <script type="module" src="/dev/main.ts"></script>
+  </body>
+</html>
