@@ -39,6 +39,18 @@
     "failed": {"panel_state": "error", "tone": "error", "terminal": true},
     "task_failed": {"panel_state": "error", "tone": "error", "terminal": true}
   },
+  "progress_messages": {
+    "comment": [
+      "What the timeline says for a state the product publishes without prose of its own.",
+      "It used to travel in the event payload as `The agent is working on the request.` --",
+      "an English sentence, in a panel whose every other string is Chinese, saying only",
+      "that the thing you just started had started."
+    ],
+    "agent_started": "正在理解目标",
+    "session_recovered": "会话已恢复",
+    "cancelling": "正在停止",
+    "approval_recorded": "已收到你的确认"
+  },
   "entry_kinds": ["goal", "progress", "action", "result", "approval", "notice"],
   "limits": {
     "composer_max_chars": 2000,
@@ -56,8 +68,6 @@
     "assistant": "AI 助手",
     "product": "WEB OPERATOR",
     "timeline": "任务进度",
-    "emptyTitle": "从一个目标开始",
-    "emptyDetail": "我会在每次操作后重新观察页面。",
     "input": "描述你想完成的目标",
     "placeholder": "描述你想完成的目标",
     "send": "发送",
@@ -82,6 +92,7 @@
     "emptyGreeting": "告诉我你想完成什么",
     "emptyDetail": "我会在每一步之后重新观察页面。需要写入时，先把要改的那条记录摆给你看，等你点头。",
     "workProcess": "工作过程",
+    "elapsedPrefix": "用时",
     "stepCount": "步",
     "approvalCount": "次确认",
     "copy": "复制",
@@ -123,8 +134,20 @@
     "submit_failed": "任务未提交，请检查连接后重试。",
     "cancel_failed": "停止请求未送达，任务可能仍在执行。请重试。",
     "connect_failed": "无法连接助手服务，请检查网络后重试。",
-    "offline": "当前网络不可用。恢复后会自动重连，任务没有重跑。",
-    "reconnecting": "连接中断，正在重试。任务没有重跑。"
+    "offline": "当前网络不可用，恢复后会自动重连。你的任务不会被重复执行。",
+    "reconnecting": "与助手的连接断开了，正在自动重连。你的任务不会被重复执行。",
+    "unexpected": "助手服务出错了，这一步没有执行。可以重试。",
+    "gateway_error": "助手服务出错了，这一步没有执行。可以重试。",
+    "invalid_message": "这次请求助手无法处理，没有执行任何操作。",
+    "stale_observation": "页面已经变了，这一步没有执行。请重试。",
+    "action_in_flight": "上一步还在执行，请等它结束。",
+    "deadline_expired": "这一步等待超时，没有执行。请重试。",
+    "payload_too_large": "内容太长，助手无法处理。请缩短后重试。",
+    "unknown_action": "助手请求了一个不存在的操作，这一步没有执行。",
+    "panel_unavailable": "这次安装没有构建助手界面。",
+    "not_found": "会话已结束，请刷新页面重新连接。",
+    "principal_expired": "登录已过期，请刷新页面重新登录。",
+    "session_expired": "会话已过期，请刷新页面重新连接。"
   },
   "terminal_error_codes": [
     "session_closed",

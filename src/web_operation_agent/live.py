@@ -23,6 +23,15 @@ from .remote import (RemoteSessionChannel, RemoteSessionClosed, RemoteSessionLim
                      RemoteSessionRegistry)
 from .traceview import build_trace_case, render_trace_html, write_trace_bundle
 
+#: How long an idle event request is held open before it returns "nothing yet".
+#:
+#: It was 0.2s, which is not a long poll: it is polling. One panel sitting still put ten
+#: requests a second through the gateway -- events and timeline both -- and every one of
+#: them is a connection the browser sets up, the server answers with a keepalive comment,
+#: and both sides tear down. A held request costs a parked thread and returns the instant
+#: an event exists, so waiting longer makes the session quieter without making it slower.
+_LONG_POLL_S = 20.0
+
 
 class ProductRunner(Protocol):
     """Compatibility contract for a complete product-session worker."""
@@ -137,7 +146,7 @@ class LiveConversationRunner:
                             "message": user_message,
                             "error_code": error_code,
                             "retryable": retryable,
-                        })
+                        }, turn_id=message_id)
                     except RemoteSessionClosed:
                         # The outcome is already durable to this host.  The next dequeue
                         # observes closure after any messages already accepted by the channel.
@@ -185,7 +194,7 @@ class LiveProductSession:
 
     def __init__(self, *, allowed_origin: str, page_controller_module: str,
                  runner_factory: Callable[[RemoteSessionChannel], ProductRunner],
-                 session_id: str | None = None, sse_wait_s: float = .2,
+                 session_id: str | None = None, sse_wait_s: float = _LONG_POLL_S,
                  navigation_mode: str = "document",
                  sensitive_query_keys: frozenset[str] = frozenset(),
                  principal: PrincipalContext | None = None,
@@ -337,7 +346,7 @@ class LiveProductServer:
     protocol. Optional SQLite storage preserves safe history and fences local owners.
     """
 
-    def __init__(self, *, max_sessions: int = 100, sse_wait_s: float = .2,
+    def __init__(self, *, max_sessions: int = 100, sse_wait_s: float = _LONG_POLL_S,
                  host: str = "127.0.0.1", port: int = 0,
                  session_limits: RemoteSessionLimits | None = None,
                  durable_store: SQLiteSessionStore | None = None,

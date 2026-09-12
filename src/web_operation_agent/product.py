@@ -534,10 +534,10 @@ class AgentTurnExecutor:
         session.adopt_entry(current.observation)
         try:
             session.plan()
-            self.channel.publish("progress", {
-                "state": "agent_started",
-                "message": "The agent is working on the request.",
-            })
+            # No prose here. What the timeline says for this state is a user-visible
+            # string, and those live in the panel contract with the rest of them.
+            self.channel.publish("progress", {"state": "agent_started"},
+                                 turn_id=turn_message.message_id)
             agent = session.run()
         except Exception as exc:
             ledger.append("turn_execution_failed", error_type=type(exc).__name__)
@@ -637,7 +637,7 @@ class AgentTurnExecutor:
                 "state": status.value,
                 "terminal_reason": agent.terminal_reason,
                 "message": user_answer,
-            })
+            }, turn_id=turn_message.message_id)
         except Exception as exc:
             # The browser or event transport may disappear after a write or after the
             # Agent has already finished. Delivery loss cannot erase the execution or

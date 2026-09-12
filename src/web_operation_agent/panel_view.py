@@ -47,9 +47,17 @@ def _validate_contract(contract: dict) -> None:
             raise ValueError(f"terminal code {code} maps to an unknown panel state")
         if code not in contract["terminal_error_codes"]:
             raise ValueError(f"terminal code {code} is not listed as terminal")
-    if not set(contract["notices"]) >= set(contract["terminal_error_codes"]) - {
-            "not_found", "principal_expired", "session_expired"}:
+    if not set(contract["notices"]) >= set(contract["terminal_error_codes"]):
         raise ValueError("every terminal transport code needs user-visible guidance")
+    # The panel falls back to this one when a code arrives that nothing anticipated. It
+    # used to fall back to `reconnecting`, which told a person their connection had
+    # dropped when what had actually happened was a server-side failure.
+    if "unexpected" not in contract["notices"]:
+        raise ValueError("the panel needs a notice for an unanticipated failure code")
+    unknown_message = sorted(
+        set(contract["progress_messages"]) - {"comment"} - set(contract["progress_states"]))
+    if unknown_message:
+        raise ValueError(f"progress message names an unknown state: {unknown_message[0]}")
 
 
 @lru_cache(maxsize=1)
@@ -74,6 +82,11 @@ def token_custom_properties() -> str:
         f"{block(tokens['themes']['dark'], '        ')}\n"
         "        color-scheme: dark;\n      }\n    }"
     )
+
+
+def progress_message(state: str) -> str:
+    """The server-owned prose for a progress state that publishes none of its own."""
+    return str(panel_contract()["progress_messages"].get(state) or "")
 
 
 def panel_limits() -> dict[str, int]:
@@ -167,7 +180,8 @@ def project_event(event: TaskEvent, *, at: int) -> dict | None:
     if state == "message_accepted":
         return {**base, "kind": "goal", "tone": "neutral",
                 "text": _clip(payload.get("text"), limits["goal_max_chars"])}
-    text = _clip(payload.get("message"), limits["result_max_chars"])
+    text = (_clip(payload.get("message"), limits["result_max_chars"])
+            or progress_message(state))
     if not text:
         text = "正在执行" if not mapping["terminal"] else "任务结束"
     return {**base, "kind": "result" if mapping["terminal"] else "progress",
@@ -195,7 +209,8 @@ def project_history_record(record: dict, *, index: int) -> dict | None:
     if state == "message_accepted":
         return {**base, "kind": "goal", "tone": "neutral",
                 "text": _clip(payload.get("text"), limits["goal_max_chars"])}
-    text = _clip(payload.get("message"), limits["result_max_chars"])
+    text = (_clip(payload.get("message"), limits["result_max_chars"])
+            or progress_message(state))
     if not text:
         return None
     return {**base, "kind": "result" if mapping["terminal"] else "progress",

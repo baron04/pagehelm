@@ -445,6 +445,11 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 [item[1]["state"] for item in channel.published],
                 ["agent_started", "finished"],
             )
+            # Every entry a turn produces belongs to that turn. Published without one,
+            # `agent_started` and the terminal answer carried an empty turn id, and the
+            # panel -- which groups the timeline by it -- broke one exchange into four:
+            # the goal alone, a step with no goal, the actions, then the answer.
+            self.assertEqual({item[2] for item in channel.published}, {"message-1"})
 
     def test_turn_answer_limit_reaches_the_session_before_product_rendering(self):
         with tempfile.TemporaryDirectory() as tmp:

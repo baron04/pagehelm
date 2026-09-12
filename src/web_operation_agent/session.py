@@ -83,6 +83,8 @@ link or a submitting form is recognised without it. Setting it makes the runtime
 a navigation: if none commits, the action has already reached the page, so the run ends \
 with an uncertain outcome rather than letting you try again.
 * Call `finish` when the task is done, or when you are certain you cannot do it, and say why.
+* Write the `finish` reason in the language the user wrote the task in. A person reads it.
+* A change this run is not authorised to make is still worth walking the user to. When a typed tool result or the current page gives the exact route of the record they named, `goto` it first, then `finish` saying that the change has to be made by hand on that page. Only the route an authorised result already offered -- never one you construct.
 
 You may be given a contract compiled from the application's source code. It tells you where \
 things are likely to be and what a form is likely to submit. It is a hint and it can be \

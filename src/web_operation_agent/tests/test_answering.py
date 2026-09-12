@@ -70,9 +70,11 @@ class StructuredQueryAnswerTests(unittest.TestCase):
         self.assertNotIn("完整性", rendered.text)
         self.assertNotIn("未截断", rendered.text)
         self.assertIn("显示限制", rendered.text)
-        for line in rendered.text.splitlines():
-            if "domain:" in line:
-                self.assertTrue(line.endswith("x" * 80), line)
+        rows = [line for line in rendered.text.splitlines()
+                if line.startswith("| Company ")]
+        self.assertTrue(rows)
+        for line in rows:
+            self.assertTrue(line.endswith("x" * 80 + " |"), line)
 
     def test_incomplete_result_carries_the_tool_reason_in_english(self):
         rendered = render_structured_query_answer(
@@ -89,6 +91,33 @@ class StructuredQueryAnswerTests(unittest.TestCase):
         self.assertIn("数据来源：fixture", rendered.text)
         self.assertNotIn("完整性", rendered.text)
         self.assertNotIn("未截断", rendered.text)
+        # The records are a table, and the provenance is a footer under it rather than a
+        # sentence the reader has to walk past to reach the facts.
+        self.assertIn("| name | domain |", rendered.text)
+        self.assertIn("| Acme | acme.test |", rendered.text)
+        self.assertLess(rendered.text.index("| Acme"),
+                        rendered.text.index("数据来源"))
+
+    def test_a_value_holding_a_cell_separator_is_never_rewritten_to_fit_a_table(self):
+        rendered = render_structured_query_answer(
+            _projection(records=(("Ac|me", "acme.test"),)),
+            user_text="列出公司", max_chars=2_000)
+
+        self.assertIn("Ac|me", rendered.text)
+        self.assertNotIn("| name | domain |", rendered.text)
+        self.assertIn("1. name: Ac|me; domain: acme.test", rendered.text)
+
+    def test_a_numeric_column_is_right_aligned_and_a_text_one_is_not(self):
+        projection = StructuredQueryAnswer(
+            collection="products", fields=("name", "price"),
+            records=(("Hotel Accommodation", "400.00"),),
+            source="fixture", scope="all", observed_at="2026-01-01T00:00:00Z",
+            source_complete=True, result_truncated=False,
+            matched_count=1, source_total=1, records_scanned=1)
+        rendered = render_structured_query_answer(
+            projection, user_text="价格是多少", max_chars=2_000)
+
+        self.assertIn("| --- | ---: |", rendered.text)
 
 
 if __name__ == "__main__":

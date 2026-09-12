@@ -133,10 +133,53 @@ class StructuredAnswerRendering:
     presentation_truncated: bool
 
 
+_NUMERIC = re.compile(r"^-?[\d,]*\d(?:\.\d+)?%?$")
+
+
+def _alignment(values: list[str]) -> str:
+    """Right-align a column only when every value in it reads as a number."""
+    shown = [value for value in values if value]
+    return "---:" if shown and all(_NUMERIC.fullmatch(value) for value in shown) else "---"
+
+
+def _markdown_table(fields: tuple[str, ...],
+                    records: tuple[tuple[str, ...], ...]) -> tuple[str, str, list[str]] | None:
+    """Header, delimiter and one line per record -- or ``None`` if a table would lie.
+
+    The panel's table grammar has no escape for a cell separator, so a value containing
+    one cannot be put in a cell without changing it. Rewriting business data to fit a
+    layout is not a trade this function is allowed to make: it declines, and the caller
+    falls back to the labelled-list form, which has no such character.
+    """
+    if any("|" in field for field in fields):
+        return None
+    if any("|" in value for record in records for value in record):
+        return None
+    columns = [[record[index] for record in records] for index in range(len(fields))]
+    header = "| " + " | ".join(fields) + " |"
+    delimiter = "| " + " | ".join(_alignment(column) for column in columns) + " |"
+    rows = ["| " + " | ".join(value or "—" for value in record) + " |"
+            for record in records]
+    return header, delimiter, rows
+
+
+def _labelled_rows(fields: tuple[str, ...],
+                   records: tuple[tuple[str, ...], ...]) -> list[str]:
+    return [f"{index}. " + "; ".join(f"{field}: {value or '—'}"
+                                     for field, value in zip(fields, record))
+            for index, record in enumerate(records, 1)]
+
+
 def render_structured_query_answer(
         projection: StructuredQueryAnswer, *, user_text: str,
         max_chars: int) -> StructuredAnswerRendering:
-    """Render trusted facts and make result limits explicit when they exist."""
+    """Render trusted facts and make result limits explicit when they exist.
+
+    The facts are laid out, not narrated: a heading that says what was read and how much
+    of it, a table of the records, and the provenance as a footer. Every one of those was
+    a run-on line of prose before, which is a poor way to read sixteen sales orders and a
+    worse way to compare two of them.
+    """
     if not isinstance(projection, StructuredQueryAnswer):
         raise TypeError("projection must be a StructuredQueryAnswer")
     if isinstance(max_chars, bool) or not isinstance(max_chars, int) or max_chars < 512:
@@ -146,61 +189,69 @@ def render_structured_query_answer(
     known_total = (str(projection.source_total)
                    if projection.source_total is not None else ("未知" if chinese else "unknown"))
     if chinese:
-        lines = [f"查询结果：{projection.collection}（{total} 条）"]
+        head = [f"## 查询结果：{projection.collection}（{total} 条）"]
         if not projection.complete:
             limit = ("源扫描已完成，但返回结果受限" if projection.source_complete
                      else "结果可能不完整")
-            lines.append(
+            head.append(
                 f"{limit}：返回 {total}/{projection.matched_count} 条匹配记录；"
                 f"来源总数 {known_total}；扫描记录数 "
                 f"{projection.records_scanned if projection.records_scanned is not None else '未知'}。")
             if projection.incomplete_reason:
-                lines.append(f"原因：{projection.incomplete_reason}。")
-        lines.append(
-            f"数据来源：{projection.source}；范围：{projection.scope}；采集时间：{projection.observed_at}。")
-        lines.append("记录：")
+                head.append(f"原因：{projection.incomplete_reason}。")
+        footer = (f"> 数据来源：{projection.source} · 范围：{projection.scope}"
+                  f" · 采集时间：{projection.observed_at}")
         suffix_template = "显示限制：本答案列出 {shown}/{total} 条工具返回记录。"
+        empty_note = "（无记录）"
     else:
         record_word = "record" if total == 1 else "records"
-        lines = [f"Query result: {projection.collection} ({total} {record_word})"]
+        head = [f"## Query result: {projection.collection} ({total} {record_word})"]
         if not projection.complete:
             limit = ("The source scan completed, but the returned result is limited"
                      if projection.source_complete else "The result may be incomplete")
-            lines.append(
+            head.append(
                 f"{limit}: returned {total}/{projection.matched_count} matching records; "
                 f"source total {known_total}; scanned "
                 f"{projection.records_scanned if projection.records_scanned is not None else 'unknown'} records.")
             if projection.incomplete_reason:
-                lines.append(f"Reason: {projection.incomplete_reason}.")
-        lines.append(
-            f"Source: {projection.source}; scope: {projection.scope}; observed: {projection.observed_at}.")
-        lines.append("Records:")
+                head.append(f"Reason: {projection.incomplete_reason}.")
+        footer = (f"> Source: {projection.source} · scope: {projection.scope}"
+                  f" · observed: {projection.observed_at}")
         suffix_template = "Display limit: this answer lists {shown}/{total} tool-returned records."
+        empty_note = "(no records)"
 
-    prefix = "\n".join(lines)
-    row_lines = []
-    for index, values in enumerate(projection.records, 1):
-        parts = [f"{field}: {value or '—'}"
-                 for field, value in zip(projection.fields, values)]
-        row_lines.append(f"{index}. " + "; ".join(parts))
-    complete_text = "\n".join([prefix, *row_lines])
-    if not row_lines:
-        complete_text += "\n" + ("（无记录）" if chinese else "(no records)")
+    prefix = "\n".join(head)
+    table = _markdown_table(projection.fields, projection.records)
+    # Two lines of grammar before the first row when a table is possible; the labelled
+    # list has none, and the two cost the same to bound.
+    opening = [prefix, "", *(table[:2] if table else [])]
+    row_lines = list(table[2]) if table else _labelled_rows(
+        projection.fields, projection.records)
+
+    def assemble(rows: list[str], suffix: str = "") -> str:
+        # A table header with nothing under it states a shape, not a fact; with no rows
+        # the answer says so in words instead.
+        body = [*opening, *rows] if rows else [prefix, "", empty_note]
+        tail = [suffix, footer] if suffix else [footer]
+        return "\n".join([*body, "", *tail])
+
+    complete_text = assemble(row_lines)
     if len(complete_text) <= max_chars:
         return StructuredAnswerRendering(complete_text, total, False)
 
     selected: list[str] = []
     for row in row_lines:
-        shown = len(selected) + 1
-        suffix = suffix_template.format(shown=shown, total=total)
-        candidate = "\n".join([prefix, *selected, row, suffix])
+        candidate = assemble(
+            [*selected, row], suffix_template.format(shown=len(selected) + 1, total=total))
         if len(candidate) > max_chars:
             break
         selected.append(row)
     suffix = suffix_template.format(shown=len(selected), total=total)
-    rendered = "\n".join([prefix, *selected, suffix])
+    rendered = assemble(selected, suffix)
     if len(rendered) > max_chars:
-        rendered = "\n".join([lines[0], lines[1], suffix])
+        rendered = "\n".join([prefix, "", suffix, footer])
+    if len(rendered) > max_chars:
+        rendered = "\n".join([prefix, "", suffix])
     if len(rendered) > max_chars:
         rendered = ("结构化查询结果超过配置的显示上限。" if chinese
                     else "The structured query result exceeds the configured display limit.")
