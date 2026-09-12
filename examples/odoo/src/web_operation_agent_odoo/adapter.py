@@ -23,7 +23,8 @@ import re
 import threading
 import time
 import unicodedata
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from decimal import Decimal
 from importlib import resources
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -144,7 +145,8 @@ COLLECTIONS: tuple[_Collection, ...] = (
         # `sale.action_orders` stores exactly this domain: the Orders page is confirmed
         # orders, and quotations are a different page.
         domain=[("state", "not in", ("draft", "sent", "cancel"))],
-        fields=("name", "partner_id", "state", "amount_total", "invoice_status"),
+        fields=("name", "partner_id", "state", "amount_total", "currency_id",
+                "date_order", "invoice_status"),
         scope="confirmed sales orders visible to the delegated user",
         action_xml_id="sale.action_orders", route="/odoo/orders",
         answer_fields=("reference", "customer", "state", "total"),
@@ -152,7 +154,7 @@ COLLECTIONS: tuple[_Collection, ...] = (
     _Collection(
         tool="query_customers", model="res.partner",
         domain=[("customer_rank", ">", 0)],
-        fields=("name", "email", "city", "country_id"),
+        fields=("name", "email", "phone", "mobile", "city", "country_id"),
         scope="customers visible to the delegated user",
         action_xml_id="account.res_partner_action_customer", route="/odoo/customers",
         answer_fields=("name", "email"),
@@ -160,7 +162,7 @@ COLLECTIONS: tuple[_Collection, ...] = (
     _Collection(
         tool="query_products", model="product.template",
         domain=[("sale_ok", "=", True)],
-        fields=("name", "default_code", "list_price", "type"),
+        fields=("name", "default_code", "list_price", "currency_id", "type"),
         scope="saleable products visible to the delegated user",
         action_xml_id="sale.product_template_action", route="/odoo/products",
         answer_fields=("name", "code", "price"),
@@ -169,7 +171,8 @@ COLLECTIONS: tuple[_Collection, ...] = (
         tool="query_quotations", model="sale.order",
         # The complement of `query_sale_orders`: what the Orders page excludes.
         domain=[("state", "in", ("draft", "sent"))],
-        fields=("name", "partner_id", "state", "amount_total", "validity_date"),
+        fields=("name", "partner_id", "state", "amount_total", "currency_id",
+                "date_order", "validity_date"),
         scope="open quotations, neither confirmed nor cancelled",
         action_xml_id="sale.action_quotations_with_onboarding", route="/odoo/sales",
         answer_fields=("reference", "customer", "state", "total"),
@@ -184,7 +187,8 @@ COLLECTIONS: tuple[_Collection, ...] = (
         # `account.action_move_out_invoice` stores move_type in (out_invoice, out_refund);
         # this tool takes the invoice half, which is what a sales workflow asks about.
         domain=[("move_type", "=", "out_invoice")],
-        fields=("name", "partner_id", "state", "amount_total", "invoice_origin"),
+        fields=("name", "partner_id", "state", "amount_total", "currency_id",
+                "amount_residual", "invoice_date", "invoice_date_due", "invoice_origin"),
         scope="customer invoices visible to the delegated user",
         action_xml_id="account.action_move_out_invoice",
         route="/odoo/customer-invoices",
@@ -214,6 +218,21 @@ REGULAR_INVOICE = "delivered"
 
 
 def _query_schema(collection: _Collection, description: str) -> dict:
+    filters = {}
+    if "partner_id" in collection.fields:
+        filters["customer_id"] = {
+            "type": "integer", "minimum": 1,
+            "description": "Exact res.partner id from a current query; not a display name."}
+    date_field = "date_order" if collection.model == "sale.order" else "invoice_date"
+    if date_field in collection.fields:
+        for parameter, boundary in (("date_from", "inclusive"), ("date_until", "exclusive")):
+            filters[parameter] = {
+                "type": "string", "format": "date",
+                "description": (f"Optional {boundary} YYYY-MM-DD bound on {date_field}. "
+                                + ("Order datetimes use UTC midnight boundaries; date_order is "
+                                   "creation time for quotations, confirmation time for orders."
+                                   if date_field == "date_order" else
+                                   "Invoice dates are calendar dates, not posting dates."))}
     return {
         "type": "function",
         "function": {
@@ -230,6 +249,7 @@ def _query_schema(collection: _Collection, description: str) -> dict:
                         "type": "integer", "minimum": 1, "maximum": 50,
                         "description": "Maximum rows to return; defaults to 20.",
                     },
+                    **filters,
                 },
                 "additionalProperties": False,
             },
@@ -484,7 +504,6 @@ class OdooBusinessToolExecutor:
         self.timeout_s = timeout_s
         self.allow_mutations = allow_mutations
         self._uid: int | None = None
-        self._currency_cache: str | None = None
         self._lock = threading.Lock()
 
     # -- tool catalog -------------------------------------------------------------------
@@ -583,8 +602,8 @@ class OdooBusinessToolExecutor:
 
     # -- reads --------------------------------------------------------------------------
     @staticmethod
-    def _read_args(name: str, args: dict) -> tuple[str, int]:
-        unknown = set(args) - {"name_contains", "limit"}
+    def _read_args(name: str, args: dict) -> tuple[str, int, list]:
+        unknown = set(args) - set(QUERY_SCHEMAS[name]["function"]["parameters"]["properties"])
         if unknown:
             raise BusinessToolRequestError(f"{name} received unknown arguments")
         needle = args.get("name_contains", "")
@@ -595,20 +614,43 @@ class OdooBusinessToolExecutor:
         limit = args.get("limit", 20)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
             raise BusinessToolRequestError("limit must be an integer from 1 to 50")
-        return needle, limit
+        domain = []
+        if "customer_id" in args:
+            customer_id = args["customer_id"]
+            if isinstance(customer_id, bool) or not isinstance(customer_id, int) or customer_id < 1:
+                raise BusinessToolRequestError("customer_id must be a positive integer")
+            domain.append(["partner_id", "=", customer_id])
+        dates = {}
+        for key, operator in (("date_from", ">="), ("date_until", "<")):
+            if key not in args:
+                continue
+            value = args[key]
+            try:
+                if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+                    raise ValueError()
+                dates[key] = date.fromisoformat(value)
+            except ValueError:
+                raise BusinessToolRequestError(f"{key} must be a valid YYYY-MM-DD date") from None
+            field = "date_order" if _BY_TOOL[name].model == "sale.order" else "invoice_date"
+            domain.append([field, operator, value + (" 00:00:00" if field == "date_order" else "")])
+        if len(dates) == 2 and dates["date_from"] >= dates["date_until"]:
+            raise BusinessToolRequestError("date_from must precede the exclusive date_until")
+        return needle.strip(), limit, domain
 
-    def _scan(self, collection: _Collection) -> tuple[list[dict], int, dict]:
+    def _scan(self, collection: _Collection, extra_domain: list | None = None
+              ) -> tuple[list[dict], int, dict]:
         """Read the whole scoped collection, and say plainly whether the scan finished.
 
         `search_count` under the same actor and the same domain is the completeness oracle:
         a truthful "I saw all of them" needs a number that did not come from the same page
         of results being counted.
         """
-        domain = [list(clause) for clause in collection.domain]
+        domain = [list(clause) for clause in collection.domain] + (extra_domain or [])
         total = self.call(collection.model, "search_count", [domain])
         if isinstance(total, bool) or not isinstance(total, int) or total < 0:
             raise BusinessToolContractError("Odoo returned an invalid record count")
         rows: list[dict] = []
+        seen: set[int] = set()
         pages = 0
         while pages < _MAX_PAGES and len(rows) < total:
             page = self.call(collection.model, "search_read", [domain],
@@ -617,7 +659,13 @@ class OdooBusinessToolExecutor:
             if not isinstance(page, list):
                 raise BusinessToolContractError("Odoo returned an invalid record page")
             pages += 1
-            rows.extend(row for row in page if isinstance(row, dict))
+            for row in page:
+                record_id = row.get("id") if isinstance(row, dict) else None
+                if (isinstance(record_id, bool) or not isinstance(record_id, int)
+                        or record_id <= 0 or record_id in seen):
+                    raise BusinessToolContractError("Odoo returned a missing or repeated record identity")
+                seen.add(record_id)
+                rows.append(row)
             if not page:
                 break
         complete = len(rows) == total
@@ -636,33 +684,35 @@ class OdooBusinessToolExecutor:
         if value is False or value is None:
             return ""
         if isinstance(value, float):
-            return f"{value:.2f}"
+            numeric = Decimal(str(value))
+            if not numeric.is_finite():
+                raise BusinessToolContractError("Odoo returned a non-finite number")
+            return format(numeric, f".{max(2, -numeric.as_tuple().exponent)}f")
         return str(value)[:300]
 
-    @property
-    def _currency(self) -> str:
-        """The company currency, read from the application rather than assumed.
+    @staticmethod
+    def _currency(row: dict) -> str:
+        # sale.order uses its pricelist's currency, account.move its invoice currency,
+        # and product.template exposes the catalog currency. A company's currency is
+        # not a substitute for any of these record-level denominators.
+        value = row.get("currency_id")
+        if (not isinstance(value, list) or len(value) != 2
+                or isinstance(value[0], bool) or not isinstance(value[0], int) or value[0] <= 0
+                or not isinstance(value[1], str) or not value[1].strip()
+                or len(value[1]) > 32 or re.search(r"[\x00-\x1f\x7f]", value[1])):
+            raise BusinessToolContractError("Odoo returned money without its record currency")
+        return value[1].strip()
 
-        Every monetary field these collections carry is in it. Reading it costs one call per
-        executor and is cached, because a number whose currency this guessed is exactly the
-        kind of number a total should refuse to combine.
-        """
-        if self._currency_cache is None:
-            rows = self.call("res.company", "search_read", [[]],
-                             {"fields": ["currency_id"], "limit": 1})
-            found = rows[0].get("currency_id") if rows else None
-            self._currency_cache = (found[1] if isinstance(found, list) and len(found) > 1
-                                    else "")
-        return self._currency_cache
-
-    #: Which of a collection's own fields carry business numbers, and in what. Odoo keeps
-    #: every monetary field of these models in the company currency, which the deployment
-    #: reports once; a field listed here without a currency would be a number an answer
-    #: could total across currencies without noticing.
-    _NUMERIC_FIELDS = {"amount_total": "money", "list_price": "money"}
+    _NUMERIC_FIELDS = {"amount_total": "money", "list_price": "money", "amount_residual": "money"}
+    _FIELD_MEANINGS = {
+        "date_order": "order confirmation time / quotation creation time (UTC)",
+        "invoice_date": "invoice calendar date", "invoice_date_due": "invoice due date",
+        "validity_date": "quotation expiry date", "amount_total": "total including taxes",
+        "amount_residual": "invoice amount due", "list_price": "catalog sales price",
+    }
 
     def _evidence(self, collection: _Collection, pairs, *, name: str, observed_at: str,
-                  matched: int, scanned, whole: bool) -> tuple:
+                  matched: int, scanned, whole: bool, conditions: tuple[str, ...]) -> tuple:
         """Turn what this read returned into evidence an answer can cite.
 
         The projection beside it stays a display view. This is the same read expressed so a
@@ -671,11 +721,10 @@ class OdooBusinessToolExecutor:
         """
         reference = f"{name}#{len(pairs)}"
         origin = Origin(kind="typed", reference=reference, observed_at=observed_at,
-                        scope=collection.scope)
+                        scope=collection.scope + "; " + "; ".join(conditions))
         items = [QueryEvidence(
             evidence_id="query#1", origin=origin, collection=collection.tool.removeprefix("query_"),
-            conditions=tuple(f"{part[0]} {part[1]} {part[2]}" for part in collection.domain)
-                       or ("no filter",),
+            conditions=conditions,
             matched_count=matched, records_scanned=scanned, covers_whole_scope=whole)]
         index = 0
         for row, _item in pairs:
@@ -691,12 +740,13 @@ class OdooBusinessToolExecutor:
                 items.append(RecordEvidence(
                     evidence_id=f"record#{index}", origin=origin,
                     record_id=f"{collection.model}/{record_id}",
-                    field_name=field_name, field_meaning=field_name.replace("_", " "),
+                    field_name=field_name,
+                    field_meaning=self._FIELD_MEANINGS.get(field_name, field_name.replace("_", " ")),
                     field_was_read=field_name in row,
-                    value=(self._label(row, field_name) if field_name in row and raw not in
-                           (False, None) else None),
+                    value=(self._label(row, field_name) if field_name in row
+                           and raw is not False and raw is not None else None),
                     value_type=value_type if field_name in row else "",
-                    unit=self._currency if value_type == "money" else ""))
+                    unit=self._currency(row) if value_type == "money" and field_name in row else ""))
         return tuple(items)
 
     def _project(self, collection: _Collection, row: dict) -> dict:
@@ -725,6 +775,7 @@ class OdooBusinessToolExecutor:
                     "sale_order": self._label(row, "invoice_origin")}
         elif collection.tool == "query_customers":
             item = {"name": self._label(row, "name"), "email": self._label(row, "email"),
+                    "phone": self._label(row, "phone"), "mobile": self._label(row, "mobile"),
                     "city": self._label(row, "city"),
                     "country": self._label(row, "country_id")}
         else:
@@ -732,6 +783,9 @@ class OdooBusinessToolExecutor:
                     "code": self._label(row, "default_code"),
                     "price": self._label(row, "list_price"),
                     "type": self._label(row, "type")}
+        for field in ("currency_id", "date_order", "invoice_date", "invoice_date_due", "amount_residual"):
+            if field in collection.fields:
+                item[field] = self._label(row, field)
         if not isinstance(record_id, bool) and isinstance(record_id, int) and record_id > 0:
             item["ui_path"] = f"{collection.route}/{record_id}"
         return item
@@ -745,8 +799,13 @@ class OdooBusinessToolExecutor:
         collection = _BY_TOOL.get(name)
         if collection is None:
             raise BusinessToolRequestError("unknown Odoo business tool")
-        needle, limit = self._read_args(name, args)
-        rows, total, scan = self._scan(collection)
+        needle, limit, extra_domain = self._read_args(name, args)
+        rows, total, scan = self._scan(collection, extra_domain)
+        conditions = tuple(f"{p[0]} {p[1]} {p[2]}" for p in [*collection.domain, *extra_domain])
+        if needle:
+            conditions += (f"name case-insensitive substring {needle!r}",)
+        conditions = conditions or ("no filter",)
+        page_matches = not collection.route_scope_note and not needle and not extra_domain
         # Kept paired with the row it came from: the projection is a display view -- labels
         # for people -- while evidence needs the record's own identity, and re-deriving one
         # from the other after filtering is how they drift apart.
@@ -778,12 +837,14 @@ class OdooBusinessToolExecutor:
                 # Whether that page shows this exact set. Only two of the five collections
                 # can promise it, and the ones that cannot say so here rather than leaving
                 # the model to assume the page and the answer agree.
-                "collection_ui_path_shows_this_scope": not collection.route_scope_note,
+                "collection_ui_path_shows_this_scope": page_matches,
                 **({"collection_ui_path_note": collection.route_scope_note}
                    if collection.route_scope_note else {}),
                 "matched_count": matched,
                 "source_total": total,
                 "scope": collection.scope,
+                "conditions": list(conditions),
+                "consistency": "bounded scan, not a database snapshot",
                 "observed_at": observed_at,
                 "completeness": completeness,
             },
@@ -795,7 +856,7 @@ class OdooBusinessToolExecutor:
                 "returned_count": len(visible),
                 "source_total": total,
                 "scope": collection.scope,
-                "collection_ui_path_shows_this_scope": not collection.route_scope_note,
+                "collection_ui_path_shows_this_scope": page_matches,
                 "observed_at": observed_at,
                 **completeness,
                 **self._identity_audit(context),
@@ -804,7 +865,8 @@ class OdooBusinessToolExecutor:
             evidence=self._evidence(collection, visible_pairs, name=name,
                                     observed_at=observed_at, matched=matched,
                                     scanned=scan["records_scanned"],
-                                    whole=source_complete and not result_truncated),
+                                    whole=source_complete and not result_truncated,
+                                    conditions=conditions),
             query_answer=StructuredQueryAnswer(
                 collection=collection.tool.removeprefix("query_"),
                 fields=collection.answer_fields,

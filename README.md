@@ -36,6 +36,8 @@ These claims describe the implemented paths only. The project does not yet have 
 
 For integrations that return typed answer evidence, read-only answers use a versioned conclusion contract. The agent can filter, count, sum and find extrema within one current dataset; the server resolves the cited fields and renders the supported conclusions instead of replacing them with the last query table. Invalid references receive bounded correction feedback. Coverage describes the evidence scope, not a guarantee that an arbitrary user question was fully answered. Integrations without answer evidence retain their existing answer path; navigation and write outcomes remain governed by their execution receipts and approval controls.
 
+The Odoo read tools additionally expose phone/mobile/email, order and invoice dates, and invoice amounts due. Date and customer-ID filters execute in the adapter; currency follows each record rather than the company default. See [Odoo tool semantics](examples/odoo/README.md#tools) for date boundaries, supported scopes and scan consistency.
+
 ## Architecture
 
 ```mermaid

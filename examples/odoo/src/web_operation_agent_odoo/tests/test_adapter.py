@@ -43,6 +43,8 @@ def _matches(row: dict, domain: list) -> bool:
     """
     for field, operator, value in domain:
         actual = row.get(field)
+        if isinstance(actual, list) and len(actual) == 2:
+            actual = actual[0]
         if operator == "=":
             matched = actual == value
         elif operator == "in":
@@ -51,6 +53,10 @@ def _matches(row: dict, domain: list) -> bool:
             matched = actual not in tuple(value)
         elif operator == ">":
             matched = isinstance(actual, (int, float)) and actual > value
+        elif operator == ">=":
+            matched = actual is not None and actual is not False and actual >= value
+        elif operator == "<":
+            matched = actual is not None and actual is not False and actual < value
         else:
             raise AssertionError(f"the fake does not implement {operator!r}")
         if not matched:
@@ -69,10 +75,6 @@ class _FakeOdoo(OdooBusinessToolExecutor):
         self.calls = []
         self.created = []
         self._uid = uid
-        # The executor reads the company currency once and caches it here. A double that
-        # skipped this would send every money field's unit through a `getattr` guard in the
-        # product, which is the shape this repository keeps removing.
-        self._currency_cache = "USD"
         self.keys = type("K", (), {"database": "woa", "login": "grower",
                                    "api_key": "0123456789abcdef0123"})()
 
@@ -123,6 +125,7 @@ class _FakeOdoo(OdooBusinessToolExecutor):
 def _orders(count):
     return [{"id": index, "name": f"S{index:05d}", "partner_id": [3, "Acme"],
              "state": "sale", "amount_total": 100.0 + index,
+             "currency_id": [1, "USD"], "date_order": "2026-09-01 08:00:00",
              "invoice_status": "no"} for index in range(1, count + 1)]
 
 
@@ -130,13 +133,14 @@ def _quotations(rows):
     """`rows` is (reference, state); a quotation is a sale.order in draft or sent."""
     return [{"id": index, "name": reference, "partner_id": [3, "Ready Mat"],
              "state": state, "amount_total": 500.0 + index, "validity_date": "2026-12-31"}
+            | {"currency_id": [1, "USD"], "date_order": "2026-09-01 08:00:00"}
             for index, (reference, state) in enumerate(rows, start=2)]
 
 
 def _invoiceable_orders(rows):
     """`rows` is (reference, invoice_status)."""
     return [{"id": index, "name": reference, "partner_id": [3, "Acme"], "state": "sale",
-             "amount_total": 100.0 + index, "invoice_status": status}
+             "amount_total": 100.0 + index, "currency_id": [1, "USD"], "invoice_status": status}
             for index, (reference, status) in enumerate(rows, start=1)]
 
 

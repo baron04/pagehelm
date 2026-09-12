@@ -20,8 +20,9 @@
     "The Quotations page at /odoo/sales is not this tool's scope. Its action stores no domain: it lists every sales order and merely defaults the search filter to the signed-in user's quotations, which anyone can clear. The ToolResult says so in collection_ui_path_shows_this_scope; if you open that page, tell the user the page shows more than the answer did.",
     "When the user asks to open one quotation, call query_quotations with its reference, require exactly one match, then call goto with that result's exact ui_path.",
     "Odoo renders its back office as a single-page application, so after goto call wait_for once when the requested record is not visible yet.",
-    "If the query has zero or multiple matches, ask for clarification; never invent a record path.",
-    "Treat the ToolResult as runtime truth. After the query, respond briefly; the server projects the exact records, source and completeness into the user answer."
+    "For navigation, require a unique current match; a zero-result search answers only within the tool's actual scope, and multiple targets require clarification.",
+    "Use the current answer evidence and finish contract to answer the question. Compute totals, filters and counts with compute; the server renders the conclusions you cite, not the last raw query table.",
+    "Each amount uses its own currency_id, never an assumed company currency. For a sum or ranking, first restrict a mixed-currency result to one currency. date_from is inclusive and date_until exclusive at UTC midnight on date_order; for confirmed orders this is confirmation time, and for quotations creation time. Use explicit dates from the user or current time evidence; do not invent a relative-date anchor."
   ],
   "tool_names": [
     "query_quotations"

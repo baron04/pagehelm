@@ -132,7 +132,11 @@ rather than fact.
 | `query_sale_orders` | `sale.order` | confirmed orders (the Orders page's own domain) | `/odoo/orders` |
 | `query_customers` | `res.partner` | customer rank above zero | `/odoo/customers` |
 | `query_products` | `product.template` | saleable products | `/odoo/products` |
+| `query_quotations` | `sale.order` | draft and sent quotations | `/odoo/sales` |
+| `query_customer_invoices` | `account.move` | customer invoices, excluding credit notes | `/odoo/customer-invoices` |
 | `create_customer` | `res.partner` | one customer, opt-in | `/odoo/customers/<id>` |
+| `confirm_quotation` | `sale.order` | one quotation, opt-in | `/odoo/orders/<id>` |
+| `invoice_sale_order` | `sale.advance.payment.inv` | one regular invoice workflow, opt-in | `/odoo/customer-invoices/<id>` |
 
 Each read scans its whole scope and checks the row count against the application's own
 `search_count`, so "I saw all of them" is answered by a number that did not come from the
@@ -140,6 +144,12 @@ page of rows being counted. `create_customer` is disabled unless a deployment pa
 `allow_mutations=True` **and** a mutation journal; it normalises the proposal, re-checks
 duplicates over a complete scan immediately before dispatch, and reads the record back under
 the same actor.
+
+Read evidence includes customer phone/mobile/email, each monetary record's own `currency_id`, quotation/order `date_order`, and invoice dates plus `amount_residual` (amount still due). Monetary values keep their supplied precision; a missing currency is a contract error, and the core refuses to sum or rank different currencies together. Filter by currency first to compute within one denomination. `amount_total` is the tax-inclusive total; product `list_price` is a catalog price, not an outstanding balance.
+
+Order and invoice tools accept `customer_id` from a current `res.partner` read. They also accept `date_from` (inclusive) and `date_until` (exclusive), both `YYYY-MM-DD`: orders use UTC midnight bounds on `date_order`, which is confirmation time for confirmed orders and creation time for quotations; invoices use calendar `invoice_date`, not posting date. Customers/products reject those inapplicable filters. These parameters narrow the tool's declared scope; they do not enable cancelled-order or arbitrary-domain queries. Relative dates require a known current time and an explicit interpretation.
+
+Every read reports the executed conditions. `source_total` counts the server domain after relation/date filters, while `name_contains` is a local case-insensitive substring filter after that scan. Filtered results do not claim that opening the unfiltered collection route reproduces the result. Pagination is bounded and rejects malformed or repeated record identities; matching a count establishes coverage of that scan, not database snapshot consistency under concurrent updates.
 
 ## Provisioning the fixture
 

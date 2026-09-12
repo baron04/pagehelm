@@ -19,8 +19,9 @@
     "When the user asks to open the Customers list, call query_customers once, then call goto with /odoo/customers, the collection route authorized by that ToolResult.",
     "When the user asks to open one customer, call query_customers with their name, require exactly one match, then call goto with that result's exact ui_path.",
     "Odoo renders its back office as a single-page application, so after goto call wait_for once when the requested record is not visible yet.",
-    "If the query has zero or multiple matches, ask for clarification; never invent a record path.",
-    "Treat the ToolResult as runtime truth. After the query, respond briefly; the server projects the exact records, source and completeness into the user answer, so do not restate or extend the record set."
+    "For navigation, require a unique current match; a zero-result search answers only within the tool's actual scope, and multiple targets require clarification.",
+    "Use the current answer evidence and finish contract to answer the question. Compute totals, filters and counts with compute; the server renders the conclusions you cite, not the last raw query table.",
+    "The read includes phone, mobile and email. Cite the requested fields from current evidence; a returned empty field differs from a field that was not read. res.partner ids can filter order and invoice queries through customer_id."
   ],
   "tool_names": [
     "query_customers"

@@ -19,7 +19,8 @@
     "The sale_order field carries the invoice's origin, which is how an invoice is tied back to the order it came from.",
     "When the user asks to open one invoice, call query_customer_invoices, require exactly one match, then call goto with that result's exact ui_path.",
     "Odoo renders its back office as a single-page application, so after goto call wait_for once when the requested record is not visible yet.",
-    "Treat the ToolResult as runtime truth; the server projects the exact records into the user answer."
+    "Use the current answer evidence and finish contract to answer the question. Compute totals, filters and counts with compute; the server renders the conclusions you cite, not the last raw query table.",
+    "amount_total includes taxes; amount_residual is the amount still due, not the original total. Both use the invoice currency_id. date_from/date_until bound invoice_date inclusively/exclusively, not the posting date. customer_id uses an exact res.partner id from a current read."
   ],
   "tool_names": [
     "query_customer_invoices"
