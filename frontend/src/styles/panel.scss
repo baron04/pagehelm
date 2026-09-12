@@ -152,20 +152,20 @@ button:disabled { cursor: not-allowed; }
 .woa-handle[data-handle='n']::after,
 .woa-handle[data-handle='s']::after {
   left: 50%; transform: translateX(-50%);
-  width: 28px; height: 2px; border-radius: 99px;
+  width: 60px; height: 3px; border-radius: 99px;
 }
 .woa-handle[data-handle='n']::after { top: 2px; }
 .woa-handle[data-handle='s']::after { bottom: 2px; }
 .woa-handle[data-handle='w']::after,
 .woa-handle[data-handle='e']::after {
   top: 50%; transform: translateY(-50%);
-  height: 28px; width: 2px; border-radius: 99px;
+  height: 60px; width: 3px; border-radius: 99px;
 }
 .woa-handle[data-handle='w']::after { left: 2px; }
 .woa-handle[data-handle='e']::after { right: 2px; }
 .woa-handle[data-handle^='n']:not([data-handle='n'])::after,
 .woa-handle[data-handle^='s']:not([data-handle='s'])::after {
-  width: 5px; height: 5px; border-radius: 50%;
+  width: 8px; height: 8px; border-radius: 50%;
   background: var(--woa-line-strong);
 }
 .woa-handle[data-handle='nw']::after { top: 5px; left: 5px; }
