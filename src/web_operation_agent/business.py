@@ -492,6 +492,21 @@ class BusinessMutationProposal:
         }
 
 
+def _without_redundant_reads(skills: list) -> list:
+    """Drop a read-only Skill whose tools a mutation Skill in the same set already carries.
+
+    A mutation Skill usually carries the read tools its own preflight needs, so offering the
+    narrower read-only Skill beside it adds a second, ambiguous route to a strict subset of
+    the same tools. Unrelated read Skills stay: a mixed-intent task needs them.
+    """
+    mutation_toolsets = [set(skill.tool_names) for skill in skills if not skill.read_only]
+    if not mutation_toolsets:
+        return list(skills)
+    return [skill for skill in skills
+            if (not skill.read_only
+                or not any(set(skill.tool_names) < tools for tools in mutation_toolsets))]
+
+
 @dataclass(frozen=True)
 class BusinessSkill:
     skill_id: str
@@ -592,6 +607,11 @@ class BusinessSkillSelection:
     skills: tuple[BusinessSkill, ...]
     trigger_matches: tuple[str, ...]
     fallback_used: bool
+    #: Trigger phrases matched, but none of what they matched could perform a change, so the
+    #: catalog's mutation Skills were added to the candidates anyway. Recorded because a
+    #: widened surface is a decision, and a decision nobody can see is how the previous
+    #: behaviour went unnoticed.
+    mutation_surface_widened: bool = False
 
     @property
     def candidate_ids(self) -> tuple[str, ...]:
@@ -807,15 +827,7 @@ class BusinessToolRuntime:
         # verification.  In that case a broader read-only Skill adds a second, ambiguous
         # route to a strict subset of the same tools.  Remove only that redundant candidate;
         # unrelated read Skills remain available for mixed-intent tasks.
-        mutation_toolsets = [set(skill.tool_names) for skill in selected
-                             if not skill.read_only]
-        if mutation_toolsets:
-            selected = [
-                skill for skill in selected
-                if (not skill.read_only or not any(
-                    set(skill.tool_names) < tools for tools in mutation_toolsets))
-            ]
-        return tuple(selected[:limit])
+        return tuple(_without_redundant_reads(selected)[:limit])
 
     def select(self, task: str, *, allow_mutations: bool,
                limit: int = 5) -> BusinessSkillSelection:
@@ -831,25 +843,55 @@ class BusinessToolRuntime:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
             raise ValueError("Skill candidate limit must be an integer from 1 to 20")
         matched = self.relevant(task, limit=max(limit, len(self._skills)))
-        eligible = tuple(
-            skill for skill in matched if skill.read_only or allow_mutations)
+        eligible = [skill for skill in matched if skill.read_only or allow_mutations]
+        # Trigger phrases rank the catalog; they do not decide what this turn is able to do.
+        # A write trigger is a verb and its object ("confirm quotation", "确认报价单"); the
+        # read trigger beside it is usually the object alone ("quotation", "报价单"). Every
+        # sentence matching the write therefore matches the read, and none of the reverse.
+        # When word order breaks the write phrase -- "把报价单 S00002 确认掉" puts the verb
+        # last -- the read Skill still matches, `matched` is not empty, and the fallback below
+        # never runs, because it only ever fired on *no* match. The turn is then left with no
+        # write tool and refuses correctly for the wrong reason, which reads exactly like the
+        # product holding its line. Measured on the Odoo catalog: 10 of 21 ordinary phrasings
+        # reached the write Skill through triggers alone.
+        #
+        # The catalog itself says which write belongs to which read: a mutation Skill carries
+        # the read tools its own preflight needs, so its tool set is a strict superset of the
+        # narrower read-only Skill about the same subject. When triggers land on that read
+        # Skill and this turn can write, offer both and let the model say which it meant.
+        # Widening no further is the point -- "list every product" gains nothing, because
+        # `products-query` has no write Skill extending it.
+        widened = False
+        if allow_mutations and eligible and all(skill.read_only for skill in eligible):
+            selected_tools = [set(skill.tool_names) for skill in eligible]
+            present = {skill.skill_id for skill in eligible}
+            # Subsuming *every* matched read Skill is what makes this safe. "Create a person
+            # named Bob at Acme company" matches both people and companies, and company
+            # creation extends only one of them -- so the sentence is about more than that
+            # write, and nothing is added. A subject named alone, whose whole read surface one
+            # mutation Skill already carries, is the only case triggers cannot resolve.
+            addition = [
+                skill for skill in sorted(self._skills.values(),
+                                          key=lambda item: item.skill_id)
+                if (not skill.read_only and skill.skill_id not in present
+                    and all(tools < set(skill.tool_names) for tools in selected_tools))]
+            widened = bool(addition)
+            eligible += addition
+        # Pruning the read-only Skill here would undo the widening: it was added on that
+        # Skill's account, and the reader may well have meant the read.
+        if not widened:
+            eligible = _without_redundant_reads(eligible)
         if eligible:
             return BusinessSkillSelection(
-                BUSINESS_SKILL_MATCHER_VERSION, eligible[:limit],
-                tuple(skill.skill_id for skill in matched), False)
+                BUSINESS_SKILL_MATCHER_VERSION, tuple(eligible[:limit]),
+                tuple(skill.skill_id for skill in matched), False,
+                mutation_surface_widened=widened)
 
         fallback = [
             skill for skill in sorted(self._skills.values(), key=lambda item: item.skill_id)
             if skill.read_only or allow_mutations
         ]
-        mutation_toolsets = [set(skill.tool_names) for skill in fallback
-                             if not skill.read_only]
-        if mutation_toolsets:
-            fallback = [
-                skill for skill in fallback
-                if (not skill.read_only or not any(
-                    set(skill.tool_names) < tools for tools in mutation_toolsets))
-            ]
+        fallback = _without_redundant_reads(fallback)
         return BusinessSkillSelection(
             BUSINESS_SKILL_MATCHER_VERSION, tuple(fallback[:limit]),
             tuple(skill.skill_id for skill in matched), bool(fallback))

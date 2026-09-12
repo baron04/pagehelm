@@ -632,6 +632,7 @@ class ServerAgentSession:
                 candidate_ids=[skill.skill_id for skill in self._task_business_skills],
                 trigger_match_empty=not selection.trigger_matches,
                 fallback_used=selection.fallback_used,
+                mutation_surface_widened=selection.mutation_surface_widened,
                 mutations_enabled=business_mutation_approval is not None,
                 prior_user_context_used=bool(prior_skills),
                 bounded_limit=5,

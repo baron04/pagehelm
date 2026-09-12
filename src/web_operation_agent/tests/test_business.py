@@ -1103,5 +1103,161 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertEqual(len(ledger.of_kind("business_answer")), 1)
 
 
+class TriggersRankTheCatalogRatherThanGateIt(unittest.TestCase):
+    """A write phrase loses to word order; the read phrase beside it does not.
+
+    A write trigger is a verb and its object -- "confirm quotation", "确认报价单" -- and the
+    read trigger for the same subject is usually the object alone. So every sentence matching
+    the write also matches the read, and none of the reverse. When word order breaks the write
+    phrase, the read Skill still matches; the selection is not empty, so the empty-match
+    fallback never runs, and the turn silently loses its write tool. It then refuses for want
+    of a tool, which reads exactly like the product declining to act.
+    """
+
+    @staticmethod
+    def _catalog(root: Path) -> tuple:
+        read = root / "read.json"
+        read.write_text(json.dumps({
+            "schema_version": 1, "skill_id": "fixture.orders-query",
+            "title": "Query orders", "intent": "Read current orders.",
+            "triggers": ["order", "订单"],
+            "instructions": ["Call query_orders and trust its current result."],
+            "tool_names": ["query_orders"],
+            "provenance": ["src:fixture@v1:orders.json#orders"], "read_only": True,
+        }) + "\n")
+        # The shape the rule keys on: a mutation Skill carries the read tool its own
+        # preflight needs, so its tool set strictly extends the read-only Skill's.
+        write = root / "write.json"
+        write.write_text(json.dumps({
+            "schema_version": 1, "skill_id": "fixture.orders-confirm",
+            "title": "Confirm an order", "intent": "Confirm one current order.",
+            "triggers": ["confirm order", "确认订单"],
+            "instructions": ["Read the order, then propose confirming exactly it."],
+            "tool_names": ["query_orders", "confirm_order"],
+            "provenance": ["src:fixture@v1:orders.json#confirm"], "read_only": False,
+        }) + "\n")
+        unrelated = root / "unrelated.json"
+        unrelated.write_text(json.dumps({
+            "schema_version": 1, "skill_id": "fixture.people-create",
+            "title": "Create a person", "intent": "Create one current person.",
+            "triggers": ["create person", "创建联系人"],
+            "instructions": ["Propose one person and wait for approval."],
+            "tool_names": ["create_person"],
+            "provenance": ["src:fixture@v1:people.json#create"], "read_only": False,
+        }) + "\n")
+        return tuple(BusinessSkill.load(path) for path in (read, write, unrelated))
+
+    class _Executor:
+        @staticmethod
+        def tool_schemas():
+            return tuple(
+                {"type": "function",
+                 "function": {"name": name, "description": name,
+                              "parameters": {"type": "object", "properties": {},
+                                             "additionalProperties": False}}}
+                for name in ("query_orders", "confirm_order", "create_person"))
+
+        @staticmethod
+        def tool_effects():
+            return {"query_orders": "read", "confirm_order": "write",
+                    "create_person": "write"}
+
+    def _select(self, task: str, *, allow_mutations: bool):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = BusinessToolRuntime(self._catalog(Path(tmp)), self._Executor())
+            return runtime.select(task, allow_mutations=allow_mutations)
+
+    def test_the_write_skill_that_extends_a_matched_read_skill_is_offered_with_it(self):
+        """The verb is last, so only the read phrase matches -- and the write is the point."""
+        selection = self._select("把订单 S00002 确认掉", allow_mutations=True)
+
+        self.assertTrue(selection.mutation_surface_widened)
+        self.assertEqual(set(selection.candidate_ids),
+                         {"fixture.orders-query", "fixture.orders-confirm"})
+
+    def test_an_unrelated_write_skill_is_not_dragged_in(self):
+        """Widening keyed on intent would be another guess; this one is keyed on tool sets."""
+        selection = self._select("把订单 S00002 确认掉", allow_mutations=True)
+        self.assertNotIn("fixture.people-create", selection.candidate_ids)
+
+    def test_a_read_only_turn_is_left_exactly_as_it_was(self):
+        selection = self._select("把订单 S00002 确认掉", allow_mutations=False)
+
+        self.assertFalse(selection.mutation_surface_widened)
+        self.assertEqual(selection.candidate_ids, ("fixture.orders-query",))
+
+    def test_a_phrase_that_matches_the_write_directly_widens_nothing(self):
+        selection = self._select("确认订单 S00002", allow_mutations=True)
+
+        self.assertFalse(selection.mutation_surface_widened)
+        self.assertEqual(selection.candidate_ids, ("fixture.orders-confirm",))
+
+
+    def test_a_sentence_about_two_subjects_gains_neither_ones_write(self):
+        """Subsuming every matched read Skill is what keeps a mention from arming a write.
+
+        "Create a person named Bob at Acme company" matches people and companies both, and
+        company creation extends only the companies read -- so the sentence is about more
+        than that write, and the surface stays where the triggers put it. `examples/twenty`
+        has carried this as a packaged-Skill test; it belongs next to the rule as well.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orders, confirm, _people = self._catalog(root)
+            other = root / "other.json"
+            other.write_text(json.dumps({
+                "schema_version": 1, "skill_id": "fixture.people-query",
+                "title": "Query people", "intent": "Read current people.",
+                "triggers": ["person", "联系人"],
+                "instructions": ["Call query_people and trust its current result."],
+                "tool_names": ["query_people"],
+                "provenance": ["src:fixture@v1:people.json#people"], "read_only": True,
+            }) + "\n")
+
+            class _Both:
+                @staticmethod
+                def tool_schemas():
+                    return tuple(
+                        {"type": "function",
+                         "function": {"name": name, "description": name,
+                                      "parameters": {"type": "object", "properties": {},
+                                                     "additionalProperties": False}}}
+                        for name in ("query_orders", "confirm_order", "query_people"))
+
+                @staticmethod
+                def tool_effects():
+                    return {"query_orders": "read", "confirm_order": "write",
+                            "query_people": "read"}
+
+            runtime = BusinessToolRuntime(
+                (orders, confirm, BusinessSkill.load(other)), _Both())
+            selection = runtime.select("把这个联系人的订单找出来", allow_mutations=True)
+
+        self.assertFalse(selection.mutation_surface_widened)
+        self.assertNotIn("fixture.orders-confirm", selection.candidate_ids)
+
+    def test_a_subject_with_no_write_skill_gains_nothing(self):
+        """A read Skill no mutation Skill extends adds nothing, however the turn is armed."""
+        class _ReadOnly:
+            @staticmethod
+            def tool_schemas():
+                return ({"type": "function",
+                         "function": {"name": "query_orders", "description": "query_orders",
+                                      "parameters": {"type": "object", "properties": {},
+                                                     "additionalProperties": False}}},)
+
+            @staticmethod
+            def tool_effects():
+                return {"query_orders": "read"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = BusinessToolRuntime(self._catalog(Path(tmp))[:1], _ReadOnly())
+            selection = runtime.select("列出所有订单", allow_mutations=True)
+
+        self.assertFalse(selection.mutation_surface_widened)
+        self.assertEqual(selection.candidate_ids, ("fixture.orders-query",))
+
+
+
 if __name__ == "__main__":
     unittest.main()
