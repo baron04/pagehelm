@@ -213,12 +213,19 @@ class ComputationEvidence:
     value: str
     value_type: str
     unit: str = ""
+    #: Whether the inputs covered the whole scope the question asked about. A sum over the
+    #: fifty records one page returned is a subtotal; calling it the total is the single
+    #: most expensive thing a correct-looking number can do, so the result carries the
+    #: answer rather than leaving it to whoever renders it.
+    covers_whole_scope: bool = False
 
     def __post_init__(self) -> None:
         _require_id(self.evidence_id)
         _require_origin(self.origin)
         if self.origin.kind != "computed":
             raise ValueError("computation evidence must be recorded as computed")
+        if not isinstance(self.covers_whole_scope, bool):
+            raise TypeError("covers_whole_scope must be a boolean")
         object.__setattr__(self, "operation", _text(self.operation, "operation"))
         if not isinstance(self.inputs, tuple) or not self.inputs:
             raise ValueError("a computation must name the evidence it ran on")
@@ -231,7 +238,49 @@ class ComputationEvidence:
         object.__setattr__(self, "unit", self.unit.strip())
 
 
-Evidence = Union[RecordEvidence, QueryEvidence, PageEvidence, ComputationEvidence]
+
+@dataclass(frozen=True, slots=True)
+class SelectionEvidence:
+    """The records a condition kept, and the condition it applied.
+
+    A filter's result is a set, not a number, and the difference matters: "which quotations
+    are over 2000" was answered with all five because the answer carried rows rather than a
+    selection. What a reader needs is the condition that ran and the members it left.
+    """
+
+    evidence_id: str
+    origin: Origin
+    operation: str
+    inputs: tuple[str, ...]
+    condition: str
+    members: tuple[str, ...]
+    covers_whole_scope: bool = False
+
+    def __post_init__(self) -> None:
+        _require_id(self.evidence_id)
+        _require_origin(self.origin)
+        if self.origin.kind != "computed":
+            raise ValueError("a selection is computed, not observed")
+        object.__setattr__(self, "operation", _text(self.operation, "operation"))
+        if not isinstance(self.inputs, tuple) or not self.inputs:
+            raise ValueError("a selection must name the evidence it ran on")
+        for item in self.inputs:
+            _require_id(item)
+        object.__setattr__(self, "condition", _text(self.condition, "condition"))
+        if not isinstance(self.members, tuple):
+            raise TypeError("members must be a tuple")
+        # An empty selection is a result, not a failure: "none of them are over 2000" is an
+        # answer, and it is a different answer from "I could not check".
+        object.__setattr__(self, "members", tuple(
+            _text(item, "member record id") for item in self.members))
+        if len(set(self.members)) != len(self.members):
+            raise ValueError("a selection cannot hold the same record twice")
+        if not isinstance(self.covers_whole_scope, bool):
+            raise TypeError("covers_whole_scope must be a boolean")
+
+
+Evidence = Union[RecordEvidence, QueryEvidence, PageEvidence,
+                 ComputationEvidence, SelectionEvidence]
 
 
 def _require_id(value: object) -> None:
@@ -261,19 +310,19 @@ class TurnEvidence:
     _items: dict[str, Evidence] = field(default_factory=dict)
 
     def record(self, item: Evidence) -> str:
-        if not isinstance(item, (RecordEvidence, QueryEvidence,
-                                 PageEvidence, ComputationEvidence)):
+        if not isinstance(item, (RecordEvidence, QueryEvidence, PageEvidence,
+                                 ComputationEvidence, SelectionEvidence)):
             raise TypeError("only evidence can be recorded")
         if item.evidence_id in self._items:
             raise ValueError(f"evidence {item.evidence_id} was already recorded this turn")
-        if isinstance(item, ComputationEvidence):
+        if isinstance(item, (ComputationEvidence, SelectionEvidence)):
             # Checked here rather than in the dataclass: an input is only meaningful against
             # a turn, and a computation whose inputs came from somewhere else is not
             # recomputable by whoever reads the answer.
             missing = [name for name in item.inputs if name not in self._items]
             if missing:
                 raise EvidenceUnknown(
-                    f"computation {item.evidence_id} names evidence this turn does not have: "
+                    f"{item.evidence_id} names evidence this turn does not have: "
                     + ", ".join(sorted(missing)))
         self._items[item.evidence_id] = item
         return item.evidence_id
