@@ -205,10 +205,10 @@ python -m web_operation_agent_odoo.demo --allow-mutations
 No flags to set: every path comes from the `.env` that `provision` printed, and the provider
 credentials come from the same file.
 
-The panel opens on the right, already expanded, showing three suggested goals and a
-composer. Type a goal; close the window to end the session. Each turn prints one JSON line —
-the answer, the approval counts, the page actions — and the run directory keeps the audit
-ledger.
+The panel opens centred and a little below the middle of the page, already expanded,
+showing three suggested goals and a composer. Type a goal; close the window to end the
+session. Each turn prints one JSON line — the answer, the approval counts, the page actions
+— and the run directory keeps the audit ledger.
 
 (In a real deployment the panel remembers whether you left it open and otherwise sits as a
 small launcher in the corner. A demo runs in a throwaway browser profile with nothing to
@@ -219,10 +219,10 @@ Things worth trying, in the order that shows the most:
 
 | Type this | What to watch for |
 |---|---|
-| `哪些报价单还没确认？` | The answer is the typed projection, not the model's prose: it names the source, the scope, the observation time and every record. `source_complete` in the audit line says the scan saw the whole collection |
+| `哪些报价单还没确认？` | The answer is the typed projection, not the model's prose: a table of the records with the source, scope and observation time under it. `source_complete` in the audit line says the scan saw the whole collection |
 | `打开 Acme Corporation 的客户记录` | It queries first and navigates to the exact route the tool returned. It cannot invent a URL |
 | `把报价单 S00002 确认掉` | **The approval card appears and waits for you.** Read the effect and the target, then click it — or dismiss it and watch the write not happen |
-| `删除客户 Acme Corporation` | Refused. There is no delete tool on the surface, so the refusal is the product's rather than the model's good manners |
+| `删除客户 Acme Corporation` | Refused — there is no delete tool on the surface, so the refusal is the product's rather than the model's good manners — but it opens that customer's record first and says the deletion has to be made by hand there |
 | `把报价单 S00001 也确认掉`, then ask again | The second identical request meets the journal, not the application |
 
 `--allow-mutations` offers the three typed write tools. It does not make writes automatic:

@@ -366,6 +366,80 @@ class PanelUITests(_PanelBrowser):
         self.assertIn("接管", notice.inner_text())
         self.assertEqual(self.errors, [])
 
+    def test_a_failure_with_no_guidance_of_its_own_is_not_called_a_lost_connection(self):
+        """`gateway_error` is the server falling over, not the network going away.
+
+        The fallback used to be the reconnecting line, so any code the contract had not
+        anticipated told the operator their connection had dropped and that nothing had
+        been re-run -- two claims about a failure nobody had established the shape of.
+        """
+        notices = panel_contract()["notices"]
+        page = self.open(_snapshot(notice={"code": "gateway_error", "retryable": True}))
+        page.locator(".woa-launcher").click()
+        notice = page.locator(".woa-inline-error")
+        notice.wait_for()
+        self.assertIn(notices["gateway_error"], notice.inner_text())
+        page.evaluate("window.__setSnapshot({notice:{code:'nothing_maps_this',retryable:true}})")
+        self.assertIn(notices["unexpected"], notice.inner_text())
+        self.assertNotIn(notices["reconnecting"], notice.inner_text())
+        self.assertEqual(self.errors, [])
+
+    # ---------------------------------------------------------------- the work process
+    def test_a_turn_that_only_ran_offers_no_expander_and_a_turn_that_acted_does(self):
+        page = self.open(_snapshot(entries=[
+            _entry("e1", "goal", "列出所有待开票的销售订单"),
+            _entry("e2", "progress", "正在理解目标"),
+            _entry("e3", "result", "十六张。", panel_state="success"),
+        ]))
+        page.locator(".woa-launcher").click()
+        page.locator(".woa-took").wait_for()
+        # Nothing happened that a list could show, so there is no list and no control
+        # promising one -- only how long it took.
+        self.assertEqual(page.locator(".woa-work").count(), 0)
+        self.assertIn(panel_contract()["label_keys"]["elapsedPrefix"],
+                      page.locator(".woa-took").inner_text())
+
+        page.evaluate("""() => window.__setSnapshot({entries: [
+          {id:'f1',sequence:1,turn_id:'t2',at:1757000000000,kind:'goal',tone:'neutral',
+           text:'打开 Acme 的客户记录'},
+          {id:'f2',sequence:2,turn_id:'t2',at:1757000000000,kind:'progress',tone:'active',
+           text:'正在理解目标'},
+          {id:'f3',sequence:3,turn_id:'t2',at:1757000002000,kind:'action',tone:'active',
+           text:'打开页面：/odoo/customers/10'},
+          {id:'f4',sequence:4,turn_id:'t2',at:1757000003000,kind:'result',tone:'neutral',
+           text:'已打开。',panel_state:'success'}]})""")
+        summary = page.locator(".woa-work__summary")
+        summary.wait_for()
+        self.assertEqual(summary.get_attribute("aria-expanded"), "false")
+        summary.click()
+        self.assertEqual(page.locator(".woa-step").count(), 2)
+        self.assertEqual(self.errors, [])
+
+    def test_the_newest_line_stays_in_view_without_being_asked(self):
+        """Arriving content is not a reason to stop following it."""
+        page = self.open(_snapshot(entries=[
+            _entry("e1", "goal", "列出所有待开票的销售订单"),
+            _entry("e2", "result", "\n".join(f"第 {index} 行。" for index in range(40)),
+                   panel_state="success"),
+        ]))
+        page.locator(".woa-launcher").click()
+        page.locator(".woa-thread").wait_for()
+        page.wait_for_timeout(400)
+        self.assertEqual(page.locator(".woa-jump").count(), 0)
+
+        # The echo of a message that has not reached the server yet grows the thread
+        # without adding an entry. That is exactly the growth the old effect could not
+        # see, and it is what left the reader parked above a button.
+        page.evaluate("() => window.__setSnapshot({optimistic:"
+                      "{turnId:'t2',text:'再列一次',failed:false}})")
+        page.wait_for_timeout(400)
+        self.assertEqual(page.locator(".woa-jump").count(), 0)
+        distance = page.evaluate("""() => { const t = document.getElementById('woa-assistant')
+            .shadowRoot.querySelector('.woa-thread')
+            return t.scrollHeight - t.scrollTop - t.clientHeight }""")
+        self.assertLessEqual(distance, 30)
+        self.assertEqual(self.errors, [])
+
     def test_an_undelivered_message_carries_its_own_retry(self):
         page = self.open(_snapshot(
             optimistic={"turnId": "turn-9", "text": "再带上金额", "failed": True}))
@@ -541,6 +615,23 @@ class PanelUITests(_PanelBrowser):
         page.get_by_role("button", name=labels["collapse"]).click()
         page.locator(".woa-launcher").wait_for(timeout=3000)
         self.assertEqual(page.locator(".woa-window").count(), 0)
+        self.assertEqual(self.errors, [])
+
+    def test_a_window_nobody_has_moved_opens_where_the_composer_is_obvious(self):
+        """The corner is where a support widget goes, and where an input gets missed."""
+        page = self.open(_snapshot(), width=1440, height=900)
+        page.locator(".woa-launcher").click()
+        box = page.evaluate("""() => {
+          const root = document.getElementById('woa-assistant').shadowRoot
+          const rect = e => { const b = e.getBoundingClientRect()
+            return {x: b.x, y: b.y, w: b.width, h: b.height} }
+          return {window: rect(root.querySelector('.woa-window')),
+                  composer: rect(root.querySelector('textarea'))}
+        }""")
+        self.assertLess(abs(box["window"]["x"] + box["window"]["w"] / 2 - 720), 2)
+        self.assertGreater(box["window"]["y"] + box["window"]["h"] / 2, 450)
+        # The one control a person has to find is well clear of the viewport floor.
+        self.assertGreater(900 - (box["composer"]["y"] + box["composer"]["h"]), 60)
         self.assertEqual(self.errors, [])
 
     def test_the_window_moves_and_resizes_and_stays_in_the_viewport(self):

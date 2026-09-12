@@ -1,11 +1,16 @@
-import {memo, useEffect, useMemo, useRef, useState} from 'react'
+import {memo, useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import {
-  AlertTriangle, ChevronDown, ChevronRight, CircleAlert, CircleCheck, CircleDot,
-  ExternalLink, MousePointerClick, RotateCcw, Search, ShieldQuestion,
+  AlertTriangle, ArrowDown, ChevronDown, ChevronRight, CircleAlert, CircleCheck, CircleDot,
+  ExternalLink, MousePointerClick, Search, ShieldQuestion,
 } from 'lucide-react'
 import type {Labels, PanelLimits, TimelineEntry} from '../contract/panel'
 import type {PanelSnapshot} from '../bridge/host'
 import {Answer} from './Answer'
+
+/** Inside this many pixels of the floor counts as "at the newest line". */
+const NEAR_BOTTOM = 28
+/** How long after a gesture a scroll still counts as that person's own doing. */
+const GESTURE_WINDOW_MS = 700
 
 const STEP_ICONS: Record<string, typeof CircleDot> = {
   goto: ExternalLink, click: MousePointerClick, query: Search, observe: CircleDot,
@@ -21,13 +26,28 @@ function stepIcon(text: string): typeof CircleDot {
 }
 
 /** How long the turn took, from the goal the server accepted to the outcome it recorded. */
-function elapsed(turn: Turn): string {
+function elapsed(turn: Turn, now: number): string {
   const from = turn.goal?.at ?? turn.steps[0]?.at ?? 0
-  const to = turn.outcome?.at ?? turn.steps.at(-1)?.at ?? 0
+  // While the turn is still running the clock is the wall clock. Reading it off the last
+  // entry instead is how a turn that spent twelve seconds inside one tool call reported
+  // `0.0s` for all twelve of them: nothing had happened yet, so nothing moved.
+  const to = turn.running ? now : (turn.outcome?.at ?? turn.steps.at(-1)?.at ?? 0)
   if (!from || !to || to < from) return ''
   const seconds = (to - from) / 1000
   return seconds < 60 ? `${seconds.toFixed(1)}s`
     : `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`
+}
+
+/** A clock that only ticks while something is running, and stops dead when it is not. */
+function useClock(running: boolean): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!running) return
+    setNow(Date.now())
+    const timer = window.setInterval(() => setNow(Date.now()), 100)
+    return () => window.clearInterval(timer)
+  }, [running])
+  return now
 }
 
 /** One user turn: the goal, the steps it took, and where it ended up. */
@@ -57,21 +77,36 @@ function group(entries: TimelineEntry[], busy: boolean): Turn[] {
   return turns
 }
 
-const WorkProcess = memo(function WorkProcess({turn, labels, took}: {
+const WorkProcess = memo(function WorkProcess({turn, labels}: {
   turn: Turn
   labels: Labels
-  took: string
 }): React.JSX.Element {
   // Open while it runs, folded once it lands -- and whatever the reader last chose wins.
   const [override, setOverride] = useState<boolean | null>(null)
-  const open = override ?? turn.running
+  const took = elapsed(turn, useClock(turn.running))
   const approvals = turn.steps.filter(step => step.kind === 'approval').length
-  const summary = [
-    labels.workProcess,
-    turn.running ? `第 ${turn.steps.length} ${labels.stepCount}`
-      : `${turn.steps.length} ${labels.stepCount}`,
-    approvals ? `${approvals} ${labels.approvalCount}` : '',
-  ].filter(Boolean).join(' · ')
+  // What the agent *did*: a page action, a confirmation. A turn whose only entries are
+  // the server saying it had started has nothing a list can add, so it gets no expander
+  // and no card -- just how long it took. An affordance that opens onto one generic line
+  // is worse than no affordance.
+  const concrete = turn.steps.filter(step => step.kind !== 'progress')
+  const open = override ?? (turn.running && concrete.length > 1)
+  const summary = turn.running
+    // Running, the summary line *is* the live status. Repeating "工作过程 · 第 1 步" above a
+    // list holding that one step said the same thing twice and neither time said what it
+    // was doing.
+    ? (turn.steps.at(-1)?.text ?? labels.statusActing)
+    : [
+      labels.workProcess,
+      `${turn.steps.length} ${labels.stepCount}`,
+      approvals ? `${approvals} ${labels.approvalCount}` : '',
+    ].filter(Boolean).join(' · ')
+
+  if (!turn.running && concrete.length === 0) {
+    return (
+      <p className="woa-took">{labels.elapsedPrefix} {took}</p>
+    )
+  }
 
   return (
     <div className="woa-work" data-open={open ? 'true' : 'false'}>
@@ -82,7 +117,7 @@ const WorkProcess = memo(function WorkProcess({turn, labels, took}: {
           : (open
             ? <ChevronDown className="woa-work__chevron" size={13} strokeWidth={1.7} aria-hidden="true" />
             : <ChevronRight className="woa-work__chevron" size={13} strokeWidth={1.7} aria-hidden="true" />)}
-        <span>{summary}</span>
+        <span className="woa-work__label">{summary}</span>
         <span className="woa-work__elapsed">{took}</span>
       </button>
       {open && (
@@ -145,9 +180,18 @@ export interface ThreadProps {
 export function Thread(props: ThreadProps): React.JSX.Element {
   const {snapshot, labels, limits, allowedOrigins, onLoadOlder, onRetry} = props
   const scroller = useRef<HTMLDivElement>(null)
+  const content = useRef<HTMLDivElement>(null)
   const bottom = useRef<HTMLDivElement>(null)
   const top = useRef<HTMLDivElement>(null)
-  const [atBottom, setAtBottom] = useState(true)
+  // Following the newest line is the default and stays the default until the reader
+  // scrolls away from it *on purpose*. Content arriving -- an entry, a revealed answer,
+  // a card -- is not a reason to stop following, which is exactly what the old
+  // `entries.length` effect got wrong: the optimistic echo grew the thread without
+  // changing that count, the bottom drifted out of view, and every later arrival then
+  // counted as unseen behind a button nobody asked for.
+  const follow = useRef(true)
+  const gesture = useRef(0)
+  const [detached, setDetached] = useState(false)
   const [unseen, setUnseen] = useState(0)
   const turns = useMemo(() => group(snapshot.entries, snapshot.connection.busy),
                         [snapshot.entries, snapshot.connection.busy])
@@ -160,20 +204,63 @@ export function Thread(props: ThreadProps): React.JSX.Element {
       snapshot.entries.filter(entry => entry.kind === 'result').map(entry => entry.id))
   }
 
-  // A sentinel plus IntersectionObserver is both cheaper and more accurate than measuring
-  // scrollHeight on every scroll event.
-  useEffect(() => {
-    const node = bottom.current
+  const pin = useCallback((smooth = false) => {
     const root = scroller.current
-    if (!node || !root || typeof IntersectionObserver === 'undefined') return
-    const observer = new IntersectionObserver(records => {
-      const visible = records.at(-1)?.isIntersecting ?? true
-      setAtBottom(visible)
-      if (visible) setUnseen(0)
-    }, {root, threshold: 0.01})
+    if (!root) return
+    root.scrollTo({top: root.scrollHeight, behavior: smooth ? 'smooth' : 'auto'})
+    setDetached(false)
+    setUnseen(0)
+    follow.current = true
+  }, [])
+
+  // One scroll listener decides both things: whether to keep following, and whether the
+  // reader is far enough away to be offered a way back. Only a deliberate gesture can
+  // turn following off -- a programmatic scroll always lands at the bottom, so it cannot.
+  useEffect(() => {
+    const root = scroller.current
+    if (!root) return
+    const note = () => { gesture.current = Date.now() }
+    const onScroll = () => {
+      const distance = root.scrollHeight - root.scrollTop - root.clientHeight
+      const near = distance <= NEAR_BOTTOM
+      if (near) {
+        follow.current = true
+        setUnseen(0)
+      } else if (Date.now() - gesture.current < GESTURE_WINDOW_MS) {
+        follow.current = false
+      }
+      setDetached(!near)
+    }
+    root.addEventListener('scroll', onScroll, {passive: true})
+    root.addEventListener('wheel', note, {passive: true})
+    root.addEventListener('touchmove', note, {passive: true})
+    root.addEventListener('keydown', note)
+    root.addEventListener('pointerdown', note)
+    return () => {
+      root.removeEventListener('scroll', onScroll)
+      root.removeEventListener('wheel', note)
+      root.removeEventListener('touchmove', note)
+      root.removeEventListener('keydown', note)
+      root.removeEventListener('pointerdown', note)
+    }
+  }, [])
+
+  // Anything that changes the height of the thread -- a new entry, prose revealing one
+  // character at a time, a card opening -- keeps the newest line in view while following.
+  useEffect(() => {
+    const node = content.current
+    if (!node || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => {
+      if (follow.current) pin()
+    })
     observer.observe(node)
     return () => observer.disconnect()
-  }, [])
+  }, [pin])
+
+  // Submitting is an explicit request to watch what happens next.
+  useEffect(() => {
+    if (snapshot.optimistic) pin()
+  }, [snapshot.optimistic?.turnId, pin])
 
   useEffect(() => {
     const node = top.current
@@ -190,15 +277,19 @@ export function Thread(props: ThreadProps): React.JSX.Element {
     const added = snapshot.entries.length - lastCount.current
     lastCount.current = snapshot.entries.length
     if (added <= 0) return
-    if (atBottom) bottom.current?.scrollIntoView({block: 'end'})
+    if (follow.current) pin()
     else setUnseen(count => count + added)
-  }, [snapshot.entries.length, atBottom])
+  }, [snapshot.entries.length, pin])
 
   const empty = turns.length === 0 && !snapshot.optimistic
 
   return (
     <div className="woa-thread" ref={scroller} role="log" aria-live="polite"
          aria-label={labels.timeline} tabIndex={0}>
+      {/* One box holding everything that can change height, so a single ResizeObserver
+          sees every kind of growth instead of one effect per kind. */}
+      <div className="woa-thread__content" ref={content}
+           data-empty={empty ? 'true' : undefined}>
       <div ref={top} aria-hidden="true" />
       {snapshot.loadingOlder && (
         <div className="woa-skeleton" aria-hidden="true"><i /><i /><i /></div>
@@ -210,9 +301,7 @@ export function Thread(props: ThreadProps): React.JSX.Element {
                 data-settled={turn.running ? undefined : 'true'}>
               {turn.goal && <p className="woa-user">{turn.goal.text}</p>}
               <div className="woa-agent">
-                {turn.steps.length > 0 && (
-                  <WorkProcess turn={turn} labels={labels} took={elapsed(turn)} />
-                )}
+                {turn.steps.length > 0 && <WorkProcess turn={turn} labels={labels} />}
                 {turn.outcome && (
                   <Outcome entry={turn.outcome} labels={labels} limits={limits}
                            live={!settledAtMount.current?.has(turn.outcome.id)}
@@ -242,11 +331,11 @@ export function Thread(props: ThreadProps): React.JSX.Element {
         </div>
       )}
       <div ref={bottom} aria-hidden="true" />
-      {!atBottom && unseen > 0 && (
-        <button type="button" className="woa-jump"
-                onClick={() => bottom.current?.scrollIntoView({behavior: 'smooth', block: 'end'})}>
-          <RotateCcw size={12} strokeWidth={1.9} aria-hidden="true" />
-          {labels.jumpLatest} · {unseen}
+      </div>
+      {detached && (
+        <button type="button" className="woa-jump" onClick={() => pin(true)}>
+          <ArrowDown size={12} strokeWidth={1.9} aria-hidden="true" />
+          {labels.jumpLatest}{unseen > 0 ? ` · ${unseen}` : ''}
         </button>
       )}
     </div>

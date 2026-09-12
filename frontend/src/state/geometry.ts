@@ -12,9 +12,11 @@ import {useCallback, useEffect, useRef, useState} from 'react'
 
 export const MIN_WIDTH = 320
 export const MIN_HEIGHT = 360
-export const DEFAULT_WIDTH = 376
+export const DEFAULT_WIDTH = 420
 export const DEFAULT_HEIGHT = 560
 const EDGE_INSET = 16
+/** Where the window's own box sits between the top of the viewport and the bottom of it. */
+const BELOW_CENTRE = 0.68
 const STORAGE_KEY = 'woa.panel.geometry.v1'
 
 export type Handle = 'move' | 'n' | 's' | 'e' | 'w' | 'nw' | 'ne' | 'sw' | 'se'
@@ -71,13 +73,25 @@ export function clamp(geometry: Geometry, preferred: {width: number; height: num
   }
 }
 
-function defaultGeometry(): Geometry {
+/**
+ * Where a window nobody has moved yet opens: horizontally centred, sitting below the
+ * middle of the viewport.
+ *
+ * It used to open in the bottom-right corner with the composer a hair above the viewport
+ * floor. That is the classic support-widget position, and it is wrong for this product:
+ * the one control a person has to find is the input, and in the corner it is both the
+ * easiest thing on screen to miss and the first thing a shorter viewport clips.
+ */
+export function defaultGeometry(): Geometry {
   const view = viewport()
   const width = Math.min(DEFAULT_WIDTH, Math.max(MIN_WIDTH, view.width - EDGE_INSET * 2))
   const height = Math.min(DEFAULT_HEIGHT, Math.max(MIN_HEIGHT, view.height - EDGE_INSET * 2))
+  const room = view.height - height
   return clamp({
-    left: Math.max(EDGE_INSET, view.width - width - EDGE_INSET),
-    top: Math.max(EDGE_INSET, view.height - height - EDGE_INSET),
+    left: Math.round((view.width - width) / 2),
+    // Below centre, but never past the inset: on a viewport barely taller than the window
+    // the fraction would push the composer off the bottom, which is what this fixes.
+    top: Math.round(Math.max(0, Math.min(room * BELOW_CENTRE, room - EDGE_INSET))),
     width,
     height,
   }, {width, height})

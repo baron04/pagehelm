@@ -218,6 +218,10 @@ button:disabled { cursor: not-allowed; }
   overflow-anchor: auto;
   padding: 15px 13px 4px;
 }
+.woa-thread__content { display: flex; flex-direction: column; min-height: 100%; }
+/* With nothing said yet the composer is the whole interface, so the greeting and the
+   suggestions sit with it rather than stranded at the top of an empty box. */
+.woa-thread__content[data-empty] { justify-content: center; }
 
 /* Scrollbars are chrome, not content: thin, on the panel's own neutrals, and never a
    dark overlay pill sitting on top of the composer. */
@@ -277,13 +281,16 @@ button:disabled { cursor: not-allowed; }
 .woa-undelivered { color: var(--woa-danger); }
 .woa-undelivered button { color: var(--woa-accent); font-weight: 500; }
 
+/* Outside the flow on purpose: in it, the button's own 25px made the thread taller than
+   its viewport, so an empty thread was permanently one button-height from the bottom. */
 .woa-jump {
-  position: sticky;
-  bottom: 6px;
-  align-self: center;
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1;
   display: inline-flex; align-items: center; gap: 5px;
   height: 25px; padding: 0 11px;
-  margin: 0 auto;
   border-radius: 99px;
   background: var(--woa-surface-raised);
   color: var(--woa-ink);
@@ -318,6 +325,13 @@ button:disabled { cursor: not-allowed; }
   text-align: left;
 }
 .woa-work__summary:hover { color: var(--woa-ink); }
+.woa-took {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--woa-ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.woa-work__label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .woa-work__chevron { flex: none; color: var(--woa-ink-faint); }
 .woa-work__elapsed {
   margin-left: auto;
@@ -360,7 +374,9 @@ button:disabled { cursor: not-allowed; }
 .woa-md p, .woa-md h2, .woa-md h3, .woa-md blockquote, .woa-md ul, .woa-md ol { margin: 0; }
 .woa-md h2 { font-size: 14px; font-weight: 600; }
 .woa-md h3 { font-size: 13px; font-weight: 600; }
-.woa-md__list { padding-inline-start: 18px; display: flex; flex-direction: column; gap: 3px; }
+/* Wide enough for a two-digit marker: at 18px, item 10 onwards lost its first glyph. */
+.woa-md__list { padding-inline-start: 26px; display: flex; flex-direction: column; gap: 3px; }
+.woa-md__list li::marker { color: var(--woa-ink-faint); font-variant-numeric: tabular-nums; }
 .woa-md blockquote {
   padding-inline-start: 10px;
   border-inline-start: 2px solid var(--woa-line-strong);

@@ -19,8 +19,12 @@ export function InlineError({notice, configuration, labels, limits, onRetry, off
   offline: boolean
 }): React.JSX.Element {
   const terminal = configuration.terminal_error_codes.includes(notice.code)
+  // A code with no guidance of its own is *not* a dropped connection. Borrowing the
+  // reconnecting line for it told people their network had failed whenever the server
+  // did, which is both wrong and unactionable.
   const message = (configuration.notices[notice.code]
-    ?? configuration.notices[offline ? 'offline' : 'reconnecting']
+    ?? configuration.notices[offline ? 'offline' : 'unexpected']
+    ?? configuration.notices.reconnecting
     ?? '').slice(0, limits.notice_max_chars)
   const Icon = offline ? WifiOff : TriangleAlert
   return (

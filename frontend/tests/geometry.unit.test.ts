@@ -1,5 +1,5 @@
 import {describe, expect, it, vi} from 'vitest'
-import {MIN_HEIGHT, MIN_WIDTH, clamp} from '../src/state/geometry'
+import {MIN_HEIGHT, MIN_WIDTH, clamp, defaultGeometry} from '../src/state/geometry'
 
 function withViewport(width: number, height: number, run: () => void) {
   const original = {width: window.innerWidth, height: window.innerHeight}
@@ -55,6 +55,27 @@ describe('the window stays reachable', () => {
                              {width: 900, height: 700})
       expect(restored.width).toBe(900)
       expect(restored.height).toBe(700)
+    })
+  })
+})
+
+describe('a window nobody has moved yet', () => {
+  it('opens centred and below the middle, not in the corner', () => {
+    withViewport(1440, 900, () => {
+      const {left, top, width, height} = defaultGeometry()
+      expect(Math.abs(left + width / 2 - 720)).toBeLessThanOrEqual(1)
+      // Below the middle of the viewport...
+      expect(top + height / 2).toBeGreaterThan(450)
+      // ...and clear of its floor, which is where the composer lives.
+      expect(900 - (top + height)).toBeGreaterThanOrEqual(60)
+    })
+  })
+
+  it('keeps the composer on screen when the viewport is barely taller than the window', () => {
+    withViewport(1024, 600, () => {
+      const {top, height} = defaultGeometry()
+      expect(top).toBeGreaterThanOrEqual(0)
+      expect(top + height).toBeLessThanOrEqual(600)
     })
   })
 })
