@@ -138,7 +138,13 @@ class AgentTurnConfig:
     require_identity: bool = False
     deployment_profile: str = "production"
     max_user_answer_chars: int = 4_000
-    source_affordance_mode: str = "off"
+    #: What this deployment's compiled source lets the turn do, as one value handed over by
+    #: the application distribution. It is a capability rather than a set of flags because
+    #: the flags only make sense together, and because a turn that spreads them can pick
+    #: three of four -- which is exactly what this field replaced: the product turn built a
+    #: `SourceCapability` of its own out of two of the adapter's four settings, so an
+    #: adapter that declared cited runtime lookup got a deployment without it.
+    source: SourceCapability = SourceCapability.none()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "ledger_path", Path(self.ledger_path))
@@ -168,8 +174,8 @@ class AgentTurnConfig:
         if not isinstance(self.disabled_actions, frozenset) \
                 or any(not isinstance(item, str) for item in self.disabled_actions):
             raise ValueError("disabled_actions must be a frozenset of tool names")
-        if self.source_affordance_mode not in {"off", "empty", "auto"}:
-            raise ValueError("source_affordance_mode must be off, empty, or auto")
+        if not isinstance(self.source, SourceCapability):
+            raise TypeError("source must be a SourceCapability")
         if self.deployment_profile not in {"production", "test"}:
             raise ValueError("deployment_profile must be production or test")
         if self.allow_business_mutations and not self.require_identity:
@@ -311,7 +317,6 @@ class AgentTurnExecutor:
                  run_id_factory: RunIdFactory,
                  answer_renderer: AnswerRenderer = render_neutral_user_answer,
                  ledger_factory: LedgerFactory = SessionLedger,
-                 source_map=None,
                  conversation_state: ConversationState | None = None):
         self.channel = channel
         self.config = config
@@ -343,11 +348,8 @@ class AgentTurnExecutor:
         self.run_id_factory = run_id_factory
         self.answer_renderer = answer_renderer
         self.ledger_factory = ledger_factory
-        self.source_map = source_map
-        if self.config.source_affordance_mode == "auto" and source_map is None:
-            raise ValueError("auto source affordances require a version-bound SourceMap")
-        if self.config.source_affordance_mode != "auto" and source_map is not None:
-            raise ValueError("a SourceMap is accepted only when source affordances are auto")
+        # No local coherence check: `SourceCapability.__post_init__` is the one place that
+        # refuses an incoherent combination, and a second copy here is how the two drift.
         if conversation_state is not None and not isinstance(
                 conversation_state, ConversationState):
             raise TypeError("conversation_state must be a ConversationState or None")
@@ -501,9 +503,11 @@ class AgentTurnExecutor:
             ledger=ledger,
             # No `lab=`: a deployed turn has no arm to define, and the one keyword that
             # would inject a known-good plan is not reachable from here at all.
-            source=SourceCapability(
-                source_map=self.source_map,
-                source_affordance_mode=self.config.source_affordance_mode),
+            #
+            # The capability goes across whole. Rebuilding one here out of selected fields
+            # is what dropped `runtime_source` on the floor: the adapter declared cited
+            # runtime lookup and the deployment never offered the tool.
+            source=self.config.source,
             step_budget=self.config.step_budget,
             wall_budget_s=self.config.wall_budget_s,
             run_id=run_id,

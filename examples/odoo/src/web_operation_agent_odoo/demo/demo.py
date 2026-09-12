@@ -75,11 +75,17 @@ class ScriptedOdooChat:
         self.replies = replies
         self.egress_policy = egress_policy or ProviderEgressPolicy()
         self.calls = 0
+        #: Every tool surface this run was offered, in order. A gate that only checks a tool
+        #: *worked* cannot tell "the deployment offers it" from "the script happened to name
+        #: something the session still accepts"; this is the surface a model would see.
+        self.tool_surfaces: list[list[str]] = []
 
     def complete(self, messages: list[dict], tools: list[dict] | None, run_id: str,
                  max_tokens: int | None = None, options: dict | None = None,
                  timeout_s: float | None = None) -> dict[str, Any]:
         self.calls += 1
+        self.tool_surfaces.append(sorted(
+            tool["function"]["name"] for tool in (tools or [])))
         if self.calls > len(self.replies):
             name, arguments = "finish", {"done": False, "why": "Script exhausted."}
         else:
@@ -205,6 +211,40 @@ def _source_candidate_counts(ledger_path: Path) -> list[int]:
         if row.get("event") == "source_affordances_delivered":
             counts.append(len(row.get("candidates") or []))
     return counts
+
+
+def _runtime_source_retrievals(ledger_path: Path) -> list[dict]:
+    """Every cited source lookup this turn made, read back from its own audit ledger.
+
+    The citation keys are carried out whole (`path:start-end`), because "a lookup happened"
+    and "the lookup cited bytes that are still there" are different claims and only the
+    second one is worth anything. The queries themselves are not carried: they are user-
+    derived text, and the gate has no reason to publish them.
+    """
+    if not ledger_path.exists():
+        return []
+    retrievals = []
+    for line in ledger_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if row.get("event") != "runtime_source_retrieved":
+            continue
+        evidence = row.get("evidence") or []
+        retrievals.append({
+            "lines": len(evidence),
+            "citations": row.get("citations", 0),
+            "source_digest": row.get("source_digest", ""),
+            # `_emit` prefixes every evidence line with `[path:start-end]`, so the citation a
+            # model was shown is recoverable from the ledger without trusting the retriever.
+            "citation_keys": sorted({line[1:line.index("]")] for line in evidence
+                                     if line.startswith("[") and "]" in line}),
+            "licensed_view_routes": row.get("licensed_view_routes") or [],
+        })
+    return retrievals
 
 
 #: The audit events a gate reads back to say what a turn actually did with the application.
@@ -426,13 +466,15 @@ def run_demo(config: OdooDemoConfig) -> dict:
                 require_identity=True,
                 allow_business_mutations=config.allow_mutations,
                 deployment_profile="production",
-                source_affordance_mode=capability.source_affordance_mode,
+                # The adapter's whole answer, not a selection from it: with a source root
+                # configured this is what turns on cited runtime lookup as well as source
+                # affordance candidates.
+                source=capability,
                 max_user_answer_chars=8_000,
             ),
             chat=chat,
             application=bound,
             control=ReadOnlyControl(),
-            source_map=capability.source_map,
             run_id_factory=lambda _message: "odoo-" + uuid.uuid4().hex[:16],
         )
         conversation = LiveConversationRunner(channel, executor=executor)
@@ -472,6 +514,14 @@ def run_demo(config: OdooDemoConfig) -> dict:
         # is the failure this number exists to catch: it is what the product path did for as
         # long as the entry observation was assigned without deriving its scopes.
         "source_candidates_delivered": candidates,
+        # What the adapter's `runtime_source` declaration actually bought this turn: the
+        # cited lookups it made, and the tool surface it was offered. Both were unobservable
+        # from a deployment until the capability crossed into the product turn whole.
+        "runtime_source_retrievals": _runtime_source_retrievals(run_dir / "audit.jsonl"),
+        "tools_offered": sorted({name for surface in
+                                 (chat.tool_surfaces if isinstance(chat, ScriptedOdooChat)
+                                  else [])
+                                 for name in surface}),
         "audit_projection": _audit_projection(run_dir / "audit.jsonl"),
         "turns": records,
         "last_url": last_url,

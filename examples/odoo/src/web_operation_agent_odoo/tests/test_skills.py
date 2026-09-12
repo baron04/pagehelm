@@ -7,7 +7,10 @@ from pathlib import Path
 
 from web_operation_agent.business import Citation
 from web_operation_agent_odoo.demo.skills import (APPLICATION, compiler, packaged_skills,
+                                                  reissue_packaged_skills,
+                                                  skill_artifact_path,
                                                   verify_packaged_skills)
+from web_operation_agent_odoo.skill_sources import SKILL_SOURCES
 
 
 class PackagedSkills(unittest.TestCase):
@@ -45,6 +48,35 @@ class PackagedSkills(unittest.TestCase):
                                   "an Odoo XML id or model name is module-qualified")
 
 
+class DraftingSourcesStayWithTheSkills(unittest.TestCase):
+    """Every shipped Skill has to say what it was compiled from, and nothing else may.
+
+    A Skill artifact records the facts it was drafted with, not the request they were about,
+    and the one time that matters is when a citation rots -- which is exactly when reading
+    the subject back out of the citations would mean trusting the broken thing. So it is
+    declared alongside the Skills, and drift between the two sets is a defect: a Skill with
+    no entry cannot be repaired, and an entry with no Skill is a name nobody maintains.
+    """
+
+    def test_the_two_sets_are_the_same_set(self):
+        self.assertEqual(sorted(SKILL_SOURCES),
+                         sorted(skill.skill_id for skill in packaged_skills()))
+
+    def test_every_declared_subject_is_this_application_s_source_scope(self):
+        from web_operation_agent_odoo.route import ODOO_SOURCE_SCOPE
+
+        for skill_id, (subject, _methods) in sorted(SKILL_SOURCES.items()):
+            with self.subTest(skill_id=skill_id):
+                scope, separator, route = subject.partition("/")
+                self.assertEqual(scope, ODOO_SOURCE_SCOPE)
+                self.assertTrue(separator and route, subject)
+
+    def test_every_skill_id_resolves_to_exactly_one_packaged_artifact(self):
+        for skill_id in sorted(SKILL_SOURCES):
+            with self.subTest(skill_id=skill_id):
+                self.assertTrue(skill_artifact_path(skill_id).is_file())
+
+
 @unittest.skipUnless(os.environ.get("WOA_ODOO_SOURCE_ROOT")
                      and os.environ.get("WOA_ODOO_SOURCE_RELEASE"),
                      "needs a source tree matching the deployed release")
@@ -63,6 +95,39 @@ class CitationsAgainstARealRelease(unittest.TestCase):
         report = verify_packaged_skills(self.root, self.release)
         self.assertEqual(report["unresolved"], [])
         self.assertEqual(report["status"], "READY")
+
+    def test_nothing_is_reissued_while_every_citation_resolves(self):
+        """`verify` is the entry point, so a green release must produce an empty diff."""
+        report = reissue_packaged_skills(self.root, self.release, accept=("provenance",))
+        self.assertEqual(report["reissued"], [])
+
+    def test_a_named_skill_is_reissued_with_its_playbook_untouched(self):
+        """The repair itself, against the real release, on a Skill nothing is wrong with.
+
+        Selecting by name rather than by rot is what lets this run on a green tree; what it
+        checks is the invariant that holds either way -- the recomputed citations resolve,
+        and every field a person owns is the same object it was.
+        """
+        report = reissue_packaged_skills(
+            self.root, self.release, accept=("provenance",),
+            only=("odoo.sales.sale-orders-query",))
+        reissue = report["reissues"][0]
+        original = next(skill for skill in packaged_skills()
+                        if skill.skill_id == "odoo.sales.sale-orders-query")
+        self.assertEqual(reissue.skill["instructions"], list(original.instructions))
+        self.assertEqual(reissue.skill["title"], original.title)
+        self.assertEqual(reissue.skill["triggers"], list(original.triggers))
+        self.assertEqual([change.field for change in reissue.changed], ["provenance"])
+
+        from web_operation_agent.business import BusinessSkill
+        import json
+        verified = compiler(self.root, self.release).verify(
+            BusinessSkill.from_bytes(
+                json.dumps(reissue.skill, ensure_ascii=False).encode(),
+                artifact_uri="memory://reissued"))
+        self.assertTrue(verified.passed,
+                        [check.reason for check in verified.source_citations
+                         if not check.resolved])
 
     def test_a_renamed_anchor_stops_resolving(self):
         """Reverse verification: the checker must be able to fail."""

@@ -28,6 +28,7 @@ from pathlib import Path
 from web_operation_agent.application import bind_application
 
 from ..adapter import COLLECTIONS, OdooApplicationAdapter
+from ..sourcemap import OdooCompiler, odoo_source_tree
 from .demo import OdooDemoConfig, run_demo
 from .fixture import OdooPostgresFixture, load_json, restore_snapshot
 from .skills import verify_packaged_skills
@@ -112,6 +113,31 @@ CASES = {
         "expect_path": "/odoo/orders",
         "expect_page_text": ("S00",),
     },
+    "cited_source_lookup": {
+        # The one case that needs a compiled source tree, so it only runs when one is
+        # configured. What it proves is narrow and was previously unprovable from a
+        # deployment: the adapter declares `runtime_source=True`, and the deployed turn
+        # therefore offers `lookup_source`, answers from the compiled index, and cites byte
+        # ranges that are still in the tree. Until G5 the product turn rebuilt the
+        # capability out of two of its four settings and this tool was never on the surface.
+        # The task needs both halves on purpose. Source answers what the deployment's own
+        # descriptors declare; only a typed read answers what is in the library right now,
+        # and the order here is the order AGENTS.md requires -- source is a prior, the
+        # runtime fact wins.
+        "task": ("Which fields does Odoo's customer invoice form declare, and how many "
+                 "customer invoices are there right now?"),
+        "replies": (
+            ("lookup_source",
+             {"query": "which fields does the customer invoice form declare"}),
+            ("load_skill", {"skill_id": "odoo.sales.customer-invoices-query"}),
+            ("query_customer_invoices", {}),
+            (None, "The declared fields are cited above; the current invoices are below."),
+        ),
+        "expect_path": "/odoo/customers",
+        "expect_page_text": (),
+        "requires_source": True,
+        "expect_source_lookup": True,
+    },
     "safe_refusal": {
         # S00006 is confirmed and its invoice status is `no`: nothing left to invoice. The
         # refusal has to come from the adapter, before any proposal reaches the user --
@@ -163,7 +189,19 @@ CASES = {
 #: has written, so what it refuses is Odoo's demo data exactly as shipped; the writes run
 #: last so that only the fixture restore has to undo them.
 CASE_ORDER = ("complete_enumeration", "conditional_query", "open_record", "open_collection",
+              "cited_source_lookup",
               "safe_refusal", "multi_step_write_confirm", "multi_step_write_invoice")
+
+
+def cases_for(source_root: str) -> tuple[str, ...]:
+    """The cases this environment can actually run, in order.
+
+    A case that needs a compiled source tree is dropped rather than failed where there is
+    none: source retrieval is optional by design, and a gate that reported a missing
+    optional prerequisite as a product failure would be lying about a different thing.
+    """
+    return tuple(name for name in CASE_ORDER
+                 if source_root or not CASES[name].get("requires_source"))
 
 
 def run_case(name: str, case: dict, args, output_dir: Path) -> dict:
@@ -226,7 +264,33 @@ def run_case(name: str, case: dict, args, output_dir: Path) -> dict:
         "answer_digest": _digest(turn.get("answer", "")),
         "source_relations": summary.get("source_relations", 0),
         "source_candidates_delivered": summary.get("source_candidates_delivered") or [],
+        "runtime_source_retrievals": summary.get("runtime_source_retrievals") or [],
+        "tools_offered": summary.get("tools_offered") or [],
     }
+
+
+def verify_retrieved_citations(source_root: str, release: str,
+                               results: Sequence[dict]) -> dict:
+    """Re-read every byte range a source lookup cited, and say whether it is still there.
+
+    Resolution is against the tree, not against the retriever's own record of what it read:
+    a bundle that cites its own memory proves nothing. `SourceTree.verify` re-hashes the
+    exact cited lines, so a citation survives here only if those bytes are unchanged in the
+    release the map was compiled from -- which is what makes a cited answer replayable at
+    all, and is the reason retrieval is built on the compiled index rather than on a
+    mutable working tree.
+    """
+    tree = odoo_source_tree(Path(source_root).resolve(), release=release)
+    by_key = {reference.key: reference
+              for relation in OdooCompiler(tree, "citation-check").compile().relations
+              for reference in relation.evidence}
+    cited = sorted({key for row in results
+                    for retrieval in row["runtime_source_retrievals"]
+                    for key in retrieval["citation_keys"]})
+    unresolved = [key for key in cited
+                  if key not in by_key or not tree.verify(by_key[key])]
+    return {"cited_count": len(cited), "unresolved": unresolved,
+            "resolved": bool(cited) and not unresolved}
 
 
 def verify_effect(adapter: OdooApplicationAdapter, case: dict) -> dict:
@@ -417,9 +481,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             started_on == baseline)
 
     read_only_before = fixture_state(adapter)
+    case_order = cases_for(args.source_root)
     with tempfile.TemporaryDirectory() as tmp:
         results = []
-        for name in CASE_ORDER:
+        for name in case_order:
             case = CASES[name]
             if case.get("writes") and database is None:
                 # A write with nothing to undo it is how a demo library drifts. Refusing is
@@ -453,7 +518,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     checks = {
         "application_reachable": bool(health["passed"]),
         "every_workflow_kind_ran": sorted(row["case"] for row in results)
-                                   == sorted(CASES),
+                                   == sorted(case_order),
         "every_case_reached_its_expected_terminal_state": all(
             row["turn_finished"] for row in results),
         "every_case_landed_on_its_authorised_route": all(
@@ -490,6 +555,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             for row in refusal_cases),
         **fixture_checks,
     }
+    # Both directions, in the deployment itself: with a compiled source root every turn is
+    # offered the cited-lookup tools, and without one no turn is. The adapter's declaration
+    # is the only thing that moves between those two runs.
+    source_cases = [row for row in results
+                    if CASES[row["case"]].get("expect_source_lookup")]
+    checks["runtime_source_tools_follow_the_declared_capability"] = all(
+        ("lookup_source" in row["tools_offered"]) == bool(args.source_root)
+        and ("open_source_route" in row["tools_offered"]) == bool(args.source_root)
+        for row in results)
+    retrieved: dict = {}
     citations: dict = {}
     if args.source_root:
         # With a compiled map the treatment must be real: every delivery in every case has
@@ -504,6 +579,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         citations = verify_packaged_skills(args.source_root, args.source_release)
         checks["every_skill_citation_resolves_in_this_release"] = (
             citations["status"] == "READY")
+        # The lookup itself: it happened, it returned cited evidence, and every byte range
+        # it cited is still exactly those bytes in the compiled release.
+        checks["the_source_lookup_case_retrieved_cited_evidence"] = all(
+            row["runtime_source_retrievals"]
+            and all(retrieval["lines"] > 0 and retrieval["citation_keys"]
+                    for retrieval in row["runtime_source_retrievals"])
+            for row in source_cases) and bool(source_cases)
+        retrieved = verify_retrieved_citations(args.source_root, args.source_release,
+                                               results)
+        checks["every_retrieved_citation_still_names_those_bytes"] = retrieved["resolved"]
     artifact = {
         "schema_version": 1,
         "kind": "woa_odoo_live_qualification",
@@ -523,6 +608,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "fixture_drift_before_run": drift_before_run,
         "skill_citations": {key: value for key, value in citations.items()
                             if key != "reports"},
+        "retrieved_citations": retrieved,
         "checks": checks,
         "status": "READY" if all(checks.values()) else "FAILED",
     }

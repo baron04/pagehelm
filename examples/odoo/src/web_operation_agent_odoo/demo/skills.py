@@ -1,11 +1,12 @@
-"""Draft and check Odoo Business Skills against the deployed release's own descriptors.
+"""Draft, check and reissue Odoo Business Skills against the deployed release's descriptors.
 
-Two commands, which are the two halves of the project's oldest claim -- that a Skill should
-be derived from the application's source rather than written from memory:
+Three commands, which are the halves of the project's oldest claim -- that a Skill should be
+derived from the application's source rather than written from memory -- plus the repair:
 
     python -m web_operation_agent_odoo.demo.skills verify --source-root ... --release ...
     python -m web_operation_agent_odoo.demo.skills draft  --action sale.action_orders \\
         --tools query_sale_orders --source-root ... --release ...
+    python -m web_operation_agent_odoo.demo.skills reissue --source-root ... --release ...
 
 `verify` is the one that runs in a gate. It resolves every ``src:`` citation in every
 packaged Skill against the compiled ``SourceMap``: the file must still be one the compiler
@@ -19,6 +20,18 @@ state and refuses to write the one it cannot: the instructions are a playbook fo
 and a compiler that generated them would be inventing the only part that needs judgement.
 What it does supply is the thing prose gets wrong -- a list page that reads as "all orders"
 is a filtered scope, and the filter exists only in the descriptor's ``domain``.
+
+`reissue` is what `verify` is for. It takes the Skills `verify` judged red, recompiles their
+compiled facts against this release's map, and keeps what a person wrote -- the instructions
+above all, byte for byte. Before this existed, one rotted citation meant hand-resealing the
+whole artifact, which is where the friction actually was.
+
+It writes nothing without `--apply`, and what it prints first is a field-by-field diff. That
+is not politeness: `--accept` defaults to every field a compiler can derive, and for these
+Skills two of the three carry human edits the source cannot regenerate -- the titles are
+hand-written and the trigger lists are bilingual, with Chinese aliases that appear in no
+descriptor. Repairing citation rot alone is `--accept provenance`; the diff is how a reviewer
+sees which of those they are doing.
 
 `--action` takes Odoo's globally qualified XML id; the subject the core compiler works with
 is looked up here, because "an action id" is Odoo's word for it and not a core concept.
@@ -35,6 +48,7 @@ from web_operation_agent.business import BusinessSkill
 from web_operation_agent.source_skill import BusinessSkillCompiler
 
 from ..route import ODOO_ROUTE_PORT, ODOO_SOURCE_SCOPE
+from ..skill_sources import SKILL_SOURCES
 from ..sourcemap import OdooCompiler, odoo_source_tree
 
 
@@ -78,6 +92,53 @@ def verify_packaged_skills(source_root: str, release: str) -> dict:
     }
 
 
+def skill_artifact_path(skill_id: str) -> Path:
+    """Where this distribution keeps one Skill, resolved from the package itself."""
+    for entry in resources.files("web_operation_agent_odoo").joinpath("skills").iterdir():
+        if not entry.name.endswith(".json"):
+            continue
+        if json.loads(entry.read_bytes()).get("skill_id") == skill_id:
+            return Path(str(entry))
+    raise SystemExit(f"no packaged artifact declares {skill_id}")
+
+
+def reissue_packaged_skills(source_root: str, release: str, *,
+                            accept: tuple[str, ...],
+                            only: tuple[str, ...] = ()) -> dict:
+    """Recompile the named Skills (default: the ones `verify` judged red) as diffs.
+
+    `verify` stays the entry point. Reissuing a Skill whose citations all resolve would
+    rewrite an artifact nobody asked about, and would make every release's diff noise --
+    the whole value of a citation gate is that it names the few things that moved.
+    """
+    checker = compiler(source_root, release)
+    skills = {skill.skill_id: skill for skill in packaged_skills()}
+    if not only:
+        only = tuple(sorted(
+            report["skill_id"] for report in
+            (checker.verify(skill).to_json() for skill in skills.values())
+            if not report["passed"]))
+    reissues = []
+    for skill_id in only:
+        if skill_id not in skills:
+            raise SystemExit(f"no packaged Skill is called {skill_id}")
+        if skill_id not in SKILL_SOURCES:
+            raise SystemExit(
+                f"{skill_id} declares no drafting source; add it to skill_sources.py")
+        subject, methods = SKILL_SOURCES[skill_id]
+        reissues.append(checker.reissue(skills[skill_id], subject=subject,
+                                        methods=methods, recompute=accept))
+    return {
+        "schema_version": 1,
+        "kind": "woa_odoo_skill_reissue",
+        "release": release,
+        "accepted_fields": list(accept),
+        "skill_ids": list(only),
+        "reissued": [item.to_json() for item in reissues],
+        "reissues": reissues,
+    }
+
+
 def _subject_of(checker: BusinessSkillCompiler, action_id: str) -> str:
     matches = {row.subject for row in checker.source_map.by_kind("request_handler")
                if row.attrs.get("action_id") == action_id}
@@ -90,7 +151,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="web-operation-agent-odoo-skills",
         description="Draft and check Odoo Skills against the deployed release's source.")
-    parser.add_argument("command", choices=("verify", "draft"))
+    parser.add_argument("command", choices=("verify", "draft", "reissue"))
     parser.add_argument("--source-root", required=True)
     parser.add_argument("--release", required=True)
     parser.add_argument("--action", default="", help="a globally qualified Odoo XML id")
@@ -99,6 +160,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--methods", default="",
                         help="comma-separated model methods whose declarations to quote")
     parser.add_argument("--write", action="store_true", help="a mutation Skill draft")
+    parser.add_argument("--skill-ids", default="",
+                        help="reissue: comma-separated Skills to reissue instead of the "
+                             "ones verify judged red")
+    parser.add_argument("--accept", default=",".join(
+                            BusinessSkillCompiler.RECOMPUTABLE_FIELDS),
+                        help="reissue: which compiled fields to take from the new map; "
+                             "'provenance' alone repairs citation rot and touches nothing "
+                             "a person edited")
+    parser.add_argument("--apply", action="store_true",
+                        help="reissue: write the artifacts back; without it nothing on "
+                             "disk changes and only the diff is printed")
     parser.add_argument("--output", default="")
     arguments = parser.parse_args(argv)
 
@@ -113,6 +185,40 @@ def main(argv: list[str] | None = None) -> int:
                           if key != "reports"},
                          ensure_ascii=False, sort_keys=True, indent=2))
         return 0 if report["status"] == "READY" else 1
+
+    if arguments.command == "reissue":
+        accept = tuple(name.strip() for name in arguments.accept.split(",")
+                       if name.strip())
+        unknown = sorted(set(accept) - set(BusinessSkillCompiler.RECOMPUTABLE_FIELDS))
+        if unknown:
+            parser.error(f"a compiler cannot recompute {unknown}")
+        report = reissue_packaged_skills(
+            arguments.source_root, arguments.release, accept=accept,
+            only=tuple(name.strip() for name in arguments.skill_ids.split(",")
+                       if name.strip()))
+        reissues = report.pop("reissues")
+        if arguments.output:
+            Path(arguments.output).parent.mkdir(parents=True, exist_ok=True)
+            Path(arguments.output).write_text(
+                json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+                encoding="utf-8")
+        if not reissues:
+            print("every packaged Skill's citations resolve in this release; "
+                  "nothing to reissue")
+            return 0
+        for item in reissues:
+            print(item.render())
+            print()
+        if not arguments.apply:
+            print(f"{len(reissues)} artifact(s) would change. Nothing was written; "
+                  "re-run with --apply.", file=sys.stderr)
+            return 0
+        for item in reissues:
+            path = skill_artifact_path(item.skill_id)
+            path.write_text(json.dumps(item.skill, ensure_ascii=False, indent=2) + "\n",
+                            encoding="utf-8")
+            print(f"wrote {path}", file=sys.stderr)
+        return 0
 
     if not arguments.action or not arguments.skill_id or not arguments.tools:
         parser.error("draft needs --action, --skill-id and --tools")

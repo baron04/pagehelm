@@ -5,13 +5,14 @@ relations and refuses ambiguous request/view/screen chains instead of guessing.
 """
 from __future__ import annotations
 
+import json
 import re
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
 from .application import ApplicationRoutePort
-from .business import Citation
+from .business import BusinessSkill, Citation
 from .schemas import SourceMap, SourceRelation
 
 
@@ -308,6 +309,93 @@ class BusinessSkillDraft:
                 "review": list(self.review)}
 
 
+@dataclass(frozen=True)
+class FieldChange:
+    """One field a reissue would change, with both sides kept for a person to read."""
+
+    field: str
+    before: tuple[str, ...] | str | bool
+    after: tuple[str, ...] | str | bool
+
+    def render(self) -> str:
+        def show(value) -> str:
+            if isinstance(value, tuple):
+                return "[" + ", ".join(repr(item) for item in value) + "]"
+            return repr(value)
+        return f"  {self.field}:\n    - {show(self.before)}\n    + {show(self.after)}"
+
+
+@dataclass(frozen=True)
+class SkillReissue:
+    """An existing Skill recompiled against a newer SourceMap, as a diff.
+
+    The split is the same one `BusinessSkillDraft` makes, applied to an artifact that
+    already exists. Titles, triggers and citations are facts the compiler takes from the
+    application's own descriptors, so a reissue recomputes them. Instructions are a playbook
+    a person wrote; recomputing them would throw away the only part that needed judgement,
+    so they cross over byte for byte -- as do the intent, the tool names, and any citation
+    the source cannot speak for (an `api:` entry names a published interface, and inventing
+    one here would be a claim no map can support).
+
+    It is a diff rather than a new file because the facts moving is exactly the moment a
+    person should look: a title that changed because the deployment renamed an action is
+    routine, and a scope filter that appeared in `facts` may mean the instructions are now
+    wrong. Nothing here can tell those apart, so nothing here decides.
+    """
+
+    skill_id: str
+    artifact_uri: str
+    skill: dict
+    source_digest: str
+    release: str
+    changed: tuple[FieldChange, ...]
+    recomputed: tuple[str, ...]
+    preserved: tuple[str, ...]
+    facts: tuple[str, ...]
+    review: tuple[str, ...]
+
+    @property
+    def unchanged(self) -> bool:
+        return not self.changed
+
+    def render(self) -> str:
+        """The diff a reviewer reads before any file is written."""
+        lines = [f"{self.skill_id} <- {self.release} ({self.source_digest[:12]})"]
+        if self.unchanged:
+            lines.append("  no recomputed field changed; the artifact would be unchanged")
+        else:
+            lines.extend(change.render() for change in self.changed)
+        lines.append("  recomputed: " + ", ".join(self.recomputed))
+        lines.append("  kept verbatim: " + ", ".join(self.preserved))
+        if self.facts:
+            lines.append("  the source now declares:")
+            lines.extend(f"    - {fact}" for fact in self.facts)
+        if self.review:
+            lines.append("  a person still has to judge:")
+            lines.extend(f"    - {item}" for item in self.review)
+        return "\n".join(lines)
+
+    def to_json(self) -> dict:
+        return {
+            "skill_id": self.skill_id,
+            "artifact_uri": self.artifact_uri,
+            "skill": self.skill,
+            "source_digest": self.source_digest,
+            "release": self.release,
+            "unchanged": self.unchanged,
+            "recomputed": list(self.recomputed),
+            "changed": [{"field": change.field,
+                         "before": list(change.before)
+                         if isinstance(change.before, tuple) else change.before,
+                         "after": list(change.after)
+                         if isinstance(change.after, tuple) else change.after}
+                        for change in self.changed],
+            "preserved": list(self.preserved),
+            "facts": list(self.facts),
+            "review": list(self.review),
+        }
+
+
 class BusinessSkillCompiler:
     """Draft and check typed-tool Skills against one release's compiled descriptors.
 
@@ -429,6 +517,89 @@ class BusinessSkillCompiler:
         return BusinessSkillDraft(skill=skill, source_digest=self.source_map.content_digest,
                                   release=self.source_map.release, facts=facts,
                                   review=review)
+
+    # -- reissue ------------------------------------------------------------------------
+    #: Always taken from the existing artifact. Two are judgement (`intent`, `instructions`),
+    #: two are the adapter's (`tool_names`, `read_only`), and `skill_id` is the artifact's
+    #: identity -- a reissue that changed it would be a different Skill.
+    PRESERVED_FIELDS = ("skill_id", "intent", "instructions", "tool_names", "read_only")
+
+    #: The fields a compiler can derive from descriptors, and therefore the ones a reissue
+    #: can recompute. `provenance` is pure compiler output. `title` and `triggers` are not:
+    #: they *start* as compiler output and a person then edits them -- the eight Odoo Skills
+    #: carry hand-written titles and bilingual trigger lists whose Chinese aliases exist
+    #: nowhere in any descriptor. The artifact format records only the final value, not
+    #: whether anyone edited it, so no rule here can tell the two apart; the caller chooses,
+    #: and the diff shows exactly what each choice costs.
+    RECOMPUTABLE_FIELDS = ("title", "triggers", "provenance")
+
+    def reissue(self, skill, *, subject: str, methods: tuple[str, ...] = (),
+                recompute: tuple[str, ...] = RECOMPUTABLE_FIELDS) -> SkillReissue:
+        """Recompile one existing Skill's facts against this map, keeping what a person wrote.
+
+        `subject` and `methods` are the drafting inputs, and they are supplied rather than
+        recovered from the artifact on purpose: what a reissue exists to repair is a citation
+        that no longer resolves, and deriving "which request was this Skill about" from those
+        same citations would mean asking the broken thing where to look. The distribution
+        that ships the Skill declares them; naming one this map does not contain fails here
+        rather than producing a plausible artifact about the wrong request.
+        """
+        unknown = sorted(set(recompute) - set(self.RECOMPUTABLE_FIELDS))
+        if unknown:
+            raise ValueError(f"a compiler cannot recompute {unknown}")
+        draft = self.draft(skill_id=skill.skill_id, subject=subject,
+                           tool_names=tuple(skill.tool_names),
+                           read_only=bool(skill.read_only), methods=methods)
+        # Source citations are recomputed; everything else the artifact carried stays, in the
+        # order it was in. An `api:` citation names a published interface no source map can
+        # confirm -- `verify` already reports it as unchecked -- so a reissue neither drops
+        # it nor pretends to have re-derived it.
+        recomputed = [entry for entry in draft.skill["provenance"]
+                      if Citation.parse(entry).kind == "src"]
+        carried = [entry for entry in skill.provenance
+                   if Citation.parse(entry).kind != "src"]
+        compiled = {
+            "title": draft.skill["title"],
+            "triggers": list(draft.skill["triggers"]),
+            "provenance": recomputed + carried,
+        }
+        existing = {"title": skill.title, "triggers": list(skill.triggers),
+                    "provenance": list(skill.provenance)}
+        taken = {name: (compiled[name] if name in recompute else existing[name])
+                 for name in self.RECOMPUTABLE_FIELDS}
+        reissued = {
+            "schema_version": 1,
+            "skill_id": skill.skill_id,
+            "title": taken["title"],
+            "intent": skill.intent,
+            "triggers": taken["triggers"],
+            "instructions": list(skill.instructions),
+            "tool_names": list(skill.tool_names),
+            "provenance": taken["provenance"],
+            "read_only": bool(skill.read_only),
+        }
+        # A reissue that emits something `BusinessSkill.load` would reject is worse than one
+        # that fails: it hands a person a diff to approve and a file that cannot be shipped.
+        raw = json.dumps(reissued, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+        loaded = BusinessSkill.from_bytes(raw.encode("utf-8"),
+                                          artifact_uri="memory://reissue")
+        if loaded.instructions != tuple(skill.instructions):
+            raise ValueError("a reissue must not rewrite the instructions")
+
+        changed = []
+        for field, before, after in (
+                ("title", skill.title, reissued["title"]),
+                ("triggers", tuple(skill.triggers), tuple(reissued["triggers"])),
+                ("provenance", tuple(skill.provenance), tuple(reissued["provenance"]))):
+            if before != after:
+                changed.append(FieldChange(field=field, before=before, after=after))
+        return SkillReissue(
+            skill_id=skill.skill_id, artifact_uri=skill.artifact_uri, skill=reissued,
+            source_digest=self.source_map.content_digest, release=self.source_map.release,
+            changed=tuple(changed), recomputed=tuple(sorted(recompute)),
+            preserved=self.PRESERVED_FIELDS + tuple(
+                name for name in self.RECOMPUTABLE_FIELDS if name not in recompute),
+            facts=draft.facts, review=draft.review)
 
     def _menus_for(self, subject: str) -> list[SourceRelation]:
         """Menus point at a request by its subject, or by its route within the scope.

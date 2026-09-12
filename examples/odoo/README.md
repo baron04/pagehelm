@@ -85,8 +85,45 @@ root returns "nothing", and the session runs on runtime facts alone.
 
 ```python
 capability = adapter.source_capability(source_root, release="18.0-20260908+…")
-session_kwargs = capability.session_kwargs()
+config = AgentTurnConfig(..., source=capability)
 ```
+
+The capability goes into the turn as one value. Handing over a selection of its fields is how
+a deployment came to enable source affordances while silently dropping the `runtime_source`
+this adapter declares — so `lookup_source` and `open_source_route`, the cited retrieval this
+`SourceMap` exists to serve, were never on the model's tool surface at all.
+
+## Keeping Skills current
+
+Two commands, and `verify` is the entry to both:
+
+```bash
+python -m web_operation_agent_odoo.demo.skills verify  --source-root … --release …
+python -m web_operation_agent_odoo.demo.skills reissue --source-root … --release … \
+    --accept provenance          # add --apply to write
+```
+
+`verify` resolves every `src:` citation in every packaged Skill against the compiled map.
+`reissue` takes the ones it judged red, recompiles their compiled facts, and keeps what a
+person wrote: `instructions`, `intent`, `tool_names` and `read_only` cross over untouched,
+and an `api:` citation — which names a published interface no source map can confirm — is
+carried verbatim rather than dropped or reinvented. It prints a field-by-field diff and
+writes nothing without `--apply`.
+
+`--accept` names which compiled fields to take. It defaults to all three a compiler can
+derive, and `provenance` alone is the one that repairs citation rot without touching anything
+a person edited: these Skills' titles are hand-written and their trigger lists are bilingual,
+and neither the Chinese aliases nor the chosen phrasing appear in any Odoo descriptor.
+
+`reissue` needs to know which declared request each Skill was compiled from, and that is
+declared in `skill_sources.py` rather than recovered from the artifact. Recovering it would
+mean reading the subject out of the citations that are exactly what went wrong. A subject
+this release's map no longer contains fails loudly: when Odoo renames or removes an action, a
+person decides what the Skill is now about.
+
+What none of this fixes: when the workflow itself changes, the instructions are still written
+by a person. No retrieval scheme removes that, because what needs reviewing is judgement
+rather than fact.
 
 ## Tools
 

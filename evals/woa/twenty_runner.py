@@ -26,7 +26,7 @@ from evals.woa.assembler import (
 from evals.twenty.breadth_taskset import validate_breadth_execution_case
 from evals.woa.breadth_assembler import assemble_woa_breadth_run
 from evals.woa.scripted import RecordingBusinessRuntime
-from web_operation_agent.application import bind_application
+from web_operation_agent.application import SourceCapability, bind_application
 from web_operation_agent.business import BusinessToolError
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.identity import PrincipalError
@@ -169,7 +169,24 @@ class WoaTwentyConfig:
             raise WoaTwentyRunnerError("browser storage state is unavailable")
 
 
-def turn_config(config: WoaTwentyConfig, ledger_path: Path) -> AgentTurnConfig:
+def source_capability(config: WoaTwentyConfig,
+                      source_map: SourceMap | None) -> SourceCapability:
+    """This arm's source capability, as one value the turn config carries whole.
+
+    Twenty ships no `SourceCompiler`, so the map an arm is handed is supplied by the harness
+    rather than by the adapter; what the arm *does* with it is still declared in one place.
+    The paired control is `empty`: the interface exists and returns nothing, which is how a
+    comparison keeps the tool surface identical across arms.
+    """
+    if config.source_mode == "on":
+        return SourceCapability(source_map=source_map, source_affordance_mode="auto")
+    if config.source_interface == "paired":
+        return SourceCapability(source_affordance_mode="empty")
+    return SourceCapability.none()
+
+
+def turn_config(config: WoaTwentyConfig, ledger_path: Path, *,
+                source_map: SourceMap | None = None) -> AgentTurnConfig:
     """Build the bounded turn policy this comparison arm runs under."""
     browser_only = config.capability_profile == "browser_only"
     return AgentTurnConfig(
@@ -193,9 +210,7 @@ def turn_config(config: WoaTwentyConfig, ledger_path: Path) -> AgentTurnConfig:
         require_identity=True,
         deployment_profile=("test" if config.allow_create else "production"),
         max_user_answer_chars=20_000,
-        source_affordance_mode=(
-            "auto" if config.source_mode == "on"
-            else "empty" if config.source_interface == "paired" else "off"),
+        source=source_capability(config, source_map),
     )
 
 
@@ -289,9 +304,9 @@ def _run_validated_case(
         allowed_origins=[application.descriptor.origin],
         session_id=f"woa-eval-{uuid.uuid4().hex[:12]}", principal=principal)
     executor = AgentTurnExecutor(
-        channel=channel, config=turn_config(config, ledger_path), chat=client,
+        channel=channel,
+        config=turn_config(config, ledger_path, source_map=source_map), chat=client,
         application=execution_application, control=ReadOnlyControl(),
-        source_map=source_map,
         run_id_factory=lambda _message: run_id)
     execution: AgentTurnExecution | None = None
     boundary_error_code: str | None = None

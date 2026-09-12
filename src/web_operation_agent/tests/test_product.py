@@ -11,9 +11,17 @@ from pathlib import Path
 from unittest.mock import patch
 
 from web_operation_agent import product
-from web_operation_agent.application import bind_application
+from web_operation_agent.application import (APPLICATION_ADAPTER_VERSION,
+                                             AnonymousIdentityPort,
+                                             ApplicationDescriptor,
+                                             ApplicationPorts,
+                                             ConservativeMutationReconciler,
+                                             DeclaredDataClassifier,
+                                             ResultPostconditionVerifier,
+                                             bind_application)
 from web_operation_agent.answering import StructuredQueryAnswer
-from web_operation_agent.business import BusinessToolResult, BusinessToolRuntime
+from web_operation_agent.business import (BusinessSkill, BusinessToolResult,
+                                          BusinessToolRuntime)
 from web_operation_agent.conversation import ConversationState
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.identity import PrincipalContext
@@ -39,6 +47,8 @@ from web_operation_agent.tests.test_business import (
     _skill,
     _write_skill,
 )
+from web_operation_agent.tests.route_fixture import (FIXTURE_APPLICATION_ID,
+                                                     FIXTURE_ROUTE_PORT, fixture_route)
 from web_operation_agent.tests.test_application import _InvoiceAdapter
 
 
@@ -1097,12 +1107,6 @@ class LabApparatusNeverReachesTheProduct(unittest.TestCase):
     its absence is the assertion.
     """
 
-    #: A deployment source capability the product turn does not offer yet. `SourceCapability`
-    #: can return it True for an application whose compiled source supports cited runtime
-    #: lookup, and a directly composed turn honours it; the product turn exposes source
-    #: knowledge only through affordance candidates.
-    NOT_WIRED_INTO_A_PRODUCT_TURN = ("runtime_source",)
-
     def _recorded_keywords(self) -> dict:
         recorded = {}
         real = product.ServerAgentSession
@@ -1153,10 +1157,9 @@ class LabApparatusNeverReachesTheProduct(unittest.TestCase):
         recorded = self._recorded_keywords()
         capability = recorded["source"]
         # Source planning is a deployment capability, not a default: a product turn compiles
-        # no contract unless a composition explicitly supplies source affordances.
+        # no contract, and looks up no source, unless a composition explicitly supplies one.
         self.assertIs(capability.source_contract, False)
-        for knob in self.NOT_WIRED_INTO_A_PRODUCT_TURN:
-            self.assertIs(getattr(capability, knob), False)
+        self.assertIs(capability.runtime_source, False)
 
 
 class EntryScopesReachTheProductTurn(unittest.TestCase):
@@ -1219,6 +1222,181 @@ class EntryScopesReachTheProductTurn(unittest.TestCase):
         # missing. The application-bound case is covered by the live Odoo gate's
         # `source_treatment_is_non_empty` check.
         self.assertIn("served_webapps", recorded)
+
+
+class _FixtureGrammarAdapter:
+    """A bound application whose route grammar is the core suite's synthetic one.
+
+    A source-enabled session needs an application route port -- `lookup_source` licenses
+    view-only routes, and something has to say which strings are routes at all. The port
+    here is the fixture grammar (`/{scope}/do/{route}`), which is the grammar the fixture
+    `SourceMap` was written against and is deliberately neither OFBiz's nor Odoo's.
+    """
+
+    _TOOL = {
+        "type": "function",
+        "function": {"name": "query_ledger",
+                     "description": "Read ledger rows from the fixture application.",
+                     "parameters": {"type": "object", "properties": {},
+                                    "additionalProperties": False}},
+    }
+
+    class _Executor:
+        def tool_schemas(self):
+            return (_FixtureGrammarAdapter._TOOL,)
+
+        def tool_effects(self):
+            return {"query_ledger": "read"}
+
+        def execute(self, name, args):
+            route = fixture_route("greenhouse", "findTrays")
+            return BusinessToolResult(
+                content={"rows": [{"id": "row-1", "ui_path": route}]},
+                audit={"operation": name, "count": 1},
+                allowed_routes=(route,))
+
+    def __init__(self):
+        skill = BusinessSkill.from_bytes(json.dumps({
+            "schema_version": 1, "skill_id": "fixture.ledger-query",
+            "title": "Ledger lookup", "intent": "Read current ledger rows.",
+            "triggers": ["ledger", "rows", "trays"],
+            "instructions": ["Call query_ledger and trust its current result."],
+            "tool_names": ["query_ledger"],
+            "provenance": ["api:fixture@v0:/ledger#get"], "read_only": True,
+        }, sort_keys=True).encode(), artifact_uri="memory://fixture/ledger.json")
+        data = DeclaredDataClassifier((("query_ledger", ("business.ledger",)),))
+        postconditions = ResultPostconditionVerifier(())
+        self.business_tools = BusinessToolRuntime(
+            (skill,), self._Executor(), application_id=FIXTURE_APPLICATION_ID,
+            data_classifier=data, postcondition_verifier=postconditions,
+            route_validator=FIXTURE_ROUTE_PORT)
+        self.ports = ApplicationPorts(
+            identity=AnonymousIdentityPort(), routes=FIXTURE_ROUTE_PORT,
+            postconditions=postconditions,
+            reconciliation=ConservativeMutationReconciler(), data=data)
+        self.descriptor = ApplicationDescriptor(
+            schema_version=APPLICATION_ADAPTER_VERSION,
+            application_id=FIXTURE_APPLICATION_ID, display_name="Fixture Grammar",
+            origin="https://fixture.test", navigation_mode="document",
+            page_controller_module="https://fixture.test/assets/page-controller.js",
+            catalog_sha256=self.business_tools.catalog_sha256)
+
+    def health(self):
+        return {"passed": True, "http_status": 200}
+
+
+class _FixtureGrammarChat(_Chat):
+    """The egress policy the assembly gate requires for this adapter's session vocabulary."""
+
+    from web_operation_agent.egress import ProviderEgressPolicy as _Policy
+
+    egress_policy = _Policy(
+        session_handoff_keys=FIXTURE_ROUTE_PORT.session_handoff_query_keys)
+
+
+class DeploymentSourceCapabilityReachesTheProductTurn(unittest.TestCase):
+    """What the adapter declared is what the deployed turn runs with -- all four settings.
+
+    The product turn used to build a `SourceCapability` of its own out of two of the four
+    settings a capability carries, so an adapter that declared `runtime_source=True` -- Odoo
+    does, at `adapter.py:source_capability` -- got a deployment where `lookup_source` and
+    `open_source_route` were never on the tool surface. Nothing failed; the ability was
+    simply absent, which is the shape of defect a passing suite does not catch.
+
+    So the assertion is on the tool surface the model was actually offered, in both
+    directions: declaring the capability puts the tools there, and withholding it takes them
+    away. The capability itself must also arrive whole, because "the turn rebuilt one out of
+    the fields it chose to keep" is the defect, not the symptom.
+    """
+
+    def _turn(self, capability):
+        """Run one product turn under `capability` and return (session kwargs, tool surface)."""
+        recorded = {}
+        real = product.ServerAgentSession
+
+        class _Recording(real):
+            def __init__(self, **kwargs):
+                recorded.update(kwargs)
+                super().__init__(**kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            chat = _FixtureGrammarChat(
+                [("query_ledger", {}), (None, {"content": "done"})])
+            executor = AgentTurnExecutor(
+                channel=_Channel(page_url="https://fixture.test/greenhouse/do/main"),
+                config=AgentTurnConfig(
+                    supported_scope="Read ledger data only.",
+                    ledger_path=root / "session.jsonl",
+                    plain_business_answer_min_page_actions=0,
+                    disabled_actions=frozenset({"click", "fill", "select", "submit"}),
+                    source=capability,
+                ),
+                chat=chat,
+                application=bind_application(_FixtureGrammarAdapter()),
+                control=ReadOnlyControl(),
+                run_id_factory=lambda message: "turn-source-capability",
+            )
+            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser), \
+                    patch.object(product, "ServerAgentSession", _Recording):
+                try:
+                    executor.run_once(
+                        _message(page_url="https://fixture.test/greenhouse/do/main"))
+                except product.AgentTurnError:
+                    pass
+        self.assertTrue(chat.tool_names, "the turn made no model call")
+        return recorded, chat.tool_names[0]
+
+    def _capability(self, root: Path, *, runtime_source: bool):
+        from web_operation_agent.application import SourceCapability
+        from web_operation_agent.tests.source_fixture import fixture_source_map
+
+        return SourceCapability(source_map=fixture_source_map(root),
+                                runtime_source=runtime_source,
+                                source_affordance_mode="auto")
+
+    def test_a_declared_runtime_source_capability_puts_the_tools_on_the_surface(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            capability = self._capability(Path(tmp), runtime_source=True)
+        recorded, tools = self._turn(capability)
+        self.assertIn("lookup_source", tools)
+        self.assertIn("open_source_route", tools)
+        # Whole, not rebuilt: the identical value the composition was handed. Asserted after
+        # the surface so a regression names the capability that was lost, not the plumbing.
+        self.assertIs(recorded["source"], capability)
+
+    def test_withholding_it_takes_the_same_tools_away(self):
+        """The reverse direction: same composition, one field, and the tools are gone."""
+        with tempfile.TemporaryDirectory() as tmp:
+            capability = self._capability(Path(tmp), runtime_source=False)
+        recorded, tools = self._turn(capability)
+        self.assertNotIn("lookup_source", tools)
+        self.assertNotIn("open_source_route", tools)
+        self.assertIs(recorded["source"], capability)
+
+    def test_the_turn_cannot_be_handed_source_settings_any_other_way(self):
+        """There is no second door: the executor takes no source keyword of its own.
+
+        While `source_map=` was an executor keyword and `source_affordance_mode` a config
+        field, "what this deployment's source enables" had two owners and no single place
+        that could refuse an incoherent pair.
+        """
+        accepted = set(inspect.signature(AgentTurnExecutor.__init__).parameters)
+        self.assertEqual(accepted & {"source_map", "source", "source_affordance_mode",
+                                     "source_contract", "runtime_source"}, set())
+        fields = {field.name for field in dataclasses.fields(AgentTurnConfig)}
+        self.assertIn("source", fields)
+        self.assertEqual(fields & {"source_map", "source_affordance_mode",
+                                   "source_contract", "runtime_source"}, set())
+
+    def test_an_incoherent_capability_is_refused_in_one_place(self):
+        from web_operation_agent.application import SourceCapability
+
+        with self.assertRaisesRegex(ValueError, "version-bound SourceMap"):
+            SourceCapability(runtime_source=True)
+        with self.assertRaisesRegex(TypeError, "SourceCapability"):
+            AgentTurnConfig(supported_scope="Read only.", ledger_path=Path("x.jsonl"),
+                            source="auto")
 
 
 if __name__ == "__main__":

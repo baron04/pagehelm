@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 import tempfile
 from pathlib import Path
@@ -137,14 +138,16 @@ from web_operation_agent.source_skill import BusinessSkillCompiler          # no
 from web_operation_agent.tests.source_fixture import fixture_source_map     # noqa: E402
 
 
-def _business_skill(path: Path, provenance: list[str]) -> BusinessSkill:
+def _business_skill(path: Path, provenance: list[str], **overrides) -> BusinessSkill:
     import json
-    path.write_text(json.dumps({
+    artifact = {
         "schema_version": 1, "skill_id": "fixture.trays-query",
         "title": "Seed trays", "intent": "Read the seed trays.",
         "triggers": ["trays"], "instructions": ["Call query_trays."],
         "tool_names": ["query_trays"], "provenance": provenance, "read_only": True,
-    }) + "\n")
+    }
+    artifact.update(overrides)
+    path.write_text(json.dumps(artifact, ensure_ascii=False) + "\n")
     return BusinessSkill.load(path)
 
 
@@ -296,3 +299,145 @@ class VerifyingCitations(unittest.TestCase):
         self.assertTrue(report.passed, "an api citation must not fail a source gate")
         self.assertEqual(report.source_citations, ())
         self.assertIn("no source map can confirm it", report.checks[0].reason)
+
+
+class ReissuingASkill(unittest.TestCase):
+    """Recompiling an artifact's facts while keeping what a person wrote.
+
+    The friction this removes is specific and was measured: a Skill's citation rots -- the
+    application renames a descriptor, or moves a file out of the compiled tree -- and before
+    this there was no path that recomputed the compiled facts without also throwing away the
+    instructions, so a one-line repair meant hand-resealing the whole artifact.
+
+    The rule underneath every test here is the one `BusinessSkillDraft` already states:
+    descriptors are facts a compiler may recompute; a playbook is judgement it must not
+    touch. `instructions` crossing over byte for byte is the load-bearing assertion.
+    """
+
+    #: A rename, in the shape the application actually produces one: the cited file is still
+    #: read, and the identifier inside it is gone.
+    ROTTED = "src:fixture@v0:apps/greenhouse/glasshouse.decl#glasshouse/renamedRequest"
+    INTACT = "src:fixture@v0:apps/greenhouse/glasshouse.decl#glasshouse/findTrays"
+    INTERFACE = "api:fixture@v0:/rpc#call"
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.map = fixture_source_map(self.root)
+        self.compiler = BusinessSkillCompiler(
+            self.map, application="fixture", route_port=FIXTURE_ROUTE_PORT)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _skill(self, provenance=None, **overrides) -> BusinessSkill:
+        return _business_skill(self.root / "skill.json",
+                               provenance if provenance is not None
+                               else [self.ROTTED, self.INTERFACE],
+                               **overrides)
+
+    def _reissue(self, skill=None, **overrides):
+        arguments = {"subject": "glasshouse/findTrays"}
+        arguments.update(overrides)
+        return self.compiler.reissue(skill or self._skill(), **arguments)
+
+    def test_a_rotted_citation_is_red_then_green_and_the_playbook_never_moves(self):
+        """The whole point, end to end, in the order a person would do it.
+
+        `verify` is the entry: it names the citation that no longer resolves. The reissue
+        recomputes it from the same map the check used. `verify` then passes, and the
+        instructions are the same bytes they were before any of it.
+        """
+        skill = self._skill(instructions=[
+            "Call query_trays and trust its current result.",
+            "Never answer from this Skill; the tool result is the runtime truth.",
+            "查询育苗盘时只用 query_trays，不要照抄本 Skill 里的内容。",
+        ])
+        before = self.compiler.verify(skill)
+        self.assertFalse(before.passed)
+        self.assertIn("nothing in it declares", before.source_citations[0].reason)
+
+        reissue = self._reissue(skill)
+        path = self.root / "reissued.json"
+        path.write_text(json.dumps(reissue.skill, ensure_ascii=False, indent=2) + "\n",
+                        encoding="utf-8")
+        after = self.compiler.verify(BusinessSkill.load(path))
+        self.assertTrue(after.passed,
+                        [check.reason for check in after.source_citations
+                         if not check.resolved])
+        self.assertEqual(BusinessSkill.load(path).instructions, skill.instructions)
+        self.assertEqual(
+            json.dumps(reissue.skill["instructions"], ensure_ascii=False),
+            json.dumps(list(skill.instructions), ensure_ascii=False),
+            "the instructions must survive byte for byte, non-ASCII included")
+
+    def test_it_produces_a_diff_rather_than_a_silent_new_artifact(self):
+        reissue = self._reissue()
+        self.assertFalse(reissue.unchanged)
+        self.assertEqual({change.field for change in reissue.changed},
+                         {"title", "triggers", "provenance"})
+        provenance = next(change for change in reissue.changed
+                          if change.field == "provenance")
+        self.assertIn(self.ROTTED, provenance.before)
+        self.assertNotIn(self.ROTTED, provenance.after)
+        # And the diff is readable without a JSON viewer, because that is what gets read.
+        rendered = reissue.render()
+        self.assertIn("provenance:", rendered)
+        self.assertIn("kept verbatim: ", rendered)
+
+    def test_everything_a_person_owns_crosses_over_unchanged(self):
+        skill = self._skill(title="Seed trays, current", intent="Read the current trays.",
+                            triggers=["trays", "育苗盘"], read_only=True)
+        reissue = self._reissue(skill, recompute=("provenance",))
+        for field, expected in (("skill_id", skill.skill_id), ("title", skill.title),
+                                ("intent", skill.intent),
+                                ("triggers", list(skill.triggers)),
+                                ("instructions", list(skill.instructions)),
+                                ("tool_names", list(skill.tool_names)),
+                                ("read_only", skill.read_only)):
+            self.assertEqual(reissue.skill[field], expected, field)
+        self.assertEqual(reissue.recomputed, ("provenance",))
+        self.assertEqual([change.field for change in reissue.changed], ["provenance"])
+
+    def test_a_citation_the_source_cannot_speak_for_is_carried_not_reinvented(self):
+        """`api:` names a published interface. A compiler can neither check nor write one.
+
+        Dropping it would quietly delete the only provenance a typed tool has; emitting one
+        would be a claim no map supports. So it crosses over verbatim, after the recomputed
+        source citations.
+        """
+        reissue = self._reissue()
+        self.assertEqual(reissue.skill["provenance"][-1], self.INTERFACE)
+        self.assertEqual(
+            [entry for entry in reissue.skill["provenance"]
+             if entry.startswith("api:")], [self.INTERFACE])
+
+    def test_the_result_is_always_a_loadable_artifact(self):
+        reissue = self._reissue()
+        path = self.root / "loadable.json"
+        path.write_text(json.dumps(reissue.skill, ensure_ascii=False) + "\n")
+        self.assertEqual(BusinessSkill.load(path).skill_id, "fixture.trays-query")
+
+    def test_reissuing_an_intact_skill_changes_nothing_it_did_not_have_to(self):
+        """Nothing to repair means nothing to review; the diff says so rather than churning."""
+        first = self._reissue(self._skill([self.INTACT, self.INTERFACE]),
+                              recompute=("provenance",))
+        settled = _business_skill(self.root / "settled.json",
+                                  list(first.skill["provenance"]))
+        self.assertTrue(self._reissue(settled, recompute=("provenance",)).unchanged)
+
+    def test_a_field_no_compiler_can_derive_is_refused_rather_than_guessed(self):
+        for field in ("instructions", "intent", "tool_names", "read_only"):
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ValueError, "cannot recompute"):
+                    self._reissue(recompute=(field,))
+
+    def test_a_subject_this_release_does_not_declare_fails_loudly(self):
+        """When the application removes the request, a person decides what the Skill is now.
+
+        Producing a confident artifact about some other request is the one outcome worse
+        than stopping, and it is what deriving the subject from the rotted citations would
+        eventually do.
+        """
+        with self.assertRaisesRegex(ValueError, "declared request"):
+            self._reissue(subject="glasshouse/noSuchRequest")

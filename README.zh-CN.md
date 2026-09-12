@@ -148,7 +148,9 @@ scripts/qualify.sh
 
 **它的源码编译器是真的，而且 Skill 会被拿去对账。** `OdooCompiler` 把菜单、动作、视图和模型读成带引证的 `SourceRelation` 三元组——在带 `sale`、`sale_management`、`account`、`stock`、`product` 及其依赖的源码树上共 14 011 条——而 25 个声明了 URL 段的动作与运行中的数据库**逐个完全一致**。每个随包发出的 Skill 里每一条 `src:` 引证，都由一项 live 门禁拿这张图去解析：这才让"已经烂掉的引证"与"本来就指向不存在之处的引证"区分得开。两条编译器局限被如实记录而不是猜测：删除或替换节点的 `inherit_id` 补丁没有被应用（关系带 `root_view`，含义是"在这个视图族里被声明过"，不是"渲染后确实存在"）；跨模块的 `<record id="别的模块.…">` 补丁被列进 `unsupported`，不会当成定义发出。
 
-**源码配置是 Adapter 下发的一个决定。** `adapter.source_capability(source_root, release=…)` 返回一个 `SourceCapability`，把四个只能一起成立的会话设置装成一个值；不给源码根时它返回"什么都没有"，会话只靠运行时事实工作。源码检索始终是可选的。
+**源码配置是 Adapter 下发的一个决定，并且整体进入轮次。** `adapter.source_capability(source_root, release=…)` 返回一个 `SourceCapability`，把四个只能一起成立的会话设置装成一个值；不给源码根时它返回"什么都没有"，会话只靠运行时事实工作。`AgentTurnConfig` 把这个值当作一个字段接收，所以部署无法"四个里挑三个"——G5 之前它正是这么做的：adapter 声明的 `runtime_source` 被丢掉，部署里根本没有带引证的源码查询。源码检索始终是可选的。
+
+**引证烂掉是被修复的，不是手工重封的。** `python -m web_operation_agent_odoo.demo.skills reissue` 取出引证门禁判红的 Skill，拿当前的 map 重算它们的编译事实，并保留人写的东西——`instructions` 逐字节不动。它打印逐字段的 diff，不加 `--apply` 不写任何文件。`--accept` 决定采纳哪些编译字段；`--accept provenance` 只修引证腐烂，这一点是要紧的：这些 Skill 的标题和双语触发词是人改过的，任何描述符都生不出来。它解决不了的那部分仍然在它之外——工作流本身变了时 `instructions` 仍须人写，因为需要复核的是判断而不是事实。
 
 typed 工具面是五个读——`query_sale_orders`、`query_quotations`、`query_customers`、`query_products`、`query_customer_invoices`——加三个可选开启的写：`create_customer`、`confirm_quotation`、`invoice_sale_order`。每次读取都扫完整个范围，并拿 Odoo 自己的 `search_count` 对账——"我是否看全了"由一个不是从同一页结果里数出来的数字回答。
 
@@ -161,7 +163,7 @@ python -m web_operation_agent_odoo.demo --scripted --headless \
 
 `--scripted` 用真实 Odoo、真实 Chromium 和真实产品轮次跑一遍，不调用 provider、不产生费用。
 
-门禁版本（`python -m web_operation_agent_odoo.demo.qualify`）跑七个脚本化用例，覆盖六类工作流——完整列举、条件查询、打开记录、打开集合、安全拒绝，以及"报价单→确认订单→客户发票"的多步写入。三个写入用例由页面里点击面板自己的确认控件批准，因为只有这一条路可以批准。它在库已经偏离记录基线时**拒绝开始**，运行后把夹具恢复回去，并且逐个去问 Odoo 每次写入是否真的改动了它点名的那条记录，而不是相信这次运行自己的说法。`python -m web_operation_agent_odoo.demo.fixture` 负责取与恢复这个基线；`python -m web_operation_agent_odoo.demo.settle` 是运维人员用来了结一次不确定写入的入口。
+门禁版本（`python -m web_operation_agent_odoo.demo.qualify`）跑七个脚本化用例，覆盖六类工作流——完整列举、条件查询、打开记录、打开集合、安全拒绝，以及"报价单→确认订单→客户发票"的多步写入；配置了源码根时还有第八个：一次带引证的源码查询接一次 typed 读，用来检查 adapter 声明的 `runtime_source` 确实到达了部署，以及那次查询引用的每一段字节今天仍然是那些字节。三个写入用例由页面里点击面板自己的确认控件批准，因为只有这一条路可以批准。它在库已经偏离记录基线时**拒绝开始**，运行后把夹具恢复回去，并且逐个去问 Odoo 每次写入是否真的改动了它点名的那条记录，而不是相信这次运行自己的说法。`python -m web_operation_agent_odoo.demo.fixture` 负责取与恢复这个基线；`python -m web_operation_agent_odoo.demo.settle` 是运维人员用来了结一次不确定写入的入口。
 
 ## Twenty CRM 集成
 
