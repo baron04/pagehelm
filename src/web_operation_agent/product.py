@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 from .application import BoundApplication, SourceCapability
 from .answering import render_structured_query_answer
 from .answer_view import render_payload, render_sources
+from .panel_view import panel_limits
 from .browser import TransportError
 from .business import BusinessToolResult, BusinessToolRuntime
 from .conversation import ConversationState
@@ -165,8 +166,9 @@ class AgentTurnConfig:
                 raise ValueError(f"{name} must be a positive integer")
         if self.approval_ttl_s > 600:
             raise ValueError("approval_ttl_s cannot exceed 600 seconds")
-        if self.max_user_answer_chars > 20_000:
-            raise ValueError("max_user_answer_chars cannot exceed 20000")
+        if self.max_user_answer_chars > panel_limits()["result_max_chars"]:
+            raise ValueError("max_user_answer_chars cannot exceed "
+                             f"{panel_limits()['result_max_chars']}")
         if self.max_user_answer_chars < 512:
             raise ValueError("max_user_answer_chars must be at least 512")
         if (isinstance(self.transport_timeout_s, bool)

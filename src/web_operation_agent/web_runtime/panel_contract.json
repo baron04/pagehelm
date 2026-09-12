@@ -62,7 +62,7 @@
     "notice_max_chars": 300,
     "label_max_chars": 200,
     "goal_max_chars": 2000,
-    "result_max_chars": 4000
+    "result_max_chars": 20000
   },
   "label_keys": {
     "assistant": "AI 助手",

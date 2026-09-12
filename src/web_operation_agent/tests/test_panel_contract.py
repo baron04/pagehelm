@@ -102,7 +102,7 @@ class PanelContractTests(unittest.TestCase):
 
     def test_source_details_are_redacted_bounded_and_survive_history_projection(self):
         payload = {"state": "finished", "message": "12.50 USD",
-                   "source_details": "token=secret-value\n" + "source " * 1000}
+                   "source_details": "token=secret-value\n" + "source " * panel_limits()["result_max_chars"]}
         live = project_event(_event("progress", payload), at=0)
         replay = project_history_record({"kind": "progress", "payload": payload}, index=1)
         self.assertEqual(live["source_details"], replay["source_details"])
@@ -110,6 +110,14 @@ class PanelContractTests(unittest.TestCase):
         self.assertLessEqual(len(live["source_details"]), panel_limits()["result_max_chars"])
         payload["state"] = "agent_started"
         self.assertNotIn("source_details", project_event(_event("progress", payload), at=0))
+
+    def test_panel_capacity_accepts_the_largest_supported_product_answer(self):
+        from web_operation_agent.product import AgentTurnConfig
+        config = AgentTurnConfig(supported_scope="read", ledger_path=Path("unused.jsonl"),
+                                 max_user_answer_chars=panel_limits()["result_max_chars"])
+        text = "x" * (config.max_user_answer_chars - 20) + "\nEND OF ANSWER"
+        entry = project_event(_event("progress", {"state": "finished", "message": text}), at=0)
+        self.assertEqual(entry["text"], text)
 
     def test_the_projection_shows_prose_and_never_a_capability(self):
         action = project_event(

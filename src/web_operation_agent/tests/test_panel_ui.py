@@ -400,6 +400,18 @@ class PanelUITests(_PanelBrowser):
         self.assertEqual(self.errors, [])
 
     # ---------------------------------------------------------------- the work process
+    def test_a_long_table_keeps_the_last_row_and_its_source(self):
+        text = ("| Name | Email |\n| --- | --- |\n" + "\n".join(
+            f"| Synthetic Contact {i:03} Demonstration Department Research Group | contact-{i:03}@synthetic.example.test |"
+            for i in range(1, 51)) + "\n\n> source: all rows in this read")
+        self.assertGreater(len(text), 4000)
+        page = self.open(_snapshot(entries=[_entry("e1", "result", text, panel_state="success")]))
+        page.locator(".woa-launcher").click()
+        self.assertEqual(page.locator(".woa-md tbody tr").count(), 50)
+        self.assertIn("contact-050@synthetic.example.test", page.locator(".woa-md").inner_text())
+        self.assertIn("source: all rows in this read", page.locator(".woa-md").inner_text())
+        self.assertEqual(self.errors, [])
+
     def test_source_details_expand_by_keyboard_without_hiding_partial_answer(self):
         page = self.open(_snapshot(entries=[
             _entry("e1", "goal", "未确认报价合计？"),
