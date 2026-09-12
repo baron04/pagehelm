@@ -209,10 +209,6 @@ class ProviderRuntimeGuard:
 #: instead of guessing, and adding one requires an explicit dated price entry.
 PRICES = json.loads((Path(__file__).parent / "policies" / "prices.json").read_text())
 
-#: The model used by existing ledger entries. Keeping it as the module-level default preserves
-#: a comparable cumulative figure; the accounting tests verify the shared price contract.
-DEFAULT_PRICE_MODEL = "MiniMax-M3"
-PRICE = PRICES[DEFAULT_PRICE_MODEL]
 
 
 #: Extra request-body fields per model, keyed by the model's own name. See the file's own
@@ -317,9 +313,21 @@ class SpendMeter:
         self.batch_in = self.batch_out = self.batch_cached = 0
         self.run_in: dict[str, int] = {}
         self._run_summaries: dict[str, dict] = {}
-        self.price = price or PRICE
+        # No default rate. A meter costs nothing until `ChatModel` sets the price of the
+        # model actually in use; a module-level fallback would book a run at some other
+        # model's rates and the ledger would look right while being wrong.
+        self.price = price
 
     def cost_of(self, i: int, o: int, c: int) -> float:
+        if self.price is None:
+            # Nothing used cannot be mis-stated, so a meter that has not metered still
+            # reports. The moment there are tokens, an unknown rate has to stop: a wrong
+            # rate does not fail, it makes the running total look right while being wrong.
+            if not (i or o or c):
+                return 0.0
+            raise UnpricedModel(
+                "this meter has no price: construct it through ChatModel, which registers "
+                "the price of the model in use, or pass price= explicitly")
         return cost_with(self.price, i, o, c)
 
     def batch_cost(self) -> float:
@@ -409,8 +417,8 @@ class SpendMeter:
             next_batch_out = self.batch_out + o
             next_batch_cached = self.batch_cached + c
             next_run_in = self.run_in.get(run_id, 0) + i
-            next_batch_cost = cost_with(
-                self.price, next_batch_in, next_batch_out, next_batch_cached)
+            next_batch_cost = self.cost_of(
+                next_batch_in, next_batch_out, next_batch_cached)
             rec = {"t": time.time(), "provider": provider, "model": model,
                    "batch_id": self.batch_id, "logical_run_id": run_id,
                    "accounting_status": "reported",
@@ -537,8 +545,8 @@ class SpendMeter:
                         value = rec.get(key)
                         return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
-                    rec["batch_cost_cny"] = round(cost_with(
-                        self.price, totals[0] + contribution("in"),
+                    rec["batch_cost_cny"] = round(self.cost_of(
+                        totals[0] + contribution("in"),
                         totals[1] + contribution("out"),
                         totals[2] + contribution("cached")), 4)
                 fh.seek(0, os.SEEK_END)

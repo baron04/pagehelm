@@ -22,10 +22,6 @@ class Policy(unittest.TestCase):
         """An option a provider does not understand is a 400, so absence means silence."""
         self.assertEqual(M.options_for("some-model-we-have-never-run"), {})
 
-    def test_the_default_price_model_has_no_extra_request_options(self):
-        """A price-table default does not imply provider-specific request options."""
-        self.assertEqual(M.options_for("MiniMax-M3"), {})
-
     def test_a_configured_model_carries_its_reasoning_allowance(self):
         self.assertTrue(M.options_for("qwen3.8-flash")["thinking_budget"] > 0)
 
@@ -140,7 +136,7 @@ class ProviderDeadline(unittest.TestCase):
 class NativeCompletionTransport(unittest.TestCase):
     ENV = {"AGENT_OPENAI_BASE_URL": "https://provider.example/v1",
            "AGENT_OPENAI_API_KEY": "test-key",
-           "AGENT_OPENAI_MODEL": "MiniMax-M3"}
+           "AGENT_OPENAI_MODEL": "qwen3.8-flash"}
 
     @staticmethod
     def _response(payload):
@@ -160,7 +156,7 @@ class NativeCompletionTransport(unittest.TestCase):
             chat = M.ChatModel(M.SpendMeter(ledger=ledger), env=self.ENV, shared_quota=quota)
             with patch.object(M.urllib.request, "urlopen") as opened:
                 with self.assertRaises(M.ProviderError) as caught:
-                    chat.request_completion({"model": "MiniMax-M3", "messages": [{"role": "user", "content": "hello"}]}, "run")
+                    chat.request_completion({"model": "qwen3.8-flash", "messages": [{"role": "user", "content": "hello"}]}, "run")
                 self.assertEqual(caught.exception.code, "provider_capacity")
                 self.assertIs(caught.exception.dispatched, False)
                 opened.assert_not_called()
@@ -172,7 +168,7 @@ class NativeCompletionTransport(unittest.TestCase):
             meter = M.SpendMeter(ledger=Path(directory) / "spend.jsonl")
             chat = M.ChatModel(meter, env=self.ENV)
             body = {
-                "model": "MiniMax-M3",
+                "model": "qwen3.8-flash",
                 "messages": [{"role": "user", "content": "Click the only button."}],
                 "tools": [{"type": "function", "function": {
                     "name": "AgentOutput", "description": "Choose one action.",
@@ -223,7 +219,7 @@ class NativeCompletionTransport(unittest.TestCase):
             messages = [{"role": "user", "content": "test"}]
             invalid = (
                 {"model": "other-model", "messages": messages},
-                {"model": "MiniMax-M3", "messages": messages, "stream": True},
+                {"model": "qwen3.8-flash", "messages": messages, "stream": True},
             )
             with patch.object(M.urllib.request, "urlopen") as opened:
                 for body in invalid:
@@ -236,7 +232,7 @@ class NativeCompletionTransport(unittest.TestCase):
             chat = M.ChatModel(
                 M.SpendMeter(ledger=Path(directory) / "spend.jsonl"), env=self.ENV)
             body = {
-                "model": "MiniMax-M3",
+                "model": "qwen3.8-flash",
                 "messages": [{"role": "user", "content": "test"}],
                 "metadata": {"api_key": "must-not-leave"},
             }
@@ -277,7 +273,7 @@ class ProviderRuntimeProtection(unittest.TestCase):
                     M.SpendMeter(ledger=Path(directory) / "spend.jsonl"),
                     env={"AGENT_OPENAI_BASE_URL": f"http://127.0.0.1:{server.server_port}/v1",
                          "AGENT_OPENAI_API_KEY": "key",
-                         "AGENT_OPENAI_MODEL": "MiniMax-M3"},
+                         "AGENT_OPENAI_MODEL": "qwen3.8-flash"},
                     runtime_guard=guard,
                 )
                 cancelled = threading.Event()
@@ -348,7 +344,7 @@ class ProviderRuntimeProtection(unittest.TestCase):
                     M.SpendMeter(ledger=Path(directory) / "spend.jsonl"),
                     env={"AGENT_OPENAI_BASE_URL": f"http://127.0.0.1:{server.server_port}/v1",
                          "AGENT_OPENAI_API_KEY": "key",
-                         "AGENT_OPENAI_MODEL": "MiniMax-M3"},
+                         "AGENT_OPENAI_MODEL": "qwen3.8-flash"},
                     runtime_guard=guard,
                 )
                 with self.assertRaises(M.ProviderError) as timed_out:
@@ -458,7 +454,7 @@ class ProviderRuntimeProtection(unittest.TestCase):
                 M.SpendMeter(ledger=ledger),
                 env={"AGENT_OPENAI_BASE_URL": "http://127.0.0.1:9/v1",
                      "AGENT_OPENAI_API_KEY": "key",
-                     "AGENT_OPENAI_MODEL": "MiniMax-M3"},
+                     "AGENT_OPENAI_MODEL": "qwen3.8-flash"},
                 runtime_guard=guard,
             )
             cancelled = threading.Event()
@@ -499,7 +495,7 @@ class ProviderRuntimeProtection(unittest.TestCase):
                 M.SpendMeter(ledger=Path(directory) / "spend.jsonl"),
                 env={"AGENT_OPENAI_BASE_URL": "https://provider.example/v1",
                      "AGENT_OPENAI_API_KEY": "key",
-                     "AGENT_OPENAI_MODEL": "MiniMax-M3"},
+                     "AGENT_OPENAI_MODEL": "qwen3.8-flash"},
                 runtime_guard=guard,
             )
 
@@ -537,7 +533,7 @@ class ProviderRuntimeProtection(unittest.TestCase):
                 M.SpendMeter(ledger=Path(directory) / "spend.jsonl"),
                 env={"AGENT_OPENAI_BASE_URL": "https://provider.example/v1",
                      "AGENT_OPENAI_API_KEY": "key",
-                     "AGENT_OPENAI_MODEL": "MiniMax-M3"},
+                     "AGENT_OPENAI_MODEL": "qwen3.8-flash"},
                 runtime_guard=GuardWithMeasuredWait(max_concurrent_requests=1),
             )
             payload = {"usage": {"prompt_tokens": 0, "completion_tokens": 0}, "choices": [{
@@ -571,7 +567,7 @@ class ProviderRuntimeProtection(unittest.TestCase):
                 M.SpendMeter(ledger=Path(directory) / "spend.jsonl"),
                 env={"AGENT_OPENAI_BASE_URL": "https://provider.example/v1",
                      "AGENT_OPENAI_API_KEY": "key",
-                     "AGENT_OPENAI_MODEL": "MiniMax-M3"},
+                     "AGENT_OPENAI_MODEL": "qwen3.8-flash"},
             )
             payload = {"choices": [{
                 "finish_reason": "stop", "message": {"content": "done"}}]}
@@ -593,7 +589,7 @@ class ProviderRuntimeProtection(unittest.TestCase):
                 M.SpendMeter(ledger=Path(directory) / "spend.jsonl"),
                 env={"AGENT_OPENAI_BASE_URL": "https://provider.example/v1",
                      "AGENT_OPENAI_API_KEY": "key",
-                     "AGENT_OPENAI_MODEL": "MiniMax-M3"},
+                     "AGENT_OPENAI_MODEL": "qwen3.8-flash"},
             )
             payload = {"model": "snapshot-without-usage", "choices": [{
                 "finish_reason": "stop", "message": {"content": "done"}}]}
@@ -629,7 +625,7 @@ class PlannerAllowance(unittest.TestCase):
     def test_a_model_with_no_such_knob_is_asked_for_nothing(self):
         """Otherwise switching provider would start posting a field it never advertised."""
         from web_operation_agent.contract import thinking_options
-        self.assertIsNone(thinking_options(_Recorder("MiniMax-M3"), 4))
+        self.assertIsNone(thinking_options(_Recorder("some-model-we-have-never-run"), 4))
         self.assertIsNone(thinking_options(object(), 4))
 
 

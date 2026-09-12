@@ -6,21 +6,36 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from web_operation_agent.model import (DEFAULT_PRICE_MODEL, PRICE, PRICES, BudgetExhausted,
-                                       SpendMeter, cost_with, load_env)
+from web_operation_agent.model import (PRICES, BudgetExhausted, SpendMeter, UnpricedModel,
+                                       cost_with, load_env)
+
+#: The rate these tests meter at. Named here rather than defaulted inside `SpendMeter`, so a
+#: test that books spend says which price it books at.
+PRICE = PRICES["qwen3.8-flash"]
 
 
 class PriceAgreement(unittest.TestCase):
-    def test_the_default_rate_is_the_registered_model_rate(self):
-        self.assertEqual(DEFAULT_PRICE_MODEL, "MiniMax-M3")
-        self.assertIs(PRICE, PRICES[DEFAULT_PRICE_MODEL])
-        self.assertEqual(
-            PRICE,
-            {"input_per_m": 2.1, "output_per_m": 8.4, "cache_read_per_m": 0.42,
-             "currency": "CNY",
-             "taken": "2026-09-05, platform.minimaxi.com pay-as-you-go, standard tier, "
-                      "<=512k input"},
-        )
+    def test_a_meter_with_no_price_refuses_to_cost_anything(self):
+        """There is no module-level default rate, deliberately.
+
+        There used to be one, naming a model no ledger entry has ever used, so a meter that
+        nobody had given a price to still produced numbers -- at that model's rates. A wrong
+        rate does not fail; it makes the running total look right while being wrong, and the
+        ledger is this phase's only cost control. `ChatModel` sets the price of the model
+        actually in use, and a meter that never went through it now says so.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            meter = SpendMeter(ledger=Path(directory) / "spend.jsonl")
+            self.assertIsNone(meter.price)
+            with self.assertRaisesRegex(UnpricedModel, "no price"):
+                meter.cost_of(1_000, 1_000, 0)
+
+    def test_a_price_given_explicitly_is_honoured(self):
+        with tempfile.TemporaryDirectory() as directory:
+            meter = SpendMeter(ledger=Path(directory) / "spend.jsonl",
+                               price=PRICES["qwen3.8-flash"])
+            self.assertEqual(meter.cost_of(1_000_000, 0, 0),
+                             PRICES["qwen3.8-flash"]["input_per_m"])
 
     def test_every_registered_price_records_where_it_came_from(self):
         from web_operation_agent.model import PRICES
@@ -59,6 +74,7 @@ class Ledger(unittest.TestCase):
         self.tmp.cleanup()
 
     def _meter(self, **kw):
+        kw.setdefault("price", PRICE)
         return SpendMeter(ledger=self.path, batch_id="test", **kw)
 
     def test_one_line_per_call_with_everything_the_ledger_must_carry(self):
@@ -217,7 +233,7 @@ class TheClientIsNotTiedToOneProvider(unittest.TestCase):
     """Swapping models must be a .env change, not a code change."""
 
     ENV = {"AGENT_OPENAI_BASE_URL": "https://api.example-vendor.com/v1",
-           "AGENT_OPENAI_API_KEY": "k", "AGENT_OPENAI_MODEL": "MiniMax-M3"}
+           "AGENT_OPENAI_API_KEY": "k", "AGENT_OPENAI_MODEL": "qwen3.8-flash"}
 
     def _chat(self, **over):
         from web_operation_agent.model import ChatModel
@@ -251,7 +267,7 @@ class TheClientIsNotTiedToOneProvider(unittest.TestCase):
                 self._chat(AGENT_OPENAI_BASE_URL=value)
 
     def test_the_model_name_comes_from_the_environment(self):
-        self.assertEqual(self._chat().model, "MiniMax-M3")
+        self.assertEqual(self._chat().model, "qwen3.8-flash")
 
     def test_an_unpriced_model_is_refused_at_construction(self):
         """Better to stop before the first call than to book the run at the wrong rates."""
@@ -259,10 +275,25 @@ class TheClientIsNotTiedToOneProvider(unittest.TestCase):
         with self.assertRaises(UnpricedModel):
             self._chat(AGENT_OPENAI_MODEL="a-model-with-no-price")
 
+    def test_the_old_tier_name_is_refused_rather_than_quietly_honoured(self):
+        """`AGENT_OPENAI_MODEL_PRO` was renamed; a fallback would pick the wrong model.
+
+        Nothing ever ran two tiers -- every construction site takes exactly one model -- and
+        the old name meant a flash model could only be selected through a key called PRO.
+        Reading it as a fallback is the failure this project keeps removing: an environment
+        nobody updated would keep working while naming something else.
+        """
+        from web_operation_agent.model import ProviderError
+        env = {name: value for name, value in self.ENV.items()
+               if name != "AGENT_OPENAI_MODEL"}
+        env["AGENT_OPENAI_MODEL_PRO"] = "qwen3.8-flash"
+        with self.assertRaisesRegex(ProviderError, "AGENT_OPENAI_MODEL"):
+            self._chat(**env, AGENT_OPENAI_MODEL="")
+
     def test_the_meter_is_given_the_price_of_the_model_actually_in_use(self):
         from web_operation_agent.model import PRICES
         chat = self._chat()
-        self.assertEqual(chat.meter.price, PRICES["MiniMax-M3"])
+        self.assertEqual(chat.meter.price, PRICES["qwen3.8-flash"])
 
 
 class ProviderSignalsReachTheCaller(unittest.TestCase):
@@ -352,7 +383,7 @@ class ReasoningTokensAreAccountedSeparately(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_a_provider_that_reports_them_has_them_recorded(self):
-        m = SpendMeter(ledger=self.path, batch_id="t")
+        m = SpendMeter(ledger=self.path, batch_id="t", price=PRICE)
         m.record(provider="p", model="m", run_id="r1",
                  usage={"prompt_tokens": 100, "completion_tokens": 55,
                         "completion_tokens_details": {"reasoning_tokens": 26}})
@@ -362,7 +393,7 @@ class ReasoningTokensAreAccountedSeparately(unittest.TestCase):
 
     def test_the_cost_still_comes_from_the_completion_count(self):
         """Reasoning is inside completion_tokens; counting it again would double-charge."""
-        m = SpendMeter(ledger=self.path, batch_id="t")
+        m = SpendMeter(ledger=self.path, batch_id="t", price=PRICE)
         rec = m.record(provider="p", model="m", run_id="r1",
                        usage={"prompt_tokens": 0, "completion_tokens": 55,
                               "completion_tokens_details": {"reasoning_tokens": 26}})
@@ -370,13 +401,13 @@ class ReasoningTokensAreAccountedSeparately(unittest.TestCase):
                                round(cost_with(PRICE, 0, 55, 0), 6), places=9)
 
     def test_a_provider_that_does_not_report_them_is_fine(self):
-        m = SpendMeter(ledger=self.path, batch_id="t")
+        m = SpendMeter(ledger=self.path, batch_id="t", price=PRICE)
         m.record(provider="p", model="m", run_id="r1",
                  usage={"prompt_tokens": 10, "completion_tokens": 5})
         self.assertEqual(m.report()["reasoning_tokens"], 0)
 
     def test_malformed_usage_cannot_corrupt_in_memory_or_disk_totals(self):
-        m = SpendMeter(ledger=self.path, batch_id="t")
+        m = SpendMeter(ledger=self.path, batch_id="t", price=PRICE)
         invalid = (
             {"prompt_tokens": -1, "completion_tokens": 0},
             {"prompt_tokens": 1, "completion_tokens": 0,

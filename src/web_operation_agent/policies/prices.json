@@ -7,13 +7,6 @@
     "",
     "Adding a model is a line here. Nothing in the code needs to change."
   ],
-  "MiniMax-M3": {
-    "input_per_m": 2.1,
-    "output_per_m": 8.4,
-    "cache_read_per_m": 0.42,
-    "currency": "CNY",
-    "taken": "2026-09-05, platform.minimaxi.com pay-as-you-go, standard tier, <=512k input"
-  },
   "qwen3.8-max": {
     "input_per_m": 12.0,
     "output_per_m": 36.0,
