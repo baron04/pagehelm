@@ -31,6 +31,7 @@ from web_operation_agent.business import (BusinessMutationIndeterminate,
                                           BusinessToolContractError,
                                           BusinessToolError,
                                           BusinessToolIdentityError,
+                                          BusinessToolPermissionError,
                                           BusinessToolRequestError,
                                           BusinessToolResult,
                                           BusinessToolRuntime,
@@ -1011,6 +1012,10 @@ class TwentyBusinessToolExecutor:
             if exc.code == 401:
                 raise BusinessToolAuthenticationError(
                     "Twenty API authorization expired") from exc
+            if exc.code == 403:
+                # The token works and names the actor; Twenty's permissions refuse this read.
+                raise BusinessToolPermissionError(
+                    "Twenty does not permit the delegated user this read") from exc
             raise BusinessToolUnavailableError(
                 f"Twenty API returned HTTP {exc.code}") from exc
         except (URLError, TimeoutError) as exc:
@@ -1073,6 +1078,10 @@ class TwentyBusinessToolExecutor:
                 status = response.status
                 payload = json.load(response)
         except HTTPError as exc:
+            if exc.code == 403:
+                # A refusal Twenty made before storing anything: definite, not uncertain.
+                raise BusinessToolPermissionError(
+                    "Twenty does not permit the delegated user this mutation") from exc
             if 400 <= exc.code < 500:
                 raise BusinessToolError(
                     f"Twenty API refused the mutation with HTTP {exc.code}") from exc

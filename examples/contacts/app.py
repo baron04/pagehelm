@@ -72,6 +72,9 @@ DEMO_ACTORS = (
               "token-rosalind-northstar", ("contacts:read",)),
     DemoActor("mary-jackson", OTHER_WORKSPACE, "session-mary-southwind",
               "token-mary-southwind", ("contacts:read", "contacts:write")),
+    #: Signed in, and allowed nothing: the application refuses her reads on its own.
+    DemoActor("hedy-lamarr", DEMO_WORKSPACE, "session-hedy-northstar",
+              "token-hedy-northstar", ()),
 )
 ACTORS_BY_ID = {item.actor: item for item in DEMO_ACTORS}
 _MODEL_ENV_KEYS = (
@@ -331,6 +334,10 @@ class MinimalContactsApplication:
                         self._reply(401, _json_bytes({"error": "unauthenticated"}),
                                     "application/json")
                         return
+                    if "contacts:read" not in resolved[0].permissions:
+                        self._reply(403, _json_bytes({"error": "forbidden"}),
+                                    "application/json")
+                        return
                     if owner.write_fault == "fail_readback" and owner.records_created:
                         self._reply(503, _json_bytes({"error": "readback_unavailable"}),
                                     "application/json; charset=utf-8")
@@ -355,6 +362,11 @@ class MinimalContactsApplication:
                                     "text/html; charset=utf-8")
                         return
                     actor = resolved[0]
+                    if "contacts:read" not in actor.permissions:
+                        self._reply(403, b"<!doctype html><title>Forbidden</title>"
+                                         b"<h1>Not permitted</h1>\n",
+                                    "text/html; charset=utf-8")
+                        return
                     with owner._lock:
                         records = [dict(item) for item in owner.workspaces[actor.workspace]]
                     self._reply(200, _html(records, actor.workspace),

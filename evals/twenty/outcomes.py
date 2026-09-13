@@ -84,7 +84,7 @@ def classify_woa_outcome(*, terminal_reason: str,
         elif kind in {
                 "business_mutation_blocked", "business_mutation_failed",
                 "business_mutation_permission_denied", "business_mutation_rejected",
-                "business_tool_rejected"}:
+                "business_tool_permission_denied", "business_tool_rejected"}:
             code = event.get("error_code") or "business_tool"
             typed_errors.append(("business", str(code)))
     apparatus, source_code = classify_host_errors(typed_errors)

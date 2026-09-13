@@ -12,11 +12,15 @@ import uuid
 from importlib import resources
 from pathlib import Path
 from unittest.mock import Mock, patch
+from urllib.error import HTTPError
 
 from web_operation_agent.business import (BusinessMutationIndeterminate,
                                           BusinessSkill,
+                                          BusinessToolAuthenticationError,
                                           BusinessToolError,
-                                          BusinessToolRuntime)
+                                          BusinessToolPermissionError,
+                                          BusinessToolRuntime,
+                                          BusinessToolUnavailableError)
 from web_operation_agent.identity import IdentityAssertion, PrincipalError
 from web_operation_agent.mutation import (MemoryMutationJournal,
                                           SQLiteMutationJournal)
@@ -613,6 +617,78 @@ class TwentyMutationFaultTests(unittest.TestCase):
                 runtime.execute_mutation(proposal, proposal.content_digest, loaded)
             self.assertEqual(executor.posts, 1)
             self.assertEqual(len(executor.rows), 1)
+
+
+class TwentyPermissionRefusalTests(unittest.TestCase):
+    """HTTP 403 is Twenty's permissions refusing a working token -- not an outage."""
+
+    class _Tokens:
+        @staticmethod
+        def access_token():
+            return "token"
+
+    @staticmethod
+    def _refused(code: int) -> HTTPError:
+        return HTTPError("http://127.0.0.1:3000/rest/companies", code, "refused", {},
+                         io.BytesIO(b"{}"))
+
+    def _executor(self, **kwargs) -> TwentyBusinessToolExecutor:
+        return TwentyBusinessToolExecutor(
+            base_url="http://127.0.0.1:3000", tokens=self._Tokens(), **kwargs)
+
+    def test_a_refused_read_is_a_permission_result_and_other_failures_are_unchanged(self):
+        executor = self._executor()
+        for code, expected in ((403, BusinessToolPermissionError),
+                               (401, BusinessToolAuthenticationError),
+                               (500, BusinessToolUnavailableError)):
+            with self.subTest(code), patch("web_operation_agent_twenty.adapter.urlopen",
+                                           side_effect=self._refused(code)):
+                with self.assertRaises(expected) as raised:
+                    executor._authorized_json("/rest/companies", "token")
+                if code == 403:
+                    self.assertEqual(raised.exception.layer, "application")
+                else:
+                    self.assertNotIsInstance(raised.exception, BusinessToolPermissionError)
+
+    def test_a_refused_mutation_is_definite_and_other_client_errors_are_unchanged(self):
+        executor = self._executor(allow_mutations=True)
+        with patch("web_operation_agent_twenty.adapter.urlopen",
+                   side_effect=self._refused(403)):
+            with self.assertRaises(BusinessToolPermissionError):
+                executor._authorized_mutation_json("/rest/companies", "token", {})
+        with patch("web_operation_agent_twenty.adapter.urlopen",
+                   side_effect=self._refused(422)):
+            with self.assertRaises(BusinessToolError) as raised:
+                executor._authorized_mutation_json("/rest/companies", "token", {})
+            self.assertNotIsInstance(raised.exception, BusinessToolPermissionError)
+        with patch("web_operation_agent_twenty.adapter.urlopen",
+                   side_effect=self._refused(502)):
+            with self.assertRaises(BusinessMutationIndeterminate):
+                executor._authorized_mutation_json("/rest/companies", "token", {})
+
+    def test_a_permission_refused_readback_after_a_create_stays_indeterminate(self):
+        """The record exists; being refused the readback cannot make that "nothing changed"."""
+        executor = self._executor(allow_mutations=True)
+        record_id = str(uuid.uuid4())
+
+        class Created(io.BytesIO):
+            status = 201
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                self.close()
+
+        created = Created(json.dumps({"data": {"createCompany": {"id": record_id}}}).encode())
+        with patch.object(executor, "_assert_no_duplicate"), \
+                patch("web_operation_agent_twenty.adapter.urlopen",
+                      side_effect=[created, self._refused(403)]):
+            with self.assertRaises(BusinessMutationIndeterminate) as raised:
+                executor.execute_mutation(
+                    "create_company", {"name": "Acme", "domain": "acme.example"})
+        self.assertEqual(raised.exception.phase, "readback")
+        self.assertEqual(raised.exception.record_id, record_id)
 
 
 class TwentyOAuthRefreshTests(unittest.TestCase):

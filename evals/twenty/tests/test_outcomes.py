@@ -75,12 +75,12 @@ class SharedOutcomeProjectionTests(unittest.TestCase):
                 events=[{"event": "business_mutation_permission_denied",
                          "error_code": "business_permission_denied", "layer": layer}],
             ), (None, "permission_denied"))
-        # A read the actor may not make is refused the same way, and still scored.
+        # A read the actor may not make ends the turn the same way, and is still scored.
         self.assertEqual(classify_woa_outcome(
-            terminal_reason="agent_finished",
-            events=[{"event": "business_tool_rejected",
+            terminal_reason="permission_denied",
+            events=[{"event": "business_tool_permission_denied",
                      "error_code": "business_permission_denied"}],
-        ), (None, "agent_finished"))
+        ), (None, "permission_denied"))
         # Whereas a credential the application rejects is still the apparatus's fault.
         self.assertEqual(classify_woa_outcome(
             terminal_reason="agent_finished",

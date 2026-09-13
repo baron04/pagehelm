@@ -53,8 +53,8 @@ Two consequences worth noticing in the code:
 
 ## Authority belongs to the application
 
-Two synthetic users sign in to the `northstar` workspace: `ada-lovelace` may read and write,
-`rosalind-franklin` may only read. A second workspace, `southwind`, holds contacts with the
+Three synthetic users sign in to the `northstar` workspace: `ada-lovelace` may read and write,
+`rosalind-franklin` may only read, and `hedy-lamarr` may do nothing at all. A second workspace, `southwind`, holds contacts with the
 same names as some of `northstar`'s.
 
 ```bash
@@ -69,6 +69,9 @@ PYTHONPATH=src:. python -m examples.contacts.demo --allow-mutations --actor rosa
 - **The application refuses the same write on its own** (HTTP 403), and the adapter maps
   that to `BusinessToolPermissionError` as well. A test forges an over-scoped principal to
   show that this second layer holds by itself.
+- **A refused read ends the turn the same way.** The application refuses Hedy every read,
+  its pages included, and a principal without the read scope is refused before any request
+  is made. Neither refusal goes back to the Agent, so it never falls back to the page.
 - **Every read carries the delegated credential** and returns only the actor's workspace.
   The duplicate check cannot mistake `southwind`'s Radia Perlman for one in `northstar`, and
   "not found" is stated only for the scope this account could search.

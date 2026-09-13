@@ -1015,6 +1015,49 @@ class BusinessReActTransition(unittest.TestCase):
             digest = ledger.of_kind("business_mutation_proposed")[-1]["proposal"]["digest"]
             self.assertEqual(journal.get(digest).state, "failed")
 
+    def test_a_refused_read_ends_the_turn_at_either_layer_and_never_reaches_the_page(self):
+        class RefusingReads(_Executor):
+            @staticmethod
+            def execute(*_args, **_kwargs):
+                raise BusinessToolPermissionError("the application refused this read")
+
+        cases = (
+            ("tool_authorization", _Executor(), ("companies:write",), False),
+            ("application", RefusingReads(), ("companies:read",), True),
+        )
+        for layer, executor, scopes, dispatched in cases:
+            with self.subTest(layer), tempfile.TemporaryDirectory() as tmp:
+                skill = _skill(Path(tmp) / "query-skill.json")
+                runtime = BusinessToolRuntime(
+                    (skill,), executor, application_id="fixture",
+                    required_scopes={"query_companies": "companies:read"})
+                chat = _Chat([
+                    ("load_skill", {"skill_id": skill.skill_id}),
+                    ("query_companies", {}),
+                    # Never asked for: the same facts off the page would step around the
+                    # scope that just refused them.
+                    ("goto", {"url": "/object/company"}),
+                ])
+                session = self._principal_bound_session(
+                    tmp, runtime, chat, _operation_context(scopes=scopes),
+                    lambda proposal, **_: None, f"read-refused-{layer}")
+                browser = session.browser
+                result = session.run()
+
+                self.assertEqual(result.terminal_reason, "permission_denied")
+                self.assertEqual(len(chat.messages), 2, "the model is not asked again")
+                self.assertEqual(browser.actions, [])
+                ledger = session.ledger
+                self.assertEqual(ledger.of_kind("business_tool_rejected"), [])
+                self.assertEqual(ledger.of_kind("business_tool_result"), [])
+                event = ledger.of_kind("business_tool_permission_denied")[-1]
+                self.assertEqual(event["layer"], layer)
+                self.assertEqual(event["dispatched"], dispatched)
+                self.assertFalse(event["side_effect_possible"])
+                self.assertEqual(event["error_code"], "business_permission_denied")
+                if layer == "tool_authorization":
+                    self.assertEqual(event["required_scope"], "companies:read")
+
     def test_an_unresolved_write_in_another_workspace_does_not_block_this_one(self):
         def context_in(workspace, operation_id):
             now = int(time.time() * 1000)

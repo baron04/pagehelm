@@ -1726,6 +1726,14 @@ class ServerAgentSession:
                                 return self._finish(
                                     result, t0, "agent_finished", result.agent_said,
                                     steps=step)
+                except BusinessToolPermissionError as exc:
+                    # A read is refused for the same reason a write is, and ends the same
+                    # way: handed back, the model could read the same facts off the page and
+                    # step around the scope that refused it.
+                    return self._permission_denied(
+                        result, t0, step, name, exc,
+                        dispatched=exc.layer == "application",
+                        identity=operation_identity, event="business_tool_permission_denied")
                 except BusinessToolError as exc:
                     self.latest_business_tool_result = None
                     self._form_draft = None
@@ -3091,14 +3099,16 @@ class ServerAgentSession:
 
     def _permission_denied(self, result: RunResult, t0: float, step: int, name: str,
                            exc: BusinessToolPermissionError, *, dispatched: bool,
-                           identity: dict, approval_id: str = "") -> RunResult:
+                           identity: dict, approval_id: str = "",
+                           event: str = "business_mutation_permission_denied") -> RunResult:
         """End the turn on an authorization refusal, recording which layer refused.
 
         `dispatched` is true only when the application itself received the request and
         refused it; either way the refusal is definite, so no side effect is possible.
+        `event` names the refused path: a read or a proposed write.
         """
         self.ledger.append(
-            "business_mutation_permission_denied", step=step, tool=name,
+            event, step=step, tool=name,
             approval_id=approval_id, error_code=exc.code, layer=exc.layer,
             required_scope=exc.required_scope, dispatched=dispatched,
             side_effect_possible=False, identity=identity)

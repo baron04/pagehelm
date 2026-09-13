@@ -737,6 +737,57 @@ class TheApplicationsOwnAuthorityInARealBrowser(unittest.TestCase):
                                               events=events),
                          (None, "permission_denied"))
 
+    def test_a_refused_read_ends_the_turn_at_either_layer_and_reveals_no_record(self):
+        from evals.twenty.outcomes import classify_woa_outcome
+
+        script = (
+            ("load_skill", {"skill_id": "minimal.contacts.query"}),
+            ("list_contacts", {}),
+            # Never asked for: the same records off the page would step around the refusal.
+            ("goto", {"url": "/contacts/grace-hopper"}),
+            ("finish", {"outcome": "acted"}),
+        )
+        cases = (
+            # The framework's scope check: the principal carries no read scope.
+            ("tool_authorization", _READ_ONLY, ("contacts:write",), False),
+            # The application's own: the principal claims read, the application refuses it.
+            ("application", "hedy-lamarr", ("contacts:read",), True),
+        )
+        for layer, actor, scopes, dispatched in cases:
+            with self.subTest(layer), tempfile.TemporaryDirectory() as directory:
+                summary, chat = self._run(directory, script, ("List my contacts.",),
+                                          actor=actor, forged_scopes=scopes)
+                events = _audit_events(directory)
+                turn = summary["turns"][0]
+                self.assertEqual(turn["status"], "refused")
+                self.assertEqual(turn["terminal_reason"], "permission_denied")
+                self.assertIn("not permitted", turn["answer"])
+                self.assertEqual(summary["panel"]["live"]["state"], "refused")
+                self.assertEqual(chat.calls, 2, "nothing was asked of the model afterwards")
+                self.assertEqual(turn["page_actions"], 0)
+                self.assertFalse(any(event["event"] == "action_receipt"
+                                     and event.get("tool") == "goto" for event in events))
+                self.assertNotIn("business_tool_result", [e["event"] for e in events])
+                denied = next(event for event in events
+                              if event["event"] == "business_tool_permission_denied")
+                self.assertEqual(denied["layer"], layer)
+                self.assertEqual(denied["dispatched"], dispatched)
+                self.assertFalse(denied["side_effect_possible"])
+                self.assertEqual(classify_woa_outcome(terminal_reason="permission_denied",
+                                                      events=events),
+                                 (None, "permission_denied"))
+                if layer == "application":
+                    # The application refuses this actor every read, its pages included, so
+                    # no record may reach anything. (A principal merely narrower than the
+                    # application is a different case: the page still shows what the
+                    # application lets the actor see.)
+                    self.assertNothingFromTheOtherWorkspace({
+                        "model context": "\n".join(chat.seen),
+                        "audit ledger": json.dumps(events, ensure_ascii=False),
+                        "live panel": summary["panel"]["live"]["text"],
+                        "page": summary["last_page_text"],
+                    }, markers=("@example.test", "southwind"))
+
     # -- I02 ------------------------------------------------------------------------------
     def test_a_same_name_record_in_another_workspace_reaches_no_surface(self):
         script = (
@@ -887,6 +938,26 @@ class TheApplicationsOwnAuthority(unittest.TestCase):
             self.assertEqual(refused.exception.layer, "application")
             self.assertEqual(refused.exception.code, "business_permission_denied")
             self.assertEqual(application.records_created, 0)
+
+    def test_the_application_refuses_a_read_to_an_actor_it_grants_nothing(self):
+        from examples.contacts.app import ACTORS_BY_ID
+        from web_operation_agent.business import BusinessToolPermissionError
+        from web_operation_agent.identity import PrincipalError
+        nobody = ACTORS_BY_ID["hedy-lamarr"]
+        with MinimalContactsApplication() as application:
+            self.assertEqual(self._request(application, "GET", "/api/contacts",
+                                           token=nobody.token)[0], 403)
+            self.assertEqual(self._request(application, "GET", "/contacts",
+                                           cookie=nobody.session)[0], 403)
+            adapter = MinimalContactsAdapter(application.origin, api_token=nobody.token)
+            with self.assertRaises(BusinessToolPermissionError) as refused:
+                adapter.business_tools._executor.execute("list_contacts", {})
+            self.assertEqual(refused.exception.layer, "application")
+            # And an honest identity port gives her no principal to act with at all.
+            with self.assertRaisesRegex(PrincipalError, "none of the scopes"):
+                adapter.ports.identity.bind(
+                    adapter.identity.page_identity(f"{DEMO_SESSION_COOKIE}={nobody.session}"),
+                    delegation_id="nobody")
 
     def test_each_workspace_sees_only_its_own_records_through_every_credential(self):
         from examples.contacts.app import ACTORS_BY_ID

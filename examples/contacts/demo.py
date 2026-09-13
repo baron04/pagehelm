@@ -10,7 +10,6 @@ Run it from a checkout:  python -m examples.contacts.demo --help
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import hashlib
 import json
 import math
@@ -29,6 +28,7 @@ from examples.contacts.app import (ACTORS_BY_ID, DEMO_SESSION_COOKIE,
                                    MinimalContactsApplication)
 from web_operation_agent.application import bind_application
 from web_operation_agent.embedded_agent import ReadOnlyControl
+from web_operation_agent.identity import bind_matching_identity
 from web_operation_agent.live import LiveConversationRunner, LiveProductSession
 from web_operation_agent.model import ChatModel, ProviderError, SpendMeter, load_env
 from web_operation_agent.mutation import MemoryMutationJournal
@@ -206,6 +206,12 @@ def _decide_in_page(page, config: DemoConfig) -> dict:
     return visible
 
 
+def _page_text(page) -> str:
+    """The application's own text: its main region, or the whole page it served instead."""
+    return page.evaluate(
+        "() => (document.querySelector('main') || document.body).innerText.slice(0, 2000)")
+
+
 def _read_panel(page, task: str) -> dict:
     """What the person sees in the panel once the thread has settled on `task`."""
     window = page.locator(".woa-window")
@@ -334,7 +340,7 @@ def _run_browser(config: DemoConfig, live: LiveProductSession,
                     # Playwright may retain its prior URL briefly after history.pushState even
                     # though the document and runtime already observe the new route.
                     last_url = page.evaluate("() => location.href")
-                    last_page_text = page.locator("main").inner_text()[:2_000]
+                    last_page_text = _page_text(page)
                     if config.capture_panel:
                         panel["live"] = _read_panel(page, tasks[-1])
                         # A full document load: the panel keeps no timeline of its own, so
@@ -345,8 +351,7 @@ def _run_browser(config: DemoConfig, live: LiveProductSession,
                         page.evaluate(
                             "async () => { await window.__WOA_RUNTIME_READY__; return true; }")
                         panel["replayed"] = _read_panel(page, tasks[-1])
-                        panel["page_text_after_reload"] = page.locator(
-                            "main").inner_text()[:2_000]
+                        panel["page_text_after_reload"] = _page_text(page)
                     if config.keep_open_seconds and not config.headless:
                         page.wait_for_timeout(int(config.keep_open_seconds * 1000))
                 else:
@@ -365,7 +370,7 @@ def _run_browser(config: DemoConfig, live: LiveProductSession,
                             raise
                     last_url = (page.evaluate("() => location.href")
                                 if not page.is_closed() else last_url)
-                    last_page_text = (page.locator("main").inner_text()[:2_000]
+                    last_page_text = (_page_text(page)
                                       if not page.is_closed() else last_page_text)
             finally:
                 context.close()
@@ -400,11 +405,17 @@ def run_demo(config: DemoConfig) -> dict:
         # agree. A real integration reads the cookie out of the browser context it is about
         # to drive; this demo knows its own synthetic session, which is the only part of
         # this a real application replaces.
-        principal = adapter.ports.identity.bind(
-            adapter.identity.page_identity(f"{DEMO_SESSION_COOKIE}={actor.session}"),
-            delegation_id=f"minimal-contacts-{uuid.uuid4().hex}")
+        page = adapter.identity.page_identity(f"{DEMO_SESSION_COOKIE}={actor.session}")
+        delegation_id = f"minimal-contacts-{uuid.uuid4().hex}"
         if config.forged_scopes:
-            principal = dataclasses.replace(principal, scopes=config.forged_scopes)
+            # The fault being injected: an integration that put scopes on the principal the
+            # application never granted. Both identities are still resolved and must agree.
+            delegated, _granted = adapter.identity._whoami(
+                {"Authorization": f"Bearer {actor.token}"}, "delegated_api")
+            principal = bind_matching_identity(
+                page, delegated, delegation_id=delegation_id, scopes=config.forged_scopes)
+        else:
+            principal = adapter.ports.identity.bind(page, delegation_id=delegation_id)
         chat, meter = _chat(config, run_dir)
         holder: dict[str, LiveConversationRunner] = {}
 
