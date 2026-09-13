@@ -113,6 +113,12 @@ class DemoConfig:
     #: start from, and a template that enabled writes by default would teach the wrong
     #: default.
     allow_mutations: bool = False
+    #: Qualification-only approval behavior.  The public CLI keeps ``approved``; tests use
+    #: the other values to drive the same visible card without a privileged server shortcut.
+    approval_decision: str = "approved"
+    approval_ttl_s: int = 120
+    write_fault: str = ""
+    replay_approval: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "output_dir", Path(self.output_dir).expanduser())
@@ -125,6 +131,16 @@ class DemoConfig:
         if (not math.isfinite(self.keep_open_seconds) or self.keep_open_seconds < 0
                 or not math.isfinite(self.turn_timeout_s) or self.turn_timeout_s <= 0):
             raise ValueError("demo timeouts are invalid")
+        if self.approval_decision not in {"approved", "denied", "cancelled", "expired"}:
+            raise ValueError("approval_decision is invalid")
+        if (isinstance(self.approval_ttl_s, bool)
+                or not isinstance(self.approval_ttl_s, int)
+                or not 1 <= self.approval_ttl_s <= 600):
+            raise ValueError("approval_ttl_s must be an integer from 1 to 600")
+        if self.write_fault not in MinimalContactsApplication.WRITE_FAULTS:
+            raise ValueError("write_fault is invalid")
+        if self.replay_approval and self.approval_decision != "approved":
+            raise ValueError("only an approved decision can be replayed")
 
 
 #: The panel's own approve control, inside the assistant's shadow root. There is no other
@@ -134,6 +150,7 @@ class DemoConfig:
 #: is a real one: the card refuses an event a script synthesised, which is precisely the
 #: case this walkthrough must not be allowed to take.
 _APPROVE_CONTROL = '[data-testid="woa-approve"]'
+_DENY_CONTROL = '[data-testid="woa-deny"]'
 
 
 def _approve_in_page(page, timeout_s: float) -> None:
@@ -144,6 +161,26 @@ def _approve_in_page(page, timeout_s: float) -> None:
     # dwell is the point, so the walkthrough waits it out rather than working around it.
     page.wait_for_timeout(700)
     control.click()
+
+
+def _decide_in_page(page, config: DemoConfig) -> dict:
+    """Drive the visible approval card and return the exact user-visible proposal."""
+    control = page.locator(_APPROVE_CONTROL)
+    control.wait_for(state="visible", timeout=int(config.turn_timeout_s * 1000))
+    card = control.locator("xpath=ancestor::*[@role='alertdialog']")
+    visible = {"text": card.inner_text(), "decision": config.approval_decision}
+    if config.approval_decision == "cancelled":
+        page.evaluate("() => window.__WOA_RUNTIME_READY__.then(runtime => runtime.cancelTask())")
+        return visible
+    if config.approval_decision == "expired":
+        page.wait_for_timeout((config.approval_ttl_s * 1000) + 250)
+    else:
+        page.wait_for_timeout(700)
+    if config.approval_decision == "denied":
+        page.locator(_DENY_CONTROL).click()
+    else:
+        control.click()
+    return visible
 
 
 def _chat(config: DemoConfig, run_dir: Path):
@@ -179,12 +216,13 @@ def _outcome_json(outcome) -> dict:
 
 
 def _run_browser(config: DemoConfig, live: LiveProductSession,
-                 conversation: LiveConversationRunner) -> tuple[list[dict], str, str]:
+                 conversation: LiveConversationRunner) -> tuple[list[dict], str, str, list[dict]]:
     from playwright.sync_api import Error as PlaywrightError, sync_playwright
 
     records: list[dict] = []
     last_url = ""
     last_page_text = ""
+    approvals: list[dict] = []
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=config.headless)
         try:
@@ -210,12 +248,36 @@ def _run_browser(config: DemoConfig, live: LiveProductSession,
                 tasks = config.tasks or ((scripted_task,) if config.scripted else ())
                 if tasks:
                     for task in tasks:
+                        if config.replay_approval:
+                            page.evaluate("""() => {
+                              window.__woaApprovalPosts = [];
+                              const original = window.fetch.bind(window);
+                              window.fetch = async (url, options = {}) => {
+                                if (String(url).endsWith('/approvals')) {
+                                  window.__woaApprovalPosts.push({url: String(url), options: {
+                                    method: options.method, headers: {...options.headers},
+                                    body: options.body, credentials: options.credentials,
+                                    cache: options.cache,
+                                  }});
+                                }
+                                return original(url, options);
+                              };
+                            }""")
                         page.evaluate(
                             "task => window.__WOA_RUNTIME_READY__.then(runtime => "
                             "runtime.submitTask(task))", task)
                         if config.allow_mutations and config.scripted:
-                            _approve_in_page(page, config.turn_timeout_s)
+                            approvals.append(_decide_in_page(page, config))
                         outcome = conversation.next_outcome(timeout_s=config.turn_timeout_s)
+                        if config.replay_approval:
+                            replay = page.evaluate("""async () => {
+                              const item = window.__woaApprovalPosts?.[0];
+                              if (!item) return {found: false};
+                              const response = await fetch(item.url, item.options);
+                              return {found: true, status: response.status,
+                                      payload: await response.json()};
+                            }""")
+                            approvals[-1]["replay"] = replay
                         record = _outcome_json(outcome)
                         records.append(record)
                         print(json.dumps(record, ensure_ascii=False, sort_keys=True), flush=True)
@@ -247,7 +309,7 @@ def _run_browser(config: DemoConfig, live: LiveProductSession,
                 context.close()
         finally:
             browser.close()
-    return records, last_url, last_page_text
+    return records, last_url, last_page_text, approvals
 
 
 def run_demo(config: DemoConfig) -> dict:
@@ -256,7 +318,7 @@ def run_demo(config: DemoConfig) -> dict:
     run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
     run_dir = config.output_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
-    with MinimalContactsApplication() as application:
+    with MinimalContactsApplication(write_fault=config.write_fault) as application:
         journal = MemoryMutationJournal() if config.allow_mutations else None
         adapter = MinimalContactsAdapter(
             application.origin, api_token=DEMO_API_TOKEN,
@@ -289,6 +351,7 @@ def run_demo(config: DemoConfig) -> dict:
                     step_budget=8,
                     wall_budget_s=max(1, int(config.turn_timeout_s)),
                     transport_timeout_s=min(30, config.turn_timeout_s),
+                    approval_ttl_s=config.approval_ttl_s,
                     disabled_actions=frozenset({"click", "fill", "select", "submit", "back"}),
                     scope_first_policy=True,
                     policy_block_limit=2,
@@ -319,7 +382,7 @@ def run_demo(config: DemoConfig) -> dict:
             principal=principal,
         ).start()
         try:
-            records, last_url, last_page_text = _run_browser(
+            records, last_url, last_page_text, approvals = _run_browser(
                 config, live, holder["conversation"])
         finally:
             live.close()
@@ -327,6 +390,21 @@ def run_demo(config: DemoConfig) -> dict:
 
     usage = (chat.usage() if isinstance(chat, ScriptedDemoChat)
              else meter.report() if meter is not None else {})
+    journal_rows = []
+    audit_path = run_dir / "audit.jsonl"
+    if journal is not None and audit_path.exists():
+        for event in (json.loads(line) for line in audit_path.read_text().splitlines()):
+            if event.get("event") != "business_mutation_proposed":
+                continue
+            digest = str((event.get("proposal") or {}).get("digest") or "")
+            intent = journal.get(digest) if digest else None
+            if intent is not None:
+                journal_rows.append({
+                    "proposal_digest": intent.proposal_digest,
+                    "state": intent.state,
+                    "business_key": intent.business_key,
+                    "reconciliation": json.loads(intent.reconciliation_json),
+                })
     summary = {
         "schema_version": 1,
         "application": "minimal.contacts",
@@ -334,7 +412,14 @@ def run_demo(config: DemoConfig) -> dict:
         "turns": records,
         "last_url": last_url,
         "last_page_text": last_page_text,
+        "approvals": approvals,
+        "application_state": {
+            "post_requests": application.post_requests,
+            "records_created": application.records_created,
+            "contact_count": len(application.contacts),
+        },
         "model_usage": usage,
+        "mutation_journal": journal_rows,
         "output": str(run_dir),
     }
     summary_path = run_dir / "summary.json"

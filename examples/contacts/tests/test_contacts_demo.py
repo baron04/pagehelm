@@ -12,11 +12,16 @@ from web_operation_agent.model import ProviderError, require_chat_port
 from examples.contacts.app import (DEMO_API_TOKEN, DEMO_SESSION_COOKIE,
                                    DEMO_SESSION_VALUE, MinimalContactsApplication)
 from examples.contacts.adapter import MinimalContactsAdapter
-from examples.contacts.demo import DemoConfig, ScriptedDemoChat, run_demo
+from examples.contacts.demo import (DemoConfig, ScriptedDemoChat, WRITE_WALKTHROUGH,
+                                    run_demo)
+from web_operation_agent.application import bind_application
 from web_operation_agent.business import (BusinessMutationIndeterminate,
                                           BusinessToolError)
+from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.identity import PrincipalError
-from web_operation_agent.mutation import MemoryMutationJournal
+from web_operation_agent.live import LiveConversationRunner, LiveProductSession
+from web_operation_agent.mutation import MemoryMutationJournal, SQLiteMutationJournal
+from web_operation_agent.product import AgentTurnConfig, AgentTurnExecutor
 from web_operation_agent.tests.adapter_contract import assert_adapter_contract
 
 
@@ -176,6 +181,7 @@ class TheWriteWalkthroughInARealBrowser(unittest.TestCase):
             self.assertIn("Create exactly one contact", turn["answer"])
             self.assertIn("Radia Perlman", turn["answer"])
             self.assertIn("Opened the page", turn["answer"])
+            self.assertEqual(summary["mutation_journal"][0]["state"], "completed")
             audit = next(Path(directory).glob("*/audit.jsonl"))
             events = [json.loads(line) for line in audit.read_text().splitlines()]
             kinds = [row["event"] for row in events]
@@ -194,6 +200,197 @@ class TheWriteWalkthroughInARealBrowser(unittest.TestCase):
             self.assertEqual(sorted(proposed["proposal"]["argument_names"]),
                              ["email", "name"])
             self.assertNotIn("radia@example.test", json.dumps(proposed["proposal"]))
+
+    def _run_write(self, directory, **changes):
+        return run_demo(DemoConfig(
+            scripted=True, headless=True, allow_mutations=True,
+            output_dir=Path(directory), keep_open_seconds=0, turn_timeout_s=45,
+            **changes,
+        ))
+
+    def test_visible_proposal_cancelled_without_approval_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            summary = self._run_write(directory, approval_decision="cancelled")
+        self.assertIn("Create exactly one contact", summary["approvals"][0]["text"])
+        self.assertIn("Name: Radia Perlman", summary["approvals"][0]["text"])
+        self.assertIn("Email: radia@example.test", summary["approvals"][0]["text"])
+        self.assertEqual(summary["application_state"]["post_requests"], 0)
+        self.assertEqual(summary["application_state"]["records_created"], 0)
+        self.assertEqual(summary["turns"][0]["terminal_reason"], "user_cancelled")
+        self.assertEqual(summary["mutation_journal"][0]["state"], "prepared")
+
+    def test_visible_denial_is_terminal_and_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            summary = self._run_write(directory, approval_decision="denied")
+        self.assertEqual(summary["application_state"]["post_requests"], 0)
+        self.assertEqual(summary["application_state"]["records_created"], 0)
+        self.assertEqual(summary["turns"][0]["terminal_reason"], "approval_denied")
+        self.assertEqual(summary["mutation_journal"][0]["state"], "prepared")
+
+    def test_expired_visible_approval_cannot_write(self):
+        with tempfile.TemporaryDirectory() as directory:
+            summary = self._run_write(
+                directory, approval_decision="expired", approval_ttl_s=1)
+        self.assertEqual(summary["application_state"]["post_requests"], 0)
+        self.assertEqual(summary["application_state"]["records_created"], 0)
+        self.assertEqual(summary["turns"][0]["terminal_reason"], "approval_expired")
+        self.assertIn("expired", summary["turns"][0]["answer"])
+        self.assertEqual(summary["mutation_journal"][0]["state"], "prepared")
+
+    def test_browser_replay_of_the_same_approval_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            summary = self._run_write(directory, replay_approval=True)
+        replay = summary["approvals"][0]["replay"]
+        self.assertTrue(replay["found"])
+        self.assertEqual(replay["status"], 200)
+        self.assertTrue(replay["payload"]["duplicate"])
+        self.assertEqual(summary["application_state"]["post_requests"], 1)
+        self.assertEqual(summary["application_state"]["records_created"], 1)
+        self.assertEqual(summary["mutation_journal"][0]["state"], "completed")
+
+    def test_lost_application_response_is_indeterminate_and_not_retried(self):
+        with tempfile.TemporaryDirectory() as directory:
+            summary = self._run_write(directory, write_fault="drop_response")
+        self.assertEqual(summary["turns"][0]["terminal_reason"], "indeterminate_write")
+        self.assertEqual(summary["application_state"]["post_requests"], 1)
+        self.assertEqual(summary["application_state"]["records_created"], 1)
+        self.assertEqual(summary["mutation_journal"][0]["state"], "indeterminate")
+        self.assertEqual(
+            summary["mutation_journal"][0]["reconciliation"]["phase"], "dispatch")
+
+    def test_acknowledged_write_with_failed_readback_is_indeterminate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            summary = self._run_write(directory, write_fault="fail_readback")
+        self.assertEqual(summary["turns"][0]["terminal_reason"], "indeterminate_write")
+        self.assertEqual(summary["application_state"]["post_requests"], 1)
+        self.assertEqual(summary["application_state"]["records_created"], 1)
+        self.assertEqual(summary["mutation_journal"][0]["state"], "indeterminate")
+        reconciliation = summary["mutation_journal"][0]["reconciliation"]
+        self.assertEqual(reconciliation["phase"], "readback")
+        self.assertEqual(reconciliation["record_id"], "radia-perlman")
+
+    def test_two_browser_sessions_cannot_dispatch_the_same_business_key(self):
+        from playwright.sync_api import sync_playwright
+
+        with tempfile.TemporaryDirectory() as directory, \
+                MinimalContactsApplication(write_fault="hold_before_commit") as application:
+            root = Path(directory)
+            lives = []
+            conversations = []
+
+            def start_session(index: int):
+                adapter = MinimalContactsAdapter(
+                    application.origin, api_token=DEMO_API_TOKEN,
+                    allow_mutations=True,
+                    mutation_journal=SQLiteMutationJournal(root / "mutations.sqlite3"))
+                bound = bind_application(adapter)
+                principal = adapter.ports.identity.bind(
+                    adapter.identity.page_identity(
+                        f"{DEMO_SESSION_COOKIE}={DEMO_SESSION_VALUE}"),
+                    delegation_id=f"concurrent-{index}")
+                chat = ScriptedDemoChat(WRITE_WALKTHROUGH)
+
+                def runner_factory(channel):
+                    executor = AgentTurnExecutor(
+                        channel=channel,
+                        config=AgentTurnConfig(
+                            supported_scope="Create one confirmed synthetic contact.",
+                            ledger_path=root / f"audit-{index}.jsonl",
+                            step_budget=8, wall_budget_s=30, transport_timeout_s=10,
+                            disabled_actions=frozenset(
+                                {"click", "fill", "select", "submit", "back"}),
+                            plain_business_answer_min_page_actions=0,
+                            require_identity=True, allow_business_mutations=True,
+                            deployment_profile="production",
+                        ),
+                        chat=chat, application=bound, control=ReadOnlyControl(),
+                        run_id_factory=lambda _message: f"concurrent-{index}")
+                    conversation = LiveConversationRunner(channel, executor=executor)
+                    conversations.append(conversation)
+                    return conversation
+
+                live = LiveProductSession(
+                    allowed_origin=bound.descriptor.origin,
+                    page_controller_module=bound.descriptor.page_controller_module,
+                    runner_factory=runner_factory,
+                    navigation_mode=bound.descriptor.navigation_mode,
+                    principal=principal,
+                ).start()
+                lives.append(live)
+                return live
+
+            first, second = start_session(1), start_session(2)
+            try:
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch(headless=True)
+                    contexts = []
+                    try:
+                        pages = []
+                        for live in (first, second):
+                            context = browser.new_context(viewport={"width": 1280,
+                                                                    "height": 900})
+                            contexts.append(context)
+                            context.add_init_script(script=live.bootstrap_script)
+                            page = context.new_page()
+                            page.goto(application.origin + "/contacts",
+                                      wait_until="domcontentloaded", timeout=30_000)
+                            page.wait_for_function(
+                                "window.__WOA_RUNTIME_READY__ !== undefined", timeout=30_000)
+                            page.evaluate(
+                                "async () => { await window.__WOA_RUNTIME_READY__; return true; }")
+                            pages.append(page)
+
+                        pages[0].evaluate(
+                            "task => window.__WOA_RUNTIME_READY__.then(r => r.submitTask(task))",
+                            "Create Radia Perlman at radia@example.test")
+                        pages[0].get_by_test_id("woa-approve").wait_for(
+                            state="visible", timeout=20_000)
+                        pages[0].wait_for_timeout(700)
+                        pages[0].get_by_test_id("woa-approve").click()
+                        self.assertTrue(application.post_received.wait(5),
+                                        "first application dispatch did not start")
+
+                        pages[1].evaluate(
+                            "task => window.__WOA_RUNTIME_READY__.then(r => r.submitTask(task))",
+                            "Create Radia Perlman at radia@example.test")
+                        pages[1].get_by_test_id("woa-approve").wait_for(
+                            state="visible", timeout=20_000)
+                        pages[1].wait_for_timeout(700)
+                        pages[1].get_by_test_id("woa-approve").click()
+                        blocked = conversations[1].next_outcome(timeout_s=10).result
+                        self.assertEqual(blocked.terminal_reason,
+                                         "business_mutation_blocked")
+                        self.assertEqual(blocked.status.value, "refused")
+                        self.assertIn("Nothing was submitted again", blocked.user_answer)
+                        self.assertEqual(application.post_requests, 1)
+
+                        application.release_post.set()
+                        completed = conversations[0].next_outcome(timeout_s=15).result
+                        self.assertEqual(completed.terminal_reason, "agent_finished")
+                        self.assertEqual(application.post_requests, 1)
+                        self.assertEqual(application.records_created, 1)
+                        second_events = [json.loads(line) for line in
+                                         (root / "audit-2.jsonl").read_text().splitlines()]
+                        blocked_event = next(
+                            item for item in second_events
+                            if item["event"] == "business_mutation_blocked")
+                        self.assertEqual(blocked_event["reason"],
+                                         "business_key_unresolved")
+                        self.assertFalse(blocked_event["dispatched"])
+                        self.assertFalse(blocked_event["side_effect_possible"])
+                        self.assertFalse(any(
+                            item["event"] == "business_mutation_execution_started"
+                            for item in second_events))
+                    finally:
+                        application.release_post.set()
+                        for context in contexts:
+                            context.close()
+                        browser.close()
+            finally:
+                application.release_post.set()
+                for live in lives:
+                    live.close()
+                    live.wait(timeout_s=10)
 
 
 class TheWriteChainAnAuthorCopies(unittest.TestCase):
@@ -316,6 +513,33 @@ class TheWriteChainAnAuthorCopies(unittest.TestCase):
                     "create_contact", {"name": "Radia Perlman",
                                        "email": "radia@example.test"})
             self.assertEqual(raised.exception.phase, "readback")
+
+    def test_a_lost_response_is_indeterminate_and_the_adapter_does_not_retry(self):
+        with MinimalContactsApplication(write_fault="drop_response") as application:
+            adapter, _bound = self._composed(application)
+            executor = adapter.business_tools._executor
+            with self.assertRaisesRegex(
+                    BusinessMutationIndeterminate, "did not report an outcome") as lost:
+                executor.execute_mutation(
+                    "create_contact", {"name": "Radia Perlman",
+                                       "email": "radia@example.test"})
+            self.assertEqual(lost.exception.phase, "dispatch")
+            self.assertEqual(application.post_requests, 1)
+            self.assertEqual(application.records_created, 1)
+
+    def test_a_failed_readback_after_ack_is_indeterminate_and_not_reposted(self):
+        with MinimalContactsApplication(write_fault="fail_readback") as application:
+            adapter, _bound = self._composed(application)
+            executor = adapter.business_tools._executor
+            with self.assertRaisesRegex(
+                    BusinessMutationIndeterminate, "readback was unavailable") as unread:
+                executor.execute_mutation(
+                    "create_contact", {"name": "Radia Perlman",
+                                       "email": "radia@example.test"})
+            self.assertEqual(unread.exception.phase, "readback")
+            self.assertEqual(unread.exception.record_id, "radia-perlman")
+            self.assertEqual(application.post_requests, 1)
+            self.assertEqual(application.records_created, 1)
 
     def test_reconciliation_reports_evidence_and_never_a_verdict(self):
         with MinimalContactsApplication() as application:

@@ -114,7 +114,7 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
           : <p className="woa-approval__fine">{labels.approvalHint}</p>}
         <div className="woa-approval__actions">
           <button type="button" className="woa-btn woa-btn--ghost" ref={cancel}
-                  disabled={busy} onClick={answer('denied')}>
+                  data-testid="woa-deny" disabled={busy} onClick={answer('denied')}>
             {labels.deny}
           </button>
           <span className="woa-approval__spacer" />

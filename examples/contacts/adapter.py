@@ -280,8 +280,13 @@ class _ContactsToolExecutor:
                 "the contacts API accepted the create but returned no record",
                 phase="acknowledgement")
         record_id = str(created["id"])
-        readback = [row for row in self._existing(proposed["name"])
-                    if row["id"] == record_id]
+        try:
+            readback = [row for row in self._existing(proposed["name"])
+                        if row["id"] == record_id]
+        except BusinessToolError as exc:
+            raise BusinessMutationIndeterminate(
+                "the contact was created but same-actor readback was unavailable",
+                phase="readback", record_id=record_id) from exc
         if len(readback) != 1 or readback[0]["email"] != proposed["email"]:
             # Created, and not what was approved. Not a failure -- a failure would invite a
             # retry, and something is already there.

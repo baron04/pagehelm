@@ -72,4 +72,6 @@ created it.
 The adapter contract test in [`tests/`](tests/) is the same assertion every integration
 should run: it checks the ports are coherent before any model or browser is involved.
 `TheWriteWalkthroughInARealBrowser` is the one that cannot be faked into passing — the
-approval has to come from the page.
+approval has to come from the page. The same browser suite also exercises no decision,
+denial, expiry, an exact HTTP replay, two independently approved sessions racing on one
+business key, a lost response after commit, and failed readback after acknowledgement.

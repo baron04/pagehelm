@@ -260,7 +260,7 @@ odoo = OdooApplicationAdapter(base_url="http://127.0.0.1:8069",
                               api_key_path=root / "odoo-key.json")
 assert odoo.business_tools.tool_names == frozenset(
     {"query_sale_orders", "query_quotations", "query_customers", "query_products",
-     "query_customer_invoices"})
+     "query_customer_invoices", "prepare_customer_form"})
 assert odoo.business_tools.mutation_tool_names == frozenset()
 # The packaged write Skills have to be present in the wheel too, or a mutation-enabled
 # deployment fails at composition time with a missing package-data entry -- exactly the

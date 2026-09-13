@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import json
+import socket
 import threading
 import urllib.error
 import urllib.parse
@@ -134,9 +135,12 @@ def _html(source_contacts: Sequence[Mapping[str, str]]) -> bytes:
 
 
 class MinimalContactsApplication:
-    """Loopback first-party application and typed API backed by synthetic immutable data."""
+    """Loopback first-party application and typed API backed by synthetic resettable data."""
 
-    def __init__(self, *, contacts: Sequence[Mapping[str, str]] = DEMO_CONTACTS):
+    WRITE_FAULTS = frozenset({"", "hold_before_commit", "drop_response", "fail_readback"})
+
+    def __init__(self, *, contacts: Sequence[Mapping[str, str]] = DEMO_CONTACTS,
+                 write_fault: str = ""):
         # Mutable now: the example gained a write, and a store that cannot change cannot
         # demonstrate one. `_lock` is what keeps the create and the readback consistent.
         self.contacts = [{key: str(value) for key, value in item.items()}
@@ -144,6 +148,15 @@ class MinimalContactsApplication:
         if not self.contacts or any(set(item) != {"id", "name", "email"}
                                     for item in self.contacts):
             raise ValueError("contacts must contain id, name, and email")
+        if write_fault not in self.WRITE_FAULTS:
+            raise ValueError("write_fault is invalid")
+        self.write_fault = write_fault
+        self.post_requests = 0
+        self.records_created = 0
+        self.post_received = threading.Event()
+        self.release_post = threading.Event()
+        if write_fault != "hold_before_commit":
+            self.release_post.set()
         self._lock = threading.Lock()
         owner = self
 
@@ -187,6 +200,9 @@ class MinimalContactsApplication:
                     self._reply(401, _json_bytes({"error": "delegated_token_required"}),
                                 "application/json")
                     return
+                with owner._lock:
+                    owner.post_requests += 1
+                owner.post_received.set()
                 try:
                     length = int(self.headers.get("Content-Length") or 0)
                     payload = json.loads(self.rfile.read(min(length, 64 * 1024)) or b"{}")
@@ -200,6 +216,10 @@ class MinimalContactsApplication:
                     self._reply(400, _json_bytes({"error": "name_and_email_required"}),
                                 "application/json")
                     return
+                if not owner.release_post.wait(timeout=10):
+                    self._reply(503, _json_bytes({"error": "write_hold_timeout"}),
+                                "application/json")
+                    return
                 with owner._lock:
                     identifier = urllib.parse.quote(
                         name.casefold().replace(" ", "-"), safe="")
@@ -209,6 +229,18 @@ class MinimalContactsApplication:
                         return
                     record = {"id": identifier, "name": name, "email": email}
                     owner.contacts.append(record)
+                    owner.records_created += 1
+                if owner.write_fault == "drop_response":
+                    # The application committed, then the transport disappeared before an
+                    # acknowledgement.  This is deliberately a broken HTTP exchange: the
+                    # adapter must report an unknown outcome and must never retry it.
+                    self.close_connection = True
+                    try:
+                        self.connection.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
+                    self.connection.close()
+                    return
                 self._reply(201, _json_bytes({"contact": record}), "application/json")
 
             def do_GET(self):
@@ -224,6 +256,10 @@ class MinimalContactsApplication:
                 if path == "/healthz":
                     self._reply(200, _json_bytes({"ready": True}), "application/json")
                 elif path == "/api/contacts":
+                    if owner.write_fault == "fail_readback" and owner.records_created:
+                        self._reply(503, _json_bytes({"error": "readback_unavailable"}),
+                                    "application/json; charset=utf-8")
+                        return
                     with owner._lock:
                         records = [dict(item) for item in owner.contacts]
                     self._reply(200, _json_bytes({"contacts": records}),

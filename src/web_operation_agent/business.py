@@ -16,13 +16,13 @@ import time
 import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Callable, Protocol, runtime_checkable
 from urllib.parse import urlsplit
 
 from .answering import StructuredQueryAnswer
 from .evidence import RecordEvidence
 from .identity import OperationContext, PrincipalError
-from .mutation import (MemoryMutationJournal, MutationJournal,
+from .mutation import (MemoryMutationJournal, MutationClaimError, MutationJournal,
                        MutationJournalDurability, MutationJournalError)
 from .schemas import BROWSER_ACTIONS
 
@@ -166,6 +166,17 @@ class BusinessToolContractError(BusinessToolError):
     """The application integration returned data outside its declared contract."""
 
     code = "business_contract"
+
+
+class BusinessMutationBlockedError(BusinessToolError):
+    """A safe product refusal made before the application received a write."""
+
+    code = "business_mutation_blocked"
+
+    def __init__(self, message: str, *, reason: str, state: str = ""):
+        super().__init__(message)
+        self.reason = reason
+        self.state = state
 
 
 class BusinessMutationIndeterminate(RuntimeError):
@@ -1186,7 +1197,8 @@ class BusinessToolRuntime:
     def execute_mutation(self, proposal: BusinessMutationProposal,
                          approved_digest: str,
                          loaded_ids: set[str], *,
-                         context: OperationContext | None = None) -> BusinessToolResult:
+                         context: OperationContext | None = None,
+                         on_claimed: Callable[[], None] | None = None) -> BusinessToolResult:
         if not isinstance(proposal, BusinessMutationProposal):
             raise BusinessToolError("business mutation proposal is invalid")
         digest = proposal.content_digest
@@ -1196,8 +1208,9 @@ class BusinessToolRuntime:
             if prepared != proposal or approved_digest != digest:
                 prior = self._mutation_journal.get(digest)
                 if prepared is None and prior is not None and prior.state != "prepared":
-                    raise BusinessToolError(
-                        f"business mutation proposal is already {prior.state}")
+                    raise BusinessMutationBlockedError(
+                        f"business mutation proposal is already {prior.state}",
+                        reason="already_consumed", state=prior.state)
                 raise BusinessToolError(
                     "business mutation approval does not match the proposal")
             self._validate_call(proposal.tool, proposal.args, loaded_ids, context)
@@ -1210,11 +1223,29 @@ class BusinessToolRuntime:
                     "business mutation proposal names a read-only tool")
             # Claim atomically before dispatch. A competing caller, process restart, timeout,
             # or malformed acknowledgement cannot make the same proposal eligible again.
+            if on_claimed is not None and not callable(on_claimed):
+                raise TypeError("on_claimed must be callable or None")
             try:
                 self._mutation_journal.claim(
                     digest, proposal.operation_context_digest)
+            except MutationClaimError as exc:
+                raise BusinessMutationBlockedError(
+                    str(exc), reason=exc.reason, state=exc.state) from exc
             except MutationJournalError as exc:
                 raise BusinessToolError(str(exc)) from exc
+            if on_claimed is not None:
+                try:
+                    on_claimed()
+                except Exception as exc:
+                    # Nothing reached the application yet.  Release the key with a definite
+                    # failed outcome rather than leaving a false in-flight write behind.
+                    try:
+                        self._mutation_journal.finish(digest, "failed")
+                    except MutationJournalError:
+                        pass
+                    self._forget_mutation(digest)
+                    raise BusinessToolUnavailableError(
+                        "mutation dispatch audit could not be recorded") from exc
         try:
             result = (self._executor.execute_mutation(proposal.tool, proposal.args)
                       if context is None

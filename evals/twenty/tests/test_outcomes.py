@@ -14,7 +14,8 @@ class SharedOutcomeProjectionTests(unittest.TestCase):
             self.assertIsNone(provider_apparatus_code(code), code)
         for code in (
                 "business_request", "business_call_budget", "route_call_budget",
-                "route_refused", "cancelled"):
+                "route_refused", "approval_expired", "business_mutation_blocked",
+                "cancelled"):
             self.assertIsNone(business_apparatus_code(code), code)
 
     def test_external_failures_use_the_frozen_apparatus_classes(self):
@@ -59,6 +60,11 @@ class SharedOutcomeProjectionTests(unittest.TestCase):
             events=[{"event": "business_tool_rejected",
                      "error_code": "business_request"}],
         ), (None, "agent_refused"))
+        self.assertEqual(classify_woa_outcome(
+            terminal_reason="business_mutation_blocked",
+            events=[{"event": "business_mutation_blocked",
+                     "error_code": "business_mutation_blocked"}],
+        ), (None, "business_mutation_blocked"))
 
     def test_woa_boundary_and_transport_failures_are_apparatus_faults(self):
         self.assertEqual(classify_woa_outcome(

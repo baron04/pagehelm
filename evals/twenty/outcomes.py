@@ -10,7 +10,8 @@ _ENGINE_PROVIDER_CODES = frozenset({
 })
 _ENGINE_BUSINESS_CODES = frozenset({
     "business_request", "business_call_budget", "route_call_budget",
-    "route_refused", "approval_denied", "indeterminate_write", "cancelled",
+    "route_refused", "approval_denied", "approval_expired", "indeterminate_write", "cancelled",
+    "business_mutation_blocked",
 })
 _IDENTITY_BUSINESS_CODES = frozenset({
     "business_authentication", "business_identity",
@@ -21,7 +22,9 @@ _WOA_BOUNDARY_IDENTITY_CODES = frozenset({
 _WOA_TRANSPORT_TERMINALS = frozenset({"control_plane_error", "transport_error"})
 _WOA_ENGINE_TERMINALS = frozenset({
     "action_policy_budget", "agent_finished", "agent_refused", "approval_denied",
-    "indeterminate_write", "needs_input", "no_progress", "step_budget", "token_budget",
+    "approval_expired",
+    "business_mutation_blocked", "indeterminate_write", "needs_input", "no_progress",
+    "step_budget", "token_budget",
     "user_cancelled", "wall_clock_budget",
 })
 
@@ -76,7 +79,8 @@ def classify_woa_outcome(*, terminal_reason: str,
             code = event.get("provider_error_code") or "provider_error"
             typed_errors.append(("provider", str(code)))
         elif kind in {
-                "business_mutation_failed", "business_mutation_rejected",
+                "business_mutation_blocked", "business_mutation_failed",
+                "business_mutation_rejected",
                 "business_tool_rejected"}:
             code = event.get("error_code") or "business_tool"
             typed_errors.append(("business", str(code)))

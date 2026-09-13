@@ -151,9 +151,11 @@ class RecordingBusinessRuntime:
         return result
 
     def execute_mutation(self, proposal: Any, approved_digest: str,
-                         loaded_ids: set[str], *, context: Any = None) -> Any:
+                         loaded_ids: set[str], *, context: Any = None,
+                         on_claimed=None) -> Any:
         result = self._inner.execute_mutation(
-            proposal, approved_digest, loaded_ids, context=context)
+            proposal, approved_digest, loaded_ids, context=context,
+            on_claimed=on_claimed)
         self.results.append(json.loads(json.dumps(result.content, ensure_ascii=False)))
         return result
 

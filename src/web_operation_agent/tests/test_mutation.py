@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 from web_operation_agent.mutation import (MemoryMutationJournal,
+                                          MutationClaimError,
                                           MutationJournalDurability,
                                           MutationJournalError,
                                           SQLiteMutationJournal)
@@ -91,6 +92,19 @@ class MutationJournalContract:
         with self.assertRaisesRegex(MutationJournalError, "expired"):
             journal.claim(PROPOSAL, CONTEXT, now_ms=2_000)
         self.assertEqual(journal.get(PROPOSAL).state, "prepared")
+
+    def test_claim_refusals_carry_stable_machine_reasons(self):
+        journal = self.make_journal()
+        journal.register(PROPOSAL, CONTEXT, expires_at=2_000, now_ms=1_000,
+                         business_key="d" * 64)
+        with self.assertRaises(MutationClaimError) as mismatch:
+            journal.claim(PROPOSAL, "e" * 64, now_ms=1_001)
+        self.assertEqual(mismatch.exception.reason, "context_mismatch")
+        journal.claim(PROPOSAL, CONTEXT, now_ms=1_001)
+        with self.assertRaises(MutationClaimError) as consumed:
+            journal.claim(PROPOSAL, CONTEXT, now_ms=1_002)
+        self.assertEqual(consumed.exception.reason, "already_consumed")
+        self.assertEqual(consumed.exception.state, "dispatching")
 
 
 class MemoryMutationJournalTests(MutationJournalContract, unittest.TestCase):

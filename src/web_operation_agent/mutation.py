@@ -35,6 +35,27 @@ class MutationJournalError(RuntimeError):
     """A mutation intent cannot safely transition to the requested state."""
 
 
+class MutationClaimError(MutationJournalError):
+    """A prepared mutation was refused before application dispatch.
+
+    ``reason`` is a stable machine value.  Callers must not recover safety behavior by
+    matching the diagnostic text: the same contract is implemented by both journals and
+    crosses into the product terminal shown for a refused write.
+    """
+
+    REASONS = frozenset({
+        "unknown", "context_mismatch", "expired", "already_consumed",
+        "business_key_unresolved",
+    })
+
+    def __init__(self, message: str, *, reason: str, state: str = ""):
+        if reason not in self.REASONS:
+            raise ValueError("mutation claim reason is invalid")
+        super().__init__(message)
+        self.reason = reason
+        self.state = state if state in _STATES else ""
+
+
 class MutationJournalDurability(str, Enum):
     """Restart behavior a journal implementation explicitly promises."""
 
@@ -181,19 +202,26 @@ class MemoryMutationJournal:
         with self._lock:
             intent = self._records.get(proposal_digest)
             if intent is None:
-                raise MutationJournalError("mutation proposal is unknown")
+                raise MutationClaimError(
+                    "mutation proposal is unknown", reason="unknown")
             if intent.operation_context_digest != operation_context_digest:
-                raise MutationJournalError("mutation proposal belongs to another context")
+                raise MutationClaimError(
+                    "mutation proposal belongs to another context",
+                    reason="context_mismatch")
             if intent.expires_at <= now:
-                raise MutationJournalError("mutation proposal has expired")
+                raise MutationClaimError(
+                    "mutation proposal has expired", reason="expired")
             if intent.state != "prepared":
-                raise MutationJournalError(
-                    f"mutation proposal is already {intent.state}")
+                raise MutationClaimError(
+                    f"mutation proposal is already {intent.state}",
+                    reason="already_consumed", state=intent.state)
             if intent.business_key and any(
                     row.business_key in {"", intent.business_key}
                     and row.state in {"dispatching", "indeterminate"}
                     for row in self._records.values()):
-                raise MutationJournalError("business key has an in-flight or unresolved mutation")
+                raise MutationClaimError(
+                    "business key has an in-flight or unresolved mutation",
+                    reason="business_key_unresolved")
             self._records[proposal_digest] = replace(
                 intent, state="dispatching", updated_at=now)
 
@@ -356,7 +384,9 @@ class SQLiteMutationJournal:
                     "AND state IN ('dispatching', 'indeterminate') LIMIT 1",
                     (intent["business_key"],)).fetchone()
                 if blocked:
-                    raise MutationJournalError("business key has an in-flight or unresolved mutation")
+                    raise MutationClaimError(
+                        "business key has an in-flight or unresolved mutation",
+                        reason="business_key_unresolved")
             changed = connection.execute(
                 "UPDATE mutation_intents SET state = 'dispatching', updated_at = ? "
                 "WHERE proposal_digest = ? AND operation_context_digest = ? "
@@ -370,12 +400,18 @@ class SQLiteMutationJournal:
                 (proposal_digest,)).fetchone()
             connection.rollback()
         if row is None:
-            raise MutationJournalError("mutation proposal is unknown")
+            raise MutationClaimError(
+                "mutation proposal is unknown", reason="unknown")
         if row["operation_context_digest"] != operation_context_digest:
-            raise MutationJournalError("mutation proposal belongs to another context")
+            raise MutationClaimError(
+                "mutation proposal belongs to another context",
+                reason="context_mismatch")
         if row["expires_at"] <= now:
-            raise MutationJournalError("mutation proposal has expired")
-        raise MutationJournalError(f"mutation proposal is already {row['state']}")
+            raise MutationClaimError(
+                "mutation proposal has expired", reason="expired")
+        raise MutationClaimError(
+            f"mutation proposal is already {row['state']}",
+            reason="already_consumed", state=row["state"])
 
     def finish(self, proposal_digest: str, state: str, *,
                result_digest: str = "", reconciliation: dict | None = None,

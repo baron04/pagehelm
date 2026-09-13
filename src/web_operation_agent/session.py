@@ -32,7 +32,8 @@ from . import page_answer
 from .answer_view import render_payload, unavailable_answer
 from .affordance import SourceAffordance, resolve_source_affordances
 from .browser import BrowserExecutor, TransportError, TurnCancelled
-from .business import (BUSINESS_SKILL_MATCHER_VERSION, BusinessMutationIndeterminate,
+from .business import (BUSINESS_SKILL_MATCHER_VERSION, BusinessMutationBlockedError,
+                       BusinessMutationIndeterminate,
                        BusinessSkillSelection, BusinessToolError, BusinessToolResult, FormDraft,
                        BusinessToolRuntime)
 from .contract import (ContractPlanner, EvidenceBundle, PlanningFailed, SourceRetriever,
@@ -1462,6 +1463,16 @@ class ServerAgentSession:
                     approved_context_digest = getattr(
                         grant, "operation_context_digest", "")
                     approval_id = str(getattr(grant, "approval_id", ""))[:200]
+                    if decision == "expired":
+                        self.ledger.append(
+                            "business_mutation_approval_expired", step=step, tool=name,
+                            approval_id=approval_id,
+                            proposal_digest=proposal.content_digest,
+                            dispatched=False, side_effect_possible=False)
+                        return self._finish(
+                            result, t0, "approval_expired",
+                            "business mutation approval expired before dispatch",
+                            steps=step)
                     if decision != "approved":
                         self._business_control["approval_denied"] += 1
                         self.ledger.append(
@@ -1504,16 +1515,28 @@ class ServerAgentSession:
                             result, t0, "user_cancelled",
                             "the user stopped this task before mutation dispatch",
                             steps=step)
-                    self._business_control["mutation_execution_started"] += 1
-                    self.ledger.append(
-                        "business_mutation_execution_started", step=step, tool=name,
-                        approval_id=approval_id,
-                        proposal_digest=proposal.content_digest,
-                        side_effect_possible=True, identity=operation_identity)
+                    def mutation_claimed() -> None:
+                        self.ledger.append(
+                            "business_mutation_execution_started", step=step, tool=name,
+                            approval_id=approval_id,
+                            proposal_digest=proposal.content_digest,
+                            side_effect_possible=True, identity=operation_identity)
+                        self._business_control["mutation_execution_started"] += 1
                     try:
                         tool_result = self.business_tools.execute_mutation(
                             proposal, approved_digest, self._loaded_business_skill_ids,
-                            context=operation_context)
+                            context=operation_context, on_claimed=mutation_claimed)
+                    except BusinessMutationBlockedError as exc:
+                        detail = str(exc)[:500]
+                        self.ledger.append(
+                            "business_mutation_blocked", step=step, tool=name,
+                            approval_id=approval_id,
+                            proposal_digest=proposal.content_digest,
+                            error_code=exc.code, reason=exc.reason, state=exc.state,
+                            detail=detail, dispatched=False,
+                            side_effect_possible=False, identity=operation_identity)
+                        return self._finish(
+                            result, t0, "business_mutation_blocked", detail, steps=step)
                     except BusinessMutationIndeterminate as exc:
                         self._business_control["mutation_indeterminate"] += 1
                         detail = str(exc)[:500]

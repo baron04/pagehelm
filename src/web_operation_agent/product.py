@@ -23,7 +23,7 @@ from .panel_view import panel_limits
 from .browser import TransportError
 from .business import BusinessToolResult, BusinessToolRuntime
 from .conversation import ConversationState
-from .embedded_agent import ApprovalGate
+from .embedded_agent import ApprovalGate, ApprovalGrant
 from .identity import OperationContext, PrincipalError
 from .ledger import SessionLedger
 from .model import require_chat_port
@@ -230,6 +230,21 @@ def render_neutral_user_answer(context: AgentAnswerContext) -> str:
     status = _status_for(context.agent.terminal_reason)
     if status is AgentTurnStatus.INDETERMINATE:
         return "The action outcome is uncertain. It was not retried automatically."
+    if context.agent.terminal_reason == "business_mutation_blocked":
+        if re.search(r"[\u3400-\u9fff]", context.message.text):
+            return "同一业务对象已有正在执行或结果待确认的操作。本次没有再次提交，请先核对上一笔操作。"
+        return ("An operation for the same business object is still running or unresolved. "
+                "Nothing was submitted again; check the earlier operation first.")
+    if context.agent.terminal_reason == "approval_failed":
+        if re.search(r"[\u3400-\u9fff]", context.message.text):
+            return "本次确认已失效或与当前操作不再匹配，因此没有执行写入。请核对当前目标后重新提交。"
+        return ("This confirmation expired or no longer matched the current action, so no "
+                "write was performed. Review the target and submit it again.")
+    if context.agent.terminal_reason == "approval_expired":
+        if re.search(r"[\u3400-\u9fff]", context.message.text):
+            return "本次确认已过期，因此没有执行写入。请核对当前目标后重新提交。"
+        return ("This confirmation expired, so no write was performed. Review the target "
+                "and submit it again.")
     if context.agent.terminal_reason == "no_progress":
         if re.search(r"[\u3400-\u9fff]", context.message.text):
             return "同一步骤没有带来新结果，我已停止重复操作。请补充目标信息后重试。"
@@ -538,13 +553,21 @@ class AgentTurnExecutor:
 
         def approve_business_mutation(
                 proposal, *, context: OperationContext | None = None):
-            return approval_gate.decide_plan(
-                proposal,
-                effect=proposal.effect,
-                targets=proposal.targets,
-                ttl_s=self.config.approval_ttl_s,
-                context=context,
-            )
+            try:
+                return approval_gate.decide_plan(
+                    proposal,
+                    effect=proposal.effect,
+                    targets=proposal.targets,
+                    ttl_s=self.config.approval_ttl_s,
+                    context=context,
+                )
+            except RemoteProtocolError as exc:
+                if exc.code != "approval_expired":
+                    raise
+                return ApprovalGrant(
+                    approval_id="", decision="expired",
+                    plan_digest=proposal.content_digest, decided_at=time.time(),
+                    operation_context_digest=(context.binding_digest if context else ""))
 
         session = ServerAgentSession(
             task=task,
@@ -624,7 +647,9 @@ class AgentTurnExecutor:
                         if (authoritative_projection is not None
                             or agent.verified_answer is not None
                             or status is AgentTurnStatus.NEEDS_INPUT
-                            or agent.terminal_reason == "no_progress")
+                            or agent.terminal_reason in {
+                                "approval_expired", "approval_failed",
+                                "business_mutation_blocked", "no_progress"})
                         else self.answer_renderer(answer_context))
             if not isinstance(rendered, str) or not rendered.strip():
                 raise ValueError("answer renderer returned no text")
@@ -721,9 +746,11 @@ def _status_for(terminal_reason: str) -> AgentTurnStatus:
         return AgentTurnStatus.NEEDS_INPUT
     if terminal_reason == "agent_refused":
         return AgentTurnStatus.REFUSED
+    if terminal_reason == "business_mutation_blocked":
+        return AgentTurnStatus.REFUSED
     if terminal_reason == "no_progress":
         return AgentTurnStatus.REFUSED
-    if terminal_reason in {"approval_denied", "user_cancelled"}:
+    if terminal_reason in {"approval_denied", "approval_expired", "user_cancelled"}:
         return AgentTurnStatus.CANCELLED
     if terminal_reason == "indeterminate_write":
         return AgentTurnStatus.INDETERMINATE

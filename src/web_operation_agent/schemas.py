@@ -151,8 +151,10 @@ SCORABLE_TERMINAL_REASONS = frozenset({
     "no_progress",            # an unchanged decision repeated after one recovery prompt
     "planning_failed",        # the source arm could not produce a valid contract
     "approval_denied",        # the authenticated user declined the proposed effect
+    "approval_expired",       # the visible confirmation elapsed before dispatch
     "user_cancelled",         # the authenticated user stopped the active task
     "business_mutation_failed",  # a known-safe server write refusal was returned
+    "business_mutation_blocked",  # an in-flight/unresolved business key refused dispatch
 })
 
 #: Reasons that invalidate a run: apparatus, not behaviour. Never scored.

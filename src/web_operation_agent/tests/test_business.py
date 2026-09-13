@@ -10,7 +10,8 @@ from types import SimpleNamespace
 
 from web_operation_agent.answering import StructuredQueryAnswer
 from web_operation_agent.business import (
-    BusinessMutationIndeterminate, BusinessMutationSpec, BusinessSelectionOption,
+    BusinessMutationBlockedError, BusinessMutationIndeterminate, BusinessMutationSpec,
+    BusinessSelectionOption,
     BusinessSkill, Citation, FormDraft, FormDraftField,
     BusinessToolContractError, BusinessToolError, BusinessToolIdentityError,
     BusinessToolRequestError, BusinessToolResult, BusinessToolRuntime,
@@ -643,9 +644,10 @@ class BusinessRuntimeValidation(unittest.TestCase):
                 for runtime, name in zip(runtimes, (" Acme ", "Acme"))]
             self.assertNotEqual(proposals[0].content_digest, proposals[1].content_digest)
             journal.claim(proposals[0].content_digest, "")
-            with self.assertRaisesRegex(BusinessToolError, "business key"):
+            with self.assertRaisesRegex(BusinessMutationBlockedError, "business key") as blocked:
                 runtimes[1].execute_mutation(
                     proposals[1], proposals[1].content_digest, {skill.skill_id})
+            self.assertEqual(blocked.exception.reason, "business_key_unresolved")
             self.assertEqual(executors[1].executions, 0)
 
     def test_mutation_requires_exact_approval_and_is_single_use(self):
@@ -673,8 +675,9 @@ class BusinessRuntimeValidation(unittest.TestCase):
             self.assertEqual(
                 journal.get(proposal.content_digest).result_digest,
                 result.content_digest)
-            with self.assertRaisesRegex(BusinessToolError, "already completed"):
+            with self.assertRaisesRegex(BusinessMutationBlockedError, "already completed") as reused:
                 runtime.execute_mutation(proposal, proposal.content_digest, loaded)
+            self.assertEqual(reused.exception.reason, "already_consumed")
             self.assertEqual(executor.executions, 1)
 
     def test_indeterminate_mutation_is_consumed_and_cannot_be_retried(self):
@@ -856,6 +859,51 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertEqual(result.business_control["approval_denied"], 1)
             self.assertEqual(result.business_control["mutation_execution_started"], 0)
             self.assertEqual(len(ledger.of_kind("business_mutation_denied")), 1)
+
+    def test_in_flight_business_key_is_a_product_refusal_before_dispatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _write_skill(Path(tmp) / "write-skill.json")
+            journal = MemoryMutationJournal()
+            first = BusinessToolRuntime(
+                (skill,), _MutationExecutor(), mutation_journal=journal)
+            blocker = first.prepare_mutation(
+                "create_company", {"name": "Acme"}, {skill.skill_id})
+            journal.claim(blocker.content_digest, "")
+
+            executor = _MutationExecutor()
+            runtime = BusinessToolRuntime(
+                (skill,), executor, mutation_journal=journal)
+            chat = _Chat([
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("create_company", {"name": " Acme "}),
+            ])
+            ledger = SessionLedger(Path(tmp) / "session.jsonl", "write-blocked")
+
+            def approve(proposal):
+                return SimpleNamespace(
+                    approval_id="approval-2", decision="approved",
+                    plan_digest=proposal.content_digest)
+
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="Create company Acme.",
+                              supported_scope="Create exactly one company."),
+                chat=chat, browser=_Browser(), control=ReadOnlyControl(),
+                ledger=ledger, step_budget=3, wall_budget_s=30,
+                run_id="write-blocked", business_tools=runtime,
+                business_mutation_approval=approve)
+            session.entry_observation = _observation(1)
+            session.plan()
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "business_mutation_blocked")
+            self.assertEqual(executor.executions, 0)
+            self.assertEqual(result.business_control["approval_granted"], 1)
+            self.assertEqual(result.business_control["mutation_execution_started"], 0)
+            self.assertEqual(len(ledger.of_kind("business_mutation_execution_started")), 0)
+            event = ledger.of_kind("business_mutation_blocked")[-1]
+            self.assertEqual(event["reason"], "business_key_unresolved")
+            self.assertFalse(event["dispatched"])
+            self.assertFalse(event["side_effect_possible"])
 
     def test_cancellation_after_approval_never_dispatches_the_mutation(self):
         with tempfile.TemporaryDirectory() as tmp:
