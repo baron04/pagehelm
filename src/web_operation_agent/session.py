@@ -34,8 +34,8 @@ from .affordance import SourceAffordance, resolve_source_affordances
 from .browser import BrowserExecutor, TransportError, TurnCancelled
 from .business import (BUSINESS_SKILL_MATCHER_VERSION, BusinessMutationBlockedError,
                        BusinessMutationIndeterminate,
-                       BusinessSkillSelection, BusinessToolError, BusinessToolResult, FormDraft,
-                       BusinessToolRuntime)
+                       BusinessSkillSelection, BusinessToolError, BusinessToolPermissionError,
+                       BusinessToolResult, FormDraft, BusinessToolRuntime)
 from .contract import (ContractPlanner, EvidenceBundle, PlanningFailed, SourceRetriever,
                        _segment_from_template, expand_terms)
 from .controlplane import ControlPlaneClient, ControlPlaneError
@@ -1403,6 +1403,13 @@ class ServerAgentSession:
                         proposal = self.business_tools.prepare_mutation(
                             name, args, self._loaded_business_skill_ids,
                             context=operation_context)
+                    except BusinessToolPermissionError as exc:
+                        # The actor's authority answered, and it is final for this turn.
+                        # Handing it back to the model would only invite a page route to the
+                        # same effect, which is exactly the downgrade that must not happen.
+                        return self._permission_denied(
+                            result, t0, step, name, exc, dispatched=False,
+                            identity=operation_identity)
                     except BusinessToolError as exc:
                         detail = str(exc)[:500]
                         self.ledger.append(
@@ -1551,6 +1558,12 @@ class ServerAgentSession:
                             side_effect_possible=True, identity=operation_identity)
                         return self._finish(
                             result, t0, "indeterminate_write", detail, steps=step)
+                    except BusinessToolPermissionError as exc:
+                        # The application received the request and refused it itself; its
+                        # refusal is definite, so this is not an uncertain write.
+                        return self._permission_denied(
+                            result, t0, step, name, exc, dispatched=True,
+                            identity=operation_identity, approval_id=approval_id)
                     except BusinessToolError as exc:
                         detail = str(exc)[:500]
                         self.ledger.append(
@@ -3075,6 +3088,21 @@ class ServerAgentSession:
             and self._latest_business_query_page_actions == self.page_actions
             and self.page_actions >= minimum
         )
+
+    def _permission_denied(self, result: RunResult, t0: float, step: int, name: str,
+                           exc: BusinessToolPermissionError, *, dispatched: bool,
+                           identity: dict, approval_id: str = "") -> RunResult:
+        """End the turn on an authorization refusal, recording which layer refused.
+
+        `dispatched` is true only when the application itself received the request and
+        refused it; either way the refusal is definite, so no side effect is possible.
+        """
+        self.ledger.append(
+            "business_mutation_permission_denied", step=step, tool=name,
+            approval_id=approval_id, error_code=exc.code, layer=exc.layer,
+            required_scope=exc.required_scope, dispatched=dispatched,
+            side_effect_possible=False, identity=identity)
+        return self._finish(result, t0, "permission_denied", str(exc)[:500], steps=step)
 
     def _finish(self, result: RunResult, t0: float, reason: str, detail: str = "",
                 steps: int = 0) -> RunResult:

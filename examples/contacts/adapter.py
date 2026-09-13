@@ -48,7 +48,9 @@ from web_operation_agent.business import (
     BusinessMutationIndeterminate,
     BusinessMutationSpec,
     BusinessSkill,
+    BusinessToolAuthenticationError,
     BusinessToolError,
+    BusinessToolPermissionError,
     BusinessToolResult,
     BusinessToolRuntime,
     business_text_key,
@@ -138,6 +140,14 @@ class _ContactsToolExecutor:
             effects[CREATE_CONTACT] = "write"
         return effects
 
+    @staticmethod
+    def _scope(context) -> str:
+        """What a read covered: the actor's own workspace, never the application at large."""
+        principal = getattr(context, "principal", None)
+        if principal is not None:
+            return f"workspace {principal.workspace_id}: contacts the current actor may read"
+        return "contacts the delegated actor may read"
+
     def execute(self, name: str, args: dict, *, context=None) -> BusinessToolResult:
         if name != "list_contacts" or set(args) - {"name_contains"}:
             raise BusinessToolError("invalid contact query")
@@ -145,9 +155,22 @@ class _ContactsToolExecutor:
         if (not isinstance(query, str) or len(query) > 120
                 or re.search(r"[\x00-\x1f\x7f]", query)):
             raise BusinessToolError("name_contains must be a string of at most 120 characters")
+        # Reads go out under the delegated actor too. What comes back is what the
+        # application lets that actor see, which is the only scope an answer may claim.
+        request = urllib.request.Request(
+            self.origin + "/api/contacts",
+            headers={"Authorization": f"Bearer {self._api_token}"})
         try:
-            with urllib.request.urlopen(self.origin + "/api/contacts", timeout=3) as response:
+            with urllib.request.urlopen(request, timeout=3) as response:
                 payload = json.load(response)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 401:
+                raise BusinessToolAuthenticationError(
+                    "the delegated credential was refused") from exc
+            if exc.code == 403:
+                raise BusinessToolPermissionError(
+                    "the application does not let this actor read contacts") from exc
+            raise BusinessToolError("the contacts API is unavailable") from exc
         except (OSError, ValueError, urllib.error.URLError) as exc:
             raise BusinessToolError("the contacts API is unavailable") from exc
         source = payload.get("contacts") if isinstance(payload, dict) else None
@@ -173,9 +196,11 @@ class _ContactsToolExecutor:
             })
         routes = tuple(item["ui_path"] for item in matched)
         conditions = (f"name case-insensitive substring {query!r}",) if query else ("no filter",)
+        scope = self._scope(context)
         origin = Origin(kind="typed", reference="list_contacts", observed_at=datetime.now(timezone.utc).isoformat(),
-                        scope="synthetic_local_workspace; " + "; ".join(conditions))
+                        scope=scope + "; " + "; ".join(conditions))
         evidence = [QueryEvidence(evidence_id="query#1", origin=origin, collection="contacts",
+                                  looked_for=query,
                                   conditions=conditions, matched_count=len(matched),
                                   records_scanned=len(source), covers_whole_scope=True)]
         for row in matched:
@@ -189,7 +214,7 @@ class _ContactsToolExecutor:
                 "contacts": matched,
                 "matched_count": len(matched),
                 "source_total": len(source),
-                "scope": "synthetic_local_workspace",
+                "scope": scope,
                 "completeness": {
                     "source_complete": True,
                     "result_truncated": False,
@@ -220,8 +245,14 @@ class _ContactsToolExecutor:
             # body may quote record content, and only the shape of the answer crosses.
             if exc.code == 409:
                 raise BusinessToolError("a contact with that name already exists") from exc
-            if exc.code in (401, 403):
-                raise BusinessToolError("the delegated credential was refused") from exc
+            if exc.code == 401:
+                raise BusinessToolAuthenticationError(
+                    "the delegated credential was refused") from exc
+            if exc.code == 403:
+                # Definite: the application turned the request away before storing anything,
+                # so this is an authorization result and not an uncertain write.
+                raise BusinessToolPermissionError(
+                    "the application does not let this actor create contacts") from exc
             raise BusinessToolError(f"the contacts API returned HTTP {exc.code}") from exc
         except (OSError, ValueError) as exc:
             # Unlike the refusals above, this may have arrived and been lost on the way
@@ -298,7 +329,7 @@ class _ContactsToolExecutor:
             content={
                 "created": True, "readback_verified": True,
                 "contact": {**readback[0]},
-                "scope": "synthetic_local_workspace",
+                "scope": self._scope(context),
             },
             audit={
                 "application": "minimal-contacts", "operation": name,
@@ -334,7 +365,8 @@ class _ContactsIdentityPort:
         self.required_scopes = frozenset(scopes)
         self.lifetime_s = lifetime_s
 
-    def _whoami(self, headers: dict, expected_source: str) -> IdentityAssertion:
+    def _whoami(self, headers: dict,
+                expected_source: str) -> tuple[IdentityAssertion, frozenset[str]]:
         request = urllib.request.Request(self.origin + "/api/whoami", headers=headers)
         try:
             with urllib.request.urlopen(request, timeout=3) as response:
@@ -343,25 +375,36 @@ class _ContactsIdentityPort:
             raise PrincipalError("the contacts identity endpoint is unavailable") from exc
         if not isinstance(payload, dict) or payload.get("source") != expected_source:
             raise PrincipalError("the contacts identity answer is not the expected side")
+        permissions = payload.get("permissions")
+        if not isinstance(permissions, list) or any(
+                not isinstance(item, str) for item in permissions):
+            raise PrincipalError("the contacts identity answer carries no permissions")
         import time
         issued = int(time.time() * 1000)
         return IdentityAssertion(
             schema_version=PRINCIPAL_CONTEXT_VERSION, source=expected_source,
             application_id=APPLICATION_ID, tenant_id="synthetic",
             workspace_id=str(payload["workspace"]), actor_id=str(payload["actor"]),
-            issued_at=issued, expires_at=issued + self.lifetime_s * 1000)
+            issued_at=issued, expires_at=issued + self.lifetime_s * 1000,
+        ), frozenset(permissions)
 
     def page_identity(self, session_cookie: str) -> IdentityAssertion:
         """What the *browser* is, asked of the application with the browser's own cookie."""
-        return self._whoami({"Cookie": session_cookie}, "page_session")
+        return self._whoami({"Cookie": session_cookie}, "page_session")[0]
 
     def bind(self, page_identity: IdentityAssertion, *, delegation_id: str,
              lifetime_s: int = 300, now_ms: int | None = None) -> PrincipalContext:
-        delegated = self._whoami({"Authorization": f"Bearer {self._api_token}"},
-                                 "delegated_api")
+        delegated, permissions = self._whoami(
+            {"Authorization": f"Bearer {self._api_token}"}, "delegated_api")
+        # The principal carries what the catalog needs *and* the application grants this
+        # actor -- never the catalog alone. A read-only user in a composition that offers a
+        # write gets a principal the framework's per-tool scope check refuses the write on.
+        granted = self.required_scopes & permissions
+        if not granted:
+            raise PrincipalError("the actor holds none of the scopes this integration uses")
         return bind_matching_identity(
             page_identity, delegated, delegation_id=delegation_id,
-            scopes=tuple(sorted(self.required_scopes)), now_ms=now_ms)
+            scopes=tuple(sorted(granted)), now_ms=now_ms)
 
     def validate(self, principal: PrincipalContext | None, *,
                  application_id: str) -> None:

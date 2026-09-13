@@ -4,20 +4,25 @@ A real integration deletes this file: the application already exists. It is here
 example runs end to end without provisioning anything, and so the adapter next door has
 something concrete to bind to. It serves one list page and one record page per contact,
 plus the same-origin PageController the SPI requires the application itself to host.
+
+It also has the two things an application's own authority is made of, in their smallest
+form: actors with different permissions, and workspaces whose records are invisible to each
+other. Both workspaces deliberately hold contacts with the same names -- an integration that
+leaks across workspaces, or lets a record it cannot see decide that something "already
+exists", is found out by exactly that.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
+import html
 import json
 import socket
 import threading
-import urllib.error
 import urllib.parse
-import urllib.request
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from importlib.resources import files
 
 
 
@@ -26,6 +31,15 @@ DEMO_CONTACTS = (
     {"id": "grace-hopper", "name": "Grace Hopper", "email": "grace@example.test"},
     {"id": "alan-turing", "name": "Alan Turing", "email": "alan@example.test"},
 )
+#: Another organisation's records. Two names repeat names above on purpose.
+SOUTHWIND_CONTACTS = (
+    {"id": "grace-hopper", "name": "Grace Hopper", "email": "grace.hopper@southwind.test"},
+    {"id": "radia-perlman", "name": "Radia Perlman", "email": "radia@southwind.test"},
+    {"id": "katherine-johnson", "name": "Katherine Johnson",
+     "email": "katherine@southwind.test"},
+)
+DEMO_WORKSPACE = "northstar"
+OTHER_WORKSPACE = "southwind"
 
 #: The two credentials a writeable integration needs, in their smallest honest form. A real
 #: application already has both: a browser session it set at sign-in, and a delegated
@@ -36,7 +50,30 @@ DEMO_SESSION_VALUE = "session-ada-northstar"
 DEMO_API_TOKEN = "token-ada-northstar"
 #: Who both of them resolve to. A framework that could not compare these would be trusting
 #: whichever side happened to answer first.
-DEMO_ACTOR = {"workspace": "northstar", "actor": "ada-lovelace"}
+DEMO_ACTOR = {"workspace": DEMO_WORKSPACE, "actor": "ada-lovelace"}
+
+
+@dataclass(frozen=True, slots=True)
+class DemoActor:
+    """One synthetic user: where they work, how they sign in, and what they may do."""
+
+    actor: str
+    workspace: str
+    session: str
+    token: str
+    permissions: tuple[str, ...]
+
+
+DEMO_ACTORS = (
+    DemoActor("ada-lovelace", DEMO_WORKSPACE, DEMO_SESSION_VALUE, DEMO_API_TOKEN,
+              ("contacts:read", "contacts:write")),
+    #: Same workspace, and the application lets her read and nothing else.
+    DemoActor("rosalind-franklin", DEMO_WORKSPACE, "session-rosalind-northstar",
+              "token-rosalind-northstar", ("contacts:read",)),
+    DemoActor("mary-jackson", OTHER_WORKSPACE, "session-mary-southwind",
+              "token-mary-southwind", ("contacts:read", "contacts:write")),
+)
+ACTORS_BY_ID = {item.actor: item for item in DEMO_ACTORS}
 _MODEL_ENV_KEYS = (
     "AGENT_OPENAI_BASE_URL",
     "AGENT_OPENAI_API_KEY",
@@ -48,8 +85,9 @@ def _json_bytes(value: object) -> bytes:
             + "\n").encode("utf-8")
 
 
-def _html(source_contacts: Sequence[Mapping[str, str]]) -> bytes:
+def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str) -> bytes:
     contacts = json.dumps(source_contacts, ensure_ascii=False).replace("</", "<\\/")
+    title = html.escape(workspace.title())
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -85,7 +123,7 @@ def _html(source_contacts: Sequence[Mapping[str, str]]) -> bytes:
   </style>
 </head>
 <body>
-  <header><strong>Northstar Contacts</strong><span>Synthetic local workspace</span></header>
+  <header><strong>{title} Contacts</strong><span>Synthetic local workspace</span></header>
   <main id="app"></main>
   <script>
     // Server-rendered for the first paint, then refetched on every navigation. A snapshot
@@ -134,23 +172,37 @@ def _html(source_contacts: Sequence[Mapping[str, str]]) -> bytes:
 """.encode("utf-8")
 
 
+def _validated(contacts: Sequence[Mapping[str, str]]) -> list[dict[str, str]]:
+    records = [{key: str(value) for key, value in item.items()} for item in contacts]
+    if any(set(item) != {"id", "name", "email"} for item in records):
+        raise ValueError("contacts must contain id, name, and email")
+    return records
+
+
 class MinimalContactsApplication:
     """Loopback first-party application and typed API backed by synthetic resettable data."""
 
     WRITE_FAULTS = frozenset({"", "hold_before_commit", "drop_response", "fail_readback"})
 
     def __init__(self, *, contacts: Sequence[Mapping[str, str]] = DEMO_CONTACTS,
+                 other_contacts: Sequence[Mapping[str, str]] = SOUTHWIND_CONTACTS,
                  write_fault: str = ""):
         # Mutable now: the example gained a write, and a store that cannot change cannot
         # demonstrate one. `_lock` is what keeps the create and the readback consistent.
-        self.contacts = [{key: str(value) for key, value in item.items()}
-                         for item in contacts]
-        if not self.contacts or any(set(item) != {"id", "name", "email"}
-                                    for item in self.contacts):
+        self.workspaces = {DEMO_WORKSPACE: _validated(contacts),
+                           OTHER_WORKSPACE: _validated(other_contacts)}
+        if not self.workspaces[DEMO_WORKSPACE]:
             raise ValueError("contacts must contain id, name, and email")
+        #: The demo workspace's records, which is what a single-workspace reader expects.
+        self.contacts = self.workspaces[DEMO_WORKSPACE]
         if write_fault not in self.WRITE_FAULTS:
             raise ValueError("write_fault is invalid")
         self.write_fault = write_fault
+        #: Every POST this application received, refused or not.
+        self.write_requests = 0
+        #: POSTs the application's own authentication or permissions turned away.
+        self.refused_writes = 0
+        #: POSTs from a permitted actor that reached the store.
         self.post_requests = 0
         self.records_created = 0
         self.post_received = threading.Event()
@@ -173,32 +225,42 @@ class MinimalContactsApplication:
                 self.end_headers()
                 self.wfile.write(body)
 
-            def _actor(self) -> dict | None:
+            def _actor(self) -> tuple[DemoActor, str] | None:
                 """Who this request is, by whichever credential it carried."""
                 cookies = self.headers.get("Cookie") or ""
                 authorization = self.headers.get("Authorization") or ""
-                session = any(
-                    piece.strip() == f"{DEMO_SESSION_COOKIE}={DEMO_SESSION_VALUE}"
-                    for piece in cookies.split(";"))
-                token = authorization == f"Bearer {DEMO_API_TOKEN}"
-                if not (session or token):
-                    return None
-                # The assertion carries identifiers and nothing else. A page that could read
-                # its own credential back out of this would be a credential in the DOM.
-                return {**DEMO_ACTOR, "source": "page_session" if session else "delegated_api"}
+                pieces = {piece.strip() for piece in cookies.split(";")}
+                for actor in DEMO_ACTORS:
+                    if f"{DEMO_SESSION_COOKIE}={actor.session}" in pieces:
+                        return actor, "page_session"
+                    if authorization == f"Bearer {actor.token}":
+                        return actor, "delegated_api"
+                return None
+
+            def _refuse_write(self, status: int, error: str) -> None:
+                with owner._lock:
+                    owner.refused_writes += 1
+                self._reply(status, _json_bytes({"error": error}), "application/json")
 
             def do_POST(self):
                 path = urllib.parse.urlsplit(self.path).path
-                actor = self._actor()
+                with owner._lock:
+                    owner.write_requests += 1
+                resolved = self._actor()
                 if path != "/api/contacts":
-                    self._reply(404, b"not found\n", "text/plain; charset=utf-8")
+                    self._refuse_write(404, "not_found")
                     return
-                if actor is None or actor["source"] != "delegated_api":
+                if resolved is None or resolved[1] != "delegated_api":
                     # A write takes the delegated credential, never the browser session:
                     # a page that could write with its own cookie is a CSRF away from a
                     # write nobody asked for.
-                    self._reply(401, _json_bytes({"error": "delegated_token_required"}),
-                                "application/json")
+                    self._refuse_write(401, "delegated_token_required")
+                    return
+                actor = resolved[0]
+                if "contacts:write" not in actor.permissions:
+                    # The application's own authority, independent of anything an
+                    # integration decided before sending the request.
+                    self._refuse_write(403, "forbidden")
                     return
                 with owner._lock:
                     owner.post_requests += 1
@@ -221,14 +283,16 @@ class MinimalContactsApplication:
                                 "application/json")
                     return
                 with owner._lock:
+                    store = owner.workspaces[actor.workspace]
                     identifier = urllib.parse.quote(
                         name.casefold().replace(" ", "-"), safe="")
-                    if any(item["id"] == identifier for item in owner.contacts):
+                    # Uniqueness is the workspace's, like every other rule about its records.
+                    if any(item["id"] == identifier for item in store):
                         self._reply(409, _json_bytes({"error": "already_exists"}),
                                     "application/json")
                         return
                     record = {"id": identifier, "name": name, "email": email}
-                    owner.contacts.append(record)
+                    store.append(record)
                     owner.records_created += 1
                 if owner.write_fault == "drop_response":
                     # The application committed, then the transport disappeared before an
@@ -245,23 +309,35 @@ class MinimalContactsApplication:
 
             def do_GET(self):
                 path = urllib.parse.urlsplit(self.path).path
+                resolved = self._actor()
                 if path == "/api/whoami":
-                    actor = self._actor()
-                    if actor is None:
+                    if resolved is None:
                         self._reply(401, _json_bytes({"error": "unauthenticated"}),
                                     "application/json")
                     else:
-                        self._reply(200, _json_bytes(actor), "application/json")
+                        actor, source = resolved
+                        # The assertion carries identifiers and permissions, and nothing
+                        # else. A page that could read its own credential back out of this
+                        # would be a credential in the DOM.
+                        self._reply(200, _json_bytes({
+                            "workspace": actor.workspace, "actor": actor.actor,
+                            "source": source, "permissions": list(actor.permissions),
+                        }), "application/json")
                     return
                 if path == "/healthz":
                     self._reply(200, _json_bytes({"ready": True}), "application/json")
                 elif path == "/api/contacts":
+                    if resolved is None:
+                        self._reply(401, _json_bytes({"error": "unauthenticated"}),
+                                    "application/json")
+                        return
                     if owner.write_fault == "fail_readback" and owner.records_created:
                         self._reply(503, _json_bytes({"error": "readback_unavailable"}),
                                     "application/json; charset=utf-8")
                         return
                     with owner._lock:
-                        records = [dict(item) for item in owner.contacts]
+                        records = [dict(item)
+                                   for item in owner.workspaces[resolved[0].workspace]]
                     self._reply(200, _json_bytes({"contacts": records}),
                                 "application/json; charset=utf-8")
                 elif path == "/woa/page-controller.js":
@@ -273,7 +349,16 @@ class MinimalContactsApplication:
                               / "page_controller.js").read_bytes()
                     self._reply(200, source, "text/javascript; charset=utf-8")
                 elif path == "/contacts" or path.startswith("/contacts/"):
-                    self._reply(200, _html(owner.contacts), "text/html; charset=utf-8")
+                    if resolved is None or resolved[1] != "page_session":
+                        self._reply(401, b"<!doctype html><title>Sign in</title>"
+                                         b"<h1>Sign in required</h1>\n",
+                                    "text/html; charset=utf-8")
+                        return
+                    actor = resolved[0]
+                    with owner._lock:
+                        records = [dict(item) for item in owner.workspaces[actor.workspace]]
+                    self._reply(200, _html(records, actor.workspace),
+                                "text/html; charset=utf-8")
                 elif path == "/":
                     self.send_response(302)
                     self.send_header("Location", "/contacts")

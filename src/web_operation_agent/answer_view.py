@@ -25,6 +25,7 @@ _WORDS = {
     "zh": {
         "undetermined": "无法确定",
         "not_found": "未找到",
+        "not_found_scope": "仅指本次查询过、且当前账号有权访问的范围，不代表整个系统中不存在",
         "partial": "已回答目前可以确认的部分",
         "partial_why": "还无法确认",
         "gap": "缺口",
@@ -40,6 +41,8 @@ _WORDS = {
     "en": {
         "undetermined": "Could not determine",
         "not_found": "Not found",
+        "not_found_scope": ("only within what this search covered and the current account can "
+                            "access; not a claim that it exists nowhere"),
         "partial": "Answered the part supported by current data",
         "partial_why": "still not confirmed",
         "gap": "gap",
@@ -212,8 +215,11 @@ def _one(words: dict, item: dict, *, presentation: str) -> list[str]:
     if kind == "not_found":
         # The normal answer names the thing that was absent. Executed filters and scope are
         # already available in the separate answer-basis disclosure; repeating adapter query
-        # syntax here turns a one-line response into an internal diagnostic.
-        return [f"**{words['not_found']}**：{_literal(item['looked_for'])}"]
+        # syntax here turns a one-line response into an internal diagnostic. What stays is
+        # the limit of the claim: a search sees only what this actor may see, so absence
+        # there says nothing about records in a scope the actor cannot read.
+        return [f"**{words['not_found']}**：{_literal(item['looked_for'])}",
+                f"> {words['not_found_scope']}"]
     if kind == "undetermined":
         return [f"**{words['undetermined']}**：{_literal(item['about'])}",
                 f"> {words['gap']}：{_literal(item['gap'])}"]

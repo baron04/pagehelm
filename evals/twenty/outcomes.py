@@ -12,6 +12,9 @@ _ENGINE_BUSINESS_CODES = frozenset({
     "business_request", "business_call_budget", "route_call_budget",
     "route_refused", "approval_denied", "approval_expired", "indeterminate_write", "cancelled",
     "business_mutation_blocked",
+    # An authenticated actor's own authority refusing an operation is behaviour to score,
+    # not a broken credential: the credential worked and named the actor who was refused.
+    "business_permission_denied",
 })
 _IDENTITY_BUSINESS_CODES = frozenset({
     "business_authentication", "business_identity",
@@ -24,7 +27,7 @@ _WOA_ENGINE_TERMINALS = frozenset({
     "action_policy_budget", "agent_finished", "agent_refused", "approval_denied",
     "approval_expired",
     "business_mutation_blocked", "indeterminate_write", "needs_input", "no_progress",
-    "step_budget", "token_budget",
+    "permission_denied", "step_budget", "token_budget",
     "user_cancelled", "wall_clock_budget",
 })
 
@@ -80,7 +83,7 @@ def classify_woa_outcome(*, terminal_reason: str,
             typed_errors.append(("provider", str(code)))
         elif kind in {
                 "business_mutation_blocked", "business_mutation_failed",
-                "business_mutation_rejected",
+                "business_mutation_permission_denied", "business_mutation_rejected",
                 "business_tool_rejected"}:
             code = event.get("error_code") or "business_tool"
             typed_errors.append(("business", str(code)))

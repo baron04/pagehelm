@@ -14,8 +14,8 @@ from web_operation_agent.business import (
     BusinessSelectionOption,
     BusinessSkill, Citation, FormDraft, FormDraftField,
     BusinessToolContractError, BusinessToolError, BusinessToolIdentityError,
-    BusinessToolRequestError, BusinessToolResult, BusinessToolRuntime,
-    BusinessToolUnavailableError,
+    BusinessToolPermissionError, BusinessToolRequestError, BusinessToolResult,
+    BusinessToolRuntime, BusinessToolUnavailableError,
 )
 from web_operation_agent.application import ResultPostconditionVerifier
 from web_operation_agent.embedded_agent import ReadOnlyControl
@@ -480,10 +480,11 @@ class BusinessRuntimeValidation(unittest.TestCase):
                 "query_companies", {}, loaded,
                 context=_operation_context(scopes=("companies:read",)))
             self.assertEqual(result.content["matched_count"], 1)
-            with self.assertRaisesRegex(BusinessToolError, "required operation scope"):
+            with self.assertRaises(BusinessToolPermissionError) as refused:
                 runtime.execute(
                     "query_companies", {}, loaded,
                     context=_operation_context(scopes=("companies:write",)))
+            self.assertEqual(refused.exception.required_scope, "companies:read")
             with self.assertRaisesRegex(BusinessToolError, "another application"):
                 runtime.execute(
                     "query_companies", {}, loaded,
@@ -904,6 +905,153 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertEqual(event["reason"], "business_key_unresolved")
             self.assertFalse(event["dispatched"])
             self.assertFalse(event["side_effect_possible"])
+
+    def test_a_missing_scope_is_a_typed_permission_refusal_not_an_identity_fault(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _write_skill(Path(tmp) / "write-skill.json")
+            runtime = BusinessToolRuntime(
+                (skill,), _MutationExecutor(), application_id="fixture",
+                required_scopes={"create_company": "companies:write"})
+            with self.assertRaises(BusinessToolPermissionError) as refused:
+                runtime.prepare_mutation(
+                    "create_company", {"name": "Acme"}, {skill.skill_id},
+                    context=_operation_context(scopes=("companies:read",)))
+            self.assertEqual(refused.exception.code, "business_permission_denied")
+            self.assertEqual(refused.exception.layer, "tool_authorization")
+            self.assertEqual(refused.exception.required_scope, "companies:write")
+            # A principal for another application is still an identity fault, told apart
+            # by its type rather than by what its message says.
+            with self.assertRaises(BusinessToolIdentityError) as identity:
+                runtime.prepare_mutation(
+                    "create_company", {"name": "Acme"}, {skill.skill_id},
+                    context=_operation_context(application_id="another-app"))
+            self.assertNotIsInstance(identity.exception, BusinessToolPermissionError)
+
+    def _principal_bound_session(self, tmp, runtime, chat, context, approve, run_id):
+        session = ServerAgentSession(
+            task=TaskSpec(task_ref="T", prompt="Create company Acme.",
+                          supported_scope="Create exactly one company."),
+            chat=chat, browser=_Browser(), control=ReadOnlyControl(),
+            ledger=SessionLedger(Path(tmp) / "session.jsonl", run_id),
+            step_budget=5, wall_budget_s=30, run_id=run_id, business_tools=runtime,
+            business_mutation_approval=approve, principal=context.principal,
+            session_id=context.session_id, turn_id=context.turn_id)
+        session.entry_observation = _observation(1)
+        session.plan()
+        return session
+
+    def test_a_tool_authorization_refusal_ends_the_turn_before_a_proposal_or_page_route(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _write_skill(Path(tmp) / "write-skill.json")
+            executor = _MutationExecutor()
+            runtime = BusinessToolRuntime(
+                (skill,), executor, application_id="fixture",
+                required_scopes={"create_company": "companies:write"})
+            chat = _Chat([
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("create_company", {"name": "Acme"}),
+                ("click", {"ref": "e1"}),
+            ])
+            asked = []
+            session = self._principal_bound_session(
+                tmp, runtime, chat, _operation_context(scopes=("companies:read",)),
+                lambda proposal, **_: asked.append(proposal), "write-forbidden")
+            browser = session.browser
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "permission_denied")
+            self.assertEqual(executor.executions, 0)
+            self.assertEqual(asked, [])
+            self.assertEqual(len(chat.messages), 2, "the model is not asked again")
+            self.assertEqual(browser.actions, [])
+            self.assertEqual(result.business_control["approval_requested"], 0)
+            ledger = session.ledger
+            self.assertEqual(ledger.of_kind("business_mutation_proposed"), [])
+            event = ledger.of_kind("business_mutation_permission_denied")[-1]
+            self.assertEqual(event["layer"], "tool_authorization")
+            self.assertEqual(event["required_scope"], "companies:write")
+            self.assertEqual(event["error_code"], "business_permission_denied")
+            self.assertFalse(event["dispatched"])
+            self.assertFalse(event["side_effect_possible"])
+
+    def test_an_application_refusal_after_dispatch_is_definite_not_indeterminate(self):
+        class RefusingExecutor(_MutationExecutor):
+            def execute_mutation(self, name, args, *, context=None):
+                self.executions += 1
+                raise BusinessToolPermissionError("the application refused this actor")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _write_skill(Path(tmp) / "write-skill.json")
+            executor = RefusingExecutor()
+            journal = MemoryMutationJournal()
+            runtime = BusinessToolRuntime(
+                (skill,), executor, application_id="fixture", mutation_journal=journal,
+                required_scopes={"create_company": "companies:write"})
+            chat = _Chat([
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("create_company", {"name": "Acme"}),
+            ])
+
+            def approve(proposal, *, context=None):
+                return SimpleNamespace(
+                    approval_id="approval-1", decision="approved",
+                    plan_digest=proposal.content_digest,
+                    operation_context_digest=context.binding_digest)
+
+            session = self._principal_bound_session(
+                tmp, runtime, chat, _operation_context(), approve, "write-refused")
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "permission_denied")
+            self.assertEqual(executor.executions, 1)
+            self.assertEqual(result.business_control["mutation_indeterminate"], 0)
+            ledger = session.ledger
+            self.assertEqual(ledger.of_kind("business_mutation_indeterminate"), [])
+            event = ledger.of_kind("business_mutation_permission_denied")[-1]
+            self.assertEqual(event["layer"], "application")
+            self.assertEqual(event["approval_id"], "approval-1")
+            self.assertTrue(event["dispatched"])
+            self.assertFalse(event["side_effect_possible"])
+            digest = ledger.of_kind("business_mutation_proposed")[-1]["proposal"]["digest"]
+            self.assertEqual(journal.get(digest).state, "failed")
+
+    def test_an_unresolved_write_in_another_workspace_does_not_block_this_one(self):
+        def context_in(workspace, operation_id):
+            now = int(time.time() * 1000)
+            principal = PrincipalContext(
+                1, "fixture", "tenant-1", workspace, "actor-1", "delegation-1",
+                now - 1_000, now + 60_000, ("companies:write",))
+            return OperationContext.create(
+                principal, session_id="session-1", turn_id="message-1",
+                operation_id=operation_id, deadline_ms=now + 30_000, now_ms=now)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _write_skill(Path(tmp) / "write-skill.json")
+            journal = MemoryMutationJournal()
+            runtime = BusinessToolRuntime(
+                (skill,), _MutationExecutor(), application_id="fixture",
+                mutation_journal=journal,
+                required_scopes={"create_company": "companies:write"})
+            loaded = {skill.skill_id}
+            elsewhere = context_in("workspace-2", "op-elsewhere")
+            blocker = runtime.prepare_mutation(
+                "create_company", {"name": "Acme"}, loaded, context=elsewhere)
+            journal.claim(blocker.content_digest, blocker.operation_context_digest)
+
+            here = context_in("workspace-1", "op-here")
+            proposal = runtime.prepare_mutation(
+                "create_company", {"name": "Acme"}, loaded, context=here)
+            created = runtime.execute_mutation(
+                proposal, proposal.content_digest, loaded, context=here)
+            self.assertTrue(created.content["created"])
+
+            # The reverse check: the same name in the blocker's own workspace is blocked.
+            again = context_in("workspace-2", "op-again")
+            repeat = runtime.prepare_mutation(
+                "create_company", {"name": "Acme"}, loaded, context=again)
+            with self.assertRaises(BusinessMutationBlockedError):
+                runtime.execute_mutation(
+                    repeat, repeat.content_digest, loaded, context=again)
 
     def test_cancellation_after_approval_never_dispatches_the_mutation(self):
         with tempfile.TemporaryDirectory() as tmp:

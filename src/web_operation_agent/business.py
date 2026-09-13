@@ -156,6 +156,28 @@ class BusinessToolAuthenticationError(BusinessToolIdentityError):
     code = "business_authentication"
 
 
+class BusinessToolPermissionError(BusinessToolError):
+    """An authenticated actor is not permitted to perform this operation.
+
+    Distinct from an identity or authentication failure: the credential works and names a
+    real actor, and that actor's own authority refuses the operation. `layer` says who
+    refused -- the framework's per-tool scope check before anything reached the application,
+    or the application's own permission system after it did.
+    """
+
+    code = "business_permission_denied"
+    LAYERS = frozenset({"tool_authorization", "application"})
+
+    def __init__(self, message: str, *, layer: str = "application",
+                 required_scope: str = ""):
+        super().__init__(message)
+        if layer not in self.LAYERS:
+            raise ValueError("permission refusal layer is invalid")
+        self.layer = layer
+        self.required_scope = (required_scope if isinstance(required_scope, str)
+                               and len(required_scope) <= 100 else "")
+
+
 class BusinessToolUnavailableError(BusinessToolError):
     """A valid read could not reach the application service."""
 
@@ -1106,12 +1128,16 @@ class BusinessToolRuntime:
                 raise BusinessToolIdentityError(
                     "business tool operation context is invalid")
             try:
-                context.require_live(
-                    application_id=self.application_id or None,
-                    required_scope=self._required_scopes.get(name),
-                )
+                context.require_live(application_id=self.application_id or None)
             except PrincipalError as exc:
                 raise BusinessToolIdentityError(str(exc)) from exc
+            # A live principal that lacks the scope is an authorization answer, not a broken
+            # identity. Checked separately so the two never have to be told apart by text.
+            required_scope = self._required_scopes.get(name)
+            if required_scope and required_scope not in context.principal.scopes:
+                raise BusinessToolPermissionError(
+                    "the current actor is not permitted to use this business tool",
+                    layer="tool_authorization", required_scope=required_scope)
         return args
 
     def execute(self, name: str, args: object,

@@ -235,6 +235,11 @@ def render_neutral_user_answer(context: AgentAnswerContext) -> str:
             return "同一业务对象已有正在执行或结果待确认的操作。本次没有再次提交，请先核对上一笔操作。"
         return ("An operation for the same business object is still running or unresolved. "
                 "Nothing was submitted again; check the earlier operation first.")
+    if context.agent.terminal_reason == "permission_denied":
+        if re.search(r"[\u3400-\u9fff]", context.message.text):
+            return "当前账号没有执行这项操作的权限，系统没有做任何更改。如确实需要，请联系管理员授予权限。"
+        return ("Your account is not permitted to perform this operation, and nothing was "
+                "changed. Ask an administrator for access if you need it.")
     if context.agent.terminal_reason == "approval_failed":
         if re.search(r"[\u3400-\u9fff]", context.message.text):
             return "本次确认已失效或与当前操作不再匹配，因此没有执行写入。请核对当前目标后重新提交。"
@@ -649,7 +654,8 @@ class AgentTurnExecutor:
                             or status is AgentTurnStatus.NEEDS_INPUT
                             or agent.terminal_reason in {
                                 "approval_expired", "approval_failed",
-                                "business_mutation_blocked", "no_progress"})
+                                "business_mutation_blocked", "no_progress",
+                                "permission_denied"})
                         else self.answer_renderer(answer_context))
             if not isinstance(rendered, str) or not rendered.strip():
                 raise ValueError("answer renderer returned no text")
@@ -746,7 +752,7 @@ def _status_for(terminal_reason: str) -> AgentTurnStatus:
         return AgentTurnStatus.NEEDS_INPUT
     if terminal_reason == "agent_refused":
         return AgentTurnStatus.REFUSED
-    if terminal_reason == "business_mutation_blocked":
+    if terminal_reason in {"business_mutation_blocked", "permission_denied"}:
         return AgentTurnStatus.REFUSED
     if terminal_reason == "no_progress":
         return AgentTurnStatus.REFUSED

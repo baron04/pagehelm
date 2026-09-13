@@ -183,12 +183,13 @@ class _PanelBrowser(unittest.TestCase):
 
     def open(self, snapshot: dict, *, width: int = 1280, height: int = 800,
              reduced_motion: str = "no-preference", color_scheme: str = "light",
-             csp: str = ""):
+             csp: str = "", device_scale_factor: float = 1):
         harness = _Harness(snapshot, csp=csp)
         self.addCleanup(harness.close)
         context = self.browser.new_context(viewport={"width": width, "height": height},
                                            reduced_motion=reduced_motion,
-                                           color_scheme=color_scheme)
+                                           color_scheme=color_scheme,
+                                           device_scale_factor=device_scale_factor)
         self.addCleanup(context.close)
         page = context.new_page()
         self.errors: list[str] = []
@@ -854,6 +855,372 @@ class PanelUITests(_PanelBrowser):
         self.assertLessEqual(clamped["x"] + clamped["width"], 421)
         self.assertLessEqual(clamped["y"] + clamped["height"], 421)
         self.assertGreaterEqual(clamped["width"], 320)
+        self.assertEqual(self.errors, [])
+
+
+def _relative_luminance(rgb: list[float]) -> float:
+    def linear(channel: float) -> float:
+        channel /= 255
+        return channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4
+    red, green, blue = (linear(value) for value in rgb)
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+
+def _contrast(foreground: str, background: str) -> float:
+    """WCAG contrast of a computed `rgb()`/`rgba()` foreground over an opaque background."""
+    import re
+
+    def parse(value: str) -> tuple[list[float], float]:
+        numbers = [float(item) for item in re.findall(r"[\d.]+", value)]
+        return numbers[:3], numbers[3] if len(numbers) > 3 else 1.0
+
+    back, _ = parse(background)
+    fore, alpha = parse(foreground)
+    blended = [alpha * f + (1 - alpha) * b for f, b in zip(fore, back)]
+    lighter, darker = sorted((_relative_luminance(blended), _relative_luminance(back)),
+                             reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+# The colour an element's text is drawn in, and the first opaque background behind it --
+# walking out of the shadow root to its host if need be.
+_COLOURS_JS = """([selector, pseudo, property]) => {
+  const root = document.querySelector('#woa-assistant').shadowRoot
+  const node = root.querySelector(selector)
+  if (!node) return null
+  const parent = el => el.parentElement
+    || (el.getRootNode() instanceof ShadowRoot ? el.getRootNode().host : null)
+  let background = 'rgb(255, 255, 255)'
+  for (let at = node; at; at = parent(at)) {
+    const value = getComputedStyle(at).backgroundColor
+    const parts = value.match(/[\\d.]+/g) || []
+    if (parts.length >= 3 && (parts.length < 4 || parseFloat(parts[3]) > 0.99)) {
+      background = value
+      break
+    }
+  }
+  return {fg: getComputedStyle(node, pseudo || null)[property || 'color'], bg: background}
+}"""
+
+# Whether a control is inside the viewport and inside the window, and whether the point a
+# person would press actually lands on it rather than on something drawn over it.
+_REACHABLE_JS = """selector => {
+  const root = document.querySelector('#woa-assistant').shadowRoot
+  const node = root.querySelector(selector)
+  if (!node) return {present: false}
+  const box = node.getBoundingClientRect()
+  const frame = root.querySelector('.woa-window').getBoundingClientRect()
+  const x = box.left + box.width / 2, y = box.top + box.height / 2
+  const hit = root.elementFromPoint(x, y)
+  return {
+    present: true, width: box.width, height: box.height,
+    in_viewport: box.left >= 0 && box.top >= 0
+      && box.right <= innerWidth + 0.5 && box.bottom <= innerHeight + 0.5,
+    in_window: box.left >= frame.left - 0.5 && box.top >= frame.top - 0.5
+      && box.right <= frame.right + 0.5 && box.bottom <= frame.bottom + 0.5,
+    unobscured: Boolean(hit) && (hit === node || node.contains(hit)),
+  }
+}"""
+
+_ACTIVE_JS = """() => {
+  const active = document.querySelector('#woa-assistant').shadowRoot.activeElement
+  if (!active) return null
+  const style = getComputedStyle(active)
+  return {id: active.id, testid: active.getAttribute('data-testid') || '',
+          label: active.getAttribute('aria-label') || active.textContent.trim(),
+          focus_visible: active.matches(':focus-visible'),
+          outline_style: style.outlineStyle, outline_width: parseFloat(style.outlineWidth),
+          outline_color: style.outlineColor}
+}"""
+
+
+class PanelU07Tests(_PanelBrowser):
+    """U07, the part a machine can decide.
+
+    Layout at 320 px, layout at 200 % zoom, both colour schemes, reduced motion, and whether
+    the keyboard reaches the composer and both confirmation answers in a sensible order with
+    a visible focus ring. 200 % zoom is emulated the way a browser produces it -- half the
+    CSS viewport at twice the device pixel ratio -- which is the layout a 1280 x 800 window
+    shows when zoomed, not the browser's zoom control itself.
+
+    None of this is a screen-reader test. The DOM roles and names checked at the end are
+    what a reader needs to be handed; whether it announces them sensibly is a person's
+    judgement and stays with the manual acceptance steps.
+    """
+
+    LONG_QUESTION = ("请把 Nordwind Handelsgesellschaft mbH & Co. Kommanditgesellschaft 名下所有"
+                     "未确认的报价单按金额从高到低列出来，并说明每一张的客户、币种和创建日期，"
+                     "如果有并列金额的也全部列出。") * 2
+
+    VIEWPORTS = (("320px", 320, 568, 1), ("200pct-zoom", 640, 400, 2))
+
+    def _shot(self, page, name: str) -> None:
+        import os
+        directory = os.environ.get("WOA_U07_SCREENSHOT_DIR")
+        if directory:
+            Path(directory).mkdir(parents=True, exist_ok=True)
+            page.screenshot(path=str(Path(directory) / f"{name}.png"))
+
+    def _conversation(self) -> dict:
+        return _snapshot(entries=[
+            _entry("e1", "goal", self.LONG_QUESTION),
+            _entry("e2", "result", "找到 2 张：\n\n| 单号 | 金额 |\n|---|---|\n"
+                   "| S00002 | 2947.50 USD |\n| S00007 | 1180.00 USD |",
+                   authored="server", panel_state="success"),
+        ])
+
+    @staticmethod
+    def _settle(page) -> None:
+        """Let entrance animations finish, so geometry and pixels are the resting ones."""
+        page.evaluate("""() => Promise.all(document.querySelector('#woa-assistant')
+          .shadowRoot.getAnimations().map(animation => animation.finished))""")
+
+    def assertLaidOut(self, page, where: str) -> None:
+        """Nothing a person needs is clipped by the window or drawn over by something else."""
+        facts = page.evaluate("""() => {
+          const root = document.querySelector('#woa-assistant').shadowRoot
+          const rect = selector => {
+            const node = root.querySelector(selector)
+            return node ? node.getBoundingClientRect().toJSON() : null
+          }
+          const heading = root.querySelector('.woa-approval h2')
+          let heading_hit = null
+          if (heading) {
+            const box = heading.getBoundingClientRect()
+            const hit = root.elementFromPoint(box.left + 24, box.top + box.height / 2)
+            heading_hit = Boolean(hit) && heading.contains(hit)
+          }
+          // Where the thread is actually painted: its own box, cut by the shell around it
+          // only if that shell clips.
+          const shell = root.querySelector('.woa-thread-shell')
+          const thread = rect('.woa-thread')
+          if (getComputedStyle(shell).overflowY !== 'visible') {
+            thread.bottom = Math.min(thread.bottom, shell.getBoundingClientRect().bottom)
+          }
+          return {window: rect('.woa-window'), field: rect('.woa-field'),
+                  thread, card: rect('.woa-approval'),
+                  heading: heading ? heading.getBoundingClientRect().toJSON() : null,
+                  heading_hit}
+        }""")
+        frame = facts["window"]
+        self.assertLessEqual(facts["field"]["bottom"], frame["bottom"] + 0.5,
+                             f"the composer is clipped by the window at {where}: {facts}")
+        card = facts["card"]
+        if card is None:
+            return
+        self.assertLessEqual(facts["thread"]["bottom"], card["top"] + 0.5,
+                             f"the thread runs under the confirmation at {where}: {facts}")
+        self.assertLessEqual(card["bottom"], facts["field"]["top"] + 0.5,
+                             f"the confirmation runs under the composer at {where}: {facts}")
+        heading = facts["heading"]
+        self.assertGreaterEqual(heading["top"], card["top"] - 0.5,
+                                f"the confirmation's heading is scrolled away at {where}")
+        self.assertTrue(facts["heading_hit"],
+                        f"the confirmation's heading is covered at {where}: {facts}")
+
+    def assertReachable(self, page, selector: str, where: str) -> None:
+        facts = page.evaluate(_REACHABLE_JS, selector)
+        self.assertTrue(facts["present"], f"{selector} is missing at {where}")
+        for fact in ("in_viewport", "in_window", "unobscured"):
+            self.assertTrue(facts[fact], f"{selector} is not {fact} at {where}: {facts}")
+        self.assertGreaterEqual(min(facts["width"], facts["height"]), 24,
+                                f"{selector} is too small to press at {where}: {facts}")
+
+    def test_narrow_and_zoomed_layouts_keep_every_control_inside_and_unobscured(self):
+        labels = panel_contract()["label_keys"]
+        for name, width, height, scale in self.VIEWPORTS:
+            for scheme in ("light", "dark"):
+                where = f"{name}/{scheme}"
+                with self.subTest(where):
+                    page = self.open(self._conversation(), width=width, height=height,
+                                     color_scheme=scheme, device_scale_factor=scale)
+                    page.locator(".woa-launcher").click()
+                    composer = page.locator("#woa-composer-input")
+                    composer.fill(self.LONG_QUESTION)
+                    self._settle(page)
+                    self.assertLaidOut(page, where)
+                    box = page.locator(".woa-window").bounding_box()
+                    assert box is not None
+                    self.assertGreaterEqual(box["x"], 0, where)
+                    self.assertGreaterEqual(box["y"], 0, where)
+                    self.assertLessEqual(box["x"] + box["width"], width + 1, where)
+                    self.assertLessEqual(box["y"] + box["height"], height + 1, where)
+                    for selector in (f'[aria-label="{labels["newChat"]}"]',
+                                     f'[aria-label="{labels["collapse"]}"]',
+                                     "#woa-composer-input",
+                                     f'[aria-label="{labels["send"]}"]'):
+                        self.assertReachable(page, selector, where)
+                    self.assertFalse(page.locator(".woa-thread").evaluate(
+                        "node => node.scrollWidth > node.clientWidth + 1"), where)
+                    self.assertFalse(page.evaluate(
+                        "document.documentElement.scrollWidth > innerWidth + 1"), where)
+                    self._shot(page, f"u07-{name}-{scheme}-composer")
+
+                    self.raise_approval(
+                        page, effect="新建客户 Nordwind Handelsgesellschaft mbH & Co. KG",
+                        targets=["res.partner · 新建一条客户记录",
+                                 "邮箱 · buchhaltung@nordwind.example"])
+                    self._settle(page)
+                    self.assertLaidOut(page, f"{where} with a confirmation")
+                    for selector in ('[data-testid="woa-deny"]',
+                                     '[data-testid="woa-approve"]'):
+                        self.assertReachable(page, selector, f"{where} with a confirmation")
+                    self.assertTrue(page.locator(".woa-approval__effect").is_visible(), where)
+                    self._shot(page, f"u07-{name}-{scheme}-confirmation")
+                    self.assertEqual(self.errors, [], where)
+
+    def test_both_colour_schemes_follow_the_system_and_keep_text_legible(self):
+        tokens = design_tokens()
+        text = (".woa-user", ".woa-md", "#woa-composer-input",
+                ".woa-approval__effect", ".woa-approval__label", ".woa-approval__fine",
+                '[data-testid="woa-deny"]', '[data-testid="woa-approve"]')
+        for scheme in ("light", "dark"):
+            with self.subTest(scheme):
+                page = self.open(self._conversation(), color_scheme=scheme)
+                page.locator(".woa-launcher").click()
+                window = page.locator(".woa-window")
+                # Nothing on the document asked for a theme: the system preference alone
+                # has to reach the shadow root.
+                self.assertEqual(window.evaluate(
+                    "node => getComputedStyle(node).getPropertyValue('--woa-bg').trim()"),
+                    tokens["themes"][scheme]["bg"])
+                placeholder = page.evaluate(_COLOURS_JS, ["#woa-composer-input",
+                                                         "::placeholder", "color"])
+                self.assertGreaterEqual(_contrast(placeholder["fg"], placeholder["bg"]), 4.5,
+                                        f"placeholder in {scheme}: {placeholder}")
+                page.locator("#woa-composer-input").fill("列出订单")
+                self.raise_approval(page)
+                for selector in text:
+                    colours = page.evaluate(_COLOURS_JS, [selector, "", "color"])
+                    self.assertIsNotNone(colours, selector)
+                    self.assertGreaterEqual(_contrast(colours["fg"], colours["bg"]), 4.5,
+                                            f"{selector} in {scheme}: {colours}")
+                # The focus ring is a non-text indicator: 3:1 against what it sits on.
+                page.keyboard.press("Tab")
+                active = page.evaluate(_ACTIVE_JS)
+                ring = page.evaluate(_COLOURS_JS, [".woa-approval", "", "color"])
+                self.assertGreaterEqual(_contrast(active["outline_color"], ring["bg"]), 3.0,
+                                        f"focus ring in {scheme}: {active}")
+                self.assertEqual(self.errors, [])
+
+    def test_reduced_motion_removes_transitions_as_well_as_animations(self):
+        script = ("node => [...node.querySelectorAll('*'), node].flatMap(el =>"
+                  " getComputedStyle(el).transitionDuration.split(',').map(parseFloat))")
+        for preference in ("no-preference", "reduce"):
+            with self.subTest(preference):
+                page = self.open(self._conversation(), reduced_motion=preference)
+                page.locator(".woa-launcher").click()
+                self.raise_approval(page)
+                durations = page.locator(".woa-window").evaluate(script)
+                if preference == "reduce":
+                    self.assertTrue(all(value < 0.01 for value in durations), durations)
+                else:
+                    # Otherwise the check above would pass on a panel with nothing to stop.
+                    self.assertTrue(any(value >= 0.05 for value in durations), durations)
+                self.assertEqual(self.errors, [])
+
+    def test_the_keyboard_reaches_the_composer_and_send_in_order_with_a_visible_ring(self):
+        labels = panel_contract()["label_keys"]
+        page = self.open(self._conversation())
+        page.keyboard.press("Tab")
+        self.assertEqual(page.evaluate(_ACTIVE_JS)["label"], labels["expand"])
+        page.keyboard.press("Enter")
+        page.locator(".woa-window").wait_for()
+        self.assertEqual(page.evaluate(_ACTIVE_JS)["id"], "woa-composer-input",
+                         "opening the panel puts the caret where the person types")
+        page.keyboard.type("列出订单")
+
+        # Walk backwards to the first control in the window, then forwards through it.
+        for _ in range(20):
+            if page.evaluate(_ACTIVE_JS)["label"] == labels["newChat"]:
+                break
+            page.keyboard.press("Shift+Tab")
+        order = []
+        for _ in range(20):
+            active = page.evaluate(_ACTIVE_JS)
+            if active is None:
+                break
+            order.append(active["label"] if not active["id"] else active["id"])
+            self.assertTrue(active["focus_visible"], active)
+            if active["id"] == "woa-composer-input":
+                # The composer draws its ring on the field around the text, not on the
+                # textarea's own outline.
+                field = page.locator(".woa-field")
+                self.assertEqual(field.get_attribute("data-focus"), "true")
+                self.assertNotEqual(field.evaluate(
+                    "node => getComputedStyle(node).boxShadow"), "none")
+            else:
+                self.assertNotEqual(active["outline_style"], "none", active)
+                self.assertGreaterEqual(active["outline_width"], 2, active)
+            if active["label"] == labels["send"]:
+                break
+            page.keyboard.press("Tab")
+        for earlier, later in ((labels["newChat"], labels["collapse"]),
+                               (labels["collapse"], "woa-composer-input"),
+                               ("woa-composer-input", labels["send"])):
+            self.assertIn(earlier, order)
+            self.assertIn(later, order)
+            self.assertLess(order.index(earlier), order.index(later), order)
+
+        page.keyboard.press("Shift+Tab")
+        self.assertEqual(page.evaluate(_ACTIVE_JS)["id"], "woa-composer-input")
+        page.keyboard.press("Enter")
+        self.assertEqual(self.calls(page), [["submit", "列出订单"]])
+        self.assertEqual(self.errors, [])
+
+    def test_both_confirmation_answers_are_reachable_and_operable_by_keyboard(self):
+        visibility = panel_contract()["approval_visibility"]
+        page = self.open(_snapshot())
+        self.raise_approval(page)
+        self.assertEqual(page.evaluate(_ACTIVE_JS)["testid"], "woa-deny",
+                         "the safe answer takes focus first")
+        page.keyboard.press("Shift+Tab")
+        self.assertEqual(page.evaluate(_ACTIVE_JS)["testid"], "woa-approve",
+                         "Shift+Tab from the first answer wraps to the second")
+        page.keyboard.press("Tab")
+        self.assertEqual(page.evaluate(_ACTIVE_JS)["testid"], "woa-deny")
+        page.keyboard.press("Tab")
+        active = page.evaluate(_ACTIVE_JS)
+        self.assertEqual(active["testid"], "woa-approve")
+        self.assertTrue(active["focus_visible"])
+        self.assertNotEqual(active["outline_style"], "none")
+        # A keyboard press is a real gesture: once the card has been visible long enough to
+        # read, Enter approves exactly as a click does.
+        page.wait_for_timeout(int(visibility["min_visible_ms"]) + 250)
+        page.keyboard.press("Enter")
+        self.assertEqual([call[0] for call in self.calls(page)], ["decide"])
+        self.assertEqual(self.calls(page)[0][2], "approved")
+        self.assertEqual(self.errors, [])
+
+    def test_what_a_screen_reader_is_handed_names_every_control(self):
+        """Roles and names only. Whether they are announced well is checked by a person."""
+        page = self.open(self._conversation())
+        page.locator(".woa-launcher").click()
+        self.raise_approval(page)
+        facts = page.evaluate("""() => {
+          const root = document.querySelector('#woa-assistant').shadowRoot
+          const text = id => (root.getElementById(id) || {}).textContent || ''
+          const card = root.querySelector('[role="alertdialog"]')
+          const input = root.querySelector('#woa-composer-input')
+          return {
+            window_label: root.querySelector('.woa-window').getAttribute('aria-label'),
+            log: [root.querySelector('.woa-thread').getAttribute('role'),
+                  root.querySelector('.woa-thread').getAttribute('aria-live')],
+            unnamed_buttons: [...root.querySelectorAll('button')].filter(button =>
+              !(button.getAttribute('aria-label') || button.textContent.trim())).length,
+            input_label: [...root.querySelectorAll(`label[for="${input.id}"]`)]
+              .map(label => label.textContent).join(''),
+            card_title: text(card.getAttribute('aria-labelledby')),
+            card_description: text(card.getAttribute('aria-describedby')),
+          }
+        }""")
+        labels = panel_contract()["label_keys"]
+        self.assertEqual(facts["window_label"], labels["assistant"])
+        self.assertEqual(facts["log"], ["log", "polite"])
+        self.assertEqual(facts["unnamed_buttons"], 0)
+        self.assertEqual(facts["input_label"], labels["input"])
+        self.assertIn(labels["approvalTitle"], facts["card_title"])
+        self.assertIn("S00002", facts["card_description"])
         self.assertEqual(self.errors, [])
 
 

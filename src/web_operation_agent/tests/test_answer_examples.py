@@ -86,6 +86,12 @@ class Example2NotFoundWithinAScope(unittest.TestCase):
         self.assertIn("S00042", text)
         self.assertIn("未找到", text)
         self.assertNotIn("name contains", text)
+        # Absence is claimed only for what this actor could search, never system-wide.
+        self.assertIn("当前账号有权访问的范围", text)
+        self.assertIn("不代表整个系统中不存在", text)
+        english = render(answer, user_text="Which customer owns S00042?", max_chars=4000)
+        self.assertIn("the current account can access", english)
+        self.assertIn("not a claim that it exists nowhere", english)
 
     def test_the_five_unrelated_records_cannot_be_the_answer(self):
         """A query that matched five does not establish that a sixth is absent."""

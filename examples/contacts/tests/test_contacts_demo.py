@@ -39,7 +39,7 @@ def _chromium_launches() -> bool:
 class MinimalDemoUnitTests(unittest.TestCase):
     def test_second_adapter_binds_and_reads_its_live_typed_api(self):
         with MinimalContactsApplication() as application:
-            adapter = MinimalContactsAdapter(application.origin)
+            adapter = MinimalContactsAdapter(application.origin, api_token=DEMO_API_TOKEN)
             bound = assert_adapter_contract(self, adapter)
             self.assertTrue(adapter.health()["passed"])
             self.assertEqual(bound.descriptor.application_id, "minimal.contacts")
@@ -329,6 +329,9 @@ class TheWriteWalkthroughInARealBrowser(unittest.TestCase):
                         for live in (first, second):
                             context = browser.new_context(viewport={"width": 1280,
                                                                     "height": 900})
+                            context.add_cookies([{"name": DEMO_SESSION_COOKIE,
+                                                  "value": DEMO_SESSION_VALUE,
+                                                  "url": application.origin}])
                             contexts.append(context)
                             context.add_init_script(script=live.bootstrap_script)
                             page = context.new_page()
@@ -565,3 +568,354 @@ class TheWriteChainAnAuthorCopies(unittest.TestCase):
                 urllib.request.urlopen(request, timeout=3)
             self.assertEqual(raised.exception.code, 401)
             self.assertEqual(len(application.contacts), 3)
+
+
+# ------------------------------------------------------------------------ identity scope
+#: A northstar actor must never meet any of this: the other workspace's id, and the values
+#: only its records carry. Record names are not listed -- two of them repeat on purpose.
+_OTHER_WORKSPACE_MARKERS = ("southwind", "katherine", "radia@")
+_READ_ONLY = "rosalind-franklin"
+
+
+def _audit_events(directory) -> list[dict]:
+    audit = next(Path(directory).glob("*/audit.jsonl"))
+    return [json.loads(line) for line in audit.read_text().splitlines()]
+
+
+def _replays(directory, events: list[dict], summary: dict) -> list[dict]:
+    """The redacted replay projection of every turn in the run, built from its own ledger."""
+    from web_operation_agent.traceview import build_trace_case
+
+    cases = []
+    for index, run_id in enumerate(dict.fromkeys(event["run_id"] for event in events)):
+        ledger = Path(directory) / f"replay-{index}.jsonl"
+        ledger.write_text("".join(json.dumps(event) + "\n" for event in events
+                                  if event["run_id"] == run_id))
+        turn = summary["turns"][index]
+        result = Path(directory) / f"replay-{index}.json"
+        result.write_text(json.dumps({
+            "product_run_id": run_id, "task": turn["task"],
+            "agent": {"agent_said": turn["answer"],
+                      "terminal_reason": turn["terminal_reason"]}}))
+        cases.append(build_trace_case(case_id=f"turn-{index}", label=turn["task"],
+                                      result_path=result, ledger_path=ledger,
+                                      mode="scripted"))
+    return cases
+
+
+class TheApplicationsOwnAuthorityInARealBrowser(unittest.TestCase):
+    """I01 and I02: who the actor is decides what the product may do and may say.
+
+    Everything here runs the real gateway, panel and product turn in Chromium against the
+    synthetic application, whose actors and workspaces are its own. The scripted decider
+    fixes the Agent's choices; it cannot approve anything or reach past a refusal.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        required = os.environ.get("WOA_REQUIRE_MINIMAL_DEMO_BROWSER") == "1"
+        if not _chromium_launches():
+            if required:
+                raise RuntimeError("Chromium is required for minimal-demo qualification")
+            raise unittest.SkipTest("Chromium is unavailable")
+
+    def _run(self, directory, script, tasks, **changes):
+        chat = ScriptedDemoChat(script)
+        with patch("examples.contacts.demo._chat", return_value=(chat, None)):
+            summary = run_demo(DemoConfig(
+                tasks=tuple(tasks), headless=True, output_dir=Path(directory),
+                keep_open_seconds=0, turn_timeout_s=45, capture_panel=True, **changes))
+        return summary, chat
+
+    def assertNothingFromTheOtherWorkspace(self, surfaces: dict, markers=_OTHER_WORKSPACE_MARKERS):
+        for surface, text in surfaces.items():
+            folded = text.casefold()
+            for marker in markers:
+                self.assertNotIn(marker, folded, f"{marker!r} reached {surface}")
+
+    def _surfaces(self, directory, summary, chat) -> dict:
+        events = _audit_events(directory)
+        return {
+            "model context": "\n".join(chat.seen),
+            "audit ledger": json.dumps(events, ensure_ascii=False),
+            "replay projection": json.dumps(_replays(directory, events, summary),
+                                            ensure_ascii=False),
+            "user answers": json.dumps([turn.get("answer") for turn in summary["turns"]],
+                                       ensure_ascii=False),
+            "page": summary["last_page_text"] + summary["panel"]["page_text_after_reload"],
+            "live panel": summary["panel"]["live"]["text"],
+            "replayed panel": summary["panel"]["replayed"]["text"],
+        }
+
+    # -- I01 ------------------------------------------------------------------------------
+    def test_a_read_only_actor_s_write_is_refused_by_tool_authorization_and_not_rerouted(self):
+        from evals.twenty.outcomes import classify_woa_outcome
+
+        script = (
+            ("load_skill", {"skill_id": "minimal.contacts-create"}),
+            ("list_contacts", {"name_contains": "Radia"}),
+            # The same effect by way of the page, before the tool: refused before dispatch.
+            ("click", {"ref": "e1"}),
+            ("create_contact", {"name": "Radia Perlman", "email": "radia@example.test"}),
+            # Never asked for: the refusal ends the turn, so no page route follows it.
+            ("fill", {"ref": "e1", "value": "Radia Perlman"}),
+            ("submit", {"ref": "e1"}),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            summary, chat = self._run(
+                directory, script, ("Create a contact for Radia Perlman at radia@example.test.",),
+                actor=_READ_ONLY, allow_mutations=True)
+            events = _audit_events(directory)
+
+        turn = summary["turns"][0]
+        self.assertEqual(turn["status"], "refused")
+        self.assertEqual(turn["terminal_reason"], "permission_denied")
+        self.assertIn("not permitted", turn["answer"])
+        self.assertIn("nothing was changed", turn["answer"])
+        self.assertIn("not permitted", summary["panel"]["live"]["text"])
+        self.assertEqual(summary["panel"]["live"]["state"], "refused")
+        self.assertEqual(summary["panel"]["live"]["approval_cards"], 0)
+        self.assertEqual(chat.calls, 4, "nothing was asked of the model after the refusal")
+
+        state = summary["application_state"]
+        self.assertEqual(state["write_requests"], 0, "no write reached the application")
+        self.assertEqual(state["records_created"], 0)
+        self.assertEqual(state["workspace_counts"], {"northstar": 3, "southwind": 3})
+        self.assertEqual(summary["mutation_journal"], [])
+
+        kinds = [event["event"] for event in events]
+        self.assertNotIn("business_mutation_proposed", kinds)
+        self.assertNotIn("business_mutation_execution_started", kinds)
+        blocked = [event for event in events if event["event"] == "action_policy_blocked"]
+        self.assertEqual([event["tool"] for event in blocked], ["click"])
+        self.assertFalse(blocked[0]["dispatched"])
+        self.assertFalse(any(event["event"] == "action_receipt"
+                             and event.get("tool") in {"click", "fill", "submit"}
+                             for event in events))
+        denied = next(event for event in events
+                      if event["event"] == "business_mutation_permission_denied")
+        self.assertEqual(denied["layer"], "tool_authorization")
+        self.assertEqual(denied["required_scope"], "contacts:write")
+        self.assertEqual(denied["error_code"], "business_permission_denied")
+        self.assertFalse(denied["dispatched"])
+        self.assertFalse(denied["side_effect_possible"])
+        self.assertEqual(denied["identity"]["scopes"], ["contacts:read"])
+        # Scored as the product's behaviour, not written off as a broken apparatus.
+        self.assertEqual(classify_woa_outcome(terminal_reason=turn["terminal_reason"],
+                                              events=events),
+                         (None, "permission_denied"))
+
+    def test_the_application_refuses_even_when_the_integration_granted_too_much(self):
+        """Defence in depth: a principal forged with the write scope still cannot write."""
+        from evals.twenty.outcomes import classify_woa_outcome
+
+        with tempfile.TemporaryDirectory() as directory:
+            summary = run_demo(DemoConfig(
+                scripted=True, headless=True, allow_mutations=True, actor=_READ_ONLY,
+                forged_scopes=("contacts:read", "contacts:write"),
+                output_dir=Path(directory), keep_open_seconds=0, turn_timeout_s=45))
+            events = _audit_events(directory)
+
+        turn = summary["turns"][0]
+        self.assertIn("Create exactly one contact", summary["approvals"][0]["text"])
+        self.assertEqual(turn["terminal_reason"], "permission_denied")
+        self.assertIn("not permitted", turn["answer"])
+        state = summary["application_state"]
+        self.assertEqual(state["write_requests"], 1)
+        self.assertEqual(state["refused_writes"], 1, "the application itself said no")
+        self.assertEqual(state["post_requests"], 0)
+        self.assertEqual(state["records_created"], 0)
+        self.assertEqual(summary["mutation_journal"][0]["state"], "failed")
+        denied = next(event for event in events
+                      if event["event"] == "business_mutation_permission_denied")
+        self.assertEqual(denied["layer"], "application")
+        self.assertTrue(denied["dispatched"])
+        self.assertFalse(denied["side_effect_possible"])
+        self.assertNotIn("business_mutation_indeterminate",
+                         [event["event"] for event in events])
+        self.assertEqual(classify_woa_outcome(terminal_reason=turn["terminal_reason"],
+                                              events=events),
+                         (None, "permission_denied"))
+
+    # -- I02 ------------------------------------------------------------------------------
+    def test_a_same_name_record_in_another_workspace_reaches_no_surface(self):
+        script = (
+            ("load_skill", {"skill_id": "minimal.contacts.query"}),
+            ("list_contacts", {"name_contains": "Grace Hopper"}),
+            ("compute", {"operation": "count", "dataset_ref": "call2-query#1"}),
+            ("finish", {"outcome": "answered", "answer": {
+                "version": 1, "coverage": "complete", "conclusions": [
+                    {"kind": "aggregate", "evidence_ref": "calc#3"}]}}),
+            ("load_skill", {"skill_id": "minimal.contacts.query"}),
+            ("list_contacts", {"name_contains": "Grace Hopper"}),
+            ("goto", {"url": "/contacts/grace-hopper"}),
+            ("finish", {"outcome": "acted"}),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            summary, chat = self._run(
+                directory, script,
+                ("How many contacts named Grace Hopper can I see?",
+                 "Open Grace Hopper's contact record."))
+            surfaces = self._surfaces(directory, summary, chat)
+            events = _audit_events(directory)
+
+        counted, opened = summary["turns"]
+        self.assertEqual(counted["status"], "finished")
+        self.assertIn("Count", counted["answer"])
+        self.assertIn("1", counted["answer"])
+        self.assertEqual(opened["status"], "finished")
+        self.assertTrue(summary["last_url"].endswith("/contacts/grace-hopper"))
+        self.assertIn("grace@example.test", summary["last_page_text"])
+        self.assertEqual([event["audit"]["returned_count"] for event in events
+                          if event["event"] == "business_tool_result"], [1, 1])
+        self.assertNothingFromTheOtherWorkspace(surfaces)
+
+    def test_absence_here_is_claimed_only_for_the_scope_this_actor_can_search(self):
+        script = (
+            ("load_skill", {"skill_id": "minimal.contacts.query"}),
+            ("list_contacts", {"name_contains": "Katherine Johnson"}),
+            ("finish", {"outcome": "answered", "answer": {
+                "version": 1, "coverage": "complete", "conclusions": [
+                    {"kind": "not_found", "evidence_ref": "call2-query#1"}]}}),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            summary, chat = self._run(directory, script,
+                                      ("Find Katherine Johnson's contact.",))
+            surfaces = self._surfaces(directory, summary, chat)
+
+        turn = summary["turns"][0]
+        self.assertEqual(turn["status"], "finished")
+        self.assertEqual(chat.calls, 3)
+        self.assertEqual(turn["page_actions"], 0)
+        self.assertIn("Not found", turn["answer"])
+        self.assertIn("Katherine Johnson", turn["answer"])
+        self.assertIn("the current account can access", turn["answer"])
+        self.assertIn("not a claim that it exists nowhere", turn["answer"])
+        self.assertNotIn("does not exist", turn["answer"])
+        self.assertIn("the current account can access", summary["panel"]["live"]["text"])
+        # The name is the user's own words; what only the other workspace holds is not.
+        self.assertNothingFromTheOtherWorkspace(
+            surfaces, markers=("southwind", "katherine@", "radia"))
+
+    def test_a_same_name_record_elsewhere_does_not_count_as_already_existing_here(self):
+        with tempfile.TemporaryDirectory() as directory:
+            chat = ScriptedDemoChat(WRITE_WALKTHROUGH)
+            with patch("examples.contacts.demo._chat", return_value=(chat, None)):
+                summary = run_demo(DemoConfig(
+                    scripted=True, headless=True, allow_mutations=True,
+                    output_dir=Path(directory), keep_open_seconds=0, turn_timeout_s=45))
+            events = _audit_events(directory)
+
+        from examples.contacts.app import SOUTHWIND_CONTACTS
+        from examples.contacts.demo import workspace_digest
+
+        self.assertEqual(summary["turns"][0]["status"], "finished")
+        # The duplicate check read this workspace, found no Radia Perlman, and let the
+        # proposal through, although the other workspace has one.
+        self.assertEqual([event["audit"]["returned_count"] for event in events
+                          if event["event"] == "business_tool_result"], [0])
+        self.assertEqual([event["event"] for event in events].count(
+            "business_mutation_proposed"), 1)
+        state = summary["application_state"]
+        self.assertEqual(state["post_requests"], 1)
+        self.assertEqual(state["records_created"], 1)
+        self.assertEqual(state["workspace_counts"], {"northstar": 4, "southwind": 3})
+        self.assertEqual(state["workspace_digests"]["southwind"],
+                         workspace_digest([dict(item) for item in SOUTHWIND_CONTACTS]))
+        self.assertEqual(summary["mutation_journal"][0]["state"], "completed")
+        self.assertIn("radia@example.test", summary["last_page_text"])
+        self.assertNothingFromTheOtherWorkspace({
+            "model context": "\n".join(chat.seen),
+            "audit ledger": json.dumps(events, ensure_ascii=False),
+        }, markers=("southwind", "katherine"))
+
+
+class TheApplicationsOwnAuthority(unittest.TestCase):
+    """The same two boundaries without a browser: the application, then the adapter."""
+
+    def _request(self, application, method, path, *, token="", cookie="", body=None):
+        import urllib.error
+        headers = {"Content-Type": "application/json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        if cookie:
+            headers["Cookie"] = f"{DEMO_SESSION_COOKIE}={cookie}"
+        request = urllib.request.Request(
+            application.origin + path,
+            json.dumps(body).encode() if body is not None else None, headers, method=method)
+        try:
+            with urllib.request.urlopen(request, timeout=3) as response:
+                return response.status, response.read().decode()
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read().decode()
+
+    def test_the_application_refuses_a_read_only_actor_s_write_by_either_credential(self):
+        from examples.contacts.app import ACTORS_BY_ID
+        reader = ACTORS_BY_ID[_READ_ONLY]
+        with MinimalContactsApplication() as application:
+            status, body = self._request(application, "GET", "/api/whoami", token=reader.token)
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body)["permissions"], ["contacts:read"])
+            radia = {"name": "Radia Perlman", "email": "radia@example.test"}
+            self.assertEqual(self._request(application, "POST", "/api/contacts",
+                                           token=reader.token, body=radia)[0], 403)
+            self.assertEqual(self._request(application, "POST", "/api/contacts",
+                                           cookie=reader.session, body=radia)[0], 401)
+            self.assertEqual(application.refused_writes, 2)
+            self.assertEqual(application.post_requests, 0)
+            self.assertEqual(len(application.contacts), 3)
+
+    def test_a_read_only_actor_binds_with_only_the_scope_the_application_grants(self):
+        from examples.contacts.app import ACTORS_BY_ID
+        from web_operation_agent.business import BusinessToolPermissionError
+        reader = ACTORS_BY_ID[_READ_ONLY]
+        with MinimalContactsApplication() as application:
+            adapter = MinimalContactsAdapter(
+                application.origin, api_token=reader.token, allow_mutations=True,
+                mutation_journal=MemoryMutationJournal())
+            assert_adapter_contract(self, adapter)
+            principal = adapter.ports.identity.bind(
+                adapter.identity.page_identity(f"{DEMO_SESSION_COOKIE}={reader.session}"),
+                delegation_id="read-only")
+            self.assertEqual(principal.scopes, ("contacts:read",))
+            # And with the framework's check stepped around entirely, the application still
+            # refuses, and says so in a type rather than in words.
+            with self.assertRaises(BusinessToolPermissionError) as refused:
+                adapter.business_tools._executor.execute_mutation(
+                    "create_contact", {"name": "Radia Perlman",
+                                       "email": "radia@example.test"})
+            self.assertEqual(refused.exception.layer, "application")
+            self.assertEqual(refused.exception.code, "business_permission_denied")
+            self.assertEqual(application.records_created, 0)
+
+    def test_each_workspace_sees_only_its_own_records_through_every_credential(self):
+        from examples.contacts.app import ACTORS_BY_ID
+        with MinimalContactsApplication() as application:
+            for actor, expected in (("ada-lovelace", "grace@example.test"),
+                                    ("mary-jackson", "grace.hopper@southwind.test")):
+                person = ACTORS_BY_ID[actor]
+                _status, api = self._request(application, "GET", "/api/contacts",
+                                             token=person.token)
+                _status, page = self._request(application, "GET", "/contacts",
+                                              cookie=person.session)
+                for text in (api, page):
+                    self.assertIn(expected, text)
+                    other = ("southwind" if person.workspace == "northstar"
+                             else "example.test")
+                    self.assertNotIn(other, text.casefold())
+            self.assertEqual(self._request(application, "GET", "/api/contacts")[0], 401)
+            self.assertEqual(self._request(application, "GET", "/contacts")[0], 401)
+
+    def test_the_adapter_s_duplicate_check_and_reconciliation_see_only_this_workspace(self):
+        with MinimalContactsApplication() as application:
+            adapter = MinimalContactsAdapter(
+                application.origin, api_token=DEMO_API_TOKEN, allow_mutations=True,
+                mutation_journal=MemoryMutationJournal())
+            executor = adapter.business_tools._executor
+            # Radia Perlman exists only in the other workspace: not a duplicate here.
+            spec = executor.prepare_mutation(
+                "create_contact", {"name": "Radia Perlman", "email": "radia@example.test"})
+            self.assertEqual(spec.targets[0], "Name: Radia Perlman")
+            self.assertEqual(
+                [row["email"] for row in executor._existing("Grace Hopper")],
+                ["grace@example.test"])

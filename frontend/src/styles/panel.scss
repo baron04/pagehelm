@@ -213,6 +213,9 @@ button:disabled { cursor: not-allowed; }
   position: relative;
   flex: 1;
   min-height: 0;
+  /* Squeezed to nothing by a confirmation in a short window, the thread's own padding
+     would otherwise spill out of this box and under the card. */
+  overflow: hidden;
 }
 .woa-thread {
   height: 100%;
@@ -581,7 +584,15 @@ button:disabled { cursor: not-allowed; }
 }
 .woa-approval__blocked svg { flex: none; margin-top: 1px; }
 
-.woa-approval__actions { display: flex; align-items: center; gap: 8px; margin-top: 11px; }
+.woa-approval__actions {
+  display: flex; align-items: center; gap: 8px;
+  /* When the card is short enough to scroll -- a narrow or zoomed window -- the two
+     answers stay pinned at its foot. Focusing the first one then has nothing to scroll
+     to, so the heading and the time left are not pushed out of view to reach it. */
+  position: sticky; bottom: 0;
+  margin: 11px -13px -13px; padding: 10px 13px 13px;
+  background: var(--woa-surface-raised);
+}
 .woa-approval__spacer { flex: 1; }
 
 .woa-btn {
@@ -659,7 +670,9 @@ button:disabled { cursor: not-allowed; }
 }
 .woa-field textarea:focus { outline: none; }
 .woa-field textarea::placeholder { color: var(--woa-ink-faint); }
-.woa-field textarea:disabled { color: var(--woa-ink-faint); }
+/* Nobody can type while a confirmation is pending, and a long draft kept at full height
+   would push the composer past the window's floor. Two lines say a draft is kept. */
+.woa-field textarea:disabled { color: var(--woa-ink-faint); max-height: 42px; }
 
 .woa-send {
   width: 27px; height: 27px;

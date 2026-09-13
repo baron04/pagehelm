@@ -155,6 +155,7 @@ SCORABLE_TERMINAL_REASONS = frozenset({
     "user_cancelled",         # the authenticated user stopped the active task
     "business_mutation_failed",  # a known-safe server write refusal was returned
     "business_mutation_blocked",  # an in-flight/unresolved business key refused dispatch
+    "permission_denied",      # the actor's own authority refused the operation
 })
 
 #: Reasons that invalidate a run: apparatus, not behaviour. Never scored.

@@ -26,6 +26,8 @@ Runtime 只会在顶层 document 且 `location.origin` 与 session grant 一致�
 
 身份端口要求认证时，设置 `AgentTurnConfig.require_identity=True`。`AgentTurnExecutor(application=...)` 会在启动浏览器传输或模型前校验 principal 和准确应用 Origin。随后每个 typed tool 都会收到 `OperationContext`，其中绑定 principal、session、turn、operation、deadline 和所需 scope。未认证的合成示例必须显式声明 `AnonymousIdentityPort`。
 
+principal 上只放应用实际授予该 actor 的 scope，而不是 catalog 声明的全部 scope。principal 缺少所需 scope 的 typed tool 会在调用应用之前以 `BusinessToolPermissionError`（`layer="tool_authorization"`）拒绝。应用自己的授权拒绝——HTTP 403、访问规则异常——同样映射为 `BusinessToolPermissionError`；被拒绝或已过期的凭据仍然是 `BusinessToolAuthenticationError`。前者是授权结果，产品向用户报告为 `permission_denied`，evaluator 计分；后者是装置故障。被拒绝的写入直接结束本轮，不会交还 Agent，以免它寻找达成同一效果的页面路径。每次读取也要限定在该 actor 的范围内，并在证据来源中写明：完整查询没有找到，只能证明在这个范围内不存在。
+
 ## 写入与验证
 
 Adapter 与 turn policy 默认都关闭写入。启用写入的 Adapter 在生产环境中必须提供持久 mutation journal、覆盖每个写工具的后置条件 verifier 和核对端口。用户确认会绑定一个规范化 proposal digest、影响、目标、principal、turn 和 operation，且只能消费一次。

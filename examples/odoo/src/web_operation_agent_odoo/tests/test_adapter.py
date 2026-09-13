@@ -10,6 +10,10 @@ import re
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+from web_operation_agent.business import (BusinessToolAuthenticationError,
+                                          BusinessToolPermissionError)
 
 from web_operation_agent.application import bind_application
 from web_operation_agent.business import (BusinessMutationIndeterminate, BusinessToolError,
@@ -125,6 +129,44 @@ class _FakeOdoo(OdooBusinessToolExecutor):
         for field in wanted:
             projected[field] = row.get(field, [] if field.endswith("_ids") else False)
         return projected
+
+
+class OdooRefusalsAreTypedByWhoRefused(unittest.TestCase):
+    """`AccessDenied` rejects the credential; `AccessError` refuses an authenticated user."""
+
+    def _refusal(self, exception_name: str):
+        payload = json.dumps({"jsonrpc": "2.0", "id": None, "error": {
+            "code": 200, "message": "Odoo Server Error",
+            "data": {"name": exception_name, "message": "private record detail"}}}).encode()
+
+        class _Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+            @staticmethod
+            def read(_limit=None):
+                return payload
+
+        executor = _FakeOdoo({})
+        with patch("web_operation_agent_odoo.adapter.urlopen", return_value=_Response()):
+            with self.assertRaises(BusinessToolError) as raised:
+                OdooBusinessToolExecutor._rpc(executor, {"service": "object"})
+        self.assertNotIn("private record detail", str(raised.exception))
+        return raised.exception
+
+    def test_an_access_rule_refusal_is_an_authorization_result(self):
+        refused = self._refusal("odoo.exceptions.AccessError")
+        self.assertIsInstance(refused, BusinessToolPermissionError)
+        self.assertEqual(refused.code, "business_permission_denied")
+        self.assertEqual(refused.layer, "application")
+
+    def test_a_rejected_credential_is_still_an_authentication_fault(self):
+        refused = self._refusal("odoo.exceptions.AccessDenied")
+        self.assertIsInstance(refused, BusinessToolAuthenticationError)
+        self.assertNotIsInstance(refused, BusinessToolPermissionError)
 
 
 def _orders(count):

@@ -66,6 +66,28 @@ class SharedOutcomeProjectionTests(unittest.TestCase):
                      "error_code": "business_mutation_blocked"}],
         ), (None, "business_mutation_blocked"))
 
+    def test_a_permission_refusal_is_scored_and_a_broken_credential_is_not(self):
+        """The credential worked and named the actor; that actor was refused."""
+        self.assertIsNone(business_apparatus_code("business_permission_denied"))
+        for layer in ("tool_authorization", "application"):
+            self.assertEqual(classify_woa_outcome(
+                terminal_reason="permission_denied",
+                events=[{"event": "business_mutation_permission_denied",
+                         "error_code": "business_permission_denied", "layer": layer}],
+            ), (None, "permission_denied"))
+        # A read the actor may not make is refused the same way, and still scored.
+        self.assertEqual(classify_woa_outcome(
+            terminal_reason="agent_finished",
+            events=[{"event": "business_tool_rejected",
+                     "error_code": "business_permission_denied"}],
+        ), (None, "agent_finished"))
+        # Whereas a credential the application rejects is still the apparatus's fault.
+        self.assertEqual(classify_woa_outcome(
+            terminal_reason="agent_finished",
+            events=[{"event": "business_tool_rejected",
+                     "error_code": "business_authentication"}],
+        ), ("credential_or_identity", "business_authentication"))
+
     def test_woa_boundary_and_transport_failures_are_apparatus_faults(self):
         self.assertEqual(classify_woa_outcome(
             terminal_reason="", boundary_error_code="identity_unavailable",

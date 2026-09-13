@@ -4,7 +4,7 @@ Four files, in the order a real integration writes them.
 
 | File | What it is | Do you write this? |
 |---|---|---|
-| [`app.py`](app.py) | The synthetic Contacts application: a list page, a record page per contact, a typed read and write API, two credentials, and the same-origin PageController the SPI requires a host to serve | **No** — your application already exists. This file exists so the example runs with nothing provisioned |
+| [`app.py`](app.py) | The synthetic Contacts application: a list page, a record page per contact, a typed read and write API, two credentials, users with different permissions, two workspaces that repeat contact names, and the same-origin PageController the SPI requires a host to serve | **No** — your application already exists. This file exists so the example runs with nothing provisioned |
 | [`adapter.py`](adapter.py) | All five ports — identity, routes, postconditions, reconciliation, data classification — plus one read and one write over the application's data | **Yes** — this is the file to copy |
 | [`skills/`](skills/) | One Skill artifact per capability: when the tool applies, and the instructions the model follows when it does | **Yes** — version-controlled beside the application it describes |
 | [`demo.py`](demo.py) | The deployment composition: identity binding, mutation journal, control plane, gateway, browser session | **Yes** — but this is the host's job, not the adapter's |
@@ -51,6 +51,28 @@ Two consequences worth noticing in the code:
   write with its own cookie is one CSRF away from a write nobody asked for, so `POST
   /api/contacts` takes the delegated credential and nothing else.
 
+## Authority belongs to the application
+
+Two synthetic users sign in to the `northstar` workspace: `ada-lovelace` may read and write,
+`rosalind-franklin` may only read. A second workspace, `southwind`, holds contacts with the
+same names as some of `northstar`'s.
+
+```bash
+PYTHONPATH=src:. python -m examples.contacts.demo --allow-mutations --actor rosalind-franklin
+```
+
+- **The principal carries what the application grants, not what the catalog offers.**
+  `_ContactsIdentityPort` asks the application what the actor may do. Rosalind's principal
+  has `contacts:read` only, so the create tool is refused before any request is made; the
+  panel says the account is not permitted and nothing changed, and the turn ends there —
+  the Agent is never handed the refusal to try the page instead.
+- **The application refuses the same write on its own** (HTTP 403), and the adapter maps
+  that to `BusinessToolPermissionError` as well. A test forges an over-scoped principal to
+  show that this second layer holds by itself.
+- **Every read carries the delegated credential** and returns only the actor's workspace.
+  The duplicate check cannot mistake `southwind`'s Radia Perlman for one in `northstar`, and
+  "not found" is stated only for the scope this account could search.
+
 Reconciliation is the other half of "never retried": when an outcome is lost,
 `_ContactsReconciler` returns `unknown` with `requires_human` and the counts an operator
 needs. It never answers "completed" — a matching record is not proof that this proposal
@@ -75,3 +97,6 @@ should run: it checks the ports are coherent before any model or browser is invo
 approval has to come from the page. The same browser suite also exercises no decision,
 denial, expiry, an exact HTTP replay, two independently approved sessions racing on one
 business key, a lost response after commit, and failed readback after acknowledgement.
+`TheApplicationsOwnAuthorityInARealBrowser` signs in as the read-only user and as a user whose
+workspace shares names with another, and checks the model context, audit ledger, replay,
+page and panel for anything from the other workspace.

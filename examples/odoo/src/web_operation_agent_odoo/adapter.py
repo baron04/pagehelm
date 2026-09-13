@@ -44,6 +44,7 @@ from web_operation_agent.business import (BusinessMutationIndeterminate,
                                           BusinessToolAuthenticationError,
                                           BusinessToolContractError, BusinessToolError,
                                           BusinessToolIdentityError,
+                                          BusinessToolPermissionError,
                                           BusinessToolRequestError, BusinessToolResult,
                                           BusinessToolRuntime, FormDraft, FormDraftField,
                                           BusinessToolUnavailableError,
@@ -576,9 +577,16 @@ class OdooBusinessToolExecutor:
             name = ""
             if isinstance(error, dict) and isinstance(error.get("data"), dict):
                 name = str(error["data"].get("name") or "")
-            if "AccessDenied" in name or "AccessError" in name:
+            # Two different answers that used to share one class. `AccessDenied` is Odoo
+            # refusing the credential; `AccessError` is Odoo's access rules refusing an
+            # authenticated user this model or record, which is an authorization result.
+            if "AccessDenied" in name:
                 raise BusinessToolAuthenticationError(
-                    "Odoo denied the delegated user this operation")
+                    "Odoo rejected the delegated credential")
+            if "AccessError" in name:
+                raise BusinessToolPermissionError(
+                    "Odoo's access rules do not permit the delegated user this operation",
+                    layer="application")
             # The message may quote record content, so only the exception class crosses.
             raise BusinessToolError(f"Odoo refused the call ({name or 'unknown'})")
         return payload.get("result")

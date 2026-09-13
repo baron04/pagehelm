@@ -33,7 +33,8 @@ export function Composer(props: ComposerProps): React.JSX.Element {
     // a fractional line height leaves over is enough to park a scrollbar next to a single
     // line of placeholder -- permanently, for anyone who asks for non-overlay scrollbars.
     node.style.overflowY = Number.isFinite(ceiling) && needed > ceiling ? 'auto' : 'hidden'
-  }, [draft])
+    // Disabling the field lowers its ceiling, so it is measured again when that changes.
+  }, [draft, disabled])
 
   useEffect(() => {
     if (!disabled && !busy) input.current?.focus()

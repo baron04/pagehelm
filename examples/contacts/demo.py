@@ -10,6 +10,8 @@ Run it from a checkout:  python -m examples.contacts.demo --help
 from __future__ import annotations
 
 import argparse
+import dataclasses
+import hashlib
 import json
 import math
 import os
@@ -23,8 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from examples.contacts.adapter import MinimalContactsAdapter
-from examples.contacts.app import (DEMO_API_TOKEN, DEMO_SESSION_COOKIE,
-                                   DEMO_SESSION_VALUE,
+from examples.contacts.app import (ACTORS_BY_ID, DEMO_SESSION_COOKIE,
                                    MinimalContactsApplication)
 from web_operation_agent.application import bind_application
 from web_operation_agent.embedded_agent import ReadOnlyControl
@@ -67,11 +68,16 @@ class ScriptedDemoChat:
     def __init__(self, replies: tuple[tuple[str, dict], ...] = READ_WALKTHROUGH):
         self.calls = 0
         self.replies = replies
+        #: Exactly what reached the "model": every message and tool schema, per decision.
+        #: Kept in memory for qualification, which checks what a model would have seen.
+        self.seen: list[str] = []
 
     def complete(self, messages: list[dict], tools: list[dict] | None, run_id: str,
                  max_tokens: int | None = None, options: dict | None = None,
                  timeout_s: float | None = None) -> dict[str, Any]:
         self.calls += 1
+        self.seen.append(json.dumps({"messages": messages, "tools": tools},
+                                    ensure_ascii=False, default=str))
         replies = self.replies
         if self.calls > len(replies):
             name, arguments = "finish", {"done": False, "why": "Script exhausted."}
@@ -119,6 +125,15 @@ class DemoConfig:
     approval_ttl_s: int = 120
     write_fault: str = ""
     replay_approval: bool = False
+    #: Qualification-only: which synthetic user signs in. The public CLI keeps the writer.
+    actor: str = "ada-lovelace"
+    #: Qualification-only fault injection: the scopes a *misconfigured* integration would
+    #: put on the principal, so a test can show the application's own permissions still
+    #: refuse when the framework's scope check has been handed too much.
+    forged_scopes: tuple[str, ...] = ()
+    #: Qualification-only: read the panel after the last turn, then reload the page and
+    #: read what the server replays into it.
+    capture_panel: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "output_dir", Path(self.output_dir).expanduser())
@@ -141,6 +156,11 @@ class DemoConfig:
             raise ValueError("write_fault is invalid")
         if self.replay_approval and self.approval_decision != "approved":
             raise ValueError("only an approved decision can be replayed")
+        if self.actor not in ACTORS_BY_ID:
+            raise ValueError("actor is not a synthetic demo user")
+        if not isinstance(self.forged_scopes, tuple) or any(
+                not isinstance(scope, str) for scope in self.forged_scopes):
+            raise ValueError("forged_scopes must be a tuple of scope names")
 
 
 #: The panel's own approve control, inside the assistant's shadow root. There is no other
@@ -151,6 +171,9 @@ class DemoConfig:
 #: case this walkthrough must not be allowed to take.
 _APPROVE_CONTROL = '[data-testid="woa-approve"]'
 _DENY_CONTROL = '[data-testid="woa-deny"]'
+#: Panel states in which a turn is still moving; anything else has settled.
+_ACTIVE_PANEL_STATES = ("connecting", "queued", "observing", "acting", "stopping",
+                        "reconnecting")
 
 
 def _approve_in_page(page, timeout_s: float) -> None:
@@ -181,6 +204,26 @@ def _decide_in_page(page, config: DemoConfig) -> dict:
     else:
         control.click()
     return visible
+
+
+def _read_panel(page, task: str) -> dict:
+    """What the person sees in the panel once the thread has settled on `task`."""
+    window = page.locator(".woa-window")
+    if not window.is_visible():
+        page.locator(".woa-launcher").click()
+    window.wait_for(state="visible", timeout=10_000)
+    thread = page.locator(".woa-thread")
+    thread.get_by_text(task, exact=False).first.wait_for(timeout=10_000)
+    page.wait_for_function(
+        """active => {
+          const root = document.querySelector('#woa-assistant')?.shadowRoot;
+          const state = root?.querySelector('.woa-window')?.dataset.state;
+          return Boolean(state) && !active.includes(state);
+        }""", arg=list(_ACTIVE_PANEL_STATES), timeout=10_000)
+    page.wait_for_timeout(300)
+    return {"text": thread.inner_text(),
+            "state": window.get_attribute("data-state") or "",
+            "approval_cards": page.locator(".woa-approval").count()}
 
 
 def _chat(config: DemoConfig, run_dir: Path):
@@ -216,21 +259,28 @@ def _outcome_json(outcome) -> dict:
 
 
 def _run_browser(config: DemoConfig, live: LiveProductSession,
-                 conversation: LiveConversationRunner) -> tuple[list[dict], str, str, list[dict]]:
+                 conversation: LiveConversationRunner, session_value: str
+                 ) -> tuple[list[dict], str, str, list[dict], dict]:
     from playwright.sync_api import Error as PlaywrightError, sync_playwright
 
     records: list[dict] = []
     last_url = ""
     last_page_text = ""
     approvals: list[dict] = []
+    panel: dict = {}
+    origin = live.grant.allowed_origins[0]
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=config.headless)
         try:
             context = browser.new_context(viewport={"width": 1440, "height": 960})
             try:
+                # The user is signed in to the application before the assistant exists,
+                # which is the only order a real deployment can have.
+                context.add_cookies([{"name": DEMO_SESSION_COOKIE, "value": session_value,
+                                      "url": origin}])
                 context.add_init_script(script=live.bootstrap_script)
                 page = context.new_page()
-                page.goto(live.grant.allowed_origins[0] + "/contacts",
+                page.goto(origin + "/contacts",
                           wait_until="domcontentloaded", timeout=30_000)
                 page.wait_for_function("window.__WOA_RUNTIME_READY__ !== undefined",
                                        timeout=30_000)
@@ -285,6 +335,18 @@ def _run_browser(config: DemoConfig, live: LiveProductSession,
                     # though the document and runtime already observe the new route.
                     last_url = page.evaluate("() => location.href")
                     last_page_text = page.locator("main").inner_text()[:2_000]
+                    if config.capture_panel:
+                        panel["live"] = _read_panel(page, tasks[-1])
+                        # A full document load: the panel keeps no timeline of its own, so
+                        # whatever it shows now is what the server replayed to it.
+                        page.reload(wait_until="domcontentloaded", timeout=30_000)
+                        page.wait_for_function("window.__WOA_RUNTIME_READY__ !== undefined",
+                                               timeout=30_000)
+                        page.evaluate(
+                            "async () => { await window.__WOA_RUNTIME_READY__; return true; }")
+                        panel["replayed"] = _read_panel(page, tasks[-1])
+                        panel["page_text_after_reload"] = page.locator(
+                            "main").inner_text()[:2_000]
                     if config.keep_open_seconds and not config.headless:
                         page.wait_for_timeout(int(config.keep_open_seconds * 1000))
                 else:
@@ -309,7 +371,14 @@ def _run_browser(config: DemoConfig, live: LiveProductSession,
                 context.close()
         finally:
             browser.close()
-    return records, last_url, last_page_text, approvals
+    return records, last_url, last_page_text, approvals, panel
+
+
+def workspace_digest(records) -> str:
+    """A content-free fingerprint of one workspace's records, for before/after checks."""
+    encoded = json.dumps(sorted(records, key=lambda item: item["id"]), ensure_ascii=False,
+                         sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
 def run_demo(config: DemoConfig) -> dict:
@@ -318,10 +387,11 @@ def run_demo(config: DemoConfig) -> dict:
     run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
     run_dir = config.output_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
+    actor = ACTORS_BY_ID[config.actor]
     with MinimalContactsApplication(write_fault=config.write_fault) as application:
         journal = MemoryMutationJournal() if config.allow_mutations else None
         adapter = MinimalContactsAdapter(
-            application.origin, api_token=DEMO_API_TOKEN,
+            application.origin, api_token=actor.token,
             allow_mutations=config.allow_mutations, mutation_journal=journal)
         bound = bind_application(adapter)
         if not adapter.health()["passed"]:
@@ -331,9 +401,10 @@ def run_demo(config: DemoConfig) -> dict:
         # to drive; this demo knows its own synthetic session, which is the only part of
         # this a real application replaces.
         principal = adapter.ports.identity.bind(
-            adapter.identity.page_identity(
-                f"{DEMO_SESSION_COOKIE}={DEMO_SESSION_VALUE}"),
+            adapter.identity.page_identity(f"{DEMO_SESSION_COOKIE}={actor.session}"),
             delegation_id=f"minimal-contacts-{uuid.uuid4().hex}")
+        if config.forged_scopes:
+            principal = dataclasses.replace(principal, scopes=config.forged_scopes)
         chat, meter = _chat(config, run_dir)
         holder: dict[str, LiveConversationRunner] = {}
 
@@ -382,8 +453,8 @@ def run_demo(config: DemoConfig) -> dict:
             principal=principal,
         ).start()
         try:
-            records, last_url, last_page_text, approvals = _run_browser(
-                config, live, holder["conversation"])
+            records, last_url, last_page_text, approvals, panel = _run_browser(
+                config, live, holder["conversation"], actor.session)
         finally:
             live.close()
             live.wait(timeout_s=10)
@@ -409,19 +480,30 @@ def run_demo(config: DemoConfig) -> dict:
         "schema_version": 1,
         "application": "minimal.contacts",
         "mode": "scripted_apparatus" if config.scripted else "provider",
+        "actor": actor.actor,
         "turns": records,
         "last_url": last_url,
         "last_page_text": last_page_text,
         "approvals": approvals,
         "application_state": {
+            "write_requests": application.write_requests,
+            "refused_writes": application.refused_writes,
             "post_requests": application.post_requests,
             "records_created": application.records_created,
             "contact_count": len(application.contacts),
+            # Counts and fingerprints only. The summary sits next to the actor's audit
+            # trail, and another workspace's records have no business being in either.
+            "workspace_counts": {name: len(items)
+                                 for name, items in sorted(application.workspaces.items())},
+            "workspace_digests": {name: workspace_digest(items)
+                                  for name, items in sorted(application.workspaces.items())},
         },
         "model_usage": usage,
         "mutation_journal": journal_rows,
         "output": str(run_dir),
     }
+    if panel:
+        summary["panel"] = panel
     summary_path = run_dir / "summary.json"
     summary_path.write_text(
         json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
@@ -453,6 +535,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--turn-timeout", type=float, default=90.0)
     parser.add_argument("--allow-mutations", action="store_true",
                         help="offer the write tool; the panel still asks before it runs")
+    parser.add_argument("--actor", default="ada-lovelace", choices=sorted(ACTORS_BY_ID),
+                        help="synthetic user to sign in as; rosalind-franklin may only read")
     return parser
 
 
@@ -469,6 +553,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             keep_open_seconds=args.keep_open_seconds,
             turn_timeout_s=args.turn_timeout,
             allow_mutations=args.allow_mutations,
+            actor=args.actor,
         )
         summary = run_demo(config)
         print(json.dumps(summary, ensure_ascii=False, sort_keys=True), flush=True)
