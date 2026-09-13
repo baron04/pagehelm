@@ -53,8 +53,18 @@ export function host(initial: PanelSnapshot): PanelHost {
       current = {...current, connection: {...current.connection, stopping: true}}
       emit()
     },
-    decide() {
-      current = {...current, pendingApproval: null}
+    decide(_approvalId, decision) {
+      // What the server does next. A denial ends the turn, so the running step settles; an
+      // approval lets the turn carry on, which a static story can only leave running.
+      current = decision === 'denied'
+        ? {
+          ...current,
+          pendingApproval: null,
+          connection: {...current.connection, state: 'cancelled', busy: false},
+          entries: [...current.entries,
+            entry('e90', 'result', '已取消，没有执行任何写入。', {panel_state: 'cancelled'})],
+        }
+        : {...current, pendingApproval: null}
       emit()
     },
     newConversation() {},

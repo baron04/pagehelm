@@ -1213,6 +1213,55 @@ class PanelU07Tests(_PanelBrowser):
         self.assertEqual(self.calls(page)[0][2], "approved")
         self.assertEqual(self.errors, [])
 
+    def test_no_focus_ring_is_cut_off_by_a_container_that_clips(self):
+        """A ring drawn outside its control vanishes wherever an ancestor clips.
+
+        The work-process summary sits in a box with `overflow: hidden`, and keyboard focus
+        on it showed a stray line beneath it rather than a ring around it.
+        """
+        page = self.open(_snapshot(entries=[
+            _entry("e1", "goal", "列出所有待开票的销售订单，带金额"),
+            _entry("e2", "action", "query_sale_orders · 扫完 12 / 12 条", tone="active"),
+            _entry("e3", "result", "3 张销售订单待开票。", authored="server",
+                   panel_state="success"),
+        ]))
+        page.locator(".woa-launcher").click()
+        page.locator(".woa-work__summary").wait_for()
+        # Real Tab presses: only keyboard focus draws the ring a keyboard user sees.
+        ring_js = """() => {
+          const root = document.querySelector('#woa-assistant').shadowRoot
+          const node = root.activeElement
+          if (!node || !node.matches(':focus-visible')) return null
+          const style = getComputedStyle(node)
+          if (style.outlineStyle === 'none') return null
+          const name = `${node.tagName.toLowerCase()}.${node.className || node.id}`
+          const grow = parseFloat(style.outlineOffset) + parseFloat(style.outlineWidth)
+          const box = node.getBoundingClientRect()
+          for (let at = node.parentElement; at; at = at.parentElement) {
+            const clip = getComputedStyle(at)
+            if (clip.overflowX === 'visible' && clip.overflowY === 'visible') continue
+            const edge = at.getBoundingClientRect()
+            if (box.left - grow < edge.left - 0.5 || box.top - grow < edge.top - 0.5
+                || box.right + grow > edge.right + 0.5
+                || box.bottom + grow > edge.bottom + 0.5) {
+              return {name, clipped_by: at.className}
+            }
+          }
+          return {name, clipped_by: ''}
+        }"""
+        page.locator("#woa-composer-input").focus()
+        seen: dict[str, str] = {}
+        for key in ("Shift+Tab",) * 12 + ("Tab",) * 12:
+            page.keyboard.press(key)
+            ring = page.evaluate(ring_js)
+            if ring is not None:
+                seen[ring["name"]] = ring["clipped_by"]
+        # Otherwise an empty result could mean nothing was ever focused.
+        self.assertGreaterEqual(len(seen), 3, seen)
+        self.assertTrue(any("woa-work__summary" in name for name in seen), seen)
+        self.assertEqual({name: by for name, by in seen.items() if by}, {}, seen)
+        self.assertEqual(self.errors, [])
+
     def test_what_a_screen_reader_is_handed_names_every_control(self):
         """Roles and names only. Whether they are announced well is checked by a person."""
         page = self.open(self._conversation())
