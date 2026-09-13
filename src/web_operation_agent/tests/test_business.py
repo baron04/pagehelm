@@ -451,6 +451,84 @@ class SkillCitations(unittest.TestCase):
 
 
 class BusinessRuntimeValidation(unittest.TestCase):
+    def test_a_clarification_reply_inherits_only_the_unresolved_user_goal(self):
+        class CatalogExecutor:
+            @staticmethod
+            def tool_schemas():
+                return (SCHEMA, WRITE_SCHEMA)
+
+            @staticmethod
+            def tool_effects():
+                return {"query_companies": "read", "create_company": "write"}
+
+            @staticmethod
+            def execute(*_args, **_kwargs):
+                raise AssertionError("routing the turn must not dispatch a tool")
+
+        context = {
+            "schema_version": 1,
+            "prior_turns": [{
+                "message_id": "message-1", "user": "打开 A",
+                "assistant": "请给出完整名称。", "status": "needs_input",
+            }],
+            "pending_clarification": {
+                "schema_version": 1, "clarification_id": "clarify-1",
+                "task_id": "task-1", "question": "请给出完整名称。",
+                "response_kind": "free_text", "choices": [],
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            query = _skill(root / "query.json")
+            create_path = root / "create.json"
+            create_path.write_text(json.dumps({
+                "schema_version": 1,
+                "skill_id": "fixture.companies-create",
+                "title": "Create company",
+                "intent": "Create one company.",
+                "triggers": ["create company", "创建公司"],
+                "instructions": ["Query duplicates, then propose one company."],
+                "tool_names": ["query_companies", "create_company"],
+                "provenance": ["src:fixture@v1:companies.json#create"],
+                "read_only": False,
+            }) + "\n")
+            create = BusinessSkill.load(create_path)
+            runtime = BusinessToolRuntime(
+                (query, create), CatalogExecutor(),
+                route_skill_hints=((r"^/companies$", query.skill_id),))
+
+            continued = ServerAgentSession(
+                task=TaskSpec(task_ref="continued", prompt="Azure Interior",
+                              entry_path="/companies", supported_scope="read and open"),
+                chat=_Chat([]), browser=_Browser(), control=ReadOnlyControl(),
+                ledger=SessionLedger(root / "continued.jsonl", "continued"),
+                business_tools=runtime,
+                business_mutation_approval=lambda *_args, **_kwargs: None,
+                deterministic_read_navigation=True,
+                conversation_context=context,
+            )
+            self.assertEqual(continued._task_business_skill_ids, {query.skill_id})
+            self.assertEqual(continued._auto_loaded_business_skill_ids, {query.skill_id})
+            self.assertTrue(continued._navigation_only)
+            routed = continued.ledger.of_kind("business_skill_candidates")[-1]
+            self.assertTrue(routed["clarification_context_used"])
+            self.assertTrue(routed["route_context_used"])
+
+            replaced = ServerAgentSession(
+                task=TaskSpec(task_ref="replaced", prompt="创建公司 Zephyr",
+                              entry_path="/companies", supported_scope="create one"),
+                chat=_Chat([]), browser=_Browser(), control=ReadOnlyControl(),
+                ledger=SessionLedger(root / "replaced.jsonl", "replaced"),
+                business_tools=runtime,
+                business_mutation_approval=lambda *_args, **_kwargs: None,
+                deterministic_read_navigation=True,
+                conversation_context=context,
+            )
+            self.assertEqual(replaced._task_business_skill_ids, {create.skill_id})
+            self.assertFalse(replaced._navigation_only)
+            rerouted = replaced.ledger.of_kind("business_skill_candidates")[-1]
+            self.assertFalse(rerouted.get("clarification_context_used", False))
+
     def test_read_failures_have_stable_machine_classification(self):
         class FailingExecutor(_Executor):
             @staticmethod

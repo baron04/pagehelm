@@ -10,6 +10,8 @@ import {guarded} from './ErrorBoundary'
 
 /** Inside this many pixels of the floor counts as "at the newest line". */
 const NEAR_BOTTOM = 28
+/** A small accidental scroll does not need a floating recovery control. */
+const JUMP_REVEAL_DISTANCE = 96
 /** How long after a gesture a scroll still counts as that person's own doing. */
 const GESTURE_WINDOW_MS = 700
 
@@ -241,7 +243,7 @@ export function Thread(props: ThreadProps): React.JSX.Element {
       } else if (Date.now() - gesture.current < GESTURE_WINDOW_MS) {
         follow.current = false
       }
-      setDetached(!near)
+      setDetached(distance >= JUMP_REVEAL_DISTANCE)
     })
     root.addEventListener('scroll', onScroll, {passive: true})
     root.addEventListener('wheel', note, {passive: true})
@@ -264,6 +266,13 @@ export function Thread(props: ThreadProps): React.JSX.Element {
     if (!node || typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(guarded('thread resize', () => {
       if (follow.current) pin()
+      else {
+        const root = scroller.current
+        if (root) {
+          const distance = root.scrollHeight - root.scrollTop - root.clientHeight
+          setDetached(distance >= JUMP_REVEAL_DISTANCE)
+        }
+      }
     }))
     observer.observe(node)
     return () => observer.disconnect()

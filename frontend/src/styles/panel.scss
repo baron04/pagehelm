@@ -224,8 +224,13 @@ button:disabled { cursor: not-allowed; }
   overflow-anchor: auto;
   padding: 15px 13px 4px;
 }
-/* The shell around the thread clips, so the thread's own focus ring is drawn inside it. */
-.woa-thread:focus-visible { outline-offset: -2px; }
+/* The transcript remains keyboard-scrollable, but a saturated ring around the entire
+   reading area looks like an application error. Use the same quiet boundary as the rest
+   of the panel while preserving a visible keyboard focus state. */
+.woa-thread:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--woa-line-strong);
+}
 .woa-thread__content { display: flex; flex-direction: column; min-height: 100%; }
 .woa-thread__content:not([data-empty])::after {
   content: '';

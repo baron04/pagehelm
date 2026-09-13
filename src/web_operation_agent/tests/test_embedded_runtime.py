@@ -169,27 +169,31 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                 thread.get_by_text("列出所有待开票的销售订单").wait_for(timeout=8000)
                 thread.get_by_text("正在检查当前页面").wait_for(timeout=8000)
 
-                # A first-party SPA may reconcile <body> itself and remove a host node it
-                # did not create. The Runtime must reattach the same mounted panel without
-                # losing its input, timeline or authenticated browser lease.
+                # A first-party SPA may remove an integration-owned body child. The Runtime
+                # reattaches the same mounted panel without losing its input, timeline or
+                # authenticated browser lease.
                 page.evaluate("document.querySelector('#woa-assistant-root').remove()")
                 page.locator("#woa-assistant-root").wait_for(state="attached", timeout=3000)
                 page.locator(".woa-window").wait_for(timeout=3000)
                 thread.get_by_text("列出所有待开票的销售订单").wait_for(timeout=3000)
                 thread.get_by_text("正在检查当前页面").wait_for(timeout=3000)
 
-                # The application owns <body>. Replacing all its children must not detach
-                # the assistant even for one microtask: detaching it and putting it back in
-                # a MutationObserver is the user-visible flash this protects against.
+                # A fixed overlay still belongs inside body. An extra sibling under html
+                # can enter an application's root layout and steal viewport width.
                 self.assertEqual(page.evaluate(
                     "document.querySelector('#woa-assistant-root').parentElement.tagName"),
-                    "HTML")
-                remained_connected = page.evaluate("""() => {
+                    "BODY")
+                self.assertFalse(page.evaluate(
+                    "Array.from(document.documentElement.children, node => node.id)"
+                    ".includes('woa-assistant-root')"))
+                page.evaluate("""() => {
                   const root = document.querySelector('#woa-assistant-root')
                   document.body.replaceChildren(document.createElement('main'))
-                  return root.isConnected && root.parentElement === document.documentElement
                 }""")
-                self.assertTrue(remained_connected)
+                page.locator("#woa-assistant-root").wait_for(state="attached", timeout=3000)
+                self.assertEqual(page.evaluate(
+                    "document.querySelector('#woa-assistant-root').parentElement.tagName"),
+                    "BODY")
                 labels = channel._panel_configuration()["labels"]
                 page.get_by_role("button", name=labels["collapse"]).click()
                 page.locator(".woa-launcher").wait_for(timeout=3000)

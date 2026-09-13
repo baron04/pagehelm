@@ -500,12 +500,12 @@ export class EmbeddedWebRuntime {
       this.panelContainer.setAttribute('data-page-agent-not-interactive', 'true')
       // A non-interactive parent does not exclude its descendants or shadow text.
       this.panelContainer.setAttribute('data-page-agent-ignore', 'true')
-      // First-party SPAs own <body> and are allowed to reconcile or replace its children.
-      // Mount beside it under the stable document root so a route render cannot detach the
-      // live React tree, blink the panel, or lose the collapsed launcher.  Fixed-position
-      // shadow content does not participate in the application's document flow here.
-      const mountParent = document.documentElement || document.body
-      mountParent?.appendChild(this.panelContainer)
+      // The host is fixed-position and belongs in <body>. Appending an extra element next
+      // to <body> under <html> violates the document structure and, on Odoo, makes the two
+      // nodes participate in its root layout: the business application visibly loses part
+      // of the viewport. The attachment watcher below handles an application that really
+      // replaces body or removes this integration-owned child.
+      document.body?.appendChild(this.panelContainer)
       this._watchPanelAttachment()
     }
     this._onPageShow = event => {
@@ -542,16 +542,19 @@ export class EmbeddedWebRuntime {
         || typeof MutationObserver === 'undefined') return
     this.panelAttachmentObserver ||= new MutationObserver(() => {
       if (this.stopped || !this.panelContainer) return
-      const parent = document.documentElement || document.body
+      const parent = document.body
       if (!parent) return
-      // Removing the integration-owned root is still recoverable, but ordinary application
-      // route reconciliation no longer causes this branch to run.
-      if (!this.panelContainer.isConnected) parent.appendChild(this.panelContainer)
+      if (!this.panelContainer.isConnected || this.panelContainer.parentElement !== parent) {
+        parent.appendChild(this.panelContainer)
+      }
       this._watchPanelAttachment()
     })
     this.panelAttachmentObserver.disconnect()
     if (document.documentElement) {
       this.panelAttachmentObserver.observe(document.documentElement, {childList: true})
+    }
+    if (document.body) {
+      this.panelAttachmentObserver.observe(document.body, {childList: true})
     }
   }
 

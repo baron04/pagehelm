@@ -704,7 +704,23 @@ class ServerAgentSession:
         self.allow_clarification = allow_clarification
         self.allow_form_prefill = allow_form_prefill
         self.deterministic_read_navigation = deterministic_read_navigation
-        self._navigation_only = _is_navigation_only(task.prompt)
+        current_navigation_only = _is_navigation_only(task.prompt)
+        self._navigation_only = current_navigation_only
+        # A clarification reply such as "Azure Interior" carries no domain verb of its
+        # own. The unresolved turn is the server-owned proof that it is a continuation;
+        # recover only that turn's user-authored goal, never the assistant's question or
+        # prose, so a label cannot expand the tool surface by prompt injection.
+        continuation_prompt = ""
+        pending_clarification = (
+            (self.conversation_context or {}).get("pending_clarification") or {})
+        prior_turns = (self.conversation_context or {}).get("prior_turns") or ()
+        if (isinstance(pending_clarification, dict) and pending_clarification
+                and isinstance(prior_turns, list) and prior_turns):
+            prior = prior_turns[-1]
+            if (isinstance(prior, dict) and prior.get("status") == "needs_input"
+                    and isinstance(prior.get("user"), str)):
+                continuation_prompt = prior["user"].strip()
+        clarification_context_used = False
         self._business_control = {
             "approval_requested": 0,
             "approval_granted": 0,
@@ -727,9 +743,26 @@ class ServerAgentSession:
                 selection = business_tools.select(
                     task.public_text(),
                     allow_mutations=business_mutation_approval is not None,
-                    trusted_entry_path=(task.entry_path if self._navigation_only else ""),
+                    trusted_entry_path=(task.entry_path if current_navigation_only else ""),
                     limit=5,
                 )
+                # If the reply independently names a current capability, it is a new task
+                # and wins. Only a fallback-only reply inherits the unresolved goal. This
+                # lets "Azure Interior" continue "打开 A", while "算了，创建客户……" is
+                # routed solely by the new explicit request.
+                if continuation_prompt and selection.fallback_used:
+                    continued = business_tools.select(
+                        f"{continuation_prompt}\n{task.public_text()}",
+                        allow_mutations=business_mutation_approval is not None,
+                        trusted_entry_path=(
+                            task.entry_path if _is_navigation_only(continuation_prompt)
+                            else ""),
+                        limit=5,
+                    )
+                    if not continued.fallback_used:
+                        selection = continued
+                        self._navigation_only = _is_navigation_only(continuation_prompt)
+                        clarification_context_used = True
             current_skills = selection.skills
             prior_skills = ()
             if (self.conversation_context is not None
@@ -766,6 +799,8 @@ class ServerAgentSession:
                 mutations_enabled=business_mutation_approval is not None,
                 prior_user_context_used=bool(prior_skills),
                 bounded_limit=5,
+                **({"clarification_context_used": True}
+                   if clarification_context_used else {}),
                 **({"route_context_used": True}
                    if selection.route_context_used else {}),
             )

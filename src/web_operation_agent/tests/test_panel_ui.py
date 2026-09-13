@@ -565,7 +565,7 @@ class PanelUITests(_PanelBrowser):
         self.assertEqual(self.errors, [])
 
     def test_the_jump_control_is_anchored_and_the_latest_answer_has_breathing_room(self):
-        answer = "\n".join(f"第 {index} 行内容。" for index in range(80))
+        answer = "\n\n".join(f"第 {index} 行内容。" for index in range(80))
         page = self.open(_snapshot(entries=[
             _entry("e1", "goal", "给我一份长清单"),
             _entry("e2", "result", answer, panel_state="success"),
@@ -586,6 +586,52 @@ class PanelUITests(_PanelBrowser):
         composer = page.locator(".woa-composer").bounding_box()
         assert turn is not None and composer is not None
         self.assertGreaterEqual(composer["y"] - (turn["y"] + turn["height"]), 85)
+        self.assertEqual(self.errors, [])
+
+    def test_the_jump_control_waits_until_the_reader_is_meaningfully_away(self):
+        answer = "\n\n".join(f"第 {index} 行内容。" for index in range(80))
+        page = self.open(_snapshot(entries=[
+            _entry("e1", "goal", "给我一份长清单"),
+            _entry("e2", "result", answer, panel_state="success"),
+        ]))
+        page.locator(".woa-launcher").click()
+        thread = page.locator(".woa-thread")
+        page.wait_for_timeout(300)
+
+        thread.hover()
+        page.mouse.wheel(0, -60)
+        page.wait_for_timeout(100)
+        first_distance = thread.evaluate(
+            "node => node.scrollHeight - node.scrollTop - node.clientHeight")
+        self.assertGreaterEqual(first_distance, 40)
+        self.assertLess(first_distance, 96)
+        self.assertEqual(page.locator(".woa-jump").count(), 0)
+
+        page.mouse.wheel(0, -200)
+        page.wait_for_timeout(100)
+        second_distance = thread.evaluate(
+            "node => node.scrollHeight - node.scrollTop - node.clientHeight")
+        self.assertGreaterEqual(second_distance, 96)
+        page.locator(".woa-jump").wait_for(timeout=3000)
+        self.assertEqual(self.errors, [])
+
+    def test_the_keyboard_scroll_target_uses_a_quiet_focus_boundary(self):
+        page = self.open(_snapshot(entries=[
+            _entry("e1", "goal", "列出客户"),
+            _entry("e2", "result", "Acme", panel_state="success"),
+        ]))
+        page.locator(".woa-launcher").click()
+        thread = page.locator(".woa-thread")
+        # Opening puts the caret in the composer. One reverse Tab reaches the scrollable
+        # transcript and activates the keyboard-only focus treatment.
+        page.keyboard.press("Shift+Tab")
+        self.assertTrue(thread.evaluate("node => node === node.getRootNode().activeElement"))
+        style = thread.evaluate("""node => {
+          const css = getComputedStyle(node)
+          return {outline: css.outlineStyle, shadow: css.boxShadow}
+        }""")
+        self.assertEqual(style["outline"], "none")
+        self.assertNotEqual(style["shadow"], "none")
         self.assertEqual(self.errors, [])
 
     def test_a_crash_inside_the_panel_never_reaches_the_page(self):
@@ -951,7 +997,7 @@ _ACTIVE_JS = """() => {
           label: active.getAttribute('aria-label') || active.textContent.trim(),
           focus_visible: active.matches(':focus-visible'),
           outline_style: style.outlineStyle, outline_width: parseFloat(style.outlineWidth),
-          outline_color: style.outlineColor}
+          outline_color: style.outlineColor, box_shadow: style.boxShadow}
 }"""
 
 
@@ -1192,8 +1238,12 @@ class PanelU07Tests(_PanelBrowser):
                 self.assertNotEqual(field.evaluate(
                     "node => getComputedStyle(node).boxShadow"), "none")
             else:
-                self.assertNotEqual(active["outline_style"], "none", active)
-                self.assertGreaterEqual(active["outline_width"], 2, active)
+                # Most controls use an outside outline. The large scrollable transcript
+                # uses a quiet inset shadow so keyboard focus does not resemble an error
+                # border around the whole conversation.
+                self.assertTrue(
+                    (active["outline_style"] != "none" and active["outline_width"] >= 2)
+                    or active["box_shadow"] != "none", active)
             if active["label"] == labels["send"]:
                 break
             page.keyboard.press("Tab")
@@ -1254,9 +1304,10 @@ class PanelU07Tests(_PanelBrowser):
           const node = root.activeElement
           if (!node || !node.matches(':focus-visible')) return null
           const style = getComputedStyle(node)
-          if (style.outlineStyle === 'none') return null
+          const inset = style.outlineStyle === 'none' && style.boxShadow !== 'none'
+          if (style.outlineStyle === 'none' && !inset) return null
           const name = `${node.tagName.toLowerCase()}.${node.className || node.id}`
-          const grow = parseFloat(style.outlineOffset) + parseFloat(style.outlineWidth)
+          const grow = inset ? 0 : parseFloat(style.outlineOffset) + parseFloat(style.outlineWidth)
           const box = node.getBoundingClientRect()
           for (let at = node.parentElement; at; at = at.parentElement) {
             const clip = getComputedStyle(at)
