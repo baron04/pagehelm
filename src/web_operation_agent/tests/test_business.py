@@ -248,6 +248,20 @@ class SelectionOptionContract(unittest.TestCase):
                 content={"companies": []}, audit={},
                 selection_options=(BusinessSelectionOption("company/1", "Acme"),))
 
+    def test_a_navigation_target_must_be_an_authorized_route(self):
+        result = BusinessToolResult(
+            content={"ui_path": "/object/company/1"}, audit={},
+            allowed_routes=("/object/company/1",),
+            navigation_target="/object/company/1")
+        self.assertEqual(result.navigation_target, "/object/company/1")
+        with self.assertRaisesRegex(ValueError, "one of the allowed routes"):
+            BusinessToolResult(
+                content={"ui_path": "/object/company/1"}, audit={},
+                allowed_routes=("/object/company/1",),
+                navigation_target="/object/company/2")
+        with self.assertRaisesRegex(ValueError, "must be a string"):
+            BusinessToolResult(content={}, audit={}, navigation_target=None)
+
 
 class FormDraftContract(unittest.TestCase):
     def test_a_draft_is_bound_to_an_allowed_route_and_exact_non_secret_fields(self):
@@ -1428,6 +1442,84 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertIsNotNone(result.verified_answer)
             self.assertEqual(
                 ledger.of_kind("answer_verified")[-1]["deterministic"], "empty_query")
+
+    def test_complete_empty_preflight_does_not_finish_a_mutation_task(self):
+        class EmptyMutationExecutor(_MutationExecutor):
+            @staticmethod
+            def tool_schemas():
+                return (SCHEMA, WRITE_SCHEMA)
+
+            @staticmethod
+            def tool_effects():
+                return {"query_companies": "read", "create_company": "write"}
+
+            @staticmethod
+            def execute(name, args, *, context=None):
+                if name != "query_companies" or args:
+                    raise BusinessToolError("unexpected read")
+                observed_at = "2026-09-13T04:00:00+00:00"
+                origin = Origin(
+                    kind="typed", reference="query_companies#0",
+                    observed_at=observed_at, scope="current companies")
+                return BusinessToolResult(
+                    content={"companies": [], "matched_count": 0},
+                    audit={"application": "fixture", "operation": name,
+                           "returned_count": 0},
+                    query_answer=StructuredQueryAnswer(
+                        collection="companies", fields=("name", "domain"), records=(),
+                        source="fixture API", scope=origin.scope, observed_at=observed_at,
+                        source_complete=True, result_truncated=False, matched_count=0,
+                        source_total=0, records_scanned=0),
+                    evidence=(QueryEvidence(
+                        evidence_id="query#1", origin=origin, collection="companies",
+                        conditions=("name contains P72 Acceptance Write",),
+                        matched_count=0, records_scanned=0, covers_whole_scope=True),),
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "create-skill.json"
+            path.write_text(json.dumps({
+                "schema_version": 1,
+                "skill_id": "fixture.companies-create",
+                "title": "Create company",
+                "intent": "Create one company after checking duplicates.",
+                "triggers": ["create company", "创建公司"],
+                "instructions": ["Query duplicates, then propose the write."],
+                "tool_names": ["query_companies", "create_company"],
+                "provenance": ["src:fixture@v1:companies.json#create"],
+                "read_only": False,
+            }) + "\n")
+            skill = BusinessSkill.load(path)
+            chat = _Chat([
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("query_companies", {}),
+                ("create_company", {"name": "P72 Acceptance Write"}),
+            ])
+            ledger = SessionLedger(Path(tmp) / "session.jsonl", "empty-preflight")
+
+            def deny(proposal):
+                return SimpleNamespace(
+                    approval_id="approval-1", decision="denied",
+                    plan_digest=proposal.content_digest)
+
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="创建公司 P72 Acceptance Write",
+                              supported_scope="Create exactly one company."),
+                chat=chat, browser=_Browser(), control=ReadOnlyControl(), ledger=ledger,
+                step_budget=4, wall_budget_s=30, run_id="empty-preflight",
+                business_tools=BusinessToolRuntime(
+                    (skill,), EmptyMutationExecutor(),
+                    mutation_journal=MemoryMutationJournal()),
+                business_mutation_approval=deny,
+                plain_business_answer_min_page_actions=0)
+            session.entry_observation = _observation(1)
+            session.plan()
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "approval_denied")
+            self.assertEqual(result.steps_used, 3)
+            self.assertEqual(len(chat.messages), 3)
+            self.assertEqual(ledger.of_kind("answer_verified"), [])
 
     def test_read_failure_records_its_machine_code_for_external_scoring(self):
         class UnavailableExecutor(_Executor):

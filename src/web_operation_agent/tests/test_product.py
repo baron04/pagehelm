@@ -500,6 +500,57 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 sum(item["event"] == "deterministic_navigation_completed"
                     for item in events), 1)
 
+    def test_current_route_and_unique_result_remove_all_extra_navigation_model_calls(self):
+        class UniqueRouteExecutor(_Executor):
+            @staticmethod
+            def execute(name, args, *, context=None):
+                return dataclasses.replace(
+                    _Executor.execute(name, args, context=context),
+                    navigation_target="/object/company/company-1")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = _skill(root / "query-skill.json")
+            chat = _Chat([("query_companies", {})])
+            runtime = BusinessToolRuntime(
+                (skill,), UniqueRouteExecutor(),
+                route_skill_hints=((r"^/companies$", skill.skill_id),))
+            executor = AgentTurnExecutor(
+                channel=_Channel(),
+                config=AgentTurnConfig(
+                    supported_scope="Read and open one company.",
+                    ledger_path=root / "session.jsonl",
+                    deterministic_read_navigation=True,
+                ),
+                chat=chat, business_tools=runtime, control=ReadOnlyControl(),
+                run_id_factory=lambda _message: "turn-route-context-navigation",
+            )
+
+            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+                execution = executor.execute({
+                    "message_id": "message-1", "text": "打开 Acme",
+                    "page_url": "http://app.test/companies",
+                })
+
+            self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+            self.assertEqual(execution.user_answer, "已打开请求的页面。")
+            self.assertEqual(len(chat.tool_names), 1)
+            self.assertIn("query_companies", chat.tool_names[0])
+            self.assertEqual(_RemoteBrowser.instances[-1].actions, ["goto"])
+            events = [json.loads(line) for line in
+                      (root / "session.jsonl").read_text().splitlines()]
+            candidates = next(item for item in events
+                              if item["event"] == "business_skill_candidates")
+            self.assertTrue(candidates["route_context_used"])
+            self.assertFalse(candidates["fallback_used"])
+            read = next(item for item in events
+                        if item["event"] == "business_tool_result")
+            self.assertEqual(len(read["navigation_target_digest"]), 64)
+            self.assertNotIn("/object/company", json.dumps(read))
+            completed = next(item for item in events
+                             if item["event"] == "deterministic_navigation_completed")
+            self.assertEqual(completed["source"], "business_result")
+
     def test_fallback_skill_still_requires_model_selection_but_skips_final_call(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

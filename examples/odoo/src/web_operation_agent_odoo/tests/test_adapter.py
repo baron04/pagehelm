@@ -222,6 +222,35 @@ class AdapterContract(unittest.TestCase):
         for scope in ("customers:write", "sale_orders:write", "invoices:write"):
             self.assertIn(scope, bound.ports.identity.required_scopes)
 
+    def test_customer_page_context_narrows_an_entityless_open_without_granting_a_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            adapter = OdooApplicationAdapter(
+                base_url=BASE, api_key_path=_key_file(Path(tmp)),
+                allow_mutations=True, mutation_journal=MemoryMutationJournal())
+
+        selection = adapter.business_tools.select(
+            "打开 azur", allow_mutations=True,
+            trusted_entry_path="/odoo/customers")
+
+        self.assertTrue(selection.route_context_used)
+        self.assertFalse(selection.fallback_used)
+        self.assertEqual(selection.candidate_ids,
+                         ("odoo.sales.customers-query",))
+        self.assertTrue(all(skill.read_only for skill in selection.skills))
+
+    def test_customer_creation_selects_the_mutation_skill_without_route_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            adapter = OdooApplicationAdapter(
+                base_url=BASE, api_key_path=_key_file(Path(tmp)),
+                allow_mutations=True, mutation_journal=MemoryMutationJournal())
+
+        selection = adapter.business_tools.select(
+            "创建客户 P72 Acceptance Write，邮箱 p72-acceptance-write@example.test",
+            allow_mutations=True, trusted_entry_path="/odoo/customers")
+
+        self.assertFalse(selection.route_context_used)
+        self.assertIn("odoo.sales.customers-create", selection.candidate_ids)
+
     def test_mutations_require_an_explicit_journal(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(ValueError, "explicit mutation journal"):
@@ -308,6 +337,7 @@ class TypedReads(unittest.TestCase):
             ],
         )
         self.assertEqual(result.allowed_routes, ("/odoo/customers",))
+        self.assertEqual(result.navigation_target, "")
 
     def test_a_fuzzy_single_match_can_open_the_only_current_record(self):
         executor = _FakeOdoo({"res.partner": _customers(
@@ -315,6 +345,7 @@ class TypedReads(unittest.TestCase):
         result = executor.execute("query_customers", {"name_contains": "Acme"})
 
         self.assertEqual(result.content["record_route_resolution"], "unique")
+        self.assertEqual(result.navigation_target, "/odoo/customers/10")
         self.assertEqual(result.allowed_routes,
                          ("/odoo/customers", "/odoo/customers/10"))
         self.assertEqual(len(result.selection_options), 1)

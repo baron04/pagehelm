@@ -490,6 +490,7 @@ export class EmbeddedWebRuntime {
     this.panelHandle = null
     this.panelConfiguration = null
     this.panelCursor = ''
+    this.panelAttachmentObserver = null
     this._expiryTimer = 0
     if (this.panelEnabled && typeof document !== 'undefined') {
       // Created before the PageController so it can be excluded from the page the agent
@@ -500,6 +501,7 @@ export class EmbeddedWebRuntime {
       // A non-interactive parent does not exclude its descendants or shadow text.
       this.panelContainer.setAttribute('data-page-agent-ignore', 'true')
       document.body?.appendChild(this.panelContainer)
+      this._watchPanelAttachment()
     }
     this._onPageShow = event => {
       if (!event?.persisted || this.stopped) return
@@ -528,6 +530,25 @@ export class EmbeddedWebRuntime {
 
   _panelState(state) {
     this.panelHost?.setConnection({state})
+  }
+
+  _watchPanelAttachment() {
+    if (!this.panelEnabled || this.stopped || !this.panelContainer
+        || typeof MutationObserver === 'undefined') return
+    this.panelAttachmentObserver ||= new MutationObserver(() => {
+      if (this.stopped || !this.panelContainer || !document.body) return
+      // Some first-party SPAs replace or reconcile the direct children of <body>. Keep the
+      // already-mounted panel and its server-backed timeline alive when that happens.
+      if (!this.panelContainer.isConnected) document.body.appendChild(this.panelContainer)
+      this._watchPanelAttachment()
+    })
+    this.panelAttachmentObserver.disconnect()
+    if (document.documentElement) {
+      this.panelAttachmentObserver.observe(document.documentElement, {childList: true})
+    }
+    if (document.body) {
+      this.panelAttachmentObserver.observe(document.body, {childList: true})
+    }
   }
 
   /** One place where a failed request becomes a panel state and a stop-or-retry decision. */
@@ -812,6 +833,8 @@ export class EmbeddedWebRuntime {
   stop({removePanel = true} = {}) {
     this.stopped = true
     clearTimeout(this._expiryTimer)
+    this.panelAttachmentObserver?.disconnect()
+    this.panelAttachmentObserver = null
     this.eventAbortController?.abort()
     this.eventAbortController = null
     window.removeEventListener?.('pageshow', this._onPageShow)

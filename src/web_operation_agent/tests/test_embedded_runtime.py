@@ -169,6 +169,15 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                 thread.get_by_text("列出所有待开票的销售订单").wait_for(timeout=8000)
                 thread.get_by_text("正在检查当前页面").wait_for(timeout=8000)
 
+                # A first-party SPA may reconcile <body> itself and remove a host node it
+                # did not create. The Runtime must reattach the same mounted panel without
+                # losing its input, timeline or authenticated browser lease.
+                page.evaluate("document.querySelector('#woa-assistant-root').remove()")
+                page.locator("#woa-assistant-root").wait_for(state="attached", timeout=3000)
+                page.locator(".woa-window").wait_for(timeout=3000)
+                thread.get_by_text("列出所有待开票的销售订单").wait_for(timeout=3000)
+                thread.get_by_text("正在检查当前页面").wait_for(timeout=3000)
+
                 # A real, full document navigation: new document, new Runtime, new panel.
                 page.goto(app.origin + "/page2?source=navigation", wait_until="domcontentloaded")
                 page.locator(".woa-window").wait_for(timeout=8000)

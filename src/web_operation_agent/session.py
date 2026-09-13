@@ -727,6 +727,7 @@ class ServerAgentSession:
                 selection = business_tools.select(
                     task.public_text(),
                     allow_mutations=business_mutation_approval is not None,
+                    trusted_entry_path=(task.entry_path if self._navigation_only else ""),
                     limit=5,
                 )
             current_skills = selection.skills
@@ -765,6 +766,8 @@ class ServerAgentSession:
                 mutations_enabled=business_mutation_approval is not None,
                 prior_user_context_used=bool(prior_skills),
                 bounded_limit=5,
+                **({"route_context_used": True}
+                   if selection.route_context_used else {}),
             )
         self._task_business_skill_ids = {
             skill.skill_id for skill in self._task_business_skills}
@@ -773,7 +776,8 @@ class ServerAgentSession:
         if (self.deterministic_read_navigation and self._navigation_only
                 and len(self._task_business_skills) == 1
                 and len(selection.skills) == 1
-                and selection.trigger_matches and not selection.fallback_used
+                and (selection.trigger_matches or selection.route_context_used)
+                and not selection.fallback_used
                 and not selection.mutation_surface_widened
                 and self._task_business_skills[0].read_only):
             skill = self._task_business_skills[0]
@@ -1666,6 +1670,9 @@ class ServerAgentSession:
                         audit=tool_result.audit,
                         data_classes=list(tool_result.data_classes),
                         route_count=len(tool_result.allowed_routes),
+                        **({"navigation_target_digest": hashlib.sha256(
+                            tool_result.navigation_target.encode()).hexdigest()}
+                           if tool_result.navigation_target else {}),
                         side_effect_possible=False, identity=operation_identity)
                     self._business_routes.update(tool_result.allowed_routes)
                     self._latest_business_routes = set(tool_result.allowed_routes)
@@ -1695,6 +1702,8 @@ class ServerAgentSession:
                             "user explicitly asked to open a record or collection.")
                         projection = tool_result.query_answer
                         if (projection.complete and projection.matched_count == 0
+                                and all(skill.read_only
+                                        for skill in self._task_business_skills)
                                 and len(recorded_evidence) == 1):
                             evidence_ref = recorded_evidence[0]
                             try:
@@ -1726,6 +1735,71 @@ class ServerAgentSession:
                                 return self._finish(
                                     result, t0, "agent_finished", result.agent_said,
                                     steps=step)
+                    if (self.deterministic_read_navigation and self._navigation_only
+                            and "goto" not in self.disabled_actions
+                            and tool_result.navigation_target):
+                        target = tool_result.navigation_target
+                        if self._cancel_requested():
+                            return self._finish(
+                                result, t0, "user_cancelled",
+                                "the user stopped this task before browser dispatch",
+                                steps=step)
+                        prior_page_epoch = obs.epoch
+                        try:
+                            self._browser_attempts += 1
+                            receipt = self.browser.execute(
+                                "goto", {"url": target}, expect_navigation=True)
+                        except TurnCancelled as exc:
+                            self.ledger.append(
+                                "browser_action_cancelled_before_dispatch", step=step,
+                                tool="goto", dispatched=False, side_effect_possible=False)
+                            return self._finish(
+                                result, t0, "user_cancelled", str(exc), steps=step)
+                        except TransportError as exc:
+                            return self._finish(
+                                result, t0, self._transport_terminal(
+                                    "goto", may_write=False), str(exc), steps=step)
+                        self.page_actions += 1
+                        write = self._write_outcome(
+                            receipt, step, action_may_write=False)
+                        self.ledger.append(
+                            "action_receipt", step=step, tool=receipt.action,
+                            command_id=receipt.command_id,
+                            write_attribution="unattributed", ok=receipt.ok,
+                            error_code=receipt.error_code, navigated=receipt.navigated,
+                            url_after=receipt.url_after, elapsed_ms=receipt.elapsed_ms,
+                            write=write["state"], relogin=receipt.relogin,
+                            deterministic_business_navigation=True)
+                        reason, detail = self._settle_write(write)
+                        if reason:
+                            return self._finish(result, t0, reason, detail, steps=step)
+                        if receipt.observation is not None:
+                            obs = receipt.observation
+                        reached = bool(
+                            receipt.ok and receipt.observation is not None
+                            and receipt.observation.epoch > prior_page_epoch
+                            and self._observation_is_at_route(receipt.observation, target))
+                        if reached:
+                            self._answer_action_receipt = {
+                                "kind": "navigation", "url": obs.url}
+                            result.agent_said = (
+                                "已打开请求的页面。"
+                                if re.search(r"[\u3400-\u9fff]", self.task.prompt)
+                                else "Opened the requested page.")
+                            self.ledger.append(
+                                "deterministic_navigation_completed", step=step,
+                                url_digest=hashlib.sha256(obs.url.encode()).hexdigest(),
+                                observation_epoch=obs.epoch, side_effect_possible=False,
+                                source="business_result")
+                            return self._finish(
+                                result, t0, "agent_finished", result.agent_said,
+                                steps=step)
+                        note = self._ground(
+                            obs, receipt, write["state"], write["refused_requests"])
+                        feedback += (
+                            "\n\nThe server tried the adapter's unique current route, but "
+                            "the fresh page did not verify that target. Replan from the "
+                            "current page.\n\n" + self._render(obs, receipt, note, write))
                 except BusinessToolPermissionError as exc:
                     # A read is refused for the same reason a write is, and ends the same
                     # way: handed back, the model could read the same facts off the page and

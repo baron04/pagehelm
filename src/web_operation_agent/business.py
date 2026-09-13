@@ -469,6 +469,10 @@ class BusinessToolResult:
     #: server to place in a non-persisting form. It is one-turn authority and never grants
     #: submission. The model can request its application but cannot alter its bindings.
     form_draft: FormDraft | None = None
+    #: A read may identify exactly one record route for a navigation-only task. The route
+    #: remains ordinary, adapter-issued, one-turn authority; this field merely lets the
+    #: server take the already-determined reversible step without another model round trip.
+    navigation_target: str = ""
 
     def __post_init__(self) -> None:
         if not isinstance(self.content, dict) or not isinstance(self.audit, dict):
@@ -522,6 +526,12 @@ class BusinessToolResult:
                    for item in self.form_draft.fields):
                 raise ValueError(
                     "business form draft fields must appear exactly in its content")
+        if not isinstance(self.navigation_target, str):
+            raise ValueError("business navigation target must be a string")
+        if self.navigation_target:
+            if self.navigation_target not in self.allowed_routes:
+                raise ValueError(
+                    "business navigation target must be one of the allowed routes")
         option_bytes = json.dumps(
             [{"record_ref": item.record_ref, "label": item.label}
              for item in self.selection_options],
@@ -795,6 +805,9 @@ class BusinessSkillSelection:
     #: widened surface is a decision, and a decision nobody can see is how the previous
     #: behaviour went unnoticed.
     mutation_surface_widened: bool = False
+    #: The task had no domain trigger, so an application-declared route-to-Skill hint was
+    #: used. The page path is trusted only as routing context and never grants a tool scope.
+    route_context_used: bool = False
 
     @property
     def candidate_ids(self) -> tuple[str, ...]:
@@ -811,6 +824,7 @@ class BusinessToolRuntime:
                  data_classifier: BusinessDataClassifier | None = None,
                  postcondition_verifier: BusinessPostconditionVerifier | None = None,
                  route_validator: BusinessRouteValidator | None = None,
+                 route_skill_hints: tuple[tuple[str, str], ...] = (),
                  max_pending_mutations: int = 1_000):
         skill_ids = [skill.skill_id for skill in skills]
         if len(skill_ids) != len(set(skill_ids)):
@@ -889,6 +903,18 @@ class BusinessToolRuntime:
                 route_validator, BusinessRouteValidator):
             raise TypeError("route_validator must provide validate_tool_route")
         self._route_validator = route_validator
+        compiled_hints = []
+        for pattern, skill_id in route_skill_hints:
+            if (not isinstance(pattern, str) or not pattern.startswith("^")
+                    or not pattern.endswith("$") or skill_id not in self._skills):
+                raise ValueError("route Skill hints require anchored patterns and known Skills")
+            if not self._skills[skill_id].read_only:
+                raise ValueError("route Skill hints may name only read-only Skills")
+            try:
+                compiled_hints.append((re.compile(pattern), pattern, skill_id))
+            except re.error as exc:
+                raise ValueError("route Skill hint pattern is invalid") from exc
+        self._route_skill_hints = tuple(compiled_hints)
         self.application_id = application_id
         self._required_scopes = scopes
         self._mutation_journal = (mutation_journal
@@ -988,7 +1014,10 @@ class BusinessToolRuntime:
                 separators=(",", ":"), allow_nan=False,
             ).encode("utf-8")).hexdigest(),
         } for name in sorted(self._schemas)]
-        return {"schema_version": 1, "skills": skills, "tools": tools}
+        route_hints = [{"pattern": pattern, "skill_id": skill_id}
+                       for _compiled, pattern, skill_id in self._route_skill_hints]
+        return {"schema_version": 1, "skills": skills, "tools": tools,
+                "route_skill_hints": route_hints}
 
     @property
     def catalog_sha256(self) -> str:
@@ -1027,6 +1056,7 @@ class BusinessToolRuntime:
             if skill.read_only or allow_mutations)
 
     def select(self, task: str, *, allow_mutations: bool,
+               trusted_entry_path: str = "",
                limit: int = 5) -> BusinessSkillSelection:
         """Select task candidates and use a bounded capability-aware empty fallback.
 
@@ -1039,8 +1069,21 @@ class BusinessToolRuntime:
             raise ValueError("allow_mutations must be a boolean")
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
             raise ValueError("Skill candidate limit must be an integer from 1 to 20")
+        if trusted_entry_path and (
+                not isinstance(trusted_entry_path, str)
+                or not trusted_entry_path.startswith("/")
+                or len(trusted_entry_path) > 1_000):
+            raise ValueError("trusted_entry_path must be a bounded absolute path")
         matched = self.relevant(task, limit=max(limit, len(self._skills)))
         eligible = [skill for skill in matched if skill.read_only or allow_mutations]
+        route_context_used = False
+        if not eligible and trusted_entry_path:
+            context_ids = []
+            for pattern, _source, skill_id in self._route_skill_hints:
+                if pattern.fullmatch(trusted_entry_path) and skill_id not in context_ids:
+                    context_ids.append(skill_id)
+            eligible = [self._skills[skill_id] for skill_id in context_ids]
+            route_context_used = bool(eligible)
         # Trigger phrases rank the catalog; they do not decide what this turn is able to do.
         # A write trigger is a verb and its object ("confirm quotation", "确认报价单"); the
         # read trigger beside it is usually the object alone ("quotation", "报价单"). Every
@@ -1059,7 +1102,8 @@ class BusinessToolRuntime:
         # Widening no further is the point -- "list every product" gains nothing, because
         # `products-query` has no write Skill extending it.
         widened = False
-        if allow_mutations and eligible and all(skill.read_only for skill in eligible):
+        if (allow_mutations and eligible and not route_context_used
+                and all(skill.read_only for skill in eligible)):
             selected_tools = [set(skill.tool_names) for skill in eligible]
             present = {skill.skill_id for skill in eligible}
             # Subsuming *every* matched read Skill is what makes this safe. "Create a person
@@ -1082,7 +1126,8 @@ class BusinessToolRuntime:
             return BusinessSkillSelection(
                 BUSINESS_SKILL_MATCHER_VERSION, tuple(eligible[:limit]),
                 tuple(skill.skill_id for skill in matched), False,
-                mutation_surface_widened=widened)
+                mutation_surface_widened=widened,
+                route_context_used=route_context_used)
 
         fallback = [
             skill for skill in sorted(self._skills.values(), key=lambda item: item.skill_id)

@@ -986,6 +986,7 @@ class OdooBusinessToolExecutor:
                                     whole=source_complete and not result_truncated,
                                     conditions=conditions, looked_for=needle),
             selection_options=selection_options,
+            navigation_target=(record_routes[0] if unique_match else ""),
             query_answer=StructuredQueryAnswer(
                 collection=collection.tool.removeprefix("query_"),
                 fields=collection.answer_fields,
@@ -1474,7 +1475,9 @@ class OdooApplicationAdapter:
             tuple(skills), executor, application_id=APPLICATION_ID,
             required_scopes=required_scopes, mutation_journal=mutation_journal,
             data_classifier=data, postcondition_verifier=postconditions,
-            route_validator=routes)
+            route_validator=routes,
+            route_skill_hints=((r"^/odoo/customers(?:/[^/?#]+)?$",
+                                "odoo.sales.customers-query"),))
         self._executor = executor
         self.ports = ApplicationPorts(
             identity=_OdooIdentityPort(executor, frozenset(required_scopes.values())),
