@@ -236,10 +236,20 @@ def render_neutral_user_answer(context: AgentAnswerContext) -> str:
         return ("An operation for the same business object is still running or unresolved. "
                 "Nothing was submitted again; check the earlier operation first.")
     if context.agent.terminal_reason == "permission_denied":
+        prior_write_completed = bool(
+            context.agent.business_control.get("mutation_completed", 0))
         if re.search(r"[\u3400-\u9fff]", context.message.text):
-            return "当前账号没有执行这项操作的权限，系统没有做任何更改。如确实需要，请联系管理员授予权限。"
-        return ("Your account is not permitted to perform this operation, and nothing was "
-                "changed. Ask an administrator for access if you need it.")
+            if prior_write_completed:
+                return ("本轮先前的操作已经完成，但后续操作因权限不足没有执行。"
+                        "请先核对已完成的结果；如需继续，请联系管理员授予权限。")
+            return ("当前账号没有执行这项操作的权限，这项操作没有执行。"
+                    "如确实需要，请联系管理员授予权限。")
+        if prior_write_completed:
+            return ("An earlier action in this task completed, but the later operation was "
+                    "not permitted and was not carried out. Review the completed result; "
+                    "ask an administrator for access if you need to continue.")
+        return ("Your account is not permitted to perform this operation, so that operation "
+                "was not carried out. Ask an administrator for access if you need it.")
     if context.agent.terminal_reason == "approval_failed":
         if re.search(r"[\u3400-\u9fff]", context.message.text):
             return "本次确认已失效或与当前操作不再匹配，因此没有执行写入。请核对当前目标后重新提交。"

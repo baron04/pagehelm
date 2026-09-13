@@ -738,6 +738,24 @@ class AgentTurnExecutorTests(unittest.TestCase):
 
         self.assertEqual(product.render_neutral_user_answer(context), "Opened Acme.")
 
+    def test_permission_answer_does_not_erase_an_earlier_completed_write(self):
+        context = product.AgentAnswerContext(
+            message=AgentTurnMessage.from_wire({
+                **_message(), "text": "创建客户后读取详情。"}),
+            agent=product.RunResult(
+                run_id="run", task_ref="task", arm="U",
+                terminal_reason="permission_denied",
+                business_control={"mutation_completed": 1}),
+            business_result=None,
+            max_chars=4_000,
+        )
+
+        answer = product.render_neutral_user_answer(context)
+
+        self.assertIn("先前的操作已经完成", answer)
+        self.assertIn("后续操作因权限不足没有执行", answer)
+        self.assertNotIn("没有任何更改", answer)
+
     def test_second_turn_resolves_reference_but_must_requery_before_opening(self):
         class TwoCompanyExecutor(_Executor):
             @staticmethod

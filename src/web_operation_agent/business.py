@@ -162,7 +162,9 @@ class BusinessToolPermissionError(BusinessToolError):
     Distinct from an identity or authentication failure: the credential works and names a
     real actor, and that actor's own authority refuses the operation. `layer` says who
     refused -- the framework's per-tool scope check before anything reached the application,
-    or the application's own permission system after it did.
+    or the application's own permission system after it did. A mutation adapter may raise
+    this only when the application guarantees that the refused call made no business change;
+    an uncertain or partially applied refusal is ``BusinessMutationIndeterminate`` instead.
     """
 
     code = "business_permission_denied"

@@ -671,7 +671,7 @@ class TheApplicationsOwnAuthorityInARealBrowser(unittest.TestCase):
         self.assertEqual(turn["status"], "refused")
         self.assertEqual(turn["terminal_reason"], "permission_denied")
         self.assertIn("not permitted", turn["answer"])
-        self.assertIn("nothing was changed", turn["answer"])
+        self.assertIn("that operation was not carried out", turn["answer"])
         self.assertIn("not permitted", summary["panel"]["live"]["text"])
         self.assertEqual(summary["panel"]["live"]["state"], "refused")
         self.assertEqual(summary["panel"]["live"]["approval_cards"], 0)
