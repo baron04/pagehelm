@@ -39,6 +39,7 @@ from web_operation_agent.application import (APPLICATION_ADAPTER_VERSION,
                                              ResultPostconditionVerifier,
                                              SourceCapability)
 from web_operation_agent.business import (BusinessMutationIndeterminate,
+                                          BusinessSelectionOption,
                                           BusinessMutationSpec, BusinessSkill,
                                           BusinessToolAuthenticationError,
                                           BusinessToolContractError, BusinessToolError,
@@ -791,6 +792,27 @@ class OdooBusinessToolExecutor:
         return item
 
     @staticmethod
+    def _selection_option(collection: _Collection, row: dict,
+                          item: dict) -> BusinessSelectionOption | None:
+        record_id = row.get("id")
+        if isinstance(record_id, bool) or not isinstance(record_id, int) or record_id <= 0:
+            return None
+        if collection.tool == "query_customers":
+            fields = ("name", "email", "city")
+        elif collection.tool == "query_products":
+            fields = ("name", "code", "price")
+        else:
+            fields = ("reference", "customer", "total", "state")
+        values = [str(item.get(field) or "").strip() for field in fields]
+        values = [value for value in values if value]
+        if not values:
+            return None
+        return BusinessSelectionOption(
+            record_ref=f"{collection.model}/{record_id}",
+            label=" — ".join(values)[:200],
+        )
+
+    @staticmethod
     def _match_field(collection: _Collection) -> str:
         return "name" if "reference" not in collection.answer_fields else "reference"
 
@@ -817,6 +839,9 @@ class OdooBusinessToolExecutor:
         matched = len(pairs)
         visible_pairs = pairs[:limit]
         visible = [item for _row, item in visible_pairs]
+        selection_options = tuple(
+            option for row, item in visible_pairs
+            if (option := self._selection_option(collection, row, item)) is not None)
         allowed_routes = (collection.route,) + tuple(
             item["ui_path"] for item in visible if isinstance(item.get("ui_path"), str))
         source_complete = scan["complete"]
@@ -867,6 +892,7 @@ class OdooBusinessToolExecutor:
                                     scanned=scan["records_scanned"],
                                     whole=source_complete and not result_truncated,
                                     conditions=conditions),
+            selection_options=selection_options,
             query_answer=StructuredQueryAnswer(
                 collection=collection.tool.removeprefix("query_"),
                 fields=collection.answer_fields,

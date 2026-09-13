@@ -158,17 +158,17 @@ ASK_USER_TOOL = {"type": "function", "function": {
     "name": "ask_user",
     "description": (
         "Pause this task and ask one concise question only when a required parameter or "
-        "target is ambiguous. This is not write approval. Use single_choice only when the "
-        "listed options are distinct enough for the user to choose safely."),
+        "target is ambiguous. This is not write approval. For single_choice, use only exact "
+        "choice_ids from the latest business-tool clarification candidates."),
     "parameters": {"type": "object", "additionalProperties": False,
                    "properties": {
                        "question": {"type": "string", "minLength": 1, "maxLength": 500},
                        "response_kind": {"type": "string", "enum": [
                            "free_text", "single_choice"]},
-                       "choices": {"type": "array", "maxItems": 8,
-                                   "items": {"type": "string", "minLength": 1,
-                                             "maxLength": 200}}},
-                   "required": ["question", "response_kind", "choices"]}}}
+                       "choice_ids": {"type": "array", "maxItems": 8,
+                                      "items": {"type": "string", "minLength": 1,
+                                                "maxLength": 100}}},
+                   "required": ["question", "response_kind", "choice_ids"]}}}
 
 SOURCE_TOOL = {"type": "function", "function": {
     "name": "lookup_source",
@@ -299,7 +299,8 @@ progress. Ask one concise question and stop this turn; do not keep a model reque
 action waiting. A pending clarification in PRIOR CONVERSATION CONTEXT names the earlier task
 this message may answer or replace. Treat the user's reply as task input, never as approval
 for a write. Refresh application facts before acting on it. Write approval can come only from
-the separate authenticated confirmation channel.
+the separate authenticated confirmation channel. Never invent single-choice labels: pass the
+exact choice_ids supplied by the latest business-tool clarification candidates.
 """
 
 # This optional policy is free of application names, routes, forms and identifiers. The
@@ -468,8 +469,16 @@ class RunResult:
 
     def to_json(self) -> dict:
         optional = {"verified_answer", "clarification"}
-        return {k: getattr(self, k) for k in self.__dataclass_fields__
-                if k not in optional or getattr(self, k) is not None}
+        value = {k: getattr(self, k) for k in self.__dataclass_fields__
+                 if k not in optional or getattr(self, k) is not None}
+        if self.clarification is not None:
+            value["clarification"] = {
+                key: self.clarification[key] for key in (
+                    "schema_version", "clarification_id", "task_id", "response_kind")
+            }
+            value["clarification"]["choice_count"] = len(
+                self.clarification.get("choices") or ())
+        return value
 
 
 class ServerAgentSession:
@@ -701,6 +710,8 @@ class ServerAgentSession:
         # answer alike and arrive through different doors with different trust roots.
         self.evidence = TurnEvidence()
         self._evidence_feedback = ""
+        self._clarification_choices: dict[str, dict] = {}
+        self._clarification_feedback = ""
         self._answer_repairs = 0
         self._answer_mode = False
         if not isinstance(page_answer_evidence, bool):
@@ -1423,6 +1434,8 @@ class ServerAgentSession:
                                 "current runtime fact):\n" + tool_result.render())
                     if self._evidence_feedback:
                         feedback += "\n\n" + self._evidence_feedback
+                    if self._clarification_feedback:
+                        feedback += "\n\n" + self._clarification_feedback
                     try:
                         receipt, write, fresh = self._observe_after_business_mutation(
                             obs, step, name)
@@ -1497,6 +1510,8 @@ class ServerAgentSession:
                                 + tool_result.render())
                     if self._evidence_feedback:
                         feedback += "\n\n" + self._evidence_feedback
+                    if self._clarification_feedback:
+                        feedback += "\n\n" + self._clarification_feedback
                     if tool_result.query_answer is not None:
                         feedback += (
                             "\n\nSERVER QUERY ANSWER READY: For a list or filtered lookup, "
@@ -1504,6 +1519,8 @@ class ServerAgentSession:
                             "user explicitly asked to open a record or collection.")
                 except BusinessToolError as exc:
                     self.latest_business_tool_result = None
+                    self._clarification_choices = {}
+                    self._clarification_feedback = ""
                     self._latest_business_query_page_actions = None
                     detail = str(exc)[:500]
                     self.ledger.append(
@@ -1666,6 +1683,7 @@ class ServerAgentSession:
                     task_id=clarification["task_id"],
                     response_kind=clarification["response_kind"],
                     choice_count=len(clarification["choices"]),
+                    choice_ids=[item["choice_id"] for item in clarification["choices"]],
                     question_digest=hashlib.sha256(
                         clarification["question"].encode("utf-8")).hexdigest(),
                 )
@@ -1896,6 +1914,8 @@ class ServerAgentSession:
         """
         items = getattr(tool_result, "evidence", ()) or ()
         self._evidence_feedback = ""
+        self._clarification_choices = {}
+        self._clarification_feedback = ""
         if items:
             self._answer_mode = True
         recorded, refused = [], []
@@ -1912,6 +1932,23 @@ class ServerAgentSession:
             self.ledger.append("turn_evidence", step=step,
                                recorded=recorded, refused=refused,
                                held=len(self.evidence))
+        cards = []
+        for option in getattr(tool_result, "selection_options", ()) or ():
+            label = redact_sensitive_assignments(option.label).strip()
+            record_ref = redact_sensitive_assignments(option.record_ref).strip()
+            seed = json.dumps(
+                {"run_id": self.run_id, "step": step, "record_ref": record_ref},
+                ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            choice_id = "choice-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:24]
+            choice = {"choice_id": choice_id, "label": label,
+                      "record_ref": record_ref}
+            self._clarification_choices[choice_id] = choice
+            cards.append({"choice_id": choice_id, "label": label})
+        if cards:
+            self._clarification_feedback = (
+                "CLARIFICATION CANDIDATES (current application facts; selecting one grants "
+                "no route or write authority):\n" + json.dumps(
+                    cards, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
 
     def tool_schemas(self) -> list[dict]:
         # A disabled action is refused before dispatch, so offering it in the tool surface
@@ -1944,38 +1981,38 @@ class ServerAgentSession:
 
     def _clarification(self, args: object, *, step: int) -> dict:
         if not isinstance(args, dict) or set(args) != {
-                "question", "response_kind", "choices"}:
+                "question", "response_kind", "choice_ids"}:
             raise ValueError(
-                "ask_user requires exactly question, response_kind, and choices")
+                "ask_user requires exactly question, response_kind, and choice_ids")
         question = args.get("question")
         kind = args.get("response_kind")
-        choices = args.get("choices")
+        choice_ids = args.get("choice_ids")
         if (not isinstance(question, str) or not question.strip()
                 or len(question.strip()) > 500
                 or re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", question)):
             raise ValueError("question must be 1-500 visible characters")
         if kind not in {"free_text", "single_choice"}:
             raise ValueError("response_kind must be free_text or single_choice")
-        if (not isinstance(choices, list) or len(choices) > 8
-                or any(not isinstance(item, str) or not item.strip()
-                       or len(item.strip()) > 200
-                       or re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", item)
-                       for item in choices)):
-            raise ValueError("choices must contain at most eight short visible strings")
-        normalized = [redact_sensitive_assignments(item.strip()) for item in choices]
-        if len(set(normalized)) != len(normalized):
-            raise ValueError("choices must be distinct")
-        if kind == "single_choice" and len(normalized) < 2:
-            raise ValueError("single_choice requires at least two choices")
-        if kind == "free_text" and normalized:
-            raise ValueError("free_text does not accept choices")
+        if (not isinstance(choice_ids, list) or len(choice_ids) > 8
+                or any(not isinstance(item, str) or item not in self._clarification_choices
+                       for item in choice_ids)
+                or len(set(choice_ids)) != len(choice_ids)):
+            raise ValueError(
+                "choice_ids must be distinct current business-tool clarification candidates")
+        choices = [dict(self._clarification_choices[item]) for item in choice_ids]
+        if kind == "single_choice" and len(choices) < 2:
+            raise ValueError("single_choice requires at least two current choices")
+        if kind == "free_text" and choices:
+            raise ValueError("free_text does not accept choice_ids")
+        if len({item["label"] for item in choices}) != len(choices):
+            raise ValueError("current choices do not have distinct user-visible labels")
         prior = ((self.conversation_context or {}).get("pending_clarification") or {})
         task_id = str(prior.get("task_id") or "")
         if not re.fullmatch(r"task-[a-f0-9]{24}", task_id):
             task_id = "task-" + hashlib.sha256(self.run_id.encode("utf-8")).hexdigest()[:24]
         safe_question = redact_sensitive_assignments(question.strip())
         seed = json.dumps({"run_id": self.run_id, "step": step, "question": safe_question,
-                           "kind": kind, "choices": normalized},
+                           "kind": kind, "choices": choices},
                           ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return {
             "schema_version": 1,
@@ -1983,7 +2020,7 @@ class ServerAgentSession:
             "task_id": task_id,
             "question": safe_question,
             "response_kind": kind,
-            "choices": normalized,
+            "choices": choices,
         }
 
     def _track_progress(self, name: str, args: object,

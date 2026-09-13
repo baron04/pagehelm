@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import inspect
 import json
 import tempfile
@@ -20,10 +21,12 @@ from web_operation_agent.application import (APPLICATION_ADAPTER_VERSION,
                                              ResultPostconditionVerifier,
                                              bind_application)
 from web_operation_agent.answering import StructuredQueryAnswer
-from web_operation_agent.business import (BusinessSkill, BusinessToolResult,
+from web_operation_agent.business import (BusinessSelectionOption, BusinessSkill,
+                                          BusinessToolResult,
                                           BusinessToolRuntime)
 from web_operation_agent.conversation import ConversationState
 from web_operation_agent.embedded_agent import ReadOnlyControl
+from web_operation_agent.evidence import Origin, RecordEvidence
 from web_operation_agent.identity import PrincipalContext
 from web_operation_agent.model import ProviderError
 from web_operation_agent.mutation import SQLiteMutationJournal
@@ -660,9 +663,9 @@ class AgentTurnExecutorTests(unittest.TestCase):
             state = ConversationState()
             chat = _Chat([
                 ("ask_user", {
-                    "question": "Which Acme should I open?",
-                    "response_kind": "single_choice",
-                    "choices": ["Acme — London", "Acme — Paris"],
+                    "question": "What city should I use to identify Acme?",
+                    "response_kind": "free_text",
+                    "choice_ids": [],
                 }),
                 ("finish", {"done": True, "why": "Opened Acme — London."}),
             ])
@@ -688,12 +691,10 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 })
 
             self.assertEqual(first.status, AgentTurnStatus.NEEDS_INPUT)
-            self.assertEqual(
-                first.user_answer,
-                "Which Acme should I open?\n1. Acme — London\n2. Acme — Paris",
-            )
+            self.assertEqual(first.user_answer,
+                             "What city should I use to identify Acme?")
             self.assertEqual(first.to_json()["clarification"]["response_kind"],
-                             "single_choice")
+                             "free_text")
             self.assertEqual(second.status, AgentTurnStatus.FINISHED)
             self.assertIsNone(state.pending_clarification)
             second_opening = chat.messages[1][1]["content"]
@@ -703,6 +704,113 @@ class AgentTurnExecutorTests(unittest.TestCase):
             progress = [event[1] for event in channel.published if event[0] == "progress"]
             self.assertEqual([item["state"] for item in progress],
                              ["agent_started", "needs_input", "agent_started", "finished"])
+
+    def test_single_choice_is_bound_to_current_application_options(self):
+        class AmbiguousExecutor(_Executor):
+            @staticmethod
+            def execute(name, args, *, context=None):
+                result = _Executor.execute(name, args, context=context)
+                origin = Origin(kind="typed", reference="fixture", observed_at="now",
+                                scope="current workspace")
+                return BusinessToolResult(
+                    content={
+                        **result.content,
+                        "companies": [
+                            {"name": "Acme", "city": "London"},
+                            {"name": "Acme", "city": "Paris"},
+                        ],
+                    },
+                    audit=result.audit,
+                    evidence=(
+                        RecordEvidence(
+                            "record#1", origin, "company/1", "name", "company name",
+                            True, "Acme", "text"),
+                        RecordEvidence(
+                            "record#2", origin, "company/2", "name", "company name",
+                            True, "Acme", "text"),
+                    ),
+                    selection_options=(
+                        BusinessSelectionOption("company/1", "Acme — London"),
+                        BusinessSelectionOption("company/2", "Acme — Paris"),
+                    ),
+                )
+
+        def choice_id(record_ref: str) -> str:
+            seed = json.dumps(
+                {"run_id": "choice-turn", "step": 2, "record_ref": record_ref},
+                ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            return "choice-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:24]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = _skill(root / "query-skill.json")
+            ids = [choice_id("company/1"), choice_id("company/2")]
+            chat = _Chat([
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("query_companies", {}),
+                ("ask_user", {
+                    "question": "Which Acme should I open?",
+                    "response_kind": "single_choice",
+                    "choice_ids": ids,
+                }),
+            ])
+            state = ConversationState()
+            executor = AgentTurnExecutor(
+                channel=_Channel(),
+                config=AgentTurnConfig(
+                    supported_scope="Read and open one company.",
+                    ledger_path=root / "session.jsonl",
+                ),
+                chat=chat,
+                business_tools=BusinessToolRuntime((skill,), AmbiguousExecutor()),
+                control=ReadOnlyControl(),
+                run_id_factory=lambda _message: "choice-turn",
+                conversation_state=state,
+            )
+            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+                result = executor.execute(_message())
+
+            self.assertEqual(result.status, AgentTurnStatus.NEEDS_INPUT)
+            self.assertEqual(
+                result.user_answer,
+                "Which Acme should I open?\n1. Acme — London\n2. Acme — Paris")
+            pending = state.pending_clarification
+            self.assertEqual([item["record_ref"] for item in pending["choices"]],
+                             ["company/1", "company/2"])
+            public = result.to_json()["clarification"]
+            self.assertNotIn("record_ref", json.dumps(public))
+            self.assertNotIn("record_ref", json.dumps(result.agent.to_json()))
+            self.assertIn("CLARIFICATION CANDIDATES", chat.messages[2][-1]["content"])
+
+    def test_fabricated_single_choice_ids_are_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            chat = _Chat([
+                ("ask_user", {
+                    "question": "Which Acme should I open?",
+                    "response_kind": "single_choice",
+                    "choice_ids": ["choice-invented-1", "choice-invented-2"],
+                }),
+                ("finish", {"done": False, "why": "No verified choices are available."}),
+            ])
+            executor = AgentTurnExecutor(
+                channel=_Channel(),
+                config=AgentTurnConfig(
+                    supported_scope="Read and open one company.",
+                    ledger_path=root / "session.jsonl",
+                ),
+                chat=chat, business_tools=None, control=ReadOnlyControl(),
+                run_id_factory=lambda _message: "fabricated-choice-turn",
+            )
+            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+                result = executor.execute(_message())
+
+            self.assertEqual(result.status, AgentTurnStatus.REFUSED)
+            self.assertIsNone(result.agent.clarification)
+            events = [json.loads(line) for line in
+                      (root / "session.jsonl").read_text().splitlines()]
+            self.assertEqual(
+                [event["event"] for event in events].count("clarification_refused"), 1)
 
     def test_unchanged_repeat_is_not_dispatched_and_a_second_repeat_ends_the_turn(self):
         with tempfile.TemporaryDirectory() as tmp:

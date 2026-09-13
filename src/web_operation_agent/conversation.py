@@ -148,16 +148,28 @@ class ConversationState:
         if kind not in _CLARIFICATION_KINDS:
             raise ValueError("clarification response_kind is invalid")
         if (not isinstance(choices, list) or len(choices) > 8
-                or any(not isinstance(item, str) or not item.strip() or len(item) > 200
-                       for item in choices)
-                or len(set(item.strip() for item in choices)) != len(choices)):
+                or any(not isinstance(item, dict) or set(item) != {
+                           "choice_id", "label", "record_ref"}
+                       for item in choices)):
             raise ValueError("clarification choices are invalid")
+        normalized_choices = []
+        for item in choices:
+            normalized_item = {}
+            for key, limit in (("choice_id", 100), ("label", 200), ("record_ref", 500)):
+                entry = item.get(key)
+                if not isinstance(entry, str) or not entry.strip() or len(entry.strip()) > limit:
+                    raise ValueError(f"clarification choice {key} is invalid")
+                normalized_item[key] = entry.strip()
+            normalized_choices.append(normalized_item)
+        for key in ("choice_id", "label", "record_ref"):
+            if len({item[key] for item in normalized_choices}) != len(normalized_choices):
+                raise ValueError(f"clarification choice {key} values must be distinct")
         if kind == "single_choice" and len(choices) < 2:
             raise ValueError("single_choice clarification requires at least two choices")
         if kind == "free_text" and choices:
             raise ValueError("free_text clarification cannot carry choices")
         normalized = _redact_json({**value, "question": value["question"].strip(),
-                                   "choices": [item.strip() for item in choices]})
+                                   "choices": normalized_choices})
         if len(_canonical({"schema_version": 1, "prior_turns": [],
                            "pending_clarification": normalized})) > self.max_bytes:
             raise ValueError("clarification exceeds the conversation limit")

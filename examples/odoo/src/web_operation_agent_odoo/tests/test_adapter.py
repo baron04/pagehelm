@@ -241,6 +241,24 @@ class TypedReads(unittest.TestCase):
                          ("/odoo/customers", "/odoo/customers/10"))
         self.assertEqual(result.content["customers"][0]["ui_path"], "/odoo/customers/10")
         self.assertEqual(result.query_answer.records, (("Acme", "a@example.test"),))
+        self.assertEqual(
+            [(item.record_ref, item.label) for item in result.selection_options],
+            [("res.partner/10", "Acme — a@example.test — Paris")],
+        )
+
+    def test_same_name_customers_have_application_grounded_choice_labels(self):
+        executor = _FakeOdoo({"res.partner": _customers(
+            [("Acme", "london@example.test"), ("Acme", "paris@example.test")])})
+        result = executor.execute("query_customers", {"name_contains": "Acme"})
+
+        self.assertEqual(result.content["matched_count"], 2)
+        self.assertEqual(
+            [(item.record_ref, item.label) for item in result.selection_options],
+            [
+                ("res.partner/10", "Acme — london@example.test — Paris"),
+                ("res.partner/11", "Acme — paris@example.test — Paris"),
+            ],
+        )
 
     def test_an_unknown_tool_or_argument_is_refused_before_any_call(self):
         executor = _FakeOdoo({"sale.order": _orders(1)})

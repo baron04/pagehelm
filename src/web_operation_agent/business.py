@@ -20,6 +20,7 @@ from typing import Protocol, runtime_checkable
 from urllib.parse import urlsplit
 
 from .answering import StructuredQueryAnswer
+from .evidence import RecordEvidence
 from .identity import OperationContext, PrincipalError
 from .mutation import (MemoryMutationJournal, MutationJournal,
                        MutationJournalDurability, MutationJournalError)
@@ -321,6 +322,27 @@ def _has_sensitive_key(value: object) -> bool:
 
 
 @dataclass(frozen=True)
+class BusinessSelectionOption:
+    """One application-labelled record that may be offered for user disambiguation.
+
+    The adapter owns the label because only it knows which fields are meaningful to the
+    application's users.  ``record_ref`` is retained on the server as historical context;
+    it grants no route or tool authority and must be refreshed before use.
+    """
+
+    record_ref: str
+    label: str
+
+    def __post_init__(self) -> None:
+        for name, value, limit in (("record_ref", self.record_ref, 500),
+                                   ("label", self.label, 200)):
+            if (not isinstance(value, str) or not value.strip() or len(value.strip()) > limit
+                    or re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", value)):
+                raise ValueError(f"business selection {name} is invalid")
+            object.__setattr__(self, name, value.strip())
+
+
+@dataclass(frozen=True)
 class BusinessToolResult:
     """Bounded runtime facts for the model plus a smaller audit projection."""
 
@@ -334,6 +356,9 @@ class BusinessToolResult:
     #: view -- positional strings with no record identity, type or currency -- and an answer
     #: built on it can say what a table said, never what a reader asked.
     evidence: tuple = ()
+    #: Current, application-labelled records that a server clarification may offer. These
+    #: are data, not capabilities: selecting one never authorises a route or a write.
+    selection_options: tuple[BusinessSelectionOption, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.content, dict) or not isinstance(self.audit, dict):
@@ -361,6 +386,28 @@ class BusinessToolResult:
                 or any(not isinstance(item, str) or not _DATA_CLASS.fullmatch(item)
                        for item in self.data_classes)):
             raise ValueError("business tool data_classes must be unique identifiers")
+        if (not isinstance(self.selection_options, tuple)
+                or len(self.selection_options) > 50
+                or any(not isinstance(item, BusinessSelectionOption)
+                       for item in self.selection_options)
+                or len({item.record_ref for item in self.selection_options})
+                != len(self.selection_options)):
+            raise ValueError(
+                "business tool selection options must be at most 50 unique record references")
+        if self.selection_options:
+            evidence_record_refs = {
+                item.record_id for item in self.evidence if isinstance(item, RecordEvidence)}
+            if any(item.record_ref not in evidence_record_refs
+                   for item in self.selection_options):
+                raise ValueError(
+                    "business selection options must reference records established by evidence")
+        option_bytes = json.dumps(
+            [{"record_ref": item.record_ref, "label": item.label}
+             for item in self.selection_options],
+            ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+            allow_nan=False).encode("utf-8")
+        if len(encoded) + len(option_bytes) > _MAX_RESULT_BYTES:
+            raise ValueError("business tool result exceeds 64 KiB")
         for route in self.allowed_routes:
             parsed = urlsplit(route) if isinstance(route, str) else None
             safe = bool(

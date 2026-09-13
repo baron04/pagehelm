@@ -28,7 +28,12 @@ class ConversationStateTests(unittest.TestCase):
             "task_id": "task-123",
             "question": "Which Acme did you mean?",
             "response_kind": "single_choice",
-            "choices": ["Acme — London", "Acme — Paris"],
+            "choices": [
+                {"choice_id": "choice-1", "label": "Acme — London",
+                 "record_ref": "company/1"},
+                {"choice_id": "choice-2", "label": "Acme — Paris",
+                 "record_ref": "company/2"},
+            ],
         }
 
         state.record(

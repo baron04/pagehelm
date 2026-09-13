@@ -240,7 +240,7 @@ def render_neutral_user_answer(context: AgentAnswerContext) -> str:
         clarification = context.agent.clarification
         question = str(clarification["question"])
         choices = clarification.get("choices") or ()
-        return "\n".join([question, *(f"{index}. {choice}"
+        return "\n".join([question, *(f"{index}. {choice['label']}"
                                       for index, choice in enumerate(choices, 1))])
     if context.agent.agent_said.strip():
         return context.agent.agent_said.strip()
@@ -274,6 +274,17 @@ class AgentTurnExecution:
 
     def to_json(self) -> dict:
         business = self.business_result
+        clarification = self.agent.clarification
+        public_clarification = None
+        if clarification is not None:
+            public_clarification = {
+                key: clarification[key] for key in (
+                    "schema_version", "clarification_id", "task_id", "question",
+                    "response_kind")
+            }
+            public_clarification["choices"] = [
+                {"choice_id": item["choice_id"], "label": item["label"]}
+                for item in clarification.get("choices") or ()]
         return {
             "schema_version": self.schema_version,
             "run_id": self.run_id,
@@ -300,7 +311,7 @@ class AgentTurnExecution:
                         and business.query_answer is not None) else None),
             } if business is not None else None),
             "answer_fallback_used": self.answer_fallback_used,
-            "clarification": self.agent.clarification,
+            "clarification": public_clarification,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
         }

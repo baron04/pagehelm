@@ -10,13 +10,15 @@ from types import SimpleNamespace
 
 from web_operation_agent.answering import StructuredQueryAnswer
 from web_operation_agent.business import (
-    BusinessMutationIndeterminate, BusinessMutationSpec, BusinessSkill, Citation,
+    BusinessMutationIndeterminate, BusinessMutationSpec, BusinessSelectionOption,
+    BusinessSkill, Citation,
     BusinessToolContractError, BusinessToolError, BusinessToolIdentityError,
     BusinessToolRequestError, BusinessToolResult, BusinessToolRuntime,
     BusinessToolUnavailableError,
 )
 from web_operation_agent.application import ResultPostconditionVerifier
 from web_operation_agent.embedded_agent import ReadOnlyControl
+from web_operation_agent.evidence import Origin, RecordEvidence
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.identity import OperationContext, PrincipalContext
 from web_operation_agent.mutation import MemoryMutationJournal, MutationJournalError
@@ -215,6 +217,35 @@ class _Chat(CancellableChatDouble):
             return {"content": args["content"]}
         return {"tool_calls": [{"id": str(len(self.messages)), "function": {
             "name": name, "arguments": json.dumps(args)}}]}
+
+
+class SelectionOptionContract(unittest.TestCase):
+    def test_options_require_bounded_unique_application_record_references(self):
+        evidence = (RecordEvidence(
+            evidence_id="record#1",
+            origin=Origin(kind="typed", reference="fixture", observed_at="now",
+                          scope="current workspace"),
+            record_id="company/1", field_name="name", field_meaning="company name",
+            field_was_read=True, value="Acme", value_type="text"),)
+        result = BusinessToolResult(
+            content={"companies": []}, audit={},
+            evidence=evidence,
+            selection_options=(BusinessSelectionOption("company/1", "Acme — London"),))
+        self.assertEqual(result.selection_options[0].label, "Acme — London")
+        with self.assertRaisesRegex(ValueError, "unique record references"):
+            BusinessToolResult(
+                content={"companies": []}, audit={},
+                evidence=evidence,
+                selection_options=(
+                    BusinessSelectionOption("company/1", "Acme — London"),
+                    BusinessSelectionOption("company/1", "Acme — Paris"),
+                ))
+
+    def test_an_option_cannot_name_a_record_absent_from_evidence(self):
+        with self.assertRaisesRegex(ValueError, "established by evidence"):
+            BusinessToolResult(
+                content={"companies": []}, audit={},
+                selection_options=(BusinessSelectionOption("company/1", "Acme"),))
 
 
 class SkillCitations(unittest.TestCase):
