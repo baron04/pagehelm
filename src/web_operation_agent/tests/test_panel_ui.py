@@ -997,7 +997,23 @@ class PanelU07Tests(_PanelBrowser):
           if (getComputedStyle(shell).overflowY !== 'visible') {
             thread.bottom = Math.min(thread.bottom, shell.getBoundingClientRect().bottom)
           }
-          return {window: rect('.woa-window'), field: rect('.woa-field'),
+          // Whether the card still has an edge beside and below its pinned answers: a real
+          // border, and an answers bar that stays inside it.
+          const cardNode = root.querySelector('.woa-approval')
+          let edge = null
+          if (cardNode) {
+            const style = getComputedStyle(cardNode)
+            const outer = cardNode.getBoundingClientRect()
+            const bar = root.querySelector('.woa-approval__actions').getBoundingClientRect()
+            const left = parseFloat(style.borderLeftWidth)
+            const right = parseFloat(style.borderRightWidth)
+            const bottom = parseFloat(style.borderBottomWidth)
+            edge = {left, right, bottom,
+                    bar_inside: bar.left >= outer.left + left - 0.5
+                      && bar.right <= outer.right - right + 0.5
+                      && bar.bottom <= outer.bottom - bottom + 0.5}
+          }
+          return {window: rect('.woa-window'), field: rect('.woa-field'), edge,
                   thread, card: rect('.woa-approval'),
                   heading: heading ? heading.getBoundingClientRect().toJSON() : null,
                   heading_hit}
@@ -1017,6 +1033,11 @@ class PanelU07Tests(_PanelBrowser):
                                 f"the confirmation's heading is scrolled away at {where}")
         self.assertTrue(facts["heading_hit"],
                         f"the confirmation's heading is covered at {where}: {facts}")
+        edge = facts["edge"]
+        self.assertGreaterEqual(min(edge["left"], edge["right"], edge["bottom"]), 1,
+                                f"the confirmation has no edge at {where}: {edge}")
+        self.assertTrue(edge["bar_inside"],
+                        f"the pinned answers cover the confirmation's edge at {where}: {edge}")
 
     def assertReachable(self, page, selector: str, where: str) -> None:
         facts = page.evaluate(_REACHABLE_JS, selector)
@@ -1222,6 +1243,97 @@ class PanelU07Tests(_PanelBrowser):
         self.assertIn(labels["approvalTitle"], facts["card_title"])
         self.assertIn("S00002", facts["card_description"])
         self.assertEqual(self.errors, [])
+
+
+STORYBOOK_STATIC = Path(__file__).resolve().parents[3] / "frontend" / "storybook-static"
+
+
+@unittest.skipUnless((STORYBOOK_STATIC / "iframe.html").is_file(),
+                     "Storybook is not built; run npm run build-storybook in frontend")
+class StorybookShowsThePanelAsShipped(unittest.TestCase):
+    """Storybook is where a person reviews the panel, so it has to show the shipped panel.
+
+    The palette, the type and the shadows are all declared on `:host`. A story rendered
+    straight into the document has no host, every one of them silently resolves to nothing,
+    and the reviewer is looking at a serif, borderless, transparent panel no user ever sees.
+    """
+
+    def setUp(self):
+        import functools
+        from http.server import SimpleHTTPRequestHandler
+        try:
+            from playwright.sync_api import Error as PlaywrightError
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            self.skipTest("Playwright is not installed")
+
+        class Quiet(SimpleHTTPRequestHandler):
+            def log_message(self, _format, *_args):
+                return
+
+        server = ThreadingHTTPServer(
+            ("127.0.0.1", 0), functools.partial(Quiet, directory=str(STORYBOOK_STATIC)))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        self.origin = f"http://127.0.0.1:{server.server_port}"
+        self._playwright = sync_playwright().start()
+        try:
+            self.browser = self._playwright.chromium.launch(headless=True)
+        except PlaywrightError as error:
+            self._playwright.stop()
+            if "Executable doesn't exist" in str(error):
+                self.skipTest("Playwright Chromium is not installed")
+            raise
+        self.addCleanup(self._playwright.stop)
+        self.addCleanup(self.browser.close)
+
+    def _story(self, story: str, theme: str):
+        context = self.browser.new_context(viewport={"width": 1024, "height": 720})
+        self.addCleanup(context.close)
+        page = context.new_page()
+        page.goto(f"{self.origin}/iframe.html?id={story}&viewMode=story"
+                  f"&globals=theme:{theme}", wait_until="load")
+        return page
+
+    def assertShipped(self, page, selector: str, theme: str, *, edged: bool = True) -> None:
+        node = page.locator(selector).first
+        node.wait_for(timeout=15_000)
+        facts = node.evaluate("""node => {
+          const style = getComputedStyle(node)
+          return {in_shadow_root: node.getRootNode() instanceof ShadowRoot,
+                  bg: style.getPropertyValue('--woa-bg').trim(),
+                  font: style.fontFamily, shadow: style.boxShadow}
+        }""")
+        self.assertTrue(facts["in_shadow_root"], f"{selector} in {theme}: {facts}")
+        self.assertEqual(facts["bg"], design_tokens()["themes"][theme]["bg"],
+                         f"{selector} in {theme}: {facts}")
+        self.assertTrue(facts["font"].startswith("Inter"), f"{selector} in {theme}: {facts}")
+        if edged:
+            # The window, the card and the field draw their edges with box-shadow tokens;
+            # with no palette those resolve to nothing and the edge simply disappears.
+            self.assertNotEqual(facts["shadow"], "none", f"{selector} in {theme}: {facts}")
+
+    def test_a_window_story_renders_with_the_palette_type_and_edges_in_both_themes(self):
+        for theme in ("light", "dark"):
+            with self.subTest(theme):
+                page = self._story("panel-window--first-open", theme)
+                launcher = page.locator(".woa-launcher")
+                launcher.wait_for(timeout=15_000)
+                launcher.click()
+                self.assertShipped(page, ".woa-window", theme)
+                self.assertShipped(page, ".woa-field", theme)
+
+    def test_a_confirmation_story_renders_the_card_as_shipped(self):
+        page = self._story("panel-window--awaiting-confirmation", "dark")
+        self.assertShipped(page, ".woa-approval", "dark")
+
+    def test_a_single_piece_renders_as_shipped_and_stays_pressable(self):
+        page = self._story("panel-launcher--launcher-idle", "light")
+        # The launcher's disc carries its own gradient; the button itself draws no edge.
+        self.assertShipped(page, ".woa-launcher", "light", edged=False)
+        self.assertEqual(page.locator(".woa-launcher").evaluate(
+            "node => getComputedStyle(node).pointerEvents"), "auto")
 
 
 class PanelCspTests(_PanelBrowser):

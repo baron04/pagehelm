@@ -511,7 +511,12 @@ button:disabled { cursor: not-allowed; }
   margin: 0 13px 11px;
   border-radius: 10px;
   background: var(--woa-surface-raised);
-  box-shadow: var(--woa-shadow-2), inset 0 0 0 1px var(--woa-line-strong);
+  /* A real border, not an inset shadow: an inset shadow is painted beneath the card's
+     children, so the answers pinned to its foot covered the edge beside and below them.
+     The warning strip is the top edge. */
+  border: 1px solid var(--woa-line-strong);
+  border-top-width: 0;
+  box-shadow: var(--woa-shadow-2);
   overflow: hidden;
   max-height: 62%;
   overflow-y: auto;
