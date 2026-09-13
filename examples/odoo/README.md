@@ -140,7 +140,7 @@ rather than fact.
 
 Each read scans its whole scope and checks the row count against the application's own
 `search_count`, so "I saw all of them" is answered by a number that did not come from the
-page of rows being counted. `create_customer` is disabled unless a deployment passes
+page of rows being counted. `create_customer` requires a user-supplied name and email and is disabled unless a deployment passes
 `allow_mutations=True` **and** a mutation journal; it normalises the proposal, re-checks
 duplicates over a complete scan immediately before dispatch, and reads the record back under
 the same actor.

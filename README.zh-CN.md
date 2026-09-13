@@ -212,7 +212,7 @@ Evaluator 还包含一套严格的配对实验预注册校验器，用于在运�
 
 - 共享 Runtime 网关及活跃执行仍位于进程内。可选 SQLite 恢复在身份作用域内保存去重与进度并使用 owner lease，重新签发浏览器权限，将旧工作标记为中断而不重跑动作；跨主机扩展和模型对话上下文持久化尚未实现。Session TTL 与硬配额限制资源占用；SQLite 模式只恢复安全历史，不恢复执行权限。已确认的 Twenty API 写入拥有持久的一次性 SQLite journal，但 dispatch 之后发生崩溃仍会标记为 `indeterminate`，必须核对而不能自动重试。Twenty demo 已通过可信 Playwright 宿主强制身份绑定；普通嵌入式应用仍需从自身登录边界提供服务端认证的身份断言，principal 续期和分布式撤销也尚未实现。独立的旧页面控制网关仍使用全局许可与 trace：协作客户端会串行执行完整 run，并在前后边界清空状态，但并发页面写入前仍需在网关内部实现 tenant/session/turn scope。
 - 单轮截止时间同时覆盖 provider 排队和 socket 调用。服务端 Agent 的原生 completion 路径使用可关闭的 HTTP 连接：消息级主动取消会中断进行中的请求、释放 provider guard 名额、阻止后续工具下发，并把已派发调用记为 usage 未知而不自动重试。所有能被单轮触达的实现都满足同一个显式 `ChatPort` 契约，其中取消能力是必需项，并在模型被组装的位置校验，而不是在调用时探测，因此无法取消的实现会被直接拒绝，而不是静默降级。合同规划调用仍走普通 completion 路径，不可取消。并发 guard 只在单进程内生效；可选 SQLite 滚动请求配额可按服务端指定的租户/provider scope 在本机进程间协调，尚无 token 和金额配额。已有初始页面观察绑定，以及 claim 前对目标控件、关联表单和路由的新鲜度检查；目标元素之外的依赖、跨机器恢复和更完整的运行监控仍未完成。
-- 打包的真实应用适配器都很窄。Odoo 18 支持读取已确认销售订单、客户和可售产品，外加可选开启的创建客户；Twenty CRM 支持 Companies 读取与确认后创建、People/Opportunities 读取与记录导航；OFBiz 只保留 MPA/iframe 回归。Minimal Contacts 只是合成的上手示例。目前没有任何 adapter 覆盖多步业务流程。
+- 打包的真实应用适配器都很窄。Odoo 18 支持读取已确认销售订单、客户和可售产品，外加可选开启、且要求用户提供名称与邮箱的创建客户；Twenty CRM 支持 Companies 读取与确认后创建、People/Opportunities 读取与记录导航；OFBiz 只保留 MPA/iframe 回归。Minimal Contacts 只是合成的上手示例。目前没有任何 adapter 覆盖多步业务流程。
 - Odoo 源码编译器只链接视图继承关系，不做 xpath 合并，也不把跨模块的补丁记录并入定义。两条局限都通过编译产物的 `unsupported` 列表或 `root_view` 属性显式暴露，不会静默。
 - 尚未实现任意第三方网站支持和浏览器扩展。
 - 浏览器操作不具备数据库事务或回滚语义。

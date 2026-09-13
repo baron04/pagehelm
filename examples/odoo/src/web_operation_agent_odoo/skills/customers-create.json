@@ -21,7 +21,8 @@
   ],
   "instructions": [
     "Use query_customers when useful to inspect current delegated-user facts before proposing a write.",
-    "Call create_customer with the exact customer name and email address supplied by the user.",
+    "Both customer name and email address are mandatory. If either one is missing, ask the user for the missing value and end the turn. Never invent a value or describe either field as optional.",
+    "Call create_customer only with the exact customer name and email address supplied by the user.",
     "The server will normalize the proposal, check duplicates over a complete scan, show the exact effect for confirmation, execute at most once, and read it back under the same user.",
     "After a successful result, open only the returned ui_path and observe the page before finishing.",
     "If confirmation is denied or a write outcome is uncertain, stop; never retry the mutation."

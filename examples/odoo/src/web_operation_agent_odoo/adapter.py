@@ -290,9 +290,12 @@ CREATE_CUSTOMER_SCHEMA = {
             "type": "object",
             "properties": {
                 "name": {"type": "string", "minLength": 1, "maxLength": 200,
-                         "description": "Exact customer name supplied by the user."},
+                         "description": "Required exact customer name supplied by the user."},
                 "email": {"type": "string", "minLength": 3, "maxLength": 254,
-                          "description": "Customer email address."},
+                          "description": (
+                              "Required customer email address supplied by the user; it "
+                              "cannot be omitted or invented."
+                          )},
             },
             "required": ["name", "email"],
             "additionalProperties": False,
