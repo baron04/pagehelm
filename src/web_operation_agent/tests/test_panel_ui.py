@@ -612,20 +612,20 @@ class PanelUITests(_PanelBrowser):
         thread = page.locator(".woa-thread")
         page.wait_for_timeout(300)
 
-        thread.hover()
-        page.mouse.wheel(0, -60)
+        exact_distance = thread.evaluate("""node => {
+          node.scrollTop = node.scrollHeight - node.clientHeight - 160
+          return node.scrollHeight - node.scrollTop - node.clientHeight
+        }""")
         page.wait_for_timeout(100)
-        first_distance = thread.evaluate(
-            "node => node.scrollHeight - node.scrollTop - node.clientHeight")
-        self.assertGreaterEqual(first_distance, 40)
-        self.assertLess(first_distance, 96)
+        self.assertEqual(exact_distance, 160)
         self.assertEqual(page.locator(".woa-jump").count(), 0)
 
-        page.mouse.wheel(0, -200)
+        beyond_distance = thread.evaluate("""node => {
+          node.scrollTop = node.scrollHeight - node.clientHeight - 161
+          return node.scrollHeight - node.scrollTop - node.clientHeight
+        }""")
         page.wait_for_timeout(100)
-        second_distance = thread.evaluate(
-            "node => node.scrollHeight - node.scrollTop - node.clientHeight")
-        self.assertGreaterEqual(second_distance, 96)
+        self.assertEqual(beyond_distance, 161)
         page.locator(".woa-jump").wait_for(timeout=3000)
         self.assertEqual(self.errors, [])
 
