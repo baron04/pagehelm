@@ -265,14 +265,14 @@ class TypedReads(unittest.TestCase):
         )
         self.assertEqual(result.allowed_routes, ("/odoo/customers",))
 
-    def test_a_fuzzy_single_match_is_a_candidate_not_navigation_authority(self):
+    def test_a_fuzzy_single_match_can_open_the_only_current_record(self):
         executor = _FakeOdoo({"res.partner": _customers(
             [("Acme Corporation", "a@example.test")])})
         result = executor.execute("query_customers", {"name_contains": "Acme"})
 
-        self.assertEqual(result.content["record_route_resolution"],
-                         "confirmation_required")
-        self.assertEqual(result.allowed_routes, ("/odoo/customers",))
+        self.assertEqual(result.content["record_route_resolution"], "unique")
+        self.assertEqual(result.allowed_routes,
+                         ("/odoo/customers", "/odoo/customers/10"))
         self.assertEqual(len(result.selection_options), 1)
 
     def test_an_unknown_tool_or_argument_is_refused_before_any_call(self):

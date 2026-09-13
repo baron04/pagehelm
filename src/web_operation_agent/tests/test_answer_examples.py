@@ -74,7 +74,7 @@ class Example2NotFoundWithinAScope(unittest.TestCase):
     conclusion stands on the query rather than on any value.
     """
 
-    def test_the_answer_names_what_was_looked_for_and_where(self):
+    def test_the_answer_names_what_was_looked_for_without_internal_filter_syntax(self):
         turn = TurnEvidence()
         turn.record(QueryEvidence(
             evidence_id="query#1", origin=_typed("query_quotations#1", QUOTES),
@@ -85,7 +85,7 @@ class Example2NotFoundWithinAScope(unittest.TestCase):
 
         self.assertIn("S00042", text)
         self.assertIn("未找到", text)
-        self.assertIn("name contains S00042", text)
+        self.assertNotIn("name contains", text)
 
     def test_the_five_unrelated_records_cannot_be_the_answer(self):
         """A query that matched five does not establish that a sixth is absent."""

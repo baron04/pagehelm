@@ -216,10 +216,10 @@ export function Thread(props: ThreadProps): React.JSX.Element {
       snapshot.entries.filter(entry => entry.kind === 'result').map(entry => entry.id))
   }
 
-  const pin = useCallback((smooth = false) => {
+  const pin = useCallback(() => {
     const root = scroller.current
     if (!root) return
-    root.scrollTo({top: root.scrollHeight, behavior: smooth ? 'smooth' : 'auto'})
+    root.scrollTo({top: root.scrollHeight, behavior: 'auto'})
     setDetached(false)
     setUnseen(0)
     follow.current = true
@@ -348,7 +348,7 @@ export function Thread(props: ThreadProps): React.JSX.Element {
       </div>
     </div>
     {detached && (
-      <button type="button" className="woa-jump" onClick={() => pin(true)}>
+      <button type="button" className="woa-jump" onClick={pin}>
         <ArrowDown size={12} strokeWidth={1.9} aria-hidden="true" />
         {labels.jumpLatest}{unseen > 0 ? ` · ${unseen}` : ''}
       </button>

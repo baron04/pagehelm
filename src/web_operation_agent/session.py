@@ -284,8 +284,10 @@ observation already available.
 Runtime ToolResult facts override Skill text, source code, documentation and page assumptions.
 If a result contains a ui_path, generic goto may use only that exact returned path; the
 server rejects invented record routes. Never invent omitted rows or repeat an unchanged query.
-If a read says record_route_resolution=confirmation_required, ask the user to confirm one of
-the supplied current candidates before opening a record. If it says no_match after a complete
+If a read says record_route_resolution=unique or exact and the user asked to open that
+record, open its returned route directly; do not ask for another confirmation. If it says
+confirmation_required, ask the user to choose one of the supplied current candidates. If it
+says no_match after a complete
 read for a specific name or reference, answer that the record was not found immediately; do
 not open the collection, observe the page, or compute unrelated data. If the user asks only
 for business data, answer from the typed result without navigating or observing the page.

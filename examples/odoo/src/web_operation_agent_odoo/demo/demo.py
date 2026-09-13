@@ -416,11 +416,12 @@ def _run_browser(config: OdooDemoConfig, live: LiveProductSession,
                  adapter: OdooApplicationAdapter, expected_binding: str,
                  shots: Path,
                  turn_boundary_hook: Callable[[int, dict], None] | None = None,
-                 ) -> tuple[list[dict], str, str, list[str]]:
+                 ) -> tuple[list[dict], str, str, list[str], int]:
     from playwright.sync_api import Error as PlaywrightError, sync_playwright
 
     records: list[dict] = []
     taken: list[str] = []
+    document_loads = 0
     last_url = last_text = ""
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=config.headless)
@@ -441,6 +442,10 @@ def _run_browser(config: OdooDemoConfig, live: LiveProductSession,
                     script="try { localStorage.setItem('woa.panel.open.v1', 'true') } "
                            "catch (error) { /* a profile that blocks site data still works */ }")
                 page = context.new_page()
+                def count_document_load(*_event: object) -> None:
+                    nonlocal document_loads
+                    document_loads += 1
+                page.on("domcontentloaded", count_document_load)
                 page.goto(config.base_url.rstrip("/") + config.entry_path,
                           wait_until="domcontentloaded", timeout=60_000)
                 page.wait_for_function("window.__WOA_RUNTIME_READY__ !== undefined",
@@ -523,7 +528,7 @@ def _run_browser(config: OdooDemoConfig, live: LiveProductSession,
                 context.close()
         finally:
             browser.close()
-    return records, last_url, last_text, taken
+    return records, last_url, last_text, taken, document_loads
 
 
 def run_demo(config: OdooDemoConfig, *,
@@ -603,7 +608,7 @@ def run_demo(config: OdooDemoConfig, *,
         principal=principal,
     ).start()
     try:
-        records, last_url, last_text, taken = _run_browser(
+        records, last_url, last_text, taken, document_loads = _run_browser(
             config, live, holder["conversation"], adapter=adapter,
             expected_binding=expected_binding, shots=run_dir / "screens",
             turn_boundary_hook=turn_boundary_hook)
@@ -639,6 +644,8 @@ def run_demo(config: OdooDemoConfig, *,
         # The demo's own evidence that it had something to show. An empty list after a
         # run that reported ready means the window never rendered.
         "screenshots": list(taken),
+        "document_loads": document_loads,
+        "document_reloads_after_entry": max(0, document_loads - 1),
         "audit_projection": _audit_projection(run_dir / "audit.jsonl"),
         "turns": records,
         "last_url": last_url,

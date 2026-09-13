@@ -855,18 +855,17 @@ class OdooBusinessToolExecutor:
             folded and matched == 1
             and business_text_key(str(visible[0].get(field, "")))
             == business_text_key(needle))
+        unique_match = bool(folded and matched == 1)
         selection_options = tuple(
             option for row, item in visible_pairs
             if (option := self._selection_option(collection, row, item)) is not None)
-        # A substring is useful discovery, but it is not authority to open a record.  An
-        # exact user-visible name/reference can go straight through; a prefix such as
-        # "Acme" stays a candidate even if today's fixture happens to contain only one hit.
-        # That keeps a future second Acme from changing a silent fuzzy choice into a wrong
-        # navigation.
+        # Opening a record is a reversible read. A single current match is therefore enough
+        # to navigate, even when the user supplied a prefix such as "Acme". More than one
+        # current match remains a choice; the user must decide which record they meant.
         record_routes = tuple(
             item["ui_path"] for item in visible if isinstance(item.get("ui_path"), str))
         allowed_routes = ((collection.route,) + record_routes
-                          if not folded or exact_match else (collection.route,))
+                          if not folded or unique_match else (collection.route,))
         source_complete = scan["complete"]
         result_truncated = matched > limit or not source_complete
         observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -894,7 +893,8 @@ class OdooBusinessToolExecutor:
                 "conditions": list(conditions),
                 "record_route_resolution": (
                     "exact" if exact_match else
-                    "confirmation_required" if folded and matched else
+                    "unique" if unique_match else
+                    "confirmation_required" if folded and matched > 1 else
                     "no_match" if folded else "not_requested"),
                 "consistency": "bounded scan, not a database snapshot",
                 "observed_at": observed_at,
