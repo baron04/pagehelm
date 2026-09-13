@@ -141,6 +141,9 @@ class AgentTurnConfig:
     allow_application_entry: bool = False
     allow_business_mutations: bool = False
     allow_clarification: bool = True
+    #: Permit only application-issued, transient-until-submit form drafts. Direct model
+    #: fill/select/submit policy remains independent and may stay disabled.
+    allow_form_prefill: bool = False
     #: Let a deployment remove model-only bookends from pure read navigation. The session
     #: still requires one exact read-only Skill match, a current typed route, and a fresh
     #: browser receipt at that route; this flag grants neither a route nor a mutation.
@@ -165,6 +168,7 @@ class AgentTurnConfig:
                 or not isinstance(self.allow_application_entry, bool)
                 or not isinstance(self.allow_business_mutations, bool)
                 or not isinstance(self.allow_clarification, bool)
+                or not isinstance(self.allow_form_prefill, bool)
                 or not isinstance(self.deterministic_read_navigation, bool)
                 or not isinstance(self.require_identity, bool)):
             raise ValueError("turn policy flags must be booleans")
@@ -569,6 +573,7 @@ class AgentTurnExecutor:
                 approve_business_mutation
                 if self.config.allow_business_mutations else None),
             allow_clarification=self.config.allow_clarification,
+            allow_form_prefill=self.config.allow_form_prefill,
             deterministic_read_navigation=(
                 self.config.deterministic_read_navigation),
             plain_business_answer_min_page_actions=(

@@ -33,7 +33,7 @@ from .answer_view import render_payload, unavailable_answer
 from .affordance import SourceAffordance, resolve_source_affordances
 from .browser import BrowserExecutor, TransportError, TurnCancelled
 from .business import (BUSINESS_SKILL_MATCHER_VERSION, BusinessMutationIndeterminate,
-                       BusinessSkillSelection, BusinessToolError, BusinessToolResult,
+                       BusinessSkillSelection, BusinessToolError, BusinessToolResult, FormDraft,
                        BusinessToolRuntime)
 from .contract import (ContractPlanner, EvidenceBundle, PlanningFailed, SourceRetriever,
                        _segment_from_template, expand_terms)
@@ -256,6 +256,13 @@ LOAD_SKILL_TOOL = {"type": "function", "function": {
     "parameters": {"type": "object", "properties": {
         "skill_id": {"type": "string"}},
         "required": ["skill_id"], "additionalProperties": False}}}
+
+PREFILL_FORM_TOOL = {"type": "function", "function": {
+    "name": "prefill_form",
+    "description": "Apply the current application-issued transient form draft. It accepts "
+                   "no route, field or value arguments and never submits the form.",
+    "parameters": {"type": "object", "properties": {},
+                   "additionalProperties": False}}}
 
 REACT_SOURCE_SYSTEM = """\
 When the current page leaves a concrete operation question unresolved, use lookup_source.
@@ -562,6 +569,7 @@ class ServerAgentSession:
                  business_tools: BusinessToolRuntime | None = None,
                  business_mutation_approval=None,
                  allow_clarification: bool = False,
+                 allow_form_prefill: bool = False,
                  deterministic_read_navigation: bool = False,
                  plain_business_answer_min_page_actions: int | None = None,
                  max_agent_said_chars: int = 500,
@@ -614,6 +622,8 @@ class ServerAgentSession:
             raise ValueError("max_agent_said_chars must be between 1 and 20000")
         if cancelled is not None and not callable(cancelled):
             raise ValueError("cancelled must be callable or None")
+        if not isinstance(allow_form_prefill, bool):
+            raise ValueError("allow_form_prefill must be a boolean")
         if principal is not None and not isinstance(principal, PrincipalContext):
             raise ValueError("principal must be a PrincipalContext or None")
         if principal is not None and (not session_id or not turn_id):
@@ -691,6 +701,7 @@ class ServerAgentSession:
         if not isinstance(deterministic_read_navigation, bool):
             raise ValueError("deterministic_read_navigation must be a boolean")
         self.allow_clarification = allow_clarification
+        self.allow_form_prefill = allow_form_prefill
         self.deterministic_read_navigation = deterministic_read_navigation
         self._navigation_only = _is_navigation_only(task.prompt)
         self._business_control = {
@@ -778,6 +789,10 @@ class ServerAgentSession:
         # render requested facts directly.  The audit ledger intentionally stores only its
         # digest and projection; model prose is not a reliable transport for table rows.
         self.latest_business_tool_result: BusinessToolResult | None = None
+        # One adapter-issued draft is usable once, in this turn only. It never enters the
+        # browser protocol as authority: the model can request application of the current
+        # draft but cannot provide or alter any route, field or value.
+        self._form_draft: FormDraft | None = None
         # What this turn established, as opposed to what its last call returned. Held here
         # rather than on either result type: a typed read and a page observation back an
         # answer alike and arrive through different doors with different trust roots.
@@ -805,7 +820,7 @@ class ServerAgentSession:
             reserved = set(BROWSER_ACTIONS) | {
                 "finish", "ask_user", "compute", "load_skill", "lookup_source", "open_source_route",
                 "open_source_candidate", "open_skill_route", "enter_skill_app",
-                "enter_application",
+                "enter_application", "prefill_form",
             }
             collisions = business_tools.tool_names & reserved
             if collisions:
@@ -1336,6 +1351,46 @@ class ServerAgentSession:
                 messages = _trim(messages, self.keep_observations)
                 continue
 
+            if name == "prefill_form" and self.allow_form_prefill:
+                if args:
+                    messages += [_assistant_call(call), _tool_result(
+                        call, "prefill_form accepts no arguments; route, fields and values "
+                              "come only from the current application-issued draft.")]
+                    continue
+                draft = self._form_draft
+                # Consume before dispatch. Even though the application contract says these
+                # fields do not persist until user submission, repeating a partially applied
+                # draft after transport loss would be surprising and could retrigger onchange.
+                self._form_draft = None
+                if draft is None:
+                    messages += [_assistant_call(call), _tool_result(
+                        call, "No current application-issued form draft is available.")]
+                    continue
+                prefilled, reason, detail = self._apply_form_draft(draft, obs, step)
+                if prefilled is not None:
+                    obs = prefilled
+                if reason:
+                    result.agent_said = (
+                        "表单未能完整预填，未执行提交。" if re.search(
+                            r"[\u3400-\u9fff]", self.task.prompt)
+                        else "The form could not be fully prefilled and was not submitted.")
+                    return self._finish(result, t0, reason,
+                                        result.agent_said + (f" {detail}" if detail else ""),
+                                        steps=step)
+                result.agent_said = (
+                    "表单已预填，尚未提交。请检查或修改后由你继续。"
+                    if re.search(r"[\u3400-\u9fff]", self.task.prompt)
+                    else "The form is prefilled and has not been submitted. Review or edit it, "
+                         "then continue yourself.")
+                self.ledger.append(
+                    "form_prefill_completed", step=step,
+                    draft_digest=draft.content_digest,
+                    route_digest=hashlib.sha256(draft.route.encode()).hexdigest(),
+                    fields=[item.field for item in draft.fields],
+                    submitted=False, persisted=False, user_takeover=True)
+                return self._finish(
+                    result, t0, "agent_finished", result.agent_said, steps=step)
+
             if (self.business_tools is not None
                     and name in self.business_tools.tool_names):
                 operation_context = self._operation_context(step, name)
@@ -1495,6 +1550,7 @@ class ServerAgentSession:
                         identity=operation_identity)
                     self._business_routes.update(tool_result.allowed_routes)
                     self.latest_business_tool_result = tool_result
+                    self._form_draft = None
                     # A successful write invalidates values read before it. The receipt
                     # remains authoritative even when this adapter supplies no new fields.
                     self.evidence = TurnEvidence()
@@ -1578,12 +1634,20 @@ class ServerAgentSession:
                     self._business_routes.update(tool_result.allowed_routes)
                     self._latest_business_routes = set(tool_result.allowed_routes)
                     self.latest_business_tool_result = tool_result
+                    self._form_draft = (
+                        tool_result.form_draft if self.allow_form_prefill else None)
                     recorded_evidence = self._collect_evidence(tool_result, step=step)
                     self._latest_business_query_page_actions = (
                         self.page_actions if tool_result.query_answer is not None else None)
                     successful_business_tools += 1
                     feedback = ("BUSINESS TOOL RESULT (current runtime fact):\n"
                                 + tool_result.render())
+                    if self._form_draft is not None:
+                        feedback += (
+                            "\n\nAPPLICATION FORM DRAFT READY: Call prefill_form with no "
+                            "arguments. The server will use the exact current route, fields "
+                            "and values above, stop before submission, and hand control to "
+                            "the user.")
                     if self._evidence_feedback:
                         feedback += "\n\n" + self._evidence_feedback
                     if self._clarification_feedback:
@@ -1628,6 +1692,7 @@ class ServerAgentSession:
                                     steps=step)
                 except BusinessToolError as exc:
                     self.latest_business_tool_result = None
+                    self._form_draft = None
                     self._latest_business_routes = set()
                     self._clarification_choices = {}
                     self._clarification_feedback = ""
@@ -2125,6 +2190,8 @@ class ServerAgentSession:
                     or self._loaded_business_skill_ids != self._task_business_skill_ids):
                 tools += [LOAD_SKILL_TOOL]
             tools += self.business_tools.schemas_for(self._loaded_business_skill_ids)
+        if self.allow_form_prefill and self._form_draft is not None:
+            tools += [PREFILL_FORM_TOOL]
         return tools
 
     def _clarification(self, args: object, *, step: int) -> dict:
@@ -2516,6 +2583,111 @@ class ServerAgentSession:
             page_epoch_before=prior_epoch, observation_epoch=observed_epoch,
             fresh_observation=fresh)
         return receipt, write, fresh
+
+    @staticmethod
+    def _observation_is_at_route(observation: PageObservation, route: str) -> bool:
+        actual = urlsplit(observation.url)
+        expected = urlsplit(urljoin(observation.url, route))
+        return bool(
+            actual.scheme == expected.scheme and actual.netloc == expected.netloc
+            and (actual.path.rstrip("/") or "/") == (expected.path.rstrip("/") or "/")
+            and actual.query == expected.query)
+
+    def _apply_form_draft(
+            self, draft: FormDraft, observation: PageObservation,
+            step: int) -> tuple[PageObservation | None, str, str]:
+        """Apply one adapter-issued transient draft without exposing its bindings to choice.
+
+        The application has attested that these exact fields do not persist until a user
+        submits. This method never calls ``click`` or ``submit`` and every generic browser
+        action still yields a fresh observation before the next field is resolved.
+        """
+        current = observation
+        actions: list[tuple[str, dict, str]] = []
+        if not self._observation_is_at_route(current, draft.route):
+            actions.append(("goto", {"url": draft.route}, ""))
+
+        def dispatch(action: str, args: dict, field: str,
+                     before: PageObservation) -> tuple[PageObservation | None, str, str]:
+            if self._cancel_requested():
+                return before, "user_cancelled", "the user stopped before form preparation"
+            prior_epoch = before.epoch
+            try:
+                self._browser_attempts += 1
+                receipt = self.browser.execute(action, args)
+            except TurnCancelled as exc:
+                return before, "user_cancelled", str(exc)
+            except TransportError as exc:
+                return before, "transport_error", str(exc)
+            if action != "observe":
+                self.page_actions += 1
+            write = self._write_outcome(receipt, step, action_may_write=False)
+            self.ledger.append(
+                "form_prefill_action", step=step, tool=action,
+                command_id=receipt.command_id, field=field,
+                value_digest=(hashlib.sha256(str(args.get("value", "")).encode()).hexdigest()
+                              if field else ""),
+                ok=receipt.ok, error_code=receipt.error_code,
+                page_epoch_before=prior_epoch,
+                observation_epoch=(receipt.observation.epoch
+                                   if receipt.observation is not None else None),
+                side_effect_possible=False, persisted=False, submitted=False,
+                write=write["state"])
+            terminal, detail = self._settle_write(write)
+            if terminal:
+                return receipt.observation or before, terminal, detail
+            if (not receipt.ok or receipt.observation is None
+                    or receipt.observation.epoch <= prior_epoch):
+                return (receipt.observation or before, "agent_refused",
+                        f"{action} did not return a successful fresh page")
+            after = receipt.observation
+            if not self._observation_is_at_route(after, draft.route):
+                return after, "agent_refused", "the application left the issued form route"
+            return after, "", ""
+
+        for action, args, field in actions:
+            current, reason, detail = dispatch(action, args, field, current)
+            if reason:
+                return current, reason, detail
+
+        for binding in draft.fields:
+            matches = [element for element in current.elements
+                       if element.role == binding.control
+                       and element.attrs.get("field") == binding.field]
+            # A SPA may commit its URL before the component tree for the new route is ready.
+            # Do not let a stale first observation turn an issued draft into an arbitrary
+            # selector fallback. Re-observe after bounded, short waits and keep requiring the
+            # same exact semantic field from the fresh page.
+            for wait_ms in (100, 250, 500):
+                if matches:
+                    break
+                current, reason, detail = dispatch(
+                    "wait_for", {"ms": wait_ms}, "", current)
+                if reason:
+                    return current, reason, detail
+                matches = [element for element in current.elements
+                           if element.role == binding.control
+                           and element.attrs.get("field") == binding.field]
+            if len(matches) != 1:
+                self.ledger.append(
+                    "form_prefill_field_refused", step=step, field=binding.field,
+                    matches=len(matches),
+                    available_fields=[{
+                        "field": str(element.attrs.get("field") or "")[:80],
+                        "role": element.role,
+                    } for element in current.elements
+                        if element.attrs.get("field")],
+                    dispatched=False, side_effect_possible=False)
+                return current, "agent_refused", (
+                    f"the current form did not expose one exact {binding.field} field")
+            action = "select" if binding.control == "select" else "fill"
+            current, reason, detail = dispatch(
+                action,
+                {"ref": matches[0].ref, "epoch": current.epoch, "value": binding.value},
+                binding.field, current)
+            if reason:
+                return current, reason, detail
+        return current, "", ""
 
     def lookup_source(self, query: str, obs: PageObservation) -> EvidenceBundle:
         """Local retrieval only: no planner/model call, filesystem expansion or hidden data.

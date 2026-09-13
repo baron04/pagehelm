@@ -190,6 +190,7 @@ class AgentTurnConfigTests(unittest.TestCase):
                 {"allow_application_entry": "yes"},
                 {"allow_business_mutations": 1},
                 {"allow_clarification": 1},
+                {"allow_form_prefill": 1},
                 {"deterministic_read_navigation": 1},
                 {"no_progress_repeat_limit": 1},
                 {"require_identity": 1},

@@ -744,6 +744,16 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                 ? '/callback?access_token=TOPSECRET&next=1' : null,
               hasAttribute: name => name === 'href',
             }}));
+          const formHydrated = h.hydrateFormFacts([
+            {{ref:'e7', role:'combobox', name:'Customer', tag:'input', epoch:9, attrs:{{}}}},
+            {{ref:'e8', role:'textbox', name:'Password', tag:'input', epoch:9, attrs:{{}}}},
+          ], {{}}, (_map, index) => ({{
+            closest: () => ({{
+              hasAttribute: name => name === 'name',
+              getAttribute: name => name === 'name'
+                ? (index === 7 ? 'customer_name' : 'password') : null,
+            }}),
+          }}));
           const encoded = h.redactString('/x?jsessionid%253Dabc%2526next=1');
           const generic = h.redactString('/callback?access_token=TOPSECRET&next=1');
           const encodedGeneric = h.redactString(
@@ -788,6 +798,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
           terminalRuntime.panel = {{add() {{}}, status() {{}}}};
           await terminalRuntime._handleEvent({{kind:'terminal', payload:{{reason:'done'}}}});
           process.stdout.write(JSON.stringify({{clean, elements, hydrated, secretHydrated,
+            formHydrated,
             encoded, generic,
             encodedGeneric, encodedKeyGeneric, encodedKeyHandoff, args,
             recoveries, terminalStopped: terminalRuntime.stopped}}));
@@ -816,6 +827,8 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         self.assertNotIn("TOPSECRET", json.dumps(result["secretHydrated"]))
         self.assertEqual(result["secretHydrated"][0]["attrs"]["href"],
                          "/callback?access_token=[redacted]&next=1")
+        self.assertEqual(result["formHydrated"][0]["attrs"]["field"], "customer_name")
+        self.assertNotIn("field", result["formHydrated"][1]["attrs"])
         self.assertEqual(result["args"]["value"], "[redacted]")
         self.assertEqual(result["args"]["nested"]["token"], "[redacted]")
         self.assertIn("First line", result["elements"][4]["name"])

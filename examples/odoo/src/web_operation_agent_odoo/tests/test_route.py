@@ -10,6 +10,7 @@ from web_operation_agent_odoo.route import (ODOO_ROUTE_PORT, ODOO_SESSION_HANDOF
 class RouteGrammar(unittest.TestCase):
     def test_it_accepts_the_three_shapes_odoo_actually_serves(self):
         for route in ("/odoo/sales", "/odoo/orders/7", "/odoo/customers/44",
+                      "/odoo/customers/new",
                       "/odoo/res.partner/11", "/odoo/product.template/2"):
             with self.subTest(route=route):
                 self.assertEqual(ODOO_ROUTE_PORT.validate_tool_route(route), route)

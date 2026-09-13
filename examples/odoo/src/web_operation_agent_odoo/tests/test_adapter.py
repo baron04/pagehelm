@@ -21,7 +21,8 @@ from web_operation_agent.tests.adapter_contract import assert_adapter_contract
 from web_operation_agent_odoo.adapter import (APPLICATION_ID, COLLECTIONS,
                                               OdooApplicationAdapter,
                                               OdooBusinessToolExecutor,
-                                              OdooPageSessionIdentityResolver)
+                                              OdooPageSessionIdentityResolver,
+                                              PREPARE_CUSTOMER_FORM_TOOL)
 
 BASE = "http://127.0.0.1:8069"
 
@@ -163,8 +164,9 @@ class AdapterContract(unittest.TestCase):
         self.assertEqual(bound.descriptor.application_id, APPLICATION_ID)
         self.assertEqual(bound.descriptor.navigation_mode, "spa")
         self.assertEqual(sorted(bound.business_tools.tool_names),
-                         ["query_customer_invoices", "query_customers", "query_products",
-                          "query_quotations", "query_sale_orders"])
+                         ["prepare_customer_form", "query_customer_invoices",
+                          "query_customers", "query_products", "query_quotations",
+                          "query_sale_orders"])
         self.assertEqual(bound.business_tools.mutation_tool_names, frozenset())
 
     def test_a_mutation_adapter_satisfies_the_shared_contract(self):
@@ -345,6 +347,33 @@ class TheOneWrite(unittest.TestCase):
         with self.assertRaises(BusinessToolError):
             executor.prepare_mutation("create_customer",
                                       {"name": "X", "email": "x@example.test"})
+
+
+class CustomerFormPreparation(unittest.TestCase):
+    def test_it_issues_exact_transient_bindings_without_creating_a_record(self):
+        executor = _FakeOdoo({"res.partner": []})
+        result = executor.execute(
+            PREPARE_CUSTOMER_FORM_TOOL,
+            {"name": "  NovaForge Labs  ", "email": " OPS@NovaForge.Example "})
+
+        self.assertEqual(result.allowed_routes, ("/odoo/customers/new",))
+        self.assertEqual(result.form_draft.route, "/odoo/customers/new")
+        self.assertEqual(
+            [(item.field, item.value) for item in result.form_draft.fields],
+            [("name", "NovaForge Labs"), ("email", "ops@novaforge.example")])
+        self.assertEqual(result.form_draft.fields[0].control, "combobox")
+        self.assertEqual(result.form_draft.persistence, "transient_until_submit")
+        self.assertEqual(result.content["submission"], "user_only")
+        self.assertEqual(executor.created, [])
+
+    def test_it_reuses_the_complete_duplicate_gate_before_prefill(self):
+        executor = _FakeOdoo({"res.partner": _customers(
+            [("NovaForge Labs", "ops@novaforge.example")])})
+        with self.assertRaisesRegex(BusinessToolError, "already exists"):
+            executor.execute(
+                PREPARE_CUSTOMER_FORM_TOOL,
+                {"name": "novaforge labs", "email": "other@example.test"})
+        self.assertEqual(executor.created, [])
 
 
 class TheOrderLifecycleWrites(unittest.TestCase):

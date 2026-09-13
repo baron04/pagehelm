@@ -32,10 +32,16 @@ Writes are disabled in both the adapter and turn policy by default. A write-enab
 
 After one acknowledged dispatch, the postcondition port decides whether the mutation can be recorded as completed. A missing or failed postcondition produces an indeterminate result and no automatic retry. The current conservative reconciler leaves uncertain writes for human handling; persistent reconciliation keys, background recovery, and cross-session in-flight business-key exclusion are later reliability work.
 
+## Transient form handoff
+
+Form prefill is an optional typed-tool result, not another application port and not general browser authority. An adapter may return a `FormDraft` only after it has validated the exact route, semantic field identifiers, control roles and values. The result content must contain those bindings exactly, and the route must also be one of that result's allowed routes. Enable application with `AgentTurnConfig.allow_form_prefill=True`; the model then receives only a no-argument `prefill_form` tool while the one-turn draft exists.
+
+The server consumes the draft once, resolves every field uniquely from a fresh page observation, fills or selects the adapter-issued value, and stops before click or submit. The adapter is asserting that these fields remain transient until the user submits. Do not issue a draft for onchange handlers, autosaving forms, credential fields, uploads, or any control whose edit can persist or trigger an external effect; use the ordinary confirmed mutation path for those cases. Test the claim against the deployed application, including a post-run API or database check that no record was created.
+
 ## Composition and qualification
 
 Bind once with `application = bind_application(adapter)`, pass that object to `AgentTurnExecutor(application=application, ...)`, and use its descriptor and route port to configure `LiveProductSession`. Do not pass the raw tool runtime separately in a product composition.
 
 Run the reusable adapter contract assertions for every adapter, then add application tests for valid routes, identity mismatch, read completeness, mutation refusal, approval, postcondition failure, and credential redaction. `scripts/qualify.sh --require-browser` runs the product suite, isolated wheel checks, the minimal embedded Runtime walkthrough, and the canonical browser protocol in real Chromium. A live application gate that reports `BLOCKED` has not run and is not a pass.
 
-Minimal Contacts and Twenty CRM currently satisfy the same Adapter v2 contract without application branches in the Agent core. Minimal Contacts is the onboarding reference. Twenty remains in the main distribution while the SPI is still pre-stable, because splitting it now would add a second release and compatibility surface without proving independent versioning demand.
+Minimal Contacts, Twenty CRM, Odoo and Apache OFBiz currently satisfy the same Adapter v2 contract without application branches in the Agent core. Minimal Contacts is the onboarding reference; the three real application adapters ship as separate distributions.

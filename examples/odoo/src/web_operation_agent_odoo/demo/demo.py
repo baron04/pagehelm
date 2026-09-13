@@ -587,6 +587,9 @@ def run_demo(config: OdooDemoConfig, *,
                 deterministic_read_navigation=not config.scripted,
                 require_identity=True,
                 allow_business_mutations=config.allow_mutations,
+                # The adapter may issue an exact transient customer-form draft. Direct
+                # model fill/select/submit actions above remain unavailable.
+                allow_form_prefill=True,
                 deployment_profile="production",
                 # The adapter's whole answer, not a selection from it: with a source root
                 # configured this is what turns on cited runtime lookup as well as source

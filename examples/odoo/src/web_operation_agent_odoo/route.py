@@ -28,6 +28,7 @@ ODOO_ROUTE_PORT = DeclaredRoutePort(
     application_id="odoo",
     tool_route_patterns=(
         r"/odoo/[a-z][a-z0-9-]*",
+        r"/odoo/customers/new",
         r"/odoo/[a-z][a-z0-9-]*/[1-9][0-9]{0,9}",
         r"/odoo/[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+/[1-9][0-9]{0,9}",
     ),

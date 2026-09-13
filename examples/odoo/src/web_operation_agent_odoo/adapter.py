@@ -45,7 +45,7 @@ from web_operation_agent.business import (BusinessMutationIndeterminate,
                                           BusinessToolContractError, BusinessToolError,
                                           BusinessToolIdentityError,
                                           BusinessToolRequestError, BusinessToolResult,
-                                          BusinessToolRuntime,
+                                          BusinessToolRuntime, FormDraft, FormDraftField,
                                           BusinessToolUnavailableError,
                                           business_text_key, normalize_business_text)
 from web_operation_agent.identity import (IdentityAssertion, OperationContext,
@@ -70,8 +70,9 @@ _SESSION_COOKIE = "session_id"
 #: mutations are explicitly enabled. Split by effect rather than listed and sliced by index:
 #: the previous `_SKILLS[:3]` / `_SKILLS[3]` silently made the fourth entry the only write
 #: Skill, which is a fact no reader could see and a fifth entry would have broken.
-_READ_SKILLS = ("sale-orders-query.json", "customers-query.json", "products-query.json",
-                "quotations-query.json", "customer-invoices-query.json")
+_READ_SKILLS = ("sale-orders-query.json", "customers-query.json", "customers-draft.json",
+                "products-query.json", "quotations-query.json",
+                "customer-invoices-query.json")
 _WRITE_SKILLS = ("customers-create.json", "sale-orders-confirm.json",
                  "sale-orders-invoice.json")
 
@@ -201,6 +202,7 @@ COLLECTIONS: tuple[_Collection, ...] = (
 )
 _BY_TOOL = {collection.tool: collection for collection in COLLECTIONS}
 CREATE_CUSTOMER_TOOL = "create_customer"
+PREPARE_CUSTOMER_FORM_TOOL = "prepare_customer_form"
 CONFIRM_QUOTATION_TOOL = "confirm_quotation"
 INVOICE_SALE_ORDER_TOOL = "invoice_sale_order"
 MUTATION_TOOLS = (CREATE_CUSTOMER_TOOL, CONFIRM_QUOTATION_TOOL, INVOICE_SALE_ORDER_TOOL)
@@ -296,6 +298,29 @@ CREATE_CUSTOMER_SCHEMA = {
                               "Required customer email address supplied by the user; it "
                               "cannot be omitted or invented."
                           )},
+            },
+            "required": ["name", "email"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+PREPARE_CUSTOMER_FORM_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": PREPARE_CUSTOMER_FORM_TOOL,
+        "description": (
+            "Prepare an exact Odoo customer form draft without submitting or persisting it. "
+            "After this returns, call prefill_form with no arguments; the server uses only "
+            "the adapter-issued route, fields and values."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "minLength": 1, "maxLength": 200,
+                         "description": "Required exact customer name supplied by the user."},
+                "email": {"type": "string", "minLength": 3, "maxLength": 254,
+                          "description": "Required exact email supplied by the user."},
             },
             "required": ["name", "email"],
             "additionalProperties": False,
@@ -497,7 +522,7 @@ class OdooPageSessionIdentityResolver:
 # ------------------------------------------------------------------------------- executor
 
 class OdooBusinessToolExecutor:
-    """Typed reads and one guarded write over Odoo's delegated JSON-RPC endpoint."""
+    """Typed reads, transient form preparation and guarded writes over delegated JSON-RPC."""
 
     def __init__(self, *, base_url: str, keys: OdooApiKeyStore, timeout_s: float = 20,
                  allow_mutations: bool = False):
@@ -515,10 +540,12 @@ class OdooBusinessToolExecutor:
         reads = tuple(QUERY_SCHEMAS[collection.tool] for collection in COLLECTIONS)
         writes = (CREATE_CUSTOMER_SCHEMA, CONFIRM_QUOTATION_SCHEMA,
                   INVOICE_SALE_ORDER_SCHEMA)
-        return reads + (writes if self.allow_mutations else ())
+        return reads + (PREPARE_CUSTOMER_FORM_SCHEMA,) + (
+            writes if self.allow_mutations else ())
 
     def tool_effects(self) -> dict[str, str]:
         effects = {collection.tool: "read" for collection in COLLECTIONS}
+        effects[PREPARE_CUSTOMER_FORM_TOOL] = "read"
         if self.allow_mutations:
             effects.update({tool: "write" for tool in MUTATION_TOOLS})
         return effects
@@ -823,6 +850,37 @@ class OdooBusinessToolExecutor:
 
     def execute(self, name: str, args: dict, *,
                 context: OperationContext | None = None) -> BusinessToolResult:
+        if name == PREPARE_CUSTOMER_FORM_TOOL:
+            normalized = self._normalize_customer(args)
+            self._assert_no_duplicate(normalized["name"], normalized["email"])
+            route = "/odoo/customers/new"
+            draft = FormDraft(
+                route=route,
+                fields=(
+                    FormDraftField("name", "客户名称", normalized["name"], "combobox"),
+                    FormDraftField("email", "邮箱", normalized["email"]),
+                ),
+            )
+            observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            return BusinessToolResult(
+                content={
+                    "form_ui_path": route,
+                    "form_fields": [item.to_json() for item in draft.fields],
+                    "persistence": draft.persistence,
+                    "submission": "user_only",
+                    "observed_at": observed_at,
+                },
+                audit={
+                    "application": APPLICATION_ID,
+                    "operation": PREPARE_CUSTOMER_FORM_TOOL,
+                    "field_count": len(draft.fields),
+                    "persistence": draft.persistence,
+                    "observed_at": observed_at,
+                    **self._identity_audit(context),
+                },
+                allowed_routes=(route,),
+                form_draft=draft,
+            )
         collection = _BY_TOOL.get(name)
         if collection is None:
             raise BusinessToolRequestError("unknown Odoo business tool")
@@ -937,7 +995,7 @@ class OdooBusinessToolExecutor:
             ),
         )
 
-    # -- the one write ------------------------------------------------------------------
+    # -- customer creation ---------------------------------------------------------------
     @staticmethod
     def _normalize_customer(args: dict) -> dict:
         if not isinstance(args, dict) or set(args) != {"name", "email"}:
@@ -1371,6 +1429,7 @@ class OdooApplicationAdapter:
                            "query_products": "products:read",
                            "query_quotations": "sale_orders:read",
                            "query_customer_invoices": "invoices:read"}
+        required_scopes[PREPARE_CUSTOMER_FORM_TOOL] = "customers:read"
         if allow_mutations:
             required_scopes[CREATE_CUSTOMER_TOOL] = "customers:write"
             required_scopes[CONFIRM_QUOTATION_TOOL] = "sale_orders:write"
@@ -1379,6 +1438,9 @@ class OdooApplicationAdapter:
             (collection.tool,
              (collection.data_class, "business.identifier", "application.route"))
             for collection in COLLECTIONS]
+        declarations.append((
+            PREPARE_CUSTOMER_FORM_TOOL,
+            ("business.customer", "application.route", "business.form_draft")))
         if allow_mutations:
             declarations += [
                 (CREATE_CUSTOMER_TOOL,

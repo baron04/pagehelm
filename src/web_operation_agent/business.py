@@ -44,6 +44,7 @@ BUSINESS_SKILL_MATCHER_VERSION = "business-skill-trigger-v2"
 _EXPLICIT_TOOL_REFERENCE = re.compile(
     r"\bcall\s+`?([a-z][a-z0-9_]{1,63})`?", re.I)
 _DATA_CLASS = re.compile(r"^[a-z][a-z0-9_.-]{1,63}$")
+_FORM_FIELD = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,79}$")
 
 
 def _trigger_tokens(value: str) -> tuple[str, ...]:
@@ -342,6 +343,76 @@ class BusinessSelectionOption:
             object.__setattr__(self, name, value.strip())
 
 
+@dataclass(frozen=True, slots=True)
+class FormDraftField:
+    """One application-owned form binding; the model cannot replace its value or target."""
+
+    field: str
+    label: str
+    value: str
+    control: str = "textbox"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.field, str) or not _FORM_FIELD.fullmatch(self.field):
+            raise ValueError("form draft field identifier is invalid")
+        if self.control not in {"textbox", "combobox", "select"}:
+            raise ValueError("form draft control must be textbox, combobox or select")
+        for name, value, maximum, allow_empty in (
+                ("label", self.label, 120, False),
+                ("value", self.value, 4_000, True)):
+            if (not isinstance(value, str) or (not allow_empty and not value.strip())
+                    or len(value) > maximum
+                    or re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", value)):
+                raise ValueError(f"form draft {name} is invalid")
+        if _SENSITIVE_KEY.search(self.field):
+            raise ValueError("form draft cannot bind a credential-shaped field")
+
+    def to_json(self) -> dict:
+        return {"field": self.field, "label": self.label,
+                "value": self.value, "control": self.control}
+
+
+@dataclass(frozen=True, slots=True)
+class FormDraft:
+    """A one-turn, non-persisting form preparation issued by an application adapter.
+
+    ``transient_until_submit`` is deliberately the only persistence contract. An adapter
+    must not issue this value for an autosaving form; such a draft is a write and belongs
+    behind the ordinary mutation proposal and approval path.
+    """
+
+    route: str
+    fields: tuple[FormDraftField, ...]
+    persistence: str = "transient_until_submit"
+
+    def __post_init__(self) -> None:
+        parsed = urlsplit(self.route) if isinstance(self.route, str) else None
+        if not (parsed and self.route.startswith("/") and not self.route.startswith("//")
+                and not parsed.scheme and not parsed.netloc and not parsed.fragment
+                and len(self.route) <= 1_000 and "%" not in parsed.path
+                and not re.search(r"[\\\x00-\x20\x7f]", self.route)
+                and ".." not in parsed.path.split("/")):
+            raise ValueError("form draft route must be a safe relative path")
+        if self.persistence != "transient_until_submit":
+            raise ValueError("form draft must remain transient until user submission")
+        if (not isinstance(self.fields, tuple) or not 1 <= len(self.fields) <= 20
+                or any(not isinstance(item, FormDraftField) for item in self.fields)
+                or len({item.field for item in self.fields}) != len(self.fields)):
+            raise ValueError("form draft must contain 1-20 unique fields")
+
+    def to_json(self) -> dict:
+        return {"route": self.route,
+                "fields": [item.to_json() for item in self.fields],
+                "persistence": self.persistence,
+                "submission": "user_only"}
+
+    @property
+    def content_digest(self) -> str:
+        raw = json.dumps(self.to_json(), ensure_ascii=False, sort_keys=True,
+                         separators=(",", ":"), allow_nan=False).encode("utf-8")
+        return hashlib.sha256(raw).hexdigest()
+
+
 @dataclass(frozen=True)
 class BusinessToolResult:
     """Bounded runtime facts for the model plus a smaller audit projection."""
@@ -359,6 +430,10 @@ class BusinessToolResult:
     #: Current, application-labelled records that a server clarification may offer. These
     #: are data, not capabilities: selecting one never authorises a route or a write.
     selection_options: tuple[BusinessSelectionOption, ...] = ()
+    #: Exact route, fields and values that the trusted application adapter permits the
+    #: server to place in a non-persisting form. It is one-turn authority and never grants
+    #: submission. The model can request its application but cannot alter its bindings.
+    form_draft: FormDraft | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.content, dict) or not isinstance(self.audit, dict):
@@ -401,6 +476,17 @@ class BusinessToolResult:
                    for item in self.selection_options):
                 raise ValueError(
                     "business selection options must reference records established by evidence")
+        if self.form_draft is not None:
+            if not isinstance(self.form_draft, FormDraft):
+                raise ValueError("business form draft is invalid")
+            if self.form_draft.route not in self.allowed_routes:
+                raise ValueError("business form draft route must be an allowed route")
+            if not _contains_exact_string(self.content, self.form_draft.route):
+                raise ValueError("business form draft route must appear in its content")
+            if any(not _contains_exact_value(self.content, item.to_json())
+                   for item in self.form_draft.fields):
+                raise ValueError(
+                    "business form draft fields must appear exactly in its content")
         option_bytes = json.dumps(
             [{"record_ref": item.record_ref, "label": item.label}
              for item in self.selection_options],
@@ -439,6 +525,16 @@ def _contains_exact_string(value: object, target: str) -> bool:
         return any(_contains_exact_string(item, target) for item in value.values())
     if isinstance(value, (list, tuple)):
         return any(_contains_exact_string(item, target) for item in value)
+    return False
+
+
+def _contains_exact_value(value: object, target: object) -> bool:
+    if value == target:
+        return True
+    if isinstance(value, dict):
+        return any(_contains_exact_value(item, target) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_exact_value(item, target) for item in value)
     return False
 
 
@@ -707,7 +803,8 @@ class BusinessToolRuntime:
         for skill in skills:
             if skill.read_only and any(effects[name] == "write" for name in skill.tool_names):
                 raise ValueError("read-only Business Skills may not declare write tools")
-        callable_tools = set(schemas) | set(BROWSER_ACTIONS) | {"finish", "load_skill"}
+        callable_tools = (set(schemas) | set(BROWSER_ACTIONS)
+                          | {"finish", "load_skill", "prefill_form"})
         for skill in skills:
             references = {
                 match.group(1) for instruction in skill.instructions

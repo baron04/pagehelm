@@ -310,6 +310,31 @@ function hydrateLinkFacts(elements, selectorMap, getByIndex) {
   return elements
 }
 
+/**
+ * Add a bounded application field identifier from the nearest form-field wrapper. Modern
+ * component systems often put `name` on that wrapper and leave the actual input unnamed.
+ * The identifier is observation data, not authority: the server still requires an exact
+ * adapter-issued form draft before it may use it. Credential-shaped names are omitted.
+ */
+function hydrateFormFacts(elements, selectorMap, getByIndex) {
+  for (const item of elements) {
+    if (!['textbox', 'combobox', 'select'].includes(item.role)) continue
+    try {
+      const element = getByIndex(selectorMap, refIndex(item.ref))
+      const owner = typeof element?.closest === 'function' ? element.closest('[name]') : null
+      const rawField = explicitAttribute(owner || element, 'name')
+      if (rawField !== null && /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/.test(rawField)
+          && !SENSITIVE_NAME.test(rawField)) {
+        item.attrs.field = rawField
+      }
+    } catch {
+      // A stale selector or an unusual DOM shape supplies no semantic field fact. The
+      // server will refuse an adapter draft that cannot resolve to one unique live field.
+    }
+  }
+  return elements
+}
+
 function storageKey(sessionId) {
   return `woa.remote.v1.${sessionId}`
 }
@@ -870,8 +895,9 @@ export class EmbeddedWebRuntime {
     const content = sanitizePageContent(`${state.header}\n${state.content}\n${state.footer}`)
     const epoch = ++this.stored.epoch
     this._save()
-    const elements = hydrateLinkFacts(
-      elementsFrom(content, epoch), this.controller.selectorMap, this.getElementByIndex)
+    const elements = hydrateFormFacts(hydrateLinkFacts(
+      elementsFrom(content, epoch), this.controller.selectorMap, this.getElementByIndex),
+    this.controller.selectorMap, this.getElementByIndex)
     const fingerprints = new Map()
     for (const item of elements) {
       try {
@@ -1510,7 +1536,7 @@ export async function startEmbeddedRuntime(config) {
 // shells that want to preflight their own redaction rules.  They contain no session state.
 export const runtimeInternals = Object.freeze({
   redactString, sanitizePageContent, safeArgs, safeErrorDetail, elementsFrom,
-  hydrateLinkFacts, actionElementFingerprint,
+  hydrateLinkFacts, hydrateFormFacts, actionElementFingerprint,
   urlDigest, navigationWal, recoveryProvesNavigation, formGetUrl,
   configureSensitiveQueryKeys,
 })

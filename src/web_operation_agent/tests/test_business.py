@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from web_operation_agent.answering import StructuredQueryAnswer
 from web_operation_agent.business import (
     BusinessMutationIndeterminate, BusinessMutationSpec, BusinessSelectionOption,
-    BusinessSkill, Citation,
+    BusinessSkill, Citation, FormDraft, FormDraftField,
     BusinessToolContractError, BusinessToolError, BusinessToolIdentityError,
     BusinessToolRequestError, BusinessToolResult, BusinessToolRuntime,
     BusinessToolUnavailableError,
@@ -22,7 +22,7 @@ from web_operation_agent.evidence import Origin, QueryEvidence, RecordEvidence
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.identity import OperationContext, PrincipalContext
 from web_operation_agent.mutation import MemoryMutationJournal, MutationJournalError
-from web_operation_agent.schemas import ActionReceipt, PageObservation
+from web_operation_agent.schemas import ActionReceipt, ElementRef, PageObservation
 from web_operation_agent.session import ServerAgentSession, TaskSpec
 from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
 
@@ -246,6 +246,112 @@ class SelectionOptionContract(unittest.TestCase):
             BusinessToolResult(
                 content={"companies": []}, audit={},
                 selection_options=(BusinessSelectionOption("company/1", "Acme"),))
+
+
+class FormDraftContract(unittest.TestCase):
+    def test_a_draft_is_bound_to_an_allowed_route_and_exact_non_secret_fields(self):
+        draft = FormDraft(
+            route="/object/company/new",
+            fields=(FormDraftField("name", "Company name", "Acme"),))
+        result = BusinessToolResult(
+            content={"form_ui_path": "/object/company/new",
+                     "fields": [item.to_json() for item in draft.fields]}, audit={},
+            allowed_routes=("/object/company/new",), form_draft=draft)
+        self.assertEqual(result.form_draft.content_digest, draft.content_digest)
+
+        with self.assertRaisesRegex(ValueError, "allowed route"):
+            BusinessToolResult(content={"form_ui_path": "/object/company/new"}, audit={},
+                               form_draft=draft)
+        with self.assertRaisesRegex(ValueError, "credential-shaped"):
+            FormDraftField("password", "Password", "secret")
+        with self.assertRaisesRegex(ValueError, "unique fields"):
+            FormDraft(route="/object/company/new", fields=(
+                FormDraftField("name", "Name", "A"),
+                FormDraftField("name", "Name", "B"),
+            ))
+
+
+class FormPrefillProductPath(unittest.TestCase):
+    class Executor:
+        @staticmethod
+        def tool_schemas():
+            return ({"type": "function", "function": {
+                "name": "prepare_company_form", "description": "Prepare one form.",
+                "parameters": {"type": "object", "properties": {},
+                               "additionalProperties": False}}},)
+
+        @staticmethod
+        def tool_effects():
+            return {"prepare_company_form": "read"}
+
+        @staticmethod
+        def execute(name, args, *, context=None):
+            draft = FormDraft(
+                route="/object/company/new",
+                fields=(FormDraftField("name", "Company name", "NovaForge"),
+                        FormDraftField("email", "Email", "ops@novaforge.example")))
+            return BusinessToolResult(
+                content={"form_ui_path": draft.route,
+                         "fields": [item.to_json() for item in draft.fields]},
+                audit={"operation": name, "field_count": 2},
+                allowed_routes=(draft.route,), form_draft=draft)
+
+    class Browser(_Browser):
+        def execute(self, action, args=None, expect_navigation=False):
+            receipt = super().execute(action, args, expect_navigation)
+            receipt.observation.elements = [
+                ElementRef("e1", "textbox", "Company name", "input",
+                           receipt.observation.epoch, {"field": "name"}),
+                ElementRef("e2", "textbox", "Email", "input",
+                           receipt.observation.epoch, {"field": "email"}),
+                ElementRef("e3", "button", "Save", "button",
+                           receipt.observation.epoch),
+            ]
+            return receipt
+
+    def test_the_model_can_request_the_current_draft_but_cannot_supply_bindings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "draft-skill.json"
+            path.write_text(json.dumps({
+                "schema_version": 1, "skill_id": "fixture.companies-draft",
+                "title": "Draft company", "intent": "Prefill a company form.",
+                "triggers": ["prefill company"],
+                "instructions": [
+                    "Call prepare_company_form, then call prefill_form with no arguments."],
+                "tool_names": ["prepare_company_form"],
+                "provenance": ["api:fixture@v1:/companies#draft"],
+                "read_only": True,
+            }))
+            skill = BusinessSkill.load(path)
+            chat = _Chat([
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("prepare_company_form", {}),
+                ("prefill_form", {}),
+                ("finish", {"done": True, "why": "must not be called"}),
+            ])
+            browser = self.Browser()
+            ledger = SessionLedger(Path(tmp) / "session.jsonl", "form-prefill")
+            session = ServerAgentSession(
+                task=TaskSpec("T", "prefill company, do not submit"),
+                chat=chat, browser=browser, control=ReadOnlyControl(), ledger=ledger,
+                business_tools=BusinessToolRuntime((skill,), self.Executor()),
+                disabled_actions={"click", "fill", "select", "submit"},
+                allow_form_prefill=True, step_budget=5, wall_budget_s=30)
+            session.entry_observation = browser.observe()
+            session.plan()
+
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "agent_finished")
+            self.assertEqual(result.steps_used, 3)
+            self.assertEqual(len(chat.messages), 3)
+            self.assertNotIn("prefill_form", chat.tool_names[0])
+            self.assertIn("prefill_form", chat.tool_names[2])
+            self.assertNotIn("fill", chat.tool_names[2])
+            self.assertEqual(browser.actions, ["goto", "fill", "fill"])
+            self.assertNotIn("submit", browser.actions)
+            self.assertIn("has not been submitted", result.agent_said)
+            self.assertEqual(len(ledger.of_kind("form_prefill_completed")), 1)
 
 
 class SkillCitations(unittest.TestCase):

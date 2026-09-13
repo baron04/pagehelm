@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "skill_id": "odoo.sales.customers-draft",
+  "title": "Prepare an Odoo customer form",
+  "intent": "Prefill one customer form from a user-supplied name and email, then leave submission to the user.",
+  "triggers": [
+    "预填客户",
+    "填写客户",
+    "填写客户表单",
+    "不要提交",
+    "不提交",
+    "prefill customer",
+    "fill customer form",
+    "do not submit",
+    "without submitting"
+  ],
+  "instructions": [
+    "Both customer name and email address are mandatory. If either is missing, ask the user for the missing value and end the turn. Never invent either value.",
+    "Call prepare_customer_form with exactly the name and email the user supplied. It checks duplicates over a complete delegated-user scan and issues a one-turn form draft.",
+    "After a successful result, call prefill_form with no arguments. The server, not you, selects the exact route, fields and values from the current application-issued draft.",
+    "The draft is transient until submission. Stop after prefill_form; never click, submit, invoke a mutation, or claim the customer was created.",
+    "If preparation or prefill is refused, explain the short reason and do not retry unchanged input."
+  ],
+  "tool_names": [
+    "prepare_customer_form"
+  ],
+  "provenance": [
+    "src:odoo@18.0:addons/account/views/partner_view.xml#account.res_partner_action_customer",
+    "src:odoo@18.0:odoo/addons/base/models/res_partner.py#res.partner",
+    "api:odoo@18.0:/jsonrpc#object.execute_kw"
+  ],
+  "read_only": true
+}

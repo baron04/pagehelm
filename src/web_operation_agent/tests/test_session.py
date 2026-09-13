@@ -142,6 +142,7 @@ from web_operation_agent.tests.route_fixture import (FIXTURE_ROUTE_PORT,
 from web_operation_agent.tests.knowledge_fixture import (FixtureKnowledgeRouter,
                                                          FixtureSkill)
 from web_operation_agent.ledger import SessionLedger
+from web_operation_agent.business import FormDraft, FormDraftField
 from web_operation_agent.schemas import ActionReceipt, OperationContract, empty_contract
 from web_operation_agent.session import (AGENT_SYSTEM, SCOPE_FIRST_SYSTEM,
                                          LabApparatus, ServerAgentSession, TaskSpec,
@@ -710,6 +711,74 @@ class WithdrawnPlanLeavesTheContext(unittest.TestCase):
 def _page(epoch, url="http://app/accounting/do/main", title="Accounting Manager"):
     return PageObservation(schema_version=1, epoch=epoch, url=url, title=title,
                            landmarks=[title], elements=[ElementRef("e1", "link", "Go", "a", epoch)])
+
+
+class ApplicationIssuedFormPrefill(unittest.TestCase):
+    @staticmethod
+    def _form(epoch):
+        return PageObservation(
+            schema_version=1, epoch=epoch,
+            url="http://app/accounting/do/createCustomer", title="New customer",
+            landmarks=["New customer"], elements=[
+                ElementRef("e2", "textbox", "Customer name", "input", epoch,
+                           {"field": "name"}),
+                ElementRef("e3", "textbox", "Email", "input", epoch,
+                           {"field": "email", "type": "email"}),
+                ElementRef("e4", "button", "Save", "button", epoch),
+            ])
+
+    def test_only_the_adapter_values_are_filled_and_submit_is_never_dispatched(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            browser = _Browser([
+                _page(1), self._form(2), self._form(3), self._form(4)])
+            session = ServerAgentSession(
+                task=TaskSpec("T", "填写客户但不要提交"), chat=_Chat([]),
+                browser=browser, control=_Control([[], [], []]),
+                ledger=SessionLedger(Path(tmp) / "prefill.jsonl", "prefill"),
+                application_routes=FIXTURE_ROUTE_PORT,
+                allow_form_prefill=True)
+            draft = FormDraft(
+                route="/accounting/do/createCustomer",
+                fields=(FormDraftField("name", "客户名称", "NovaForge"),
+                        FormDraftField("email", "邮箱", "ops@novaforge.example")))
+
+            final_page, reason, detail = session._apply_form_draft(
+                draft, browser.pages[0], step=1)
+
+            self.assertEqual((reason, detail), ("", ""))
+            self.assertEqual(final_page.epoch, 4)
+            self.assertEqual(
+                [(action, args.get("ref"), args.get("value"))
+                 for action, args in browser.done],
+                [("goto", None, None), ("fill", "e2", "NovaForge"),
+                 ("fill", "e3", "ops@novaforge.example")])
+            self.assertNotIn("submit", [action for action, _args in browser.done])
+            ledger = (Path(tmp) / "prefill.jsonl").read_text()
+            self.assertNotIn("NovaForge", ledger)
+            self.assertNotIn("ops@novaforge.example", ledger)
+
+    def test_a_missing_or_ambiguous_field_is_refused_before_fill(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ambiguous = self._form(1)
+            ambiguous.elements.append(ElementRef(
+                "e9", "textbox", "Other email", "input", 1,
+                {"field": "email", "type": "email"}))
+            browser = _Browser([ambiguous])
+            session = ServerAgentSession(
+                task=TaskSpec("T", "填写客户但不要提交"), chat=_Chat([]),
+                browser=browser, control=_Control([[]]),
+                ledger=SessionLedger(Path(tmp) / "prefill.jsonl", "prefill"),
+                allow_form_prefill=True)
+            draft = FormDraft(
+                route="/accounting/do/createCustomer",
+                fields=(FormDraftField("email", "邮箱", "ops@example.test"),))
+
+            _page_after, reason, detail = session._apply_form_draft(
+                draft, ambiguous, step=1)
+
+            self.assertEqual(reason, "agent_refused")
+            self.assertIn("one exact email field", detail)
+            self.assertEqual(browser.done, [])
 
 
 SKILL_ID = "fixture.accounting.invoices-by-due-date"
