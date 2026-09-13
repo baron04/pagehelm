@@ -84,8 +84,8 @@ class PanelContractTests(unittest.TestCase):
     def test_the_server_emits_exactly_the_progress_states_the_panel_maps(self):
         """Anything the product can publish must have a projection, and nothing else may.
 
-        The old panel carried entries for `verified`, `needs_input`, `not_verified` and
-        `knowledge_used` -- four states no code path has ever published. They were dead
+        The old panel carried entries for `verified`, `not_verified` and `knowledge_used` --
+        states no code path has ever published. They were dead
         branches that looked like coverage.
         """
         mapped = set(panel_contract()["progress_states"])
@@ -110,6 +110,15 @@ class PanelContractTests(unittest.TestCase):
         self.assertLessEqual(len(live["source_details"]), panel_limits()["result_max_chars"])
         payload["state"] = "agent_started"
         self.assertNotIn("source_details", project_event(_event("progress", payload), at=0))
+
+    def test_a_clarification_is_a_terminal_turn_that_keeps_the_session_ready(self):
+        entry = project_event(_event("progress", {
+            "state": "needs_input",
+            "message": "Which Acme?\n1. London\n2. Paris",
+        }), at=0)
+        self.assertEqual(entry["panel_state"], "needs_input")
+        self.assertEqual(entry["tone"], "warning")
+        self.assertIn("1. London", entry["text"])
 
     def test_panel_capacity_accepts_the_largest_supported_product_answer(self):
         from web_operation_agent.product import AgentTurnConfig

@@ -1033,11 +1033,8 @@ export class EmbeddedWebRuntime {
       await this._handleAction(event.payload)
     } else if (event.kind === 'progress') {
       const progressState = String(event.payload.state || '')
-      const finished = [
-        'finished', 'refused', 'cancelled', 'indeterminate', 'failed',
-        'verified', 'needs_input', 'not_verified', 'approval_denied', 'task_failed',
-      ]
-        .includes(event.payload.state)
+      const mapped = this.panelConfiguration?.progress_states?.[progressState]
+      const finished = Boolean(mapped?.terminal)
       if (finished) {
         this.stored.taskInFlight = false
         this.stored.activeMessageId = ''
@@ -1048,7 +1045,6 @@ export class EmbeddedWebRuntime {
       }
       // The panel state each progress state maps to is the server's table, not a second
       // copy of it here; an unmapped state means the contract moved and must be noticed.
-      const mapped = this.panelConfiguration?.progress_states?.[progressState]
       this._panelState(mapped ? mapped.panel_state : 'acting')
     } else if (event.kind === 'terminal') {
       this.stored.taskInFlight = false

@@ -41,6 +41,7 @@ class AgentTurnStatus(str, Enum):
     """A transport-level description of how the Agent loop ended."""
 
     FINISHED = "finished"
+    NEEDS_INPUT = "needs_input"
     REFUSED = "refused"
     CANCELLED = "cancelled"
     INDETERMINATE = "indeterminate"
@@ -133,11 +134,13 @@ class AgentTurnConfig:
     #: action lost every turn in which the model reached for one. Two recoveries is enough
     #: to tell a model that adapts from one that keeps retrying.
     policy_block_limit: int | None = 3
+    no_progress_repeat_limit: int | None = 2
     plain_business_answer_min_page_actions: int | None = None
     approval_ttl_s: int = 120
     keep_observations: int = 3
     allow_application_entry: bool = False
     allow_business_mutations: bool = False
+    allow_clarification: bool = True
     require_identity: bool = False
     deployment_profile: str = "production"
     max_user_answer_chars: int = 4_000
@@ -157,6 +160,7 @@ class AgentTurnConfig:
                 or not isinstance(self.page_answer_evidence, bool)
                 or not isinstance(self.allow_application_entry, bool)
                 or not isinstance(self.allow_business_mutations, bool)
+                or not isinstance(self.allow_clarification, bool)
                 or not isinstance(self.require_identity, bool)):
             raise ValueError("turn policy flags must be booleans")
         for name in ("step_budget", "wall_budget_s", "approval_ttl_s",
@@ -191,6 +195,12 @@ class AgentTurnConfig:
                 or not isinstance(self.policy_block_limit, int)
                 or self.policy_block_limit < 1):
             raise ValueError("policy_block_limit must be a positive integer or None")
+        if self.no_progress_repeat_limit is not None and (
+                isinstance(self.no_progress_repeat_limit, bool)
+                or not isinstance(self.no_progress_repeat_limit, int)
+                or self.no_progress_repeat_limit < 2):
+            raise ValueError(
+                "no_progress_repeat_limit must be at least two or None")
         minimum = self.plain_business_answer_min_page_actions
         if minimum is not None and (
                 isinstance(minimum, bool) or not isinstance(minimum, int) or minimum < 0):
@@ -211,6 +221,11 @@ def render_neutral_user_answer(context: AgentAnswerContext) -> str:
     status = _status_for(context.agent.terminal_reason)
     if status is AgentTurnStatus.INDETERMINATE:
         return "The action outcome is uncertain. It was not retried automatically."
+    if context.agent.terminal_reason == "no_progress":
+        if re.search(r"[\u3400-\u9fff]", context.message.text):
+            return "同一步骤没有带来新结果，我已停止重复操作。请补充目标信息后重试。"
+        return ("The same step produced no new result, so I stopped repeating it. "
+                "Add more detail to the goal and try again.")
     if status is AgentTurnStatus.FINISHED and context.agent.verified_answer is not None:
         return render_payload(context.agent.verified_answer, user_text=context.message.text,
                               max_chars=context.max_chars)
@@ -221,10 +236,17 @@ def render_neutral_user_answer(context: AgentAnswerContext) -> str:
         return render_structured_query_answer(
             projection, user_text=context.message.text,
             max_chars=context.max_chars).text
+    if status is AgentTurnStatus.NEEDS_INPUT and context.agent.clarification is not None:
+        clarification = context.agent.clarification
+        question = str(clarification["question"])
+        choices = clarification.get("choices") or ()
+        return "\n".join([question, *(f"{index}. {choice}"
+                                      for index, choice in enumerate(choices, 1))])
     if context.agent.agent_said.strip():
         return context.agent.agent_said.strip()
     return {
         AgentTurnStatus.FINISHED: "The agent finished the turn without a user-facing answer.",
+        AgentTurnStatus.NEEDS_INPUT: "The agent needs more information to continue.",
         AgentTurnStatus.REFUSED: "The agent could not complete the request.",
         AgentTurnStatus.CANCELLED: "The requested action was cancelled.",
         AgentTurnStatus.INDETERMINATE: (
@@ -278,6 +300,7 @@ class AgentTurnExecution:
                         and business.query_answer is not None) else None),
             } if business is not None else None),
             "answer_fallback_used": self.answer_fallback_used,
+            "clarification": self.agent.clarification,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
         }
@@ -524,10 +547,12 @@ class AgentTurnExecutor:
             scope_first_policy=self.config.scope_first_policy,
             page_answer_evidence=self.config.page_answer_evidence,
             policy_block_limit=self.config.policy_block_limit,
+            no_progress_repeat_limit=self.config.no_progress_repeat_limit,
             business_tools=self.business_tools,
             business_mutation_approval=(
                 approve_business_mutation
                 if self.config.allow_business_mutations else None),
+            allow_clarification=self.config.allow_clarification,
             plain_business_answer_min_page_actions=(
                 self.config.plain_business_answer_min_page_actions),
             max_agent_said_chars=self.config.max_user_answer_chars,
@@ -573,7 +598,10 @@ class AgentTurnExecutor:
             # A server-trusted renderer may customize ordinary terminal prose. It cannot
             # replace facts already projected by a typed query with model-authored prose.
             rendered = (render_neutral_user_answer(answer_context)
-                        if authoritative_projection is not None or agent.verified_answer is not None
+                        if (authoritative_projection is not None
+                            or agent.verified_answer is not None
+                            or status is AgentTurnStatus.NEEDS_INPUT
+                            or agent.terminal_reason == "no_progress")
                         else self.answer_renderer(answer_context))
             if not isinstance(rendered, str) or not rendered.strip():
                 raise ValueError("answer renderer returned no text")
@@ -626,6 +654,7 @@ class AgentTurnExecutor:
             assistant_text=user_answer,
             status=status.value,
             business_result=session.latest_business_tool_result,
+            clarification=agent.clarification,
         )
         ledger.append(
             "conversation_state_updated",
@@ -665,7 +694,11 @@ class AgentTurnExecutor:
 def _status_for(terminal_reason: str) -> AgentTurnStatus:
     if terminal_reason == "agent_finished":
         return AgentTurnStatus.FINISHED
+    if terminal_reason == "needs_input":
+        return AgentTurnStatus.NEEDS_INPUT
     if terminal_reason == "agent_refused":
+        return AgentTurnStatus.REFUSED
+    if terminal_reason == "no_progress":
         return AgentTurnStatus.REFUSED
     if terminal_reason in {"approval_denied", "user_cancelled"}:
         return AgentTurnStatus.CANCELLED

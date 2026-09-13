@@ -263,6 +263,30 @@ class PanelUITests(_PanelBrowser):
         self.assertEqual(self.calls(page), [])
         self.assertEqual(self.errors, [])
 
+    def test_a_clarification_releases_and_focuses_the_composer_for_the_reply(self):
+        page = self.open(_snapshot(
+            connection={"state": "needs_input", "busy": False,
+                        "stopping": False, "online": True},
+            entries=[
+                _entry("e1", "goal", "打开 Acme"),
+                _entry("e2", "result", "请选择：\n1. Acme — 伦敦\n2. Acme — 巴黎",
+                       panel_state="needs_input", tone="warning"),
+            ],
+        ))
+        page.locator(".woa-launcher").click()
+        composer = page.locator("#woa-composer-input")
+        composer.wait_for()
+
+        self.assertTrue(composer.is_enabled())
+        self.assertEqual(
+            page.evaluate("document.querySelector('#woa-assistant').shadowRoot.activeElement.id"),
+            "woa-composer-input",
+        )
+        self.assertIn("Acme — 伦敦", page.locator(".woa-thread").inner_text())
+        self.assertEqual(page.locator(".woa-window").get_attribute("data-state"),
+                         "needs_input")
+        self.assertEqual(self.errors, [])
+
     # ---------------------------------------------------------------- approval
     def test_the_approval_card_is_keyboard_operable_and_escape_cancels(self):
         page = self.open(_snapshot())

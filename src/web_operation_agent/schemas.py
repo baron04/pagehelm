@@ -147,6 +147,8 @@ SCORABLE_TERMINAL_REASONS = frozenset({
     "token_budget",           # the run hit its input-token ceiling
     "action_policy_budget",   # repeated pre-dispatch policy refusals exhausted recovery
     "agent_refused",          # the agent stopped and said it could not proceed
+    "needs_input",            # the task paused for one bounded user clarification
+    "no_progress",            # an unchanged decision repeated after one recovery prompt
     "planning_failed",        # the source arm could not produce a valid contract
     "approval_denied",        # the authenticated user declined the proposed effect
     "user_cancelled",         # the authenticated user stopped the active task

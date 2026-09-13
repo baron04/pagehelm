@@ -20,6 +20,46 @@ def _result(content: dict | None = None) -> BusinessToolResult:
 
 
 class ConversationStateTests(unittest.TestCase):
+    def test_clarification_is_bounded_and_survives_only_until_task_resolution(self):
+        state = ConversationState()
+        clarification = {
+            "schema_version": 1,
+            "clarification_id": "clarify-123",
+            "task_id": "task-123",
+            "question": "Which Acme did you mean?",
+            "response_kind": "single_choice",
+            "choices": ["Acme — London", "Acme — Paris"],
+        }
+
+        state.record(
+            message_id="message-1", user_text="Open Acme",
+            assistant_text=clarification["question"], status="needs_input",
+            clarification=clarification,
+        )
+
+        self.assertEqual(state.pending_clarification, clarification)
+        context = state.model_context()
+        self.assertEqual(context["pending_clarification"], clarification)
+        state.record(
+            message_id="message-2", user_text="The London one",
+            assistant_text="I could not refresh it.", status="failed",
+        )
+        self.assertEqual(state.pending_clarification, clarification)
+        state.record(
+            message_id="message-3", user_text="Try the London one again",
+            assistant_text="Opened Acme — London.", status="finished",
+        )
+        self.assertIsNone(state.pending_clarification)
+
+    def test_clarification_cannot_be_smuggled_into_another_terminal_state(self):
+        state = ConversationState()
+        with self.assertRaisesRegex(ValueError, "only valid"):
+            state.record(
+                message_id="message-1", user_text="Open Acme",
+                assistant_text="Done", status="finished",
+                clarification={"unexpected": True},
+            )
+
     def test_finished_turn_retains_bounded_business_facts_and_redacts_handoffs(self):
         state = ConversationState(max_turns=2)
         state.record(

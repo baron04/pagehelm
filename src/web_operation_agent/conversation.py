@@ -12,8 +12,10 @@ from .privacy import redact_sensitive_assignments, redact_session_handoffs
 
 
 _ALLOWED_STATUSES = frozenset({
-    "finished", "refused", "cancelled", "indeterminate", "failed",
+    "finished", "needs_input", "refused", "cancelled", "indeterminate", "failed",
 })
+
+_CLARIFICATION_KINDS = frozenset({"free_text", "single_choice"})
 
 
 def _redact_json(value):
@@ -58,6 +60,7 @@ class ConversationState:
         self.max_bytes = max_bytes
         self.max_business_bytes = max_business_bytes
         self._turns: deque[dict] = deque()
+        self._pending_clarification: dict | None = None
         self._lock = threading.RLock()
 
     @property
@@ -75,10 +78,17 @@ class ConversationState:
         with self._lock:
             dropped = len(self._turns)
             self._turns.clear()
+            self._pending_clarification = None
             return dropped
 
+    @property
+    def pending_clarification(self) -> dict | None:
+        with self._lock:
+            return copy.deepcopy(self._pending_clarification)
+
     def record(self, *, message_id: str, user_text: str, assistant_text: str,
-               status: str, business_result: BusinessToolResult | None = None) -> None:
+               status: str, business_result: BusinessToolResult | None = None,
+               clarification: dict | None = None) -> None:
         if (not isinstance(message_id, str) or not message_id.strip()
                 or len(message_id) > 200):
             raise ValueError("conversation message_id is invalid")
@@ -91,6 +101,10 @@ class ConversationState:
             raise ValueError("conversation status is invalid")
         if business_result is not None and not isinstance(business_result, BusinessToolResult):
             raise TypeError("business_result must be a BusinessToolResult or None")
+        if status == "needs_input":
+            clarification = self._validate_clarification(clarification)
+        elif clarification is not None:
+            raise ValueError("clarification is only valid for needs_input")
         turn = {
             "message_id": message_id,
             "user": _redact_json(user_text.strip()),
@@ -108,19 +122,58 @@ class ConversationState:
                 }
         with self._lock:
             self._turns.append(turn)
+            if status == "needs_input":
+                self._pending_clarification = clarification
+            elif status in {"finished", "refused", "cancelled", "indeterminate"}:
+                self._pending_clarification = None
             while len(self._turns) > self.max_turns:
                 self._turns.popleft()
-            while self._turns and len(_canonical({
-                    "schema_version": 1,
-                    "prior_turns": list(self._turns),
-            })) > self.max_bytes:
+            while self._turns and len(_canonical(self._model_value())) > self.max_bytes:
                 self._turns.popleft()
+
+    def _validate_clarification(self, value: object) -> dict:
+        if not isinstance(value, dict) or set(value) != {
+                "schema_version", "clarification_id", "task_id", "question",
+                "response_kind", "choices"}:
+            raise ValueError("needs_input requires one complete clarification")
+        if value.get("schema_version") != 1:
+            raise ValueError("clarification schema_version is unsupported")
+        for key, limit in (("clarification_id", 100), ("task_id", 100),
+                           ("question", 500)):
+            item = value.get(key)
+            if not isinstance(item, str) or not item.strip() or len(item) > limit:
+                raise ValueError(f"clarification {key} is invalid")
+        kind = value.get("response_kind")
+        choices = value.get("choices")
+        if kind not in _CLARIFICATION_KINDS:
+            raise ValueError("clarification response_kind is invalid")
+        if (not isinstance(choices, list) or len(choices) > 8
+                or any(not isinstance(item, str) or not item.strip() or len(item) > 200
+                       for item in choices)
+                or len(set(item.strip() for item in choices)) != len(choices)):
+            raise ValueError("clarification choices are invalid")
+        if kind == "single_choice" and len(choices) < 2:
+            raise ValueError("single_choice clarification requires at least two choices")
+        if kind == "free_text" and choices:
+            raise ValueError("free_text clarification cannot carry choices")
+        normalized = _redact_json({**value, "question": value["question"].strip(),
+                                   "choices": [item.strip() for item in choices]})
+        if len(_canonical({"schema_version": 1, "prior_turns": [],
+                           "pending_clarification": normalized})) > self.max_bytes:
+            raise ValueError("clarification exceeds the conversation limit")
+        return normalized
+
+    def _model_value(self) -> dict:
+        value = {"schema_version": 1, "prior_turns": list(self._turns)}
+        if self._pending_clarification is not None:
+            value["pending_clarification"] = self._pending_clarification
+        return value
 
     def model_context(self) -> dict | None:
         with self._lock:
-            if not self._turns:
+            if not self._turns and self._pending_clarification is None:
                 return None
-            value = {"schema_version": 1, "prior_turns": list(self._turns)}
+            value = self._model_value()
             encoded = _canonical(value)
             if len(encoded) > self.max_bytes:
                 raise RuntimeError("bounded conversation state exceeded its configured limit")
@@ -129,5 +182,5 @@ class ConversationState:
     @property
     def content_digest(self) -> str:
         with self._lock:
-            value = {"schema_version": 1, "prior_turns": list(self._turns)}
+            value = self._model_value()
             return hashlib.sha256(_canonical(value)).hexdigest()

@@ -186,6 +186,8 @@ class AgentTurnConfigTests(unittest.TestCase):
                 {"scope_first_policy": 1},
                 {"allow_application_entry": "yes"},
                 {"allow_business_mutations": 1},
+                {"allow_clarification": 1},
+                {"no_progress_repeat_limit": 1},
                 {"require_identity": 1},
                 {"deployment_profile": "staging"},
                 {"plain_business_answer_min_page_actions": -1},
@@ -651,6 +653,84 @@ class AgentTurnExecutorTests(unittest.TestCase):
             self.assertEqual(
                 sum(event["event"] == "page_route_rejected" for event in events), 1)
             self.assertEqual(state.turn_count, 2)
+
+    def test_clarification_ends_one_turn_and_the_next_message_continues_the_task(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = ConversationState()
+            chat = _Chat([
+                ("ask_user", {
+                    "question": "Which Acme should I open?",
+                    "response_kind": "single_choice",
+                    "choices": ["Acme — London", "Acme — Paris"],
+                }),
+                ("finish", {"done": True, "why": "Opened Acme — London."}),
+            ])
+            channel = _Channel()
+            executor = AgentTurnExecutor(
+                channel=channel,
+                config=AgentTurnConfig(
+                    supported_scope="Read and open one company.",
+                    ledger_path=root / "session.jsonl",
+                ),
+                chat=chat, business_tools=None, control=ReadOnlyControl(),
+                run_id_factory=lambda message: f"turn-{message.message_id}",
+                conversation_state=state,
+            )
+            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+                first = executor.execute({
+                    "message_id": "message-1", "text": "Open Acme",
+                    "page_url": "http://app.test/companies",
+                })
+                second = executor.execute({
+                    "message_id": "message-2", "text": "The London one",
+                    "page_url": "http://app.test/companies",
+                })
+
+            self.assertEqual(first.status, AgentTurnStatus.NEEDS_INPUT)
+            self.assertEqual(
+                first.user_answer,
+                "Which Acme should I open?\n1. Acme — London\n2. Acme — Paris",
+            )
+            self.assertEqual(first.to_json()["clarification"]["response_kind"],
+                             "single_choice")
+            self.assertEqual(second.status, AgentTurnStatus.FINISHED)
+            self.assertIsNone(state.pending_clarification)
+            second_opening = chat.messages[1][1]["content"]
+            self.assertIn("pending_clarification", second_opening)
+            self.assertIn("The London one", second_opening)
+            self.assertIn("never as approval", chat.messages[1][0]["content"])
+            progress = [event[1] for event in channel.published if event[0] == "progress"]
+            self.assertEqual([item["state"] for item in progress],
+                             ["agent_started", "needs_input", "agent_started", "finished"])
+
+    def test_unchanged_repeat_is_not_dispatched_and_a_second_repeat_ends_the_turn(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            channel = _Channel()
+            chat = _Chat([("observe", {}), ("observe", {}), ("observe", {})])
+            executor = AgentTurnExecutor(
+                channel=channel,
+                config=AgentTurnConfig(
+                    supported_scope="Read the current page.",
+                    ledger_path=Path(tmp) / "session.jsonl",
+                ),
+                chat=chat, business_tools=None, control=ReadOnlyControl(),
+                run_id_factory=lambda _message: "no-progress-turn",
+            )
+            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+                result = executor.execute(_message())
+                browser = _RemoteBrowser.instances[-1]
+
+            self.assertEqual(result.status, AgentTurnStatus.REFUSED)
+            self.assertEqual(result.terminal_reason, "no_progress")
+            self.assertEqual(browser.actions, ["observe"])
+            self.assertIn("NO PROGRESS", chat.messages[2][-1]["content"])
+            events = [json.loads(line) for line in
+                      (Path(tmp) / "session.jsonl").read_text().splitlines()]
+            self.assertEqual(
+                [event["event"] for event in events].count("no_progress_detected"), 1)
+            self.assertEqual(
+                [event["event"] for event in events].count("no_progress_terminated"), 1)
 
     def test_principal_context_reaches_tool_and_redacted_audit(self):
         class ContextExecutor(_Executor):

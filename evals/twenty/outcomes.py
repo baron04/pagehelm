@@ -21,8 +21,8 @@ _WOA_BOUNDARY_IDENTITY_CODES = frozenset({
 _WOA_TRANSPORT_TERMINALS = frozenset({"control_plane_error", "transport_error"})
 _WOA_ENGINE_TERMINALS = frozenset({
     "action_policy_budget", "agent_finished", "agent_refused", "approval_denied",
-    "indeterminate_write", "step_budget", "token_budget", "user_cancelled",
-    "wall_clock_budget",
+    "indeterminate_write", "needs_input", "no_progress", "step_budget", "token_budget",
+    "user_cancelled", "wall_clock_budget",
 })
 
 

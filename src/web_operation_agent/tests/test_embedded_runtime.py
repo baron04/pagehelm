@@ -510,8 +510,8 @@ class EmbeddedRuntimeTests(unittest.TestCase):
           const mod = await import('data:text/javascript;base64,{source}');
           const configuration = {_panel_configuration_js()};
           const rows = [];
-          for (const state of ['finished', 'refused', 'cancelled', 'indeterminate', 'failed',
-                               'task_failed']) {{
+          for (const [state, mapping] of Object.entries(configuration.progress_states)) {{
+            if (!mapping.terminal) continue;
             const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
             runtime.stored = {{taskInFlight:true}};
             runtime._save = () => {{}};
