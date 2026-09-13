@@ -1949,6 +1949,12 @@ class ServerAgentSession:
                 "CLARIFICATION CANDIDATES (current application facts; selecting one grants "
                 "no route or write authority):\n" + json.dumps(
                     cards, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+            self.ledger.append(
+                "clarification_candidates_ready", step=step, count=len(cards),
+                choice_ids=[item["choice_id"] for item in cards],
+                label_digests=[hashlib.sha256(item["label"].encode("utf-8")).hexdigest()
+                               for item in cards],
+            )
 
     def tool_schemas(self) -> list[dict]:
         # A disabled action is refused before dispatch, so offering it in the tool surface

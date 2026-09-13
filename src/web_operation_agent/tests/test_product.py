@@ -781,6 +781,13 @@ class AgentTurnExecutorTests(unittest.TestCase):
             self.assertNotIn("record_ref", json.dumps(public))
             self.assertNotIn("record_ref", json.dumps(result.agent.to_json()))
             self.assertIn("CLARIFICATION CANDIDATES", chat.messages[2][-1]["content"])
+            events = [json.loads(line) for line in
+                      (root / "session.jsonl").read_text().splitlines()]
+            candidate_event = next(
+                event for event in events
+                if event["event"] == "clarification_candidates_ready")
+            self.assertEqual(candidate_event["count"], 2)
+            self.assertNotIn("Acme", json.dumps(candidate_event))
 
     def test_fabricated_single_choice_ids_are_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
