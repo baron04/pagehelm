@@ -160,6 +160,8 @@ Odoo 装置现在由本仓库自己建起来：`python -m web_operation_agent_od
 
 typed 工具面是五个读——`query_sale_orders`、`query_quotations`、`query_customers`、`query_products`、`query_customer_invoices`——加三个可选开启的写：`create_customer`、`confirm_quotation`、`invoice_sale_order`。每次读取都扫完整个范围，并拿 Odoo 自己的 `search_count` 对账——"我是否看全了"由一个不是从同一页结果里数出来的数字回答。
 
+纯打开记录的请求可以启用确定性只读导航策略。精确命中唯一只读 Skill 时，服务端会在第一次模型决策前加载该 Skill；模型查询当前数据并打开结果给出的确切路由后，只有浏览器在目标 URL 返回最新回执，服务端才会直接结束本轮，不再增加一次模型调用。回退或有歧义的 Skill 仍由模型选择；同时要求读取数据的请求仍走完整 ReAct 循环。
+
 其中两个结果携带的东西，页面本身讲不出来。`sale.action_quotations_with_onboarding` **没有**存任何 domain：报价单页面列的是全部销售订单，只是把搜索过滤器默认设成了当前用户的报价单，而这个默认任何人都能清掉。所以 `query_quotations` 会报 `collection_ui_path_shows_this_scope: false` 并给出理由，而不是让模型以为自己打开的页面就是刚才那个答案。`invoice_sale_order` 则始终把开票方式钉在普通发票上：Odoo 已确认销售订单的表单上有两个都叫 "Create Invoice" 的按钮，区别只在各自的 `invisible` 条件，其中一个提出的是按百分比的预付款。
 
 ```bash

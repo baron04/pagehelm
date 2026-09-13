@@ -75,6 +75,24 @@ _CAPABILITY_QUESTION = re.compile(
     re.I,
 )
 
+_NAVIGATION_ONLY = re.compile(
+    r"^\s*(?:(?:请(?:帮我)?|帮我)\s*)?(?:打开|进入|前往|跳转到|跳转至)\s*"
+    r"[^，。！？,!?]{1,200}\s*[。.!！]?\s*$|"
+    r"^\s*(?:please\s+)?(?:open|go\s+to|navigate\s+to)\s+"
+    r"[^.!?]{1,200}\s*[.!]?\s*$",
+    re.I,
+)
+
+_NAVIGATION_EXTRA_GOAL = re.compile(
+    r"(?:并且?|然后|同时|再(?:告诉|列出|总结|说明)|告诉我|列出|总结|说明)|"
+    r"\b(?:and|then|tell|show|list|summari[sz]e|explain)\b",
+    re.I,
+)
+
+
+def _is_navigation_only(prompt: str) -> bool:
+    return bool(_NAVIGATION_ONLY.fullmatch(prompt) and not _NAVIGATION_EXTRA_GOAL.search(prompt))
+
 AGENT_SYSTEM = """\
 You operate a web application through a browser you drive one action at a time. You cannot \
 see the screen; you see a structured observation of the current page and you act by calling \
@@ -544,6 +562,7 @@ class ServerAgentSession:
                  business_tools: BusinessToolRuntime | None = None,
                  business_mutation_approval=None,
                  allow_clarification: bool = False,
+                 deterministic_read_navigation: bool = False,
                  plain_business_answer_min_page_actions: int | None = None,
                  max_agent_said_chars: int = 500,
                  cancelled: Callable[[], bool] | None = None,
@@ -669,7 +688,11 @@ class ServerAgentSession:
         self._capability_question = bool(_CAPABILITY_QUESTION.fullmatch(task.prompt))
         if not isinstance(allow_clarification, bool):
             raise ValueError("allow_clarification must be a boolean")
+        if not isinstance(deterministic_read_navigation, bool):
+            raise ValueError("deterministic_read_navigation must be a boolean")
         self.allow_clarification = allow_clarification
+        self.deterministic_read_navigation = deterministic_read_navigation
+        self._navigation_only = _is_navigation_only(task.prompt)
         self._business_control = {
             "approval_requested": 0,
             "approval_granted": 0,
@@ -678,6 +701,8 @@ class ServerAgentSession:
             "mutation_completed": 0,
             "mutation_indeterminate": 0,
         }
+        selection = BusinessSkillSelection(
+            BUSINESS_SKILL_MATCHER_VERSION, (), (), False)
         if business_tools is None:
             self._task_business_skills = ()
         else:
@@ -732,7 +757,23 @@ class ServerAgentSession:
         self._task_business_skill_ids = {
             skill.skill_id for skill in self._task_business_skills}
         self._loaded_business_skill_ids: set[str] = set()
+        self._auto_loaded_business_skill_ids: set[str] = set()
+        if (self.deterministic_read_navigation and self._navigation_only
+                and len(self._task_business_skills) == 1
+                and len(selection.skills) == 1
+                and selection.trigger_matches and not selection.fallback_used
+                and not selection.mutation_surface_widened
+                and self._task_business_skills[0].read_only):
+            skill = self._task_business_skills[0]
+            self._loaded_business_skill_ids.add(skill.skill_id)
+            self._auto_loaded_business_skill_ids.add(skill.skill_id)
+            self.ledger.append(
+                "business_skill_auto_loaded", skill_id=skill.skill_id,
+                skill_sha256=skill.artifact_sha256,
+                tool_names=list(skill.tool_names), provenance=list(skill.provenance),
+                reason="unique_exact_read_navigation")
         self._business_routes: set[str] = set()
+        self._latest_business_routes: set[str] = set()
         # Keep the bounded, schema-checked result in server memory so a product shell can
         # render requested facts directly.  The audit ledger intentionally stores only its
         # digest and projection; model prose is not a reliable transport for table rows.
@@ -1535,6 +1576,7 @@ class ServerAgentSession:
                         route_count=len(tool_result.allowed_routes),
                         side_effect_possible=False, identity=operation_identity)
                     self._business_routes.update(tool_result.allowed_routes)
+                    self._latest_business_routes = set(tool_result.allowed_routes)
                     self.latest_business_tool_result = tool_result
                     recorded_evidence = self._collect_evidence(tool_result, step=step)
                     self._latest_business_query_page_actions = (
@@ -1586,6 +1628,7 @@ class ServerAgentSession:
                                     steps=step)
                 except BusinessToolError as exc:
                     self.latest_business_tool_result = None
+                    self._latest_business_routes = set()
                     self._clarification_choices = {}
                     self._clarification_feedback = ""
                     self._latest_business_query_page_actions = None
@@ -1668,6 +1711,7 @@ class ServerAgentSession:
 
             source_route_citations: list[str] = []
             source_route_read_only = False
+            latest_business_route = False
             skill_app_entry = None
             # The routing tools resolve to a browser action rather than being one. Each of
             # them used to carry its own copy of the refusal sequence -- ledger, observe,
@@ -1856,6 +1900,7 @@ class ServerAgentSession:
                 url = args.get("url")
                 if isinstance(url, str) and url in self._business_routes:
                     source_route_read_only = True
+                    latest_business_route = url in self._latest_business_routes
                     self.ledger.append(
                         "business_route_opened", step=step,
                         url_digest=hashlib.sha256(url.encode()).hexdigest(),
@@ -1929,6 +1974,31 @@ class ServerAgentSession:
                     self._answer_action_receipt["navigation_url"] = obs.url
                 else:
                     self._answer_action_receipt = {"kind": "navigation", "url": obs.url}
+            target_observed = False
+            if name == "goto" and isinstance(args.get("url"), str):
+                expected = urlsplit(urljoin(receipt.url_before, args["url"]))
+                actual = urlsplit(obs.url)
+                target_observed = (
+                    expected.scheme == actual.scheme
+                    and expected.netloc == actual.netloc
+                    and (expected.path.rstrip("/") or "/")
+                    == (actual.path.rstrip("/") or "/")
+                    and expected.query == actual.query)
+            if (self.deterministic_read_navigation and self._navigation_only
+                    and name == "goto" and latest_business_route
+                    and receipt.ok and receipt.observation is not None
+                    and receipt.observation.epoch > prior_page_epoch
+                    and target_observed):
+                result.agent_said = (
+                    "已打开请求的页面。"
+                    if re.search(r"[\u3400-\u9fff]", self.task.prompt)
+                    else "Opened the requested page.")
+                self.ledger.append(
+                    "deterministic_navigation_completed", step=step,
+                    url_digest=hashlib.sha256(obs.url.encode()).hexdigest(),
+                    observation_epoch=obs.epoch, side_effect_possible=False)
+                return self._finish(
+                    result, t0, "agent_finished", result.agent_said, steps=step)
             if skill_app_entry is not None:
                 gap = self.knowledge_router.gap_evidence(skill_app_entry, obs)
                 self.ledger.append(
@@ -2051,7 +2121,9 @@ class ServerAgentSession:
         if self.allow_application_entry:
             tools += [APPLICATION_ENTRY_TOOL]
         if self._task_business_skills:
-            tools += [LOAD_SKILL_TOOL]
+            if (not self._auto_loaded_business_skill_ids
+                    or self._loaded_business_skill_ids != self._task_business_skill_ids):
+                tools += [LOAD_SKILL_TOOL]
             tools += self.business_tools.schemas_for(self._loaded_business_skill_ids)
         return tools
 
@@ -2747,10 +2819,21 @@ class ServerAgentSession:
     def _render_business_skills(self) -> str:
         if not self._task_business_skills:
             return ""
-        cards = [skill.candidate_card(
-            loaded=skill.skill_id in self._loaded_business_skill_ids)
+        if not self._auto_loaded_business_skill_ids:
+            cards = [skill.candidate_card(loaded=False)
+                     if skill.skill_id not in self._loaded_business_skill_ids
+                     else skill.candidate_card(loaded=True)
+                     for skill in self._task_business_skills]
+            return ("BUSINESS SKILL CANDIDATES (load before using their tools):\n"
+                    + json.dumps(cards, ensure_ascii=False, sort_keys=True,
+                                 separators=(",", ":")))
+        cards = [
+            skill.loaded_card()
+            if skill.skill_id in self._auto_loaded_business_skill_ids
+            else skill.candidate_card(loaded=False)
             for skill in self._task_business_skills]
-        return ("BUSINESS SKILL CANDIDATES (load before using their tools):\n"
+        return ("BUSINESS SKILLS (loaded cards include their playbook; load remaining "
+                "candidates before using their tools):\n"
                 + json.dumps(cards, ensure_ascii=False, sort_keys=True,
                              separators=(",", ":")))
 

@@ -190,6 +190,7 @@ class AgentTurnConfigTests(unittest.TestCase):
                 {"allow_application_entry": "yes"},
                 {"allow_business_mutations": 1},
                 {"allow_clarification": 1},
+                {"deterministic_read_navigation": 1},
                 {"no_progress_repeat_limit": 1},
                 {"require_identity": 1},
                 {"deployment_profile": "staging"},
@@ -455,6 +456,165 @@ class AgentTurnExecutorTests(unittest.TestCase):
             # panel -- which groups the timeline by it -- broke one exchange into four:
             # the goal alone, a step with no goal, the actions, then the answer.
             self.assertEqual({item[2] for item in channel.published}, {"message-1"})
+
+    def test_exact_unique_read_skill_and_verified_route_finish_without_bookend_calls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = _skill(root / "query-skill.json")
+            chat = _Chat([
+                ("query_companies", {}),
+                ("goto", {"url": "/object/company/company-1"}),
+            ])
+            executor = AgentTurnExecutor(
+                channel=_Channel(),
+                config=AgentTurnConfig(
+                    supported_scope="Read and open one company.",
+                    ledger_path=root / "session.jsonl",
+                    deterministic_read_navigation=True,
+                ),
+                chat=chat,
+                business_tools=BusinessToolRuntime((skill,), _Executor()),
+                control=ReadOnlyControl(),
+                run_id_factory=lambda _message: "turn-fast-navigation",
+            )
+
+            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+                execution = executor.execute({
+                    "message_id": "message-1",
+                    "text": "打开公司 Acme",
+                    "page_url": "http://app.test/companies",
+                })
+
+            self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+            self.assertEqual(execution.user_answer, "已打开请求的页面。")
+            self.assertEqual(len(chat.tool_names), 2)
+            self.assertIn("query_companies", chat.tool_names[0])
+            self.assertNotIn("load_skill", chat.tool_names[0])
+            self.assertEqual(_RemoteBrowser.instances[-1].actions, ["goto"])
+            events = [json.loads(line) for line in
+                      (root / "session.jsonl").read_text().splitlines()]
+            self.assertEqual(
+                sum(item["event"] == "business_skill_auto_loaded" for item in events), 1)
+            self.assertEqual(
+                sum(item["event"] == "deterministic_navigation_completed"
+                    for item in events), 1)
+
+    def test_fallback_skill_still_requires_model_selection_but_skips_final_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = _skill(root / "query-skill.json")
+            chat = _Chat([
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("query_companies", {}),
+                ("goto", {"url": "/object/company/company-1"}),
+            ])
+            executor = AgentTurnExecutor(
+                channel=_Channel(),
+                config=AgentTurnConfig(
+                    supported_scope="Read and open one company.",
+                    ledger_path=root / "session.jsonl",
+                    deterministic_read_navigation=True,
+                ),
+                chat=chat,
+                business_tools=BusinessToolRuntime((skill,), _Executor()),
+                control=ReadOnlyControl(),
+                run_id_factory=lambda _message: "turn-fallback-navigation",
+            )
+
+            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+                execution = executor.execute({
+                    "message_id": "message-1", "text": "打开 Acme",
+                    "page_url": "http://app.test/companies",
+                })
+
+            self.assertEqual(execution.user_answer, "已打开请求的页面。")
+            self.assertEqual(len(chat.tool_names), 3)
+            self.assertIn("load_skill", chat.tool_names[0])
+            events = [json.loads(line) for line in
+                      (root / "session.jsonl").read_text().splitlines()]
+            self.assertFalse(any(
+                item["event"] == "business_skill_auto_loaded" for item in events))
+
+    def test_navigation_with_an_answer_goal_does_not_take_the_fast_finish(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = _skill(root / "query-skill.json")
+            chat = _Chat([
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("query_companies", {}),
+                ("goto", {"url": "/object/company/company-1"}),
+                (None, {"content": "已打开 Acme；域名是 acme.test。"}),
+            ])
+            executor = AgentTurnExecutor(
+                channel=_Channel(),
+                config=AgentTurnConfig(
+                    supported_scope="Read and open one company.",
+                    ledger_path=root / "session.jsonl",
+                    deterministic_read_navigation=True,
+                    plain_business_answer_min_page_actions=0,
+                ),
+                chat=chat,
+                business_tools=BusinessToolRuntime((skill,), _Executor()),
+                control=ReadOnlyControl(),
+                run_id_factory=lambda _message: "turn-navigation-and-answer",
+            )
+
+            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+                execution = executor.execute({
+                    "message_id": "message-1",
+                    "text": "打开公司 Acme，并告诉我域名",
+                    "page_url": "http://app.test/companies",
+                })
+
+            self.assertEqual(execution.user_answer, "已打开 Acme；域名是 acme.test。")
+            self.assertEqual(len(chat.tool_names), 4)
+
+    def test_verified_route_must_be_the_fresh_page_before_fast_finish(self):
+        class RedirectedBrowser(_RemoteBrowser):
+            def execute(self, action, args=None, expect_navigation=False):
+                receipt = super().execute(action, args, expect_navigation)
+                if action != "goto":
+                    return receipt
+                self.url = "http://app.test/login"
+                return dataclasses.replace(
+                    receipt, url_after=self.url,
+                    observation=_observation(self.epoch, self.url))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = _skill(root / "query-skill.json")
+            chat = _Chat([
+                ("query_companies", {}),
+                ("goto", {"url": "/object/company/company-1"}),
+                (None, {"content": "没有打开目标记录。"}),
+            ])
+            executor = AgentTurnExecutor(
+                channel=_Channel(),
+                config=AgentTurnConfig(
+                    supported_scope="Read and open one company.",
+                    ledger_path=root / "session.jsonl",
+                    deterministic_read_navigation=True,
+                    plain_business_answer_min_page_actions=0,
+                ),
+                chat=chat,
+                business_tools=BusinessToolRuntime((skill,), _Executor()),
+                control=ReadOnlyControl(),
+                run_id_factory=lambda _message: "turn-redirected-navigation",
+            )
+
+            with patch.object(product, "RemoteBrowserClient", RedirectedBrowser):
+                execution = executor.execute({
+                    "message_id": "message-1", "text": "打开公司 Acme",
+                    "page_url": "http://app.test/companies",
+                })
+
+            self.assertEqual(execution.user_answer, "没有打开目标记录。")
+            self.assertEqual(len(chat.tool_names), 3)
+            events = [json.loads(line) for line in
+                      (root / "session.jsonl").read_text().splitlines()]
+            self.assertFalse(any(
+                item["event"] == "deterministic_navigation_completed"
+                for item in events))
 
     def test_turn_answer_limit_reaches_the_session_before_product_rendering(self):
         with tempfile.TemporaryDirectory() as tmp:

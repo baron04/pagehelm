@@ -162,6 +162,8 @@ The Odoo fixture is provisioned from this repository: `python -m web_operation_a
 
 The typed surface is five reads — `query_sale_orders`, `query_quotations`, `query_customers`, `query_products`, `query_customer_invoices` — and three opt-in writes: `create_customer`, `confirm_quotation` and `invoice_sale_order`. Each read scans its whole scope and checks the row count against Odoo's own `search_count`, so completeness is answered by a number that did not come from the page of rows being counted.
 
+Pure record-opening requests use an optional deterministic read-navigation policy. An exact match to one read-only Skill lets the server load that Skill before the first model decision; after the model queries current data and opens an exact route from that result, a fresh browser receipt on the requested URL ends the turn without another model call. Fallback or ambiguous Skill selection still belongs to the model, and a request that also asks for data stays in the normal ReAct loop.
+
 Two of those results carry something a page cannot tell you. `sale.action_quotations_with_onboarding` stores **no** domain: the Quotations page lists every sales order and merely defaults its search filter, which anyone can clear. So `query_quotations` reports `collection_ui_path_shows_this_scope: false` with the reason, rather than letting the model assume the page it opens shows the answer it just gave. And `invoice_sale_order` always pins the ordinary-invoice method: Odoo's confirmed-order form carries two buttons both labelled "Create Invoice", separated only by their `invisible` conditions, and the second one proposes a percentage down payment.
 
 ```bash

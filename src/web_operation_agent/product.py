@@ -141,6 +141,10 @@ class AgentTurnConfig:
     allow_application_entry: bool = False
     allow_business_mutations: bool = False
     allow_clarification: bool = True
+    #: Let a deployment remove model-only bookends from pure read navigation. The session
+    #: still requires one exact read-only Skill match, a current typed route, and a fresh
+    #: browser receipt at that route; this flag grants neither a route nor a mutation.
+    deterministic_read_navigation: bool = False
     require_identity: bool = False
     deployment_profile: str = "production"
     max_user_answer_chars: int = 4_000
@@ -161,6 +165,7 @@ class AgentTurnConfig:
                 or not isinstance(self.allow_application_entry, bool)
                 or not isinstance(self.allow_business_mutations, bool)
                 or not isinstance(self.allow_clarification, bool)
+                or not isinstance(self.deterministic_read_navigation, bool)
                 or not isinstance(self.require_identity, bool)):
             raise ValueError("turn policy flags must be booleans")
         for name in ("step_budget", "wall_budget_s", "approval_ttl_s",
@@ -564,6 +569,8 @@ class AgentTurnExecutor:
                 approve_business_mutation
                 if self.config.allow_business_mutations else None),
             allow_clarification=self.config.allow_clarification,
+            deterministic_read_navigation=(
+                self.config.deterministic_read_navigation),
             plain_business_answer_min_page_actions=(
                 self.config.plain_business_answer_min_page_actions),
             max_agent_said_chars=self.config.max_user_answer_chars,

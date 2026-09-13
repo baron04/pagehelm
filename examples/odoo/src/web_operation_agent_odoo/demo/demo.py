@@ -581,6 +581,10 @@ def run_demo(config: OdooDemoConfig, *,
                 scope_first_policy=True,
                 policy_block_limit=3,
                 plain_business_answer_min_page_actions=0,
+                # The scripted apparatus deliberately exercises the explicit load/finish
+                # transitions. Provider mode may remove those two model round trips once
+                # the server has enough trusted evidence to do so.
+                deterministic_read_navigation=not config.scripted,
                 require_identity=True,
                 allow_business_mutations=config.allow_mutations,
                 deployment_profile="production",
