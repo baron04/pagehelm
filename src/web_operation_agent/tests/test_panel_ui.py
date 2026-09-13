@@ -287,6 +287,37 @@ class PanelUITests(_PanelBrowser):
                          "needs_input")
         self.assertEqual(self.errors, [])
 
+    def test_an_arriving_result_preserves_the_unsent_draft_focus_and_host_route(self):
+        page = self.open(_snapshot(entries=[
+            _entry("e1", "goal", "先查询报价单"),
+            _entry("e2", "result", "已完成第一轮。", panel_state="success"),
+        ]))
+        page.locator(".woa-launcher").click()
+        composer = page.locator("#woa-composer-input")
+        composer.fill("这段话还没有发送")
+        composer.focus()
+        route = page.url
+
+        page.evaluate("""() => window.__setSnapshot({entries:[
+          {id:'e1',turn_id:'turn-1',kind:'goal',text:'先查询报价单',at:1,
+           panel_state:'acting',tone:'neutral',replayed:false},
+          {id:'e2',turn_id:'turn-1',kind:'result',text:'已完成第一轮。',at:2,
+           panel_state:'success',tone:'success',replayed:false},
+          {id:'e3',turn_id:'turn-2',kind:'goal',text:'后台到达的另一轮',at:3,
+           panel_state:'acting',tone:'neutral',replayed:false},
+          {id:'e4',turn_id:'turn-2',kind:'result',text:'另一轮也已完成。',at:4,
+           panel_state:'success',tone:'success',replayed:false}
+        ]})""")
+        page.wait_for_timeout(300)
+
+        self.assertEqual(composer.input_value(), "这段话还没有发送")
+        self.assertEqual(page.url, route)
+        self.assertEqual(
+            page.evaluate("document.querySelector('#woa-assistant').shadowRoot.activeElement.id"),
+            "woa-composer-input",
+        )
+        self.assertEqual(self.errors, [])
+
     # ---------------------------------------------------------------- approval
     def test_the_approval_card_is_keyboard_operable_and_escape_cancels(self):
         page = self.open(_snapshot())
