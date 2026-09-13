@@ -214,7 +214,7 @@
           "prior_user_context_used": true,
           "run_id": "a_referential_followup_keeps_its_prior_domain",
           "seq": 1,
-          "task_digest": "f288d5a9163f46a1993823fd93d496639167b0e0e72a622bac88113d96dc6684",
+          "task_digest": "11327b9edff36f9ea72eb3e5f6b3a67bef1c80f5e2e54cc29282283ca840e472",
           "trigger_match_empty": true,
           "trigger_matches": []
         },
@@ -1569,7 +1569,7 @@
           "prior_user_context_used": false,
           "run_id": "business_read_projected_as_a_plain_answer",
           "seq": 1,
-          "task_digest": "e5ae4c0e17ab65caf91a290d5faa54499ead8543eae10f1dece759dac63b9e00",
+          "task_digest": "92a04d11b11765b11062ea7ecc6a30c9f4b30eb4212f7177facf2f8beb0f976e",
           "trigger_match_empty": false,
           "trigger_matches": [
             "fixture.trays-query"
@@ -1901,7 +1901,7 @@
           "prior_user_context_used": false,
           "run_id": "business_read_then_open_the_authorised_route",
           "seq": 1,
-          "task_digest": "e5ae4c0e17ab65caf91a290d5faa54499ead8543eae10f1dece759dac63b9e00",
+          "task_digest": "92a04d11b11765b11062ea7ecc6a30c9f4b30eb4212f7177facf2f8beb0f976e",
           "trigger_match_empty": false,
           "trigger_matches": [
             "fixture.trays-query"
@@ -2341,7 +2341,7 @@
           "prior_user_context_used": false,
           "run_id": "business_write_approved",
           "seq": 1,
-          "task_digest": "5cb452fe13cca6c53964d6537159ad7234c2d3b6b87da157298e8f248ec9ec9d",
+          "task_digest": "77690df750e7803b1d05a62286fa015a7403b23b4d53d3a9a117f8d033264a5a",
           "trigger_match_empty": false,
           "trigger_matches": [
             "fixture.trays-create"
@@ -2761,7 +2761,7 @@
           "prior_user_context_used": false,
           "run_id": "business_write_denied",
           "seq": 1,
-          "task_digest": "5cb452fe13cca6c53964d6537159ad7234c2d3b6b87da157298e8f248ec9ec9d",
+          "task_digest": "77690df750e7803b1d05a62286fa015a7403b23b4d53d3a9a117f8d033264a5a",
           "trigger_match_empty": false,
           "trigger_matches": [
             "fixture.trays-create"
@@ -3052,7 +3052,7 @@
           "prior_user_context_used": false,
           "run_id": "business_write_indeterminate",
           "seq": 1,
-          "task_digest": "5cb452fe13cca6c53964d6537159ad7234c2d3b6b87da157298e8f248ec9ec9d",
+          "task_digest": "77690df750e7803b1d05a62286fa015a7403b23b4d53d3a9a117f8d033264a5a",
           "trigger_match_empty": false,
           "trigger_matches": [
             "fixture.trays-create"

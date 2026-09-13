@@ -500,12 +500,22 @@ export class EmbeddedWebRuntime {
       this.panelContainer.setAttribute('data-page-agent-not-interactive', 'true')
       // A non-interactive parent does not exclude its descendants or shadow text.
       this.panelContainer.setAttribute('data-page-agent-ignore', 'true')
-      // The host is fixed-position and belongs in <body>. Appending an extra element next
-      // to <body> under <html> violates the document structure and, on Odoo, makes the two
-      // nodes participate in its root layout: the business application visibly loses part
-      // of the viewport. The attachment watcher below handles an application that really
-      // replaces body or removes this integration-owned child.
-      document.body?.appendChild(this.panelContainer)
+      // Application frameworks own and sometimes replace body children. Reattaching this
+      // root afterwards preserves state but still leaves a paint where both the page and
+      // panel visibly blink. Keep it under the stable document root and explicitly remove
+      // the container from layout: the former unstyled sibling made Odoo's body lose part
+      // of the viewport when its root stylesheet treated document children as flex items.
+      // The mounted shadow child remains fixed to the viewport and opts into pointer events.
+      for (const [name, value] of Object.entries({
+        position: 'fixed', inset: '0', width: '0', height: '0',
+        minWidth: '0', minHeight: '0', flex: 'none', overflow: 'visible',
+        pointerEvents: 'none',
+      })) {
+        this.panelContainer.style.setProperty(
+          name.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`), value, 'important')
+      }
+      const mountParent = document.documentElement || document.body
+      mountParent?.appendChild(this.panelContainer)
       this._watchPanelAttachment()
     }
     this._onPageShow = event => {
@@ -542,7 +552,7 @@ export class EmbeddedWebRuntime {
         || typeof MutationObserver === 'undefined') return
     this.panelAttachmentObserver ||= new MutationObserver(() => {
       if (this.stopped || !this.panelContainer) return
-      const parent = document.body
+      const parent = document.documentElement || document.body
       if (!parent) return
       if (!this.panelContainer.isConnected || this.panelContainer.parentElement !== parent) {
         parent.appendChild(this.panelContainer)
@@ -552,9 +562,6 @@ export class EmbeddedWebRuntime {
     this.panelAttachmentObserver.disconnect()
     if (document.documentElement) {
       this.panelAttachmentObserver.observe(document.documentElement, {childList: true})
-    }
-    if (document.body) {
-      this.panelAttachmentObserver.observe(document.body, {childList: true})
     }
   }
 

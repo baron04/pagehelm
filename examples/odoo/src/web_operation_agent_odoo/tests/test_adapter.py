@@ -18,9 +18,14 @@ from web_operation_agent.business import (BusinessToolAuthenticationError,
 from web_operation_agent.application import bind_application
 from web_operation_agent.business import (BusinessMutationIndeterminate, BusinessToolError,
                                           BusinessToolRequestError)
+from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.identity import IdentityAssertion, PrincipalError
+from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.mutation import MemoryMutationJournal
+from web_operation_agent.schemas import ActionReceipt, PageObservation
+from web_operation_agent.session import ServerAgentSession, TaskSpec
 from web_operation_agent.tests.adapter_contract import assert_adapter_contract
+from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
 
 from web_operation_agent_odoo.adapter import (APPLICATION_ID, COLLECTIONS,
                                               OdooApplicationAdapter,
@@ -29,6 +34,72 @@ from web_operation_agent_odoo.adapter import (APPLICATION_ID, COLLECTIONS,
                                               PREPARE_CUSTOMER_FORM_TOOL)
 
 BASE = "http://127.0.0.1:8069"
+
+
+class _RoutingChat(CancellableChatDouble):
+    model = "routing-test"
+
+    def complete(self, *_args, **_kwargs):
+        raise AssertionError("constructing a routed session must not call the model")
+
+    def complete_cancellable(self, *_args, **_kwargs):
+        raise AssertionError("constructing a routed session must not call the model")
+
+
+class _RoutingBrowser:
+    def observe(self):
+        raise AssertionError("constructing a routed session must not observe the page")
+
+    def execute(self, *_args, **_kwargs):
+        raise AssertionError("constructing a routed session must not use the browser")
+
+    def console(self):
+        return []
+
+
+class _ProductRoutingChat(CancellableChatDouble):
+    model = "routing-product-test"
+
+    def __init__(self, script):
+        self.script = list(script)
+        self.calls = 0
+
+    def complete(self, _messages, _tools, _run_id, **_kwargs):
+        self.calls += 1
+        name, arguments = self.script.pop(0)
+        return {"tool_calls": [{"id": f"call-{self.calls}", "function": {
+            "name": name, "arguments": json.dumps(arguments),
+        }}]}
+
+
+class _ProductRoutingBrowser:
+    def __init__(self):
+        self.url = BASE + "/odoo/customers"
+        self.epoch = 1
+        self.actions = []
+
+    def observe(self):
+        return PageObservation(
+            schema_version=1, epoch=self.epoch, url=self.url,
+            title="Customers", landmarks=["Customers"], elements=[],
+            content="Customers")
+
+    def execute(self, action, args=None, expect_navigation=False):
+        self.actions.append(action)
+        before = self.url
+        if action == "goto":
+            self.url = BASE + str((args or {}).get("url") or "")
+        self.epoch += 1
+        return ActionReceipt(
+            schema_version=1, command_id=f"command-{self.epoch}", action=action,
+            args_echo=dict(args or {}), ok=True, url_before=before,
+            url_after=self.url, navigated=self.url != before,
+            epoch_before=self.epoch - 1, epoch_after=self.epoch,
+            observation=self.observe())
+
+    @staticmethod
+    def console():
+        return []
 
 
 def _key_file(root: Path) -> Path:
@@ -237,6 +308,141 @@ class AdapterContract(unittest.TestCase):
         self.assertEqual(selection.candidate_ids,
                          ("odoo.sales.customers-query",))
         self.assertTrue(all(skill.read_only for skill in selection.skills))
+
+    def test_real_product_scope_cannot_route_an_open_request_to_the_form_draft(self):
+        """Exercise the shipped catalog through the product session's actual boundary."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            adapter = OdooApplicationAdapter(
+                base_url=BASE, api_key_path=_key_file(root),
+                allow_mutations=True, mutation_journal=MemoryMutationJournal())
+            session = ServerAgentSession(
+                task=TaskSpec(
+                    task_ref="T", prompt="打开 azur", entry_path="/odoo/customers",
+                    supported_scope=(
+                        "Read current Odoo records through the typed API, and make at most "
+                        "the one record change the user confirms, through a typed write tool. "
+                        "Do not submit page forms. Open only an exact route returned by the API.")),
+                chat=_RoutingChat(), browser=_RoutingBrowser(), control=ReadOnlyControl(),
+                ledger=SessionLedger(root / "session.jsonl", "real-odoo-routing"),
+                business_tools=adapter.business_tools,
+                business_mutation_approval=lambda *_args, **_kwargs: None,
+                deterministic_read_navigation=True,
+            )
+
+        self.assertEqual(session._task_business_skill_ids,
+                         {"odoo.sales.customers-query"})
+        self.assertEqual(session._auto_loaded_business_skill_ids,
+                         {"odoo.sales.customers-query"})
+        self.assertNotIn("odoo.sales.customers-draft",
+                         session._task_business_skill_ids)
+
+    def test_real_product_opens_a_fuzzy_unique_customer_in_one_model_decision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            adapter = OdooApplicationAdapter(
+                base_url=BASE, api_key_path=_key_file(root),
+                allow_mutations=True, mutation_journal=MemoryMutationJournal())
+            adapter.business_tools._executor = _FakeOdoo({
+                "res.partner": _customers([
+                    ("Acme Corporation", "acme@example.test"),
+                    ("Azure Interior", "azure@example.test"),
+                ])})
+            chat = _ProductRoutingChat([
+                ("query_customers", {"name_contains": "azur"}),
+            ])
+            browser = _ProductRoutingBrowser()
+            session = ServerAgentSession(
+                task=TaskSpec(
+                    task_ref="A02", prompt="打开 azur", entry_path="/odoo/customers",
+                    supported_scope=(
+                        "Read current Odoo records through the typed API. "
+                        "Do not submit page forms.")),
+                chat=chat, browser=browser, control=ReadOnlyControl(),
+                ledger=SessionLedger(root / "a02.jsonl", "a02"),
+                business_tools=adapter.business_tools,
+                business_mutation_approval=lambda *_args, **_kwargs: None,
+                deterministic_read_navigation=True,
+                application_routes=adapter.ports.routes,
+            )
+            session.entry_observation = browser.observe()
+            session.plan()
+
+            result = session.run()
+
+        self.assertEqual(result.terminal_reason, "agent_finished")
+        self.assertEqual(chat.calls, 1)
+        self.assertEqual(browser.actions, ["goto"])
+        self.assertEqual(browser.url, BASE + "/odoo/customers/11")
+
+    def test_real_product_requeries_an_ambiguous_customer_after_the_choice(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            adapter = OdooApplicationAdapter(
+                base_url=BASE, api_key_path=_key_file(root),
+                allow_mutations=True, mutation_journal=MemoryMutationJournal())
+            adapter.business_tools._executor = _FakeOdoo({
+                "res.partner": _customers([
+                    ("Acme Corporation", "acme@example.test"),
+                    ("Azure Interior", "azure@example.test"),
+                ])})
+            first_chat = _ProductRoutingChat([
+                ("query_customers", {"name_contains": "A"}),
+            ])
+            first_browser = _ProductRoutingBrowser()
+            first = ServerAgentSession(
+                task=TaskSpec(
+                    task_ref="A03-first", prompt="打开 A",
+                    entry_path="/odoo/customers",
+                    supported_scope="Read current Odoo records. Do not submit page forms."),
+                chat=first_chat, browser=first_browser, control=ReadOnlyControl(),
+                ledger=SessionLedger(root / "a03-first.jsonl", "a03-first"),
+                business_tools=adapter.business_tools,
+                business_mutation_approval=lambda *_args, **_kwargs: None,
+                deterministic_read_navigation=True, allow_clarification=True,
+                application_routes=adapter.ports.routes,
+            )
+            first.entry_observation = first_browser.observe()
+            first.plan()
+            question = first.run()
+            context = {
+                "schema_version": 1,
+                "prior_turns": [{
+                    "message_id": "message-1", "user": "打开 A",
+                    "assistant": question.agent_said, "status": "needs_input",
+                }],
+                "pending_clarification": question.clarification,
+            }
+            second_chat = _ProductRoutingChat([
+                ("query_customers", {"name_contains": "Azure Interior"}),
+            ])
+            second_browser = _ProductRoutingBrowser()
+            second = ServerAgentSession(
+                task=TaskSpec(
+                    task_ref="A03-second", prompt="Azure Interior",
+                    entry_path="/odoo/customers",
+                    supported_scope="Read current Odoo records. Do not submit page forms."),
+                chat=second_chat, browser=second_browser, control=ReadOnlyControl(),
+                ledger=SessionLedger(root / "a03-second.jsonl", "a03-second"),
+                business_tools=adapter.business_tools,
+                business_mutation_approval=lambda *_args, **_kwargs: None,
+                deterministic_read_navigation=True, allow_clarification=True,
+                conversation_context=context, application_routes=adapter.ports.routes,
+            )
+            second.entry_observation = second_browser.observe()
+            second.plan()
+            opened = second.run()
+
+        self.assertEqual(question.terminal_reason, "needs_input")
+        self.assertEqual(first_chat.calls, 1)
+        self.assertEqual([choice["label"] for choice in question.clarification["choices"]], [
+            "Acme Corporation — acme@example.test — Paris",
+            "Azure Interior — azure@example.test — Paris",
+        ])
+        self.assertEqual(opened.terminal_reason, "agent_finished")
+        self.assertEqual(second_chat.calls, 1)
+        self.assertEqual(second_browser.actions, ["goto"])
+        self.assertEqual(second_browser.url, BASE + "/odoo/customers/11")
 
     def test_customer_creation_selects_the_mutation_skill_without_route_context(self):
         with tempfile.TemporaryDirectory() as tmp:

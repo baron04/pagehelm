@@ -740,8 +740,13 @@ class ServerAgentSession:
                 selection = BusinessSkillSelection(
                     BUSINESS_SKILL_MATCHER_VERSION, selected, (), False)
             else:
+                # Skill matching answers one question only: what the person asked for.
+                # ``public_text`` also carries the server-owned scope/policy sentence used
+                # by the planner and acting model. Feeding that sentence to the matcher can
+                # manufacture intent when a policy phrase happens to overlap a Skill
+                # trigger. Keep policy in model context, outside intent routing.
                 selection = business_tools.select(
-                    task.public_text(),
+                    task.prompt,
                     allow_mutations=business_mutation_approval is not None,
                     trusted_entry_path=(task.entry_path if current_navigation_only else ""),
                     limit=5,
@@ -752,7 +757,7 @@ class ServerAgentSession:
                 # routed solely by the new explicit request.
                 if continuation_prompt and selection.fallback_used:
                     continued = business_tools.select(
-                        f"{continuation_prompt}\n{task.public_text()}",
+                        f"{continuation_prompt}\n{task.prompt}",
                         allow_mutations=business_mutation_approval is not None,
                         trusted_entry_path=(
                             task.entry_path if _is_navigation_only(continuation_prompt)
@@ -790,7 +795,7 @@ class ServerAgentSession:
                 "business_skill_candidates",
                 matcher_version=selection.matcher_version,
                 task_digest=hashlib.sha256(
-                    task.public_text().encode("utf-8")).hexdigest(),
+                    task.prompt.encode("utf-8")).hexdigest(),
                 trigger_matches=list(selection.trigger_matches),
                 candidate_ids=[skill.skill_id for skill in self._task_business_skills],
                 trigger_match_empty=not selection.trigger_matches,
@@ -1776,6 +1781,27 @@ class ServerAgentSession:
                                 return self._finish(
                                     result, t0, "agent_finished", result.agent_said,
                                     steps=step)
+                        if (self.allow_clarification and self._navigation_only
+                                and projection.complete
+                                and projection.matched_count > 1
+                                and len(self._clarification_choices)
+                                == projection.matched_count
+                                and all(skill.read_only
+                                        for skill in self._task_business_skills)):
+                            # The current typed read already proved both the ambiguity and
+                            # the complete set of choices. Asking the model to copy those
+                            # choices into ask_user adds latency and lets it omit or rename
+                            # records without adding judgment. Keep this transition in the
+                            # server contract; the reply still grants no route authority and
+                            # the next turn must read the application again before opening.
+                            question = (
+                                "找到多个匹配项，请选择要打开的记录："
+                                if re.search(r"[\u3400-\u9fff]", self.task.prompt)
+                                else "Multiple records match. Choose the one to open:")
+                            return self._finish_with_clarification(
+                                result, t0, step=step, question=question,
+                                choice_ids=list(self._clarification_choices),
+                                deterministic="complete_navigation_query")
                     if (self.deterministic_read_navigation and self._navigation_only
                             and "goto" not in self.disabled_actions
                             and tool_result.navigation_target):
@@ -2010,19 +2036,8 @@ class ServerAgentSession:
                     messages += [_assistant_call(call), _tool_result(
                         call, "CLARIFICATION REFUSED: " + str(exc)[:500])]
                     continue
-                result.clarification = clarification
-                result.agent_said = clarification["question"]
-                self.ledger.append(
-                    "clarification_requested", step=step,
-                    clarification_id=clarification["clarification_id"],
-                    task_id=clarification["task_id"],
-                    response_kind=clarification["response_kind"],
-                    choice_count=len(clarification["choices"]),
-                    choice_ids=[item["choice_id"] for item in clarification["choices"]],
-                    question_digest=hashlib.sha256(
-                        clarification["question"].encode("utf-8")).hexdigest(),
-                )
-                return self._finish(result, t0, "needs_input", result.agent_said, steps=step)
+                return self._finish_with_clarification(
+                    result, t0, step=step, clarification=clarification)
 
             if name == "finish" and self._structured_answer_required():
                 try:
@@ -2410,6 +2425,32 @@ class ServerAgentSession:
             "response_kind": kind,
             "choices": choices,
         }
+
+    def _finish_with_clarification(self, result: RunResult, t0: float, *,
+                                   step: int, clarification: dict | None = None,
+                                   question: str = "",
+                                   choice_ids: list[str] | None = None,
+                                   deterministic: str = "") -> RunResult:
+        if clarification is None:
+            clarification = self._clarification({
+                "question": question,
+                "response_kind": "single_choice",
+                "choice_ids": list(choice_ids or ()),
+            }, step=step)
+        result.clarification = clarification
+        result.agent_said = clarification["question"]
+        self.ledger.append(
+            "clarification_requested", step=step,
+            clarification_id=clarification["clarification_id"],
+            task_id=clarification["task_id"],
+            response_kind=clarification["response_kind"],
+            choice_count=len(clarification["choices"]),
+            choice_ids=[item["choice_id"] for item in clarification["choices"]],
+            question_digest=hashlib.sha256(
+                clarification["question"].encode("utf-8")).hexdigest(),
+            **({"deterministic": deterministic} if deterministic else {}),
+        )
+        return self._finish(result, t0, "needs_input", result.agent_said, steps=step)
 
     def _track_progress(self, name: str, args: object,
                         observation: PageObservation) -> str:

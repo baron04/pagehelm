@@ -539,6 +539,20 @@ class PanelUITests(_PanelBrowser):
         self.assertEqual(page.locator(".woa-step").count(), 2)
         self.assertEqual(self.errors, [])
 
+    def test_elapsed_time_rolls_over_without_showing_sixty_seconds(self):
+        page = self.open(_snapshot(entries=[
+            _entry("e1", "goal", "打开客户", at=1_757_000_000_000),
+            _entry("e2", "action", "query_customers", tone="active",
+                   at=1_757_000_001_000),
+            _entry("e3", "result", "已打开。", panel_state="success",
+                   at=1_757_000_119_600),
+        ]))
+        page.locator(".woa-launcher").click()
+        elapsed_text = page.locator(".woa-work__elapsed").inner_text()
+        self.assertEqual(elapsed_text, "2m 0s")
+        self.assertNotIn("60s", elapsed_text)
+        self.assertEqual(self.errors, [])
+
     def test_the_newest_line_stays_in_view_without_being_asked(self):
         """Arriving content is not a reason to stop following it."""
         page = self.open(_snapshot(entries=[
@@ -1332,6 +1346,13 @@ class PanelU07Tests(_PanelBrowser):
         self.assertGreaterEqual(len(seen), 3, seen)
         self.assertTrue(any("woa-work__summary" in name for name in seen), seen)
         self.assertEqual({name: by for name, by in seen.items() if by}, {}, seen)
+        summary_style = page.locator(".woa-work__summary").evaluate("""node => {
+          node.focus()
+          const style = getComputedStyle(node)
+          return {outline: style.outlineStyle, shadow: style.boxShadow}
+        }""")
+        self.assertEqual(summary_style["outline"], "none")
+        self.assertNotEqual(summary_style["shadow"], "none")
         self.assertEqual(self.errors, [])
 
     def test_what_a_screen_reader_is_handed_names_every_control(self):

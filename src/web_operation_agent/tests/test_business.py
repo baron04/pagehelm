@@ -1,6 +1,7 @@
 """Business Skill loading and read-only runtime-tool transitions."""
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import time
@@ -451,6 +452,141 @@ class SkillCitations(unittest.TestCase):
 
 
 class BusinessRuntimeValidation(unittest.TestCase):
+    def test_complete_ambiguous_navigation_query_becomes_a_server_choice(self):
+        class AmbiguousExecutor(_Executor):
+            @staticmethod
+            def execute(name, args, *, context=None):
+                origin = Origin(kind="typed", reference="fixture", observed_at="now",
+                                scope="current workspace")
+                return BusinessToolResult(
+                    content={"companies": [
+                        {"name": "Acme", "domain": "acme.test"},
+                        {"name": "Azure", "domain": "azure.test"},
+                    ]},
+                    audit={"application": "fixture", "operation": name,
+                           "source_complete": True},
+                    query_answer=StructuredQueryAnswer(
+                        collection="companies", fields=("name", "domain"),
+                        records=(("Acme", "acme.test"), ("Azure", "azure.test")),
+                        source="fixture API", scope="current workspace",
+                        observed_at="now", source_complete=True,
+                        result_truncated=False, matched_count=2,
+                        source_total=2, records_scanned=2),
+                    evidence=(
+                        QueryEvidence(
+                            evidence_id="query#1", origin=origin, collection="companies",
+                            conditions=("name contains A",), matched_count=2,
+                            records_scanned=2, covers_whole_scope=True,
+                            looked_for="name contains A"),
+                        RecordEvidence(
+                            evidence_id="record#1", origin=origin, record_id="company/1",
+                            field_name="name", field_meaning="company name",
+                            field_was_read=True, value="Acme", value_type="text"),
+                        RecordEvidence(
+                            evidence_id="record#2", origin=origin, record_id="company/2",
+                            field_name="name", field_meaning="company name",
+                            field_was_read=True, value="Azure", value_type="text"),
+                    ),
+                    selection_options=(
+                        BusinessSelectionOption("company/1", "Acme — acme.test"),
+                        BusinessSelectionOption("company/2", "Azure — azure.test"),
+                    ),
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = _skill(root / "query.json")
+            runtime = BusinessToolRuntime(
+                (skill,), AmbiguousExecutor(),
+                route_skill_hints=((r"^/companies$", skill.skill_id),))
+            chat = _Chat([("query_companies", {})])
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="打开 A", entry_path="/companies",
+                              supported_scope="Read and open current companies."),
+                chat=chat, browser=_Browser(), control=ReadOnlyControl(),
+                ledger=SessionLedger(root / "session.jsonl", "ambiguous-navigation"),
+                business_tools=runtime, deterministic_read_navigation=True,
+                allow_clarification=True,
+            )
+            session.entry_observation = _observation(1)
+            session.plan()
+
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "needs_input")
+            self.assertEqual(result.agent_said, "找到多个匹配项，请选择要打开的记录：")
+            self.assertEqual(
+                [item["label"] for item in result.clarification["choices"]],
+                ["Acme — acme.test", "Azure — azure.test"])
+            self.assertEqual(len(chat.messages), 1, "the server must not ask the model to copy choices")
+            event = session.ledger.of_kind("clarification_requested")[-1]
+            self.assertEqual(event["deterministic"], "complete_navigation_query")
+
+    def test_server_policy_text_cannot_manufacture_a_skill_match(self):
+        """Route the person's words; keep the server's policy out of intent matching.
+
+        This is the exact shape used by the Odoo demo.  Its form-draft Skill has a
+        ``do not submit`` trigger while the product scope says ``Do not submit page
+        forms``.  Before this regression, that server-authored sentence won over the
+        trusted customer-page hint and every entity-only open request loaded the draft
+        tool instead of the customer query.
+        """
+        class CatalogExecutor:
+            @staticmethod
+            def tool_schemas():
+                return (SCHEMA, {"type": "function", "function": {
+                    "name": "prepare_company_form", "description": "Prepare a form.",
+                    "parameters": {"type": "object", "properties": {},
+                                   "additionalProperties": False}}})
+
+            @staticmethod
+            def tool_effects():
+                return {"query_companies": "read", "prepare_company_form": "read"}
+
+            @staticmethod
+            def execute(*_args, **_kwargs):
+                raise AssertionError("routing the turn must not dispatch a tool")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            query = _skill(root / "query.json")
+            draft_path = root / "draft.json"
+            draft_path.write_text(json.dumps({
+                "schema_version": 1,
+                "skill_id": "fixture.companies-draft",
+                "title": "Prepare company form",
+                "intent": "Prepare one form without submitting.",
+                "triggers": ["do not submit", "不要提交"],
+                "instructions": ["Prepare the form and leave submission to the user."],
+                "tool_names": ["prepare_company_form"],
+                "provenance": ["src:fixture@v1:companies.json#draft"],
+                "read_only": True,
+            }) + "\n")
+            draft = BusinessSkill.load(draft_path)
+            runtime = BusinessToolRuntime(
+                (query, draft), CatalogExecutor(),
+                route_skill_hints=((r"^/companies$", query.skill_id),))
+            ledger = SessionLedger(root / "session.jsonl", "policy-routing")
+
+            session = ServerAgentSession(
+                task=TaskSpec(
+                    task_ref="T", prompt="打开 azur", entry_path="/companies",
+                    supported_scope=("Read current records. Do not submit page forms. "
+                                     "Open only an exact API route.")),
+                chat=_Chat([]), browser=_Browser(), control=ReadOnlyControl(),
+                ledger=ledger, business_tools=runtime,
+                business_mutation_approval=lambda *_args, **_kwargs: None,
+                deterministic_read_navigation=True,
+            )
+
+            self.assertEqual(session._task_business_skill_ids, {query.skill_id})
+            self.assertEqual(session._auto_loaded_business_skill_ids, {query.skill_id})
+            event = ledger.of_kind("business_skill_candidates")[-1]
+            self.assertTrue(event["route_context_used"])
+            self.assertEqual(event["trigger_matches"], [])
+            self.assertEqual(event["task_digest"], hashlib.sha256(
+                "打开 azur".encode("utf-8")).hexdigest())
+
     def test_a_clarification_reply_inherits_only_the_unresolved_user_goal(self):
         class CatalogExecutor:
             @staticmethod

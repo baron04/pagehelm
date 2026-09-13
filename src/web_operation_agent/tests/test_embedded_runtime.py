@@ -155,7 +155,9 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                 browser = playwright.chromium.launch(headless=True)
                 page = browser.new_page(viewport={"width": 1280, "height": 800})
                 errors = []
+                document_loads = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
+                page.on("domcontentloaded", lambda: document_loads.append(page.url))
                 page.goto(app.origin + "/page1", wait_until="domcontentloaded")
                 channel.wait_for_client(5)
                 page.locator(".woa-launcher").click()
@@ -169,32 +171,65 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                 thread.get_by_text("列出所有待开票的销售订单").wait_for(timeout=8000)
                 thread.get_by_text("正在检查当前页面").wait_for(timeout=8000)
 
-                # A first-party SPA may remove an integration-owned body child. The Runtime
+                # Cancelling is a panel-to-server message, not application navigation.
+                # Keep the exact DOM object and document load count across the real button
+                # gesture and terminal projection; a detach/re-attach can retain React state
+                # and still produce the visible blink this test exists to catch.
+                page.evaluate(
+                    "window.__woaRootBeforeCancel = document.querySelector('#woa-assistant-root')")
+                route_before_cancel = page.url
+                labels = channel._panel_configuration()["labels"]
+                page.get_by_role("button", name=labels["stop"]).click()
+                deadline = time.monotonic() + 3
+                while not channel.message_cancelled(message["message_id"]):
+                    if time.monotonic() >= deadline:
+                        self.fail("the real stop control did not cancel its active message")
+                    time.sleep(0.01)
+                channel.publish("progress", {
+                    "state": "cancelled", "message": "已停止。",
+                }, turn_id=message["message_id"])
+                page.locator("#woa-composer-input").wait_for(state="visible", timeout=3000)
+                self.assertEqual(page.url, route_before_cancel)
+                self.assertEqual(len(document_loads), 1)
+                self.assertTrue(page.evaluate(
+                    "window.__woaRootBeforeCancel === "
+                    "document.querySelector('#woa-assistant-root') && "
+                    "window.__woaRootBeforeCancel.isConnected"))
+
+                # A first-party SPA may remove an integration-owned root. The Runtime
                 # reattaches the same mounted panel without losing its input, timeline or
                 # authenticated browser lease.
                 page.evaluate("document.querySelector('#woa-assistant-root').remove()")
                 page.locator("#woa-assistant-root").wait_for(state="attached", timeout=3000)
                 page.locator(".woa-window").wait_for(timeout=3000)
                 thread.get_by_text("列出所有待开票的销售订单").wait_for(timeout=3000)
-                thread.get_by_text("正在检查当前页面").wait_for(timeout=3000)
+                self.assertTrue(page.locator("#woa-composer-input").is_enabled())
 
-                # A fixed overlay still belongs inside body. An extra sibling under html
-                # can enter an application's root layout and steal viewport width.
+                # The stable overlay is an HTML child because the application owns body.
+                # It is explicitly fixed and zero-sized, so it cannot become a flex/grid
+                # item that steals width from the business application.
                 self.assertEqual(page.evaluate(
                     "document.querySelector('#woa-assistant-root').parentElement.tagName"),
-                    "BODY")
-                self.assertFalse(page.evaluate(
+                    "HTML")
+                self.assertTrue(page.evaluate(
                     "Array.from(document.documentElement.children, node => node.id)"
                     ".includes('woa-assistant-root')"))
-                page.evaluate("""() => {
+                root_layout = page.evaluate("""() => {
+                  const root = document.querySelector('#woa-assistant-root')
+                  const style = getComputedStyle(root)
+                  return {position: style.position, width: style.width, height: style.height,
+                          pointerEvents: style.pointerEvents}
+                }""")
+                self.assertEqual(root_layout, {
+                    "position": "fixed", "width": "0px", "height": "0px",
+                    "pointerEvents": "none",
+                })
+                remained_connected = page.evaluate("""() => {
                   const root = document.querySelector('#woa-assistant-root')
                   document.body.replaceChildren(document.createElement('main'))
+                  return root.isConnected && root.parentElement === document.documentElement
                 }""")
-                page.locator("#woa-assistant-root").wait_for(state="attached", timeout=3000)
-                self.assertEqual(page.evaluate(
-                    "document.querySelector('#woa-assistant-root').parentElement.tagName"),
-                    "BODY")
-                labels = channel._panel_configuration()["labels"]
+                self.assertTrue(remained_connected)
                 page.get_by_role("button", name=labels["collapse"]).click()
                 page.locator(".woa-launcher").wait_for(timeout=3000)
                 page.locator(".woa-launcher").click()
@@ -205,7 +240,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                 page.locator(".woa-window").wait_for(timeout=8000)
                 replayed = page.locator(".woa-thread")
                 replayed.get_by_text("列出所有待开票的销售订单").wait_for(timeout=8000)
-                replayed.get_by_text("正在检查当前页面").wait_for(timeout=8000)
+                self.assertTrue(page.locator("#woa-composer-input").is_enabled())
                 # Nothing about the timeline is kept in the document's own storage.
                 stored = page.evaluate(
                     "Object.keys(window.sessionStorage).map(key => window.sessionStorage[key])"

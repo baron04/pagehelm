@@ -38,9 +38,11 @@ function elapsed(turn: Turn, now: number): string {
   if (!from || !to || to < from) return ''
   // Whole seconds. A tenth of a second is below the resolution of anything a person
   // decides from here, and a digit that flickers ten times a second reads as noise.
-  const seconds = (to - from) / 1000
-  return seconds < 60 ? `${Math.round(seconds)}s`
-    : `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`
+  // Round once, then split that same integer into minutes and seconds. Splitting the raw
+  // duration first lets 119.6 seconds become the impossible-looking `1m 60s`.
+  const seconds = Math.round((to - from) / 1000)
+  return seconds < 60 ? `${seconds}s`
+    : `${Math.floor(seconds / 60)}m ${seconds % 60}s`
 }
 
 /** A clock that only ticks while something is running, and stops dead when it is not. */

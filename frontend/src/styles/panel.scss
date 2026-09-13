@@ -342,9 +342,12 @@ button:disabled { cursor: not-allowed; }
   text-align: left;
 }
 .woa-work__summary:hover { color: var(--woa-ink); }
-/* The box around the summary clips, so a ring drawn outside the button showed only as a
-   line beneath it. Drawn inside, the whole ring stays visible. */
-.woa-work__summary:focus-visible { outline-offset: -2px; }
+/* Keep keyboard focus visible without the saturated browser outline that reads as an
+   error border around the whole work card. */
+.woa-work__summary:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--woa-line-strong);
+}
 .woa-took {
   margin: 0;
   font-size: 11.5px;
