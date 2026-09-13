@@ -236,6 +236,24 @@ def render_neutral_user_answer(context: AgentAnswerContext) -> str:
         return ("An operation for the same business object is still running or unresolved. "
                 "Nothing was submitted again; check the earlier operation first.")
     if context.agent.terminal_reason == "permission_denied":
+        projection = (context.business_result.query_answer
+                      if context.business_result is not None else None)
+        if projection is not None:
+            chinese = bool(re.search(r"[\u3400-\u9fff]", context.message.text))
+            notice = (
+                "> **已回答目前可以确认的部分**\n"
+                "> 后续读取因权限不足没有执行；以上只包含本轮此前成功读取的结果。"
+                if chinese else
+                "> **Answered the part supported by current data**\n"
+                "> A later read was not permitted and was not carried out; the result above "
+                "contains only data read successfully earlier in this task.")
+            remaining = context.max_chars - len(notice) - 2
+            if remaining >= 512:
+                earlier = render_structured_query_answer(
+                    projection, user_text=context.message.text,
+                    max_chars=remaining).text
+                return earlier + "\n\n" + notice
+            return notice
         prior_write_completed = bool(
             context.agent.business_control.get("mutation_completed", 0))
         if re.search(r"[\u3400-\u9fff]", context.message.text):
@@ -652,9 +670,13 @@ class AgentTurnExecutor:
         )
         fallback_used = False
         try:
+            permission_partial = (
+                agent.terminal_reason == "permission_denied"
+                and session.latest_business_tool_result is not None
+                and session.latest_business_tool_result.query_answer is not None)
             authoritative_projection = (
                 session.latest_business_tool_result.query_answer
-                if (agent.business_answer_projected
+                if ((agent.business_answer_projected or permission_partial)
                     and session.latest_business_tool_result is not None) else None)
             # A server-trusted renderer may customize ordinary terminal prose. It cannot
             # replace facts already projected by a typed query with model-authored prose.
@@ -680,7 +702,7 @@ class AgentTurnExecutor:
             user_answer = render_neutral_user_answer(answer_context)
 
         projection = authoritative_projection
-        if agent.business_answer_projected and projection is not None:
+        if projection is not None:
             projection_rendering = render_structured_query_answer(
                 projection, user_text=turn_message.text,
                 max_chars=self.config.max_user_answer_chars)
@@ -694,6 +716,8 @@ class AgentTurnExecutor:
                 source_complete=projection.source_complete,
                 result_truncated=projection.result_truncated,
                 model_facts_used=False,
+                partial_due_to_permission=(
+                    agent.terminal_reason == "permission_denied"),
             )
 
         execution = AgentTurnExecution(

@@ -270,9 +270,10 @@ export function Thread(props: ThreadProps): React.JSX.Element {
   }, [pin])
 
   // Submitting is an explicit request to watch what happens next.
+  const optimisticTurnId = snapshot.optimistic?.turnId
   useEffect(() => {
-    if (snapshot.optimistic) pin()
-  }, [snapshot.optimistic?.turnId, pin])
+    if (optimisticTurnId) pin()
+  }, [optimisticTurnId, pin])
 
   useEffect(() => {
     const node = top.current

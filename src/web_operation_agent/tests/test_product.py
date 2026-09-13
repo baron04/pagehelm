@@ -22,7 +22,7 @@ from web_operation_agent.application import (APPLICATION_ADAPTER_VERSION,
                                              bind_application)
 from web_operation_agent.answering import StructuredQueryAnswer
 from web_operation_agent.business import (BusinessSelectionOption, BusinessSkill,
-                                          BusinessToolResult,
+                                          BusinessToolPermissionError, BusinessToolResult,
                                           BusinessToolRuntime)
 from web_operation_agent.conversation import ConversationState
 from web_operation_agent.embedded_agent import ReadOnlyControl
@@ -755,6 +755,88 @@ class AgentTurnExecutorTests(unittest.TestCase):
         self.assertIn("先前的操作已经完成", answer)
         self.assertIn("后续操作因权限不足没有执行", answer)
         self.assertNotIn("没有任何更改", answer)
+
+    def test_permission_answer_preserves_an_earlier_trusted_query_as_partial(self):
+        result = BusinessToolResult(
+            content={"companies": [{"name": "Acme", "domain": "acme.test"}]},
+            audit={},
+            query_answer=StructuredQueryAnswer(
+                collection="companies", fields=("name", "domain"),
+                records=(("Acme", "acme.test"),), source="fixture typed API",
+                scope="current workspace", observed_at="2026-09-13T00:00:00+00:00",
+                source_complete=True, result_truncated=False, matched_count=1,
+                source_total=1, records_scanned=1),
+        )
+        context = product.AgentAnswerContext(
+            message=AgentTurnMessage.from_wire({
+                **_message(), "text": "先列出公司，再读取无权访问的详情。"}),
+            agent=product.RunResult(
+                run_id="run", task_ref="task", arm="U",
+                terminal_reason="permission_denied"),
+            business_result=result,
+            max_chars=4_000,
+        )
+
+        answer = product.render_neutral_user_answer(context)
+
+        self.assertIn("Acme", answer)
+        self.assertIn("acme.test", answer)
+        self.assertIn("已回答目前可以确认的部分", answer)
+        self.assertIn("后续读取因权限不足没有执行", answer)
+
+    def test_a_later_refused_read_projects_the_earlier_query_without_model_recovery(self):
+        class OneReadThenRefusal(_Executor):
+            calls = 0
+
+            def execute(self, name, args, *, context=None):
+                self.calls += 1
+                if self.calls > 1:
+                    raise BusinessToolPermissionError("the application refused the detail")
+                return BusinessToolResult(
+                    content={"companies": [{"name": "Acme", "domain": "acme.test"}]},
+                    audit={},
+                    query_answer=StructuredQueryAnswer(
+                        collection="companies", fields=("name", "domain"),
+                        records=(("Acme", "acme.test"),), source="fixture typed API",
+                        scope="current workspace",
+                        observed_at="2026-09-13T00:00:00+00:00",
+                        source_complete=True, result_truncated=False, matched_count=1,
+                        source_total=1, records_scanned=1),
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = _skill(root / "query-skill.json")
+            chat = _Chat([
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("query_companies", {}),
+                ("query_companies", {}),
+                ("goto", {"url": "/object/company/acme"}),
+            ])
+            executor = AgentTurnExecutor(
+                channel=_Channel(),
+                config=AgentTurnConfig(
+                    supported_scope="Read company data only.",
+                    ledger_path=root / "session.jsonl",
+                    no_progress_repeat_limit=None),
+                chat=chat,
+                business_tools=BusinessToolRuntime((skill,), OneReadThenRefusal()),
+                control=ReadOnlyControl(),
+                run_id_factory=lambda _message: "permission-partial-001")
+            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+                execution = executor.run_once({
+                    **_message(), "text": "先列出公司，再读取无权访问的详情。"})
+
+            self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
+            self.assertEqual(execution.terminal_reason, "permission_denied")
+            self.assertIn("Acme", execution.user_answer)
+            self.assertIn("已回答目前可以确认的部分", execution.user_answer)
+            self.assertEqual(len(chat.messages), 3, "the refusal is not returned to the model")
+            events = [json.loads(line) for line in
+                      (root / "session.jsonl").read_text().splitlines()]
+            rendered = next(item for item in events
+                            if item["event"] == "structured_query_answer_rendered")
+            self.assertTrue(rendered["partial_due_to_permission"])
 
     def test_second_turn_resolves_reference_but_must_requery_before_opening(self):
         class TwoCompanyExecutor(_Executor):

@@ -202,7 +202,13 @@ def _handler(registry: RemoteSessionRegistry, *, sse_wait_s: float,
             self.send_header("Cache-Control", "no-store")
             self._cors(session_id)
             self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                # A page reload replaces the lease and closes its pending request. The
+                # semantic disconnect is recorded by the session; the old socket is not a
+                # gateway failure and must not produce a server traceback.
+                return
 
         def _static(self, source: Path, media_type: str, *, cache: str) -> None:
             try:
@@ -219,7 +225,10 @@ def _handler(registry: RemoteSessionRegistry, *, sse_wait_s: float,
             # so they need CORS.  Nothing session-bound is ever served from this path.
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                return
 
         def _error(self, exc: Exception, *, session_id: str | None = None) -> None:
             if isinstance(exc, RemoteProtocolError):
