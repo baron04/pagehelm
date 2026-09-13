@@ -90,6 +90,7 @@ class WhatTheAdapterReadsCanCarryAnAnswer(unittest.TestCase):
         turn = self._evidence("query_quotations", name_contains="S00042")
         query = turn.get("query#1")
         self.assertTrue(query.found_nothing)
+        self.assertEqual(query.looked_for, "S00042")
 
         answer = verify(AnswerDraft((NotFound("S00042", "query#1"),), "complete"), turn)
         text = render(answer, user_text="报价单 S00042 是哪个客户的？", max_chars=4000)

@@ -143,6 +143,9 @@ class QueryEvidence:
     matched_count: int
     records_scanned: int | None = None
     covers_whole_scope: bool = False
+    #: Literal record name/reference supplied by a point lookup. Broad reads leave this
+    #: empty. It keeps user-facing not-found text separate from adapter query syntax.
+    looked_for: str = ""
 
     def __post_init__(self) -> None:
         _require_id(self.evidence_id)
@@ -158,6 +161,8 @@ class QueryEvidence:
                                _count(self.records_scanned, "records_scanned"))
         if not isinstance(self.covers_whole_scope, bool):
             raise TypeError("covers_whole_scope must be a boolean")
+        object.__setattr__(self, "looked_for", _text(
+            self.looked_for, "looked_for", allow_empty=True))
 
     @property
     def found_nothing(self) -> bool:

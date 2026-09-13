@@ -511,6 +511,30 @@ class PanelUITests(_PanelBrowser):
         self.assertLessEqual(distance, 30)
         self.assertEqual(self.errors, [])
 
+    def test_the_jump_control_is_anchored_and_the_latest_answer_has_breathing_room(self):
+        answer = "\n".join(f"第 {index} 行内容。" for index in range(80))
+        page = self.open(_snapshot(entries=[
+            _entry("e1", "goal", "给我一份长清单"),
+            _entry("e2", "result", answer, panel_state="success"),
+        ]))
+        page.locator(".woa-launcher").click()
+        thread = page.locator(".woa-thread")
+        thread.evaluate("node => { node.scrollTop = 0 }")
+        page.locator(".woa-jump").wait_for()
+        before = page.locator(".woa-jump").bounding_box()
+        thread.evaluate("node => { node.scrollTop = Math.min(10, node.scrollHeight) }")
+        after = page.locator(".woa-jump").bounding_box()
+        assert before is not None and after is not None
+        self.assertAlmostEqual(before["y"], after["y"], delta=1)
+
+        page.locator(".woa-jump").click()
+        page.wait_for_timeout(500)
+        turn = page.locator(".woa-turn").last.bounding_box()
+        composer = page.locator(".woa-composer").bounding_box()
+        assert turn is not None and composer is not None
+        self.assertGreaterEqual(composer["y"] - (turn["y"] + turn["height"]), 85)
+        self.assertEqual(self.errors, [])
+
     def test_a_crash_inside_the_panel_never_reaches_the_page(self):
         """The panel has no iframe, so its realm is the host application's realm.
 

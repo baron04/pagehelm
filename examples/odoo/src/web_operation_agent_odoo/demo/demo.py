@@ -46,7 +46,11 @@ from ..adapter import OdooApplicationAdapter
 
 _MODEL_ENV_KEYS = ("AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY",
                    "AGENT_OPENAI_MODEL", "AGENT_PROVIDER")
-_PRINCIPAL_LIFETIME_S = 900
+# The interactive demo is routinely used for a full acceptance session. Fifteen minutes made
+# its server-bound principal expire while the person was still testing, even though Odoo's
+# own browser login and the Runtime's default session remained valid. Production renewal is a
+# deployment concern (P7.3); the bounded demo uses the registry's one-hour session ceiling.
+_PRINCIPAL_LIFETIME_S = 60 * 60
 #: The walkthrough the scripted mode performs: read the typed API, then open exactly the
 #: route that result authorised. Nothing here is Odoo trivia -- it is the product's contract.
 _SCRIPTED_TASK = "Open the customer record for Acme Corporation."

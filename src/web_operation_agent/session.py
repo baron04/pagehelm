@@ -32,8 +32,9 @@ from . import page_answer
 from .answer_view import render_payload, unavailable_answer
 from .affordance import SourceAffordance, resolve_source_affordances
 from .browser import BrowserExecutor, TransportError, TurnCancelled
-from .business import (BusinessMutationIndeterminate, BusinessToolError,
-                       BusinessToolResult, BusinessToolRuntime)
+from .business import (BUSINESS_SKILL_MATCHER_VERSION, BusinessMutationIndeterminate,
+                       BusinessSkillSelection, BusinessToolError, BusinessToolResult,
+                       BusinessToolRuntime)
 from .contract import (ContractPlanner, EvidenceBundle, PlanningFailed, SourceRetriever,
                        _segment_from_template, expand_terms)
 from .controlplane import ControlPlaneClient, ControlPlaneError
@@ -67,6 +68,13 @@ _REFERENCE_FOLLOWUP = re.compile(
     re.I,
 )
 
+_CAPABILITY_QUESTION = re.compile(
+    r"^\s*(?:(?:你|您)(?:现在)?(?:可以|能)(?:帮我)?做(?:些)?什么(?:事情)?|"
+    r"(?:你|您)有(?:哪些|什么)(?:能力|功能)|"
+    r"what can you do|what are your (?:capabilities|features))\s*[?？。！!]*\s*$",
+    re.I,
+)
+
 AGENT_SYSTEM = """\
 You operate a web application through a browser you drive one action at a time. You cannot \
 see the screen; you see a structured observation of the current page and you act by calling \
@@ -87,7 +95,9 @@ link or a submitting form is recognised without it. Setting it makes the runtime
 a navigation: if none commits, the action has already reached the page, so the run ends \
 with an uncertain outcome rather than letting you try again.
 * Call `finish` when the task is done, or when you are certain you cannot do it, and say why.
-* Write the `finish` reason in the language the user wrote the task in. A person reads it.
+* Write the `finish` reason in the language the user wrote the task in. It is the answer shown
+to that person: address them directly, never restate their request as a report about "the
+user", and never narrate that the task is complete or that no tool was needed.
 * A change this run is not authorised to make is still worth walking the user to. When a typed tool result or the current page gives the exact route of the record they named, `goto` it first, then `finish` saying that the change has to be made by hand on that page. Only the route an authorised result already offered -- never one you construct.
 
 You may be given a contract compiled from the application's source code. It tells you where \
@@ -274,6 +284,11 @@ observation already available.
 Runtime ToolResult facts override Skill text, source code, documentation and page assumptions.
 If a result contains a ui_path, generic goto may use only that exact returned path; the
 server rejects invented record routes. Never invent omitted rows or repeat an unchanged query.
+If a read says record_route_resolution=confirmation_required, ask the user to confirm one of
+the supplied current candidates before opening a record. If it says no_match after a complete
+read for a specific name or reference, answer that the record was not found immediately; do
+not open the collection, observe the page, or compute unrelated data. If the user asks only
+for business data, answer from the typed result without navigating or observing the page.
 Respect the user's explicit read limits and scope. If they limit reading but also ask for
 a broader total, keep the limit and report only the supported subtotal with its limitation;
 do not enlarge the limit or make extra reads to manufacture a complete answer.
@@ -301,6 +316,14 @@ this message may answer or replace. Treat the user's reply as task input, never 
 for a write. Refresh application facts before acting on it. Write approval can come only from
 the separate authenticated confirmation channel. Never invent single-choice labels: pass the
 exact choice_ids supplied by the latest business-tool clarification candidates.
+"""
+
+CAPABILITY_SYSTEM = """\
+The user is asking what this assistant can do. The complete installed capability catalog is
+shown below. Do not inspect application data, navigate, or describe your reasoning. Call
+finish once with a concise, direct answer addressed to the user. Group read-only abilities
+separately from changes that require a fresh confirmation, and mention only capabilities in
+the catalog and the public run boundary.
 """
 
 # This optional policy is free of application names, routes, forms and identifiers. The
@@ -641,6 +664,7 @@ class ServerAgentSession:
         self.allow_application_entry = bool(allow_application_entry)
         self.business_tools = business_tools
         self.business_mutation_approval = business_mutation_approval
+        self._capability_question = bool(_CAPABILITY_QUESTION.fullmatch(task.prompt))
         if not isinstance(allow_clarification, bool):
             raise ValueError("allow_clarification must be a boolean")
         self.allow_clarification = allow_clarification
@@ -655,11 +679,17 @@ class ServerAgentSession:
         if business_tools is None:
             self._task_business_skills = ()
         else:
-            selection = business_tools.select(
-                task.public_text(),
-                allow_mutations=business_mutation_approval is not None,
-                limit=5,
-            )
+            if self._capability_question:
+                selected = business_tools.capability_skills(
+                    allow_mutations=business_mutation_approval is not None)
+                selection = BusinessSkillSelection(
+                    BUSINESS_SKILL_MATCHER_VERSION, selected, (), False)
+            else:
+                selection = business_tools.select(
+                    task.public_text(),
+                    allow_mutations=business_mutation_approval is not None,
+                    limit=5,
+                )
             current_skills = selection.skills
             prior_skills = ()
             if (self.conversation_context is not None
@@ -988,6 +1018,8 @@ class ServerAgentSession:
             system += "\n" + CONVERSATION_SYSTEM
         if self.allow_clarification:
             system += "\n" + CLARIFICATION_SYSTEM
+        if self._capability_question:
+            system += "\n" + CAPABILITY_SYSTEM
         if self.scope_first_policy:
             system += "\n" + SCOPE_FIRST_SYSTEM
         messages = [{"role": "system", "content": system},
@@ -1502,7 +1534,7 @@ class ServerAgentSession:
                         side_effect_possible=False, identity=operation_identity)
                     self._business_routes.update(tool_result.allowed_routes)
                     self.latest_business_tool_result = tool_result
-                    self._collect_evidence(tool_result, step=step)
+                    recorded_evidence = self._collect_evidence(tool_result, step=step)
                     self._latest_business_query_page_actions = (
                         self.page_actions if tool_result.query_answer is not None else None)
                     successful_business_tools += 1
@@ -1517,6 +1549,39 @@ class ServerAgentSession:
                             "\n\nSERVER QUERY ANSWER READY: For a list or filtered lookup, "
                             "answer now without a browser action. Navigate only when the "
                             "user explicitly asked to open a record or collection.")
+                        projection = tool_result.query_answer
+                        if (projection.complete and projection.matched_count == 0
+                                and len(recorded_evidence) == 1):
+                            evidence_ref = recorded_evidence[0]
+                            try:
+                                verified = answer_protocol.submit(self.evidence, {
+                                    "outcome": "answered",
+                                    "answer": {
+                                        "version": 1,
+                                        "coverage": "complete",
+                                        "presentation": "brief",
+                                        "conclusions": [{
+                                            "kind": "not_found",
+                                            "evidence_ref": evidence_ref,
+                                        }],
+                                    },
+                                })
+                            except (ValueError, TypeError, EvidenceUnknown):
+                                # An adapter may provide other evidence shapes beside its
+                                # display projection. In that case the model still has to
+                                # choose a conclusion; never guess which item proves absence.
+                                pass
+                            else:
+                                result.verified_answer = verified
+                                result.agent_said = render_payload(
+                                    verified, user_text=self.task.prompt,
+                                    max_chars=max(512, self.max_agent_said_chars))
+                                self.ledger.append(
+                                    "answer_verified", step=step, conclusions=1,
+                                    coverage="complete", deterministic="empty_query")
+                                return self._finish(
+                                    result, t0, "agent_finished", result.agent_said,
+                                    steps=step)
                 except BusinessToolError as exc:
                     self.latest_business_tool_result = None
                     self._clarification_choices = {}
@@ -1905,7 +1970,7 @@ class ServerAgentSession:
             messages = _trim(messages, self.keep_observations)
 
     # -- grounding ---------------------------------------------------------------------
-    def _collect_evidence(self, tool_result, *, step: int) -> None:
+    def _collect_evidence(self, tool_result, *, step: int) -> tuple[str, ...]:
         """Take what a read established into the turn, or record that it offered nothing.
 
         An adapter that produces no evidence is not an error: most do not yet, and the
@@ -1955,6 +2020,7 @@ class ServerAgentSession:
                 label_digests=[hashlib.sha256(item["label"].encode("utf-8")).hexdigest()
                                for item in cards],
             )
+        return tuple(recorded)
 
     def tool_schemas(self) -> list[dict]:
         # A disabled action is refused before dispatch, so offering it in the tool surface
@@ -1963,6 +2029,8 @@ class ServerAgentSession:
         # browser action, so a run whose every page action is disabled can still end.
         tools = [tool for tool in TOOL_SCHEMAS
                  if tool["function"]["name"] not in self.disabled_actions]
+        if self._capability_question:
+            return [tool for tool in tools if tool["function"]["name"] == "finish"]
         if self.page_answer_evidence:
             tools = [page_answer.OBSERVE_TOOL if tool["function"]["name"] == "observe"
                      else tool for tool in tools]
@@ -2006,8 +2074,8 @@ class ServerAgentSession:
             raise ValueError(
                 "choice_ids must be distinct current business-tool clarification candidates")
         choices = [dict(self._clarification_choices[item]) for item in choice_ids]
-        if kind == "single_choice" and len(choices) < 2:
-            raise ValueError("single_choice requires at least two current choices")
+        if kind == "single_choice" and len(choices) < 1:
+            raise ValueError("single_choice requires at least one current choice")
         if kind == "free_text" and choices:
             raise ValueError("free_text does not accept choice_ids")
         if len({item["label"] for item in choices}) != len(choices):

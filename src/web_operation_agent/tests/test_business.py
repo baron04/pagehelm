@@ -18,7 +18,7 @@ from web_operation_agent.business import (
 )
 from web_operation_agent.application import ResultPostconditionVerifier
 from web_operation_agent.embedded_agent import ReadOnlyControl
-from web_operation_agent.evidence import Origin, RecordEvidence
+from web_operation_agent.evidence import Origin, QueryEvidence, RecordEvidence
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.identity import OperationContext, PrincipalContext
 from web_operation_agent.mutation import MemoryMutationJournal, MutationJournalError
@@ -640,6 +640,27 @@ class BusinessRuntimeValidation(unittest.TestCase):
 
 
 class BusinessReActTransition(unittest.TestCase):
+    def test_a_capability_question_cannot_turn_into_a_business_query(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _skill(Path(tmp) / "skill.json")
+            runtime = BusinessToolRuntime((skill,), _Executor())
+            chat = _Chat([("finish", {"done": True,
+                                      "why": "我可以查询当前公司。"})])
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="你可以做什么？",
+                              supported_scope="Read current records."),
+                chat=chat, browser=_Browser(), control=ReadOnlyControl(),
+                ledger=SessionLedger(Path(tmp) / "session.jsonl", "capabilities"),
+                business_tools=runtime, step_budget=2, wall_budget_s=30)
+            session.entry_observation = _observation(1)
+            session.plan()
+
+            result = session.run()
+
+            self.assertEqual(result.agent_said, "我可以查询当前公司。")
+            self.assertEqual(chat.tool_names, [{"finish"}])
+            self.assertIn("Query companies", chat.messages[0][1]["content"])
+
     def test_assistant_history_does_not_change_the_user_text_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill = _skill(Path(tmp) / "skill.json")
@@ -1011,6 +1032,57 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertEqual(result.spend["provider_calls"], 0)
             self.assertEqual(len(ledger.of_kind("business_answer")), 1)
             self.assertEqual(len(ledger.of_kind("no_tool_call")), 0)
+
+    def test_complete_empty_query_finishes_without_another_model_round(self):
+        class EmptyProjectedExecutor(_Executor):
+            @staticmethod
+            def execute(name, args, *, context=None):
+                observed_at = "2026-09-13T04:00:00+00:00"
+                origin = Origin(
+                    kind="typed", reference="query_companies#0",
+                    observed_at=observed_at,
+                    scope="companies visible to the delegated user; name contains S00042")
+                return BusinessToolResult(
+                    content={"companies": [], "matched_count": 0},
+                    audit={"application": "fixture", "operation": name,
+                           "returned_count": 0},
+                    query_answer=StructuredQueryAnswer(
+                        collection="companies", fields=("name", "domain"), records=(),
+                        source="fixture API", scope=origin.scope, observed_at=observed_at,
+                        source_complete=True, result_truncated=False, matched_count=0,
+                        source_total=0, records_scanned=0),
+                    evidence=(QueryEvidence(
+                        evidence_id="query#1", origin=origin, collection="companies",
+                        conditions=("name contains S00042",), matched_count=0,
+                        records_scanned=0, covers_whole_scope=True),),
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _skill(Path(tmp) / "skill.json")
+            chat = _Chat([
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("query_companies", {}),
+                ("goto", {"url": "/should-not-run"}),
+            ])
+            ledger = SessionLedger(Path(tmp) / "session.jsonl", "empty-query")
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="报价单 S00042 是哪个客户的？",
+                              supported_scope="Read current business data only."),
+                chat=chat, browser=_Browser(), control=ReadOnlyControl(), ledger=ledger,
+                step_budget=5, wall_budget_s=30, run_id="empty-query",
+                business_tools=BusinessToolRuntime((skill,), EmptyProjectedExecutor()),
+                plain_business_answer_min_page_actions=0)
+            session.entry_observation = _observation(1)
+            session.plan()
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "agent_finished")
+            self.assertEqual(result.steps_used, 2)
+            self.assertEqual(len(chat.messages), 2)
+            self.assertIn("未找到", result.agent_said)
+            self.assertIsNotNone(result.verified_answer)
+            self.assertEqual(
+                ledger.of_kind("answer_verified")[-1]["deterministic"], "empty_query")
 
     def test_read_failure_records_its_machine_code_for_external_scoring(self):
         class UnavailableExecutor(_Executor):

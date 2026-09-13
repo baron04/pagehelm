@@ -297,6 +297,7 @@ export function Thread(props: ThreadProps): React.JSX.Element {
   const empty = turns.length === 0 && !snapshot.optimistic
 
   return (
+    <div className="woa-thread-shell">
     <div className="woa-thread" ref={scroller} role="log" aria-live="polite"
          aria-label={labels.timeline} tabIndex={0}>
       {/* One box holding everything that can change height, so a single ResizeObserver
@@ -345,12 +346,13 @@ export function Thread(props: ThreadProps): React.JSX.Element {
       )}
       <div ref={bottom} aria-hidden="true" />
       </div>
-      {detached && (
-        <button type="button" className="woa-jump" onClick={() => pin(true)}>
-          <ArrowDown size={12} strokeWidth={1.9} aria-hidden="true" />
-          {labels.jumpLatest}{unseen > 0 ? ` · ${unseen}` : ''}
-        </button>
-      )}
+    </div>
+    {detached && (
+      <button type="button" className="woa-jump" onClick={() => pin(true)}>
+        <ArrowDown size={12} strokeWidth={1.9} aria-hidden="true" />
+        {labels.jumpLatest}{unseen > 0 ? ` · ${unseen}` : ''}
+      </button>
+    )}
     </div>
   )
 }

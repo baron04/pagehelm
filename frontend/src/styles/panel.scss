@@ -209,16 +209,23 @@ button:disabled { cursor: not-allowed; }
 .woa-icon-button:hover { background: var(--woa-surface-muted); color: var(--woa-ink); }
 
 /* ─────────────────────────────────────────────── thread */
-.woa-thread {
+.woa-thread-shell {
   position: relative;
   flex: 1;
   min-height: 0;
+}
+.woa-thread {
+  height: 100%;
   overflow-y: auto;
   overflow-x: hidden;
   overflow-anchor: auto;
   padding: 15px 13px 4px;
 }
 .woa-thread__content { display: flex; flex-direction: column; min-height: 100%; }
+.woa-thread__content:not([data-empty])::after {
+  content: '';
+  flex: 0 0 100px;
+}
 /* With nothing said yet the composer is the whole interface, so the greeting and the
    suggestions sit with it rather than stranded at the top of an empty box. */
 .woa-thread__content[data-empty] { justify-content: center; }
@@ -281,8 +288,8 @@ button:disabled { cursor: not-allowed; }
 .woa-undelivered { color: var(--woa-danger); }
 .woa-undelivered button { color: var(--woa-accent); font-weight: 500; }
 
-/* Outside the flow on purpose: in it, the button's own 25px made the thread taller than
-   its viewport, so an empty thread was permanently one button-height from the bottom. */
+/* The shell, rather than the scrolling element, is the containing block. The control stays
+   above the composer while the transcript moves behind it. */
 .woa-jump {
   position: absolute;
   bottom: 8px;

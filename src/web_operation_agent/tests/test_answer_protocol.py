@@ -45,10 +45,10 @@ class AnswerWireContract(unittest.TestCase):
             with self.subTest(location=location), self.assertRaises(ConclusionRefused):
                 submit(_turn(), args)
 
-    def test_not_found_subject_comes_from_the_executed_conditions(self):
-        turn = _turn(records=())
+    def test_not_found_subject_comes_from_the_trusted_query_not_the_model(self):
+        turn = _turn(records=(), looked_for="S00042")
         answer = submit(turn, _draft("not_found", "query#1"))
-        self.assertEqual(answer["conclusions"][0]["looked_for"], "state in draft,sent")
+        self.assertEqual(answer["conclusions"][0]["looked_for"], "S00042")
         forged = _draft("not_found", "query#1", looked_for="another customer")
         with self.assertRaises(ConclusionRefused):
             submit(turn, forged)
@@ -93,7 +93,7 @@ class AnswerWireContract(unittest.TestCase):
         answer = submit(turn, _draft("selection", "query#1", fields=["amount_total"]))
         text = render_payload(answer, user_text="列出所有金额", max_chars=512)
         self.assertLessEqual(len(text), 512)
-        self.assertIn("部分回答", text)
+        self.assertIn("目前可以确认的部分", text)
         self.assertIn("显示限制", text)
 
     def test_action_prefix_does_not_hide_partial_answer_or_its_display_limit(self):
@@ -103,7 +103,7 @@ class AnswerWireContract(unittest.TestCase):
         text = render_payload(answer, user_text="打开并列出所有金额", max_chars=512)
         self.assertLessEqual(len(text), 512)
         self.assertIn("已打开页面", text)
-        self.assertIn("部分回答", text)
+        self.assertIn("目前可以确认的部分", text)
         self.assertIn("显示限制", text)
 
 

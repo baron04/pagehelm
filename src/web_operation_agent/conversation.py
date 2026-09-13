@@ -164,8 +164,8 @@ class ConversationState:
         for key in ("choice_id", "label", "record_ref"):
             if len({item[key] for item in normalized_choices}) != len(normalized_choices):
                 raise ValueError(f"clarification choice {key} values must be distinct")
-        if kind == "single_choice" and len(choices) < 2:
-            raise ValueError("single_choice clarification requires at least two choices")
+        if kind == "single_choice" and len(choices) < 1:
+            raise ValueError("single_choice clarification requires at least one choice")
         if kind == "free_text" and choices:
             raise ValueError("free_text clarification cannot carry choices")
         normalized = _redact_json({**value, "question": value["question"].strip(),

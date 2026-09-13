@@ -6,6 +6,7 @@ the two-sided identity -- not that a particular Odoo deployment is reachable. Th
 qualification is a separate, opt-in gate.
 """
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -57,6 +58,9 @@ def _matches(row: dict, domain: list) -> bool:
             matched = actual is not None and actual is not False and actual >= value
         elif operator == "<":
             matched = actual is not None and actual is not False and actual < value
+        elif operator == "ilike":
+            literal = re.sub(r"\\([\\%_])", r"\1", str(value))
+            matched = literal.casefold() in str(actual or "").casefold()
         else:
             raise AssertionError(f"the fake does not implement {operator!r}")
         if not matched:
@@ -259,6 +263,17 @@ class TypedReads(unittest.TestCase):
                 ("res.partner/11", "Acme — paris@example.test — Paris"),
             ],
         )
+        self.assertEqual(result.allowed_routes, ("/odoo/customers",))
+
+    def test_a_fuzzy_single_match_is_a_candidate_not_navigation_authority(self):
+        executor = _FakeOdoo({"res.partner": _customers(
+            [("Acme Corporation", "a@example.test")])})
+        result = executor.execute("query_customers", {"name_contains": "Acme"})
+
+        self.assertEqual(result.content["record_route_resolution"],
+                         "confirmation_required")
+        self.assertEqual(result.allowed_routes, ("/odoo/customers",))
+        self.assertEqual(len(result.selection_options), 1)
 
     def test_an_unknown_tool_or_argument_is_refused_before_any_call(self):
         executor = _FakeOdoo({"sale.order": _orders(1)})

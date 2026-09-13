@@ -154,7 +154,7 @@ def submit(turn: TurnEvidence, args: dict) -> dict | None:
         elif kind == "not_found" and isinstance(item, QueryEvidence):
             if not item.covers_whole_scope:
                 raise ConclusionRefused("a partial search cannot establish not_found")
-            conclusions.append(NotFound("; ".join(item.conditions) or item.collection, ref))
+            conclusions.append(NotFound(item.looked_for or item.collection, ref))
         elif kind == "undetermined":
             about = (f"{item.record_id}.{item.field_name}" if isinstance(item, RecordEvidence)
                      else item.collection if isinstance(item, QueryEvidence)

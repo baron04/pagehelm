@@ -21,7 +21,7 @@ QUOTATIONS = (("sale.order/1", "1740.00"), ("sale.order/2", "2947.50"),
 
 
 def _turn(*, whole: bool = True, records=QUOTATIONS, unit: str = "USD",
-          scope: str = SCOPE) -> TurnEvidence:
+          scope: str = SCOPE, looked_for: str = "") -> TurnEvidence:
     turn = TurnEvidence()
     turn.record(QueryEvidence(
         evidence_id="query#1",
@@ -29,7 +29,7 @@ def _turn(*, whole: bool = True, records=QUOTATIONS, unit: str = "USD",
                       scope=scope),
         collection="quotations", conditions=("state in draft,sent",),
         matched_count=len(records), records_scanned=len(records),
-        covers_whole_scope=whole))
+        covers_whole_scope=whole, looked_for=looked_for))
     for index, (record_id, amount) in enumerate(records, start=1):
         turn.record(RecordEvidence(
             evidence_id=f"record#{index}",

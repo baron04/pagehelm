@@ -881,6 +881,19 @@ class BusinessToolRuntime:
         # unrelated read Skills remain available for mixed-intent tasks.
         return tuple(_without_redundant_reads(selected)[:limit])
 
+    def capability_skills(self, *, allow_mutations: bool) -> tuple[BusinessSkill, ...]:
+        """Return the installed user-facing capability catalog in stable order.
+
+        This is descriptive only: exposing a mutation Skill here neither loads its tools nor
+        grants approval.  Keeping the catalog on the runtime avoids teaching the generic
+        session about an application's entities.
+        """
+        if not isinstance(allow_mutations, bool):
+            raise ValueError("allow_mutations must be a boolean")
+        return tuple(
+            skill for skill in sorted(self._skills.values(), key=lambda item: item.skill_id)
+            if skill.read_only or allow_mutations)
+
     def select(self, task: str, *, allow_mutations: bool,
                limit: int = 5) -> BusinessSkillSelection:
         """Select task candidates and use a bounded capability-aware empty fallback.

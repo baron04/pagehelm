@@ -716,7 +716,8 @@ class OdooBusinessToolExecutor:
     }
 
     def _evidence(self, collection: _Collection, pairs, *, name: str, observed_at: str,
-                  matched: int, scanned, whole: bool, conditions: tuple[str, ...]) -> tuple:
+                  matched: int, scanned, whole: bool, conditions: tuple[str, ...],
+                  looked_for: str = "") -> tuple:
         """Turn what this read returned into evidence an answer can cite.
 
         The projection beside it stays a display view. This is the same read expressed so a
@@ -729,7 +730,8 @@ class OdooBusinessToolExecutor:
         items = [QueryEvidence(
             evidence_id="query#1", origin=origin, collection=collection.tool.removeprefix("query_"),
             conditions=conditions,
-            matched_count=matched, records_scanned=scanned, covers_whole_scope=whole)]
+            matched_count=matched, records_scanned=scanned, covers_whole_scope=whole,
+            looked_for=looked_for)]
         index = 0
         for row, _item in pairs:
             record_id = row.get("id")
@@ -825,7 +827,15 @@ class OdooBusinessToolExecutor:
         if collection is None:
             raise BusinessToolRequestError("unknown Odoo business tool")
         needle, limit, extra_domain = self._read_args(name, args)
-        rows, total, scan = self._scan(collection, extra_domain)
+        field = self._match_field(collection)
+        # Let Odoo's indexed/domain query discard unrelated rows before pagination. Keep the
+        # literal Python comparison below as the final semantic check. PostgreSQL LIKE uses
+        # backslash escaping, so user `%` and `_` remain ordinary name characters here.
+        scan_domain = list(extra_domain)
+        if needle:
+            escaped = needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            scan_domain.append([field, "ilike", escaped])
+        rows, total, scan = self._scan(collection, scan_domain)
         conditions = tuple(f"{p[0]} {p[1]} {p[2]}" for p in [*collection.domain, *extra_domain])
         if needle:
             conditions += (f"name case-insensitive substring {needle!r}",)
@@ -835,18 +845,28 @@ class OdooBusinessToolExecutor:
         # for people -- while evidence needs the record's own identity, and re-deriving one
         # from the other after filtering is how they drift apart.
         pairs = [(row, self._project(collection, row)) for row in rows]
-        field = self._match_field(collection)
         folded = needle.casefold().strip()
         if folded:
             pairs = [pair for pair in pairs if folded in pair[1][field].casefold()]
         matched = len(pairs)
         visible_pairs = pairs[:limit]
         visible = [item for _row, item in visible_pairs]
+        exact_match = bool(
+            folded and matched == 1
+            and business_text_key(str(visible[0].get(field, "")))
+            == business_text_key(needle))
         selection_options = tuple(
             option for row, item in visible_pairs
             if (option := self._selection_option(collection, row, item)) is not None)
-        allowed_routes = (collection.route,) + tuple(
+        # A substring is useful discovery, but it is not authority to open a record.  An
+        # exact user-visible name/reference can go straight through; a prefix such as
+        # "Acme" stays a candidate even if today's fixture happens to contain only one hit.
+        # That keeps a future second Acme from changing a silent fuzzy choice into a wrong
+        # navigation.
+        record_routes = tuple(
             item["ui_path"] for item in visible if isinstance(item.get("ui_path"), str))
+        allowed_routes = ((collection.route,) + record_routes
+                          if not folded or exact_match else (collection.route,))
         source_complete = scan["complete"]
         result_truncated = matched > limit or not source_complete
         observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -872,6 +892,10 @@ class OdooBusinessToolExecutor:
                 "source_total": total,
                 "scope": collection.scope,
                 "conditions": list(conditions),
+                "record_route_resolution": (
+                    "exact" if exact_match else
+                    "confirmation_required" if folded and matched else
+                    "no_match" if folded else "not_requested"),
                 "consistency": "bounded scan, not a database snapshot",
                 "observed_at": observed_at,
                 "completeness": completeness,
@@ -894,7 +918,7 @@ class OdooBusinessToolExecutor:
                                     observed_at=observed_at, matched=matched,
                                     scanned=scan["records_scanned"],
                                     whole=source_complete and not result_truncated,
-                                    conditions=conditions),
+                                    conditions=conditions, looked_for=needle),
             selection_options=selection_options,
             query_answer=StructuredQueryAnswer(
                 collection=collection.tool.removeprefix("query_"),

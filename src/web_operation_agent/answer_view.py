@@ -25,8 +25,8 @@ _WORDS = {
     "zh": {
         "undetermined": "无法确定",
         "not_found": "未找到",
-        "partial": "这是部分回答",
-        "partial_why": "尚未覆盖的部分",
+        "partial": "已回答目前可以确认的部分",
+        "partial_why": "还无法确认",
         "gap": "缺口",
         "scope": "范围",
         "source_page": "来源：页面观察",
@@ -40,8 +40,8 @@ _WORDS = {
     "en": {
         "undetermined": "Could not determine",
         "not_found": "Not found",
-        "partial": "This is a partial answer",
-        "partial_why": "what it does not cover",
+        "partial": "Answered the part supported by current data",
+        "partial_why": "still not confirmed",
         "gap": "gap",
         "scope": "scope",
         "source_page": "source: page observation",
@@ -210,10 +210,10 @@ def _one(words: dict, item: dict, *, presentation: str) -> list[str]:
         return [f"**{label}**：{_literal(item['value'])}{unit}",
                 f"> {_source_line(words, item)} · {words['scope']}：{_literal(item['scope'])}"]
     if kind == "not_found":
-        conditions = "；".join(_literal(x) for x in item["conditions"])
-        return [f"**{words['not_found']}**：{_literal(item['looked_for'])}",
-                f"> {_source_line(words, item)} · {words['scope']}：{_literal(item['scope'])}"
-                f" · {conditions}"]
+        # The normal answer names the thing that was absent. Executed filters and scope are
+        # already available in the separate answer-basis disclosure; repeating adapter query
+        # syntax here turns a one-line response into an internal diagnostic.
+        return [f"**{words['not_found']}**：{_literal(item['looked_for'])}"]
     if kind == "undetermined":
         return [f"**{words['undetermined']}**：{_literal(item['about'])}",
                 f"> {words['gap']}：{_literal(item['gap'])}"]
