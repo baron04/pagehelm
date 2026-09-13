@@ -13,7 +13,8 @@ import time
 import unittest
 from pathlib import Path
 
-from web_operation_agent_odoo.demo.demo import _await_outcome, _capture
+from web_operation_agent_odoo.demo.demo import (_await_outcome, _capture,
+                                                _notify_turn_boundary)
 
 
 class _Page:
@@ -106,6 +107,28 @@ class ThePollingWaitKeepsTheContractItReplaced(unittest.TestCase):
                                Path(directory) / "screens", timeout_s=0.3, taken=taken,
                                turn=1)
         self.assertEqual(taken, [])
+
+
+class TheFixtureHookRunsOnlyBetweenTurns(unittest.TestCase):
+    def test_the_hook_gets_a_copy_after_a_non_final_turn(self):
+        calls = []
+        record = {"status": "finished"}
+
+        def hook(turn, projected):
+            calls.append((turn, projected))
+            projected["status"] = "rewritten"
+
+        _notify_turn_boundary(hook, turn=1, total_turns=2, record=record)
+
+        self.assertEqual(calls, [(1, {"status": "rewritten"})])
+        self.assertEqual(record, {"status": "finished"})
+
+    def test_the_hook_never_runs_after_the_final_turn(self):
+        calls = []
+        _notify_turn_boundary(
+            lambda turn, record: calls.append((turn, record)),
+            turn=2, total_turns=2, record={"status": "finished"})
+        self.assertEqual(calls, [])
 
 
 if __name__ == "__main__":

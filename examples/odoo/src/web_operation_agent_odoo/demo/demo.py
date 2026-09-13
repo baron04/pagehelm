@@ -30,7 +30,7 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from web_operation_agent.application import bind_application
 from web_operation_agent.egress import ProviderEgressPolicy
@@ -395,10 +395,24 @@ def _assert_session_unchanged(adapter: OdooApplicationAdapter, context,
         raise RuntimeError("the Odoo browser session changed; start a new Agent session")
 
 
+def _notify_turn_boundary(hook: Callable[[int, dict], None] | None, *, turn: int,
+                          total_turns: int, record: dict) -> None:
+    """Give qualification code one safe seam between completed product turns.
+
+    The record is copied so a fixture hook cannot rewrite the user-visible outcome. The
+    final turn has no following observation to qualify, so calling the hook there would
+    only mutate the fixture after the test had already ended.
+    """
+    if hook is not None and turn < total_turns:
+        hook(turn, dict(record))
+
+
 def _run_browser(config: OdooDemoConfig, live: LiveProductSession,
                  conversation: LiveConversationRunner, *,
                  adapter: OdooApplicationAdapter, expected_binding: str,
-                 shots: Path) -> tuple[list[dict], str, str, list[str]]:
+                 shots: Path,
+                 turn_boundary_hook: Callable[[int, dict], None] | None = None,
+                 ) -> tuple[list[dict], str, str, list[str]]:
     from playwright.sync_api import Error as PlaywrightError, sync_playwright
 
     records: list[dict] = []
@@ -463,6 +477,13 @@ def _run_browser(config: OdooDemoConfig, live: LiveProductSession,
                         print(json.dumps(record, ensure_ascii=False, sort_keys=True),
                               flush=True)
                         _assert_session_unchanged(adapter, context, expected_binding)
+                        # Qualification code may change an isolated fixture between turns
+                        # to prove that historical object context is never reused as current
+                        # fact. The CLI never exposes this hook, and the next turn still
+                        # enters through the ordinary browser/product path.
+                        _notify_turn_boundary(
+                            turn_boundary_hook, turn=turn, total_turns=len(tasks),
+                            record=record)
                     last_url = page.evaluate("() => location.href")
                     last_text = page.locator("body").inner_text()[:2_000]
                     if config.keep_open_seconds and not config.headless:
@@ -501,7 +522,8 @@ def _run_browser(config: OdooDemoConfig, live: LiveProductSession,
     return records, last_url, last_text, taken
 
 
-def run_demo(config: OdooDemoConfig) -> dict:
+def run_demo(config: OdooDemoConfig, *,
+             turn_boundary_hook: Callable[[int, dict], None] | None = None) -> dict:
     if sys.version_info[:2] != (3, 12):
         raise RuntimeError("the Odoo demo requires Python 3.12")
     run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
@@ -579,7 +601,8 @@ def run_demo(config: OdooDemoConfig) -> dict:
     try:
         records, last_url, last_text, taken = _run_browser(
             config, live, holder["conversation"], adapter=adapter,
-            expected_binding=expected_binding, shots=run_dir / "screens")
+            expected_binding=expected_binding, shots=run_dir / "screens",
+            turn_boundary_hook=turn_boundary_hook)
     finally:
         live.close()
         live.wait(timeout_s=10)
