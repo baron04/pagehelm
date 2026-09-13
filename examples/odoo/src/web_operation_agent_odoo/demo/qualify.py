@@ -100,7 +100,7 @@ CASES = {
         "task": "Open the customer record for Acme Corporation.",
         "replies": (
             ("load_skill", {"skill_id": "odoo.sales.customers-query"}),
-            ("query_customers", {"name_contains": "Acme"}),
+            ("query_customers", {"name_contains": "Acme Corporation"}),
             ("goto", {"url": "/odoo/customers/10"}),
             ("wait_for", {"text": "Acme"}),
             ("finish", {"done": True, "why": "Opened Acme Corporation's record."}),
