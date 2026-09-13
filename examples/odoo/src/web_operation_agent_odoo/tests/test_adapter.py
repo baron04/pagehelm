@@ -251,6 +251,30 @@ class AdapterContract(unittest.TestCase):
         self.assertFalse(selection.route_context_used)
         self.assertIn("odoo.sales.customers-create", selection.candidate_ids)
 
+    def test_customer_creation_keeps_write_intent_with_a_malformed_email(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            adapter = OdooApplicationAdapter(
+                base_url=BASE, api_key_path=_key_file(Path(tmp)),
+                allow_mutations=True, mutation_journal=MemoryMutationJournal())
+
+        selection = adapter.business_tools.select(
+            "创建客户名称为abc,邮箱test@com", allow_mutations=True,
+            trusted_entry_path="/odoo/customers")
+
+        self.assertEqual(selection.candidate_ids,
+                         ("odoo.sales.customers-create",))
+        create_schema = next(
+            schema for schema in adapter.business_tools.schemas_for(
+                {"odoo.sales.customers-create"})
+            if schema["function"]["name"] == "create_customer")
+        self.assertEqual(
+            create_schema["function"]["parameters"]["properties"]["email"]["format"],
+            "email")
+        with self.assertRaisesRegex(
+                BusinessToolRequestError, "complete address such as name@example.com"):
+            OdooBusinessToolExecutor._normalize_customer(
+                {"name": "abc", "email": "test@com"})
+
     def test_mutations_require_an_explicit_journal(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(ValueError, "explicit mutation journal"):

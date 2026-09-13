@@ -771,6 +771,12 @@ class ServerAgentSession:
             )
         self._task_business_skill_ids = {
             skill.skill_id for skill in self._task_business_skills}
+        # A matched mutation Skill is stronger evidence than a mutation candidate exposed
+        # only by fallback or noun-only widening.  Keep that distinction so a duplicate
+        # preflight cannot be presented as the answer to an explicit create request.
+        self._explicit_mutation_intent = any(
+            not skill.read_only and skill.skill_id in selection.trigger_matches
+            for skill in selection.skills)
         self._loaded_business_skill_ids: set[str] = set()
         self._auto_loaded_business_skill_ids: set[str] = set()
         if (self.deterministic_read_navigation and self._navigation_only
@@ -1985,6 +1991,20 @@ class ServerAgentSession:
 
             if name == "finish" and self._structured_answer_required():
                 try:
+                    answer = args.get("answer") if isinstance(args, dict) else None
+                    conclusions = (answer.get("conclusions")
+                                   if isinstance(answer, dict) else ())
+                    claims_not_found = (
+                        isinstance(conclusions, list)
+                        and any(isinstance(item, dict)
+                                and item.get("kind") == "not_found"
+                                for item in conclusions))
+                    if (self._explicit_mutation_intent and claims_not_found
+                            and self._business_control["mutation_completed"] == 0):
+                        raise ValueError(
+                            "a read-only not_found result is only a mutation preflight; "
+                            "continue the requested mutation, ask for corrected input, or "
+                            "finish with outcome=unable")
                     # Existing scripted navigation callers still use done/why. Never render
                     # their free prose once evidence mode is active; use the actual receipt.
                     if (isinstance(args, dict) and args.get("done") is True

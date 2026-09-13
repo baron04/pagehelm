@@ -500,7 +500,12 @@ export class EmbeddedWebRuntime {
       this.panelContainer.setAttribute('data-page-agent-not-interactive', 'true')
       // A non-interactive parent does not exclude its descendants or shadow text.
       this.panelContainer.setAttribute('data-page-agent-ignore', 'true')
-      document.body?.appendChild(this.panelContainer)
+      // First-party SPAs own <body> and are allowed to reconcile or replace its children.
+      // Mount beside it under the stable document root so a route render cannot detach the
+      // live React tree, blink the panel, or lose the collapsed launcher.  Fixed-position
+      // shadow content does not participate in the application's document flow here.
+      const mountParent = document.documentElement || document.body
+      mountParent?.appendChild(this.panelContainer)
       this._watchPanelAttachment()
     }
     this._onPageShow = event => {
@@ -536,18 +541,17 @@ export class EmbeddedWebRuntime {
     if (!this.panelEnabled || this.stopped || !this.panelContainer
         || typeof MutationObserver === 'undefined') return
     this.panelAttachmentObserver ||= new MutationObserver(() => {
-      if (this.stopped || !this.panelContainer || !document.body) return
-      // Some first-party SPAs replace or reconcile the direct children of <body>. Keep the
-      // already-mounted panel and its server-backed timeline alive when that happens.
-      if (!this.panelContainer.isConnected) document.body.appendChild(this.panelContainer)
+      if (this.stopped || !this.panelContainer) return
+      const parent = document.documentElement || document.body
+      if (!parent) return
+      // Removing the integration-owned root is still recoverable, but ordinary application
+      // route reconciliation no longer causes this branch to run.
+      if (!this.panelContainer.isConnected) parent.appendChild(this.panelContainer)
       this._watchPanelAttachment()
     })
     this.panelAttachmentObserver.disconnect()
     if (document.documentElement) {
       this.panelAttachmentObserver.observe(document.documentElement, {childList: true})
-    }
-    if (document.body) {
-      this.panelAttachmentObserver.observe(document.body, {childList: true})
     }
   }
 
@@ -744,7 +748,10 @@ export class EmbeddedWebRuntime {
     this.stored.activeMessageId = messageId
     this.stored.cancellationPending = false
     this._save()
-    this.panelHost?.setConnection({busy: true})
+    // A completed cancellation belongs to the preceding message.  Reset both flags at the
+    // new-message boundary as well as at the terminal event so a delayed projection cannot
+    // leave the new stop control disabled.
+    this.panelHost?.setConnection({busy: true, stopping: false})
     this._panelState('observing')
     // Echo the message immediately; the server's own `message_accepted` event replaces it.
     this.panelHost?.setOptimistic({turnId: messageId, text: goal, failed: false})
@@ -765,7 +772,7 @@ export class EmbeddedWebRuntime {
       this.stored.activeMessageId = ''
       this.stored.cancellationPending = false
       this._save()
-      this.panelHost?.setConnection({busy: false})
+      this.panelHost?.setConnection({busy: false, stopping: false})
       this.panelHost?.failOptimistic()
       this._raise(error)
       throw error
@@ -1089,7 +1096,7 @@ export class EmbeddedWebRuntime {
         this.stored.activeMessageId = ''
         this.stored.cancellationPending = false
         this._save()
-        this.panelHost?.setConnection({busy: false})
+        this.panelHost?.setConnection({busy: false, stopping: false})
         this.panelHost?.clearOptimisticOnce(turnId)
       }
       // The panel state each progress state maps to is the server's table, not a second
@@ -1100,7 +1107,7 @@ export class EmbeddedWebRuntime {
       this.stored.activeMessageId = ''
       this.stored.cancellationPending = false
       this._save()
-      this.panelHost?.setConnection({busy: false})
+      this.panelHost?.setConnection({busy: false, stopping: false})
       this.panelHost?.clearOptimisticOnce(turnId)
       this._panelState('ended')
       // The terminal cursor is durable after this handler returns.  A closed server session

@@ -1493,6 +1493,11 @@ class BusinessReActTransition(unittest.TestCase):
             chat = _Chat([
                 ("load_skill", {"skill_id": skill.skill_id}),
                 ("query_companies", {}),
+                ("finish", {"outcome": "answered", "answer": {
+                    "version": 1, "coverage": "complete",
+                    "conclusions": [{"kind": "not_found",
+                                     "evidence_ref": "call2-query#1"}],
+                }}),
                 ("create_company", {"name": "P72 Acceptance Write"}),
             ])
             ledger = SessionLedger(Path(tmp) / "session.jsonl", "empty-preflight")
@@ -1506,7 +1511,7 @@ class BusinessReActTransition(unittest.TestCase):
                 task=TaskSpec(task_ref="T", prompt="创建公司 P72 Acceptance Write",
                               supported_scope="Create exactly one company."),
                 chat=chat, browser=_Browser(), control=ReadOnlyControl(), ledger=ledger,
-                step_budget=4, wall_budget_s=30, run_id="empty-preflight",
+                step_budget=5, wall_budget_s=30, run_id="empty-preflight",
                 business_tools=BusinessToolRuntime(
                     (skill,), EmptyMutationExecutor(),
                     mutation_journal=MemoryMutationJournal()),
@@ -1517,8 +1522,9 @@ class BusinessReActTransition(unittest.TestCase):
             result = session.run()
 
             self.assertEqual(result.terminal_reason, "approval_denied")
-            self.assertEqual(result.steps_used, 3)
-            self.assertEqual(len(chat.messages), 3)
+            self.assertEqual(result.steps_used, 4)
+            self.assertEqual(len(chat.messages), 4)
+            self.assertEqual(len(ledger.of_kind("answer_contract_refused")), 1)
             self.assertEqual(ledger.of_kind("answer_verified"), [])
 
     def test_read_failure_records_its_machine_code_for_external_scoring(self):

@@ -294,10 +294,11 @@ CREATE_CUSTOMER_SCHEMA = {
             "properties": {
                 "name": {"type": "string", "minLength": 1, "maxLength": 200,
                          "description": "Required exact customer name supplied by the user."},
-                "email": {"type": "string", "minLength": 3, "maxLength": 254,
+                "email": {"type": "string", "format": "email",
+                          "minLength": 3, "maxLength": 254,
                           "description": (
-                              "Required customer email address supplied by the user; it "
-                              "cannot be omitted or invented."
+                              "Required complete customer email address supplied by the user, "
+                              "such as name@example.com; it cannot be omitted or invented."
                           )},
             },
             "required": ["name", "email"],
@@ -320,8 +321,11 @@ PREPARE_CUSTOMER_FORM_SCHEMA = {
             "properties": {
                 "name": {"type": "string", "minLength": 1, "maxLength": 200,
                          "description": "Required exact customer name supplied by the user."},
-                "email": {"type": "string", "minLength": 3, "maxLength": 254,
-                          "description": "Required exact email supplied by the user."},
+                "email": {"type": "string", "format": "email",
+                          "minLength": 3, "maxLength": 254,
+                          "description": (
+                              "Required complete email supplied by the user, such as "
+                              "name@example.com.")},
             },
             "required": ["name", "email"],
             "additionalProperties": False,
@@ -1008,14 +1012,15 @@ class OdooBusinessToolExecutor:
     @staticmethod
     def _normalize_customer(args: dict) -> dict:
         if not isinstance(args, dict) or set(args) != {"name", "email"}:
-            raise BusinessToolError("create_customer requires only name and email")
+            raise BusinessToolRequestError("create_customer requires only name and email")
         name = normalize_business_text(args.get("name"), field="customer name", maximum=200)
         email = args.get("email")
         if not isinstance(email, str):
-            raise BusinessToolError("customer email must be a string")
+            raise BusinessToolRequestError("customer email must be a string")
         email = unicodedata.normalize("NFKC", email).strip().casefold()
         if not _EMAIL.fullmatch(email):
-            raise BusinessToolError("customer email must be a plain address")
+            raise BusinessToolRequestError(
+                "customer email must be a complete address such as name@example.com")
         return {"name": name, "email": email}
 
     def _assert_no_duplicate(self, name: str, email: str) -> None:

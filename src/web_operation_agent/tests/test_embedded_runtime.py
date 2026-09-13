@@ -178,6 +178,24 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                 thread.get_by_text("列出所有待开票的销售订单").wait_for(timeout=3000)
                 thread.get_by_text("正在检查当前页面").wait_for(timeout=3000)
 
+                # The application owns <body>. Replacing all its children must not detach
+                # the assistant even for one microtask: detaching it and putting it back in
+                # a MutationObserver is the user-visible flash this protects against.
+                self.assertEqual(page.evaluate(
+                    "document.querySelector('#woa-assistant-root').parentElement.tagName"),
+                    "HTML")
+                remained_connected = page.evaluate("""() => {
+                  const root = document.querySelector('#woa-assistant-root')
+                  document.body.replaceChildren(document.createElement('main'))
+                  return root.isConnected && root.parentElement === document.documentElement
+                }""")
+                self.assertTrue(remained_connected)
+                labels = channel._panel_configuration()["labels"]
+                page.get_by_role("button", name=labels["collapse"]).click()
+                page.locator(".woa-launcher").wait_for(timeout=3000)
+                page.locator(".woa-launcher").click()
+                page.locator(".woa-window").wait_for(timeout=3000)
+
                 # A real, full document navigation: new document, new Runtime, new panel.
                 page.goto(app.origin + "/page2?source=navigation", wait_until="domcontentloaded")
                 page.locator(".woa-window").wait_for(timeout=8000)
@@ -607,6 +625,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
             "activeMessageId": "message-7", "cancellationPending": True})
         self.assertEqual(result["statuses"], ["stopping", "cancelled"])
         self.assertFalse(result["busy"])
+        self.assertFalse(result["stopping"])
         self.assertFalse(result["stored"]["taskInFlight"])
         self.assertEqual(result["stored"]["activeMessageId"], "")
         self.assertFalse(result["stored"]["cancellationPending"])

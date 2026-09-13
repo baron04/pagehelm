@@ -247,6 +247,27 @@ class PanelUITests(_PanelBrowser):
         self.assertEqual(launcher.locator(".woa-launcher__nub").inner_text(), "1")
         self.assertEqual(self.errors, [])
 
+    def test_panel_interactions_do_not_reach_the_host_application_event_delegates(self):
+        page = self.open(_snapshot())
+        page.evaluate("""() => {
+          window.__escapedPanelEvents = []
+          for (const type of ['click', 'pointerdown', 'keydown', 'input', 'submit']) {
+            document.addEventListener(type, () => window.__escapedPanelEvents.push(type))
+          }
+        }""")
+
+        page.locator(".woa-launcher").click()
+        composer = page.locator("#woa-composer-input")
+        composer.fill("列出客户")
+        page.keyboard.press("Enter")
+        page.get_by_role(
+            "button", name=panel_contract()["label_keys"]["collapse"]).click()
+
+        self.assertEqual(page.evaluate("window.__escapedPanelEvents"), [])
+        self.assertEqual(self.calls(page), [["submit", "列出客户"]])
+        page.locator(".woa-launcher").wait_for(timeout=3000)
+        self.assertEqual(self.errors, [])
+
     # ---------------------------------------------------------------- default state
     def test_opening_shows_the_default_state_and_a_suggestion_only_fills_the_composer(self):
         page = self.open(_snapshot())

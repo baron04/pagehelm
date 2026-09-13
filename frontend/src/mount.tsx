@@ -42,6 +42,18 @@ function adopt(root: ShadowRoot, text: string): void {
   }
 }
 
+// Shadow DOM retargets composed events; it does not keep them out of document-level event
+// delegation. Large SPAs commonly listen for clicks and keys at `document`, where a panel
+// button otherwise looks like a click on the assistant host and can trigger reconciliation.
+// React handles each event on the mount point first, then this bubble listener seals the
+// panel boundary without cancelling the browser's default action inside the panel.
+const HOST_EVENT_BARRIER = [
+  'click', 'dblclick', 'contextmenu',
+  'pointerdown', 'pointerup', 'pointermove', 'pointercancel',
+  'mousedown', 'mouseup', 'touchstart', 'touchmove', 'touchend',
+  'keydown', 'keyup', 'input', 'change', 'submit', 'wheel', 'focusin', 'focusout',
+] as const
+
 export function mountPanel(options: MountOptions): PanelHandle {
   const host: PanelHost = requirePanelHost(options.host)
   if (host.configuration.protocol !== PANEL_PROTOCOL) {
@@ -72,6 +84,8 @@ export function mountPanel(options: MountOptions): PanelHandle {
                      {attributes: true, attributeFilter: ['data-theme']})
 
   const shadow = element.attachShadow({mode: 'open'})
+  const stopAtPanelBoundary = (event: Event) => event.stopPropagation()
+  for (const type of HOST_EVENT_BARRIER) shadow.addEventListener(type, stopAtPanelBoundary)
   adopt(shadow, css)
   const mountPoint = documentRef.createElement('div')
   mountPoint.className = 'woa-root'
@@ -99,6 +113,9 @@ export function mountPanel(options: MountOptions): PanelHandle {
     element,
     destroy() {
       themeWatch.disconnect()
+      for (const type of HOST_EVENT_BARRIER) {
+        shadow.removeEventListener(type, stopAtPanelBoundary)
+      }
       root.unmount()
       element.remove()
     },
