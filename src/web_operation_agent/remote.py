@@ -16,12 +16,13 @@ import threading
 import time
 import uuid
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
 from .durable import SQLiteSessionStore, DurableStateError, principal_scope
 from .browser import TransportError, TurnCancelled
-from .identity import PrincipalContext, PrincipalError
+from .identity import PrincipalContext, PrincipalError, PrincipalRevokedError
 from .panel_view import (collapse_timeline, panel_contract, panel_limits,
                          project_event, project_history_record)
 from .privacy import (SESSION_HANDOFF_QUERY_KEYS, SENSITIVE_CREDENTIAL_NAME,
@@ -181,10 +182,16 @@ class RemoteSessionChannel:
     def __init__(self, session_id: str, allowed_origins: tuple[str, ...],
                  principal: PrincipalContext | None = None,
                  limits: RemoteSessionLimits | None = None,
-                 durable_store: SQLiteSessionStore | None = None):
+                 durable_store: SQLiteSessionStore | None = None,
+                 principal_validator: Callable[[PrincipalContext], None] | None = None):
         self.session_id = session_id
         self.allowed_origins = frozenset(allowed_origins)
         self.principal = principal
+        if principal_validator is not None and not callable(principal_validator):
+            raise TypeError("principal_validator must be callable or None")
+        if principal_validator is not None and principal is None:
+            raise ValueError("principal_validator requires a principal-bound session")
+        self._principal_validator = principal_validator
         self.limits = limits or RemoteSessionLimits()
         if not isinstance(self.limits, RemoteSessionLimits):
             raise TypeError("limits must be RemoteSessionLimits or None")
@@ -291,9 +298,17 @@ class RemoteSessionChannel:
         if self.principal is not None:
             try:
                 self.principal.require_live(now_ms=now_ms)
+                if self._principal_validator is not None:
+                    self._principal_validator(self.principal)
+            except PrincipalRevokedError as exc:
+                self._terminate("principal_revoked")
+                raise RemoteSessionClosed("session principal has been revoked") from exc
             except PrincipalError as exc:
                 self._terminate("principal_expired")
                 raise RemoteSessionClosed("session principal is no longer valid") from exc
+            except Exception as exc:
+                self._terminate("principal_validation_failed")
+                raise RemoteSessionClosed("session principal validation failed closed") from exc
 
     @property
     def expired(self) -> bool:
@@ -1110,8 +1125,12 @@ class RemoteSessionRegistry:
     """Own capability-token hashes and session channels; raw tokens are never retained."""
 
     def __init__(self, *, limits: RemoteSessionLimits | None = None,
-                 durable_store: SQLiteSessionStore | None = None):
+                 durable_store: SQLiteSessionStore | None = None,
+                 principal_validator: Callable[[PrincipalContext], None] | None = None):
         self.durable_store = durable_store
+        if principal_validator is not None and not callable(principal_validator):
+            raise TypeError("principal_validator must be callable or None")
+        self.principal_validator = principal_validator
         self.limits = limits or RemoteSessionLimits()
         if not isinstance(self.limits, RemoteSessionLimits):
             raise TypeError("limits must be RemoteSessionLimits or None")
@@ -1135,8 +1154,10 @@ class RemoteSessionRegistry:
             principal.require_live(now_ms=_now_ms())
         token = secrets.token_urlsafe(32)
         self.reap_expired()
-        channel = RemoteSessionChannel(sid, origins, principal, self.limits,
-                                       durable_store=self.durable_store)
+        channel = RemoteSessionChannel(
+            sid, origins, principal, self.limits,
+            durable_store=self.durable_store,
+            principal_validator=self.principal_validator if principal is not None else None)
         with self._lock:
             if sid in self._channels:
                 raise ValueError(f"session {sid!r} already exists")

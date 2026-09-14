@@ -3,13 +3,19 @@
 Use a shared private SQLite database on a local filesystem for cooperating worker processes. Network filesystems and multiple hosts are outside this backend's supported scope. Stop all old workers before upgrading an existing mutation journal.
 
 ```python
-from web_operation_agent.durable import SQLiteSessionStore, SQLiteProviderQuota
+from web_operation_agent.durable import (
+    SQLitePrincipalRevocations,
+    SQLiteProviderQuota,
+    SQLiteSessionStore,
+)
 from web_operation_agent.live import LiveProductServer
 
 store = SQLiteSessionStore("private/sessions.sqlite3")
 server = LiveProductServer(durable_store=store)
 quota = SQLiteProviderQuota(store, scope="tenant-id/provider-account", max_requests=60)
+revocations = SQLitePrincipalRevocations(store)
 # Pass shared_quota=quota when constructing ChatModel.
+# Pass principal_validator=revocations.validate to LiveProductServer.
 ```
 
 The host must obtain a fresh authenticated principal from its application login boundary and supply it when creating a session. To recover, reuse the same stable session ID with that fresh principal after the former owner releases or loses its lease. Application, tenant, workspace, actor and allowed origins must match. The store rotates ownership fences; the registry issues a new capability and the browser handshake issues a new lease. Credentials, observations, actions and approvals are never restored. Accepted messages retain their deduplication tombstones; interrupted messages are not automatically executed again. The host can access `channel.recovered_history` for bounded historical progress, which grants no current facts or permissions. The in-memory model conversation context is intentionally rebuilt rather than restored as authority.
@@ -17,6 +23,8 @@ The host must obtain a fresh authenticated principal from its application login 
 A heartbeat renews ownership. Fenced workers stop publishing actions and fail cancellation checks. An HTTP write already in flight cannot be undone by a fence: the mutation journal continues to hold its business key until the result is definitive or an operator resolves it. Exactly one owner requires every cooperating worker to use this store; independent databases do not coordinate.
 
 The provider quota is a rolling request budget shared by its server-assigned scope. Workers must agree on the same limit/window for that scope; conflicting policies are rejected. Reservations are conservative and not refunded. Exhaustion occurs before provider dispatch and creates no spend row. This is a request quota, not a distributed token/currency quota or global concurrency limiter. The existing process-local concurrency guard remains active.
+
+When the application reports logout, credential revocation, or an access change, call `revocations.revoke(principal, reason="application_logout")`. The validator runs at authenticated channel boundaries, including before message acceptance, page actions, approval and model cancellation checks. A revoked session closes before another unclaimed operation can be dispatched. The exact issued principal stays revoked; a new application login must bind a new principal and receives a new capability. The table stores only a principal digest, timestamp and bounded reason code. Application login/session state remains the authority that decides when to call this hook.
 
 Inactive session histories can be removed with `store.prune(older_than_ms=...)`, with a cutoff at least one day old. Active session tombstones are retained. Operators should retain unresolved mutation records independently; deleting them could permit a duplicate write. SQLite files must be protected with filesystem access controls and disk encryption where application data requires it. Stored mutation arguments are normalized business data, not merely hashes.
 

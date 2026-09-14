@@ -350,6 +350,7 @@ class LiveProductServer:
                  host: str = "127.0.0.1", port: int = 0,
                  session_limits: RemoteSessionLimits | None = None,
                  durable_store: SQLiteSessionStore | None = None,
+                 principal_validator: Callable[[PrincipalContext], None] | None = None,
                  provider_status: Callable[[], dict] | None = None):
         if (isinstance(max_sessions, bool) or not isinstance(max_sessions, int)
                 or not 1 <= max_sessions <= 10_000):
@@ -358,7 +359,9 @@ class LiveProductServer:
         if provider_status is not None and not callable(provider_status):
             raise TypeError("provider_status must be callable or None")
         self._provider_status = provider_status
-        self.registry = RemoteSessionRegistry(limits=session_limits, durable_store=durable_store)
+        self.registry = RemoteSessionRegistry(
+            limits=session_limits, durable_store=durable_store,
+            principal_validator=principal_validator)
         self._sessions: dict[str, LiveProductSession] = {}
         self._lock = threading.RLock()
         self._closed = False

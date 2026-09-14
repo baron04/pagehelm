@@ -6,7 +6,8 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
-from web_operation_agent.durable import SQLiteSessionStore, DurableStateError
+from web_operation_agent.durable import (SQLitePrincipalRevocations, SQLiteSessionStore,
+                                         DurableStateError)
 from web_operation_agent.remote import RemoteSessionRegistry, RemoteSessionClosed, RemoteProtocolError
 from web_operation_agent.schemas import ApprovalRequest, ApprovalDecision
 from web_operation_agent.tests.test_remote_transport import ORIGIN, hello, principal
@@ -194,3 +195,55 @@ class CrashRecoveryTests(unittest.TestCase):
                     worker.join()
                 receiver.close()
                 sender.close()
+
+
+class PrincipalRevocationTests(unittest.TestCase):
+    def test_revocation_stops_an_active_session_and_new_login_gets_new_authority(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SQLiteSessionStore(Path(tmp) / "sessions.sqlite3")
+            revocations = SQLitePrincipalRevocations(store)
+            issued = int(time.time() * 1000)
+            first_principal = principal(issued)
+            registry = RemoteSessionRegistry(
+                durable_store=store, principal_validator=revocations.validate)
+            first_grant, channel = registry.create(
+                allowed_origins=[ORIGIN], session_id="revoked", principal=first_principal)
+            lease = channel.accept_hello(hello(
+                "revoked", application_id="twenty",
+                principal_digest=first_principal.binding_digest))["lease_id"]
+            channel.accept_message({"message_id": "m1", "text": "read companies",
+                                    "page_url": ORIGIN + "/start"}, lease_id=lease)
+            channel.wait_for_message(timeout_s=0)
+
+            self.assertTrue(revocations.revoke(first_principal, reason="application_logout"))
+            self.assertFalse(revocations.revoke(first_principal, reason="application_logout"))
+            self.assertEqual(revocations.status(first_principal)["reason"],
+                             "application_logout")
+            self.assertTrue(channel.message_cancelled("m1"))
+            with self.assertRaises(RemoteSessionClosed):
+                registry.authenticate("revoked", first_grant.client_token, ORIGIN)
+
+            fresh = principal(issued + 1)
+            replacement_registry = RemoteSessionRegistry(
+                durable_store=store, principal_validator=revocations.validate)
+            second_grant, recovered = replacement_registry.create(
+                allowed_origins=[ORIGIN], session_id="revoked", principal=fresh)
+            try:
+                self.assertNotEqual(first_principal.binding_digest, fresh.binding_digest)
+                self.assertNotEqual(first_grant.client_token, second_grant.client_token)
+                recovered.validate_live()
+            finally:
+                recovered.close()
+
+    def test_validation_backend_failure_closes_without_leaking_detail(self):
+        first_principal = principal(int(time.time() * 1000))
+
+        def unavailable(_principal):
+            raise OSError("private backend detail")
+
+        registry = RemoteSessionRegistry(principal_validator=unavailable)
+        _grant, channel = registry.create(allowed_origins=[ORIGIN],
+                                          principal=first_principal)
+        with self.assertRaisesRegex(RemoteSessionClosed, "failed closed") as caught:
+            channel.validate_live()
+        self.assertNotIn("private backend detail", str(caught.exception))

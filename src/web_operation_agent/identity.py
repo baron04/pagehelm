@@ -19,6 +19,10 @@ class PrincipalError(ValueError):
     """A principal assertion is malformed, expired, or bound to another application."""
 
 
+class PrincipalRevokedError(PrincipalError):
+    """The application or operator withdrew one issued principal's authority."""
+
+
 def _integer(value: object, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise PrincipalError(f"{name} must be a non-negative integer")

@@ -16,6 +16,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from .identity import PrincipalContext, PrincipalError, PrincipalRevokedError
+
 
 class DurableStateError(RuntimeError):
     pass
@@ -232,3 +234,58 @@ class SQLiteProviderQuota:
                        (self.scope, uuid.uuid4().hex, now))
             db.commit()
             return True
+
+
+class SQLitePrincipalRevocations:
+    """Process-shared revocation for one exact authenticated principal issuance."""
+
+    def __init__(self, store: SQLiteSessionStore):
+        if not isinstance(store, SQLiteSessionStore):
+            raise TypeError("store must be a SQLiteSessionStore")
+        self.store = store
+        with store.connect() as db:
+            db.execute("CREATE TABLE IF NOT EXISTS principal_revocations ("
+                       "principal_digest TEXT PRIMARY KEY, revoked INTEGER NOT NULL, "
+                       "reason TEXT NOT NULL)")
+
+    def revoke(self, principal: PrincipalContext, *, reason: str = "session_revoked",
+               now_ms: int | None = None) -> bool:
+        if not isinstance(principal, PrincipalContext):
+            raise TypeError("principal must be a PrincipalContext")
+        if (not isinstance(reason, str) or not 1 <= len(reason) <= 64
+                or any(not (char.islower() or char.isdigit() or char == "_")
+                       for char in reason)):
+            raise ValueError("revocation reason must be a lowercase reason code")
+        revoked = self.store.now() if now_ms is None else now_ms
+        if isinstance(revoked, bool) or not isinstance(revoked, int) or revoked < 0:
+            raise ValueError("revocation time must be a non-negative integer")
+        with self.store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            changed = db.execute(
+                "INSERT OR IGNORE INTO principal_revocations VALUES (?, ?, ?)",
+                (principal.binding_digest, revoked, reason)).rowcount
+            db.commit()
+        return changed == 1
+
+    def validate(self, principal: PrincipalContext) -> None:
+        if not isinstance(principal, PrincipalContext):
+            raise PrincipalError("principal is unavailable")
+        with self.store.connect() as db:
+            row = db.execute(
+                "SELECT 1 FROM principal_revocations WHERE principal_digest=?",
+                (principal.binding_digest,)).fetchone()
+        if row is not None:
+            raise PrincipalRevokedError("principal authority has been revoked")
+
+    def status(self, principal: PrincipalContext) -> dict:
+        """Return content-free operator state for one exact principal issuance."""
+        if not isinstance(principal, PrincipalContext):
+            raise TypeError("principal must be a PrincipalContext")
+        with self.store.connect() as db:
+            row = db.execute(
+                "SELECT revoked, reason FROM principal_revocations WHERE principal_digest=?",
+                (principal.binding_digest,)).fetchone()
+        return ({"revoked": False}
+                if row is None else
+                {"revoked": True, "revoked_at_ms": int(row["revoked"]),
+                 "reason": row["reason"]})
