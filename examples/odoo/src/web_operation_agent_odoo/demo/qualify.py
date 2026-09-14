@@ -214,6 +214,17 @@ def cases_for(source_root: str) -> tuple[str, ...]:
                  if source_root or not CASES[name].get("requires_source"))
 
 
+def approved_write_ran(results: Sequence[dict]) -> bool:
+    """Whether a case that actually ran was an approved write.
+
+    The fixture is expected to move only then. Asking the whole case table instead made a run
+    whose source-less environment dropped cases -- or any future partial run -- demand a
+    changed fixture merely because a write case exists somewhere in the module.
+    """
+    return any(CASES[row["case"]].get("writes") and CASES[row["case"]].get("approve")
+               for row in results)
+
+
 def run_case(name: str, case: dict, args, output_dir: Path) -> dict:
     summary = run_demo(OdooDemoConfig(
         base_url=args.base_url,
@@ -503,8 +514,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     restored: dict = {}
     if database is not None:
-        wrote = any(case.get("writes") and CASES[case_name].get("approve")
-                    for case_name, case in CASES.items())
+        wrote = approved_write_ran(results)
         ended_on = database.capture()["digest"]
         fixture_checks["fixture_changed_only_where_a_write_was_approved"] = (
             (ended_on != baseline) if wrote else (ended_on == baseline))
