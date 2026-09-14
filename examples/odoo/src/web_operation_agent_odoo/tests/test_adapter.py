@@ -610,6 +610,30 @@ class TypedReads(unittest.TestCase):
         self.assertEqual(result.query_answer.matched_count, 5)
         self.assertTrue(result.query_answer.source_complete)
 
+    def test_a_reference_search_asks_odoo_for_the_record_name(self):
+        # Orders, quotations and invoices project their `name` as "reference". The search must
+        # still go to Odoo's `name`: `sale.order.reference` is the payment reference, and
+        # `account.move` has no `reference` field at all.
+        invoices = [{"id": 40, "name": "INV/2026/00002", "partner_id": [3, "Acme"],
+                     "state": "posted", "amount_total": 90.0, "currency_id": [1, "USD"],
+                     "amount_residual": 90.0, "move_type": "out_invoice",
+                     "invoice_origin": "S00002"}]
+        cases = (("query_sale_orders", {"sale.order": _orders(3)}, "S00002", "sale_orders"),
+                 ("query_quotations", {"sale.order": _quotations([("S00007", "draft"),
+                                                                  ("S00008", "sent")])},
+                  "S00008", "quotations"),
+                 ("query_customer_invoices", {"account.move": invoices}, "INV/2026/00002",
+                  "customer_invoices"))
+        for tool, tables, reference, key in cases:
+            with self.subTest(tool=tool):
+                executor = _FakeOdoo(tables)
+                result = executor.execute(tool, {"name_contains": reference})
+                self.assertEqual(result.content["matched_count"], 1)
+                self.assertEqual(result.content[key][0]["reference"], reference)
+                self.assertEqual(result.content["record_route_resolution"], "exact")
+                counted = [call for call in executor.calls if call[1] == "search_count"]
+                self.assertIn(["name", "ilike", reference], counted[-1][2][0])
+
     def test_an_exhausted_page_budget_is_reported_as_incomplete(self):
         executor = _FakeOdoo({"res.partner": _customers(
             [(f"Customer {index}", f"c{index}@example.test") for index in range(9000)])})

@@ -919,7 +919,10 @@ class OdooBusinessToolExecutor:
         scan_domain = list(extra_domain)
         if needle:
             escaped = needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            scan_domain.append([field, "ilike", escaped])
+            # `field` names the projection key ("reference" for orders and invoices). Odoo
+            # stores that value in each model's `name`; `sale.order.reference` is the payment
+            # reference and `account.move` has no `reference` at all.
+            scan_domain.append(["name", "ilike", escaped])
         rows, total, scan = self._scan(collection, scan_domain)
         conditions = tuple(f"{p[0]} {p[1]} {p[2]}" for p in [*collection.domain, *extra_domain])
         if needle:
