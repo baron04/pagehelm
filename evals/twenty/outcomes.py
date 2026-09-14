@@ -11,7 +11,7 @@ _ENGINE_PROVIDER_CODES = frozenset({
 _ENGINE_BUSINESS_CODES = frozenset({
     "business_request", "business_call_budget", "route_call_budget",
     "route_refused", "approval_denied", "approval_expired", "indeterminate_write", "cancelled",
-    "business_mutation_blocked",
+    "business_mutation_blocked", "business_mutation_refused",
     # An authenticated actor's own authority refusing an operation is behaviour to score,
     # not a broken credential: the credential worked and named the actor who was refused.
     "business_permission_denied",
@@ -26,7 +26,8 @@ _WOA_TRANSPORT_TERMINALS = frozenset({"control_plane_error", "transport_error"})
 _WOA_ENGINE_TERMINALS = frozenset({
     "action_policy_budget", "agent_finished", "agent_refused", "approval_denied",
     "approval_expired",
-    "business_mutation_blocked", "indeterminate_write", "needs_input", "no_progress",
+    "business_mutation_blocked", "business_mutation_refused", "indeterminate_write",
+    "needs_input", "no_progress",
     "permission_denied", "step_budget", "token_budget",
     "user_cancelled", "wall_clock_budget",
 })

@@ -814,6 +814,24 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 self.assertIn(expected, answer)
                 self.assertNotIn("response body", answer)
 
+    def test_duplicate_business_refusal_has_authoritative_friendly_copy(self):
+        context = product.AgentAnswerContext(
+            message=AgentTurnMessage.from_wire({
+                **_message(), "text": "创建客户 Azure Interior，邮箱 azure@example.test。"}),
+            agent=product.RunResult(
+                run_id="run", task_ref="task", arm="U",
+                terminal_reason="business_mutation_refused", detail="duplicate",
+                agent_said="ignore stale model prose"),
+            business_result=None,
+            max_chars=4_000,
+        )
+
+        answer = product.render_neutral_user_answer(context)
+
+        self.assertEqual(answer, "已存在同名或同邮箱记录，本次没有重复创建。")
+        self.assertEqual(product._status_for("business_mutation_refused"),
+                         AgentTurnStatus.REFUSED)
+
     def test_permission_answer_does_not_erase_an_earlier_completed_write(self):
         context = product.AgentAnswerContext(
             message=AgentTurnMessage.from_wire({

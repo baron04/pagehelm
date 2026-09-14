@@ -39,6 +39,7 @@ from web_operation_agent.application import (APPLICATION_ADAPTER_VERSION,
                                              ResultPostconditionVerifier,
                                              SourceCapability)
 from web_operation_agent.business import (BusinessMutationIndeterminate,
+                                          BusinessMutationRefusedError,
                                           BusinessSelectionOption,
                                           BusinessMutationSpec, BusinessSkill,
                                           BusinessToolAuthenticationError,
@@ -1045,8 +1046,9 @@ class OdooBusinessToolExecutor:
             existing_email = self._label(row, "email").casefold()
             if (business_text_key(self._label(row, "name")) == business_text_key(name)
                     or (existing_email and existing_email == email)):
-                raise BusinessToolError(
-                    "a customer with the same name or email already exists")
+                raise BusinessMutationRefusedError(
+                    "a customer with the same name or email already exists",
+                    reason="duplicate")
 
     # -- the two order-lifecycle writes -------------------------------------------------
     @staticmethod

@@ -18,8 +18,9 @@ from web_operation_agent.business import (BusinessToolAuthenticationError,
                                           BusinessToolUnavailableError)
 
 from web_operation_agent.application import bind_application
-from web_operation_agent.business import (BusinessMutationIndeterminate, BusinessToolError,
-                                          BusinessToolRequestError)
+from web_operation_agent.business import (BusinessMutationIndeterminate,
+                                          BusinessMutationRefusedError,
+                                          BusinessToolError, BusinessToolRequestError)
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.identity import IdentityAssertion, PrincipalError
 from web_operation_agent.ledger import SessionLedger
@@ -497,6 +498,23 @@ class AdapterContract(unittest.TestCase):
             OdooBusinessToolExecutor._normalize_customer(
                 {"name": "abc", "email": "test@com"})
 
+    def test_customer_invoice_wording_selects_the_mutation_skill_directly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            adapter = OdooApplicationAdapter(
+                base_url=BASE, api_key_path=_key_file(Path(tmp)),
+                allow_mutations=True, mutation_journal=MemoryMutationJournal())
+
+        selection = adapter.business_tools.select(
+            "为销售订单 S00001 创建客户发票。", allow_mutations=True,
+            trusted_entry_path="/odoo/sales")
+
+        self.assertIn("odoo.sales.sale-orders-invoice", selection.trigger_matches)
+        self.assertIn("odoo.sales.sale-orders-invoice", selection.candidate_ids)
+        invoice = next(
+            skill for skill in selection.skills
+            if skill.skill_id == "odoo.sales.sale-orders-invoice")
+        self.assertFalse(invoice.read_only)
+
     def test_mutations_require_an_explicit_journal(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(ValueError, "explicit mutation journal"):
@@ -675,8 +693,10 @@ class TheOneWrite(unittest.TestCase):
         for args in ({"name": "novaforge labs", "email": "other@example.test"},
                      {"name": "Different", "email": "OPS@novaforge.example"}):
             with self.subTest(args=args):
-                with self.assertRaisesRegex(BusinessToolError, "already exists"):
+                with self.assertRaisesRegex(
+                        BusinessMutationRefusedError, "already exists") as raised:
                     executor.prepare_mutation("create_customer", args)
+                self.assertEqual(raised.exception.reason, "duplicate")
         self.assertEqual(executor.created, [])
 
     def test_a_write_is_read_back_under_the_same_actor(self):

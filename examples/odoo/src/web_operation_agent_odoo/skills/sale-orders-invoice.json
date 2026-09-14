@@ -11,7 +11,9 @@
     "开票",
     "开发票",
     "为订单开票",
-    "生成发票"
+    "生成发票",
+    "创建客户发票",
+    "create customer invoice"
   ],
   "instructions": [
     "Call query_sale_orders first and read the order's invoice_status. Only an order with something still to invoice can be invoiced; anything else is a refusal to report, not a write to attempt.",

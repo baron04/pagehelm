@@ -15,7 +15,7 @@ class SharedOutcomeProjectionTests(unittest.TestCase):
         for code in (
                 "business_request", "business_call_budget", "route_call_budget",
                 "route_refused", "approval_expired", "business_mutation_blocked",
-                "cancelled"):
+                "business_mutation_refused", "cancelled"):
             self.assertIsNone(business_apparatus_code(code), code)
 
     def test_external_failures_use_the_frozen_apparatus_classes(self):
@@ -65,6 +65,11 @@ class SharedOutcomeProjectionTests(unittest.TestCase):
             events=[{"event": "business_mutation_blocked",
                      "error_code": "business_mutation_blocked"}],
         ), (None, "business_mutation_blocked"))
+        self.assertEqual(classify_woa_outcome(
+            terminal_reason="business_mutation_refused",
+            events=[{"event": "business_mutation_rejected",
+                     "error_code": "business_mutation_refused"}],
+        ), (None, "business_mutation_refused"))
 
     def test_a_permission_refusal_is_scored_and_a_broken_credential_is_not(self):
         """The credential worked and named the actor; that actor was refused."""

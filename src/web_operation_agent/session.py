@@ -33,7 +33,7 @@ from .answer_view import render_payload, unavailable_answer
 from .affordance import SourceAffordance, resolve_source_affordances
 from .browser import BrowserExecutor, TransportError, TurnCancelled
 from .business import (BUSINESS_SKILL_MATCHER_VERSION, BusinessMutationBlockedError,
-                       BusinessMutationIndeterminate,
+                       BusinessMutationIndeterminate, BusinessMutationRefusedError,
                        BusinessSkillSelection, BusinessToolError, BusinessToolPermissionError,
                        BusinessToolResult, FormDraft, BusinessToolRuntime)
 from .contract import (ContractPlanner, EvidenceBundle, PlanningFailed, SourceRetriever,
@@ -1464,6 +1464,15 @@ class ServerAgentSession:
                         return self._permission_denied(
                             result, t0, step, name, exc, dispatched=False,
                             identity=operation_identity)
+                    except BusinessMutationRefusedError as exc:
+                        detail = str(exc)[:500]
+                        self.ledger.append(
+                            "business_mutation_rejected", step=step, tool=name,
+                            error_code=exc.code, reason=exc.reason,
+                            detail=detail, dispatched=False, side_effect_possible=False,
+                            identity=operation_identity)
+                        return self._finish(
+                            result, t0, "business_mutation_refused", exc.reason, steps=step)
                     except BusinessToolError as exc:
                         detail = str(exc)[:500]
                         self.ledger.append(
@@ -2054,17 +2063,18 @@ class ServerAgentSession:
                     answer = args.get("answer") if isinstance(args, dict) else None
                     conclusions = (answer.get("conclusions")
                                    if isinstance(answer, dict) else ())
-                    claims_not_found = (
+                    claims_read_only_result = (
                         isinstance(conclusions, list)
-                        and any(isinstance(item, dict)
-                                and item.get("kind") == "not_found"
-                                for item in conclusions))
-                    if (self._explicit_mutation_intent and claims_not_found
-                            and self._business_control["mutation_completed"] == 0):
+                        and any(isinstance(item, dict) for item in conclusions))
+                    if (self._explicit_mutation_intent and claims_read_only_result
+                            and self._business_control["mutation_completed"] == 0
+                            and isinstance(args, dict)
+                            and args.get("outcome") in ("answered", "partial")):
                         raise ValueError(
-                            "a read-only not_found result is only a mutation preflight; "
-                            "continue the requested mutation, ask for corrected input, or "
-                            "finish with outcome=unable")
+                            "a read-only result is only a mutation preflight for this explicit "
+                            "write request; call the mutation tool so its authoritative "
+                            "pre-dispatch checks can accept or refuse it, ask for corrected "
+                            "input, or finish with outcome=unable")
                     # Existing scripted navigation callers still use done/why. Never render
                     # their free prose once evidence mode is active; use the actual receipt.
                     if (isinstance(args, dict) and args.get("done") is True

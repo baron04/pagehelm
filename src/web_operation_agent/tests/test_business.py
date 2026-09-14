@@ -11,7 +11,8 @@ from types import SimpleNamespace
 
 from web_operation_agent.answering import StructuredQueryAnswer
 from web_operation_agent.business import (
-    BusinessMutationBlockedError, BusinessMutationIndeterminate, BusinessMutationSpec,
+    BusinessMutationBlockedError, BusinessMutationIndeterminate,
+    BusinessMutationRefusedError, BusinessMutationSpec,
     BusinessSelectionOption,
     BusinessSkill, Citation, FormDraft, FormDraftField,
     BusinessToolContractError, BusinessToolDispatchError, BusinessToolError,
@@ -1132,6 +1133,45 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertEqual(len(ledger.of_kind("business_mutation_execution_started")), 0)
             event = ledger.of_kind("business_mutation_blocked")[-1]
             self.assertEqual(event["reason"], "business_key_unresolved")
+            self.assertFalse(event["dispatched"])
+            self.assertFalse(event["side_effect_possible"])
+
+    def test_authoritative_business_refusal_is_terminal_before_approval(self):
+        class DuplicateRefusingExecutor(_MutationExecutor):
+            @staticmethod
+            def prepare_mutation(name, args, *, context=None):
+                raise BusinessMutationRefusedError(
+                    "a company with the same name already exists", reason="duplicate")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _write_skill(Path(tmp) / "write-skill.json")
+            executor = DuplicateRefusingExecutor()
+            runtime = BusinessToolRuntime((skill,), executor)
+            chat = _Chat([
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("create_company", {"name": "Acme"}),
+            ])
+            asked = []
+            ledger = SessionLedger(Path(tmp) / "session.jsonl", "duplicate-refused")
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="创建公司 Acme。",
+                              supported_scope="Create exactly one company."),
+                chat=chat, browser=_Browser(), control=ReadOnlyControl(),
+                ledger=ledger, step_budget=3, wall_budget_s=30,
+                run_id="duplicate-refused", business_tools=runtime,
+                business_mutation_approval=lambda proposal: asked.append(proposal))
+            session.entry_observation = _observation(1)
+            session.plan()
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "business_mutation_refused")
+            self.assertEqual(result.detail, "duplicate")
+            self.assertEqual(executor.executions, 0)
+            self.assertEqual(asked, [])
+            self.assertEqual(result.business_control["approval_requested"], 0)
+            event = ledger.of_kind("business_mutation_rejected")[-1]
+            self.assertEqual(event["error_code"], "business_mutation_refused")
+            self.assertEqual(event["reason"], "duplicate")
             self.assertFalse(event["dispatched"])
             self.assertFalse(event["side_effect_possible"])
 

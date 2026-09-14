@@ -199,7 +199,7 @@ class BusinessToolContractError(BusinessToolError):
 
 
 class BusinessMutationBlockedError(BusinessToolError):
-    """A safe product refusal made before the application received a write."""
+    """An unresolved or in-flight business key blocks another write."""
 
     code = "business_mutation_blocked"
 
@@ -207,6 +207,24 @@ class BusinessMutationBlockedError(BusinessToolError):
         super().__init__(message)
         self.reason = reason
         self.state = state
+
+
+class BusinessMutationRefusedError(BusinessToolError):
+    """A definite application refusal made before any write was dispatched.
+
+    This is distinct from ``BusinessMutationBlockedError``: a refusal such as a
+    duplicate record is a settled business answer, while a blocked mutation points
+    at an earlier operation that still needs reconciliation.
+    """
+
+    code = "business_mutation_refused"
+
+    def __init__(self, message: str, *, reason: str):
+        super().__init__(message)
+        if (not isinstance(reason, str) or not reason.strip()
+                or len(reason) > 100):
+            raise ValueError("business mutation refusal reason is invalid")
+        self.reason = reason.strip()
 
 
 class BusinessMutationIndeterminate(RuntimeError):
