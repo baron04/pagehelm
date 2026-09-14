@@ -151,7 +151,7 @@ Agent 网关仍只监听 loopback。部署时可以为它配置一个独立的�
 scripts/qualify.sh
 ```
 
-它会运行产品套件、Twenty evaluator 基础测试、PageAgent 与 Web Operation Agent 的离线 runner 套件，在已安装固定 npm 依赖时验证并构建 PageAgent bundle，并构建可安装 wheel，同时检查 wheel 内容和在 checkout 之外的导入。任一必需门禁失败即以非零码退出。安装固定 npm 依赖仍属于环境准备；CI 会先完成该步骤，再调用同一个门禁。
+它会运行产品套件、Twenty evaluator 基础测试、Odoo 评估装置离线测试、PageAgent 与 Web Operation Agent 的离线 runner 套件，在已安装固定 npm 依赖时验证并构建 PageAgent bundle，并构建可安装 wheel，同时检查 wheel 内容和在 checkout 之外的导入。任一必需门禁失败即以非零码退出。安装固定 npm 依赖仍属于环境准备；CI 会先完成该步骤，再调用同一个门禁。
 
 有两道门禁取决于环境，它们只会被如实报告，不会被默认当作通过：
 
@@ -203,6 +203,12 @@ python -m web_operation_agent_odoo.demo --scripted --headless \
 公司枚举使用 Twenty 的 `pageInfo.endCursor` 和 `starting_after` 翻页，并设置页数与记录数硬上限，同时检测重复记录、cursor 停滞、总数变化和畸形响应。扫描被有界中断时，工具会明确返回部分结果，不会把它表示成完整公司清单。创建公司的重复项检查只有在完整扫描当前集合后才会继续。Cursor 分页不是数据库快照；如果扫描期间工作区正在变化，结果仍可能被标记为不完整，需要等数据稳定后重试。
 
 根目录 [`demo.sh`](examples/twenty/demo.sh) 会启动 [`examples/twenty/src/web_operation_agent_twenty/demo`](examples/twenty/src/web_operation_agent_twenty/demo/README.md) 中的公开装配。先运行 `./demo.sh --check`，可以在不打开浏览器、不调用模型的情况下诊断配置、运行时、Twenty 健康状态和浏览器/OAuth 身份。Demo 要求已有一个只包含合成数据的 Twenty 实例，并显式提供浏览器登录状态、委托 OAuth 状态、同源 PageController 模块、审计输出和费用账本的本地路径；这些 `WOA_*` 值可以放在经安全解析的模型环境文件中。这个进程不读取数据库真值、不复位应用，也不会把 Agent 结束当成确定性的业务验收。可由全新 clone 一键部署的公开 Twenty 环境仍属于发布前工作。
+
+## 独立 Odoo 产品评估
+
+[`evals/odoo`](evals/odoo/README.md) 是 Odoo 参考集成作为产品接受评估时使用的装置。它通过普通 Odoo 登录、助手面板和带持久 journal 的单机部署，在预先声明的合成 Odoo 18 工作流上测量一个固定的 Web Operation Agent 组合。官方 PageAgent 只作探索性对照，而且只在单轮只读和导航任务上对照。带有本项目 Skill 与 typed tool 的 PageAgent 臂在建设之前就被排除：PageAgentCore 在构造时固定工具集，而产品根据用户请求选择本轮最初的 Skill 目录，两者若要从同一份目录出发，必须由一个读取 prompt 的 harness 代为预选。因此这项评估不做引擎归因，也不做非劣效结论。
+
+每个 attempt 在 runner 启动前就写入 append-only、摘要链接的账本，每次模型请求在转发前落账。产品结果、装置完整性和 fixture 复位作为三个独立维度记录；未知失败码不能让试验从产品分母中消失，replacement 有上限，而且必须紧跟被替换的 attempt。期望真值由独立的 evaluator 进程以同一个试验用户身份读取 Odoo 得出，判定只看用户默认可见的答案。合成 fixture 可以用一条命令从空的 Docker volume 部署，两次部署得到相同的记录和各用户可见数据；每个写入任务结束后都会复位，并对数据库、chatter、sequence 和附件文件核对；每个 attempt 都从空的 Agent 状态目录开始，结束时不得留下会话、未决 mutation 或未关闭的 proposal。开发集与保留集各含 30 个工作流族，在任何付费调用之前封存；保留集任务不公开。
 
 ## 独立 Twenty evaluator
 

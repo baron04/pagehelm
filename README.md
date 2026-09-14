@@ -164,7 +164,7 @@ The explicit `--scripted` mode performs one fixed, zero-cost apparatus walkthrou
 scripts/qualify.sh
 ```
 
-It runs the product suite, the Twenty evaluator foundation tests, the offline PageAgent and Web Operation Agent runner suites, verifies and builds the pinned PageAgent bundle when its installed dependencies are present, and builds an installable wheel whose contents and out-of-checkout import are both checked. It exits non-zero if any required gate fails. Installing the pinned npm dependencies remains environment preparation; CI does that before invoking the same gate.
+It runs the product suite, the Twenty evaluator foundation tests, the offline Odoo evaluation apparatus tests, the offline PageAgent and Web Operation Agent runner suites, verifies and builds the pinned PageAgent bundle when its installed dependencies are present, and builds an installable wheel whose contents and out-of-checkout import are both checked. It exits non-zero if any required gate fails. Installing the pinned npm dependencies remains environment preparation; CI does that before invoking the same gate.
 
 Two gates depend on the environment and are reported, never assumed:
 
@@ -218,6 +218,12 @@ Company enumeration follows Twenty's `pageInfo.endCursor` with `starting_after`,
 The root [`demo.sh`](examples/twenty/demo.sh) launches the public composition in [`examples/twenty/src/web_operation_agent_twenty/demo`](examples/twenty/src/web_operation_agent_twenty/demo/README.md). Run `./demo.sh --check` first to diagnose configuration, runtime, Twenty health, and browser/OAuth identity without opening a browser or calling the model. The demo requires an externally provisioned, synthetic Twenty instance and explicit local paths for browser state, delegated OAuth state, the same-origin PageController module, audit output, and spend accounting; these `WOA_*` values may live in the safely parsed model environment file. It does not read database truth, reset the application, or present an Agent completion as deterministic business verification. Provisioning a reproducible public Twenty environment remains release work.
 
 See [Durable local operations](docs/integrations/durable-operations.md) for opt-in recovery, shared request quotas, retention and mutation reconciliation.
+
+## Independent Odoo product evaluation
+
+[`evals/odoo`](evals/odoo/README.md) is the apparatus for evaluating the Odoo reference integration as a product. It measures one fixed Web Operation Agent composition on declared synthetic Odoo 18 workflows through the ordinary Odoo login, the assistant panel and the single-node deployment with its durable journal. Official PageAgent is compared only in an exploratory way, and only on single-turn read and navigation tasks. A PageAgent arm with this project's Skills and typed tools was ruled out before it was built: PageAgentCore fixes its tool set when it is constructed, and the product chooses its first Skill catalog from the user's request, so the two cannot start from the same catalog without a harness that reads the prompt. The evaluation therefore makes no engine-attribution or non-inferiority claim.
+
+Every attempt is written to an append-only, hash-chained ledger before its runner starts, and every model request before it is forwarded. Product outcome, apparatus integrity and fixture reset are recorded as separate axes. An unknown failure code cannot remove a trial from the product denominator, and replacements are capped and must immediately follow the attempt they replace. Expected truth comes from a separate evaluator process that reads Odoo as the trial's own user and judges only the answer a user sees by default. The synthetic fixture is provisioned from empty Docker volumes by one command, and two provisions produce the same records and the same data for each user. Every write task is reset and checked against the database, chatter, sequences and attachment files, and every attempt starts the Agent from an empty state directory and must end with no open session, unresolved mutation or unclosed proposal. Development and held-out sets of 30 workflow families each are sealed before any paid call; the held-out tasks stay private.
 
 ## Independent Twenty evaluator
 

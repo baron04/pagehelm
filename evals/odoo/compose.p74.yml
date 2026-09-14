@@ -1,0 +1,36 @@
+# Evaluation-only overlay for the Odoo single-node deployment (`p74_odoo_v1`).
+#
+# Applied after deploy/odoo-single-node/docker-compose.yml with an explicit woa-p74-* project
+# name. It changes nothing about how the product runs; it only adds what an evaluation host
+# needs beside it:
+#   * a loopback-only Odoo RPC port for the independent evaluator, which must not share the
+#     product's adapter, and for the fixture guard;
+#   * a provider relay inside the Agent's network namespace, so the product's ordinary
+#     loopback provider URL reaches the evaluation gateway that owns the attempt ledger.
+services:
+  odoo:
+    ports:
+      - "127.0.0.1:${P74_ODOO_RPC_PORT:-19069}:8069"
+
+  agent:
+    environment:
+      WOA_ALLOW_MUTATIONS: "1"
+      WOA_SCRIPTED: "0"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  provider-relay:
+    image: python@sha256:519591d6871b7bc437060736b9f7456b8731f1499a57e22e6c285135ae657bf7
+    network_mode: "service:agent"
+    depends_on:
+      - agent
+    environment:
+      P74_RELAY_LISTEN_PORT: "18080"
+      P74_GATEWAY_HOST: host.docker.internal
+      P74_GATEWAY_PORT: "${P74_GATEWAY_PORT:-18090}"
+    volumes:
+      # Compose resolves relative paths against the base file's directory, so the
+      # evaluation host supplies this checkout's evals/odoo directory explicitly.
+      - ${P74_EVALS_DIR:?}/provider_relay.py:/opt/p74/provider_relay.py:ro
+    command: ["python", "/opt/p74/provider_relay.py"]
+    restart: "no"
