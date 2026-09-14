@@ -516,10 +516,13 @@ class RunResult:
     #: approval alive. It contains no capability and the next ordinary message may answer
     #: or replace it.
     clarification: dict | None = None
+    #: Bounded machine classification for a provider terminal. Provider response bodies and
+    #: exception prose remain outside the product result.
+    provider_error_code: str | None = None
     detail: str = ""
 
     def to_json(self) -> dict:
-        optional = {"verified_answer", "clarification"}
+        optional = {"verified_answer", "clarification", "provider_error_code"}
         value = {k: getattr(self, k) for k in self.__dataclass_fields__
                  if k not in optional or getattr(self, k) is not None}
         if self.clarification is not None:
@@ -1178,6 +1181,7 @@ class ServerAgentSession:
                                     else "wall_clock_budget", str(e), steps=step)
             except (ProviderError, ProviderEgressError) as e:
                 provider_code = getattr(e, "code", "provider_error")
+                result.provider_error_code = provider_code
                 request_id = getattr(e, "request_id", "")
                 dispatched = getattr(e, "dispatched", None)
                 if provider_code == "provider_cancelled":

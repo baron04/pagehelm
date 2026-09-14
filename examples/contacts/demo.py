@@ -232,7 +232,7 @@ def _read_panel(page, task: str) -> dict:
             "approval_cards": page.locator(".woa-approval").count()}
 
 
-def _chat(config: DemoConfig, run_dir: Path):
+def _chat(config: DemoConfig, run_dir: Path, *, runtime_guard=None):
     if config.scripted:
         return ScriptedDemoChat(
             WRITE_WALKTHROUGH if config.allow_mutations else READ_WALKTHROUGH), None
@@ -244,7 +244,8 @@ def _chat(config: DemoConfig, run_dir: Path):
     meter = SpendMeter(ledger=run_dir / "model-spend.jsonl",
                        batch_id=f"minimal-demo-{run_dir.name}")
     return ChatModel(meter, env=env, model=config.model, max_completion_tokens=1024,
-                     timeout=max(1, int(config.turn_timeout_s))), meter
+                     timeout=max(1, int(config.turn_timeout_s)),
+                     runtime_guard=runtime_guard), meter
 
 
 def _outcome_json(outcome) -> dict:

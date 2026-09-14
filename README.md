@@ -135,6 +135,14 @@ delegated credential. Session and mutation state use the local durable backends.
 PYTHONPATH=src:. python -m examples.contacts.server --scripted --port 8765
 ```
 
+The reference host admits 10 browser sessions, at most 3 simultaneous model requests, and
+at most 2 model requests from one authenticated actor by default. An eleventh session gets
+an explicit retryable capacity response before a capability is issued. The limits are
+configurable with `--max-sessions`, `--max-active-requests`, and
+`--max-active-requests-per-actor`; `/readyz` reports only content-free aggregate state.
+Provider rate limiting, temporary outage, and invalid credentials reach the user as bounded
+actionable results and remain distinct in the audit trail.
+
 The Agent gateway still listens only on loopback. Deployments may give it a distinct
 browser-visible HTTPS reverse-proxy URL; runtime assets and authenticated session traffic
 then use that URL without changing the listener's bind policy.

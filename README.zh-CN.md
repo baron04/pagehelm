@@ -132,6 +132,8 @@ PYTHONPATH=src:. python -m examples.contacts.demo --scripted
 PYTHONPATH=src:. python -m examples.contacts.server --scripted --port 8765
 ```
 
+参考 Host 默认接纳 10 个浏览器会话、最多 3 个并发模型请求，且同一认证用户最多占用 2 个模型请求。第 11 个会话会在签发 capability 之前收到明确的可重试容量响应。可通过 `--max-sessions`、`--max-active-requests` 和 `--max-active-requests-per-actor` 调整限制；`/readyz` 只报告不含业务内容的聚合状态。模型限流、暂时不可用和凭据无效会作为有界、可操作的结果显示给用户，并在审计中保留不同的机器分类。
+
 Agent 网关仍只监听 loopback。部署时可以为它配置一个独立的、浏览器可见的 HTTPS 反向代理 URL；Runtime 资源和认证后的会话流量会使用该 URL，而监听地址的安全策略不变。
 
 显式的 `--scripted` 模式只执行一次固定的零费用装置演示：加载 Skill、查询当前 API、打开 API 授权的精确路由、观察新页面并结束。它不衡量模型能力。去掉 `--scripted` 并配置 OpenAI-compatible provider 后，同一个应用会改用真实模型决策并保持浏览器可交互。

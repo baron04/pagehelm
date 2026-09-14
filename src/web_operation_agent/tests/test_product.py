@@ -789,6 +789,31 @@ class AgentTurnExecutorTests(unittest.TestCase):
 
         self.assertEqual(product.render_neutral_user_answer(context), "Opened Acme.")
 
+    def test_provider_failures_have_bounded_actionable_user_copy(self):
+        cases = {
+            "provider_rate_limited": "请求过多",
+            "provider_authentication": "检查凭据",
+            "provider_unavailable": "暂时不可用",
+            "provider_transport": "暂时不可用",
+            "provider_error": "未能完成",
+        }
+        for code, expected in cases.items():
+            with self.subTest(code=code):
+                context = product.AgentAnswerContext(
+                    message=AgentTurnMessage.from_wire({
+                        **_message(), "text": "查询客户。"}),
+                    agent=product.RunResult(
+                        run_id="run", task_ref="task", arm="U",
+                        terminal_reason="provider_error",
+                        provider_error_code=code,
+                        detail="provider response body must never be shown"),
+                    business_result=None,
+                    max_chars=4_000,
+                )
+                answer = product.render_neutral_user_answer(context)
+                self.assertIn(expected, answer)
+                self.assertNotIn("response body", answer)
+
     def test_permission_answer_does_not_erase_an_earlier_completed_write(self):
         context = product.AgentAnswerContext(
             message=AgentTurnMessage.from_wire({

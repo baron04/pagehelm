@@ -14,9 +14,14 @@ from unittest.mock import patch
 
 from examples.contacts.app import DEMO_API_TOKEN, DEMO_SESSION_COOKIE, DEMO_WORKSPACE
 from examples.contacts.demo import ScriptedDemoChat, WRITE_WALKTHROUGH
-from examples.contacts.server import NativeContactsHost, NativeServerConfig
+from examples.contacts.server import (
+    NativeContactsHost,
+    NativeServerConfig,
+    _PrincipalLimitedChat,
+    _PrincipalRequestAdmission,
+)
 from web_operation_agent.identity import PrincipalRevokedError
-from web_operation_agent.model import ProviderError
+from web_operation_agent.model import ProviderError, ProviderOutcome, ProviderRuntimeGuard
 from web_operation_agent.operations import create_state_backup, restore_state_backup
 from web_operation_agent.remote import RemoteProtocolError
 
@@ -133,7 +138,128 @@ class _HeldThenScriptedChat:
             options=options, timeout_s=timeout_s)
 
 
+class _GuardedBlockingChat:
+    model = "scripted/guarded-blocking"
+
+    def __init__(self, guard: ProviderRuntimeGuard):
+        self.guard = guard
+        self.release = threading.Event()
+        self.maximum_observed = 0
+        self._lock = threading.Lock()
+
+    def complete(self, messages, tools, run_id, max_tokens=None, options=None,
+                 timeout_s=None):
+        return self.complete_cancellable(
+            messages, tools, run_id, cancelled=lambda: False,
+            max_tokens=max_tokens, options=options, timeout_s=timeout_s)
+
+    def complete_cancellable(self, messages, tools, run_id, *, cancelled,
+                             max_tokens=None, options=None, timeout_s=None):
+        self.guard.acquire(float(timeout_s or 5), cancelled=cancelled)
+        try:
+            with self._lock:
+                self.maximum_observed = max(
+                    self.maximum_observed, self.guard.status()["in_flight"])
+            if not self.release.wait(float(timeout_s or 5)):
+                raise ProviderError(
+                    "synthetic provider deadline", code="provider_deadline",
+                    retryable=False, dispatched=False)
+            self.guard.record_outcome(ProviderOutcome.SUCCESS)
+            return {"content": "done"}
+        finally:
+            self.guard.release()
+
+
+class _ProviderFailureThenScripted:
+    model = "scripted/provider-failure-then-read"
+
+    def __init__(self, code: str):
+        self.code = code
+        self._failed = False
+        self._fallback = ScriptedDemoChat()
+
+    def complete(self, messages, tools, run_id, max_tokens=None, options=None,
+                 timeout_s=None):
+        return self.complete_cancellable(
+            messages, tools, run_id, cancelled=lambda: False,
+            max_tokens=max_tokens, options=options, timeout_s=timeout_s)
+
+    def complete_cancellable(self, messages, tools, run_id, *, cancelled,
+                             max_tokens=None, options=None, timeout_s=None):
+        if not self._failed:
+            self._failed = True
+            raise ProviderError(
+                "synthetic bounded provider failure", code=self.code,
+                retryable=True, request_id="synthetic-request", dispatched=True)
+        return self._fallback.complete_cancellable(
+            messages, tools, run_id, cancelled=cancelled,
+            max_tokens=max_tokens, options=options, timeout_s=timeout_s)
+
+
 class NativeContactsHostTests(unittest.TestCase):
+    def test_reference_admission_allows_ten_sessions_and_refuses_the_eleventh(self):
+        with tempfile.TemporaryDirectory() as directory, NativeContactsHost(
+                NativeServerConfig(Path(directory), port=0, scripted=True,
+                                   max_sessions=10)) as host:
+            cookie = f"{DEMO_SESSION_COOKIE}=session-ada-northstar"
+            for index in range(10):
+                status, payload, _ = _request(
+                    host.origin + "/woa/bootstrap",
+                    body={"runtime_instance_id": f"capacity-tab-{index:02d}"},
+                    cookie=cookie, origin=host.origin)
+                self.assertEqual(status, 200, payload)
+            self.assertEqual(host.server.session_count, 10)
+            status, payload, _ = _request(
+                host.origin + "/woa/bootstrap",
+                body={"runtime_instance_id": "capacity-tab-overflow"},
+                cookie=cookie, origin=host.origin)
+            self.assertEqual(status, 429)
+            self.assertEqual(payload, {
+                "error": "assistant_capacity", "retryable": True,
+            })
+            readiness = host.server.readiness_snapshot()
+            self.assertFalse(readiness["accepting_sessions"])
+            self.assertEqual(readiness["session_count"], 10)
+            self.assertEqual(readiness["session_capacity"], 10)
+
+    def test_principal_and_global_provider_admission_are_both_enforced(self):
+        global_guard = ProviderRuntimeGuard(max_concurrent_requests=3)
+        principal_guard = _PrincipalRequestAdmission(2)
+        delegate = _GuardedBlockingChat(global_guard)
+        chats = [
+            _PrincipalLimitedChat(delegate, principal_guard, "actor-a"),
+            _PrincipalLimitedChat(delegate, principal_guard, "actor-a"),
+            _PrincipalLimitedChat(delegate, principal_guard, "actor-a"),
+            _PrincipalLimitedChat(delegate, principal_guard, "actor-b"),
+        ]
+        errors: list[BaseException] = []
+
+        def call(chat, index):
+            try:
+                chat.complete([], None, f"capacity-{index}", timeout_s=5)
+            except BaseException as exc:
+                errors.append(exc)
+
+        workers = [threading.Thread(target=call, args=(chat, index))
+                   for index, chat in enumerate(chats)]
+        for worker in workers:
+            worker.start()
+        deadline = time.monotonic() + 2
+        while (global_guard.status()["in_flight"] < 3
+               and time.monotonic() < deadline):
+            time.sleep(.01)
+        self.assertEqual(global_guard.status()["in_flight"], 3)
+        self.assertEqual(principal_guard.active("actor-a"), 2)
+        self.assertEqual(principal_guard.active("actor-b"), 1)
+        delegate.release.set()
+        for worker in workers:
+            worker.join(2)
+        self.assertFalse(any(worker.is_alive() for worker in workers))
+        self.assertEqual(errors, [])
+        self.assertEqual(global_guard.status()["in_flight"], 0)
+        self.assertEqual(principal_guard.active("actor-a"), 0)
+        self.assertEqual(delegate.maximum_observed, 3)
+
     def test_bootstrap_derives_actor_from_cookie_and_reuses_one_tab_session(self):
         with tempfile.TemporaryDirectory() as directory, NativeContactsHost(
                 NativeServerConfig(Path(directory), port=0, scripted=True)) as host:
@@ -275,6 +401,51 @@ class NativeContactsHostTests(unittest.TestCase):
 
 
 class NativeContactsBrowserTests(unittest.TestCase):
+    def test_provider_overload_and_outage_are_actionable_and_do_not_poison_session(self):
+        from playwright.sync_api import sync_playwright
+
+        cases = {
+            "provider_rate_limited": "rate limited",
+            "provider_unavailable": "temporarily unavailable",
+        }
+        for code, expected in cases.items():
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as directory:
+                chat = _ProviderFailureThenScripted(code)
+                with patch("examples.contacts.server._chat", return_value=(chat, None)), \
+                        NativeContactsHost(NativeServerConfig(
+                            Path(directory), port=0, scripted=False)) as host, \
+                        sync_playwright() as playwright:
+                    browser = playwright.chromium.launch(headless=True)
+                    try:
+                        page = browser.new_page(
+                            viewport={"width": 1280, "height": 900})
+                        page.goto(host.origin + "/demo/login/ada-lovelace",
+                                  wait_until="domcontentloaded", timeout=30_000)
+                        page.evaluate(
+                            "async () => { await window.__WOA_RUNTIME_READY__; return true; }")
+                        session = next(iter(host._sessions.values()))[0]
+                        page.evaluate(
+                            "task => window.__WOA_RUNTIME_READY__.then(r => r.submitTask(task))",
+                            "List my contacts.")
+                        failed = session.runner.next_outcome(timeout_s=15)
+                        self.assertEqual(failed.result.terminal_reason, "provider_error")
+                        self.assertEqual(
+                            failed.result.agent.provider_error_code, code)
+                        self.assertIn(expected, failed.result.user_answer)
+                        page.wait_for_function(
+                            "() => window.__WOA_RUNTIME_READY__.then(r => !r.stored.taskInFlight)",
+                            timeout=5_000)
+
+                        page.evaluate(
+                            "task => window.__WOA_RUNTIME_READY__.then(r => r.submitTask(task))",
+                            "Open Grace Hopper's contact record.")
+                        recovered = session.runner.next_outcome(timeout_s=15)
+                        self.assertEqual(
+                            recovered.result.terminal_reason, "agent_finished")
+                        page.wait_for_url("**/contacts/grace-hopper", timeout=10_000)
+                    finally:
+                        browser.close()
+
     @classmethod
     def setUpClass(cls):
         required = os.environ.get("WOA_REQUIRE_MINIMAL_DEMO_BROWSER") == "1"

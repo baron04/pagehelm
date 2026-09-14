@@ -70,6 +70,17 @@ class _ProviderHTTPStatus(Exception):
         self.status = status
 
 
+def _provider_http_error_code(status: int) -> str:
+    """Classify HTTP failures without retaining provider response content."""
+    if status == 429:
+        return "provider_rate_limited"
+    if status in {408, 425} or 500 <= status <= 599:
+        return "provider_unavailable"
+    if status in {401, 403}:
+        return "provider_authentication"
+    return "provider_http"
+
+
 class ProviderOutcome(str, Enum):
     SUCCESS = "success"
     TRANSIENT_PROVIDER_FAILURE = "transient_provider_failure"
@@ -933,6 +944,7 @@ class ChatModel:
                 data = json.loads(raw_response)
             except urllib.error.HTTPError as e:
                 transient = e.code in {408, 425, 429} or 500 <= e.code <= 599
+                error_code = _provider_http_error_code(e.code)
                 if guard is not None:
                     guard.record_outcome(
                         ProviderOutcome.TRANSIENT_PROVIDER_FAILURE if transient
@@ -940,24 +952,25 @@ class ChatModel:
                 e.close()
                 self.meter.record_unmetered(
                     provider=self.provider, model=self.model, run_id=run_id,
-                    request_id=request_id, error_code="provider_http")
+                    request_id=request_id, error_code=error_code)
                 raise ProviderError(
                     f"provider returned HTTP {e.code}",
-                    code="provider_http",
+                    code=error_code,
                     retryable=transient,
                     request_id=request_id,
                 ) from e
             except _ProviderHTTPStatus as e:
                 transient = e.status in {408, 425, 429} or 500 <= e.status <= 599
+                error_code = _provider_http_error_code(e.status)
                 if guard is not None:
                     guard.record_outcome(
                         ProviderOutcome.TRANSIENT_PROVIDER_FAILURE if transient
                         else ProviderOutcome.PERMANENT_PROVIDER_FAILURE)
                 self.meter.record_unmetered(
                     provider=self.provider, model=self.model, run_id=run_id,
-                    request_id=request_id, error_code="provider_http")
+                    request_id=request_id, error_code=error_code)
                 raise ProviderError(
-                    f"provider returned HTTP {e.status}", code="provider_http",
+                    f"provider returned HTTP {e.status}", code=error_code,
                     retryable=transient, request_id=request_id) from e
             except ProviderError as exc:
                 if guard is not None:

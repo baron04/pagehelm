@@ -336,7 +336,13 @@ class MinimalContactsApplication:
                         self._reply(400, _json_bytes({"error": "invalid_bootstrap"}),
                                     "application/json")
                         return
-                    except Exception:
+                    except Exception as exc:
+                        if getattr(exc, "code", "") == "session_capacity":
+                            self._reply(429, _json_bytes({
+                                "error": "assistant_capacity",
+                                "retryable": True,
+                            }), "application/json")
+                            return
                         self._reply(503, _json_bytes({"error": "assistant_unavailable"}),
                                     "application/json")
                         return

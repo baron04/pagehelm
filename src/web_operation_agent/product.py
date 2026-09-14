@@ -230,6 +230,21 @@ def render_neutral_user_answer(context: AgentAnswerContext) -> str:
     status = _status_for(context.agent.terminal_reason)
     if status is AgentTurnStatus.INDETERMINATE:
         return "The action outcome is uncertain. It was not retried automatically."
+    if context.agent.terminal_reason == "provider_error":
+        chinese = bool(re.search(r"[\u3400-\u9fff]", context.message.text))
+        code = context.agent.provider_error_code or "provider_error"
+        if code == "provider_rate_limited":
+            return ("模型服务当前请求过多，请稍后重试。" if chinese else
+                    "The model service is rate limited. Try again shortly.")
+        if code == "provider_authentication":
+            return ("模型服务配置无效，请联系管理员检查凭据。" if chinese else
+                    "The model service credentials are invalid. Contact the administrator.")
+        if code in {"provider_unavailable", "provider_transport",
+                    "provider_circuit_open", "provider_capacity"}:
+            return ("模型服务暂时不可用，请稍后重试。" if chinese else
+                    "The model service is temporarily unavailable. Try again shortly.")
+        return ("模型服务未能完成本次请求，请稍后重试。" if chinese else
+                "The model service could not complete this request. Try again shortly.")
     if context.agent.terminal_reason == "business_mutation_blocked":
         if re.search(r"[\u3400-\u9fff]", context.message.text):
             return "同一业务对象已有正在执行或结果待确认的操作。本次没有再次提交，请先核对上一笔操作。"

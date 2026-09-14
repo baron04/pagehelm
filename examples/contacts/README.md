@@ -29,6 +29,12 @@ To use the product as an ordinary signed-in user, without Playwright or browser 
 PYTHONPATH=src:. python -m examples.contacts.server --scripted --port 8765
 ```
 
+The ordinary-browser host defaults to 10 sessions, 3 simultaneous model requests, and 2
+requests per authenticated actor. Use `--max-sessions`, `--max-active-requests`, and
+`--max-active-requests-per-actor` to set a smaller qualified deployment envelope. Capacity
+is refused before issuing another capability; provider failures do not invalidate an
+otherwise healthy browser session.
+
 Open the printed writer or reader login URL in any browser. The application sets its own
 HttpOnly session cookie, derives the actor on the server, and returns one ephemeral Runtime
 capability to that browser tab. Reloading reuses the tab's server session and replaces only

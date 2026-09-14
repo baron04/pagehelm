@@ -26,7 +26,83 @@ from web_operation_agent.durable import (SQLitePrincipalRevocations, SQLiteSessi
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.live import LiveConversationRunner, LiveProductServer, LiveProductSession
 from web_operation_agent.mutation import SQLiteMutationJournal
+from web_operation_agent.model import ProviderError, ProviderRuntimeGuard, require_chat_port
 from web_operation_agent.product import AgentTurnConfig, AgentTurnExecutor
+
+
+class _PrincipalRequestAdmission:
+    """Keep one authenticated actor from occupying every provider slot."""
+
+    def __init__(self, maximum: int):
+        self.maximum = maximum
+        self._condition = threading.Condition()
+        self._active: dict[str, int] = {}
+
+    def acquire(self, key: str, timeout_s: float, *, cancelled=None) -> None:
+        deadline = time.monotonic() + max(0.001, float(timeout_s))
+        with self._condition:
+            while self._active.get(key, 0) >= self.maximum:
+                if cancelled is not None and cancelled():
+                    raise ProviderError(
+                        "provider call cancelled while waiting for principal capacity",
+                        code="provider_cancelled", retryable=False, dispatched=False)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ProviderError(
+                        "principal provider capacity was unavailable before the deadline",
+                        code="provider_capacity", retryable=True, dispatched=False)
+                self._condition.wait(min(.05, remaining))
+            self._active[key] = self._active.get(key, 0) + 1
+
+    def release(self, key: str) -> None:
+        with self._condition:
+            count = self._active.get(key, 0)
+            if count <= 0:
+                raise RuntimeError("principal provider slot released without acquisition")
+            if count == 1:
+                self._active.pop(key, None)
+            else:
+                self._active[key] = count - 1
+            self._condition.notify_all()
+
+    def active(self, key: str) -> int:
+        with self._condition:
+            return self._active.get(key, 0)
+
+
+class _PrincipalLimitedChat:
+    """ChatPort decorator for per-principal admission; provider health stays delegated."""
+
+    def __init__(self, delegate, admission: _PrincipalRequestAdmission, key: str):
+        self._delegate = require_chat_port(delegate, role="principal-limited chat delegate")
+        self._admission = admission
+        self._key = key
+        self.model = delegate.model
+        self.meter = getattr(delegate, "meter", None)
+        self.options = getattr(delegate, "options", None)
+        self.egress_policy = getattr(delegate, "egress_policy", None)
+
+    def complete(self, messages, tools, run_id, max_tokens=None, options=None,
+                 timeout_s=None):
+        timeout = float(timeout_s if timeout_s is not None else 180)
+        self._admission.acquire(self._key, timeout)
+        try:
+            return self._delegate.complete(
+                messages, tools, run_id, max_tokens=max_tokens, options=options,
+                timeout_s=timeout_s)
+        finally:
+            self._admission.release(self._key)
+
+    def complete_cancellable(self, messages, tools, run_id, *, cancelled,
+                             max_tokens=None, options=None, timeout_s=None):
+        timeout = float(timeout_s if timeout_s is not None else 180)
+        self._admission.acquire(self._key, timeout, cancelled=cancelled)
+        try:
+            return self._delegate.complete_cancellable(
+                messages, tools, run_id, cancelled=cancelled,
+                max_tokens=max_tokens, options=options, timeout_s=timeout_s)
+        finally:
+            self._admission.release(self._key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +116,8 @@ class NativeServerConfig:
     max_sessions: int = 10
     public_agent_url: str | None = None
     session_lease_ms: int = 5_000
+    max_active_requests: int = 3
+    max_active_requests_per_actor: int = 2
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "state_dir", Path(self.state_dir).expanduser())
@@ -52,6 +130,14 @@ class NativeServerConfig:
         if (isinstance(self.session_lease_ms, bool)
                 or not 1_000 <= self.session_lease_ms <= 60_000):
             raise ValueError("session_lease_ms must be an integer from 1000 to 60000")
+        for name in ("max_active_requests", "max_active_requests_per_actor"):
+            value = getattr(self, name)
+            if (isinstance(value, bool) or not isinstance(value, int)
+                    or not 1 <= value <= 100):
+                raise ValueError(f"{name} must be an integer from 1 to 100")
+        if self.max_active_requests_per_actor > self.max_active_requests:
+            raise ValueError(
+                "max_active_requests_per_actor cannot exceed max_active_requests")
 
 
 class NativeContactsHost:
@@ -67,11 +153,16 @@ class NativeContactsHost:
         self.revocations = SQLitePrincipalRevocations(self.session_store)
         self.mutation_journal = SQLiteMutationJournal(
             config.state_dir / "mutation-journal.sqlite3")
+        self.provider_guard = ProviderRuntimeGuard(
+            max_concurrent_requests=config.max_active_requests)
+        self.principal_admission = _PrincipalRequestAdmission(
+            config.max_active_requests_per_actor)
         self.server = LiveProductServer(
             max_sessions=config.max_sessions,
             durable_store=self.session_store,
             principal_validator=self.revocations.validate,
-            public_base_url=config.public_agent_url)
+            public_base_url=config.public_agent_url,
+            provider_status=self.provider_guard.status)
         self._sessions: dict[tuple[str, str], tuple[LiveProductSession, object]] = {}
         self._lock = threading.RLock()
         self._closed = False
@@ -82,7 +173,7 @@ class NativeContactsHost:
     def origin(self) -> str:
         return self.application.origin
 
-    def _new_chat(self, run_dir: Path):
+    def _new_chat(self, run_dir: Path, principal_key: str):
         demo_config = DemoConfig(
             scripted=self.config.scripted,
             model_env=self.config.model_env,
@@ -90,7 +181,10 @@ class NativeContactsHost:
             allow_mutations=self.config.allow_mutations,
             output_dir=run_dir.parent,
         )
-        return _chat(demo_config, run_dir)
+        chat, meter = _chat(
+            demo_config, run_dir, runtime_guard=self.provider_guard)
+        return _PrincipalLimitedChat(
+            chat, self.principal_admission, principal_key), meter
 
     def _bootstrap(self, actor: DemoActor, runtime_instance_id: str) -> dict:
         key = (actor.actor, runtime_instance_id)
@@ -121,7 +215,7 @@ class NativeContactsHost:
             run_dir = self.config.state_dir / "runs" / (
                 time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8])
             run_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
-            chat, _meter = self._new_chat(run_dir)
+            chat, _meter = self._new_chat(run_dir, principal.binding_digest)
 
             def runner_factory(channel):
                 executor = AgentTurnExecutor(
@@ -224,6 +318,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-sessions", type=int, default=10)
     parser.add_argument("--public-agent-url")
     parser.add_argument("--session-lease-ms", type=int, default=5_000)
+    parser.add_argument("--max-active-requests", type=int, default=3)
+    parser.add_argument("--max-active-requests-per-actor", type=int, default=2)
     return parser
 
 
@@ -234,7 +330,9 @@ def main(argv: list[str] | None = None) -> int:
         model_env=Path(args.model_env) if args.model_env else None,
         model=args.model, allow_mutations=args.allow_mutations,
         max_sessions=args.max_sessions, public_agent_url=args.public_agent_url,
-        session_lease_ms=args.session_lease_ms)
+        session_lease_ms=args.session_lease_ms,
+        max_active_requests=args.max_active_requests,
+        max_active_requests_per_actor=args.max_active_requests_per_actor)
     stopped = threading.Event()
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda _number, _frame: stopped.set())

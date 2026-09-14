@@ -339,6 +339,12 @@ class LiveProductSession:
         self.close()
 
 
+class LiveProductCapacityError(RuntimeError):
+    """A new browser session was refused before any capability was issued."""
+
+    code = "session_capacity"
+
+
 class LiveProductServer:
     """Bounded shared gateway and registry for multiple local product sessions.
 
@@ -431,7 +437,8 @@ class LiveProductServer:
                 raise RuntimeError("live product server is closed")
             self._reap_expired()
             if len(self._sessions) >= self.max_sessions:
-                raise RuntimeError("live product server session capacity is exhausted")
+                raise LiveProductCapacityError(
+                    "live product server session capacity is exhausted")
             session = LiveProductSession(
                 allowed_origin=allowed_origin,
                 page_controller_module=page_controller_module,

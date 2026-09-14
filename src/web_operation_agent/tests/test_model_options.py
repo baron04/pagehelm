@@ -241,6 +241,32 @@ class NativeCompletionTransport(unittest.TestCase):
                     chat.request_completion(body, "native-run")
             opened.assert_not_called()
 
+    def test_http_statuses_reach_the_product_as_bounded_failure_classes(self):
+        cases = {
+            401: ("provider_authentication", False),
+            403: ("provider_authentication", False),
+            429: ("provider_rate_limited", True),
+            503: ("provider_unavailable", True),
+            418: ("provider_http", False),
+        }
+        for status, (code, retryable) in cases.items():
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                chat = M.ChatModel(
+                    M.SpendMeter(ledger=Path(directory) / "spend.jsonl"), env=self.ENV)
+                failure = M.urllib.error.HTTPError(
+                    "https://provider.example/v1/chat/completions", status,
+                    "synthetic", {}, io.BytesIO(b"provider body is not exposed"))
+                with patch.object(M.urllib.request, "urlopen", side_effect=failure):
+                    with self.assertRaises(M.ProviderError) as caught:
+                        chat.complete(
+                            [{"role": "user", "content": "test"}], None,
+                            f"status-{status}")
+                self.assertEqual(caught.exception.code, code)
+                self.assertEqual(caught.exception.retryable, retryable)
+                self.assertNotIn("provider body", str(caught.exception))
+                row = json.loads((Path(directory) / "spend.jsonl").read_text())
+                self.assertEqual(row["error_code"], code)
+
 
 class ProviderRuntimeProtection(unittest.TestCase):
     def test_cancellation_aborts_an_inflight_socket_and_releases_the_guard(self):
@@ -507,7 +533,7 @@ class ProviderRuntimeProtection(unittest.TestCase):
                 for _ in range(2):
                     with self.assertRaises(M.ProviderError) as caught:
                         chat.complete([{"role": "user", "content": "test"}], None, "run")
-                    self.assertEqual(caught.exception.code, "provider_http")
+                    self.assertEqual(caught.exception.code, "provider_unavailable")
                     self.assertTrue(caught.exception.retryable)
                 with self.assertRaises(M.ProviderError) as caught:
                     chat.complete([{"role": "user", "content": "test"}], None, "run")
