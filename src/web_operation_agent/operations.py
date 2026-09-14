@@ -258,6 +258,7 @@ def _parser() -> argparse.ArgumentParser:
     backup = commands.add_parser("backup", help="create a consistent operational backup")
     backup.add_argument("--sessions", required=True)
     backup.add_argument("--mutations", required=True)
+    backup.add_argument("--conversations")
     backup.add_argument("--destination", required=True)
     verify = commands.add_parser("verify", help="verify a backup without restoring it")
     verify.add_argument("bundle")
@@ -272,10 +273,13 @@ def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     try:
         if arguments.command == "backup":
-            result = create_state_backup({
+            sources = {
                 "session-store": arguments.sessions,
                 "mutation-journal": arguments.mutations,
-            }, arguments.destination)
+            }
+            if arguments.conversations:
+                sources["conversation-state"] = arguments.conversations
+            result = create_state_backup(sources, arguments.destination)
         elif arguments.command == "verify":
             result = verify_state_backup(arguments.bundle)
         else:

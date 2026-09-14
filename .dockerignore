@@ -3,6 +3,8 @@
 .workbench
 .q0-cache
 .artifacts
+.private
+.fixture
 .claude
 .env*
 .DS_Store
@@ -15,7 +17,10 @@ __pycache__
 .coverage
 htmlcov
 *.egg-info
+*.whl
 node_modules
+**/node_modules
+**/storybook-static
 dist
 build
 coverage

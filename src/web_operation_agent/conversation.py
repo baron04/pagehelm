@@ -4,7 +4,12 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
+import re
+import sqlite3
+import stat
 import threading
+import time
 from collections import deque
 
 from .business import BusinessToolResult
@@ -191,8 +196,126 @@ class ConversationState:
                 raise RuntimeError("bounded conversation state exceeded its configured limit")
             return copy.deepcopy(value)
 
+    def snapshot(self) -> dict:
+        """Return the bounded, already-redacted value suitable for durable storage."""
+        with self._lock:
+            value = self._model_value()
+            if len(_canonical(value)) > self.max_bytes:
+                raise RuntimeError("bounded conversation state exceeded its configured limit")
+            return copy.deepcopy(value)
+
+    def restore(self, value: object) -> None:
+        """Restore a persisted model projection after validating every field again."""
+        if not isinstance(value, dict) or set(value) - {
+                "schema_version", "prior_turns", "pending_clarification"}:
+            raise ValueError("persisted conversation state has invalid fields")
+        if value.get("schema_version") != 1:
+            raise ValueError("persisted conversation state version is unsupported")
+        turns = value.get("prior_turns")
+        if not isinstance(turns, list) or len(turns) > self.max_turns:
+            raise ValueError("persisted conversation turns are invalid")
+        checked: list[dict] = []
+        for turn in turns:
+            if (not isinstance(turn, dict)
+                    or set(turn) - {"message_id", "user", "assistant", "status",
+                                    "prior_business_facts"}
+                    or not {"message_id", "user", "assistant", "status"} <= set(turn)):
+                raise ValueError("persisted conversation turn has invalid fields")
+            message_id, user, assistant, status = (
+                turn["message_id"], turn["user"], turn["assistant"], turn["status"])
+            if (not isinstance(message_id, str) or not message_id.strip()
+                    or len(message_id) > 200
+                    or not isinstance(user, str) or not user.strip() or len(user) > 2_000
+                    or not isinstance(assistant, str) or not assistant.strip()
+                    or len(assistant) > 20_000 or status not in _ALLOWED_STATUSES):
+                raise ValueError("persisted conversation turn is invalid")
+            if "prior_business_facts" in turn:
+                facts = turn["prior_business_facts"]
+                if len(_canonical(facts)) > self.max_business_bytes:
+                    raise ValueError("persisted business context exceeds its limit")
+            checked.append(_redact_json(copy.deepcopy(turn)))
+        pending = value.get("pending_clarification")
+        if pending is not None:
+            pending = self._validate_clarification(pending)
+        restored = {"schema_version": 1, "prior_turns": checked}
+        if pending is not None:
+            restored["pending_clarification"] = pending
+        if len(_canonical(restored)) > self.max_bytes:
+            raise ValueError("persisted conversation state exceeds its limit")
+        with self._lock:
+            self._turns = deque(checked)
+            self._pending_clarification = copy.deepcopy(pending)
+
     @property
     def content_digest(self) -> str:
         with self._lock:
             value = self._model_value()
             return hashlib.sha256(_canonical(value)).hexdigest()
+
+
+_CONVERSATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}\Z")
+
+
+class SQLiteConversationState(ConversationState):
+    """One bounded conversation projection persisted for restart recovery.
+
+    The database holds user-visible history and typed business projections, so it is a
+    private deployment asset. It contains no capability, approval, cookie, API key, or
+    execution authority. A restored reference still has to be re-read by the application
+    before it can support a current claim or action.
+    """
+
+    def __init__(self, path: str | os.PathLike[str], conversation_id: str, **limits):
+        if not isinstance(conversation_id, str) or not _CONVERSATION_ID.fullmatch(
+                conversation_id):
+            raise ValueError("conversation_id is invalid")
+        self.path = os.path.abspath(os.path.expanduser(os.fspath(path)))
+        self.conversation_id = conversation_id
+        parent = os.path.dirname(self.path)
+        os.makedirs(parent, mode=0o700, exist_ok=True)
+        fd = os.open(self.path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise ValueError("conversation store must be a regular file")
+        finally:
+            os.close(fd)
+        os.chmod(self.path, 0o600)
+        super().__init__(**limits)
+        with self._connect() as database:
+            database.execute("PRAGMA journal_mode=WAL")
+            database.execute(
+                "CREATE TABLE IF NOT EXISTS conversation_contexts ("
+                "conversation_id TEXT PRIMARY KEY, payload TEXT NOT NULL, "
+                "updated INTEGER NOT NULL)")
+            row = database.execute(
+                "SELECT payload FROM conversation_contexts WHERE conversation_id=?",
+                (conversation_id,)).fetchone()
+        if row is not None:
+            try:
+                persisted = json.loads(row[0])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("persisted conversation state is invalid JSON") from exc
+            super().restore(persisted)
+
+    def _connect(self):
+        database = sqlite3.connect(self.path, isolation_level=None, timeout=5)
+        database.execute("PRAGMA synchronous=FULL")
+        return database
+
+    def _persist(self) -> None:
+        payload = _canonical(self.snapshot()).decode("utf-8")
+        with self._connect() as database:
+            database.execute("BEGIN IMMEDIATE")
+            database.execute(
+                "INSERT OR REPLACE INTO conversation_contexts VALUES (?, ?, ?)",
+                (self.conversation_id, payload, int(time.time() * 1000)))
+            database.commit()
+
+    def clear(self) -> int:
+        dropped = super().clear()
+        self._persist()
+        return dropped
+
+    def record(self, **fields) -> None:
+        super().record(**fields)
+        self._persist()

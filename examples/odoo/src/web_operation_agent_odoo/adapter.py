@@ -78,13 +78,15 @@ _WRITE_SKILLS = ("customers-create.json", "sale-orders-confirm.json",
                  "sale-orders-invoice.json")
 
 
-def _validated_origin(value: str) -> str:
+def _validated_origin(value: str, *, allow_private_http: bool = False) -> str:
     parsed = urlsplit(value if isinstance(value, str) else "")
     if (parsed.scheme not in {"http", "https"} or not parsed.hostname
             or parsed.username is not None or parsed.password is not None
             or parsed.path not in {"", "/"} or parsed.query or parsed.fragment):
         raise ValueError("Odoo base_url must be an http(s) origin")
-    if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+    if (parsed.scheme == "http"
+            and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}
+            and not allow_private_http):
         raise ValueError("plain HTTP Odoo origins must use loopback")
     default = 80 if parsed.scheme == "http" else 443
     port = parsed.port
@@ -530,10 +532,11 @@ class OdooBusinessToolExecutor:
     """Typed reads, transient form preparation and guarded writes over delegated JSON-RPC."""
 
     def __init__(self, *, base_url: str, keys: OdooApiKeyStore, timeout_s: float = 20,
-                 allow_mutations: bool = False):
+                 allow_mutations: bool = False, allow_private_http: bool = False):
         if not isinstance(allow_mutations, bool):
             raise ValueError("allow_mutations must be a boolean")
-        self.base_url = _validated_origin(base_url)
+        self.base_url = _validated_origin(
+            base_url, allow_private_http=allow_private_http)
         self.keys = keys
         self.timeout_s = timeout_s
         self.allow_mutations = allow_mutations
@@ -1424,17 +1427,22 @@ class OdooApplicationAdapter:
                  allow_mutations: bool = False,
                  mutation_journal: MutationJournal | None = None,
                  page_controller_module: str | None = None,
-                 timeout_s: float = 20):
+                 timeout_s: float = 20,
+                 public_origin: str | None = None,
+                 allow_private_http: bool = False):
         if not isinstance(allow_mutations, bool):
             raise ValueError("allow_mutations must be a boolean")
         if allow_mutations and mutation_journal is None:
             raise ValueError("allow_mutations=True requires an explicit mutation journal")
-        self.origin = _validated_origin(base_url)
+        self.origin = _validated_origin(public_origin or base_url)
+        self.rpc_origin = _validated_origin(
+            base_url, allow_private_http=allow_private_http)
         self.page_controller_module = (
             page_controller_module or self.origin + "/woa/page-controller.js")
         executor = OdooBusinessToolExecutor(
-            base_url=self.origin, keys=OdooApiKeyStore(api_key_path),
-            timeout_s=timeout_s, allow_mutations=allow_mutations)
+            base_url=self.rpc_origin, keys=OdooApiKeyStore(api_key_path),
+            timeout_s=timeout_s, allow_mutations=allow_mutations,
+            allow_private_http=allow_private_http)
         skills = [_packaged_skill(name) for name in _READ_SKILLS]
         if allow_mutations:
             skills += [_packaged_skill(name) for name in _WRITE_SKILLS]
@@ -1535,7 +1543,7 @@ class OdooApplicationAdapter:
         return frozenset({ODOO_SOURCE_SCOPE})
 
     def health(self) -> dict:
-        request = Request(self.origin + "/web/webclient/version_info",
+        request = Request(self.rpc_origin + "/web/webclient/version_info",
                           data=json.dumps({"jsonrpc": "2.0", "method": "call",
                                            "params": {}}).encode("utf-8"), method="POST")
         request.add_header("Content-Type", "application/json")
@@ -1552,15 +1560,26 @@ class OdooApplicationAdapter:
 
     def bind_principal(self, page_identity: IdentityAssertion, *, delegation_id: str,
                        lifetime_s: int = 300,
-                       now_ms: int | None = None) -> PrincipalContext:
+                       now_ms: int | None = None,
+                       scopes: tuple[str, ...] | None = None) -> PrincipalContext:
         """Match a trusted Odoo page-session assertion to the delegated API-key actor.
 
         The host must obtain ``page_identity`` from Odoo's own authenticated session. DOM
         text or a browser-supplied user id is not trusted evidence.
         """
-        return self.ports.identity.bind(
-            page_identity, delegation_id=delegation_id, lifetime_s=lifetime_s,
-            now_ms=now_ms)
+        if scopes is None:
+            return self.ports.identity.bind(
+                page_identity, delegation_id=delegation_id, lifetime_s=lifetime_s,
+                now_ms=now_ms)
+        selected = frozenset(scopes)
+        if (not isinstance(scopes, tuple) or not scopes or len(selected) != len(scopes)
+                or not selected <= self.ports.identity.required_scopes):
+            raise PrincipalError("deployment scopes must be a non-empty unique subset")
+        delegated = self._executor.resolve_delegated_identity(
+            lifetime_s=lifetime_s, now_ms=now_ms)
+        return bind_matching_identity(
+            page_identity, delegated, delegation_id=delegation_id,
+            scopes=tuple(sorted(selected)), now_ms=now_ms)
 
     def bind_browser_session(self, storage_state_path: str | Path, *, delegation_id: str,
                              lifetime_s: int = 300,

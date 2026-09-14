@@ -494,6 +494,53 @@ class AdapterContract(unittest.TestCase):
                 OdooApplicationAdapter(base_url="http://erp.example.test",
                                        api_key_path=_key_file(Path(tmp)))
 
+    def test_a_deployment_can_separate_private_rpc_from_the_public_https_origin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            adapter = OdooApplicationAdapter(
+                base_url="http://odoo:8069",
+                public_origin="https://erp.example.test",
+                allow_private_http=True,
+                api_key_path=_key_file(Path(tmp)))
+
+        self.assertEqual(adapter.rpc_origin, "http://odoo:8069")
+        self.assertEqual(adapter.descriptor.origin, "https://erp.example.test")
+        self.assertEqual(
+            adapter.descriptor.page_controller_module,
+            "https://erp.example.test/woa/page-controller.js")
+
+    def test_a_deployment_can_narrow_the_principal_to_an_application_grant(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            adapter = OdooApplicationAdapter(
+                base_url=BASE, api_key_path=_key_file(Path(tmp)))
+            page = IdentityAssertion(
+                schema_version=1, source="page_session", application_id="odoo",
+                tenant_id="woa", workspace_id="2", actor_id="7",
+                issued_at=1000, expires_at=31_000)
+            delegated = IdentityAssertion(
+                schema_version=1, source="delegated_api", application_id="odoo",
+                tenant_id="woa", workspace_id="2", actor_id="7",
+                issued_at=1000, expires_at=31_000)
+            with patch.object(
+                    adapter._executor, "resolve_delegated_identity",
+                    return_value=delegated):
+                principal = adapter.bind_principal(
+                    page, delegation_id="trial", lifetime_s=30,
+                    now_ms=1001, scopes=("customers:read",))
+
+        self.assertEqual(principal.scopes, ("customers:read",))
+        with self.assertRaisesRegex(PrincipalError, "subset"):
+            adapter.bind_principal(
+                page, delegation_id="trial", lifetime_s=30,
+                now_ms=1001, scopes=("admin:all",))
+
+    def test_private_rpc_http_requires_an_explicit_deployment_flag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, "plain HTTP"):
+                OdooApplicationAdapter(
+                    base_url="http://odoo:8069",
+                    public_origin="https://erp.example.test",
+                    api_key_path=_key_file(Path(tmp)))
+
     def test_every_collection_names_a_route_its_own_port_accepts(self):
         with tempfile.TemporaryDirectory() as tmp:
             adapter = OdooApplicationAdapter(

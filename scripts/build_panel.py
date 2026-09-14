@@ -38,7 +38,7 @@ def main() -> int:
                         help="only sync an already built frontend/dist/panel")
     args = parser.parse_args()
 
-    if not shutil.which("npm"):
+    if (args.install or not args.skip_build) and not shutil.which("npm"):
         print("npm is unavailable; the panel cannot be built here", file=sys.stderr)
         return 2
     if args.install:

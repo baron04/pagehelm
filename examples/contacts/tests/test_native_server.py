@@ -17,11 +17,11 @@ from examples.contacts.demo import ScriptedDemoChat, WRITE_WALKTHROUGH
 from examples.contacts.server import (
     NativeContactsHost,
     NativeServerConfig,
-    _PrincipalLimitedChat,
-    _PrincipalRequestAdmission,
 )
 from web_operation_agent.identity import PrincipalRevokedError
-from web_operation_agent.model import ProviderError, ProviderOutcome, ProviderRuntimeGuard
+from web_operation_agent.model import (KeyedLimitedChat, KeyedProviderAdmission,
+                                       ProviderError, ProviderOutcome,
+                                       ProviderRuntimeGuard)
 from web_operation_agent.operations import create_state_backup, restore_state_backup
 from web_operation_agent.remote import RemoteProtocolError
 
@@ -224,13 +224,13 @@ class NativeContactsHostTests(unittest.TestCase):
 
     def test_principal_and_global_provider_admission_are_both_enforced(self):
         global_guard = ProviderRuntimeGuard(max_concurrent_requests=3)
-        principal_guard = _PrincipalRequestAdmission(2)
+        principal_guard = KeyedProviderAdmission(2)
         delegate = _GuardedBlockingChat(global_guard)
         chats = [
-            _PrincipalLimitedChat(delegate, principal_guard, "actor-a"),
-            _PrincipalLimitedChat(delegate, principal_guard, "actor-a"),
-            _PrincipalLimitedChat(delegate, principal_guard, "actor-a"),
-            _PrincipalLimitedChat(delegate, principal_guard, "actor-b"),
+            KeyedLimitedChat(delegate, principal_guard, "actor-a"),
+            KeyedLimitedChat(delegate, principal_guard, "actor-a"),
+            KeyedLimitedChat(delegate, principal_guard, "actor-a"),
+            KeyedLimitedChat(delegate, principal_guard, "actor-b"),
         ]
         errors: list[BaseException] = []
 

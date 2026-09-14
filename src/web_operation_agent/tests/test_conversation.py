@@ -1,10 +1,15 @@
 """Conversation context is bounded, redacted, and never treated as current authority."""
 from __future__ import annotations
 
+import json
+import os
+import sqlite3
+import tempfile
 import unittest
+from pathlib import Path
 
 from web_operation_agent.business import BusinessToolResult
-from web_operation_agent.conversation import ConversationState
+from web_operation_agent.conversation import ConversationState, SQLiteConversationState
 
 
 def _result(content: dict | None = None) -> BusinessToolResult:
@@ -106,6 +111,56 @@ class ConversationStateTests(unittest.TestCase):
             status="indeterminate", business_result=_result())
         self.assertNotIn(
             "prior_business_facts", state.model_context()["prior_turns"][0])
+
+
+class DurableConversationStateTests(unittest.TestCase):
+    def test_restart_restores_bounded_references_without_execution_authority(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "conversation.sqlite3"
+            state = SQLiteConversationState(path, "odoo-stable-session")
+            state.record(
+                message_id="m1", user_text="打开 Acme", assistant_text="已打开 Acme",
+                status="finished")
+
+            restored = SQLiteConversationState(path, "odoo-stable-session")
+
+            self.assertEqual(restored.turn_count, 1)
+            context = restored.model_context()
+            self.assertEqual(context["prior_turns"][0]["user"], "打开 Acme")
+            encoded = json.dumps(context)
+            for forbidden in ("approval", "capability", "clientToken", "api_key"):
+                self.assertNotIn(forbidden, encoded)
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
+    def test_new_conversation_is_durable_and_other_session_is_isolated(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "conversation.sqlite3"
+            first = SQLiteConversationState(path, "session-one")
+            first.record(message_id="m1", user_text="one", assistant_text="done",
+                         status="finished")
+            second = SQLiteConversationState(path, "session-two")
+            second.record(message_id="m2", user_text="two", assistant_text="done",
+                          status="finished")
+            self.assertEqual(first.clear(), 1)
+
+            self.assertIsNone(SQLiteConversationState(
+                path, "session-one").model_context())
+            self.assertEqual(
+                SQLiteConversationState(path, "session-two").model_context()
+                ["prior_turns"][0]["user"], "two")
+
+    def test_corrupt_persisted_context_is_refused(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "conversation.sqlite3"
+            state = SQLiteConversationState(path, "session-one")
+            state.record(message_id="m1", user_text="one", assistant_text="done",
+                         status="finished")
+            with sqlite3.connect(path) as database:
+                database.execute(
+                    "UPDATE conversation_contexts SET payload=? WHERE conversation_id=?",
+                    ('{"schema_version":1,"prior_turns":"wrong"}', "session-one"))
+            with self.assertRaisesRegex(ValueError, "turns"):
+                SQLiteConversationState(path, "session-one")
 
 
 if __name__ == "__main__":

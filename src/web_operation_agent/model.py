@@ -732,6 +732,106 @@ def require_chat_port(candidate, *, role: str = "chat"):
     return candidate
 
 
+class KeyedProviderAdmission:
+    """Bound concurrent provider work for one trusted principal or tenant key."""
+
+    def __init__(self, maximum: int):
+        if (isinstance(maximum, bool) or not isinstance(maximum, int)
+                or not 1 <= maximum <= 10_000):
+            raise ValueError("keyed provider maximum must be an integer from 1 to 10000")
+        self.maximum = maximum
+        self._condition = threading.Condition()
+        self._active: dict[str, int] = {}
+
+    def acquire(self, key: str, timeout_s: float, *, cancelled=None) -> float:
+        if not isinstance(key, str) or not key:
+            raise ValueError("provider admission key must be a non-empty string")
+        started = time.monotonic()
+        deadline = started + max(0.001, float(timeout_s))
+        with self._condition:
+            while self._active.get(key, 0) >= self.maximum:
+                if cancelled is not None and cancelled():
+                    raise ProviderError(
+                        "provider call cancelled while waiting for principal capacity",
+                        code="provider_cancelled", retryable=False, dispatched=False)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ProviderError(
+                        "principal provider capacity was unavailable before the deadline",
+                        code="provider_capacity", retryable=True, dispatched=False)
+                self._condition.wait(min(.05, remaining))
+            self._active[key] = self._active.get(key, 0) + 1
+            return time.monotonic() - started
+
+    def release(self, key: str) -> None:
+        with self._condition:
+            count = self._active.get(key, 0)
+            if count <= 0:
+                raise RuntimeError("principal provider slot released without acquisition")
+            if count == 1:
+                self._active.pop(key, None)
+            else:
+                self._active[key] = count - 1
+            self._condition.notify_all()
+
+    def active(self, key: str) -> int:
+        with self._condition:
+            return self._active.get(key, 0)
+
+
+class KeyedLimitedChat:
+    """ChatPort decorator that applies keyed admission before the provider guard."""
+
+    def __init__(self, delegate, admission: KeyedProviderAdmission, key: str,
+                 *, wait_observer=None):
+        self._delegate = require_chat_port(delegate, role="keyed chat delegate")
+        if not isinstance(admission, KeyedProviderAdmission):
+            raise TypeError("admission must be a KeyedProviderAdmission")
+        if not isinstance(key, str) or not key:
+            raise ValueError("provider admission key must be a non-empty string")
+        self._admission = admission
+        self._key = key
+        if wait_observer is not None and not callable(wait_observer):
+            raise TypeError("wait_observer must be callable or None")
+        self._wait_observer = wait_observer
+        self.model = delegate.model
+        self.meter = getattr(delegate, "meter", None)
+        self.options = getattr(delegate, "options", None)
+        self.egress_policy = getattr(delegate, "egress_policy", None)
+
+    def complete(self, messages, tools, run_id, max_tokens=None, options=None,
+                 timeout_s=None):
+        timeout = float(timeout_s if timeout_s is not None else 180)
+        waited = self._admission.acquire(self._key, timeout)
+        if self._wait_observer is not None:
+            try:
+                self._wait_observer(run_id, waited)
+            except Exception:
+                pass
+        try:
+            return self._delegate.complete(
+                messages, tools, run_id, max_tokens=max_tokens, options=options,
+                timeout_s=timeout_s)
+        finally:
+            self._admission.release(self._key)
+
+    def complete_cancellable(self, messages, tools, run_id, *, cancelled,
+                             max_tokens=None, options=None, timeout_s=None):
+        timeout = float(timeout_s if timeout_s is not None else 180)
+        waited = self._admission.acquire(self._key, timeout, cancelled=cancelled)
+        if self._wait_observer is not None:
+            try:
+                self._wait_observer(run_id, waited)
+            except Exception:
+                pass
+        try:
+            return self._delegate.complete_cancellable(
+                messages, tools, run_id, cancelled=cancelled,
+                max_tokens=max_tokens, options=options, timeout_s=timeout_s)
+        finally:
+            self._admission.release(self._key)
+
+
 class ChatModel:
     """A single OpenAI-compatible chat endpoint with native tool calling."""
 

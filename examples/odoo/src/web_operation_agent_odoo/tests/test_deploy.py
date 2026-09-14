@@ -46,6 +46,8 @@ class NothingThirdPartyIsCommitted(unittest.TestCase):
                          if path.name != ".gitignore")
         for name in tracked:
             with self.subTest(name=name):
+                if name == "loader.js":
+                    continue  # first-party authenticated bootstrap, declared in the manifest
                 self.assertIn(name, PINNED_PAGE_CONTROLLER["served_files"],
                               "an unpinned file is being served from the addon")
         self.assertTrue((deploy.SERVED_ASSETS / ".gitignore").is_file(),
@@ -61,6 +63,19 @@ class NothingThirdPartyIsCommitted(unittest.TestCase):
         compose = deploy.COMPOSE_FILE.read_text()
         self.assertIn('"127.0.0.1:8069:8069"', compose)
         self.assertNotIn('"8069:8069"', compose)
+
+    def test_the_addon_bootstraps_only_from_an_authenticated_server_assertion(self):
+        addon = deploy.DEPLOY_ROOT / "addons" / "woa_runtime"
+        manifest = (addon / "__manifest__.py").read_text()
+        loader = (addon / "static" / "src" / "loader.js").read_text()
+        controller = (addon / "controllers" / "session.py").read_text()
+        self.assertIn("web.assets_backend", manifest)
+        self.assertIn("/woa/session-assertion", loader)
+        self.assertIn("/assistant/bootstrap", loader)
+        self.assertNotIn("actor_id", loader)
+        self.assertIn('auth="user"', controller)
+        self.assertIn("request.session.uid", controller)
+        self.assertIn("WOA_SESSION_SECRET_FILE", controller)
 
 
 class AFetchedAssetIsCheckedTwice(unittest.TestCase):

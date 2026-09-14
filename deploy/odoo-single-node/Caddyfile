@@ -1,0 +1,37 @@
+{
+	admin off
+	skip_install_trust
+	auto_https disable_redirects
+	servers {
+		timeouts {
+			read_body 30s
+			read_header 10s
+			idle 5m
+		}
+	}
+}
+
+https://{$WOA_HOSTNAME:localhost}:8443 {
+	tls internal
+	encode zstd gzip
+
+	handle_path /assistant/* {
+		@bootstrap path /bootstrap
+		reverse_proxy @bootstrap 127.0.0.1:8767
+
+		@health path /healthz /readyz
+		reverse_proxy @health 127.0.0.1:8766
+
+		@gateway path /v1/*
+		reverse_proxy @gateway 127.0.0.1:8766 {
+			flush_interval -1
+			transport http {
+				response_header_timeout 35s
+			}
+		}
+	}
+
+	handle {
+		reverse_proxy odoo:8069
+	}
+}

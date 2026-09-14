@@ -1,0 +1,29 @@
+FROM node@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3 AS panel
+WORKDIR /build/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+COPY src/web_operation_agent/web_runtime/design_tokens.json src/web_operation_agent/web_runtime/panel_contract.json /build/src/web_operation_agent/web_runtime/
+RUN npm run build
+
+FROM caddy@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d AS caddy
+
+FROM python@sha256:519591d6871b7bc437060736b9f7456b8731f1499a57e22e6c285135ae657bf7 AS builder
+WORKDIR /build/source
+COPY . .
+COPY --from=panel /build/frontend/dist/panel ./frontend/dist/panel
+RUN python scripts/build_panel.py --skip-build \
+    && python -m pip install --no-cache-dir --prefix=/install . ./examples/odoo
+
+FROM python@sha256:519591d6871b7bc437060736b9f7456b8731f1499a57e22e6c285135ae657bf7
+ARG WOA_BUILD_REVISION=unversioned
+LABEL org.opencontainers.image.revision="${WOA_BUILD_REVISION}"
+COPY --from=builder /install /usr/local
+COPY --from=caddy /usr/bin/caddy /usr/local/bin/caddy
+COPY deploy/odoo-single-node/agent-entrypoint.sh /usr/local/bin/woa-agent-entrypoint
+COPY deploy/odoo-single-node/register.py /usr/local/lib/woa-register.py
+RUN groupadd --gid 10001 woa \
+    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin woa \
+    && install -d -m 0700 -o root -g root /run/woa-input \
+    && chmod 0755 /usr/local/bin/woa-agent-entrypoint
+ENTRYPOINT ["/usr/local/bin/woa-agent-entrypoint"]

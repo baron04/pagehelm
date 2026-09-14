@@ -76,6 +76,7 @@ flowchart LR
 | `web_operation_agent.egress` | 执行模型 provider 数据边界，并在不保存请求内容的前提下生成审计记录。 |
 | `web_operation_agent.mutation` | 在内存或 SQLite 中原子记录一次性 mutation intent 与终态。 |
 | `web_operation_agent.session` | 实现有步数和时间限制的服务端 Agent 循环。 |
+| `web_operation_agent.observability` | 把脱敏账本事件转换为无业务内容的 OTLP trace、metric 和运维告警，不改变任务结果。 |
 
 每个应用专有 Adapter 都以独立 distribution 发布，不放在上面的核心包里：[`web-operation-agent-odoo`](examples/odoo) 提供 `OdooApplicationAdapter` 和 Odoo 源码编译器，[`web-operation-agent-twenty`](examples/twenty) 提供 `TwentyApplicationAdapter`，[`web-operation-agent-ofbiz`](examples/ofbiz) 提供 Apache OFBiz 的路由语法、源码编译器和 App Skill provider。核心包不含任何应用专有代码，`scripts/check_core_boundary.py` 断言核心（含测试）不 import 任何应用 distribution；接入新应用时实现的是这三者同样实现的端口。
 
@@ -135,6 +136,10 @@ PYTHONPATH=src:. python -m examples.contacts.server --scripted --port 8765
 参考 Host 默认接纳 10 个浏览器会话、最多 3 个并发模型请求，且同一认证用户最多占用 2 个模型请求。第 11 个会话会在签发 capability 之前收到明确的可重试容量响应。可通过 `--max-sessions`、`--max-active-requests` 和 `--max-active-requests-per-actor` 调整限制；`/readyz` 只报告不含业务内容的聚合状态。模型限流、暂时不可用和凭据无效会作为有界、可操作的结果显示给用户，并在审计中保留不同的机器分类。
 
 Agent 网关仍只监听 loopback。部署时可以为它配置一个独立的、浏览器可见的 HTTPS 反向代理 URL；Runtime 资源和认证后的会话流量会使用该 URL，而监听地址的安全策略不变。
+
+### Odoo 单机试用部署
+
+[Odoo 单机部署](deploy/odoo-single-node/README.zh-CN.md) 是第一套面向私有试用的普通浏览器组合。固定摘要的 Docker 镜像在一台 Linux 主机运行 Odoo 18、PostgreSQL、Agent 和同源 HTTPS 代理。Odoo 用自身登录会话解析并签名身份；Agent 将其与该用户独立登记的 API key 及收窄工具 scope 对齐。SQLite session、mutation 与 conversation 状态、一致的应用备份恢复、镜像回滚、有界容量、OTLP/HTTP telemetry 和无业务内容告警都有可执行运维路径。隔离主机资格验证覆盖两种权限、session 超限、退出撤销、进程重启后旧 capability 被拒、19.34 秒的应用与 Agent 联合恢复，以及候选镜像回滚。这些证据只适用于参考单机拓扑，不构成生产或跨主机声明。
 
 显式的 `--scripted` 模式只执行一次固定的零费用装置演示：加载 Skill、查询当前 API、打开 API 授权的精确路由、观察新页面并结束。它不衡量模型能力。去掉 `--scripted` 并配置 OpenAI-compatible provider 后，同一个应用会改用真实模型决策并保持浏览器可交互。
 
@@ -223,10 +228,10 @@ Evaluator 还包含一套严格的配对实验预注册校验器，用于在运�
 
 ## 已知限制
 
-- 共享 Runtime 网关及活跃执行仍位于进程内。可选 SQLite 恢复在身份作用域内保存去重与进度并使用 owner lease，重新签发浏览器权限，将旧工作标记为中断而不重跑动作；跨主机扩展和模型对话上下文持久化尚未实现。Session TTL 与硬配额限制资源占用；SQLite 模式只恢复安全历史，不恢复执行权限。已确认的 Twenty API 写入拥有持久的一次性 SQLite journal，但 dispatch 之后发生崩溃仍会标记为 `indeterminate`，必须核对而不能自动重试。Twenty demo 已通过可信 Playwright 宿主强制身份绑定；普通嵌入式应用仍需从自身登录边界提供服务端认证的身份断言，principal 续期和分布式撤销也尚未实现。独立的旧页面控制网关仍使用全局许可与 trace：协作客户端会串行执行完整 run，并在前后边界清空状态，但并发页面写入前仍需在网关内部实现 tenant/session/turn scope。
-- 单轮截止时间同时覆盖 provider 排队和 socket 调用。服务端 Agent 的原生 completion 路径使用可关闭的 HTTP 连接：消息级主动取消会中断进行中的请求、释放 provider guard 名额、阻止后续工具下发，并把已派发调用记为 usage 未知而不自动重试。所有能被单轮触达的实现都满足同一个显式 `ChatPort` 契约，其中取消能力是必需项，并在模型被组装的位置校验，而不是在调用时探测，因此无法取消的实现会被直接拒绝，而不是静默降级。合同规划调用仍走普通 completion 路径，不可取消。并发 guard 只在单进程内生效；可选 SQLite 滚动请求配额可按服务端指定的租户/provider scope 在本机进程间协调，尚无 token 和金额配额。已有初始页面观察绑定，以及 claim 前对目标控件、关联表单和路由的新鲜度检查；目标元素之外的依赖、跨机器恢复和更完整的运行监控仍未完成。
+- 共享 Runtime 网关及活跃执行仍位于进程内。Odoo 单机 Host 会持久保存有界 conversation 上下文、session 进度与 mutation 状态，重启时轮换浏览器执行权限，并中断旧工作而不会恢复动作或审批；其它组合需要显式接入相同存储。跨主机扩缩容、活跃任务迁移和分布式撤销尚未实现。dispatch 后崩溃仍标记为 `indeterminate`，必须核对而不能自动重试。Odoo 已示范普通浏览器里的服务端登录断言与逐用户 delegation；Twenty 仍使用可信 Playwright Host，其它应用需要实现自己的可信登录边界。独立的旧页面控制网关仍使用全局许可与 trace。
+- 单轮截止时间同时覆盖 provider 排队和 socket 调用。服务端 Agent 的原生 completion 路径使用可关闭的 HTTP 连接：消息级主动取消会中断进行中的请求、释放 provider guard 名额、阻止后续工具下发，并把已派发调用记为 usage 未知而不自动重试。所有能被单轮触达的实现都满足一个在组装时检查、且强制可取消的显式 `ChatPort`。合同规划调用仍不可取消。并发 guard 只在单进程内生效；可选 SQLite 滚动请求配额可协调本机多进程的租户/provider 请求，token 与金额配额尚未实现。Odoo 单机 Host 会导出模型等待/调用、工具、浏览器往返、答案核验和整轮执行的无业务内容 OTLP trace/metric，并对 provider 连续故障、未决写入、恢复失败和配置的费用阈值告警。收集器存储、仪表盘、通知路由与跨主机观测由运维方负责。
 - 打包的真实应用适配器都很窄。Odoo 18 支持读取已确认销售订单、客户和可售产品，外加可选开启、且要求用户提供名称与邮箱的创建客户；Twenty CRM 支持 Companies 读取与确认后创建、People/Opportunities 读取与记录导航；OFBiz 只保留 MPA/iframe 回归。Minimal Contacts 只是合成的上手示例。目前没有任何 adapter 覆盖多步业务流程。
-- 只读身份与跨工作区行为只在合成的 Contacts 应用上完成资格验证。Odoo 身份端口仍把 catalog 的全部 scope 放进 principal，不看该用户的 Odoo 权限组；因此没有写权限的 Odoo 用户会被 Odoo 自己的访问规则拒绝（同样报告为类型化的 `permission_denied`），而不是先被框架的 scope 检查拒绝。真实 Odoo 的只读用户与第二家公司尚未实测。逐工具 scope 检查只约束 typed tool：应用本来就向该 actor 展示的页面仍会作为页面观察进入模型，因此比 actor 应用权限更窄的 principal 不会把这个页面藏起来。
+- 跨工作区数据隔离只在合成 Contacts 应用完成资格验证。Odoo 单机资格验证已让独立的只读与写用户完成签名 bootstrap，框架只把每个 actor 显式登记的 scope 放进 principal。Odoo 自身 group 仍是业务权限权威；真实的第二 Odoo 公司和全部应用级 RBAC 拒绝尚未实测。逐工具 scope 只约束 typed tool：应用已经向该 actor 展示的页面仍会作为页面观察进入模型，窄于应用权限的 principal 不会隐藏这个页面。
 - Odoo 源码编译器只链接视图继承关系，不做 xpath 合并，也不把跨模块的补丁记录并入定义。两条局限都通过编译产物的 `unsupported` 列表或 `root_view` 属性显式暴露，不会静默。
 - 尚未实现任意第三方网站支持和浏览器扩展。
 - 浏览器操作不具备数据库事务或回滚语义。
@@ -244,6 +249,7 @@ Evaluator 还包含一套严格的配对实验预注册校验器，用于在运�
 - [系统设计](docs/architecture/system-design.md)
 - [写一个应用 Adapter](docs/integrations/application-adapter.zh-CN.md) · [English](docs/integrations/application-adapter.md)
 - [持久化操作](docs/integrations/durable-operations.zh-CN.md) · [English](docs/integrations/durable-operations.md)
+- [Odoo 单机试用部署](deploy/odoo-single-node/README.zh-CN.md) · [English](deploy/odoo-single-node/README.md)
 - [HTTP 接入契约可行性](docs/integrations/http-contract-feasibility.md)
 - [第三方组件与许可](THIRD_PARTY.md) · [依赖锁](requirements.lock) · [SBOM](sbom.json)
 - [贡献指南](CONTRIBUTING.md)

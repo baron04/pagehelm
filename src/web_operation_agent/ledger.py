@@ -21,7 +21,8 @@ from .privacy import redact_sensitive_assignments, redact_session_handoffs
 
 
 class SessionLedger:
-    def __init__(self, path: str | Path, run_id: str, *, base: dict | None = None):
+    def __init__(self, path: str | Path, run_id: str, *, base: dict | None = None,
+                 event_sink=None):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.run_id = run_id
@@ -34,6 +35,9 @@ class SessionLedger:
         self._lock = threading.Lock()
         self._seq = 0
         self.events: list[dict] = []
+        if event_sink is not None and not callable(getattr(event_sink, "record", None)):
+            raise TypeError("event_sink must provide record or be None")
+        self._event_sink = event_sink
 
     def append(self, event: str, **fields) -> dict:
         with self._lock:
@@ -46,6 +50,12 @@ class SessionLedger:
                 fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 fh.flush()
                 os.fsync(fh.fileno())
+            if self._event_sink is not None:
+                try:
+                    self._event_sink.record(rec)
+                except Exception:
+                    # Telemetry is diagnostic and may never change product semantics.
+                    pass
             return rec
 
     def of_kind(self, event: str) -> list[dict]:

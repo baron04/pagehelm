@@ -26,83 +26,9 @@ from web_operation_agent.durable import (SQLitePrincipalRevocations, SQLiteSessi
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.live import LiveConversationRunner, LiveProductServer, LiveProductSession
 from web_operation_agent.mutation import SQLiteMutationJournal
-from web_operation_agent.model import ProviderError, ProviderRuntimeGuard, require_chat_port
+from web_operation_agent.model import (KeyedLimitedChat, KeyedProviderAdmission,
+                                       ProviderRuntimeGuard)
 from web_operation_agent.product import AgentTurnConfig, AgentTurnExecutor
-
-
-class _PrincipalRequestAdmission:
-    """Keep one authenticated actor from occupying every provider slot."""
-
-    def __init__(self, maximum: int):
-        self.maximum = maximum
-        self._condition = threading.Condition()
-        self._active: dict[str, int] = {}
-
-    def acquire(self, key: str, timeout_s: float, *, cancelled=None) -> None:
-        deadline = time.monotonic() + max(0.001, float(timeout_s))
-        with self._condition:
-            while self._active.get(key, 0) >= self.maximum:
-                if cancelled is not None and cancelled():
-                    raise ProviderError(
-                        "provider call cancelled while waiting for principal capacity",
-                        code="provider_cancelled", retryable=False, dispatched=False)
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise ProviderError(
-                        "principal provider capacity was unavailable before the deadline",
-                        code="provider_capacity", retryable=True, dispatched=False)
-                self._condition.wait(min(.05, remaining))
-            self._active[key] = self._active.get(key, 0) + 1
-
-    def release(self, key: str) -> None:
-        with self._condition:
-            count = self._active.get(key, 0)
-            if count <= 0:
-                raise RuntimeError("principal provider slot released without acquisition")
-            if count == 1:
-                self._active.pop(key, None)
-            else:
-                self._active[key] = count - 1
-            self._condition.notify_all()
-
-    def active(self, key: str) -> int:
-        with self._condition:
-            return self._active.get(key, 0)
-
-
-class _PrincipalLimitedChat:
-    """ChatPort decorator for per-principal admission; provider health stays delegated."""
-
-    def __init__(self, delegate, admission: _PrincipalRequestAdmission, key: str):
-        self._delegate = require_chat_port(delegate, role="principal-limited chat delegate")
-        self._admission = admission
-        self._key = key
-        self.model = delegate.model
-        self.meter = getattr(delegate, "meter", None)
-        self.options = getattr(delegate, "options", None)
-        self.egress_policy = getattr(delegate, "egress_policy", None)
-
-    def complete(self, messages, tools, run_id, max_tokens=None, options=None,
-                 timeout_s=None):
-        timeout = float(timeout_s if timeout_s is not None else 180)
-        self._admission.acquire(self._key, timeout)
-        try:
-            return self._delegate.complete(
-                messages, tools, run_id, max_tokens=max_tokens, options=options,
-                timeout_s=timeout_s)
-        finally:
-            self._admission.release(self._key)
-
-    def complete_cancellable(self, messages, tools, run_id, *, cancelled,
-                             max_tokens=None, options=None, timeout_s=None):
-        timeout = float(timeout_s if timeout_s is not None else 180)
-        self._admission.acquire(self._key, timeout, cancelled=cancelled)
-        try:
-            return self._delegate.complete_cancellable(
-                messages, tools, run_id, cancelled=cancelled,
-                max_tokens=max_tokens, options=options, timeout_s=timeout_s)
-        finally:
-            self._admission.release(self._key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,7 +81,7 @@ class NativeContactsHost:
             config.state_dir / "mutation-journal.sqlite3")
         self.provider_guard = ProviderRuntimeGuard(
             max_concurrent_requests=config.max_active_requests)
-        self.principal_admission = _PrincipalRequestAdmission(
+        self.principal_admission = KeyedProviderAdmission(
             config.max_active_requests_per_actor)
         self.server = LiveProductServer(
             max_sessions=config.max_sessions,
@@ -183,7 +109,7 @@ class NativeContactsHost:
         )
         chat, meter = _chat(
             demo_config, run_dir, runtime_guard=self.provider_guard)
-        return _PrincipalLimitedChat(
+        return KeyedLimitedChat(
             chat, self.principal_admission, principal_key), meter
 
     def _bootstrap(self, actor: DemoActor, runtime_instance_id: str) -> dict:

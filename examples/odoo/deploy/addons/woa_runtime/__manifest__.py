@@ -13,6 +13,11 @@
         "nothing, and a deployment cannot quietly serve a different build."
     ),
     "depends": ["web"],
+    "assets": {
+        "web.assets_backend": [
+            "woa_runtime/static/src/loader.js",
+        ],
+    },
     "installable": True,
     "auto_install": False,
     "license": "MIT",

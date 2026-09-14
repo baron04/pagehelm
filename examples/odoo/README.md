@@ -32,6 +32,8 @@ difference is the reason this adapter is worth reading:
 `bind_browser_session` resolves both and refuses to produce a principal unless they name the
 same actor. The mapping is `db` → tenant, the current company → workspace, `uid` → actor.
 
+The [single-node pilot deployment](../../deploy/odoo-single-node/README.md) replaces the development browser-profile handoff with an application-native path. The Odoo addon resolves the HttpOnly session on the application server and signs only the current database, company, actor, and one browser Runtime instance. The browser couriers this short-lived event to the same-origin Agent endpoint. The Agent verifies freshness, signature, and one-use nonce, then matches it to the actor's separately registered API key before issuing a browser capability. Logout signs a revoke event for every session issued to that Odoo actor. Playwright is not part of this path.
+
 Provisioning the API key is a **deployment step performed by the person whose records the
 Agent will act on**: Settings → My Profile → Account Security → New API Key. Store it, the
 database name and the login in one ignored `0600` JSON file:
