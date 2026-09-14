@@ -20,6 +20,30 @@ The provider quota is a rolling request budget shared by its server-assigned sco
 
 Inactive session histories can be removed with `store.prune(older_than_ms=...)`, with a cutoff at least one day old. Active session tombstones are retained. Operators should retain unresolved mutation records independently; deleting them could permit a duplicate write. SQLite files must be protected with filesystem access controls and disk encryption where application data requires it. Stored mutation arguments are normalized business data, not merely hashes.
 
+## Back up and restore local state
+
+Do not copy a live SQLite database with `cp`: committed pages may still be in its WAL. The operations command uses SQLite's online backup API, checks every snapshot, writes a content-digest manifest without host paths, and publishes the directory atomically.
+
+```bash
+python -m web_operation_agent.operations backup \
+  --sessions private/sessions.sqlite3 \
+  --mutations private/mutations.sqlite3 \
+  --destination backups/2026-09-14
+python -m web_operation_agent.operations verify backups/2026-09-14
+```
+
+Restore always targets a new directory. Stop and isolate all writers first, then make that fact explicit:
+
+```bash
+python -m web_operation_agent.operations restore backups/2026-09-14 \
+  --destination recovery/2026-09-14 \
+  --writer-isolated
+```
+
+The command refuses an existing destination, a modified or undeclared file, a symlink, a failed SQLite integrity check, or a restore without writer isolation. The result reports unresolved `dispatching` and `indeterminate` mutations. Keep the recovered deployment write-disabled until those rows and any dispatches newer than the backup have been reconciled against the application.
+
+No browser capability, runtime lease, approval, delegated credential, or model continuation is in the bundle. A recovered host authenticates the actor again and issues a new capability. Restored progress is history; it cannot authorize or replay an operation. Back up the application database, attachment storage, secrets, and configuration through their own supported mechanisms in the same recovery plan; this command covers only the framework's two SQLite files.
+
 ## Inspect and resolve uncertain writes
 
 ```bash

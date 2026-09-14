@@ -20,6 +20,30 @@ Provider quota 是按服务端指定 scope 共享的滚动请求额度。同一 
 
 通过 `store.prune(older_than_ms=...)` 清理至少一天前的不活跃会话历史；活跃会话的去重记录保留。未解决 mutation 应单独保留，删除可能放行重复写入。SQLite 文件需文件权限保护，业务数据要求时还需磁盘加密。保存的 mutation 参数是规范化业务数据，不只是摘要。
 
+## 备份与恢复本机状态
+
+不要用 `cp` 复制正在工作的 SQLite 数据库：已提交页面可能仍在 WAL 中。运维命令使用 SQLite 在线备份 API，检查每份快照，生成不含主机路径的内容摘要清单，并以原子目录切换发布备份。
+
+```bash
+python -m web_operation_agent.operations backup \
+  --sessions private/sessions.sqlite3 \
+  --mutations private/mutations.sqlite3 \
+  --destination backups/2026-09-14
+python -m web_operation_agent.operations verify backups/2026-09-14
+```
+
+恢复只能写入新目录。先停止并隔离所有 writer，再明确声明该条件：
+
+```bash
+python -m web_operation_agent.operations restore backups/2026-09-14 \
+  --destination recovery/2026-09-14 \
+  --writer-isolated
+```
+
+目标目录已存在、文件被修改或未声明、符号链接、SQLite 完整性检查失败，或者没有隔离 writer 时，命令都会拒绝。结果会报告处于 `dispatching` 与 `indeterminate` 状态的未解决 mutation。在逐条核对这些记录及备份时点之后的应用派发前，恢复后的部署必须保持禁止写入。
+
+备份不包含浏览器 capability、Runtime lease、审批、委托凭据或模型继续执行状态。恢复后的宿主必须重新认证 actor 并签发新 capability；恢复的进度仅是历史，不能授权或重放操作。应用数据库、附件存储、密钥和配置须通过各自支持的方式纳入同一恢复方案；本命令只覆盖框架的两个 SQLite 文件。
+
 ## 查看和裁决不确定写入
 
 ```bash
