@@ -181,7 +181,16 @@ def _one(words: dict, item: dict, *, presentation: str) -> list[str]:
         return [f"**{_literal(item['field_meaning'])}**（{_literal(item['record_id'])}）：{shown}{unit}",
                 f"> {_source_line(words, item)} · {words['scope']}：{_literal(item['scope'])}"]
     if kind == "selection":
-        head = f"**{_literal(item['condition'])}**：{item['matched']} {words['matched']}"
+        looked_for = str(item.get("looked_for") or "").strip()
+        if looked_for:
+            if words is _WORDS["zh"]:
+                head = f"**已存在匹配记录**：{_literal(looked_for)}（{item['matched']} 条）"
+            else:
+                noun = "record" if item["matched"] == 1 else "records"
+                head = (f"**Matching {noun} found**: {_literal(looked_for)} "
+                        f"({item['matched']})")
+        else:
+            head = f"**{_literal(item['condition'])}**：{item['matched']} {words['matched']}"
         if item.get("fields"):
             rows = []
             if presentation != "list":

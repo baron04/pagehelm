@@ -53,6 +53,13 @@ class AnswerWireContract(unittest.TestCase):
         with self.assertRaises(ConclusionRefused):
             submit(turn, forged)
 
+    def test_a_named_match_is_presented_as_an_existing_record_not_query_syntax(self):
+        turn = _turn(looked_for="P73 Manual Acceptance")
+        answer = submit(turn, _draft("selection", "query#1"))
+        text = render_payload(answer, user_text="检查这个客户是否存在", max_chars=2000)
+        self.assertIn("已存在匹配记录：P73 Manual Acceptance", text.replace("**", ""))
+        self.assertNotIn("state in draft,sent", text)
+
     def test_a_partial_zero_match_is_not_an_absence_claim(self):
         with self.assertRaisesRegex(ConclusionRefused, "partial search"):
             submit(_turn(whole=False, records=()), _draft("not_found", "query#1"))

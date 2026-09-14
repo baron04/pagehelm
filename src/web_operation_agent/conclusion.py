@@ -103,6 +103,7 @@ class Selection:
                 values.append({"value": record.value, "unit": record.unit})
             rows.append(values)
         return {"kind": self.kind, "condition": condition,
+                "looked_for": query.looked_for,
                 "members": members, "matched": len(members), "fields": self.fields,
                 "rows": rows,
                 "covers_whole_scope": (item.covers_whole_scope and (
