@@ -494,7 +494,11 @@ def _run_browser(config: OdooDemoConfig, live: LiveProductSession,
                             turn_boundary_hook, turn=turn, total_turns=len(tasks),
                             record=record)
                     last_url = page.evaluate("() => location.href")
-                    last_text = page.locator("body").inner_text()[:2_000]
+                    # Odoo's application chrome can exceed 2,000 characters before the
+                    # opened record.  Capping there made the qualification claim the record
+                    # was absent even after `wait_for` had observed it.  This text never goes
+                    # to the model or the public artifact; it only supports local assertions.
+                    last_text = page.locator("body").inner_text()[:20_000]
                     if config.keep_open_seconds and not config.headless:
                         page.wait_for_timeout(int(config.keep_open_seconds * 1000))
                 else:
@@ -523,7 +527,7 @@ def _run_browser(config: OdooDemoConfig, live: LiveProductSession,
                             raise
                     if not page.is_closed():
                         last_url = page.evaluate("() => location.href")
-                        last_text = page.locator("body").inner_text()[:2_000]
+                        last_text = page.locator("body").inner_text()[:20_000]
             finally:
                 context.close()
         finally:

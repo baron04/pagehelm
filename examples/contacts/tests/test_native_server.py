@@ -12,7 +12,8 @@ from http.cookiejar import CookieJar
 from pathlib import Path
 from unittest.mock import patch
 
-from examples.contacts.app import DEMO_API_TOKEN, DEMO_SESSION_COOKIE, DEMO_WORKSPACE
+from examples.contacts.app import (DEMO_ACTORS, DEMO_API_TOKEN, DEMO_SESSION_COOKIE,
+                                   DEMO_WORKSPACE)
 from examples.contacts.demo import ScriptedDemoChat, WRITE_WALKTHROUGH
 from examples.contacts.server import (
     NativeContactsHost,
@@ -197,22 +198,45 @@ class _ProviderFailureThenScripted:
 
 
 class NativeContactsHostTests(unittest.TestCase):
-    def test_reference_admission_allows_ten_sessions_and_refuses_the_eleventh(self):
+    def test_reference_admission_refuses_a_fourth_session_for_one_actor(self):
         with tempfile.TemporaryDirectory() as directory, NativeContactsHost(
                 NativeServerConfig(Path(directory), port=0, scripted=True,
                                    max_sessions=10)) as host:
             cookie = f"{DEMO_SESSION_COOKIE}=session-ada-northstar"
-            for index in range(10):
+            for index in range(3):
                 status, payload, _ = _request(
                     host.origin + "/woa/bootstrap",
                     body={"runtime_instance_id": f"capacity-tab-{index:02d}"},
                     cookie=cookie, origin=host.origin)
                 self.assertEqual(status, 200, payload)
-            self.assertEqual(host.server.session_count, 10)
             status, payload, _ = _request(
                 host.origin + "/woa/bootstrap",
                 body={"runtime_instance_id": "capacity-tab-overflow"},
                 cookie=cookie, origin=host.origin)
+            self.assertEqual(status, 429)
+            self.assertEqual(payload, {
+                "error": "assistant_capacity", "retryable": True,
+            })
+
+    def test_reference_admission_allows_ten_actors_sessions_and_refuses_global_overflow(self):
+        with tempfile.TemporaryDirectory() as directory, NativeContactsHost(
+                NativeServerConfig(Path(directory), port=0, scripted=True,
+                                   max_sessions=10,
+                                   max_sessions_per_actor=4)) as host:
+            for index in range(10):
+                actor = DEMO_ACTORS[index % 3]
+                status, payload, _ = _request(
+                    host.origin + "/woa/bootstrap",
+                    body={"runtime_instance_id": f"global-tab-{index:02d}"},
+                    cookie=f"{DEMO_SESSION_COOKIE}={actor.session}",
+                    origin=host.origin)
+                self.assertEqual(status, 200, payload)
+            actor = DEMO_ACTORS[1]
+            status, payload, _ = _request(
+                host.origin + "/woa/bootstrap",
+                body={"runtime_instance_id": "global-tab-overflow"},
+                cookie=f"{DEMO_SESSION_COOKIE}={actor.session}",
+                origin=host.origin)
             self.assertEqual(status, 429)
             self.assertEqual(payload, {
                 "error": "assistant_capacity", "retryable": True,
@@ -421,8 +445,17 @@ class NativeContactsBrowserTests(unittest.TestCase):
                             viewport={"width": 1280, "height": 900})
                         page.goto(host.origin + "/demo/login/ada-lovelace",
                                   wait_until="domcontentloaded", timeout=30_000)
-                        page.evaluate(
-                            "async () => { await window.__WOA_RUNTIME_READY__; return true; }")
+                        page.evaluate("""async () => {
+                            window.__WOA_TEST_RUNTIME__ = await window.__WOA_RUNTIME_READY__;
+                            return true;
+                        }""")
+                        # Runtime startup may still be draining a durable outbox/event batch
+                        # after the ready promise resolves.  A user cannot submit through the
+                        # panel until that recovery is complete, so exercise the same boundary
+                        # instead of racing submitTask directly from the test hook.
+                        page.wait_for_function(
+                            "() => window.__WOA_TEST_RUNTIME__.canRenewSession()",
+                            timeout=15_000)
                         session = next(iter(host._sessions.values()))[0]
                         page.evaluate(
                             "task => window.__WOA_RUNTIME_READY__.then(r => r.submitTask(task))",
@@ -433,11 +466,11 @@ class NativeContactsBrowserTests(unittest.TestCase):
                             failed.result.agent.provider_error_code, code)
                         self.assertIn(expected, failed.result.user_answer)
                         page.wait_for_function(
-                            "() => window.__WOA_RUNTIME_READY__.then(r => !r.stored.taskInFlight)",
-                            timeout=5_000)
+                            "() => window.__WOA_TEST_RUNTIME__.canRenewSession()",
+                            timeout=15_000)
 
                         page.evaluate(
-                            "task => window.__WOA_RUNTIME_READY__.then(r => r.submitTask(task))",
+                            "task => window.__WOA_TEST_RUNTIME__.submitTask(task)",
                             "Open Grace Hopper's contact record.")
                         recovered = session.runner.next_outcome(timeout_s=15)
                         self.assertEqual(

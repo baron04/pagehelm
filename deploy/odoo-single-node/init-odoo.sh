@@ -1,11 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-database="${WOA_ODOO_DATABASE:-woa_trial}"
-if [[ ! "$database" =~ ^[A-Za-z0-9_.-]{1,63}$ ]]; then
-  echo "invalid Odoo database name" >&2
-  exit 2
-fi
+database="woa_trial"
 install -d -m 0700 -o 100 -g 101 /run/woa-private
 for name in db-password session-secret odoo.conf odoo-admin-login-password; do
   install -m 0400 -o 100 -g 101 "/run/woa-input/${name}" "/run/woa-private/${name}"

@@ -134,6 +134,11 @@ class RuntimeObservabilityTests(unittest.TestCase):
             for index in range(3):
                 telemetry.record({"run_id": f"provider-{index}",
                                   "event": "provider_failed", "t": 1})
+            for index in range(3):
+                telemetry.record({"run_id": f"deadline-{index}",
+                                  "event": "provider_deadline", "t": 1})
+            telemetry.record({"run_id": "cancelled-provider",
+                              "event": "provider_cancelled", "t": 1})
             telemetry.record({"run_id": "write-1", "event": "write_outcome",
                               "state": "unknown", "detail": "private", "t": 2})
             telemetry.record({"run_id": "write-1", "event": "product_turn_finished",
@@ -147,10 +152,26 @@ class RuntimeObservabilityTests(unittest.TestCase):
         self.assertEqual(snapshot["provider_failures"], 3)
         self.assertEqual(snapshot["indeterminate_writes"], 1)
         self.assertEqual([item["kind"] for item in requests], [
-            "provider_sustained_failure", "indeterminate_write",
+            "provider_sustained_failure", "provider_deadline_sustained",
+            "indeterminate_write",
             "cost_threshold_exceeded",
         ])
+        self.assertEqual(snapshot["provider_deadlines"], 3)
+        self.assertEqual(snapshot["provider_deadline_streak"], 0)
         self.assertNotIn("private", json.dumps(requests))
+
+    def test_stale_telemetry_run_is_closed_by_bounded_maintenance(self):
+        telemetry = RuntimeObservability()
+        telemetry.record({"run_id": "orphan-1", "event": "provider_egress", "t": 1})
+        self.assertEqual(telemetry.reap_stale_runs(
+            max_age_s=60, now_ns=61_000_000_000), 1)
+        snapshot = telemetry.snapshot()
+        telemetry.close()
+
+        self.assertEqual(snapshot["active_runs"], 0)
+        self.assertEqual(snapshot["turns"], 1)
+        self.assertEqual(snapshot["failed_turns"], 1)
+        self.assertEqual(snapshot["stale_runs_reaped"], 1)
 
     def test_observed_chat_preserves_results_and_export_failure_is_nonfatal(self):
         with patch("urllib.request.urlopen", side_effect=OSError("offline")):

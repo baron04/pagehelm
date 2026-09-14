@@ -1,12 +1,14 @@
 # Odoo 单机试用部署
 
-这是面向单个组织私有试用的参考部署：在一台 Linux Docker Compose 主机上运行固定摘要的 Odoo 18、PostgreSQL 17、服务端 Agent 和 Caddy。Odoo 自己的登录会话建立浏览器身份；浏览器只把短期签名断言转交给 Agent，不能提供 actor id、API key、模型密钥、权限列表或审批。助手空闲时会在过期前取得新断言；只有 Odoo 浏览器身份和委托 API 身份仍指向同一 actor、公司、scope 与 delegation，Agent 才为原会话续期。它不是多租户云架构。
+这是面向单个组织私有试用的参考部署：在一台 Linux Docker Compose 主机上运行固定摘要的 Odoo 18、PostgreSQL 17、服务端 Agent 和独立 Caddy 网关。Odoo 自己的登录会话建立浏览器身份；浏览器只把短期签名断言转交给 Agent，不能提供 actor id、API key、模型密钥、权限列表或审批。助手空闲时会在过期前取得新断言；只有 Odoo 浏览器身份和委托 API 身份仍指向同一 actor、公司、scope 与 delegation，Agent 才为原会话续期。它不是多租户云架构。
 
 ## 前提与边界
 
-需要当前版本的 Docker Engine 与 Compose v2、Python 3.12、Node.js 和干净 checkout。使用有持久 Docker volume 的私有 Linux 主机，只允许运维人员访问 shell 和 Docker。公开端口默认只绑定 loopback；允许远程客户端之前，应放到组织控制的入口之后。内置 Caddy CA 只适合在受控试用中把根证书安装到托管客户端；正式域名应改用组织证书。
+需要当前版本的 Docker Engine 与 Compose v2、Python 3.12、Node.js 和干净 checkout。所有命令由同一个非 root 部署账号在 `umask 077` 下执行，该账号应拥有 checkout、私有输入目录和备份目标。使用有持久 Docker volume 的私有 Linux 主机，只允许运维人员访问 shell 和 Docker。公开端口默认只绑定 loopback；允许远程客户端之前，应放到组织控制的入口之后。内置 Caddy CA 只适合在受控试用中把根证书安装到托管客户端；正式域名应改用组织证书。
 
-部署为每个用户使用一把独立的 Odoo API key。应用自身的访问规则是最终权限来源，delegation manifest 只会进一步缩小 typed 工具 scope。任务进行中或存在待确认操作时不会续期；配置的 key 路径、scope 或 mutation grant 发生变化也会拒绝续期，这些轮换应通过新浏览器会话生效。删除 grant 不能撤回已经在执行的任务：需要在 Odoo 撤销 key、让用户退出登录；若必须立即关闭全部已签发的浏览器 capability，再重启 Agent。
+部署为每个用户使用一把独立的 Odoo API key。应用自身的访问规则是最终权限来源，delegation manifest 只会进一步缩小 typed 工具 scope。任务进行中或存在待确认操作时不会续期；配置的 key 路径、scope 或 mutation grant 发生变化也会拒绝续期。登记、替换或删除 delegation 后必须重启 Agent，登记命令会明确返回该要求。在 Odoo 撤销 key 并让用户退出登录会关闭已签发的浏览器 capability，并写入持久 actor 撤销水位。
+
+该试用拓扑把应用数据库固定为 `woa_trial`。初始化、Odoo `dbfilter`、资格数据、备份和恢复均使用同一名称，不提供只接通部分链路的数据库名覆盖参数。
 
 ## 准备与启动
 
@@ -29,7 +31,7 @@ export WOA_HTTPS_PORT=18443
 export WOA_BUILD_REVISION="$(git rev-parse HEAD)"
 docker compose -f deploy/odoo-single-node/docker-compose.yml build
 docker compose -f deploy/odoo-single-node/docker-compose.yml --profile setup run --rm odoo-init
-docker compose -f deploy/odoo-single-node/docker-compose.yml up -d db odoo
+docker compose -f deploy/odoo-single-node/docker-compose.yml up -d db odoo gateway
 ```
 
 打开 `https://localhost:18443/web/login`，使用 `.private/odoo-single-node/odoo-admin-login-password` 中生成的管理员密码创建试用用户，并在每位用户自己的 profile 中创建一把有过期时间的 API key。记下 Odoo 的数字用户 id。每把 key 分别保存为只有运维人员可读、权限为 `0600` 的临时 JSON 文件：
@@ -50,30 +52,41 @@ docker compose -f deploy/odoo-single-node/docker-compose.yml run --rm --no-deps 
 docker compose -f deploy/odoo-single-node/docker-compose.yml run --rm --no-deps --entrypoint python -v "$PWD/writer-key.json:/run/woa-register/key.json:ro" -v "$WOA_PRIVATE_DIR:/run/woa-output" agent /usr/local/lib/woa-register.py --private-dir /run/woa-output --rpc-base-url http://odoo:8069 --actor-id 8 --api-key-file /run/woa-register/key.json --scope customers:read --scope invoices:read --scope products:read --scope sale_orders:read --scope customers:write --scope invoices:write --scope sale_orders:write --allow-mutations
 ```
 
-登记后删除临时输入文件并启动 Agent。普通用户登录 Odoo 后即可看到嵌入助手，不需要 Playwright、浏览器 profile 注入或独立 launcher。
+删除 delegation 时不需要再次提供旧 key，执行后重启 Agent：
+
+```bash
+docker compose -f deploy/odoo-single-node/docker-compose.yml run --rm --no-deps --entrypoint python -v "$WOA_PRIVATE_DIR:/run/woa-output" agent /usr/local/lib/woa-register.py --private-dir /run/woa-output --actor-id 8 --database woa_trial --remove
+docker compose -f deploy/odoo-single-node/docker-compose.yml restart agent
+```
+
+登记后删除临时输入文件。每次登记、替换或删除 delegation 后都重启 Agent，使其重新加载 manifest 和 `delegated-keys` 中实际引用的文件。Agent 容器不会挂载数据库密码、Odoo master password 或用户登录密码。普通用户登录 Odoo 后即可看到嵌入助手，不需要 Playwright、浏览器 profile 注入或独立 launcher。
 
 ```bash
 export WOA_ALLOW_MUTATIONS=1
 docker compose -f deploy/odoo-single-node/docker-compose.yml up -d
 curl -sk "$WOA_PUBLIC_ORIGIN/assistant/healthz"
-curl -sk "$WOA_PUBLIC_ORIGIN/assistant/readyz"
+docker compose -f deploy/odoo-single-node/docker-compose.yml exec -T agent python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8766/readyz').read().decode())"
 ```
 
 同源浏览器请求可能不带 `Origin`；参考 Caddy 入口只在该请求头缺失时补入 `WOA_PUBLIC_ORIGIN`。显式携带的 `Origin` 会原样交给核心 gateway 校验，不匹配时仍被拒绝。gateway 必须继续只监听 loopback，Odoo 与 `/assistant/` 必须经过同一个可信入口，`WOA_PUBLIC_ORIGIN` 必须与浏览器实际看到的 origin 完全一致。
 
-`healthz` 表示进程存活，`readyz` 只返回有界 session 与 provider 准入状态，不含用户内容。仅容器内部可读的 telemetry 快照可这样检查：
+`healthz` 表示 Agent 进程存活。`readyz` 只返回有界 session 与 provider 准入状态，不含用户内容，并且不会由公开网关路由。仅容器内部可读的 telemetry 快照可这样检查：
 
 ```bash
 docker compose -f deploy/odoo-single-node/docker-compose.yml exec -T agent python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8767/internal/metrics').read().decode())"
 ```
 
-默认上限是 10 个浏览器 session、全局 3 个活跃 provider 请求和每个 actor 2 个活跃请求。第 11 个 session 收到类型化的 `429 assistant_capacity`；逐 actor 准入防止单个用户耗尽全部 provider 名额。
+默认上限是 10 个浏览器 session、每个 actor 3 个浏览器 session、全局 3 个活跃 provider 请求和每个 actor 2 个活跃请求。浏览器连续 90 秒没有发出经过认证的 Agent 请求会释放 session 名额，服务端内部 owner heartbeat 不计作浏览器在线。容量耗尽会返回类型化的 `429 assistant_capacity`。
+
+Caddy 是独立服务。Agent 不可用时 Odoo 仍可使用，`/assistant/*` 返回 HTTP 503。Agent 容器健康检查只检查进程存活，因此 provider 故障不会导致 Compose 杀死健康进程；是否接收助手流量应通过上面的内部 `readyz` 命令判断。
 
 ## 可观测性与告警
 
 把 `WOA_OTEL_EXPORTER_OTLP_ENDPOINT` 指向 Agent 容器可访问的 OTLP/HTTP 接收端，例如组织托管或同一 Compose 网络中的本地 OpenTelemetry Collector。Agent 会向 `/v1/traces` 与 `/v1/metrics` 发送标准 JSON：span 覆盖模型、typed 工具、浏览器往返、答案核验与整轮执行，metric 覆盖模型排队、模型调用数和轮次耗时。导出异步且尽力而为，收集器故障不能改变任务或写入语义。
 
-`WOA_ALERT_WEBHOOK_URL` 指向私有运维接收端。无业务内容的告警覆盖 provider 连续失败三次、写入结果不确定、备份失败和恢复失败；`WOA_COST_ALERT_CNY` 可以设置一次 run 的已知模型费用阈值。标签与告警都不含用户目标、记录字段、答案、原始身份、密钥或租户名称。监控信号不能替代审计账本和业务后置条件核验。
+`WOA_ALERT_WEBHOOK_URL` 指向私有运维接收端。无业务内容的告警覆盖 provider 连续失败三次、已派发请求连续三次超时、写入结果不确定或仍未解决、保留任务失败、备份失败和恢复失败；`WOA_COST_ALERT_CNY` 可以设置一次 run 的已知模型费用阈值。用户主动取消不计入 provider 可用性故障。标签与告警都不含用户目标、记录字段、答案、原始身份、密钥或租户名称。监控信号不能替代审计账本和业务后置条件核验。
+
+Agent 每小时执行一次保留任务：未决 mutation 行以及存在任意未决写时的全部 run 账本始终保留；已解决 mutation、非活跃 session 和 conversation 状态保留 30 天；过期签名事件 nonce 与旧撤销水位会被清理；缺少终态事件的 telemetry run 会被关闭。保留任务失败会计数并告警，但不会授权删除或重试。
 
 ## 备份与恢复
 
@@ -84,13 +97,13 @@ deploy/odoo-single-node/operations.py --project "$WOA_PROJECT_NAME" backup --des
 deploy/odoo-single-node/operations.py --project "$WOA_PROJECT_NAME" verify .private/odoo-backups/2026-09-14
 ```
 
-恢复会破坏显式指定的隔离 Compose 项目，因此必须重复输入同一个项目名。恢复前先核对备份时点之后已经派发的业务写入：旧 journal 只是证据，绝不能触发重放。恢复流程会重建应用数据库和附件 volume、恢复 Agent 的持久记录、丢弃全部执行权限，而且不会调用模型或工具。
+恢复会破坏显式指定的隔离 Compose 项目，因此必须重复输入同一个项目名。恢复前先核对备份时点之后已经派发的业务写入：旧 journal 只是证据，绝不能触发重放。命令会拒绝备份或当前部署中的未决 mutation，先创建并验证恢复前安全备份，再把数据库、附件和 Agent 状态恢复到 staging 命名空间，全部可读后才执行短切换。失败时 Agent 与 Odoo 保持停止，并返回安全备份路径。恢复后的状态不含执行权限，也不会调用模型或工具。
 
 ```bash
 deploy/odoo-single-node/operations.py --project "$WOA_PROJECT_NAME" restore .private/odoo-backups/2026-09-14 --confirm-project "$WOA_PROJECT_NAME"
 ```
 
-参考主机的实测恢复耗时为 19.34 秒，低于 30 分钟试用目标。Agent 直接重启也低于 5 分钟目标：稳定 session 身份与对话记录保留，新 capability 重新签发，旧 capability 被拒绝。这是单台资格主机的观测数据，不是普遍时延保证。
+在目标主机实测之前不能设定 RTO。成功命令会返回 `recovery_seconds`；跳过或失败的演练不构成恢复证据。每次演练后都应执行普通只读查询，确认旧 cookie 和浏览器 capability 被拒绝，并在重新开放写入前检查未决 mutation 状态。
 
 ## 升级与回滚
 
@@ -101,10 +114,10 @@ docker image tag "$WOA_PROJECT_NAME-agent:latest" "$WOA_PROJECT_NAME-agent:rollb
 export WOA_BUILD_REVISION="$(git rev-parse HEAD)"
 docker compose -f deploy/odoo-single-node/docker-compose.yml build agent
 docker compose -f deploy/odoo-single-node/docker-compose.yml up -d --no-deps --force-recreate agent
-curl -sk "$WOA_PUBLIC_ORIGIN/assistant/readyz"
+docker compose -f deploy/odoo-single-node/docker-compose.yml exec -T agent python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8766/readyz').read().decode())"
 ```
 
-若候选版本在数据迁移前资格验证失败，把保存的镜像摘要重新标为 `latest`，重建 Agent，再执行 readiness 和一条只读浏览器旅程。P7.3 已实测这条候选升级与镜像回滚路径，应用数据库和持久审计状态均未丢失。
+若候选版本在数据迁移前资格验证失败，把保存的镜像摘要重新标为 `latest`，重建 Agent，再执行 readiness 和一条只读浏览器旅程。每个部署都应记录镜像摘要、检查项和审计状态检查结果；没有实际执行的回滚命令只是操作流程，不是验证证据。
 
 ## 试用限制
 

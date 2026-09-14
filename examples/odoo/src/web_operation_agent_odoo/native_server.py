@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import signal
+import shutil
 import tempfile
 import threading
 import time
@@ -15,7 +16,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from web_operation_agent.application import bind_application
-from web_operation_agent.conversation import SQLiteConversationState
+from web_operation_agent.conversation import (SQLiteConversationState,
+                                               prune_sqlite_conversations)
 from web_operation_agent.durable import (SQLiteExpiringNonceStore,
                                          SQLitePrincipalRevocations,
                                          SQLiteSessionStore)
@@ -31,7 +33,7 @@ from web_operation_agent.observability import ObservedChat, RuntimeObservability
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.product import AgentTurnConfig, AgentTurnExecutor
 from web_operation_agent.remote import RemoteProtocolError
-from web_operation_agent.identity import PrincipalContext
+from web_operation_agent.identity import PrincipalContext, PrincipalError
 
 from .adapter import OdooApplicationAdapter
 from .demo.demo import ScriptedOdooChat
@@ -44,6 +46,12 @@ _MODEL_ENV_KEYS = (
     "AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY",
     "AGENT_OPENAI_MODEL", "AGENT_PROVIDER",
 )
+_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
+_MAINTENANCE_INTERVAL_S = 60 * 60
+
+
+class OdooAuthorityMismatchError(OdooSessionEventError):
+    """A valid Odoo browser assertion does not match delegated API authority."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +62,8 @@ class OdooNativeConfig:
     delegation_dir: Path
     session_secret_path: Path
     state_dir: Path
+    gateway_host: str = "127.0.0.1"
+    trusted_gateway_network: bool = False
     gateway_port: int = 8766
     bootstrap_host: str = "127.0.0.1"
     bootstrap_port: int = 8767
@@ -79,8 +89,13 @@ class OdooNativeConfig:
             object.__setattr__(self, name, Path(getattr(self, name)).expanduser())
         if self.model_env is not None:
             object.__setattr__(self, "model_env", Path(self.model_env).expanduser())
-        if self.bootstrap_host not in {"127.0.0.1", "localhost", "::1", "0.0.0.0"}:
-            raise ValueError("bootstrap_host must be loopback or explicit all-interfaces")
+        for name in ("gateway_host", "bootstrap_host"):
+            if getattr(self, name) not in {"127.0.0.1", "localhost", "::1", "0.0.0.0"}:
+                raise ValueError(f"{name} must be loopback or explicit all-interfaces")
+        if not isinstance(self.trusted_gateway_network, bool):
+            raise ValueError("trusted_gateway_network must be boolean")
+        if self.gateway_host == "0.0.0.0" and not self.trusted_gateway_network:
+            raise ValueError("all-interface gateway requires trusted_gateway_network")
         for name in ("gateway_port", "bootstrap_port"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 65535:
@@ -145,7 +160,7 @@ class _BootstrapHTTPServer:
                 if self.path == "/healthz":
                     self._json(200, {"ready": True})
                 elif self.path == "/internal/metrics":
-                    self._json(200, owner.telemetry.snapshot())
+                    self._json(200, owner.operational_snapshot())
                 else:
                     self._json(404, {"error": "not_found"})
 
@@ -165,6 +180,9 @@ class _BootstrapHTTPServer:
                     envelope = json.loads(self.rfile.read(length))
                     payload = (owner.bootstrap(envelope) if self.path == "/bootstrap"
                                else owner.revoke(envelope))
+                except OdooAuthorityMismatchError:
+                    self._json(403, {"error": "identity_authority_mismatch",
+                                     "retryable": False})
                 except OdooSessionEventError:
                     self._json(401, {"error": "invalid_session_event"})
                 except LiveProductCapacityError:
@@ -237,8 +255,9 @@ class OdooNativeHost:
             max_sessions=config.max_sessions,
             max_sessions_per_actor=config.max_sessions_per_actor,
             browser_idle_timeout_s=config.browser_idle_timeout_s,
-            host="127.0.0.1", port=config.gateway_port,
+            host=config.gateway_host, port=config.gateway_port,
             public_base_url=config.public_agent_url,
+            allow_private_network_bind=config.trusted_gateway_network,
             durable_store=self.session_store,
             principal_validator=self.revocations.validate,
             provider_status=self.provider_guard.status)
@@ -248,6 +267,9 @@ class OdooNativeHost:
         self._runtime_actor: dict[tuple[str, str], str] = {}
         self._lock = threading.RLock()
         self._closed = False
+        self._maintenance_stop = threading.Event()
+        self._maintenance_thread: threading.Thread | None = None
+        self._unresolved_alerted = False
 
     def _new_chat(self, run_dir: Path, adapter, principal_key: str):
         egress = ProviderEgressPolicy(
@@ -285,11 +307,15 @@ class OdooNativeHost:
             allow_private_http=self.config.allow_private_http,
             allow_mutations=allow_mutations,
             mutation_journal=self.mutation_journal if allow_mutations else None)
-        principal = adapter.bind_principal(
-            event.page_identity(lifetime_s=self.config.principal_lifetime_s),
-            delegation_id="odoo-native-" + uuid.uuid4().hex,
-            lifetime_s=self.config.principal_lifetime_s,
-            scopes=grant.scopes)
+        try:
+            principal = adapter.bind_principal(
+                event.page_identity(lifetime_s=self.config.principal_lifetime_s),
+                delegation_id="odoo-native-" + uuid.uuid4().hex,
+                lifetime_s=self.config.principal_lifetime_s,
+                scopes=grant.scopes)
+        except PrincipalError as exc:
+            raise OdooAuthorityMismatchError(
+                "browser and delegated API authority do not match") from exc
         return adapter, principal, allow_mutations, grant
 
     def _renew_active(self, active: _ActiveSession, principal: PrincipalContext,
@@ -298,7 +324,8 @@ class OdooNativeHost:
         if (grant.api_key_path != active.api_key_path
                 or grant.scopes != active.scopes
                 or allow_mutations != active.allow_mutations):
-            raise OdooSessionEventError(
+            active.session.close("delegated_authority_changed")
+            raise OdooAuthorityMismatchError(
                 "delegated authority changed; a new browser session is required")
         principal = replace(
             principal, delegation_id=active.principal.delegation_id)
@@ -313,7 +340,18 @@ class OdooNativeHost:
         runtime_key = (event.database, event.runtime_instance_id)
         # Both application identity RPCs run before the host-wide lock. A slow Odoo user
         # must not serialize bootstrap and logout for every other actor.
-        adapter, principal, allow_mutations, delegation = self._adapter_and_principal(event)
+        try:
+            adapter, principal, allow_mutations, delegation = (
+                self._adapter_and_principal(event))
+        except OdooAuthorityMismatchError:
+            # A valid page identity that no longer matches delegated API authority must
+            # close any capability previously issued for this browser document.
+            with self._lock:
+                previous = self._sessions.pop(key, None)
+                self._runtime_actor.pop(runtime_key, None)
+                if previous is not None:
+                    previous.session.close("identity_authority_mismatch")
+            raise
         with self._lock:
             if self._closed:
                 raise RuntimeError("Odoo native host is closed")
@@ -439,9 +477,64 @@ class OdooNativeHost:
                 event.database, event.actor_id, "application_logout")
         return {"revoked": count}
 
+    def operational_snapshot(self) -> dict:
+        snapshot = self.telemetry.snapshot()
+        with self._lock:
+            active_sessions = len(self._sessions)
+        unresolved = len(self.mutation_journal.unresolved())
+        snapshot.update({
+            "active_sessions": active_sessions,
+            "session_capacity": self.config.max_sessions,
+            "principal_session_capacity": self.config.max_sessions_per_actor,
+            "unresolved_mutations": unresolved,
+            "durable_state_bytes": sum(
+                path.stat().st_size for path in self.config.state_dir.glob("*.sqlite3")
+                if path.is_file() and not path.is_symlink()),
+        })
+        return snapshot
+
+    def _maintenance_once(self) -> None:
+        now = int(time.time() * 1000)
+        cutoff = now - _RETENTION_MS
+        try:
+            unresolved = len(self.mutation_journal.unresolved())
+            if unresolved and not self._unresolved_alerted:
+                self.telemetry.alert("unresolved_mutations")
+            self._unresolved_alerted = bool(unresolved)
+            self.mutation_journal.sweep(now_ms=now, retain_resolved_ms=_RETENTION_MS)
+            self.session_store.prune(older_than_ms=cutoff)
+            self.event_nonces.prune(now_ms=now)
+            self.revocations.prune(older_than_ms=cutoff, now_ms=now)
+            prune_sqlite_conversations(
+                self.config.state_dir / "conversation-state.sqlite3",
+                older_than_ms=cutoff, now_ms=now)
+            self.telemetry.reap_stale_runs(max_age_s=900)
+            # An unresolved write can refer to a run ledger. Keep all ledgers while any
+            # such row exists; this conservative rule avoids deleting reconciliation evidence.
+            with self._lock:
+                active_sessions = bool(self._sessions)
+            if not unresolved and not active_sessions:
+                runs = self.config.state_dir / "runs"
+                if runs.is_dir() and not runs.is_symlink():
+                    for path in runs.iterdir():
+                        if (path.is_dir() and not path.is_symlink()
+                                and int(path.stat().st_mtime * 1000) < cutoff):
+                            shutil.rmtree(path)
+        except Exception:
+            self.telemetry.maintenance_failed()
+
+    def _maintenance_loop(self) -> None:
+        while not self._maintenance_stop.wait(_MAINTENANCE_INTERVAL_S):
+            self._maintenance_once()
+
     def start(self) -> "OdooNativeHost":
         self.server.start()
         self.bootstrap_server.start()
+        self._maintenance_once()
+        if self._maintenance_thread is None:
+            self._maintenance_thread = threading.Thread(
+                target=self._maintenance_loop, name="woa-odoo-maintenance", daemon=True)
+            self._maintenance_thread.start()
         return self
 
     def close(self) -> None:
@@ -451,6 +544,10 @@ class OdooNativeHost:
             self._closed = True
             self._sessions.clear()
             self._runtime_actor.clear()
+        self._maintenance_stop.set()
+        if self._maintenance_thread is not None:
+            self._maintenance_thread.join(timeout=5)
+            self._maintenance_thread = None
         self.bootstrap_server.close()
         self.server.close()
         self.telemetry.close()
@@ -472,6 +569,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--delegation-dir", required=True)
     parser.add_argument("--session-secret", required=True)
     parser.add_argument("--state-dir", required=True)
+    parser.add_argument("--gateway-host", default="127.0.0.1")
+    parser.add_argument("--trusted-gateway-network", action="store_true")
     parser.add_argument("--gateway-port", type=int, default=8766)
     parser.add_argument("--bootstrap-host", default="127.0.0.1")
     parser.add_argument("--bootstrap-port", type=int, default=8767)
@@ -497,6 +596,8 @@ def main(argv: list[str] | None = None) -> int:
         delegation_dir=Path(args.delegation_dir),
         session_secret_path=Path(args.session_secret),
         state_dir=Path(args.state_dir),
+        gateway_host=args.gateway_host,
+        trusted_gateway_network=args.trusted_gateway_network,
         gateway_port=args.gateway_port,
         bootstrap_host=args.bootstrap_host,
         bootstrap_port=args.bootstrap_port,

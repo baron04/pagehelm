@@ -450,8 +450,12 @@ class EmbeddedGateway:
     def __init__(self, registry: RemoteSessionRegistry | None = None, *,
                  host: str = "127.0.0.1", port: int = 0, sse_wait_s: float = 15,
                  public_base_url: str | None = None,
+                 allow_private_network_bind: bool = False,
                  readiness_provider: Callable[[], Mapping] | None = None):
-        if host not in {"127.0.0.1", "localhost", "::1"}:
+        if not isinstance(allow_private_network_bind, bool):
+            raise TypeError("allow_private_network_bind must be boolean")
+        if (host not in {"127.0.0.1", "localhost", "::1"}
+                and not (allow_private_network_bind and host == "0.0.0.0")):
             raise ValueError("embedded gateway may bind only to loopback")
         if readiness_provider is not None and not callable(readiness_provider):
             raise TypeError("readiness_provider must be callable or None")

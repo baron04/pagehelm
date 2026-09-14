@@ -19,6 +19,8 @@ assert SPEC is not None and SPEC.loader is not None
 SPEC.loader.exec_module(OPS)
 REGISTER_PATH = ROOT / "deploy" / "odoo-single-node" / "register.py"
 CADDYFILE = ROOT / "deploy" / "odoo-single-node" / "Caddyfile"
+COMPOSEFILE = ROOT / "deploy" / "odoo-single-node" / "docker-compose.yml"
+AGENT_ENTRYPOINT = ROOT / "deploy" / "odoo-single-node" / "agent-entrypoint.sh"
 REGISTER_SPEC = importlib.util.spec_from_file_location("single_node_register", REGISTER_PATH)
 REGISTER = importlib.util.module_from_spec(REGISTER_SPEC)
 assert REGISTER_SPEC is not None and REGISTER_SPEC.loader is not None
@@ -26,6 +28,22 @@ REGISTER_SPEC.loader.exec_module(REGISTER)
 
 
 class SingleNodeOperationsTests(unittest.TestCase):
+    def test_gateway_is_independent_and_agent_mounts_only_required_secrets(self):
+        compose = COMPOSEFILE.read_text(encoding="utf-8")
+        agent = compose.split("\n  agent:\n", 1)[1].split("\n  gateway:\n", 1)[0]
+        gateway = compose.split("\n  gateway:\n", 1)[1].split("\nvolumes:\n", 1)[0]
+        entrypoint = AGENT_ENTRYPOINT.read_text(encoding="utf-8")
+
+        self.assertNotIn("Caddyfile", agent)
+        self.assertNotIn("caddy-data", agent)
+        self.assertNotIn("WOA_HTTPS_PORT", agent)
+        self.assertIn("delegated-keys:/run/woa-input/delegated-keys:ro", agent)
+        self.assertNotIn("odoo-admin-login-password", agent)
+        self.assertIn("image: caddy@sha256:", gateway)
+        self.assertIn("WOA_HTTPS_PORT", gateway)
+        self.assertNotIn("caddy run", entrypoint)
+        self.assertIn("exec setpriv", entrypoint)
+
     def test_same_origin_gateway_gets_a_trusted_application_origin(self):
         config = CADDYFILE.read_text(encoding="utf-8")
         gateway = config.split("handle_path /assistant/* {", 1)[1].split(
@@ -37,6 +55,8 @@ class SingleNodeOperationsTests(unittest.TestCase):
             gateway,
         )
         self.assertNotIn("header_up Origin", gateway)
+        self.assertIn("reverse_proxy @gateway agent:8766", gateway)
+        self.assertNotIn("/readyz", config)
 
     def _bundle(self, root: Path):
         for relative in (
@@ -137,6 +157,39 @@ class SingleNodeOperationsTests(unittest.TestCase):
                     OPS.restore(project="woa-test-stack", bundle=bundle)
             self.assertFalse(any(call[:2] == ("up", "-d") for call in calls))
 
+    def test_restore_validates_staging_before_database_and_volume_cutover(self):
+        calls = []
+
+        def compose(_env, *args, **_kwargs):
+            calls.append(("compose", args))
+            return b""
+
+        def run(args, **_kwargs):
+            calls.append(("run", tuple(args)))
+            return b""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp) / "bundle"
+            bundle.mkdir()
+            manifest = self._bundle(bundle)
+            with patch.object(OPS, "verify", return_value=manifest), \
+                    patch.object(OPS, "_assert_project_services"), \
+                    patch.object(OPS, "_unresolved_mutations", return_value=0), \
+                    patch.object(OPS, "_live_unresolved_mutations", return_value=0), \
+                    patch.object(OPS, "backup"), \
+                    patch.object(OPS, "_compose", side_effect=compose), \
+                    patch.object(OPS, "_run", side_effect=run):
+                result = OPS.restore(project="woa-test-stack", bundle=bundle)
+
+        encoded = "\n".join(str(item) for item in calls)
+        self.assertIn("woa_restore_", encoded)
+        self.assertIn(".woa-restore-stage", encoded)
+        self.assertIn("ALTER DATABASE woa_trial RENAME TO woa_previous_", encoded)
+        first_trial_cutover = encoded.index("ALTER DATABASE woa_trial")
+        self.assertLess(encoded.index("SELECT 1"), first_trial_cutover)
+        self.assertLess(encoded.index(".woa-restore-stage"), first_trial_cutover)
+        self.assertFalse(result["execution_authority_restored"])
+
     def test_tamper_extra_file_and_wrong_project_are_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -173,11 +226,21 @@ class SingleNodeOperationsTests(unittest.TestCase):
             self.assertEqual(manifest["principals"]["trial:42"]["scopes"],
                              ["customers:read"])
             self.assertEqual(stored.stat().st_mode & 0o777, 0o600)
+            self.assertTrue(result["agent_restart_required"])
+            self.assertTrue(result["credential_file"].startswith("delegated-keys/"))
             self.assertNotIn("api_key", json.dumps(result))
             with self.assertRaisesRegex(REGISTER.RegistrationError, "already"):
                 REGISTER.register(
                     private_dir=private, actor_id="42", api_key_file=key,
                     scopes=("customers:read",), allow_mutations=False)
+
+            removed = REGISTER.remove(
+                private_dir=private, database="trial", actor_id="42")
+            self.assertTrue(removed["agent_restart_required"])
+            self.assertFalse(stored.exists())
+            self.assertNotIn(
+                "trial:42",
+                json.loads((private / "delegations.json").read_text())["principals"])
 
     def test_write_scope_requires_the_matching_mutation_switch(self):
         with tempfile.TemporaryDirectory() as tmp:

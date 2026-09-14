@@ -286,36 +286,80 @@ def restore(*, project: str, bundle: str | Path) -> dict:
     backup(project=project, destination=safety)
     _assert_project_services(env, "agent", "odoo", "db")
     started = time.monotonic()
+    suffix = uuid.uuid4().hex[:12]
+    staging_database = f"woa_restore_{suffix}"
+    previous_database = f"woa_previous_{suffix}"
     try:
         _compose(env, "stop", "agent", "odoo")
+        # Restore and validate every component in a staging namespace. The current
+        # deployment remains intact until all three candidates are readable.
         _compose(env, "exec", "-T", "db", "dropdb", "--if-exists", "-U", "odoo",
-                 "woa_trial")
-        _compose(env, "exec", "-T", "db", "createdb", "-U", "odoo", "woa_trial")
+                 staging_database)
+        _compose(env, "exec", "-T", "db", "createdb", "-U", "odoo",
+                 staging_database)
         dump = (root / "odoo-database.pgdump").read_bytes()
         _run([
             "docker", "compose", "-p", project, "-f", str(COMPOSE),
             "exec", "-T", "db",
             "pg_restore", "--no-owner", "--no-privileges", "-U", "odoo",
-            "-d", "woa_trial"], env=env, input_bytes=dump, timeout=1200)
+            "-d", staging_database], env=env, input_bytes=dump, timeout=1200)
+        _compose(env, "exec", "-T", "db", "psql", "-v", "ON_ERROR_STOP=1",
+                 "-U", "odoo", "-d", staging_database, "-tAc", "SELECT 1")
         _compose(
             env, "run", "--rm", "--no-deps", "--entrypoint", "bash",
             "-v", f"{root}:/backup:ro", "odoo", "-lc",
-            "find /var/lib/odoo -mindepth 1 -delete && "
-            "tar -C /var/lib/odoo -xzf /backup/odoo-data.tar.gz && "
-            "rm -rf /var/lib/odoo/sessions")
+            "rm -rf /var/lib/odoo/.woa-restore-stage && "
+            "mkdir -p /var/lib/odoo/.woa-restore-stage && "
+            "tar -C /var/lib/odoo/.woa-restore-stage "
+            "-xzf /backup/odoo-data.tar.gz && "
+            "rm -rf /var/lib/odoo/.woa-restore-stage/sessions")
         # Core restore validates SQLite again and explicitly strips execution authority.
         _compose(
             env, "run", "--rm", "--no-deps", "--entrypoint", "bash",
             "-v", f"{root}:/backup:ro", "agent", "-lc",
-            "rm -rf /tmp/woa-restored && python -m web_operation_agent.operations restore "
-            "/backup/agent-state --destination /tmp/woa-restored --writer-isolated && "
-            "find /var/lib/woa -mindepth 1 -maxdepth 1 ! -name runs -exec rm -rf {} + && "
-            "cp -a /tmp/woa-restored/. /var/lib/woa/ && "
-            "mkdir -p /var/lib/woa/runs && "
-            "tar -C /var/lib/woa --skip-old-files "
+            "rm -rf /var/lib/woa/.woa-restore-stage && "
+            "python -m web_operation_agent.operations restore "
+            "/backup/agent-state --destination /var/lib/woa/.woa-restore-stage "
+            "--writer-isolated && "
+            "mkdir -p /var/lib/woa/.woa-restore-stage/runs && "
+            "tar -C /var/lib/woa/.woa-restore-stage --skip-old-files "
             "-xzf /backup/agent-state/agent-ledgers.tar.gz && "
-            "chown -R 10001:10001 /var/lib/woa")
+            "if [ -d /var/lib/woa/runs ]; then "
+            "tar -C /var/lib/woa/runs -cf - . | "
+            "tar -C /var/lib/woa/.woa-restore-stage/runs --skip-old-files -xf -; fi && "
+            "chown -R 10001:10001 /var/lib/woa/.woa-restore-stage")
+
+        # Short cutover begins only after staging validation. Previous state stays beside
+        # the candidate until both services pass health checks.
+        _compose(env, "exec", "-T", "db", "dropdb", "--if-exists", "-U", "odoo",
+                 previous_database)
+        _compose(env, "exec", "-T", "db", "psql", "-v", "ON_ERROR_STOP=1",
+                 "-U", "odoo", "-d", "postgres", "-c",
+                 f"ALTER DATABASE woa_trial RENAME TO {previous_database}")
+        _compose(env, "exec", "-T", "db", "psql", "-v", "ON_ERROR_STOP=1",
+                 "-U", "odoo", "-d", "postgres", "-c",
+                 f"ALTER DATABASE {staging_database} RENAME TO woa_trial")
+        for service, state_dir in (("odoo", "/var/lib/odoo"),
+                                   ("agent", "/var/lib/woa")):
+            _compose(
+                env, "run", "--rm", "--no-deps", "--entrypoint", "bash",
+                service, "-lc",
+                f"rm -rf {state_dir}/.woa-restore-previous && "
+                f"mkdir -p {state_dir}/.woa-restore-previous && "
+                f"find {state_dir} -mindepth 1 -maxdepth 1 "
+                "! -name .woa-restore-stage ! -name .woa-restore-previous "
+                f"-exec mv -t {state_dir}/.woa-restore-previous {{}} + && "
+                f"find {state_dir}/.woa-restore-stage -mindepth 1 -maxdepth 1 "
+                f"-exec mv -t {state_dir} {{}} + && "
+                f"rmdir {state_dir}/.woa-restore-stage")
         _compose(env, "up", "-d", "odoo", "agent", timeout=1200)
+        _assert_project_services(env, "agent", "odoo", "db")
+        _compose(env, "exec", "-T", "db", "dropdb", "--if-exists", "-U", "odoo",
+                 previous_database)
+        for service, state_dir in (("odoo", "/var/lib/odoo"),
+                                   ("agent", "/var/lib/woa")):
+            _compose(env, "run", "--rm", "--no-deps", "--entrypoint", "bash",
+                     service, "-lc", f"rm -rf {state_dir}/.woa-restore-previous")
     except OSError as exc:
         raise OperationsError(
             f"restore failed and services remain stopped; safety backup: {safety}") from exc

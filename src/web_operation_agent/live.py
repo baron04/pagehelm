@@ -371,6 +371,7 @@ class LiveProductServer:
                  sse_wait_s: float = _LONG_POLL_S,
                  host: str = "127.0.0.1", port: int = 0,
                  public_base_url: str | None = None,
+                 allow_private_network_bind: bool = False,
                  session_limits: RemoteSessionLimits | None = None,
                  durable_store: SQLiteSessionStore | None = None,
                  principal_validator: Callable[[PrincipalContext], None] | None = None,
@@ -401,6 +402,7 @@ class LiveProductServer:
         self.gateway = EmbeddedGateway(
             self.registry, host=host, port=port, sse_wait_s=sse_wait_s,
             public_base_url=public_base_url,
+            allow_private_network_bind=allow_private_network_bind,
             readiness_provider=self.readiness_snapshot)
 
     @property

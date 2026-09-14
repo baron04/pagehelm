@@ -268,6 +268,16 @@ class SQLiteExpiringNonceStore:
             db.commit()
         return changed == 1
 
+    def prune(self, *, now_ms: int | None = None) -> int:
+        now = self.store.now() if now_ms is None else now_ms
+        if isinstance(now, bool) or not isinstance(now, int) or now < 0:
+            raise ValueError("nonce prune time must be a non-negative integer")
+        with self.store.connect() as db:
+            removed = db.execute(
+                "DELETE FROM expiring_nonces WHERE namespace=? AND expires <= ?",
+                (self.namespace, now)).rowcount
+        return max(0, removed)
+
 
 class SQLitePrincipalRevocations:
     """Process-shared exact and actor-wide revocation watermarks."""
@@ -370,3 +380,22 @@ class SQLitePrincipalRevocations:
             return {"revoked": True, "revoked_at_ms": max(exact_at, actor_at),
                     "reason": latest["reason"]}
         return {"revoked": False}
+
+    def prune(self, *, older_than_ms: int, now_ms: int | None = None) -> dict:
+        """Drop revocations only after every conforming principal has long expired."""
+        now = self.store.now() if now_ms is None else now_ms
+        if (isinstance(older_than_ms, bool) or not isinstance(older_than_ms, int)
+                or isinstance(now, bool) or not isinstance(now, int)
+                or older_than_ms < 0 or now < 0
+                or older_than_ms > now - 86_400_000):
+            raise ValueError("revocation retention cutoff must be at least one day old")
+        with self.store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            exact = db.execute(
+                "DELETE FROM principal_revocations WHERE revoked < ?",
+                (older_than_ms,)).rowcount
+            actors = db.execute(
+                "DELETE FROM actor_revocations WHERE revoked_before < ?",
+                (older_than_ms,)).rowcount
+            db.commit()
+        return {"exact": max(0, exact), "actors": max(0, actors)}

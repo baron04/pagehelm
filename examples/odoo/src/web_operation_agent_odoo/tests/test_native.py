@@ -22,7 +22,9 @@ from web_operation_agent_odoo.native import (
     SignedOdooSessionVerifier, canonical_event, load_session_secret,
     sign_session_event,
 )
-from web_operation_agent_odoo.native_server import OdooNativeConfig, OdooNativeHost
+from web_operation_agent_odoo.native_server import (OdooAuthorityMismatchError,
+                                                     OdooNativeConfig,
+                                                     OdooNativeHost)
 
 
 SECRET = b"a deployment-owned test secret!!" * 2
@@ -368,6 +370,33 @@ class OrdinaryBrowserHostContract(unittest.TestCase):
 
         self.assertFalse(worker.is_alive())
         self.assertEqual(failure, [])
+
+    def test_valid_page_with_mismatched_api_authority_returns_typed_403(self):
+        now = int(time.time() * 1000)
+        config = OdooNativeConfig(
+            rpc_base_url="http://127.0.0.1:8069",
+            public_origin="http://127.0.0.1:18069",
+            public_agent_url="http://127.0.0.1:18766/assistant",
+            delegation_dir=self.root,
+            session_secret_path=self.secret_path,
+            state_dir=self.root / "state-mismatch",
+            gateway_port=0, bootstrap_port=0, scripted=True)
+        host = OdooNativeHost(config)
+        event = OdooSessionEvent(
+            schema_version=1, event="bootstrap", database="trial",
+            company_id="7", actor_id="42", runtime_instance_id="c" * 32,
+            issued_at=now, expires_at=now + 30_000, nonce="d" * 32)
+        with patch.object(
+                host, "_adapter_and_principal",
+                side_effect=OdooAuthorityMismatchError("mismatch")):
+            with host:
+                status, payload = self._post(
+                    host.bootstrap_server.base_url + "/bootstrap",
+                    sign_session_event(event, SECRET))
+
+        self.assertEqual(status, 403)
+        self.assertEqual(payload, {
+            "error": "identity_authority_mismatch", "retryable": False})
 
 if __name__ == "__main__":
     unittest.main()

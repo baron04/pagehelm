@@ -92,6 +92,9 @@ def register(*, private_dir: str | Path, actor_id: str, api_key_file: str | Path
     root = Path(private_dir).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(root, 0o700)
+    keys = root / "delegated-keys"
+    keys.mkdir(mode=0o700, exist_ok=True)
+    os.chmod(keys, 0o700)
     source = Path(api_key_file).expanduser()
     key = _read_key(source)
     if rpc_base_url:
@@ -122,9 +125,9 @@ def register(*, private_dir: str | Path, actor_id: str, api_key_file: str | Path
         if principal in manifest["principals"] and not replace:
             raise RegistrationError("actor is already registered; use --replace to rotate it")
         normalized = json.dumps(key, sort_keys=True, separators=(",", ":")).encode() + b"\n"
-        _private_write(root / filename, normalized)
+        _private_write(keys / filename, normalized)
         manifest["principals"][principal] = {
-            "api_key_file": filename,
+            "api_key_file": f"delegated-keys/{filename}",
             "scopes": sorted(scopes),
             "allow_mutations": allow_mutations,
         }
@@ -133,29 +136,80 @@ def register(*, private_dir: str | Path, actor_id: str, api_key_file: str | Path
             (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode())
     return {
         "status": "READY", "principal": principal,
-        "credential_file": filename, "scopes": sorted(scopes),
+        "credential_file": f"delegated-keys/{filename}", "scopes": sorted(scopes),
         "allow_mutations": allow_mutations,
+        "agent_restart_required": True,
         "online_identity_check": ("passed" if rpc_base_url else
                                   "deferred_until_signed_browser_bootstrap"),
     }
+
+
+def remove(*, private_dir: str | Path, database: str, actor_id: str) -> dict:
+    """Remove one delegation and its dedicated credential without touching others."""
+    if not DATABASE.fullmatch(database) or not ACTOR.fullmatch(actor_id):
+        raise RegistrationError("database or actor id is invalid")
+    root = Path(private_dir).expanduser().resolve()
+    lock_path = root / ".delegations.lock"
+    lock_path.touch(mode=0o600, exist_ok=True)
+    os.chmod(lock_path, 0o600)
+    principal = f"{database}:{actor_id}"
+    with lock_path.open("r+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        manifest_path = root / "delegations.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError) as exc:
+            raise RegistrationError("delegation manifest is unreadable") from exc
+        if (not isinstance(manifest, dict) or set(manifest) != {
+                "schema_version", "principals"} or manifest.get("schema_version") != 1
+                or not isinstance(manifest.get("principals"), dict)):
+            raise RegistrationError("delegation manifest does not match schema 1")
+        removed = manifest["principals"].pop(principal, None)
+        if not isinstance(removed, dict):
+            raise RegistrationError("actor is not registered")
+        relative = removed.get("api_key_file")
+        _private_write(
+            manifest_path,
+            (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode())
+        if isinstance(relative, str):
+            candidate = (root / relative).resolve()
+            key_root = (root / "delegated-keys").resolve()
+            if candidate.parent == key_root and candidate.is_file() and not candidate.is_symlink():
+                candidate.unlink()
+    return {"status": "READY", "principal": principal, "removed": True,
+            "agent_restart_required": True}
 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--private-dir", default=".private/odoo-single-node")
     parser.add_argument("--actor-id", required=True)
-    parser.add_argument("--api-key-file", required=True)
-    parser.add_argument("--rpc-base-url", required=True)
-    parser.add_argument("--scope", action="append", required=True, dest="scopes")
+    parser.add_argument("--api-key-file")
+    parser.add_argument("--rpc-base-url", default="")
+    parser.add_argument("--scope", action="append", dest="scopes")
     parser.add_argument("--allow-mutations", action="store_true")
     parser.add_argument("--replace", action="store_true")
+    parser.add_argument("--remove", action="store_true")
+    parser.add_argument("--database")
     args = parser.parse_args(argv)
     try:
-        result = register(
-            private_dir=args.private_dir, actor_id=args.actor_id,
-            api_key_file=args.api_key_file, scopes=tuple(args.scopes),
-            allow_mutations=args.allow_mutations, replace=args.replace,
-            rpc_base_url=args.rpc_base_url)
+        if args.remove:
+            if (not args.database or args.api_key_file or args.scopes
+                    or args.allow_mutations or args.replace):
+                raise RegistrationError(
+                    "--remove requires only --database and --actor-id")
+            result = remove(
+                private_dir=args.private_dir, database=args.database,
+                actor_id=args.actor_id)
+        else:
+            if not args.api_key_file or not args.rpc_base_url or not args.scopes:
+                raise RegistrationError(
+                    "registration requires --api-key-file, --rpc-base-url, and --scope")
+            result = register(
+                private_dir=args.private_dir, actor_id=args.actor_id,
+                api_key_file=args.api_key_file, scopes=tuple(args.scopes),
+                allow_mutations=args.allow_mutations, replace=args.replace,
+                rpc_base_url=args.rpc_base_url)
     except RegistrationError as exc:
         print(json.dumps({"status": "REFUSED", "reason": str(exc)}))
         return 2

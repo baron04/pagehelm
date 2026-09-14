@@ -1098,6 +1098,13 @@ class GatewayTests(unittest.TestCase):
             self.assertIn("https://app.example/assistant/v1/runtime/embedded.js", source)
             self.assertNotIn(gateway.base_url, source)
 
+    def test_non_loopback_bind_requires_an_explicit_private_network_boundary(self):
+        with self.assertRaisesRegex(ValueError, "loopback"):
+            EmbeddedGateway(host="0.0.0.0")
+        with EmbeddedGateway(
+                host="0.0.0.0", allow_private_network_bind=True) as gateway:
+            self.assertTrue(gateway.base_url.startswith("http://127.0.0.1:"))
+
     def test_public_proxy_url_refuses_downgrade_and_ambiguous_paths(self):
         for value in (
                 "http://app.example/assistant",

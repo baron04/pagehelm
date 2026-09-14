@@ -13,7 +13,9 @@ export PASSWORD_FILE=/run/woa-private/db-password
 setpriv --reuid=100 --regid=101 --init-groups \
   odoo shell --config=/run/woa-private/odoo.conf --database=woa_trial \
   --no-http --log-level=warn < /usr/local/lib/woa-qualification-users.py
-for name in writer.api-key.json reader.api-key.json delegations.json; do
-  install -m 0600 "/run/woa-generated/${name}" "/run/woa-output/${name}"
+install -d -m 0700 "/run/woa-output/delegated-keys"
+for name in writer.api-key.json reader.api-key.json; do
+  install -m 0600 "/run/woa-generated/${name}" "/run/woa-output/delegated-keys/${name}"
 done
+install -m 0600 /run/woa-generated/delegations.json /run/woa-output/delegations.json
 echo "Synthetic writer and reader credentials are ready for the isolated qualification stack."

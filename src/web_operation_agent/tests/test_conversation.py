@@ -9,7 +9,8 @@ import unittest
 from pathlib import Path
 
 from web_operation_agent.business import BusinessToolResult
-from web_operation_agent.conversation import ConversationState, SQLiteConversationState
+from web_operation_agent.conversation import (ConversationState, SQLiteConversationState,
+                                              prune_sqlite_conversations)
 
 
 def _result(content: dict | None = None) -> BusinessToolResult:
@@ -161,6 +162,30 @@ class DurableConversationStateTests(unittest.TestCase):
                     ('{"schema_version":1,"prior_turns":"wrong"}', "session-one"))
             with self.assertRaisesRegex(ValueError, "turns"):
                 SQLiteConversationState(path, "session-one")
+
+    def test_retention_prunes_only_old_conversation_rows(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "conversation.sqlite3"
+            old = SQLiteConversationState(path, "old-session")
+            old.record(message_id="m1", user_text="old", assistant_text="done",
+                       status="finished")
+            current = SQLiteConversationState(path, "current-session")
+            current.record(message_id="m2", user_text="new", assistant_text="done",
+                           status="finished")
+            with sqlite3.connect(path) as database:
+                database.execute(
+                    "UPDATE conversation_contexts SET updated=1000 "
+                    "WHERE conversation_id='old-session'")
+                database.execute(
+                    "UPDATE conversation_contexts SET updated=200000000 "
+                    "WHERE conversation_id='current-session'")
+
+            self.assertEqual(prune_sqlite_conversations(
+                path, older_than_ms=100_000_000, now_ms=200_000_000), 1)
+            self.assertIsNone(SQLiteConversationState(
+                path, "old-session").model_context())
+            self.assertEqual(SQLiteConversationState(
+                path, "current-session").turn_count, 1)
 
 
 if __name__ == "__main__":

@@ -17,10 +17,10 @@ https://{$WOA_HOSTNAME:localhost}:8443 {
 
 	handle_path /assistant/* {
 		@bootstrap path /bootstrap
-		reverse_proxy @bootstrap 127.0.0.1:8767
+		reverse_proxy @bootstrap agent:8767
 
-		@health path /healthz /readyz
-		reverse_proxy @health 127.0.0.1:8766
+		@health path /healthz
+		reverse_proxy @health agent:8766
 
 		# Same-origin browser GETs do not carry Origin. This trusted, loopback-only
 		# application ingress supplies the configured origin only when it is absent;
@@ -32,7 +32,7 @@ https://{$WOA_HOSTNAME:localhost}:8443 {
 		request_header @same_origin_gateway Origin {$WOA_PUBLIC_ORIGIN:https://localhost:8443}
 
 		@gateway path /v1/*
-		reverse_proxy @gateway 127.0.0.1:8766 {
+		reverse_proxy @gateway agent:8766 {
 			flush_interval -1
 			transport http {
 				response_header_timeout 35s
@@ -42,5 +42,10 @@ https://{$WOA_HOSTNAME:localhost}:8443 {
 
 	handle {
 		reverse_proxy odoo:8069
+	}
+
+	handle_errors {
+		@upstream_unavailable expression {http.error.status_code} == 502
+		respond @upstream_unavailable "Service temporarily unavailable" 503
 	}
 }

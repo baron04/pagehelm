@@ -569,12 +569,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     retrieved: dict = {}
     citations: dict = {}
     if args.source_root:
-        # With a compiled map the treatment must be real: every delivery in every case has
-        # to carry at least one cited candidate, or the source arm is measuring nothing.
-        checks["source_treatment_is_non_empty"] = all(
-            row["source_relations"] > 0 and row["source_candidates_delivered"]
-            and all(count > 0 for count in row["source_candidates_delivered"])
-            for row in results)
+        # With a compiled map the treatment must be real.  Requiring a cited candidate for
+        # every unrelated business step is incorrect: relevance filtering should return no
+        # source for many ordinary API calls.  Require a populated index in every run and an
+        # actual cited retrieval in each case that was explicitly designed to consume source.
+        checks["source_treatment_is_non_empty"] = (
+            all(row["source_relations"] > 0 for row in results)
+            and bool(source_cases)
+            and all(bool(row["runtime_source_retrievals"]) for row in source_cases)
+        )
         # And the Skills must still point at something. A citation nobody resolves is
         # indistinguishable from one that rotted two releases ago, which is how all four
         # shipped Skills came to cite unqualified Odoo XML ids that name four addons at once.

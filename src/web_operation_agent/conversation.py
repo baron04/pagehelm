@@ -319,3 +319,25 @@ class SQLiteConversationState(ConversationState):
     def record(self, **fields) -> None:
         super().record(**fields)
         self._persist()
+
+
+def prune_sqlite_conversations(path: str | os.PathLike[str], *,
+                               older_than_ms: int,
+                               now_ms: int | None = None) -> int:
+    """Remove inactive bounded projections without creating a missing database."""
+    target = os.path.abspath(os.path.expanduser(os.fspath(path)))
+    now = int(time.time() * 1000) if now_ms is None else now_ms
+    if (isinstance(older_than_ms, bool) or not isinstance(older_than_ms, int)
+            or isinstance(now, bool) or not isinstance(now, int)
+            or older_than_ms < 0 or now < 0
+            or older_than_ms > now - 86_400_000):
+        raise ValueError("conversation retention cutoff must be at least one day old")
+    if not os.path.exists(target):
+        return 0
+    with sqlite3.connect(target, isolation_level=None, timeout=5) as database:
+        database.execute("BEGIN IMMEDIATE")
+        removed = database.execute(
+            "DELETE FROM conversation_contexts WHERE updated < ?",
+            (older_than_ms,)).rowcount
+        database.commit()
+    return max(0, removed)

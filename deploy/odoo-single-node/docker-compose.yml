@@ -51,8 +51,6 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    environment:
-      WOA_ODOO_DATABASE: ${WOA_ODOO_DATABASE:-woa_trial}
     volumes:
       - odoo-data:/var/lib/odoo
       - ../../examples/odoo/deploy/addons:/mnt/extra-addons:ro
@@ -104,17 +102,36 @@ services:
       WOA_COST_ALERT_CNY: ${WOA_COST_ALERT_CNY:-}
     volumes:
       - agent-state:/var/lib/woa
-      - ${WOA_PRIVATE_DIR:-../../.private/odoo-single-node}:/run/woa-input:ro
+      - ${WOA_PRIVATE_DIR:-../../.private/odoo-single-node}/session-secret:/run/woa-input/session-secret:ro
+      - ${WOA_PRIVATE_DIR:-../../.private/odoo-single-node}/delegations.json:/run/woa-input/delegations.json:ro
+      - ${WOA_PRIVATE_DIR:-../../.private/odoo-single-node}/model.env:/run/woa-input/model.env:ro
+      - ${WOA_PRIVATE_DIR:-../../.private/odoo-single-node}/delegated-keys:/run/woa-input/delegated-keys:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8767/healthz', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  gateway:
+    image: caddy@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    depends_on:
+      odoo:
+        condition: service_healthy
+    environment:
+      WOA_HOSTNAME: ${WOA_HOSTNAME:-localhost}
+      WOA_PUBLIC_ORIGIN: ${WOA_PUBLIC_ORIGIN:-https://localhost:8443}
+    volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
     ports:
       - "127.0.0.1:${WOA_HTTPS_PORT:-8443}:8443"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8767/healthz', timeout=3); urllib.request.urlopen('http://127.0.0.1:8766/readyz', timeout=3)"]
-      interval: 5s
+      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+      interval: 10s
       timeout: 5s
-      retries: 30
+      retries: 10
     restart: unless-stopped
 
 volumes:

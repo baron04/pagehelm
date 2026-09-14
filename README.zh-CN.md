@@ -139,7 +139,7 @@ Agent 网关仍只监听 loopback。部署时可以为它配置一个独立的�
 
 ### Odoo 单机试用部署
 
-[Odoo 单机部署](deploy/odoo-single-node/README.zh-CN.md) 是第一套面向私有试用的普通浏览器组合。固定摘要的 Docker 镜像在一台 Linux 主机运行 Odoo 18、PostgreSQL、Agent 和同源 HTTPS 代理。Odoo 用自身登录会话解析并签名身份；Agent 将其与该用户独立登记的 API key 及收窄工具 scope 对齐。SQLite session、mutation 与 conversation 状态、一致的应用备份恢复、镜像回滚、有界容量、OTLP/HTTP telemetry 和无业务内容告警都有可执行运维路径。隔离主机资格验证覆盖两种权限、session 超限、退出撤销、进程重启后旧 capability 被拒、19.34 秒的应用与 Agent 联合恢复，以及候选镜像回滚。这些证据只适用于参考单机拓扑，不构成生产或跨主机声明。
+[Odoo 单机部署](deploy/odoo-single-node/README.zh-CN.md) 是第一套面向私有试用的普通浏览器组合。固定摘要的 Docker 镜像在一台 Linux 主机运行 Odoo 18、PostgreSQL、Agent 和独立同源 HTTPS 网关。Odoo 用自身登录会话解析并签名身份；Agent 将其与该用户独立登记的 API key 及收窄工具 scope 对齐。SQLite session、mutation 与 conversation 状态、分阶段备份恢复、逐 actor 有界容量、保留策略、OTLP/HTTP telemetry 和无业务内容告警都有可执行运维路径。仓库中的资格记录会区分自动合同证据、单机观测和仍需人工或被环境阻塞的检查，不构成生产或跨主机声明。
 
 显式的 `--scripted` 模式只执行一次固定的零费用装置演示：加载 Skill、查询当前 API、打开 API 授权的精确路由、观察新页面并结束。它不衡量模型能力。去掉 `--scripted` 并配置 OpenAI-compatible provider 后，同一个应用会改用真实模型决策并保持浏览器可交互。
 

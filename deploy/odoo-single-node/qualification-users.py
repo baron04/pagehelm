@@ -123,12 +123,12 @@ payloads = {
         "schema_version": 1,
         "principals": {
             f"{DATABASE}:{writer.id}": {
-                "api_key_file": "writer.api-key.json",
+                "api_key_file": "delegated-keys/writer.api-key.json",
                 "scopes": WRITE_SCOPES,
                 "allow_mutations": True,
             },
             f"{DATABASE}:{reader.id}": {
-                "api_key_file": "reader.api-key.json",
+                "api_key_file": "delegated-keys/reader.api-key.json",
                 "scopes": READ_SCOPES,
                 "allow_mutations": False,
             },
