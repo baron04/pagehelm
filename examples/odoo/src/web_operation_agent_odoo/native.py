@@ -17,6 +17,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from web_operation_agent.identity import IdentityAssertion, PrincipalError
 
@@ -157,7 +158,8 @@ def load_session_secret(path: str | Path) -> bytes:
 class SignedOdooSessionVerifier:
     """Verify freshness and consume every signed event nonce exactly once."""
 
-    def __init__(self, secret: bytes, *, max_clock_skew_ms: int = MAX_CLOCK_SKEW_MS):
+    def __init__(self, secret: bytes, *, max_clock_skew_ms: int = MAX_CLOCK_SKEW_MS,
+                 nonce_consumer: Callable[[str, int, int], bool] | None = None):
         if not isinstance(secret, bytes) or len(secret) < 32:
             raise ValueError("session signing secret must contain at least 32 bytes")
         if (isinstance(max_clock_skew_ms, bool) or not isinstance(max_clock_skew_ms, int)
@@ -165,6 +167,9 @@ class SignedOdooSessionVerifier:
             raise ValueError("max_clock_skew_ms must be an integer from 0 to 60000")
         self._secret = secret
         self._max_clock_skew_ms = max_clock_skew_ms
+        if nonce_consumer is not None and not callable(nonce_consumer):
+            raise TypeError("nonce_consumer must be callable or None")
+        self._nonce_consumer = nonce_consumer
         self._consumed: dict[str, int] = {}
         self._lock = threading.Lock()
 
@@ -182,14 +187,22 @@ class SignedOdooSessionVerifier:
         now = int(time.time() * 1000) if now_ms is None else _millis(now_ms, "now_ms")
         if now + self._max_clock_skew_ms < event.issued_at or now >= event.expires_at:
             raise OdooSessionEventError("session event is not currently valid")
-        with self._lock:
-            self._consumed = {
-                nonce: expiry for nonce, expiry in self._consumed.items()
-                if expiry > now
-            }
-            if event.nonce in self._consumed:
+        if self._nonce_consumer is not None:
+            try:
+                consumed = self._nonce_consumer(event.nonce, event.expires_at, now)
+            except Exception as exc:
+                raise OdooSessionEventError("session event nonce could not be persisted") from exc
+            if not consumed:
                 raise OdooSessionEventError("session event nonce was already consumed")
-            self._consumed[event.nonce] = event.expires_at
+        else:
+            with self._lock:
+                self._consumed = {
+                    nonce: expiry for nonce, expiry in self._consumed.items()
+                    if expiry > now
+                }
+                if event.nonce in self._consumed:
+                    raise OdooSessionEventError("session event nonce was already consumed")
+                self._consumed[event.nonce] = event.expires_at
         return event
 
 

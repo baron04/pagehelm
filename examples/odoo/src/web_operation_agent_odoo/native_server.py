@@ -10,13 +10,15 @@ import tempfile
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from web_operation_agent.application import bind_application
 from web_operation_agent.conversation import SQLiteConversationState
-from web_operation_agent.durable import SQLitePrincipalRevocations, SQLiteSessionStore
+from web_operation_agent.durable import (SQLiteExpiringNonceStore,
+                                         SQLitePrincipalRevocations,
+                                         SQLiteSessionStore)
 from web_operation_agent.egress import ProviderEgressPolicy
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.live import (LiveConversationRunner, LiveProductCapacityError,
@@ -62,6 +64,8 @@ class OdooNativeConfig:
     model: str | None = None
     principal_lifetime_s: int = 900
     max_sessions: int = 10
+    max_sessions_per_actor: int = 3
+    browser_idle_timeout_s: int = 90
     max_active_requests: int = 3
     max_active_requests_per_actor: int = 2
     session_lease_ms: int = 5_000
@@ -83,6 +87,7 @@ class OdooNativeConfig:
                 raise ValueError(f"{name} must be an integer from 0 to 65535")
         for name, maximum in (
                 ("principal_lifetime_s", 3600), ("max_sessions", 10_000),
+                ("max_sessions_per_actor", 10_000),
                 ("max_active_requests", 10_000),
                 ("max_active_requests_per_actor", 10_000),
                 ("turn_timeout_s", 600)):
@@ -92,6 +97,12 @@ class OdooNativeConfig:
                 raise ValueError(f"{name} must be an integer from 1 to {maximum}")
         if self.max_active_requests_per_actor > self.max_active_requests:
             raise ValueError("per-actor provider capacity cannot exceed global capacity")
+        if self.max_sessions_per_actor > self.max_sessions:
+            raise ValueError("per-actor session capacity cannot exceed global capacity")
+        if (isinstance(self.browser_idle_timeout_s, bool)
+                or not isinstance(self.browser_idle_timeout_s, int)
+                or not 30 <= self.browser_idle_timeout_s <= 86_400):
+            raise ValueError("browser_idle_timeout_s must be from 30 to 86400")
         if (isinstance(self.session_lease_ms, bool)
                 or not 1_000 <= self.session_lease_ms <= 60_000):
             raise ValueError("session_lease_ms must be an integer from 1000 to 60000")
@@ -200,12 +211,16 @@ class OdooNativeHost:
     def __init__(self, config: OdooNativeConfig):
         self.config = config
         config.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.verifier = SignedOdooSessionVerifier(
-            load_session_secret(config.session_secret_path))
         self.delegations = OdooDelegationDirectory(config.delegation_dir)
         self.session_store = SQLiteSessionStore(
             config.state_dir / "session-store.sqlite3",
             lease_ms=config.session_lease_ms)
+        self.event_nonces = SQLiteExpiringNonceStore(
+            self.session_store, namespace="odoo_session_event")
+        self.verifier = SignedOdooSessionVerifier(
+            load_session_secret(config.session_secret_path),
+            nonce_consumer=lambda nonce, expires, now: self.event_nonces.consume(
+                nonce, expires_at=expires, now_ms=now))
         self.revocations = SQLitePrincipalRevocations(self.session_store)
         self.mutation_journal = SQLiteMutationJournal(
             config.state_dir / "mutation-journal.sqlite3")
@@ -220,6 +235,8 @@ class OdooNativeHost:
             cost_alert_cny=config.cost_alert_cny)
         self.server = LiveProductServer(
             max_sessions=config.max_sessions,
+            max_sessions_per_actor=config.max_sessions_per_actor,
+            browser_idle_timeout_s=config.browser_idle_timeout_s,
             host="127.0.0.1", port=config.gateway_port,
             public_base_url=config.public_agent_url,
             durable_store=self.session_store,
@@ -275,20 +292,16 @@ class OdooNativeHost:
             scopes=grant.scopes)
         return adapter, principal, allow_mutations, grant
 
-    def _renew_active(self, active: _ActiveSession, event: OdooSessionEvent) -> None:
-        """Reauthenticate both Odoo identities and extend only unchanged authority."""
-        grant = self.delegations.resolve(event)
-        allow_mutations = self.config.allow_mutations and grant.allow_mutations
+    def _renew_active(self, active: _ActiveSession, principal: PrincipalContext,
+                      grant, allow_mutations: bool) -> None:
+        """Install an already reauthenticated identity while holding only local state."""
         if (grant.api_key_path != active.api_key_path
                 or grant.scopes != active.scopes
                 or allow_mutations != active.allow_mutations):
             raise OdooSessionEventError(
                 "delegated authority changed; a new browser session is required")
-        principal = active.adapter.bind_principal(
-            event.page_identity(lifetime_s=self.config.principal_lifetime_s),
-            delegation_id=active.principal.delegation_id,
-            lifetime_s=self.config.principal_lifetime_s,
-            scopes=active.scopes)
+        principal = replace(
+            principal, delegation_id=active.principal.delegation_id)
         active.session.renew_principal(principal)
         active.principal = principal
 
@@ -298,6 +311,9 @@ class OdooNativeHost:
             raise OdooSessionEventError("bootstrap endpoint requires a bootstrap event")
         key = (event.database, event.actor_id, event.runtime_instance_id)
         runtime_key = (event.database, event.runtime_instance_id)
+        # Both application identity RPCs run before the host-wide lock. A slow Odoo user
+        # must not serialize bootstrap and logout for every other actor.
+        adapter, principal, allow_mutations, delegation = self._adapter_and_principal(event)
         with self._lock:
             if self._closed:
                 raise RuntimeError("Odoo native host is closed")
@@ -312,10 +328,10 @@ class OdooNativeHost:
                     previous.session.close("native_bootstrap_replaced")
                     self._sessions.pop(key, None)
                 else:
-                    self._renew_active(previous, event)
+                    self._renew_active(
+                        previous, principal, delegation, allow_mutations)
                     return self._browser_bootstrap(previous.session)
 
-            adapter, principal, allow_mutations, delegation = self._adapter_and_principal(event)
             bound = bind_application(adapter)
             stable = hashlib.sha256(
                 f"{event.database}\0{event.actor_id}\0{event.runtime_instance_id}"
@@ -323,7 +339,8 @@ class OdooNativeHost:
             run_dir = self.config.state_dir / "runs" / (
                 time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8])
             run_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
-            chat = self._new_chat(run_dir, adapter, principal.binding_digest)
+            chat = self._new_chat(
+                run_dir, adapter, principal.actor_authority_digest)
 
             def runner_factory(channel):
                 def ledger_factory(path, run_id, *, base=None):
@@ -399,6 +416,9 @@ class OdooNativeHost:
         }
 
     def _revoke_actor(self, database: str, actor_id: str, reason: str) -> int:
+        self.revocations.revoke_actor(
+            application_id="odoo", tenant_id=database, actor_id=actor_id,
+            reason=reason)
         matches = [
             (key, value) for key, value in self._sessions.items()
             if key[0] == database and key[1] == actor_id

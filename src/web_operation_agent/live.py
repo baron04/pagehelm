@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -364,7 +365,10 @@ class LiveProductServer:
     protocol. Optional SQLite storage preserves safe history and fences local owners.
     """
 
-    def __init__(self, *, max_sessions: int = 100, sse_wait_s: float = _LONG_POLL_S,
+    def __init__(self, *, max_sessions: int = 100,
+                 max_sessions_per_actor: int | None = None,
+                 browser_idle_timeout_s: int = 300,
+                 sse_wait_s: float = _LONG_POLL_S,
                  host: str = "127.0.0.1", port: int = 0,
                  public_base_url: str | None = None,
                  session_limits: RemoteSessionLimits | None = None,
@@ -375,6 +379,16 @@ class LiveProductServer:
                 or not 1 <= max_sessions <= 10_000):
             raise ValueError("max_sessions must be an integer from 1 to 10000")
         self.max_sessions = max_sessions
+        per_actor = max_sessions if max_sessions_per_actor is None else max_sessions_per_actor
+        if (isinstance(per_actor, bool) or not isinstance(per_actor, int)
+                or not 1 <= per_actor <= max_sessions):
+            raise ValueError("max_sessions_per_actor must be from 1 to max_sessions")
+        if (isinstance(browser_idle_timeout_s, bool)
+                or not isinstance(browser_idle_timeout_s, int)
+                or not 30 <= browser_idle_timeout_s <= 86_400):
+            raise ValueError("browser_idle_timeout_s must be from 30 to 86400")
+        self.max_sessions_per_actor = per_actor
+        self.browser_idle_timeout_ms = browser_idle_timeout_s * 1000
         if provider_status is not None and not callable(provider_status):
             raise TypeError("provider_status must be callable or None")
         self._provider_status = provider_status
@@ -400,11 +414,16 @@ class LiveProductServer:
             return len(self._sessions)
 
     def _reap_expired(self) -> int:
+        now_ms = int(time.time() * 1000)
         with self._lock:
             expired = tuple(session for session in self._sessions.values()
-                            if session.channel.expired)
+                            if (session.channel.expired
+                                or now_ms - session.channel.last_client_activity_ms
+                                >= self.browser_idle_timeout_ms))
         for session in expired:
-            session.close("session_expired")
+            reason = ("session_expired" if session.channel.expired
+                      else "browser_inactive")
+            session.close(reason)
         return len(expired)
 
     def readiness_snapshot(self) -> dict:
@@ -451,6 +470,15 @@ class LiveProductServer:
             if len(self._sessions) >= self.max_sessions:
                 raise LiveProductCapacityError(
                     "live product server session capacity is exhausted")
+            if principal is not None:
+                actor_sessions = sum(
+                    existing.channel.principal is not None
+                    and existing.channel.principal.actor_authority_digest
+                    == principal.actor_authority_digest
+                    for existing in self._sessions.values())
+                if actor_sessions >= self.max_sessions_per_actor:
+                    raise LiveProductCapacityError(
+                        "live product server actor session capacity is exhausted")
             session = LiveProductSession(
                 allowed_origin=allowed_origin,
                 page_controller_module=page_controller_module,

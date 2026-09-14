@@ -4,6 +4,7 @@ import json
 import importlib.util
 import os
 import tempfile
+import threading
 import time
 import unittest
 import urllib.error
@@ -11,6 +12,7 @@ import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 
+from web_operation_agent.durable import SQLiteExpiringNonceStore, SQLiteSessionStore
 from web_operation_agent.identity import PrincipalContext
 from web_operation_agent.remote import RemoteProtocolError
 from web_operation_agent_odoo.adapter import OdooApplicationAdapter
@@ -66,6 +68,25 @@ class SignedOdooSessionContract(unittest.TestCase):
         verifier.verify(envelope, now_ms=1_000_001)
         with self.assertRaisesRegex(OdooSessionEventError, "already consumed"):
             verifier.verify(envelope, now_ms=1_000_002)
+
+    def test_a_nonce_stays_consumed_after_the_verifier_restarts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SQLiteSessionStore(Path(tmp) / "state.sqlite3")
+            nonces = SQLiteExpiringNonceStore(store, namespace="odoo_session_event")
+            consume = lambda nonce, expires, now: nonces.consume(
+                nonce, expires_at=expires, now_ms=now)
+            envelope = sign_session_event(_event(), SECRET)
+            SignedOdooSessionVerifier(SECRET, nonce_consumer=consume).verify(
+                envelope, now_ms=1_000_001)
+            restarted = SQLiteExpiringNonceStore(
+                SQLiteSessionStore(Path(tmp) / "state.sqlite3"),
+                namespace="odoo_session_event")
+            with self.assertRaisesRegex(OdooSessionEventError, "already consumed"):
+                SignedOdooSessionVerifier(
+                    SECRET,
+                    nonce_consumer=lambda nonce, expires, now: restarted.consume(
+                        nonce, expires_at=expires, now_ms=now),
+                ).verify(envelope, now_ms=1_000_002)
 
     def test_expired_future_and_oversized_lifetimes_are_refused(self):
         verifier = SignedOdooSessionVerifier(SECRET)
@@ -298,6 +319,55 @@ class OrdinaryBrowserHostContract(unittest.TestCase):
                     sign_session_event(revoke, SECRET))
                 self.assertEqual((revoke_status, revoked), (200, {"revoked": 1}))
                 self.assertEqual(host.server.session_count, 0)
+
+    def test_slow_identity_rpc_does_not_hold_the_host_wide_lock(self):
+        now = int(time.time() * 1000)
+        config = OdooNativeConfig(
+            rpc_base_url="http://127.0.0.1:8069",
+            public_origin="http://127.0.0.1:18069",
+            public_agent_url="http://127.0.0.1:18766/assistant",
+            delegation_dir=self.root,
+            session_secret_path=self.secret_path,
+            state_dir=self.root / "state-lock",
+            gateway_port=0,
+            bootstrap_port=0,
+            scripted=True)
+        host = OdooNativeHost(config)
+        entered = threading.Event()
+        release = threading.Event()
+        failure = []
+
+        def slow_identity(_event):
+            entered.set()
+            if not release.wait(2):
+                raise TimeoutError("test did not release identity lookup")
+            return self._bound_adapter(now)
+
+        event = OdooSessionEvent(
+            schema_version=1, event="bootstrap", database="trial",
+            company_id="7", actor_id="42", runtime_instance_id="b" * 32,
+            issued_at=now, expires_at=now + 30_000, nonce="f" * 32)
+
+        def bootstrap():
+            try:
+                host.bootstrap(sign_session_event(event, SECRET))
+            except BaseException as exc:
+                failure.append(exc)
+
+        with patch.object(host, "_adapter_and_principal", side_effect=slow_identity):
+            worker = threading.Thread(target=bootstrap, daemon=True)
+            worker.start()
+            self.assertTrue(entered.wait(1))
+            acquired = host._lock.acquire(blocking=False)
+            self.assertTrue(acquired, "identity RPC held the host-wide session lock")
+            if acquired:
+                host._lock.release()
+            release.set()
+            worker.join(3)
+        host.close()
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(failure, [])
 
 if __name__ == "__main__":
     unittest.main()

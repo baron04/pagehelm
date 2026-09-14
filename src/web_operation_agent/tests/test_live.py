@@ -12,6 +12,7 @@ from unittest import mock
 from web_operation_agent.live import (LiveConversationRunner, LiveProductServer,
                                       LiveProductSession, render_live_replay)
 from web_operation_agent.embedded_agent import ReadOnlyControl
+from web_operation_agent.identity import PrincipalContext
 from web_operation_agent.model import ProviderError
 from web_operation_agent.product import (AgentTurnConfig, AgentTurnError,
                                          AgentTurnErrorCode, AgentTurnExecutor,
@@ -462,6 +463,71 @@ class LiveProductSessionTests(unittest.TestCase):
                 runner_factory=lambda _channel: _Runner(),
                 session_id="capacity-2")
             self.assertEqual(replacement.grant.session_id, "capacity-2")
+        finally:
+            server.close()
+
+    def test_shared_server_enforces_capacity_per_stable_actor(self):
+        now = int(time.time() * 1000)
+
+        def actor(actor_id, delegation_id):
+            return PrincipalContext(
+                schema_version=1, application_id="twenty",
+                tenant_id="tenant-1", workspace_id="workspace-1",
+                actor_id=actor_id, delegation_id=delegation_id,
+                issued_at=now, expires_at=now + 60_000,
+                scopes=("companies:read",))
+
+        server = LiveProductServer(
+            max_sessions=4, max_sessions_per_actor=2, sse_wait_s=.01)
+        try:
+            sessions = [server.create_session(
+                allowed_origin=ORIGIN,
+                page_controller_module=ORIGIN + "/page-controller.js",
+                runner_factory=lambda _channel: _Runner(),
+                principal=actor("actor-1", f"delegation-{index}"),
+                session_id=f"actor-capacity-{index}") for index in range(2)]
+            with self.assertRaisesRegex(RuntimeError, "actor session capacity"):
+                server.create_session(
+                    allowed_origin=ORIGIN,
+                    page_controller_module=ORIGIN + "/page-controller.js",
+                    runner_factory=lambda _channel: _Runner(),
+                    principal=actor("actor-1", "fresh-delegation"),
+                    session_id="actor-capacity-refused")
+            other = server.create_session(
+                allowed_origin=ORIGIN,
+                page_controller_module=ORIGIN + "/page-controller.js",
+                runner_factory=lambda _channel: _Runner(),
+                principal=actor("actor-2", "delegation-other"),
+                session_id="actor-capacity-other")
+            self.assertEqual(server.session_count, 3)
+            sessions[0].close()
+            other.close()
+        finally:
+            server.close()
+
+    def test_browser_inactivity_releases_capacity_without_owner_heartbeat(self):
+        server = LiveProductServer(
+            max_sessions=1, browser_idle_timeout_s=30, sse_wait_s=.01)
+        try:
+            first = server.create_session(
+                allowed_origin=ORIGIN,
+                page_controller_module=ORIGIN + "/page-controller.js",
+                runner_factory=lambda _channel: _Runner(),
+                session_id="browser-idle")
+            activity_ms = first.channel.last_client_activity_ms
+            # Durable owner validation is an internal heartbeat and must not count as
+            # browser activity.
+            first.channel.validate_live()
+            self.assertEqual(first.channel.last_client_activity_ms, activity_ms)
+            with mock.patch("web_operation_agent.live.time.time",
+                            return_value=(activity_ms + 30_000) / 1000):
+                self.assertEqual(server.session_count, 0)
+            replacement = server.create_session(
+                allowed_origin=ORIGIN,
+                page_controller_module=ORIGIN + "/page-controller.js",
+                runner_factory=lambda _channel: _Runner(),
+                session_id="browser-reconnected")
+            self.assertEqual(replacement.grant.session_id, "browser-reconnected")
         finally:
             server.close()
 

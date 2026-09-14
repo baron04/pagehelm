@@ -263,9 +263,11 @@ def _handler(registry: RemoteSessionRegistry, *, sse_wait_s: float,
                                           code="origin_refused", status=403)
             channel = registry.authenticate(session_id, authorization[7:], origin)
             if not require_lease:
+                channel.touch_client_activity()
                 return channel, ""
             lease_id = self.headers.get("X-WOA-Lease", "")
             channel.validate_active_lease(lease_id)
+            channel.touch_client_activity()
             return channel, lease_id
 
         def _body(self) -> dict:

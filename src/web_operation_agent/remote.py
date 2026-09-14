@@ -196,6 +196,7 @@ class RemoteSessionChannel:
         if not isinstance(self.limits, RemoteSessionLimits):
             raise TypeError("limits must be RemoteSessionLimits or None")
         created_at = _now_ms()
+        self._last_client_activity_ms = created_at
         limit_expiry = created_at + self.limits.session_ttl_s * 1000
         self.expires_at = (min(limit_expiry, principal.expires_at)
                            if principal is not None else limit_expiry)
@@ -270,6 +271,20 @@ class RemoteSessionChannel:
         """Return the bounded reason code for operator and host lifecycle decisions."""
         with self._condition:
             return self._close_reason
+
+    @property
+    def last_client_activity_ms(self) -> int:
+        with self._condition:
+            return self._last_client_activity_ms
+
+    def touch_client_activity(self, *, now_ms: int | None = None) -> None:
+        """Record an authenticated browser request, never an internal owner heartbeat."""
+        now = _now_ms() if now_ms is None else now_ms
+        if isinstance(now, bool) or not isinstance(now, int) or now < 0:
+            raise ValueError("client activity time must be a non-negative integer")
+        with self._condition:
+            self._ensure_open()
+            self._last_client_activity_ms = max(self._last_client_activity_ms, now)
 
     @property
     def latest_observation_envelope(self) -> ObservationEnvelope | None:

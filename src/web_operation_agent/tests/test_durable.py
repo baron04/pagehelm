@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from web_operation_agent.durable import (SQLitePrincipalRevocations, SQLiteSessionStore,
                                          DurableStateError)
+from web_operation_agent.identity import PrincipalRevokedError
 from web_operation_agent.remote import RemoteSessionRegistry, RemoteSessionClosed, RemoteProtocolError
 from web_operation_agent.schemas import ApprovalRequest, ApprovalDecision
 from web_operation_agent.tests.test_remote_transport import ORIGIN, hello, principal
@@ -198,6 +199,23 @@ class CrashRecoveryTests(unittest.TestCase):
 
 
 class PrincipalRevocationTests(unittest.TestCase):
+    def test_actor_logout_watermark_survives_restart_and_blocks_preissued_authority(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sessions.sqlite3"
+            first = SQLitePrincipalRevocations(SQLiteSessionStore(path))
+            issued = 1_000_000
+            stale = principal(issued)
+            first.revoke_actor(
+                application_id=stale.application_id,
+                tenant_id=stale.tenant_id,
+                actor_id=stale.actor_id,
+                reason="application_logout", now_ms=issued + 10)
+
+            restarted = SQLitePrincipalRevocations(SQLiteSessionStore(path))
+            with self.assertRaises(PrincipalRevokedError):
+                restarted.validate(stale)
+            restarted.validate(principal(issued + 11))
+
     def test_revocation_stops_an_active_session_and_new_login_gets_new_authority(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteSessionStore(Path(tmp) / "sessions.sqlite3")
@@ -223,7 +241,7 @@ class PrincipalRevocationTests(unittest.TestCase):
             with self.assertRaises(RemoteSessionClosed):
                 registry.authenticate("revoked", first_grant.client_token, ORIGIN)
 
-            fresh = principal(issued + 1)
+            fresh = principal(revocations.status(first_principal)["revoked_at_ms"] + 1)
             replacement_registry = RemoteSessionRegistry(
                 durable_store=store, principal_validator=revocations.validate)
             second_grant, recovered = replacement_registry.create(

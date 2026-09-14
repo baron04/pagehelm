@@ -45,6 +45,28 @@ class PrincipalContextTests(unittest.TestCase):
         with self.assertRaisesRegex(PrincipalError, "fields"):
             PrincipalContext.from_json({**value.to_json(), "credential": "secret"})
 
+    def test_actor_authority_digest_is_stable_across_fresh_delegations(self):
+        first = principal()
+        second = PrincipalContext(
+            schema_version=1,
+            application_id=first.application_id,
+            tenant_id=first.tenant_id,
+            workspace_id="workspace-2",
+            actor_id=first.actor_id,
+            delegation_id="delegation-2",
+            issued_at=first.issued_at + 1,
+            expires_at=first.expires_at + 1,
+            scopes=("companies:read",),
+        )
+        other_actor = PrincipalContext.from_json(
+            {**second.to_json(), "actor_id": "actor-2"})
+
+        self.assertNotEqual(first.binding_digest, second.binding_digest)
+        self.assertEqual(first.actor_authority_digest,
+                         second.actor_authority_digest)
+        self.assertNotEqual(second.actor_authority_digest,
+                            other_actor.actor_authority_digest)
+
     def test_lifetime_identity_and_scope_contracts_fail_closed(self):
         base = principal().to_json()
         invalid = (

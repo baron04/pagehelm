@@ -23,6 +23,18 @@ class PrincipalRevokedError(PrincipalError):
     """The application or operator withdrew one issued principal's authority."""
 
 
+def actor_authority_digest(application_id: str, tenant_id: str, actor_id: str) -> str:
+    """Stable opaque key for limits and actor-wide revocation across fresh delegations."""
+    if not isinstance(application_id, str) or not _APPLICATION_ID.fullmatch(application_id):
+        raise PrincipalError("application_id is invalid")
+    for name, value in (("tenant_id", tenant_id), ("actor_id", actor_id)):
+        _opaque_id(value, name)
+    encoded = json.dumps(
+        [application_id, tenant_id, actor_id], ensure_ascii=False,
+        separators=(",", ":"), allow_nan=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _integer(value: object, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise PrincipalError(f"{name} must be a non-negative integer")
@@ -182,6 +194,11 @@ class PrincipalContext:
             separators=(",", ":"), allow_nan=False,
         ).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
+
+    @property
+    def actor_authority_digest(self) -> str:
+        return actor_authority_digest(
+            self.application_id, self.tenant_id, self.actor_id)
 
     def require_live(self, *, application_id: str | None = None,
                      now_ms: int | None = None) -> None:

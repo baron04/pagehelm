@@ -16,7 +16,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from .identity import PrincipalContext, PrincipalError, PrincipalRevokedError
+from .identity import (PrincipalContext, PrincipalError, PrincipalRevokedError,
+                       actor_authority_digest)
 
 
 class DurableStateError(RuntimeError):
@@ -236,8 +237,40 @@ class SQLiteProviderQuota:
             return True
 
 
+class SQLiteExpiringNonceStore:
+    """Atomic, process-shared consumption of short-lived signed-event nonces."""
+
+    def __init__(self, store: SQLiteSessionStore, *, namespace: str):
+        if not isinstance(store, SQLiteSessionStore):
+            raise TypeError("store must be a SQLiteSessionStore")
+        if (not isinstance(namespace, str) or not 1 <= len(namespace) <= 64
+                or any(not (char.islower() or char.isdigit() or char == "_")
+                       for char in namespace)):
+            raise ValueError("nonce namespace must be a lowercase reason code")
+        self.store, self.namespace = store, namespace
+        with store.connect() as db:
+            db.execute("CREATE TABLE IF NOT EXISTS expiring_nonces ("
+                       "namespace TEXT NOT NULL, nonce TEXT NOT NULL, "
+                       "expires INTEGER NOT NULL, PRIMARY KEY(namespace, nonce))")
+
+    def consume(self, nonce: str, *, expires_at: int, now_ms: int) -> bool:
+        if (not isinstance(nonce, str) or not nonce or len(nonce) > 200
+                or isinstance(expires_at, bool) or not isinstance(expires_at, int)
+                or isinstance(now_ms, bool) or not isinstance(now_ms, int)
+                or now_ms < 0 or expires_at <= now_ms):
+            raise ValueError("expiring nonce is invalid")
+        with self.store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("DELETE FROM expiring_nonces WHERE expires <= ?", (now_ms,))
+            changed = db.execute(
+                "INSERT OR IGNORE INTO expiring_nonces VALUES (?, ?, ?)",
+                (self.namespace, nonce, expires_at)).rowcount
+            db.commit()
+        return changed == 1
+
+
 class SQLitePrincipalRevocations:
-    """Process-shared revocation for one exact authenticated principal issuance."""
+    """Process-shared exact and actor-wide revocation watermarks."""
 
     def __init__(self, store: SQLiteSessionStore):
         if not isinstance(store, SQLiteSessionStore):
@@ -247,15 +280,22 @@ class SQLitePrincipalRevocations:
             db.execute("CREATE TABLE IF NOT EXISTS principal_revocations ("
                        "principal_digest TEXT PRIMARY KEY, revoked INTEGER NOT NULL, "
                        "reason TEXT NOT NULL)")
+            db.execute("CREATE TABLE IF NOT EXISTS actor_revocations ("
+                       "actor_authority_digest TEXT PRIMARY KEY, revoked_before INTEGER NOT NULL, "
+                       "reason TEXT NOT NULL)")
+
+    @staticmethod
+    def _reason(reason: str) -> None:
+        if (not isinstance(reason, str) or not 1 <= len(reason) <= 64
+                or any(not (char.islower() or char.isdigit() or char == "_")
+                       for char in reason)):
+            raise ValueError("revocation reason must be a lowercase reason code")
 
     def revoke(self, principal: PrincipalContext, *, reason: str = "session_revoked",
                now_ms: int | None = None) -> bool:
         if not isinstance(principal, PrincipalContext):
             raise TypeError("principal must be a PrincipalContext")
-        if (not isinstance(reason, str) or not 1 <= len(reason) <= 64
-                or any(not (char.islower() or char.isdigit() or char == "_")
-                       for char in reason)):
-            raise ValueError("revocation reason must be a lowercase reason code")
+        self._reason(reason)
         revoked = self.store.now() if now_ms is None else now_ms
         if isinstance(revoked, bool) or not isinstance(revoked, int) or revoked < 0:
             raise ValueError("revocation time must be a non-negative integer")
@@ -264,8 +304,34 @@ class SQLitePrincipalRevocations:
             changed = db.execute(
                 "INSERT OR IGNORE INTO principal_revocations VALUES (?, ?, ?)",
                 (principal.binding_digest, revoked, reason)).rowcount
+            db.execute(
+                "INSERT INTO actor_revocations VALUES (?, ?, ?) "
+                "ON CONFLICT(actor_authority_digest) DO UPDATE SET "
+                "revoked_before=max(revoked_before, excluded.revoked_before), "
+                "reason=CASE WHEN excluded.revoked_before >= revoked_before "
+                "THEN excluded.reason ELSE reason END",
+                (principal.actor_authority_digest, revoked, reason))
             db.commit()
         return changed == 1
+
+    def revoke_actor(self, *, application_id: str, tenant_id: str, actor_id: str,
+                     reason: str = "session_revoked",
+                     now_ms: int | None = None) -> None:
+        self._reason(reason)
+        scope = actor_authority_digest(application_id, tenant_id, actor_id)
+        revoked = self.store.now() if now_ms is None else now_ms
+        if isinstance(revoked, bool) or not isinstance(revoked, int) or revoked < 0:
+            raise ValueError("revocation time must be a non-negative integer")
+        with self.store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute(
+                "INSERT INTO actor_revocations VALUES (?, ?, ?) "
+                "ON CONFLICT(actor_authority_digest) DO UPDATE SET "
+                "revoked_before=max(revoked_before, excluded.revoked_before), "
+                "reason=CASE WHEN excluded.revoked_before >= revoked_before "
+                "THEN excluded.reason ELSE reason END",
+                (scope, revoked, reason))
+            db.commit()
 
     def validate(self, principal: PrincipalContext) -> None:
         if not isinstance(principal, PrincipalContext):
@@ -274,7 +340,12 @@ class SQLitePrincipalRevocations:
             row = db.execute(
                 "SELECT 1 FROM principal_revocations WHERE principal_digest=?",
                 (principal.binding_digest,)).fetchone()
-        if row is not None:
+            actor = db.execute(
+                "SELECT revoked_before FROM actor_revocations "
+                "WHERE actor_authority_digest=?",
+                (principal.actor_authority_digest,)).fetchone()
+        if row is not None or (actor is not None
+                               and principal.issued_at <= int(actor["revoked_before"])):
             raise PrincipalRevokedError("principal authority has been revoked")
 
     def status(self, principal: PrincipalContext) -> dict:
@@ -285,7 +356,17 @@ class SQLitePrincipalRevocations:
             row = db.execute(
                 "SELECT revoked, reason FROM principal_revocations WHERE principal_digest=?",
                 (principal.binding_digest,)).fetchone()
-        return ({"revoked": False}
-                if row is None else
-                {"revoked": True, "revoked_at_ms": int(row["revoked"]),
-                 "reason": row["reason"]})
+            actor = db.execute(
+                "SELECT revoked_before, reason FROM actor_revocations "
+                "WHERE actor_authority_digest=?",
+                (principal.actor_authority_digest,)).fetchone()
+        exact_at = int(row["revoked"]) if row is not None else -1
+        actor_at = (int(actor["revoked_before"])
+                    if actor is not None
+                    and principal.issued_at <= int(actor["revoked_before"])
+                    else -1)
+        if max(exact_at, actor_at) >= 0:
+            latest = actor if actor_at >= exact_at else row
+            return {"revoked": True, "revoked_at_ms": max(exact_at, actor_at),
+                    "reason": latest["reason"]}
+        return {"revoked": False}

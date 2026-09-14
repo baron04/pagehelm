@@ -40,6 +40,8 @@ class NativeServerConfig:
     model: str | None = None
     allow_mutations: bool = False
     max_sessions: int = 10
+    max_sessions_per_actor: int = 3
+    browser_idle_timeout_s: int = 90
     public_agent_url: str | None = None
     session_lease_ms: int = 5_000
     max_active_requests: int = 3
@@ -56,7 +58,8 @@ class NativeServerConfig:
         if (isinstance(self.session_lease_ms, bool)
                 or not 1_000 <= self.session_lease_ms <= 60_000):
             raise ValueError("session_lease_ms must be an integer from 1000 to 60000")
-        for name in ("max_active_requests", "max_active_requests_per_actor"):
+        for name in ("max_active_requests", "max_active_requests_per_actor",
+                     "max_sessions_per_actor"):
             value = getattr(self, name)
             if (isinstance(value, bool) or not isinstance(value, int)
                     or not 1 <= value <= 100):
@@ -64,6 +67,12 @@ class NativeServerConfig:
         if self.max_active_requests_per_actor > self.max_active_requests:
             raise ValueError(
                 "max_active_requests_per_actor cannot exceed max_active_requests")
+        if self.max_sessions_per_actor > self.max_sessions:
+            raise ValueError("max_sessions_per_actor cannot exceed max_sessions")
+        if (isinstance(self.browser_idle_timeout_s, bool)
+                or not isinstance(self.browser_idle_timeout_s, int)
+                or not 30 <= self.browser_idle_timeout_s <= 86_400):
+            raise ValueError("browser_idle_timeout_s must be from 30 to 86400")
 
 
 class NativeContactsHost:
@@ -85,6 +94,8 @@ class NativeContactsHost:
             config.max_active_requests_per_actor)
         self.server = LiveProductServer(
             max_sessions=config.max_sessions,
+            max_sessions_per_actor=config.max_sessions_per_actor,
+            browser_idle_timeout_s=config.browser_idle_timeout_s,
             durable_store=self.session_store,
             principal_validator=self.revocations.validate,
             public_base_url=config.public_agent_url,
@@ -141,7 +152,8 @@ class NativeContactsHost:
             run_dir = self.config.state_dir / "runs" / (
                 time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8])
             run_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
-            chat, _meter = self._new_chat(run_dir, principal.binding_digest)
+            chat, _meter = self._new_chat(
+                run_dir, principal.actor_authority_digest)
 
             def runner_factory(channel):
                 executor = AgentTurnExecutor(
