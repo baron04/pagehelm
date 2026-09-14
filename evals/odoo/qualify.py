@@ -5,7 +5,11 @@ qualification runs the real product, real Chromium, the real Odoo fixture, the g
 attempt ledger, the independent evaluator and the reset, and records only content-free
 checks, counts and digests. It proves the apparatus can tell a correct result from a wrong
 one and a product failure from an apparatus failure; it says nothing about how well any model
-or engine performs.
+or engine performs. It also checks the formal closure on this checkout: the gateway's request
+contract, the upstream provider path against a loopback responder, the runtime provider binding,
+the candidate and fixture every header binds, forged bindings, report gating, the development
+and held-out chain rules, the freeze state machine, the escrow and its custody, and the formal
+entry's refusals.
 
     python -m evals.odoo.qualify run
     python -m evals.odoo.qualify sample d01 --arm woa_product
@@ -21,69 +25,31 @@ import secrets
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
 from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from evals.pageagent.host import PageAgentProviderContract
-
-from . import (canary, equivalence, fixture, leakcheck, ledger, population as
-               population_module, protocol, report, scripted, tasks)
-from .driver import AttemptPlan, Driver, DriverConfig
-from .gateway import SCRIPTED_MODEL, GatewayBudgets, ProviderGateway, ScriptedBackend
+from . import (canary, equivalence, escrow, fixture, formal, freeze, harness, leakcheck, ledger,
+               population as population_module, protocol, report, scripted, tasks)
+from .driver import AttemptPlan
+from .gateway import (PAGEAGENT_ENGINE_FIELDS, SCRIPTED_MODEL, GatewayBudgets,
+                      GatewayCompletionClient, ProviderGateway, ScriptedBackend, UpstreamBackend,
+                      provider_binding_digest)
+from .harness import (PRIVATE, Context, batch_bindings, finish_batch, fixture_manifest_path,
+                      load_context, protocol_budgets)
 from .projection import actor_projection
 from .rpc import OdooActorClient
-from .runner_pageagent import PageAgentRunnerConfig
-from .runner_woa import ActorCredential, WoaRunnerConfig
 from .stack import REPOSITORY, Stack
 
-PRIVATE = REPOSITORY / ".private" / "p74-odoo-v1"
 ADAPTER_IN_IMAGE = "/usr/local/lib/python3.12/site-packages/web_operation_agent_odoo/adapter.py"
 QUOTATION_DOMAIN = 'domain=[("state", "in", ("draft", "sent"))],'
 MUTATED_QUOTATION_DOMAIN = 'domain=[("state", "in", ("draft", "sent", "sale"))],'
-
-
-@dataclass
-class Context:
-    stack: Stack
-    population: dict[str, Any]
-    seed_ids: dict[str, Any]
-    task_set: dict[str, Any]
-    keys: dict[str, Path]
-    actors: dict[str, ActorCredential]
-    bundle: Path
-    root: Path
-
-    def record(self, role: str) -> dict[str, Any]:
-        return population_module.record(self.population, role)
-
-    def inputs(self, task_id: str) -> tuple[tasks.RunnerInput, tasks.EvaluatorInput]:
-        return tasks.instantiate(self.task_set, task_id, population=self.population,
-                                 seed_ids=self.seed_ids)
-
-
-def load_context() -> Context:
-    seed = (PRIVATE / "seeds" / "development.seed").read_text().strip()
-    root = PRIVATE / "qualification"
-    root.mkdir(mode=0o700, exist_ok=True)
-    return Context(
-        stack=Stack(private_dir=PRIVATE),
-        population=population_module.generate(seed),
-        seed_ids=json.loads((PRIVATE / "seeded" / "truth.json").read_text()),
-        task_set=json.loads((REPOSITORY / "evals/odoo/tasksets/"
-                             "p74-odoo-development-v1.json").read_text()),
-        keys={role: PRIVATE / "keys" / f"{role}.api-key.json"
-              for role in ("writer", "reader", "other")},
-        actors={role: ActorCredential(f"p74-{role}@example.test",
-                                      PRIVATE / "stack" / f"{role}-login-password")
-                for role in ("writer", "reader", "other")},
-        bundle=REPOSITORY / ".artifacts/evals/pageagent/pageagent-baseline.js",
-        root=root)
 
 
 # -- scripted programs ---------------------------------------------------------------------
@@ -255,71 +221,19 @@ def create_batch(ctx: Context, name: str, specs: list[SlotSpec]) -> Path:
               "replicate": "primary"} for index, spec in enumerate(specs)]
     ledger.create(path, {
         "batch_id": name, "protocol_id": protocol.PROTOCOL_ID,
-        "protocol_digest": protocol.document(first_freeze=_first_freeze())["protocol_digest"],
+        "protocol_digest": protocol.document()["protocol_digest"],
         "schedule_digest": ledger.schedule_digest(slots), "purpose": "apparatus_qualification",
         "provider_config_digest": protocol.provider_config_digest(), "slots": slots,
-        "previous_batch": None})
+        "previous_batch": None, "schedule_seed": None,
+        "provider_binding_digest": provider_binding_digest(ScriptedBackend().identity(),
+                                                           protocol_budgets()),
+        **batch_bindings(ctx)})
     return path
 
 
-def protocol_budgets(**overrides: Any) -> GatewayBudgets:
-    """The gateway budgets and request parameters the machine protocol fixes."""
-    parameters = protocol.PROVIDER["request_parameters"]
-    values = {"requested_model": protocol.PROVIDER["requested_model_alias"],
-              "max_model_calls": protocol.BUDGETS["max_model_calls_per_attempt"],
-              "max_output_tokens": protocol.BUDGETS["max_output_tokens_per_call"],
-              "max_request_bytes": protocol.BUDGETS["max_request_bytes"],
-              "temperature": parameters["temperature"],
-              "model_options": dict(parameters["model_options"])}
-    return GatewayBudgets(**{**values, **overrides})
-
-
-@contextmanager
-def open_driver(ctx: Context, path: Path, playwright: Any, *,
-                budgets: GatewayBudgets | None = None, stack: Stack | None = None,
-                recovery_dir: Path | None = None) -> Iterator[Driver]:
-    """A driver and its gateway bound to an existing ledger; the gateway closes on exit."""
-    stack = stack or ctx.stack
-    backend = ScriptedBackend()
-    gateway = ProviderGateway(
-        ledger_path=path, backend=backend, port=stack.gateway_port,
-        budgets=budgets or protocol_budgets()).start()
-    evidence = ctx.root / "evidence" / path.stem
-    config = DriverConfig(
-        stack=stack, ledger_path=path, evidence_root=evidence,
-        recovery_dir=recovery_dir or PRIVATE / "recovery", actor_key_files=ctx.keys,
-        woa=WoaRunnerConfig(base_url=stack.base_url, actors=ctx.actors,
-                            evidence_dir=evidence / "screens"),
-        pageagent=PageAgentRunnerConfig(
-            base_url=stack.base_url, actors=ctx.actors, evidence_dir=evidence / "screens",
-            bundle_path=ctx.bundle,
-            bundle_sha256="sha256:" + hashlib.sha256(ctx.bundle.read_bytes()).hexdigest(),
-            max_steps=protocol.BUDGETS["pageagent_max_steps"],
-            max_page_actions=protocol.BUDGETS["pageagent_max_page_actions"]),
-        contract=PageAgentProviderContract(
-            model=protocol.PROVIDER["requested_model_alias"], temperature=0.0, top_p=1.0,
-            max_completion_tokens=protocol.BUDGETS["max_output_tokens_per_call"],
-            max_model_calls=protocol.BUDGETS["max_model_calls_per_attempt"],
-            wall_time_s=protocol.BUDGETS["turn_wall_s"]),
-        fixture_digest=json.loads((PRIVATE / "recovery" / "recovery.json").read_text())[
-            "baseline_digest"],
-        capability_digests={arm: protocol.arm_capability_digest(arm) for arm in protocol.ARMS},
-        provider_config_digest=protocol.provider_config_digest())
-    try:
-        yield Driver(config, gateway=gateway, backend=backend, playwright=playwright)
-    finally:
-        gateway.close()
-
-
-def finish_batch(path: Path) -> dict[str, Any]:
-    """Seal a batch that owes a seal, or complete one whose every slot has an attempt."""
-    _, summary = ledger.read(path)
-    if summary["status"] == "OPEN" and summary["open_attempt"] is None:
-        if summary["pending_seal"]:
-            summary = ledger.append(path, "batch_sealed", {"reason": summary["pending_seal"]})
-        elif all(slot["attempts"] for slot in summary["slots"]):
-            summary = ledger.append(path, "batch_completed", {})
-    return summary
+def open_driver(ctx: Context, path: Path, playwright: Any, **options: Any):
+    """A driver bound to an existing qualification ledger; its gateway answers from scripts."""
+    return harness.open_driver(ctx, path, playwright, backend=ScriptedBackend(), **options)
 
 
 def batch_record(path: Path, summary: dict[str, Any], specs: list[SlotSpec]) -> dict[str, Any]:
@@ -346,14 +260,6 @@ def run_batch(ctx: Context, name: str, specs: list[SlotSpec], playwright: Any, *
             if summary["status"] != "OPEN":
                 break
     return batch_record(path, finish_batch(path), specs)
-
-
-def _first_freeze() -> dict[str, Any]:
-    tasksets = REPOSITORY / "evals/odoo/tasksets"
-    return protocol.first_freeze_record(
-        development_seal=json.loads((tasksets / "p74-odoo-development-v1.seal.json").read_text()),
-        heldout_seal=json.loads((tasksets / "p74-odoo-heldout-v1.seal.json").read_text()),
-        split_verification=json.loads((tasksets / "p74-odoo-split-v1.json").read_text()))
 
 
 def selected_outcomes(batch: dict[str, Any]) -> list[dict[str, Any]]:
@@ -511,6 +417,357 @@ def mutation_stack(ctx: Context) -> Stack:
     return dataclasses.replace(ctx.stack, extra_compose=(overlay,))
 
 
+# -- formal closure probes -------------------------------------------------------------------------
+
+CLOSURE_CHECKS = ("gateway_contract_fails_closed", "upstream_path_accounts_every_call",
+                  "provider_binding_follows_endpoint_and_key",
+                  "headers_bind_the_verified_candidate", "forged_bindings_refused",
+                  "reports_gate_only_on_the_frozen_plan", "development_chain_rule_holds",
+                  "freezes_refuse_unreviewed_or_arbitrary_records", "escrow_verifies_and_restores",
+                  "custody_refuses_a_single_failure_domain",
+                  "formal_entry_refuses_without_prerequisites", "spend_ledgers_untouched")
+
+
+class LoopbackProvider:
+    """An OpenAI-compatible responder on loopback, so the upstream path runs without a model."""
+
+    def __init__(self, script: list[tuple[int, dict[str, Any], float]]):
+        self.script = list(script)
+        self.requests: list[dict[str, Any]] = []
+        provider = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *_args: Any) -> None:
+                return
+
+            def do_POST(self) -> None:  # noqa: N802 - http.server naming
+                length = int(self.headers.get("Content-Length", "0"))
+                provider.requests.append({
+                    "headers": {key.lower(): value for key, value in self.headers.items()},
+                    "body": json.loads(self.rfile.read(length))})
+                status, payload, delay = provider.script.pop(0)
+                time.sleep(delay)
+                data = json.dumps(payload).encode()
+                try:
+                    self.send_response(status)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                except OSError:
+                    pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.daemon_threads = True
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    @property
+    def base_url(self) -> str:
+        return f"http://127.0.0.1:{self.server.server_address[1]}/v1"
+
+    def close(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def spend_ledger_fingerprints() -> dict[str, str | None]:
+    """The project's two spend ledgers, so a run can show it wrote to neither."""
+    from web_operation_agent.model import DEFAULT_LEDGER
+
+    ledgers = {"default": Path(os.environ.get("WOA_SPEND_LEDGER") or DEFAULT_LEDGER),
+               "acceptance": REPOSITORY / ".artifacts" / "acceptance" / "spend.jsonl"}
+    return {name: ("sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+                   if path.exists() else None) for name, path in ledgers.items()}
+
+
+def _refused(action: Callable[[], Any], *errors: type[BaseException]) -> bool:
+    try:
+        action()
+    except errors:
+        return True
+    return False
+
+
+def _contract_probe() -> dict[str, Any]:
+    budgets = protocol_budgets()
+    contract = canary.canary_request(budgets)
+    option = sorted(budgets.model_options)[0]
+    variants = {
+        "zero_output_cap": {**contract, "max_tokens": 0},
+        "negative_output_cap": {**contract, "max_tokens": -1},
+        "output_cap_above_budget": {**contract, "max_tokens": budgets.max_output_tokens + 1},
+        "unfrozen_top_p": {**contract, "top_p": 0.9},
+        "unfrozen_seed": {**contract, "seed": 7},
+        "changed_temperature": {**contract, "temperature": 0.7},
+        "changed_model_option": {**contract, option: "changed"},
+        "missing_model_option": {key: value for key, value in contract.items() if key != option},
+    }
+    refusals = {name: budgets.request_refusal(body) for name, body in variants.items()}
+    mapped = GatewayCompletionClient(
+        base_url="http://127.0.0.1:9/v1", token=secrets.token_urlsafe(32),
+        model=budgets.requested_model, model_options=budgets.model_options).forwarded_body({
+            "model": budgets.requested_model, "messages": contract["messages"],
+            "temperature": budgets.temperature, "top_p": 1.0,
+            "max_completion_tokens": budgets.max_output_tokens, "enable_thinking": False})
+    mapped_accepted = budgets.request_refusal(mapped) is None
+    return {"refusals": refusals, "pageagent_mapping_accepted": mapped_accepted,
+            "fails_closed": (budgets.request_refusal(contract) is None
+                             and all(refusals.values()) and mapped_accepted
+                             and not set(mapped) & set(PAGEAGENT_ENGINE_FIELDS))}
+
+
+def _upstream_probe(probe: Path) -> dict[str, Any]:
+    budgets = protocol_budgets()
+    contract = canary.canary_request(budgets)
+    key = probe / "evaluation.key"
+    key.write_text(secrets.token_urlsafe(32) + "\n")
+    os.chmod(key, 0o600)
+    answer = {"id": "loopback", "object": "chat.completion", "model": budgets.requested_model,
+              "choices": [{"index": 0, "finish_reason": "stop", "message": {
+                  "role": "assistant", "content": str(canary.CANARY_ANSWER)}}],
+              "usage": {"prompt_tokens": 20, "completion_tokens": 2}}
+    provider = LoopbackProvider([(200, answer, 0.0), (503, {"error": {"code": "busy"}}, 0.0),
+                                 (200, answer, 3.0)])
+    try:
+        backend = UpstreamBackend(base_url=provider.base_url, key_file=key,
+                                  requested_model=budgets.requested_model,
+                                  spend_ledger=probe / "spend.jsonl",
+                                  batch_id="p74a-closure-probe", timeout_s=1.0)
+        calls = [backend.complete(dict(contract), attempt_id="p74a-closure-probe",
+                                  call_index=index) for index in (1, 2, 3)]
+    finally:
+        provider.close()
+    rows = [json.loads(line)["accounting_status"]
+            for line in (probe / "spend.jsonl").read_text().splitlines()]
+    results = [[call.status, call.error_code] for call in calls]
+    request_id_sent = (provider.requests[0]["headers"].get("x-woa-request-id")
+                       == calls[0].provider_request_id)
+    return {"results": results, "request_id_sent": request_id_sent, "spend_rows": rows,
+            "accounts_every_call": (
+                results == [["ok", None], ["http_error", "provider_unavailable"],
+                            ["transport_error", "provider_deadline"]]
+                and request_id_sent
+                and rows == ["reported", "usage_unavailable", "usage_unavailable"])}
+
+
+def _provider_identity_probe(probe: Path) -> dict[str, Any]:
+    """The runtime binding follows the endpoint and key; no provider is contacted."""
+    budgets = protocol_budgets()
+    keys = {}
+    for name in ("a", "b"):
+        keys[name] = probe / f"identity-key-{name}"
+        keys[name].write_text(secrets.token_urlsafe(32) + "\n")
+        os.chmod(keys[name], 0o600)
+
+    def binding(url: str, key: Path) -> str:
+        backend = UpstreamBackend(base_url=url, key_file=key,
+                                  requested_model=budgets.requested_model,
+                                  spend_ledger=probe / "identity-spend.jsonl",
+                                  batch_id="p74a-identity-probe")
+        return provider_binding_digest(backend.identity(), budgets)
+
+    base = binding("http://127.0.0.1:18001/v1", keys["a"])
+    record = {
+        "normalized_endpoint_kept": base == binding("HTTP://127.0.0.1:18001/v1/", keys["a"]),
+        "endpoint_change_detected": base != binding("http://127.0.0.1:18002/v1", keys["a"]),
+        "key_change_detected": base != binding("http://127.0.0.1:18001/v1", keys["b"]),
+        "nothing_sent": not (probe / "identity-spend.jsonl").exists(),
+    }
+    return {**record, "follows": all(record.values())}
+
+
+def _chain_rule_probe(probe: Path, sample: dict[str, Any]) -> dict[str, Any]:
+    """The development and held-out chain rules, on headers derived from a real one."""
+    development = {**sample, "purpose": "development", "schedule_seed": "0" * 32}
+    completed = {"batch_id": "p74a-chain-probe-000", "purpose": "development",
+                 "protocol_digest": sample["protocol_digest"],
+                 "candidate_commit": sample["candidate"]["commit"],
+                 "chain_head": "sha256:" + "0" * 64, "termination_reason": "batch_completed"}
+    other = {**sample["candidate"], "commit": "0" * 40, "agent_image_revision": "0" * 40}
+
+    def allowed(name: str, header: dict[str, Any]) -> bool:
+        return not _refused(lambda: ledger.create(probe / f"chain-{name}.jsonl", {
+            **header, "batch_id": f"p74a-chain-{name}"}), ledger.LedgerError)
+
+    record = {
+        "new_candidate_follows_a_completed_batch": allowed(
+            "new-candidate", {**development, "previous_batch": completed, "candidate": other}),
+        "same_candidate_refused_after_completion": not allowed(
+            "same-candidate", {**development, "previous_batch": completed}),
+        "same_candidate_follows_an_exogenous_stop": allowed("exogenous", {
+            **development, "previous_batch": {**completed,
+                                              "termination_reason": "model_identity_changed"}}),
+        "heldout_refused_after_completion_under_the_same_protocol": not allowed("heldout", {
+            **development, "purpose": "heldout", "candidate": other,
+            "previous_batch": {**completed, "purpose": "heldout"}}),
+    }
+    return {**record, "holds": all(record.values())}
+
+
+def _custody_probe() -> dict[str, Any]:
+    """Two directories on this machine are one failure domain, and the entry says so."""
+    paths = formal.FormalPaths()
+    try:
+        pointer = json.loads(paths.escrow_record.read_text())
+        shared = (escrow.failure_domain(pointer["archive"])["identifier"]
+                  == escrow.failure_domain(pointer["secret"])["identifier"]
+                  == escrow.failure_domain(paths.private_dir)["identifier"])
+    except (escrow.EscrowError, OSError, ValueError, KeyError) as exc:
+        return {"error": str(exc), "refuses": False}
+    refused = _refused(lambda: escrow.custody_record(
+        private_dir=paths.private_dir, archive=pointer["archive"], secret=pointer["secret"]),
+        escrow.EscrowError)
+    entry = formal.status(paths)["checks"]["escrow_custody"]
+    return {"local_copies_share_the_original_domain": shared, "local_custody_refused": refused,
+            "entry_custody_check": entry,
+            "refuses": shared and refused and entry.startswith("refused")}
+
+
+def _binding_probe(probe: Path, sample: dict[str, Any],
+                   candidate: dict[str, Any]) -> dict[str, Any]:
+    path = probe / "binding-probe.jsonl"
+    ledger.create(path, {**sample, "batch_id": "p74a-binding-probe"})
+    slot = sample["slots"][0]
+    genuine = {"attempt_id": "attempt-001", "slot_id": slot["slot_id"], "arm": slot["arm"],
+               "task_id": slot["task_id"], "replicate": slot["replicate"],
+               "run_id": "run-binding-probe", "fixture_digest": sample["fixture"]["manifest_digest"],
+               "capability_digest": sample["capability_digests"][slot["arm"]],
+               "provider_config_digest": sample["provider_config_digest"],
+               "provider_binding_digest": sample["provider_binding_digest"], "replacement_of": None}
+    forged = "sha256:" + hashlib.sha256(b"a well-formed digest of nothing").hexdigest()
+    refused = {field: _refused(lambda field=field: ledger.append(
+        path, "attempt_started", {**genuine, field: forged}), ledger.LedgerError)
+        for field in ("fixture_digest", "capability_digest", "provider_config_digest",
+                      "provider_binding_digest")}
+    refused["mislabelled_image"] = _refused(lambda: ledger.create(
+        probe / "mislabelled-image.jsonl",
+        {**sample, "batch_id": "p74a-mislabelled-image",
+         "candidate": {**candidate, "agent_image_revision": "0" * 40}}), ledger.LedgerError)
+    accepted = ledger.append(path, "attempt_started", genuine)["open_attempt"] == "attempt-001"
+    return {**refused, "genuine_accepted": accepted,
+            "refused": all(refused.values()) and accepted}
+
+
+def _report_probe(batches: dict[str, Any], sample: dict[str, Any],
+                  metadata: dict[str, Any]) -> dict[str, Any]:
+    summary = batches["samples"]["summary"]
+    lookalike = {"purpose": "development", "protocol_digest": sample["protocol_digest"],
+                 "task_set_seal_digest": sample["task_set_seal_digest"],
+                 "fixture_manifest_digest": sample["fixture"]["manifest_digest"],
+                 "capability_digests": sample["capability_digests"],
+                 "candidate_commit": sample["candidate"]["commit"],
+                 "provider_config_digest": sample["provider_config_digest"],
+                 "provider_binding_digest": sample["provider_binding_digest"],
+                 "schedule_digest": sample["schedule_digest"]}
+    unplanned = report.build_report(batches=[summary], tasks=metadata)["batches"][0]
+    planned = report.build_report(batches=[summary], tasks=metadata, plan=lookalike)["batches"][0]
+    unlinked = _refused(lambda: report.build_report(
+        batches=[batches["negatives"]["summary"], summary], tasks=metadata), ValueError)
+    return {"without_plan": unplanned["verdict_basis"],
+            "with_a_plan_copied_from_the_batch": planned["verdict_basis"],
+            "unlinked_chain_refused": unlinked,
+            "gates_only_on_the_frozen_plan": (
+                unplanned["verdict_basis"] == ["no_frozen_plan"]
+                and planned["verdict_status"] == "descriptive_only"
+                and "not_the_fixed_thirty_task_schedule" in planned["verdict_basis"]
+                and unlinked)}
+
+
+def _freeze_probe(started: str) -> dict[str, Any]:
+    development = json.loads(harness.DEVELOPMENT_SEAL.read_text())
+    heldout = json.loads(harness.HELDOUT_SEAL.read_text())
+    split = json.loads(harness.SPLIT_VERIFICATION.read_text())
+    revise = freeze.family_review_record(
+        reviewer="P7.4a qualification probe", reviewed_at=started, verdict="REVISE",
+        development_seal=development, heldout_seal=heldout,
+        findings=["probe: a REVISE verdict must not open the first freeze"])
+    record = {
+        "stage": protocol.document()["stage"],
+        "arbitrary_first_freeze_refused": _refused(
+            lambda: protocol.document(first_freeze={"kind": "p74_first_freeze"}),
+            freeze.FreezeError),
+        "revised_review_refused": _refused(
+            lambda: freeze.first_freeze_record(development_seal=development, heldout_seal=heldout,
+                                               split_verification=split, family_review=revise),
+            freeze.FreezeError),
+        "second_without_first_refused": _refused(
+            lambda: protocol.document(second_freeze={"kind": "p74_second_freeze"}),
+            freeze.FreezeError),
+    }
+    record["refuses"] = record["stage"] == "draft" and all(
+        value for key, value in record.items() if key != "stage")
+    return record
+
+
+def _escrow_probe(probe: Path) -> dict[str, Any]:
+    paths = formal.FormalPaths()
+    try:
+        pointer = json.loads(paths.escrow_record.read_text())
+        verification = escrow.verify(pointer["archive"], pointer["secret"],
+                                     private_dir=paths.private_dir)
+        restored = escrow.restore(pointer["archive"], pointer["secret"], probe / "escrow-restore")
+    except (escrow.EscrowError, OSError, ValueError, KeyError) as exc:
+        return {"status": "FAILED", "error": str(exc), "verifies_and_restores": False}
+    finally:
+        shutil.rmtree(probe / "escrow-restore", ignore_errors=True)
+    return {"status": verification["status"], "files": verification["files"],
+            "matches_private_files": verification["matches_private_files"],
+            "restored_copy_matches": restored["matches_private_files"],
+            "verifies_and_restores": (verification["matches_private_files"] is True
+                                      and restored["matches_private_files"] is True)}
+
+
+def _formal_entry_probe() -> dict[str, Any]:
+    paths = formal.FormalPaths()
+    state = formal.status(paths)
+    unconfirmed = _refused(lambda: formal.paid_call_prerequisites(paths, confirm_paid_calls=False),
+                           formal.FormalError)
+    return {"checks": state["checks"], "unconfirmed_refused": unconfirmed,
+            "refuses": (unconfirmed and state["development_can_start"] is False
+                        and state["checks"]["first_freeze"].startswith("refused"))}
+
+
+def closure_checks(ctx: Context, batches: dict[str, Any], *, candidate: dict[str, Any],
+                   metadata: dict[str, Any], started: str) -> dict[str, Any]:
+    """The formal-closure repairs, checked on this run's real headers and without any model."""
+    probe = ctx.root / "closure-probes" / started.replace("-", "").replace(":", "")
+    probe.mkdir(mode=0o700, parents=True)
+    headers = {name: ledger.read(REPOSITORY / batch["ledger"])[0][0]["body"]
+               for name, batch in batches.items()}
+    manifest_record = json.loads(fixture_manifest_path(ctx.private_dir).read_text())
+    contract = _contract_probe()
+    upstream = _upstream_probe(probe)
+    identity = _provider_identity_probe(probe)
+    bindings = _binding_probe(probe, headers["samples"], candidate)
+    gating = _report_probe(batches, headers["samples"], metadata)
+    chain = _chain_rule_probe(probe, headers["samples"])
+    freezes = _freeze_probe(started)
+    held = _escrow_probe(probe)
+    custody = _custody_probe()
+    entry = _formal_entry_probe()
+    return {
+        "gateway_contract": contract, "gateway_contract_fails_closed": contract["fails_closed"],
+        "upstream_path": upstream,
+        "upstream_path_accounts_every_call": upstream["accounts_every_call"],
+        "provider_binding": identity,
+        "provider_binding_follows_endpoint_and_key": identity["follows"],
+        "development_chain": chain, "development_chain_rule_holds": chain["holds"],
+        "custody": custody, "custody_refuses_a_single_failure_domain": custody["refuses"],
+        "headers_bind_the_verified_candidate": (
+            candidate["agent_image_revision"] == candidate["commit"]
+            and manifest_record["candidate"] == candidate
+            and all(item["candidate"] == candidate
+                    and item["fixture"]["manifest_digest"] == manifest_record["manifest_digest"]
+                    for item in headers.values())),
+        "forged_bindings": bindings, "forged_bindings_refused": bindings["refused"],
+        "report_gating": gating,
+        "reports_gate_only_on_the_frozen_plan": gating["gates_only_on_the_frozen_plan"],
+        "freezes": freezes, "freezes_refuse_unreviewed_or_arbitrary_records": freezes["refuses"],
+        "escrow": held, "escrow_verifies_and_restores": held["verifies_and_restores"],
+        "formal_entry": entry, "formal_entry_refuses_without_prerequisites": entry["refuses"],
+    }
+
+
 # -- the whole qualification -----------------------------------------------------------------------
 
 def offline_checks(ctx: Context) -> dict[str, Any]:
@@ -542,9 +799,8 @@ def offline_checks(ctx: Context) -> dict[str, Any]:
                                     call_index=counters[attempt]).payload
         return send
 
-    stable = canary.run_preflight(sender("canary"), model=protocol.PROVIDER["requested_model_alias"])
-    drift = canary.run_preflight(sender("canary-drift"),
-                                 model=protocol.PROVIDER["requested_model_alias"])
+    stable = canary.run_preflight(sender("canary"), budgets=protocol_budgets())
+    drift = canary.run_preflight(sender("canary-drift"), budgets=protocol_budgets())
     stability = json.loads((ctx.root / "stability-proof.json").read_text())
     return {
         "bc_ruling": {"verdict": ruling["verdict"], "reasons": ruling["reasons"]},
@@ -555,7 +811,7 @@ def offline_checks(ctx: Context) -> dict[str, Any]:
         "canary_scripted": {"stable": stable["status"], "drift": drift["status"]},
         "stability_proof": {key: stability[key] for key in ("status", "interval_s",
                                                             "required_interval_s", "changed")},
-        "protocol_digest": protocol.document(first_freeze=_first_freeze())["protocol_digest"],
+        "protocol_digest": protocol.document()["protocol_digest"],
     }
 
 
@@ -563,8 +819,13 @@ def run(ctx: Context) -> dict[str, Any]:
     from playwright.sync_api import sync_playwright
 
     started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    result: dict[str, Any] = {"artifact_version": 1, "kind": "p74a_apparatus_qualification",
-                              "started_at": started, "external_model_calls": 0}
+    spend_before = spend_ledger_fingerprints()
+    candidate = ctx.stack.verify_candidate()
+    result: dict[str, Any] = {
+        "artifact_version": 1, "kind": "p74a_apparatus_qualification", "started_at": started,
+        "external_model_calls": 0, "candidate": candidate,
+        "fixture_manifest_digest": json.loads(fixture_manifest_path(ctx.private_dir).read_text())[
+            "manifest_digest"]}
     result["offline"] = offline_checks(ctx)
     result["reset_probes"] = reset_probes(ctx)
     W, A = "woa_product", "pageagent_browser_only"
@@ -645,18 +906,23 @@ def run(ctx: Context) -> dict[str, Any]:
     metadata = {task["task_id"]: {"class": task["class"], "stratum": task["stratum"],
                                   "read_only": task["max_mutations"] == 0}
                 for task in ctx.task_set["tasks"]}
-    public = report.build_report(batches=[batch["summary"] for batch in batches.values()],
-                                 tasks=metadata)
-    report.verify_report(public)
+    # Every qualification batch starts its own chain, so each gets its own report.
+    for batch in batches.values():
+        report.verify_report(report.build_report(batches=[batch["summary"]], tasks=metadata))
     result["report_verified"] = True
+    result["closure"] = closure_checks(ctx, batches, candidate=candidate, metadata=metadata,
+                                       started=started)
+    result["closure"]["spend_ledgers_untouched"] = spend_ledger_fingerprints() == spend_before
     result["checks"] = evaluate_checks(result, batches)
     result["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     result["status"] = "READY" if all(result["checks"].values()) else "FAILED"
-    target = ctx.root / "p74a-qualification.json"
-    target.write_text(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True,
-                                 default=str) + "\n")
-    os.chmod(target, 0o600)
-    return result
+    # Every run keeps its own artifact; an earlier run's record is never overwritten.
+    target = ctx.root / f"p74a-qualification-{started.replace('-', '').replace(':', '')}.json"
+    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True,
+                                default=str) + "\n")
+    return {**result, "artifact": str(target.relative_to(REPOSITORY))}
 
 
 def _selected(row: dict[str, Any]) -> dict[str, Any] | None:
@@ -719,6 +985,7 @@ def evaluate_checks(result: dict[str, Any], batches: dict[str, Any]) -> dict[str
         "scripted_model_only": all(
             batch["summary"]["provider_model"] in {None, SCRIPTED_MODEL, "p74-scripted/v2"}
             for batch in batches.values()),
+        **{f"closure_{name}": result["closure"][name] is True for name in CLOSURE_CHECKS},
     }
     feedback = [attempt.get("metrics", {}).get("first_feedback_ms")
                 for batch in batches.values() for attempt in batch["summary"]["attempts"]
@@ -768,7 +1035,8 @@ def main(argv: list[str] | None = None) -> int:
         return child_attempt(ctx, Path(args.ledger), args.index)
     if args.command == "run":
         result = run(ctx)
-        print(json.dumps({"status": result["status"], "checks": result["checks"]}, indent=1))
+        print(json.dumps({"status": result["status"], "artifact": result["artifact"],
+                          "checks": result["checks"]}, indent=1))
         return 0 if result["status"] == "READY" else 1
     from playwright.sync_api import sync_playwright
     with sync_playwright() as playwright:

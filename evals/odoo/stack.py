@@ -5,6 +5,10 @@ Compose project label, so a mistyped project name cannot reset a developer's fix
 pilot deployment. The Agent gets a new, verified-empty state directory and a new provider
 token before each attempt; it is never assumed that a container restart cleared anything,
 because the state lives on a named volume that survives recreation.
+
+Images are built only from a clean checkout and are labelled with its full commit, and the
+running Agent image is checked against that clean checkout before its results can describe a
+candidate.
 """
 from __future__ import annotations
 
@@ -17,11 +21,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .revision import RevisionError, repository_state, require_clean_head, require_commit
+
 REPOSITORY = Path(__file__).resolve().parents[2]
 BASE_COMPOSE = REPOSITORY / "deploy" / "odoo-single-node" / "docker-compose.yml"
 OVERLAY_COMPOSE = REPOSITORY / "evals" / "odoo" / "compose.p74.yml"
 DATABASE = "woa_trial"
 _PROJECT = re.compile(r"woa-p74-[a-z0-9][a-z0-9-]{1,40}\Z")
+_IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
+REVISION_LABEL = "org.opencontainers.image.revision"
 #: Runs inside the Agent container: session and unresolved-mutation counts from the internal
 #: metrics endpoint, the digests of prepared journal reservations and the number of retained
 #: conversation contexts.
@@ -57,7 +65,8 @@ class StackError(RuntimeError):
 class Stack:
     private_dir: Path
     project: str = "woa-p74-odoo-v1"
-    build_revision: str = "eeea4a0"
+    #: The full commit images are built from and labelled with; the checkout's HEAD by default.
+    build_revision: str | None = None
     https_port: int = 19443
     rpc_port: int = 19069
     gateway_port: int = 18090
@@ -70,6 +79,12 @@ class Stack:
         if not _PROJECT.fullmatch(self.project):
             raise StackError("evaluation stacks must use an explicit woa-p74-* project name")
         object.__setattr__(self, "private_dir", Path(self.private_dir).resolve())
+        try:
+            revision = (repository_state()["commit"] if self.build_revision is None
+                        else require_commit(self.build_revision, "build_revision"))
+        except RevisionError as exc:
+            raise StackError(str(exc)) from exc
+        object.__setattr__(self, "build_revision", revision)
 
     # -- configuration ---------------------------------------------------------------------
     @property
@@ -140,6 +155,40 @@ class Stack:
         return self.run(["docker", "exec", "-i", self.container("db"), "psql", "-U", "odoo",
                          "-d", database, "-v", "ON_ERROR_STOP=1", "-tAc", sql],
                         timeout=timeout).stdout.decode("utf-8", "replace")
+
+    # -- the candidate image -------------------------------------------------------------------
+    def build(self, *services: str) -> dict[str, Any]:
+        """Build images from a clean checkout at this stack's revision, labelled with it."""
+        try:
+            state = require_clean_head(commit=self.build_revision)
+        except RevisionError as exc:
+            raise StackError(f"refusing to build: {exc}") from exc
+        self.compose("build", *(services or ("odoo", "agent")), timeout=3600)
+        return state
+
+    def candidate(self) -> dict[str, Any]:
+        """The running Agent image and the commit its revision label names."""
+        container = self.container("agent", running=False)
+        image = self.run(["docker", "inspect", "--format", "{{.Image}}",
+                          container]).stdout.decode().strip()
+        if not _IMAGE_ID.fullmatch(image):
+            raise StackError("the Agent image id is not a content digest")
+        label = self.run(["docker", "image", "inspect", "--format",
+                          f'{{{{index .Config.Labels "{REVISION_LABEL}"}}}}',
+                          image]).stdout.decode().strip()
+        return {"commit": self.build_revision, "agent_image_id": image,
+                "agent_image_revision": label}
+
+    def verify_candidate(self) -> dict[str, Any]:
+        """The candidate, provided the running Agent image was built from this clean HEAD."""
+        record = self.candidate()
+        try:
+            require_clean_head(commit=self.build_revision)
+        except RevisionError as exc:
+            raise StackError(f"the candidate cannot be verified: {exc}") from exc
+        if record["agent_image_revision"] != self.build_revision:
+            raise StackError("the running Agent image was not built from this checkout's HEAD")
+        return record
 
     # -- the Agent -------------------------------------------------------------------------
     def write_model_env(self, token: str) -> None:

@@ -4,11 +4,12 @@ This module is the executable form of ``.workbench/phase-7/P7.4/protocol.md`` wh
 decide: which arms exist and what each is able to do, the equal hard budgets and request
 parameters, the provider record, the replacement, stop and batch-chain policies, the approval
 rule, what a runner may receive, how the evaluator reaches truth, what a reset must prove, the
-versioned schedule of at most three arms and two observations, and the three freezes. The
-protocol digest covers the SHA-256 of every file a formal batch runs, so a batch header binds
-the exact runners, evaluator, reset, ledger and report it was produced with. Where a human must
-judge -- whether task families represent the intended population -- the protocol records what
-was decided and by whom it must be reviewed; it does not pretend to automate that judgement.
+versioned schedule of at most three arms and two observations, the fixed formal schedules and
+the three freezes, whose records and their verification live in ``freeze.py``. The protocol
+digest covers the SHA-256 of every file a formal batch runs, so a batch header binds the exact
+runners, evaluator, reset, ledger and report it was produced with. Where a human must judge --
+whether task families represent the intended population -- the protocol records who decided
+and binds that decision; it does not pretend to automate the judgement.
 
 The capability of an arm is fixed by the arm and the actor delegation, never by a task: the
 schedule places a PageAgent slot only on preregistered single-turn read or navigation tasks,
@@ -19,7 +20,6 @@ from __future__ import annotations
 import hashlib
 import json
 import random
-import re
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -32,7 +32,13 @@ PROTOCOL_ID = "p74-odoo-v1"
 PROTOCOL_VERSION = 1
 MAX_ARMS = 3
 OBSERVATIONS = ("primary", "replicate")
+FORMAL_TASK_COUNT = 30
+FORMAL_PURPOSES = ("development", "heldout")
 SCHEDULE_DOMAIN_TAG = "p74-odoo-v1/schedule-seed"
+#: The domain tag of each formal schedule's seed. The held-out seed comes from the commit that
+#: recorded the second freeze and the development seed from the commit that recorded the first.
+SCHEDULE_DOMAIN_TAGS = {"heldout": SCHEDULE_DOMAIN_TAG,
+                        "development": "p74-odoo-v1/development-schedule-seed"}
 REQUESTED_MODEL_ALIAS = "qwen3.8-flash"
 #: The product's own per-model request options. Both arms must send them, so they are read
 #: from the product's policy file rather than restated here.
@@ -47,6 +53,8 @@ ARMS: dict[str, dict[str, Any]] = {
         "multi_turn": False, "ask_user": False,
         "approval_boundary": "none", "mutation_journal": "none",
         "provider_path": "evaluation gateway via server-held completion client",
+        "answer_channel": ("the done action's text, read through the bridge; PageAgent does not "
+                           "render it in the page"),
         "eligible_tasks": "preregistered single-turn read or navigation tasks only",
         "analyses": ["exploratory read/navigation product-combination comparison"],
     },
@@ -61,6 +69,7 @@ ARMS: dict[str, dict[str, Any]] = {
         "multi_turn": True, "ask_user": True,
         "approval_boundary": "server_proposal", "mutation_journal": "durable",
         "provider_path": "product loopback provider URL through relay to evaluation gateway",
+        "answer_channel": "the newest turn's default-visible answer in the assistant panel",
         "eligible_tasks": "every task in the supported scope",
         "analyses": ["product screening gate", "refusal and limitation handling",
                      "exploratory comparison subset"],
@@ -111,16 +120,32 @@ PROVIDER = {
     "max_output_tokens": 2048,
     "request_parameters": {
         "identical_for": sorted(ARMS),
+        "shared_fields": ["max_tokens", "messages", "model", "stream", "temperature",
+                          "tool_choice", "tools"],
         "temperature": 0.0,
-        "output_cap_field": "max_tokens",
+        "output_cap": "an integer max_tokens from 1 to max_output_tokens_per_call",
+        "input_bound": "max_request_bytes; input tokens are not capped and are recorded per "
+                       "response",
         "model_options": json.loads(PRODUCT_MODEL_OPTIONS.read_text(encoding="utf-8"))[
             REQUESTED_MODEL_ALIAS],
-        "never_forwarded": ["top_p", "max_completion_tokens"],
-        "pageagent_mapping": ("the server-held completion client drops top_p, sends "
-                              "max_completion_tokens as max_tokens and adds the model options"),
-        "enforced_by": "evals/odoo/gateway.py refuses any request whose parameters differ",
+        "never_forwarded": ["enable_thinking", "max_completion_tokens", "top_p"],
+        "pageagent_mapping": ("the server-held completion client removes top_p, "
+                              "max_completion_tokens and the pinned bundle's enable_thinking "
+                              "patch, sends the output cap as max_tokens and adds the model "
+                              "options"),
+        "enforced_by": ("evals/odoo/gateway.py refuses any other field, a differing temperature "
+                        "or option value, and an output cap outside the frozen range"),
+        "recorded_per_request": ["max_tokens", "options", "temperature", "tool_choice",
+                                 "tools"],
     },
-    "context_window": "provider-declared; recorded at preflight",
+    "runtime_binding": ("provider id, normalized endpoint digest, credential identity digest (a "
+                        "domain-separated SHA-256 of the key), requested alias and request "
+                        "contract digest; the preflight, batch header, every attempt and the "
+                        "report plan name the same binding, and a changed endpoint or key needs "
+                        "a new preflight"),
+    "context_window": ("provider-declared or unknown: the chat-completions canary does not obtain "
+                       "it and nothing records it; request bytes stay the hard bound and a "
+                       "context overflow is a scorable product result"),
     "seed_supported": False,
     "streaming": False,
     "credential": "dedicated evaluation key held only by the gateway",
@@ -162,8 +187,11 @@ EVALUATOR = {
     "process": ("a separate process whose PYTHONPATH is the checkout root only; it writes no "
                 "result if a product, adapter or other engine module was loaded"),
     "truth": "Odoo JSON-RPC as the trial's own actor, through domains the evaluator writes",
-    "judges": ["default-visible final answer", "final page", "harness trace",
+    "judges": ["the final answer from the arm's answer channel", "final page", "harness trace",
                "names of changed fixture guard components"],
+    "answer_channels_differ": ("WOA's answer is what the panel shows by default; PageAgent's is "
+                               "its done text from the bridge, which the page never shows, so no "
+                               "A/C comparison is formal until the channels match"),
     "undecidable_answer": "product FAIL marked extraction_ambiguous; never rescored by hand",
 }
 RESET = {
@@ -179,10 +207,23 @@ RESET = {
     "never_passing_with": ["Agent residue", "an Agent end state that could not be read"],
 }
 BATCH_CHAIN = {
-    "header_binds": ["protocol_digest", "schedule_digest", "provider_config_digest", "slots",
-                     "previous_batch"],
-    "previous_batch": ["batch_id", "protocol_digest", "chain_head", "termination_reason"],
-    "same_protocol_new_batch_only_after": STOP_POLICY["same_protocol_restart_only_after"],
+    "header_binds": ["protocol_digest", "task_set_seal_digest", "fixture", "capability_digests",
+                     "candidate", "provider_config_digest", "provider_binding_digest",
+                     "schedule_digest", "schedule_seed", "slots", "previous_batch"],
+    "attempt_must_use": ("the fixture manifest digest, the arm capability digest and the runtime "
+                         "provider binding its batch binds"),
+    "previous_batch": ["batch_id", "purpose", "protocol_digest", "candidate_commit", "chain_head",
+                       "termination_reason"],
+    "one_purpose_per_chain": True,
+    "development": ("a new candidate commit may follow any finished development batch under the "
+                    "same tasks, fixture, provider and protocol; the same candidate continues "
+                    "only after an exogenous stop; a candidate never returns once another "
+                    "candidate has followed it"),
+    "heldout_and_qualification": ("a new batch under the same protocol version only after an "
+                                  "exogenous stop; the held-out set retires as the stop policy "
+                                  "states"),
+    "exogenous_stops": STOP_POLICY["same_protocol_restart_only_after"],
+    "open_batch": "resumed from its ledger, never restarted",
     "superseded": "kept, never deleted, and listed with its attempts in the public report",
     "committed": ("each batch header at its start and its final chain head at its end, to the "
                   ".workbench repository"),
@@ -197,6 +238,10 @@ STATISTICS = {
                        "read-only primary observations",
     "claims_forbidden": ["engine attribution", "non-inferiority",
                          "proof of a 90% success rate"],
+    "report_scope": "a whole unbroken batch chain, first batch first",
+    "gated_batches": ("only the newest batch of its chain, when it is COMPLETE, its purpose and "
+                      "bound digests equal the frozen plan and its schedule is the fixed "
+                      "thirty-task schedule; superseded and all other batches are descriptive"),
 }
 #: Every file a formal batch runs, by role; their SHA-256 values are part of the protocol
 #: digest. The qualification harness, its scripted model policies and the extractor's variant
@@ -206,6 +251,7 @@ APPARATUS_MODULES = {
                 "evals/pageagent/host.py"],
     "evaluator": EVALUATOR["modules"],
     "reset": RESET["modules"],
+    "candidate": ["evals/odoo/revision.py"],
     "approval_oracle": [APPROVAL_ORACLE["module"]],
     "attempts": ["evals/odoo/driver.py", "evals/odoo/ledger.py", "evals/odoo/outcomes.py",
                  "evals/odoo/trace.py", "evals/twenty/records.py", "evals/twenty/evaluator.py"],
@@ -216,6 +262,38 @@ APPARATUS_MODULES = {
                           "evals/odoo/manifest.py", "evals/odoo/leakcheck.py",
                           "evals/odoo/equivalence.py"],
     "statistics_and_report": ["evals/odoo/stats.py", "evals/odoo/report.py"],
+    "entry": ["evals/odoo/formal.py", "evals/odoo/harness.py"],
+}
+FORMAL_ENTRY = {
+    "module": "evals/odoo/formal.py",
+    "every_paid_call_needs": [
+        "--confirm-paid-calls",
+        "a clean checkout",
+        ("the first freeze and its accepted family review, each committed to .workbench exactly "
+         "once and verified against both seals and the split"),
+        ("a custody record committed once to .workbench: the escrow of the held-out set and "
+         "both seeds restore-verified, with the original, the archive and its secret in three "
+         "different failure domains; a domain the machine cannot prove carries an owner "
+         "attestation"),
+        "a configured evaluation provider with an owner-only key file",
+    ],
+    "preflight": ("five canaries under the frozen request contract, accounted to the product "
+                  "spend ledger under their own batch id; the record keeps content-free facts"),
+    "development_batch_needs": [
+        ("the newest preflight READY under the same first freeze and runtime provider binding; "
+         "a changed endpoint or key needs a new preflight"),
+        "the running candidate built from the clean checkout and a fixture manifest taken with it",
+        "the development task set matching the seal the first freeze bound",
+    ],
+    "development_schedule": ("formal_schedule('development') seeded from the commit that "
+                             "recorded the first freeze"),
+    "records": ("batch header committed to .workbench before the first attempt; chain head "
+                "committed when the batch completes or seals"),
+    "model_string": "a response model string other than the preflight's seals the batch",
+    "interrupted_batch": "resumed from its ledger, never restarted",
+    "report_plan": "the first freeze plus the header each batch announced before its first attempt",
+    "heldout": ("not available: needs the second and third freezes and a resolved PageAgent "
+                "answer channel"),
 }
 
 
@@ -241,11 +319,15 @@ def implementation_digests(repository: Path = REPOSITORY) -> dict[str, dict[str,
     return digests
 
 
-def derive_schedule_seed(second_freeze_commit: str) -> str:
-    """The schedule seed is a function of the second-freeze commit; it cannot be chosen."""
-    if not isinstance(second_freeze_commit, str) or len(second_freeze_commit) != 40:
-        raise ValueError("the second freeze is identified by a full 40-character commit SHA")
-    return hashlib.sha256(f"{SCHEDULE_DOMAIN_TAG}\0{second_freeze_commit}".encode()).hexdigest()[:32]
+def derive_schedule_seed(freeze_commit: str, *, purpose: str = "heldout") -> str:
+    """A formal schedule's seed is a function of a freeze commit; it cannot be chosen."""
+    if purpose not in SCHEDULE_DOMAIN_TAGS:
+        raise ValueError("schedule seeds exist only for development and held-out batches")
+    if (not isinstance(freeze_commit, str) or len(freeze_commit) != 40
+            or any(character not in "0123456789abcdef" for character in freeze_commit)):
+        raise ValueError("a freeze is identified by a full 40-character commit SHA")
+    tag = SCHEDULE_DOMAIN_TAGS[purpose]
+    return hashlib.sha256(f"{tag}\0{freeze_commit}".encode()).hexdigest()[:32]
 
 
 def build_schedule(task_ids: Sequence[str], *, eligible: dict[str, Sequence[str]],
@@ -279,6 +361,29 @@ def build_schedule(task_ids: Sequence[str], *, eligible: dict[str, Sequence[str]
     return slots
 
 
+def formal_schedule(purpose: str, task_ids: Sequence[str], *, seed: str,
+                    pageagent_eligible: Sequence[str] = ()) -> list[dict[str, Any]]:
+    """The fixed schedule of a formal batch: all thirty tasks on WOA, each observed twice.
+
+    A development batch schedules WOA only; a held-out batch adds PageAgent on its
+    preregistered eligible subset. Only a batch with exactly this schedule can be gated.
+    """
+    if purpose not in FORMAL_PURPOSES:
+        raise ValueError("formal batches are development or held-out batches")
+    ids = sorted(task_ids)
+    if len(ids) != FORMAL_TASK_COUNT or len(set(ids)) != len(ids):
+        raise ValueError(f"a formal batch schedules exactly {FORMAL_TASK_COUNT} distinct tasks")
+    if purpose == "development" and pageagent_eligible:
+        raise ValueError("a development batch qualifies WOA only")
+    if (not isinstance(seed, str) or len(seed) != 32
+            or any(character not in "0123456789abcdef" for character in seed)):
+        raise ValueError("a formal schedule seed is 32 lowercase hex characters")
+    eligible: dict[str, Sequence[str]] = {"woa_product": ids}
+    if pageagent_eligible:
+        eligible["pageagent_browser_only"] = sorted(pageagent_eligible)
+    return build_schedule(ids, eligible=eligible, seed=seed)
+
+
 def pageagent_eligibility(task_set: dict[str, Any]) -> list[str]:
     """Single-turn, non-mutating read or navigation tasks with no write oracle."""
     return sorted(task["task_id"] for task in task_set["tasks"]
@@ -292,8 +397,10 @@ def pageagent_eligibility(task_set: dict[str, Any]) -> list[str]:
 def document(*, first_freeze: dict[str, Any] | None = None,
              second_freeze: dict[str, Any] | None = None,
              third_freeze: dict[str, Any] | None = None) -> dict[str, Any]:
-    stage = ("third_frozen" if third_freeze else "second_frozen" if second_freeze
-             else "first_frozen" if first_freeze else "draft")
+    """The machine protocol document at the stage its verified freeze chain reaches."""
+    from .freeze import verify_chain
+
+    stage = verify_chain(first_freeze, second_freeze, third_freeze)
     body = {
         "artifact_version": PROTOCOL_VERSION, "kind": "p74_machine_protocol",
         "protocol_id": PROTOCOL_ID, "stage": stage,
@@ -310,48 +417,15 @@ def document(*, first_freeze: dict[str, Any] | None = None,
         "critical_safety_events": sorted(outcomes.CRITICAL_SAFETY_EVENTS),
         "replacement_policy": REPLACEMENT_POLICY, "stop_policy": STOP_POLICY,
         "approval_oracle": APPROVAL_ORACLE, "runners": RUNNERS, "evaluator": EVALUATOR,
-        "reset": RESET, "batch_chain": BATCH_CHAIN,
+        "reset": RESET, "batch_chain": BATCH_CHAIN, "formal_entry": FORMAL_ENTRY,
         "implementation_digests": implementation_digests(),
         "schedule": {"max_arms": MAX_ARMS, "observations": list(OBSERVATIONS),
-                     "seed_derivation": f"sha256('{SCHEDULE_DOMAIN_TAG}\\0' + second freeze "
-                                        "commit)[:32]"},
+                     "formal_purposes": list(FORMAL_PURPOSES),
+                     "formal_task_count": FORMAL_TASK_COUNT,
+                     "seed_derivation": {purpose: f"sha256('{tag}\\0' + freeze commit)[:32]"
+                                         for purpose, tag in sorted(SCHEDULE_DOMAIN_TAGS.items())}},
         "statistics": STATISTICS,
         "first_freeze": first_freeze, "second_freeze": second_freeze,
         "third_freeze": third_freeze,
     }
     return {**body, "protocol_digest": digest_json(body)}
-
-
-def first_freeze_record(*, development_seal: dict[str, Any], heldout_seal: dict[str, Any],
-                        split_verification: dict[str, Any]) -> dict[str, Any]:
-    if split_verification.get("development_seal") != development_seal.get("seal_digest") or \
-            split_verification.get("heldout_seal") != heldout_seal.get("seal_digest"):
-        raise ValueError("split verification does not bind these seals")
-    return {
-        "development_seal_digest": development_seal["seal_digest"],
-        "heldout_seal_digest": heldout_seal["seal_digest"],
-        "split_verification_digest": digest_json(split_verification),
-        "development_population_commitment": development_seal["population_seed_commitment"],
-        "heldout_population_commitment": heldout_seal["population_seed_commitment"],
-        "development_fixture_truth_digest": development_seal["fixture_truth_digest"],
-        "heldout_fixture_truth_digest": heldout_seal["fixture_truth_digest"],
-        "normal_tasks_per_split": split_verification["normal_tasks_per_split"],
-        "refusal_or_limitation_tasks_per_split":
-            split_verification["refusal_or_limitation_tasks_per_split"],
-        "family_review": "pending independent reviewer (protocol section 5)",
-    }
-
-
-def second_freeze_record(*, candidate_commit: str,
-                         repository: Path = REPOSITORY) -> dict[str, Any]:
-    """What the second freeze commits: the candidate and the exact apparatus it runs with."""
-    if not isinstance(candidate_commit, str) or not re.fullmatch(r"[0-9a-f]{40}",
-                                                                 candidate_commit):
-        raise ValueError("the candidate is identified by a full 40-character commit SHA")
-    return {
-        "candidate_commit": candidate_commit,
-        "implementation_digests": implementation_digests(repository),
-        "capability_digests": {arm: arm_capability_digest(arm) for arm in ARMS},
-        "provider_config_digest": provider_config_digest(),
-        "statistics_plan_digest": digest_json(STATISTICS),
-    }

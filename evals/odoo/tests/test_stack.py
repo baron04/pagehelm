@@ -7,13 +7,29 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from evals.odoo import revision
 from evals.odoo.stack import AGENT_STATE_PROGRAM, Stack, StackError
+
+HEAD = "a" * 40
 
 
 class RecordingStack(Stack):
     def run(self, argv, **kwargs):
         self.__dict__.setdefault("calls", []).append(argv)
+        return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+
+class ScriptedStack(Stack):
+    """Answers docker commands from a table of substrings instead of running them."""
+
+    def run(self, argv, **kwargs):
+        self.__dict__.setdefault("calls", []).append(argv)
+        command = " ".join(argv)
+        for needle, output in self.__dict__.get("responses", {}).items():
+            if needle in command:
+                return subprocess.CompletedProcess(argv, 0, output.encode(), b"")
         return subprocess.CompletedProcess(argv, 0, b"", b"")
 
 
@@ -47,6 +63,52 @@ class StackTests(unittest.TestCase):
         stack = Stack(private_dir=Path("/tmp/p74"))
         with self.assertRaises(StackError):
             stack.write_model_env("short")
+
+
+class CandidateTests(unittest.TestCase):
+    def test_build_revision_is_the_checkouts_full_head_by_default(self):
+        stack = Stack(private_dir=Path("/tmp/p74"))
+        self.assertEqual(stack.build_revision, revision.repository_state()["commit"])
+        self.assertEqual(stack.env()["WOA_BUILD_REVISION"], stack.build_revision)
+        with self.assertRaises(StackError):
+            Stack(private_dir=Path("/tmp/p74"), build_revision="eeea4a0")
+
+    def test_images_are_built_only_from_a_clean_checkout_at_that_revision(self):
+        stack = RecordingStack(private_dir=Path("/tmp/p74"), build_revision=HEAD)
+        with patch("evals.odoo.stack.require_clean_head",
+                   side_effect=revision.RevisionError("dirty")):
+            with self.assertRaises(StackError):
+                stack.build("agent")
+        self.assertEqual(stack.__dict__.get("calls", []), [])
+        with patch("evals.odoo.stack.require_clean_head",
+                   return_value={"commit": HEAD, "clean": True}) as clean:
+            stack.build("agent")
+        clean.assert_called_once_with(commit=HEAD)
+        self.assertEqual(stack.calls[-1][-2:], ["build", "agent"])
+
+    def candidate_stack(self, label):
+        stack = ScriptedStack(private_dir=Path("/tmp/p74"), build_revision=HEAD)
+        stack.__dict__["responses"] = {
+            "ps -q -a agent": "container-1\n",
+            "com.docker.compose.project": "woa-p74-odoo-v1\n",
+            "{{.Image}}": "sha256:" + "1" * 64 + "\n",
+            "org.opencontainers.image.revision": label + "\n",
+        }
+        return stack
+
+    def test_the_running_image_must_carry_the_clean_head_revision(self):
+        clean = {"commit": HEAD, "clean": True}
+        with patch("evals.odoo.stack.require_clean_head", return_value=clean):
+            record = self.candidate_stack(HEAD).verify_candidate()
+            self.assertEqual(record, {"commit": HEAD, "agent_image_id": "sha256:" + "1" * 64,
+                                      "agent_image_revision": HEAD})
+            for label in ("eeea4a0", "<no value>", "b" * 40):
+                with self.subTest(label=label), self.assertRaises(StackError):
+                    self.candidate_stack(label).verify_candidate()
+        with patch("evals.odoo.stack.require_clean_head",
+                   side_effect=revision.RevisionError("uncommitted changes")):
+            with self.assertRaises(StackError):
+                self.candidate_stack(HEAD).verify_candidate()
 
 
 class _Metrics(http.server.BaseHTTPRequestHandler):

@@ -3,8 +3,10 @@
 PageAgent signs in as the same synthetic actor on the same Odoo, but receives no Skill, no
 business API and no WOA assistant: the addon's assertion and assistant endpoints are refused
 in this browser context, and the runner verifies that no assistant mounted before PageAgent
-starts. The pinned bundle is injected after the page loads, its provider calls go through the
-same evaluation gateway as WOA's, and its visible final answer is ``done.text``.
+starts. The pinned bundle is injected after the page loads and its provider calls go through the
+same evaluation gateway as WOA's. Its final answer is the ``done`` action's text, returned through
+the bridge: PageAgent does not render it in the page, so unlike WOA's answer it is not what a
+user sees by default, and the two arms' answers reach the evaluator through different channels.
 
 The arm is single-turn and read-only by construction; the schedule admits it only to the
 preregistered read and navigation subset.

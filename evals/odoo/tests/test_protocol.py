@@ -16,12 +16,15 @@ class ScheduleTests(unittest.TestCase):
         self.eligible = {"woa_product": self.ids,
                          "pageagent_browser_only": protocol.pageagent_eligibility(self.task_set)}
 
-    def test_seed_is_derived_from_the_second_freeze_commit(self):
+    def test_schedule_seeds_are_derived_per_purpose_from_a_freeze_commit(self):
         seed = protocol.derive_schedule_seed("a" * 40)
-        self.assertEqual(seed, protocol.derive_schedule_seed("a" * 40))
+        self.assertEqual(seed, protocol.derive_schedule_seed("a" * 40, purpose="heldout"))
         self.assertNotEqual(seed, protocol.derive_schedule_seed("b" * 40))
-        with self.assertRaises(ValueError):
-            protocol.derive_schedule_seed("abc123")
+        self.assertNotEqual(seed, protocol.derive_schedule_seed("a" * 40, purpose="development"))
+        for commit, purpose in (("abc123", "heldout"), ("A" * 40, "heldout"),
+                                ("a" * 40, "apparatus_qualification")):
+            with self.subTest(commit=commit, purpose=purpose), self.assertRaises(ValueError):
+                protocol.derive_schedule_seed(commit, purpose=purpose)
 
     def test_schedule_is_deterministic_and_never_pools_observations(self):
         seed = protocol.derive_schedule_seed("c" * 40)
@@ -34,6 +37,25 @@ class ScheduleTests(unittest.TestCase):
         self.assertEqual(len(woa), 60)
         self.assertEqual(len({(slot["task_id"], slot["replicate"]) for slot in woa}), 60)
         self.assertEqual(len({slot["slot_id"] for slot in slots}), len(slots))
+
+    def test_formal_schedules_fix_thirty_tasks_observed_twice(self):
+        seed = protocol.derive_schedule_seed("d" * 40, purpose="development")
+        development = protocol.formal_schedule("development", self.ids, seed=seed)
+        self.assertEqual(len(development), 60)
+        self.assertEqual({slot["arm"] for slot in development}, {"woa_product"})
+        heldout = protocol.formal_schedule(
+            "heldout", self.ids, seed=seed,
+            pageagent_eligible=self.eligible["pageagent_browser_only"])
+        self.assertEqual(len(heldout), 60 + 2 * len(self.eligible["pageagent_browser_only"]))
+        cases = {
+            "twenty_nine_tasks": ("development", self.ids[:29], seed, ()),
+            "pageagent_in_development": ("development", self.ids, seed, ["d01"]),
+            "unformal_purpose": ("apparatus_qualification", self.ids, seed, ()),
+            "chosen_seed": ("development", self.ids, "lucky", ()),
+        }
+        for label, (purpose, ids, value, eligible) in cases.items():
+            with self.subTest(label=label), self.assertRaises(ValueError):
+                protocol.formal_schedule(purpose, ids, seed=value, pageagent_eligible=eligible)
 
     def test_pageagent_only_on_single_turn_read_tasks(self):
         eligible = set(self.eligible["pageagent_browser_only"])
@@ -77,19 +99,10 @@ class DocumentTests(unittest.TestCase):
         self.assertEqual(parameters["identical_for"], sorted(protocol.ARMS))
         self.assertEqual(parameters["temperature"], 0.0)
         self.assertNotIn("top_p", protocol.PROVIDER)
-        self.assertEqual(set(parameters["never_forwarded"]), {"top_p", "max_completion_tokens"})
-
-    def test_first_freeze_binds_its_seals(self):
-        tasksets = DEVELOPMENT.parent
-        development = json.loads((tasksets / "p74-odoo-development-v1.seal.json").read_text())
-        heldout = json.loads((tasksets / "p74-odoo-heldout-v1.seal.json").read_text())
-        split = json.loads((tasksets / "p74-odoo-split-v1.json").read_text())
-        record = protocol.first_freeze_record(development_seal=development,
-                                              heldout_seal=heldout, split_verification=split)
-        self.assertEqual(protocol.document(first_freeze=record)["stage"], "first_frozen")
-        with self.assertRaises(ValueError):
-            protocol.first_freeze_record(development_seal=heldout, heldout_seal=development,
-                                         split_verification=split)
+        # The machine protocol states exactly what the gateway enforces.
+        from evals.odoo import gateway
+        self.assertEqual(set(parameters["never_forwarded"]), set(gateway.PAGEAGENT_ENGINE_FIELDS))
+        self.assertEqual(set(parameters["shared_fields"]), gateway.SHARED_REQUEST_FIELDS)
 
 
 class ImplementationBindingTests(unittest.TestCase):
@@ -123,14 +136,6 @@ class ImplementationBindingTests(unittest.TestCase):
             evaluator.unlink()
             with self.assertRaises(ValueError):
                 protocol.implementation_digests(root)
-
-    def test_second_freeze_binds_the_candidate_and_its_apparatus(self):
-        record = protocol.second_freeze_record(candidate_commit="d" * 40)
-        self.assertEqual(record["implementation_digests"], protocol.implementation_digests())
-        self.assertEqual(protocol.document(second_freeze=record)["stage"], "second_frozen")
-        for bad in ("abc123", "D" * 40, None):
-            with self.subTest(commit=bad), self.assertRaises(ValueError):
-                protocol.second_freeze_record(candidate_commit=bad)
 
 
 if __name__ == "__main__":

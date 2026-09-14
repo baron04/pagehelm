@@ -9,33 +9,58 @@ failure -- afterwards. A request that belongs to no open attempt is written down
 ``unowned_model_request`` and never forwarded, which forces the batch to seal.
 
 Hard budgets and request parameters live here because they must be identical for comparable
-arms: model calls per attempt, output tokens per call, request size, temperature, the model's
-option fields and no sampling field either engine adds on its own. The product's request
-already has that shape; PageAgent's completion client maps its request onto it before
+arms. The gateway fails closed: a request may carry only the shared chat-completion fields and
+the model's own option fields, with the frozen temperature, the frozen option values and an
+output cap from one to the frozen maximum. The input is bounded by request bytes, not by a
+token count, and every forwarded request's actual parameters are recorded. The product's
+request already has that shape; PageAgent's completion client maps its request onto it before
 sending. Refusals are recorded with their reason and answered with a typed error; nothing is
 retried.
+
+Behind the gateway sits either :class:`ScriptedBackend`, which never contacts a provider, or
+:class:`UpstreamBackend`, the dedicated evaluation provider.
+
+Every backend names what it answers from: a provider id, a normalized endpoint digest and a
+credential identity digest. Together with the requested alias and the request contract, that is
+the runtime provider binding a preflight, a batch header and every attempt must share, so a
+changed endpoint or key can never reuse an earlier preflight. No key text leaves the backend.
 """
 from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
+import re
+import socket
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from evals.twenty.evaluator import digest_json
+
 from . import ledger
 
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
+MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 SCRIPTED_MODEL = "p74-scripted/v1"
-#: Fields only PageAgent's bridge sends. Neither is forwarded: ``top_p`` would give the arms
-#: different sampling, and not every OpenAI-compatible provider honours
-#: ``max_completion_tokens``, so the output cap always travels as ``max_tokens``.
-UNSHARED_REQUEST_FIELDS = ("top_p", "max_completion_tokens")
+#: Every field a forwarded chat completion may carry besides the model's own option fields.
+#: Anything else could change generation for one arm only, so the gateway refuses it.
+SHARED_REQUEST_FIELDS = frozenset({"model", "messages", "tools", "tool_choice", "temperature",
+                                   "max_tokens", "stream"})
+#: Generation controls PageAgent adds on its own: ``top_p`` and ``max_completion_tokens`` from
+#: its bridge request options, and ``enable_thinking`` from the pinned bundle's Qwen patch. Its
+#: completion client removes exactly these and carries the output cap as ``max_tokens``; any
+#: other field it does not recognise still reaches the gateway and is refused there.
+PAGEAGENT_ENGINE_FIELDS = ("top_p", "max_completion_tokens", "enable_thinking")
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,13 +81,91 @@ class GatewayBudgets:
                 "max_request_bytes": self.max_request_bytes,
                 "temperature": self.temperature, "model_options": dict(self.model_options)}
 
-    def parameters_match(self, body: dict[str, Any]) -> bool:
+    def request_refusal(self, body: Any) -> str | None:
+        """The typed reason a request may not be forwarded, or ``None`` when it may."""
+        if not isinstance(body, dict) or body.get("model") != self.requested_model:
+            return "request_contract"
+        if set(body) - SHARED_REQUEST_FIELDS - set(self.model_options):
+            return "request_contract"
+        messages, tools, tool_choice = body.get("messages"), body.get("tools"), body.get(
+            "tool_choice")
+        if (body.get("stream") not in (None, False)
+                or not isinstance(messages, list) or not messages
+                or (tools is not None and not isinstance(tools, list))
+                or (tool_choice is not None and not isinstance(tool_choice, (str, dict)))):
+            return "request_contract"
         temperature = body.get("temperature")
-        return (not isinstance(temperature, bool) and isinstance(temperature, (int, float))
-                and temperature == self.temperature
-                and not any(name in body for name in UNSHARED_REQUEST_FIELDS)
-                and all(name in body and type(body[name]) is type(value) and body[name] == value
-                        for name, value in self.model_options.items()))
+        if (isinstance(temperature, bool) or not isinstance(temperature, (int, float))
+                or temperature != self.temperature):
+            return "request_contract"
+        if any(name not in body or type(body[name]) is not type(value) or body[name] != value
+               for name, value in self.model_options.items()):
+            return "request_contract"
+        output = body.get("max_tokens")
+        if (isinstance(output, bool) or not isinstance(output, int)
+                or not 1 <= output <= self.max_output_tokens):
+            return "output_token_budget"
+        return None
+
+    def recorded_parameters(self, body: dict[str, Any]) -> dict[str, Any]:
+        """The generation parameters a forwarded request actually carries, without content."""
+        tool_choice = body.get("tool_choice")
+        if isinstance(tool_choice, dict):
+            tool_choice = "named_function" if tool_choice.get("function") else "object"
+        return {"temperature": body["temperature"], "max_tokens": body["max_tokens"],
+                "tool_choice": tool_choice, "tools": len(body.get("tools") or []),
+                "options": {name: body[name] for name in sorted(self.model_options)}}
+
+
+# -- the runtime provider binding ----------------------------------------------------------------
+SCRIPTED_PROVIDER_ID = "p74-scripted"
+
+
+def endpoint_digest(base_url: str) -> str:
+    """A normalized endpoint's digest: case, a default port and a trailing slash do not change it."""
+    parsed = urllib.parse.urlsplit(base_url)
+    scheme, host, port = parsed.scheme.lower(), (parsed.hostname or "").lower(), parsed.port
+    netloc = host if port in (None, {"https": 443, "http": 80}.get(scheme)) else f"{host}:{port}"
+    normalized = f"{scheme}://{netloc}{parsed.path.rstrip('/')}"
+    return "sha256:" + hashlib.sha256(b"p74-provider-endpoint\0" + normalized.encode()).hexdigest()
+
+
+def credential_identity(key: str) -> str:
+    """A domain-separated SHA-256 of a high-entropy API key, which identifies it without holding it."""
+    return "sha256:" + hashlib.sha256(b"p74-provider-credential\0" + key.encode()).hexdigest()
+
+
+def read_evaluation_key(key_file: str | Path) -> str:
+    key = Path(key_file).read_text(encoding="utf-8").strip()
+    if not key or any(not 33 <= ord(character) <= 126 for character in key):
+        raise ValueError("the evaluation key file must hold one printable token")
+    return key
+
+
+def upstream_identity(*, base_url: str, key: str, provider_id: str) -> dict[str, Any]:
+    return {"provider_id": provider_id, "endpoint_digest": endpoint_digest(
+        _provider_base_url(base_url)), "credential_identity": credential_identity(key)}
+
+
+def request_contract_digest(budgets: GatewayBudgets) -> str:
+    """What shapes every forwarded request; how many calls an attempt may make is not part of it."""
+    fields = budgets.digest_fields()
+    del fields["max_model_calls"]
+    return digest_json(fields)
+
+
+def provider_binding(identity: dict[str, Any], budgets: GatewayBudgets) -> dict[str, Any]:
+    """The provider a batch runs against: who, where, under which credential and contract."""
+    return {**identity, "requested_model": budgets.requested_model,
+            "request_contract_digest": request_contract_digest(budgets)}
+
+
+def digest_binding(binding: dict[str, Any]) -> str:
+    return digest_json(binding)
+
+
+def provider_binding_digest(identity: dict[str, Any], budgets: GatewayBudgets) -> str:
+    return digest_binding(provider_binding(identity, budgets))
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +184,10 @@ class Backend:
     """What sits behind the gateway: a scripted responder or an upstream provider."""
 
     def complete(self, body: dict[str, Any], *, attempt_id: str, call_index: int) -> BackendResult:
+        raise NotImplementedError
+
+    def identity(self) -> dict[str, Any]:
+        """The provider id, endpoint digest and credential identity this backend answers from."""
         raise NotImplementedError
 
 
@@ -113,6 +220,11 @@ class ScriptedBackend(Backend):
         self._faults: dict[tuple[str, int], str] = {}
         self._models: dict[tuple[str, int], str] = {}
         self._lock = threading.Lock()
+
+    def identity(self) -> dict[str, Any]:
+        return {"provider_id": SCRIPTED_PROVIDER_ID,
+                "endpoint_digest": endpoint_digest("scripted://p74-scripted-backend"),
+                "credential_identity": None}
 
     def install(self, attempt_id: str, policy: Callable[[dict[str, Any], int], dict[str, Any]],
                 *, faults: dict[int, str] | None = None,
@@ -148,6 +260,144 @@ class ScriptedBackend(Backend):
         completion["model"] = model
         completion["usage"] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         return BackendResult("ok", 200, completion, request_id, model, _usage(completion), 0.0,
+                             None)
+
+
+def _provider_base_url(value: str) -> str:
+    parsed = urllib.parse.urlsplit(value)
+    if (not parsed.hostname or parsed.username is not None or parsed.password is not None
+            or parsed.query or parsed.fragment):
+        raise ValueError("the provider base URL must be absolute and carry no credentials")
+    loopback = parsed.hostname.casefold() == "localhost"
+    try:
+        loopback = loopback or ipaddress.ip_address(parsed.hostname).is_loopback
+    except ValueError:
+        pass
+    if parsed.scheme != "https" and not (parsed.scheme == "http" and loopback):
+        raise ValueError("the provider base URL must use HTTPS except on loopback")
+    return value.rstrip("/")
+
+
+def _http_error_code(status: int) -> str:
+    """The product client's content-free classification of an HTTP failure."""
+    if status == 429:
+        return "provider_rate_limited"
+    if status in {408, 425} or 500 <= status <= 599:
+        return "provider_unavailable"
+    if status in {401, 403}:
+        return "provider_authentication"
+    return "provider_http"
+
+
+def _timed_out(exc: BaseException) -> bool:
+    reason = getattr(exc, "reason", None)
+    return (isinstance(exc, (TimeoutError, socket.timeout))
+            or isinstance(reason, (TimeoutError, socket.timeout)))
+
+
+def _reported_model(value: Any) -> str | None:
+    if (not isinstance(value, str) or not value.strip() or len(value.strip()) > 120
+            or re.search(r"[\x00-\x1f\x7f]", value)):
+        return None
+    return value.strip()
+
+
+class UpstreamBackend(Backend):
+    """The dedicated evaluation provider behind the gateway.
+
+    One POST per forwarded request, never retried, with the evaluation key held only here.
+    Every dispatched call is accounted as the product's own client accounts it: a 32-character
+    request id sent as ``x-woa-request-id``, reported usage priced at the registered rate into
+    the named spend ledger, and an explicit usage-unavailable row when a dispatched call returns
+    no trustworthy usage. The attempt ledger receives the same request id, the HTTP status, the
+    returned model string, usage and cost. A dropped connection is ``provider_connection_lost``,
+    an apparatus fault; a timeout is ``provider_deadline``, which the protocol scores as a
+    product result.
+    """
+
+    def __init__(self, *, base_url: str, key_file: str | Path, requested_model: str,
+                 spend_ledger: str | Path, batch_id: str, provider: str = "p74-evaluation",
+                 timeout_s: float = 180.0):
+        from web_operation_agent.model import SpendMeter, price_for
+
+        self.base_url = _provider_base_url(base_url)
+        key = read_evaluation_key(key_file)
+        self._key = key
+        self._identity = upstream_identity(base_url=self.base_url, key=key, provider_id=provider)
+        self.requested_model = requested_model
+        self.provider = provider
+        self.timeout_s = float(timeout_s)
+        # The evaluation's budgets are the gateway's; this meter only accounts.
+        self.meter = SpendMeter(ledger=spend_ledger, batch_id=batch_id,
+                                run_input_token_abort=10 ** 12,
+                                price=price_for(requested_model))
+
+    def identity(self) -> dict[str, Any]:
+        return dict(self._identity)
+
+    def _unmetered(self, attempt_id: str, request_id: str, error_code: str,
+                   reported: str | None = None) -> None:
+        self.meter.record_unmetered(provider=self.provider, model=self.requested_model,
+                                    run_id=attempt_id, request_id=request_id,
+                                    error_code=error_code, reported_model=reported)
+
+    def complete(self, body, *, attempt_id, call_index):
+        request_id = uuid.uuid4().hex
+        data = json.dumps(body, ensure_ascii=False, separators=(",", ":"),
+                          allow_nan=False).encode("utf-8")
+        request = urllib.request.Request(
+            self.base_url + "/chat/completions", data=data, method="POST",
+            headers={"content-type": "application/json",
+                     "authorization": f"Bearer {self._key}", "x-woa-request-id": request_id})
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_s) as response:
+                status = response.status
+                raw = response.read(MAX_RESPONSE_BYTES + 1)
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+            exc.close()
+            code = _http_error_code(status)
+            self._unmetered(attempt_id, request_id, code)
+            return BackendResult("http_error", status, {"error": {"code": code}}, request_id,
+                                 None, None, None, code)
+        except OSError as exc:
+            if _timed_out(exc):
+                self._unmetered(attempt_id, request_id, "provider_deadline")
+                return BackendResult("transport_error", None, None, request_id, None, None,
+                                     None, "provider_deadline")
+            self._unmetered(attempt_id, request_id, "provider_transport")
+            return BackendResult("transport_error", None, None, request_id, None, None, None,
+                                 "provider_connection_lost")
+        payload = None
+        if len(raw) <= MAX_RESPONSE_BYTES:
+            try:
+                payload = json.loads(raw)
+            except ValueError:
+                payload = None
+        if not isinstance(payload, dict):
+            self._unmetered(attempt_id, request_id, "provider_response")
+            return BackendResult("http_error", status, {"error": {"code": "provider_response"}},
+                                 request_id, None, None, None, "provider_response")
+        reported = _reported_model(payload.get("model"))
+        usage = payload.get("usage")
+        usage_record = cost = None
+        if isinstance(usage, dict) and "prompt_tokens" in usage and "completion_tokens" in usage:
+            try:
+                row = self.meter.record(provider=self.provider, model=self.requested_model,
+                                        run_id=attempt_id, usage=usage, request_id=request_id,
+                                        reported_model=reported)
+            except ValueError:
+                self._unmetered(attempt_id, request_id, "provider_usage", reported)
+            else:
+                usage_record, cost = _usage(payload), row["call_cost_cny"]
+        else:
+            self._unmetered(attempt_id, request_id, "provider_usage", reported)
+        if reported is None:
+            # A completion that names no model cannot be attributed; whatever it cost is
+            # already accounted above.
+            return BackendResult("http_error", status, {"error": {"code": "provider_response"}},
+                                 request_id, None, usage_record, cost, "provider_response")
+        return BackendResult("ok", status, payload, request_id, reported, usage_record, cost,
                              None)
 
 
@@ -202,6 +452,13 @@ class ProviderGateway:
     @property
     def base_url(self) -> str:
         return f"http://127.0.0.1:{self.port}/v1"
+
+    def binding(self) -> dict[str, Any]:
+        """The runtime provider binding of this gateway's backend and request contract."""
+        return provider_binding(self.backend.identity(), self.budgets)
+
+    def binding_digest(self) -> str:
+        return digest_binding(self.binding())
 
     def start(self) -> "ProviderGateway":
         self._thread = threading.Thread(target=self._server.serve_forever,
@@ -266,15 +523,8 @@ class ProviderGateway:
                     body = json.loads(raw)
                 except (ValueError, UnicodeDecodeError):
                     body = None
-                output = body.get("max_tokens") if isinstance(body, dict) else None
-                if (not isinstance(body, dict) or body.get("model") != self.budgets.requested_model
-                        or body.get("stream") not in (None, False)
-                        or not self.budgets.parameters_match(body)):
-                    refusal = "request_contract"
-                elif (isinstance(output, bool) or not isinstance(output, int)
-                      or output > self.budgets.max_output_tokens):
-                    refusal = "output_token_budget"
-                elif binding.calls >= self.budgets.max_model_calls:
+                refusal = self.budgets.request_refusal(body)
+                if refusal is None and binding.calls >= self.budgets.max_model_calls:
                     refusal = "model_call_budget"
             if refusal:
                 ledger.append(self.ledger_path, "model_request_refused", {
@@ -287,7 +537,8 @@ class ProviderGateway:
             attempt_id, call_index = binding.attempt_id, binding.calls
             ledger.append(self.ledger_path, "model_request_dispatched", {
                 "attempt_id": attempt_id, "request_seq": sequence, "body_digest": body_digest,
-                "requested_model": body["model"], "max_output_tokens": output})
+                "requested_model": body["model"], "max_output_tokens": body["max_tokens"],
+                "parameters": self.budgets.recorded_parameters(body)})
         try:
             result = self.backend.complete(body, attempt_id=attempt_id, call_index=call_index)
         except Exception:
@@ -306,17 +557,22 @@ class ProviderGateway:
             except OSError:
                 pass
             return
-        handler._reply(result.http_status or 502, result.payload or {})
+        status = result.http_status or 502
+        if result.status != "ok" and status < 400:
+            # A malformed provider answer arrived with a success status; the client must not
+            # read it as a completion.
+            status = 502
+        handler._reply(status, result.payload or {})
 
 
 class GatewayCompletionClient:
     """PageAgent's server-held completion client, routed through the same gateway.
 
-    PageAgent's bridge sends ``top_p`` and ``max_completion_tokens`` and knows nothing of the
-    product's model options. Before forwarding, this client drops the fields the product does
-    not send, carries the output cap as ``max_tokens`` and adds the model's option fields, so
-    both arms reach the provider with the same parameters; the gateway refuses any request
-    that still differs.
+    PageAgent's bridge sends ``top_p`` and ``max_completion_tokens``, its pinned bundle adds
+    ``enable_thinking`` for Qwen models, and it knows nothing of the product's model options.
+    Before forwarding, this client removes exactly those engine fields, carries the output cap
+    as ``max_tokens`` and adds the model's option fields, so both arms reach the provider with
+    the same parameters. It passes any other field through untouched; the gateway refuses it.
     """
 
     class _Meter:
@@ -338,7 +594,7 @@ class GatewayCompletionClient:
 
     def forwarded_body(self, body: dict[str, Any]) -> dict[str, Any]:
         forwarded = {key: value for key, value in body.items()
-                     if key not in UNSHARED_REQUEST_FIELDS}
+                     if key not in PAGEAGENT_ENGINE_FIELDS}
         if "max_tokens" not in forwarded and "max_completion_tokens" in body:
             forwarded["max_tokens"] = body["max_completion_tokens"]
         for key, value in self.model_options.items():
@@ -347,9 +603,6 @@ class GatewayCompletionClient:
 
     def request_completion(self, body: dict[str, Any], run_id: str, *,
                            timeout_s: float | None = None) -> dict[str, Any]:
-        import urllib.error
-        import urllib.request
-
         payload = json.dumps(self.forwarded_body(body), separators=(",", ":")).encode("utf-8")
         request = urllib.request.Request(
             self.base_url + "/chat/completions", data=payload, method="POST",

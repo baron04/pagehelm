@@ -28,7 +28,7 @@ from typing import Any
 from evals.pageagent.host import PageAgentProviderContract
 
 from . import fixture, ledger, outcomes, runner_pageagent, runner_woa, trace
-from .gateway import GatewayCompletionClient, ProviderGateway, ScriptedBackend
+from .gateway import Backend, GatewayCompletionClient, ProviderGateway
 from .oracle import ApprovalOracle
 from .population import digest_json
 from .projection import actor_projection
@@ -69,7 +69,7 @@ class AttemptPlan:
 
 class Driver:
     def __init__(self, config: DriverConfig, *, gateway: ProviderGateway,
-                 backend: ScriptedBackend, playwright: Any):
+                 backend: Backend, playwright: Any):
         self.config = config
         self.gateway = gateway
         self.backend = backend
@@ -144,6 +144,7 @@ class Driver:
             "run_id": run_id, "fixture_digest": self.config.fixture_digest,
             "capability_digest": self.config.capability_digests[arm],
             "provider_config_digest": self.config.provider_config_digest,
+            "provider_binding_digest": self.gateway.binding_digest(),
             "replacement_of": plan.replacement_of})
         events: list[outcomes.ApparatusEvent] = []
         product_started = False
@@ -250,7 +251,10 @@ class Driver:
             if response["status"] == "http_error" and (response["http_status"] or 0) >= 500:
                 events.append(outcomes.ApparatusEvent("provider_http_5xx",
                                                       "gateway_response_record"))
-            elif response["status"] == "transport_error":
+            elif (response["status"] == "transport_error"
+                  and response["error_code"] in {"provider_connection_lost",
+                                                 "backend_exception"}):
+                # A provider deadline is a scorable product result, not an apparatus fault.
                 events.append(outcomes.ApparatusEvent("provider_connection_lost",
                                                       "gateway_transport_record"))
         audit: list[dict[str, Any]] = []

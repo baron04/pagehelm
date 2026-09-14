@@ -49,6 +49,8 @@ def fixture_manifest(stack: Stack, *, population: dict[str, Any], seed_truth: di
     body = {
         "artifact_version": 1, "kind": "p74_fixture_manifest", "fixture_id": FIXTURE_ID,
         "compose_project": stack.project, "database": "woa_trial",
+        # The running Agent image must carry this clean checkout's commit as its revision.
+        "candidate": stack.verify_candidate(),
         "image_ids": images, "compose_pinned_images": pinned,
         "odoo_base_image": re.search(r"FROM (odoo@sha256:[0-9a-f]{64})",
                                      (REPOSITORY / "deploy/odoo-single-node/Dockerfile.odoo")
@@ -91,3 +93,33 @@ def fixture_manifest(stack: Stack, *, population: dict[str, Any], seed_truth: di
             "status", "interval_s", "required_interval_s", "changed")},
     }
     return {**body, "manifest_digest": digest_json(body)}
+
+
+class ManifestError(ValueError):
+    """A fixture manifest was changed, or describes another candidate or baseline."""
+
+
+def verify_manifest(record: Any, *, candidate: dict[str, Any],
+                    baseline_guard_digest: str) -> dict[str, Any]:
+    """A recorded manifest, provided it is unchanged and describes this candidate and baseline.
+
+    The manifest names the candidate it was taken with, so rebuilding the Agent image makes every
+    earlier manifest stale: a batch cannot bind a fixture recorded for another candidate.
+    """
+    if not isinstance(record, dict) or record.get("kind") != "p74_fixture_manifest":
+        raise ManifestError("expected a P7.4 fixture manifest")
+    body = {key: value for key, value in record.items() if key != "manifest_digest"}
+    if record.get("manifest_digest") != digest_json(body):
+        raise ManifestError("the fixture manifest was changed after it was recorded")
+    if body.get("candidate") != candidate:
+        raise ManifestError("the fixture manifest was taken with another candidate; refresh it")
+    baseline = body.get("baseline")
+    if not isinstance(baseline, dict) or baseline.get("guard_digest") != baseline_guard_digest:
+        raise ManifestError("the fixture manifest names another baseline")
+    return record
+
+
+def batch_fixture(record: dict[str, Any]) -> dict[str, str]:
+    """The fixture facts a batch header binds."""
+    return {"manifest_digest": record["manifest_digest"],
+            "baseline_guard_digest": record["baseline"]["guard_digest"]}

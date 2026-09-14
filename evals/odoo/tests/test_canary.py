@@ -2,6 +2,10 @@ import copy
 import unittest
 
 from evals.odoo import canary
+from evals.odoo.gateway import GatewayBudgets
+
+BUDGETS = GatewayBudgets("qwen3.8-flash", max_model_calls=12, max_output_tokens=2048,
+                         model_options={"thinking_budget": 1024, "parallel_tool_calls": False})
 
 
 def completion(content="391", model="provider-model-x"):
@@ -11,10 +15,16 @@ def completion(content="391", model="provider-model-x"):
 
 
 class CanaryTests(unittest.TestCase):
-    def test_request_is_fixed(self):
-        request = canary.canary_request("qwen3.8-flash")
+    def test_request_carries_the_frozen_contract_of_every_arm(self):
+        request = canary.canary_request(BUDGETS)
         self.assertEqual(request["messages"][0]["content"], canary.CANARY_PROMPT)
-        self.assertEqual(request["temperature"], 0.0)
+        self.assertEqual((request["temperature"], request["max_tokens"],
+                          request["thinking_budget"], request["parallel_tool_calls"]),
+                         (0.0, 2048, 1024, False))
+        self.assertIsNone(BUDGETS.request_refusal(request))
+        with self.assertRaises(ValueError):
+            canary.canary_request(GatewayBudgets("qwen3.8-flash", max_model_calls=12,
+                                                 max_output_tokens=0))
 
     def test_stable_scripted_provider_passes(self):
         calls = []
@@ -22,9 +32,9 @@ class CanaryTests(unittest.TestCase):
         def send(request):
             calls.append(request)
             return completion("<think>17*23</think>391")
-        result = canary.run_preflight(send, model="qwen3.8-flash")
+        result = canary.run_preflight(send, budgets=BUDGETS)
         self.assertEqual(result["status"], "READY")
-        self.assertEqual(len(calls), 5)
+        self.assertEqual(calls, [canary.canary_request(BUDGETS)] * 5)
 
     def test_each_drift_fails_the_preflight(self):
         drifted_model = [completion() for _ in range(4)] + [completion(model="provider-model-y")]
@@ -47,7 +57,7 @@ class CanaryTests(unittest.TestCase):
             if count[0] == 3:
                 raise ConnectionError()
             return completion()
-        result = canary.run_preflight(send, model="qwen3.8-flash")
+        result = canary.run_preflight(send, budgets=BUDGETS)
         self.assertEqual(result["status"], "FAILED")
         self.assertEqual(count[0], 5)
 

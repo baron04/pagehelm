@@ -152,7 +152,8 @@ def provision(private: Path, *, destroy_first: bool, stability_interval_s: float
     prepare_inputs(stack, private)
     stack.run([sys.executable, "-m", "web_operation_agent_odoo.deploy", "assets"], timeout=600)
     if build:
-        stack.compose("build", "odoo", "agent", timeout=3600)
+        # Only a clean checkout is built, and the images are labelled with its full commit.
+        stack.build("odoo", "agent")
     mark("inputs_and_images")
     stack.compose("up", "-d", "db", timeout=600)
     stack.compose("--profile", "setup", "run", "--rm", "odoo-init", timeout=1800)

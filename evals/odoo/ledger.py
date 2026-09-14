@@ -42,7 +42,8 @@ _SEAL_REASONS = frozenset({
     "model_identity_changed", "unowned_model_request", "replacement_cap_exceeded",
     "ledger_corrupted", "state_contamination", "operator_stop",
 })
-#: A later batch of the same protocol version may start only after an exogenous stop.
+#: Exogenous stops. After one, the same development candidate may continue, and a held-out or
+#: qualification batch may start again under the same protocol version.
 SAME_PROTOCOL_RESTART_REASONS = frozenset({"model_identity_changed", "replacement_cap_exceeded"})
 KINDS = frozenset({
     "batch_header", "attempt_started", "model_request_dispatched", "model_request_refused",
@@ -140,6 +141,35 @@ def _agent_residue(value: Any, *, arm: str, product_started: bool) -> list[str]:
     return residue
 
 
+_NAME = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
+
+
+def _request_parameters(value: Any, max_output_tokens: Any) -> dict[str, Any]:
+    """Validate the generation parameters a dispatched request actually carried."""
+    parameters = _exact(value, {"temperature", "max_tokens", "tool_choice", "tools", "options"},
+                        "request parameters")
+    temperature = parameters["temperature"]
+    if (isinstance(temperature, bool) or not isinstance(temperature, (int, float))
+            or not 0 <= temperature <= 2):
+        raise LedgerError("request temperature is invalid")
+    output = parameters["max_tokens"]
+    if (isinstance(output, bool) or not isinstance(output, int) or output < 1
+            or output != max_output_tokens):
+        raise LedgerError("a dispatched request carries a positive output cap equal to "
+                          "max_output_tokens")
+    choice = parameters["tool_choice"]
+    if choice is not None and (not isinstance(choice, str) or not _NAME.fullmatch(choice)):
+        raise LedgerError("request tool choice is invalid")
+    _count(parameters["tools"], "request tools")
+    options = parameters["options"]
+    if not isinstance(options, dict) or any(
+            not isinstance(name, str) or not _NAME.fullmatch(name)
+            or option is None or isinstance(option, (dict, list))
+            for name, option in options.items()):
+        raise LedgerError("request options are invalid")
+    return parameters
+
+
 def _entry_digest(entry: dict[str, Any]) -> str:
     return digest_json({key: value for key, value in entry.items() if key != "digest"})
 
@@ -180,14 +210,36 @@ class _Replay:
     # -- entry kinds -----------------------------------------------------------------------
     def header_entry(self, body: dict[str, Any]) -> None:
         required = {"batch_id", "protocol_id", "protocol_digest", "schedule_digest", "purpose",
-                    "provider_config_digest", "slots", "previous_batch"}
+                    "provider_config_digest", "slots", "previous_batch", "task_set_seal_digest",
+                    "fixture", "capability_digests", "candidate", "schedule_seed",
+                    "provider_binding_digest"}
         _exact(body, required, "batch header")
         _identifier(body["batch_id"], "batch_id")
         _identifier(body["protocol_id"], "protocol_id")
-        for name in ("protocol_digest", "schedule_digest", "provider_config_digest"):
+        for name in ("protocol_digest", "schedule_digest", "provider_config_digest",
+                     "task_set_seal_digest", "provider_binding_digest"):
             _digest(body[name], name)
         if body["purpose"] not in {"apparatus_qualification", "development", "heldout"}:
             raise LedgerError("batch purpose is invalid")
+        fixture = _exact(body["fixture"], {"manifest_digest", "baseline_guard_digest"},
+                         "batch fixture")
+        _digest(fixture["manifest_digest"], "fixture manifest digest")
+        _digest(fixture["baseline_guard_digest"], "fixture baseline guard digest")
+        candidate = _exact(body["candidate"], {"commit", "agent_image_id",
+                                               "agent_image_revision"}, "batch candidate")
+        if (not isinstance(candidate["commit"], str)
+                or not re.fullmatch(r"[0-9a-f]{40}", candidate["commit"])
+                or candidate["agent_image_revision"] != candidate["commit"]):
+            raise LedgerError("the batch candidate is a full commit whose Agent image carries "
+                              "that revision")
+        _digest(candidate["agent_image_id"], "candidate Agent image id")
+        seed = body["schedule_seed"]
+        if body["purpose"] == "apparatus_qualification":
+            if seed is not None:
+                raise LedgerError("a qualification schedule is written out, not derived from a "
+                                  "seed")
+        elif not isinstance(seed, str) or not re.fullmatch(r"[0-9a-f]{32}", seed):
+            raise LedgerError("a formal batch records the seed its schedule was derived from")
         slots = body["slots"]
         if not isinstance(slots, list) or not 1 <= len(slots) <= 1_000:
             raise LedgerError("batch slots must be a bounded non-empty list")
@@ -203,28 +255,48 @@ class _Replay:
             self.slot_order.append(slot_id)
         if digest_json(slots) != body["schedule_digest"]:
             raise LedgerError("batch slots do not match their schedule digest")
+        capabilities = body["capability_digests"]
+        if (not isinstance(capabilities, dict) or set(capabilities) - _ARMS
+                or not {slot["arm"] for slot in slots} <= set(capabilities)):
+            raise LedgerError("the header binds a capability digest for every scheduled arm")
+        for arm, value in capabilities.items():
+            _digest(value, f"{arm} capability digest")
         previous = body["previous_batch"]
         if previous is not None:
-            _exact(previous, {"batch_id", "protocol_digest", "chain_head",
-                              "termination_reason"}, "previous batch")
+            _exact(previous, {"batch_id", "purpose", "protocol_digest", "candidate_commit",
+                              "chain_head", "termination_reason"}, "previous batch")
             _identifier(previous["batch_id"], "previous batch_id")
             _digest(previous["chain_head"], "previous chain head")
             _digest(previous["protocol_digest"], "previous protocol digest")
-            if (previous["protocol_digest"] == body["protocol_digest"]
-                    and previous["termination_reason"] not in SAME_PROTOCOL_RESTART_REASONS):
+            if previous["purpose"] != body["purpose"]:
+                raise LedgerError("a batch chain holds batches of one purpose")
+            if (not isinstance(previous["candidate_commit"], str)
+                    or not re.fullmatch(r"[0-9a-f]{40}", previous["candidate_commit"])):
+                raise LedgerError("the previous batch names its full candidate commit")
+            if previous["termination_reason"] not in _SEAL_REASONS | {"batch_completed"}:
+                raise LedgerError("the previous batch names how it ended")
+            exogenous = previous["termination_reason"] in SAME_PROTOCOL_RESTART_REASONS
+            if body["purpose"] == "development":
+                # Development tunes the product: a new candidate may follow any finished batch,
+                # but a candidate never reruns a batch that did not stop for an exogenous reason.
+                if previous["candidate_commit"] == body["candidate"]["commit"] and not exogenous:
+                    raise LedgerError("a development candidate runs one batch; only an exogenous "
+                                      "stop lets the same candidate continue")
+            elif previous["protocol_digest"] == body["protocol_digest"] and not exogenous:
                 raise LedgerError(
-                    "a batch sealed for a product reason cannot be restarted under the same "
-                    "protocol version")
+                    "a completed batch, or one sealed for a product reason, cannot be followed "
+                    "under the same protocol version")
         self.header = body
 
     def attempt_started(self, body: dict[str, Any]) -> None:
         required = {"attempt_id", "slot_id", "arm", "task_id", "replicate", "run_id",
                     "fixture_digest", "capability_digest", "provider_config_digest",
-                    "replacement_of"}
+                    "provider_binding_digest", "replacement_of"}
         _exact(body, required, "attempt_started")
         attempt_id = _identifier(body["attempt_id"], "attempt_id")
         _identifier(body["run_id"], "run_id")
-        for name in ("fixture_digest", "capability_digest", "provider_config_digest"):
+        for name in ("fixture_digest", "capability_digest", "provider_config_digest",
+                     "provider_binding_digest"):
             _digest(body[name], name)
         if self.open_attempt is not None:
             raise LedgerError("an attempt is already open; the driver is exclusive")
@@ -235,10 +307,17 @@ class _Replay:
             raise LedgerError("attempt and run ids must be unique")
         if body["provider_config_digest"] != self.header["provider_config_digest"]:
             raise LedgerError("attempt provider configuration differs from its batch")
+        if body["provider_binding_digest"] != self.header["provider_binding_digest"]:
+            raise LedgerError("attempt runs against another provider endpoint, credential or "
+                              "request contract than its batch")
         slot = self.slots.get(body["slot_id"])
         if slot is None or any(slot[key] != body[key] for key in ("arm", "task_id",
                                                                    "replicate")):
             raise LedgerError("attempt does not match a scheduled slot")
+        if body["fixture_digest"] != self.header["fixture"]["manifest_digest"]:
+            raise LedgerError("attempt fixture differs from the manifest its batch binds")
+        if body["capability_digest"] != self.header["capability_digests"][body["arm"]]:
+            raise LedgerError("attempt capability differs from the one its batch binds")
         original = body["replacement_of"]
         if original is None:
             if body["slot_id"] != self._next_slot():
@@ -269,7 +348,7 @@ class _Replay:
 
     def model_request(self, body: dict[str, Any]) -> None:
         _exact(body, {"attempt_id", "request_seq", "body_digest", "requested_model",
-                      "max_output_tokens"}, "model_request_dispatched")
+                      "max_output_tokens", "parameters"}, "model_request_dispatched")
         attempt = self._require_open(body["attempt_id"])
         if attempt["records"]:
             raise LedgerError("model requests must precede the attempt's outcome records")
@@ -277,6 +356,7 @@ class _Replay:
         if seq != len(attempt["requests"]) + attempt["refusals"] + 1:
             raise LedgerError("model request sequence is not contiguous")
         _digest(body["body_digest"], "body_digest")
+        _request_parameters(body["parameters"], body["max_output_tokens"])
         attempt["requests"][seq] = body
 
     def model_refused(self, body: dict[str, Any]) -> None:
@@ -508,7 +588,9 @@ class _Replay:
             "pending_seal": self.pending_seal,
             "batch": {key: self.header[key] for key in (
                 "batch_id", "protocol_id", "protocol_digest", "schedule_digest", "purpose",
-                "previous_batch")} if self.header else None,
+                "previous_batch", "provider_config_digest", "task_set_seal_digest", "fixture",
+                "capability_digests", "candidate", "schedule_seed",
+                "provider_binding_digest")} if self.header else None,
             "slots": [{**{key: slot[key] for key in ("slot_id", "arm", "task_id",
                                                        "replicate")},
                        "attempts": list(slot["attempts"])}

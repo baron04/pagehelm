@@ -1,17 +1,22 @@
 """Provider canary contract for P7.4b preflight, qualified here with scripted responses.
 
 Before any paid development batch, the same fixed canary is sent five times through the
-evaluation gateway's provider path. Three things must hold on all five: the response has the
-contracted OpenAI-compatible schema, the returned model string is identical, and a fixed
-semantic extraction of the answer to a question with one correct result succeeds. Free text is
-never hashed, since two correct responses rarely match byte for byte. Passing shows only that
-this provider, alias and date window looked stable at preflight; an alias is not a snapshot.
+evaluation provider path, under the frozen request contract every arm's request must satisfy:
+the same temperature, output cap and model options. Three things must hold on all five: the
+response has the contracted OpenAI-compatible schema, the returned model string is identical,
+and a fixed semantic extraction of the answer to a question with one correct result succeeds.
+Free text is never hashed, since two correct responses rarely match byte for byte. Passing shows
+only that this provider, alias and date window looked stable at preflight; an alias is not a
+snapshot.
 """
 from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .gateway import GatewayBudgets
 
 CANARY_PROMPT = ("Answer with digits only: what is 17 multiplied by 23? "
                  "Reply with the number and nothing else.")
@@ -19,9 +24,14 @@ CANARY_ANSWER = 391
 REQUIRED_CALLS = 5
 
 
-def canary_request(model: str, *, max_output_tokens: int = 64) -> dict[str, Any]:
-    return {"model": model, "temperature": 0.0, "max_tokens": max_output_tokens,
-            "messages": [{"role": "user", "content": CANARY_PROMPT}]}
+def canary_request(budgets: GatewayBudgets) -> dict[str, Any]:
+    """The fixed canary with the frozen temperature, output cap and model options of every arm."""
+    request = {"model": budgets.requested_model, "temperature": budgets.temperature,
+               "max_tokens": budgets.max_output_tokens, **budgets.model_options,
+               "messages": [{"role": "user", "content": CANARY_PROMPT}]}
+    if budgets.request_refusal(request) is not None:
+        raise ValueError("the canary does not satisfy the frozen request contract")
+    return request
 
 
 def response_schema(response: Any) -> tuple[str, ...]:
@@ -75,12 +85,13 @@ def evaluate(responses: list[Any]) -> dict[str, Any]:
             "limitation": "a stable alias at preflight does not prove unchanged weights"}
 
 
-def run_preflight(send: Callable[[dict[str, Any]], dict[str, Any]], *, model: str) -> dict[str, Any]:
-    """Send the canary five times through ``send`` (the gateway client) and evaluate."""
+def run_preflight(send: Callable[[dict[str, Any]], dict[str, Any]], *,
+                  budgets: GatewayBudgets) -> dict[str, Any]:
+    """Send the canary five times through ``send`` (the provider path) and evaluate."""
     responses = []
     for _ in range(REQUIRED_CALLS):
         try:
-            responses.append(send(canary_request(model)))
+            responses.append(send(canary_request(budgets)))
         except Exception as exc:  # a failed call is a failed preflight, never retried
             responses.append({"error": type(exc).__name__})
     return evaluate(responses)

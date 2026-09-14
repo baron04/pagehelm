@@ -208,7 +208,7 @@ python -m web_operation_agent_odoo.demo --scripted --headless \
 
 [`evals/odoo`](evals/odoo/README.md) 是 Odoo 参考集成作为产品接受评估时使用的装置。它通过普通 Odoo 登录、助手面板和带持久 journal 的单机部署，在预先声明的合成 Odoo 18 工作流上测量一个固定的 Web Operation Agent 组合。官方 PageAgent 只作探索性对照，而且只在单轮只读和导航任务上对照。带有本项目 Skill 与 typed tool 的 PageAgent 臂在建设之前就被排除：PageAgentCore 在构造时固定工具集，而产品根据用户请求选择本轮最初的 Skill 目录，两者若要从同一份目录出发，必须由一个读取 prompt 的 harness 代为预选。因此这项评估不做引擎归因，也不做非劣效结论。
 
-每个 attempt 在 runner 启动前就写入 append-only、摘要链接的账本，每次模型请求在转发前落账。产品结果、装置完整性和 fixture 复位作为三个独立维度记录；未知失败码不能让试验从产品分母中消失，replacement 有上限，而且必须紧跟被替换的 attempt。期望真值由独立的 evaluator 进程以同一个试验用户身份读取 Odoo 得出，判定只看用户默认可见的答案。合成 fixture 可以用一条命令从空的 Docker volume 部署，两次部署得到相同的记录和各用户可见数据；每个写入任务结束后都会复位，并对数据库、chatter、sequence 和附件文件核对；每个 attempt 都从空的 Agent 状态目录开始，结束时不得留下会话、未决 mutation 或未关闭的 proposal。开发集与保留集各含 30 个工作流族，在任何付费调用之前封存；保留集任务不公开。
+每个 attempt 在 runner 启动前就写入 append-only、摘要链接的账本，每次模型请求在转发前落账。产品结果、装置完整性和 fixture 复位作为三个独立维度记录；未知失败码不能让试验从产品分母中消失，replacement 有上限，而且必须紧跟被替换的 attempt。期望真值由独立的 evaluator 进程以同一个试验用户身份读取 Odoo 得出。产品的答案按面板默认展示的内容判定；PageAgent 不会把最终的 `done` 文本渲染到页面上，这一臂的答案改从 bridge 读取，因此两条答案通道对齐之前不做正式的 PageAgent 对照。合成 fixture 可以用一条命令从空的 Docker volume 部署，两次部署得到相同的记录和各用户可见数据；每个写入任务结束后都会复位，并对数据库、chatter、sequence 和附件文件核对；每个 attempt 都从空的 Agent 状态目录开始，结束时不得留下会话、未决 mutation 或未关闭的 proposal。开发集与保留集各含 30 个工作流族，在任何付费调用之前封存；保留集任务不公开，另在仓库之外保存一份加密备份。正式批次绑定任务集 seal、fixture manifest、各臂能力摘要，以及所运行 Agent 镜像对应的候选提交。第一次冻结需要独立 family 评审给出 ACCEPT，保留集托管副本也须分处独立的故障域，此前不发起任何付费调用；开发批次还需要在同一 provider 端点与凭据上通过 5 次 preflight。只有与冻结计划一致、在固定 30 任务 schedule 上完成的批次才给出筛选门结论。
 
 ## 独立 Twenty evaluator
 

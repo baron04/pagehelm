@@ -13,6 +13,8 @@ EMPTY_AGENT = {"active_sessions": 0, "unresolved_mutations": 0, "prepared_propos
                "conversation_rows": 0}
 CLEAN_AGENT = {"start": EMPTY_AGENT, "end": {**EMPTY_AGENT, "conversation_rows": 1},
                "open_proposals": 0, "closed_proposals": 0}
+CANDIDATE = {"commit": "c" * 40, "agent_image_id": "sha256:" + "d" * 64,
+             "agent_image_revision": "c" * 40}
 
 
 def slots(count=4, arm="woa_product"):
@@ -26,22 +28,28 @@ def metrics(attempt_id, wall_ms=1200):
             "business_calls": 1, "repeated_observations": 0, "user_turns": 1}
 
 
-def header(slot_list, *, previous=None, protocol=DIGEST):
-    return {"batch_id": "batch-001", "protocol_id": "p74-odoo-v1", "protocol_digest": protocol,
-            "schedule_digest": ledger.schedule_digest(slot_list), "purpose": "development",
-            "provider_config_digest": DIGEST, "slots": slot_list, "previous_batch": previous}
+def header(slot_list, *, previous=None, protocol=DIGEST, purpose="development", seed="0" * 32,
+           **changes):
+    value = {"batch_id": "batch-001", "protocol_id": "p74-odoo-v1", "protocol_digest": protocol,
+             "schedule_digest": ledger.schedule_digest(slot_list), "purpose": purpose,
+             "provider_config_digest": DIGEST, "slots": slot_list, "previous_batch": previous,
+             "task_set_seal_digest": DIGEST,
+             "fixture": {"manifest_digest": DIGEST, "baseline_guard_digest": OTHER},
+             "capability_digests": {"pageagent_browser_only": DIGEST, "woa_product": DIGEST},
+             "candidate": CANDIDATE, "schedule_seed": seed, "provider_binding_digest": DIGEST}
+    return {**value, **changes}
 
 
 class LedgerHarness:
-    def __init__(self, test, slot_list):
+    def __init__(self, test, slot_list, **header_changes):
         self.directory = tempfile.TemporaryDirectory()
         test.addCleanup(self.directory.cleanup)
         self.path = Path(self.directory.name) / "attempts.jsonl"
         self.slots = {slot["slot_id"]: slot for slot in slot_list}
-        ledger.create(self.path, header(slot_list))
+        ledger.create(self.path, header(slot_list, **header_changes))
         self.counter = 0
 
-    def start(self, slot_id, *, replacement_of=None):
+    def start(self, slot_id, *, replacement_of=None, **changes):
         self.counter += 1
         attempt_id = f"attempt-{self.counter:03d}"
         slot = self.slots[slot_id]
@@ -50,13 +58,15 @@ class LedgerHarness:
             "task_id": slot["task_id"], "replicate": slot["replicate"],
             "run_id": f"run-{self.counter:03d}", "fixture_digest": DIGEST,
             "capability_digest": DIGEST, "provider_config_digest": DIGEST,
-            "replacement_of": replacement_of})
+            "provider_binding_digest": DIGEST, "replacement_of": replacement_of, **changes})
         return attempt_id
 
     def model_call(self, attempt_id, seq, *, model="scripted-model", usage=True, status="ok"):
         ledger.append(self.path, "model_request_dispatched", {
             "attempt_id": attempt_id, "request_seq": seq, "body_digest": DIGEST,
-            "requested_model": "qwen3.8-flash", "max_output_tokens": 2048})
+            "requested_model": "qwen3.8-flash", "max_output_tokens": 2048,
+            "parameters": {"temperature": 0.0, "max_tokens": 2048, "tool_choice": "auto",
+                           "tools": 0, "options": {"thinking_budget": 1024}}})
         ledger.append(self.path, "model_response_received", {
             "attempt_id": attempt_id, "request_seq": seq, "status": status,
             "http_status": 200 if status == "ok" else 503, "provider_request_id": f"req-{seq}",
@@ -137,6 +147,26 @@ class LifecycleTests(unittest.TestCase):
         with self.assertRaises(ledger.LedgerError):
             harness.finish(attempt, PASS, calls=1, unavailable=0)
 
+    def test_dispatched_request_parameters_are_validated(self):
+        harness = LedgerHarness(self, slots(1))
+        attempt = harness.start("s000")
+        valid = {"temperature": 0.0, "max_tokens": 2048, "tool_choice": "auto", "tools": 0,
+                 "options": {"thinking_budget": 1024}}
+        body = {"attempt_id": attempt, "request_seq": 1, "body_digest": DIGEST,
+                "requested_model": "qwen3.8-flash", "max_output_tokens": 2048}
+        cases = {
+            "zero_cap": ({**valid, "max_tokens": 0}, {"max_output_tokens": 0}),
+            "cap_disagrees": ({**valid, "max_tokens": 1024}, {}),
+            "missing_field": ({key: value for key, value in valid.items() if key != "tools"}, {}),
+            "nested_option": ({**valid, "options": {"thinking": {"type": "enabled"}}}, {}),
+            "object_tool_choice": ({**valid, "tool_choice": {"type": "function"}}, {}),
+        }
+        for label, (parameters, override) in cases.items():
+            with self.subTest(label=label), self.assertRaises(ledger.LedgerError):
+                ledger.append(harness.path, "model_request_dispatched",
+                              {**body, **override, "parameters": parameters})
+        ledger.append(harness.path, "model_request_dispatched", {**body, "parameters": valid})
+
     def test_unknown_usage_cannot_be_reported_as_zero_cost(self):
         harness = LedgerHarness(self, slots(1))
         attempt = harness.start("s000")
@@ -162,6 +192,46 @@ class LifecycleTests(unittest.TestCase):
                                  entries[0]["digest"], "2000-01-01T00:00:00.000Z")
         with self.assertRaises(ledger.LedgerError):
             ledger.replay([*entries, late])
+
+
+class BindingTests(unittest.TestCase):
+    def test_the_header_binds_seal_fixture_capabilities_candidate_and_seed(self):
+        slot_list = slots(1)
+        without_candidate = {key: value for key, value in header(slot_list).items()
+                             if key != "candidate"}
+        cases = {
+            "missing_candidate": without_candidate,
+            "short_commit": header(slot_list, candidate={**CANDIDATE, "commit": "eeea4a0",
+                                                         "agent_image_revision": "eeea4a0"}),
+            "image_of_another_commit": header(slot_list, candidate={
+                **CANDIDATE, "agent_image_revision": "f" * 40}),
+            "no_capability_for_a_scheduled_arm": header(slot_list, capability_digests={
+                "pageagent_browser_only": DIGEST}),
+            "formal_batch_without_a_seed": header(slot_list, seed=None),
+            "qualification_with_a_seed": header(slot_list, purpose="apparatus_qualification"),
+            "malformed_fixture": header(slot_list, fixture={"manifest_digest": "manifest",
+                                                            "baseline_guard_digest": OTHER}),
+            "malformed_seal": header(slot_list, task_set_seal_digest="seal"),
+            "malformed_provider_binding": header(slot_list, provider_binding_digest="binding"),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            for label, value in cases.items():
+                with self.subTest(label=label), self.assertRaises(ledger.LedgerError):
+                    ledger.create(Path(directory) / f"{label}.jsonl", value)
+            summary = ledger.create(Path(directory) / "qualification.jsonl",
+                                    header(slot_list, purpose="apparatus_qualification",
+                                           seed=None))
+        self.assertEqual(summary["batch"]["candidate"], CANDIDATE)
+        self.assertEqual(summary["batch"]["fixture"]["manifest_digest"], DIGEST)
+
+    def test_an_attempt_must_use_the_fixture_and_capability_its_batch_binds(self):
+        harness = LedgerHarness(self, slots(2))
+        for field in ("fixture_digest", "capability_digest", "provider_config_digest",
+                      "provider_binding_digest"):
+            with self.subTest(field=field), self.assertRaises(ledger.LedgerError):
+                harness.start("s000", **{field: OTHER})
+        attempt = harness.start("s000")
+        harness.finish(attempt, PASS)
 
 
 class AgentStateTests(unittest.TestCase):
@@ -303,18 +373,58 @@ class ReplacementTests(unittest.TestCase):
         self.assertIsNotNone(ledger.read(harness.path)[1]["attempts"][0]["metrics"])
 
 
+NEW_CANDIDATE = {"commit": "e" * 40, "agent_image_id": "sha256:" + "f" * 64,
+                 "agent_image_revision": "e" * 40}
+
+
+def link(*, purpose="development", protocol=DIGEST, candidate=CANDIDATE,
+         reason="batch_completed"):
+    return {"batch_id": "batch-000", "purpose": purpose, "protocol_digest": protocol,
+            "candidate_commit": candidate["commit"], "chain_head": OTHER,
+            "termination_reason": reason}
+
+
 class BatchChainTests(unittest.TestCase):
-    def test_same_protocol_restart_only_after_an_exogenous_stop(self):
-        slot_list = slots(1)
+    def outcome(self, **header_changes):
         with tempfile.TemporaryDirectory() as directory:
-            allowed = {"batch_id": "batch-000", "protocol_digest": DIGEST,
-                       "chain_head": OTHER, "termination_reason": "model_identity_changed"}
-            ledger.create(Path(directory) / "a.jsonl", header(slot_list, previous=allowed))
-            refused = {**allowed, "termination_reason": "critical_safety_event"}
-            with self.assertRaises(ledger.LedgerError):
-                ledger.create(Path(directory) / "b.jsonl", header(slot_list, previous=refused))
-            ledger.create(Path(directory) / "c.jsonl",
-                          header(slot_list, previous=refused, protocol=OTHER))
+            try:
+                ledger.create(Path(directory) / "batch.jsonl", header(slots(1), **header_changes))
+            except ledger.LedgerError:
+                return "refused"
+            return "allowed"
+
+    def test_a_new_development_candidate_follows_any_finished_batch(self):
+        for reason in ("batch_completed", "critical_safety_event", "reset_failed", "operator_stop",
+                       "model_identity_changed"):
+            with self.subTest(reason=reason):
+                self.assertEqual(self.outcome(previous=link(reason=reason),
+                                              candidate=NEW_CANDIDATE), "allowed")
+
+    def test_the_same_development_candidate_continues_only_after_an_exogenous_stop(self):
+        expected = {"batch_completed": "refused", "critical_safety_event": "refused",
+                    "operator_stop": "refused", "model_identity_changed": "allowed",
+                    "replacement_cap_exceeded": "allowed"}
+        for reason, outcome in expected.items():
+            with self.subTest(reason=reason):
+                self.assertEqual(self.outcome(previous=link(reason=reason)), outcome)
+        self.assertEqual(self.outcome(previous=link(), protocol=OTHER), "refused")
+
+    def test_heldout_batches_keep_the_strict_protocol_rule(self):
+        heldout = {"purpose": "heldout", "candidate": NEW_CANDIDATE}
+        self.assertEqual(self.outcome(previous=link(purpose="heldout"), **heldout), "refused")
+        self.assertEqual(self.outcome(previous=link(purpose="heldout"), protocol=OTHER, **heldout),
+                         "allowed")
+        self.assertEqual(self.outcome(previous=link(purpose="heldout",
+                                                    reason="model_identity_changed"), **heldout),
+                         "allowed")
+
+    def test_a_link_names_its_purpose_candidate_and_ending(self):
+        partial = {key: value for key, value in link().items() if key != "candidate_commit"}
+        for label, previous in {"other_purpose": link(purpose="heldout"), "no_candidate": partial,
+                                "unknown_ending": link(reason="lunch_break")}.items():
+            with self.subTest(label=label):
+                self.assertEqual(self.outcome(previous=previous, candidate=NEW_CANDIDATE),
+                                 "refused")
 
     def test_completion_needs_every_slot(self):
         harness = LedgerHarness(self, slots(2))

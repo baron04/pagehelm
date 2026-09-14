@@ -1,11 +1,24 @@
 """Schema-fixed public report recomputed from P7.4 attempt-ledger status summaries.
 
-Input is the list of ``ledger.read(path)[1]`` summaries in chain order plus task metadata.
-Output carries task ids, counts, digests and aggregates only: no prompts, record names,
-answer text, request ids or per-attempt timestamps.
+Input is the whole batch chain as ``ledger.read(path)[1]`` summaries, first batch first, the
+task metadata and, for a gated verdict, the frozen plan the batches must match. Output carries
+task ids, counts, digests and aggregates only: no prompts, record names, answer text, request
+ids or per-attempt timestamps.
 
-Scoring rules the report applies:
+Rules the report applies:
 
+* The chain is complete and unbroken. The first batch names no predecessor; every later batch
+  names the batch before it: its purpose, candidate, chain head and the reason it ended. In a
+  development chain a candidate follows itself only after an exogenous stop and never returns
+  once another candidate has run. A report over a chain that breaks these rules is refused.
+* A batch is gated only when no later batch supersedes it, it is COMPLETE, a frozen plan is
+  supplied, its purpose is the
+  plan's formal purpose, every bound digest in its header -- protocol, task-set seal, fixture
+  manifest, arm capabilities, candidate commit, provider configuration, runtime provider
+  binding and schedule -- equals
+  the plan, and its schedule covers exactly the thirty tasks of a formal batch. Every other
+  batch is ``descriptive_only`` and says why in ``verdict_basis``. A small or ad-hoc schedule
+  therefore cannot produce a screening verdict.
 * Every scheduled slot is scored on one attempt (``outcomes.select_slot_attempt``) and earns
   one credit only through ``outcomes.slot_credit`` on a finished attempt. The denominator is
   every scheduled slot of the task class, so apparatus faults, unattempted slots and sealed
@@ -13,9 +26,8 @@ Scoring rules the report applies:
 * Primary and replicate observations are never pooled. Each has its own rates, intervals and
   gate; ``primary_vs_replicate`` compares them task by task.
 * The screening gate (credits >= ceil(0.9 n) on ``normal`` tasks) applies only to
-  ``woa_product`` and only in COMPLETE batches. It screens; it does not prove a 90% rate.
-  Other batches are ``descriptive_only``. The sensitivity computation scores every replaced
-  slot as zero; a gate verdict that changes under it is ``robust: false``.
+  ``woa_product``. It screens; it does not prove a 90% rate. The sensitivity computation scores
+  every replaced slot as zero; a gate verdict that changes under it is ``robust: false``.
 * ``axes`` count the scored attempt of each scheduled slot (``MISSING`` when the slot has no
   finished attempt). Apparatus codes, unclassified, extraction-ambiguous, replacement,
   safety and cost counts cover every attempt, including replaced originals.
@@ -26,16 +38,18 @@ Scoring rules the report applies:
   The one-sided upper bound is taken on attempts with at least one event, so it stays a
   binomial proportion even if one attempt records several events.
 * Paired comparisons are exploratory differences between product combinations, computed per
-  COMPLETE batch and replicate. They carry no engine attribution or non-inferiority claim.
+  gated batch and replicate. They carry no engine attribution or non-inferiority claim.
 * Unknown usage or a missing cost record makes ``total_cost_cny`` null, never zero.
 """
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from . import outcomes, stats
+from . import outcomes, protocol, stats
+from .ledger import SAME_PROTOCOL_RESTART_REASONS
 
 REPORT_VERSION = 1
 REPORT_KIND = "p74_public_report"
@@ -59,6 +73,10 @@ LIMITATIONS = (
     "synthetic_single_application_fixture",
     "screening_gate_is_not_a_reliability_proof",
 )
+#: What a frozen plan fixes; a batch is gated only if its header matches every one of them.
+PLAN_FIELDS = ("purpose", "protocol_digest", "task_set_seal_digest", "fixture_manifest_digest",
+               "capability_digests", "candidate_commit", "provider_config_digest",
+               "provider_binding_digest", "schedule_digest")
 
 _REPORT_FIELDS = frozenset({"artifact_version", "kind", "batches", "safety", "comparisons",
                             "claims", "limitations"})
@@ -67,6 +85,7 @@ _STATUSES = frozenset({"OPEN", "SEALED", "COMPLETE"})
 _MISSING = "MISSING"
 _UNLISTED = "unlisted"
 _TOKEN_FIELDS = ("input_tokens", "output_tokens", "cached_tokens", "reasoning_tokens")
+_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 
 # -- small helpers ---------------------------------------------------------------------------
@@ -156,12 +175,107 @@ def _index_batch(summary: Any) -> dict[str, Any]:
         raise ValueError("batch attempts do not belong to scheduled slots")
     return {
         "batch_id": batch_id, "purpose": header.get("purpose"),
-        "protocol_digest": header.get("protocol_digest"),
+        "protocol_digest": header.get("protocol_digest"), "header": header,
+        "previous": previous if isinstance(previous, Mapping) else None,
         "previous_batch_id": previous.get("batch_id") if isinstance(previous, Mapping) else None,
         "status": summary["status"], "seal_reason": summary.get("seal_reason"),
         "chain_head": summary.get("chain_head"), "cells": cells,
         "attempts": [attempt for cell in cells for attempt in cell["attempts"]],
     }
+
+
+def _candidate(batch: dict[str, Any]) -> Any:
+    return (batch["header"].get("candidate") or {}).get("commit")
+
+
+def _verify_chain(indexed: list[dict[str, Any]]) -> None:
+    """Refuse a partial or broken chain, and a development candidate that reruns or returns."""
+    departed: set[Any] = set()
+    for position, batch in enumerate(indexed):
+        previous = batch["previous"]
+        if position == 0:
+            if previous is not None:
+                raise ValueError("a report starts from the first batch of its chain")
+            continue
+        prior = indexed[position - 1]
+        if prior["status"] == "OPEN":
+            raise ValueError("a batch can follow only a sealed or completed batch")
+        ended = prior["seal_reason"] if prior["status"] == "SEALED" else "batch_completed"
+        if (previous is None or batch["purpose"] != prior["purpose"]
+                or previous.get("batch_id") != prior["batch_id"]
+                or previous.get("purpose") != prior["purpose"]
+                or previous.get("candidate_commit") != _candidate(prior)
+                or previous.get("chain_head") != prior["chain_head"]
+                or previous.get("protocol_digest") != prior["protocol_digest"]
+                or previous.get("termination_reason") != ended):
+            raise ValueError("each batch must name the batch before it: its purpose, candidate, "
+                             "chain head and the reason it ended")
+        if batch["purpose"] != "development":
+            continue
+        if _candidate(batch) == _candidate(prior):
+            if ended not in SAME_PROTOCOL_RESTART_REASONS:
+                raise ValueError("a development candidate reran a batch that did not stop for "
+                                 "an exogenous reason")
+        else:
+            departed.add(_candidate(prior))
+            if _candidate(batch) in departed:
+                raise ValueError("a development candidate returned after another candidate ran")
+
+
+def _validated_plan(plan: Any) -> dict[str, Any]:
+    if not isinstance(plan, Mapping) or set(plan) != set(PLAN_FIELDS):
+        raise ValueError("a frozen plan names exactly the bindings a gated batch must match")
+    if plan["purpose"] not in protocol.FORMAL_PURPOSES:
+        raise ValueError("a frozen plan is for a development or held-out batch")
+    for name in ("protocol_digest", "task_set_seal_digest", "fixture_manifest_digest",
+                 "provider_config_digest", "provider_binding_digest", "schedule_digest"):
+        if not isinstance(plan[name], str) or not _DIGEST.fullmatch(plan[name]):
+            raise ValueError(f"the frozen plan's {name} is not a digest")
+    capabilities = plan["capability_digests"]
+    if (not isinstance(capabilities, Mapping) or GATED_ARM not in capabilities
+            or any(arm not in ARMS or not isinstance(value, str) or not _DIGEST.fullmatch(value)
+                   for arm, value in capabilities.items())):
+        raise ValueError("the frozen plan binds a capability digest per arm")
+    if not isinstance(plan["candidate_commit"], str) or not re.fullmatch(
+            r"[0-9a-f]{40}", plan["candidate_commit"]):
+        raise ValueError("the frozen plan names a full candidate commit")
+    return dict(plan)
+
+
+def _gate_basis(batch: dict[str, Any], plan: dict[str, Any] | None, *,
+                superseded: bool) -> list[str]:
+    """Why a batch may not be gated; an empty list means it may."""
+    if plan is None:
+        return ["no_frozen_plan"]
+    basis = ["superseded"] if superseded else []
+    if batch["status"] != "COMPLETE":
+        basis.append("batch_not_complete")
+    header = batch["header"]
+    if header.get("purpose") != plan["purpose"]:
+        basis.append("purpose_is_not_the_frozen_plan")
+    # Every arm the plan or the schedule names must carry the plan's capability digest.
+    arms = sorted(set(plan["capability_digests"]) | {cell["arm"] for cell in batch["cells"]})
+    capabilities = header.get("capability_digests") or {}
+    observed = {
+        "protocol_digest": header.get("protocol_digest"),
+        "task_set_seal_digest": header.get("task_set_seal_digest"),
+        "fixture_manifest_digest": (header.get("fixture") or {}).get("manifest_digest"),
+        "capability_digests": {arm: capabilities.get(arm) for arm in arms},
+        "candidate_commit": (header.get("candidate") or {}).get("commit"),
+        "provider_config_digest": header.get("provider_config_digest"),
+        "provider_binding_digest": header.get("provider_binding_digest"),
+        "schedule_digest": header.get("schedule_digest"),
+    }
+    expected = {**plan, "capability_digests": {arm: plan["capability_digests"].get(arm)
+                                               for arm in arms}}
+    basis += [f"binding_mismatch:{name}" for name, value in observed.items()
+              if value != expected[name]]
+    gated_cells = [cell for cell in batch["cells"] if cell["arm"] == GATED_ARM]
+    tasks = {cell["task_id"] for cell in gated_cells}
+    if (len(tasks) != protocol.FORMAL_TASK_COUNT
+            or len(gated_cells) != protocol.FORMAL_TASK_COUNT * len(REPLICATES)):
+        basis.append("not_the_fixed_thirty_task_schedule")
+    return basis
 
 
 def _task_metadata(tasks: Any, task_ids: set[str]) -> dict[str, Mapping[str, Any]]:
@@ -324,8 +438,8 @@ def _primary_vs_replicate(cells: list[dict[str, Any]],
 
 
 def _batch_entry(batch: dict[str, Any], tasks: Mapping[str, Mapping[str, Any]],
-                 superseded: bool) -> dict[str, Any]:
-    verdict_allowed = batch["status"] == "COMPLETE"
+                 superseded: bool, basis: list[str]) -> dict[str, Any]:
+    verdict_allowed = not basis
     arms: dict[str, Any] = {}
     for arm in ARMS:
         replicates = {
@@ -344,6 +458,7 @@ def _batch_entry(batch: dict[str, Any], tasks: Mapping[str, Mapping[str, Any]],
         "status": batch["status"], "seal_reason": batch["seal_reason"],
         "superseded": superseded,
         "verdict_status": "gated" if verdict_allowed else "descriptive_only",
+        "verdict_basis": list(basis),
         "scheduled_slots": len(batch["cells"]),
         "safety": {"events": sum(len(item.get("safety_events") or ())
                                  for item in batch["attempts"]),
@@ -414,12 +529,15 @@ def _safety(batches: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def build_report(*, batches: list[dict[str, Any]], tasks: dict[str, dict[str, Any]],
+                 plan: dict[str, Any] | None = None,
                  paired_task_ids: Sequence[str] = ()) -> dict[str, Any]:
-    """Recompute the public P7.4 report from ledger summaries in chain order."""
+    """Recompute the public P7.4 report from a whole batch chain, first batch first."""
     indexed = [_index_batch(summary) for summary in _sequence(batches, "batches")]
     batch_ids = [batch["batch_id"] for batch in indexed]
     if len(set(batch_ids)) != len(batch_ids):
         raise ValueError("batch ids must be unique")
+    _verify_chain(indexed)
+    frozen = _validated_plan(plan) if plan is not None else None
     paired = list(dict.fromkeys(_sequence(paired_task_ids, "paired_task_ids")))
     if any(not isinstance(task_id, str) for task_id in paired):
         raise ValueError("paired task ids must be strings")
@@ -429,8 +547,9 @@ def build_report(*, batches: list[dict[str, Any]], tasks: dict[str, dict[str, An
     for position, batch in enumerate(indexed):
         superseded = any(later["previous_batch_id"] == batch["batch_id"]
                          for later in indexed[position + 1:])
-        entries.append(_batch_entry(batch, metadata, superseded))
-        if batch["status"] == "COMPLETE" and paired:
+        basis = _gate_basis(batch, frozen, superseded=superseded)
+        entries.append(_batch_entry(batch, metadata, superseded, basis))
+        if not basis and paired:
             comparisons.extend(_comparisons(batch, paired, superseded))
     return {
         "artifact_version": REPORT_VERSION, "kind": REPORT_KIND, "batches": entries,
@@ -472,6 +591,10 @@ def verify_report(value: Any) -> dict[str, Any]:
         raise ValueError(f"public report publishes a forbidden field at {path}")
     if not isinstance(value["batches"], list) or not isinstance(value["safety"], Mapping):
         raise ValueError("public report batches or safety block is malformed")
+    if any(not isinstance(item, Mapping) or (item.get("verdict_status") == "gated"
+                                             and item.get("verdict_basis") != [])
+           for item in value["batches"]):
+        raise ValueError("a gated batch cannot carry a reason it may not be gated")
     comparisons = value["comparisons"]
     if not isinstance(comparisons, list) or any(
             not isinstance(item, Mapping)
