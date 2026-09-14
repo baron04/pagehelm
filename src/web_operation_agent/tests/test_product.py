@@ -668,6 +668,97 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 item["event"] == "deterministic_navigation_completed"
                 for item in events))
 
+    def test_a_related_record_request_does_not_finish_on_the_first_unique_read(self):
+        # "Open the company of order SO-1" names two collections. The order read returns one
+        # record with a route, but that record is only the way to the company; opening it and
+        # reporting "opened the requested page" would be a false success.
+        order_schema = {"type": "function", "function": {
+            "name": "query_orders", "description": "Read orders.",
+            "parameters": {"type": "object", "properties": {},
+                           "additionalProperties": False}}}
+
+        class OrderAndCompanyExecutor(_Executor):
+            @staticmethod
+            def tool_schemas():
+                return (*_Executor.tool_schemas(), order_schema)
+
+            @staticmethod
+            def tool_effects():
+                return {**_Executor.tool_effects(), "query_orders": "read"}
+
+            @staticmethod
+            def execute(name, args, *, context=None):
+                if name != "query_orders":
+                    return _Executor.execute(name, args, context=context)
+                return BusinessToolResult(
+                    content={"orders": [{"name": "SO-1", "company": "Acme",
+                                         "ui_path": "/object/order/order-1"}],
+                             "matched_count": 1, "source_total": 1,
+                             "scope": "current_delegated_workspace",
+                             "observed_at": "2026-09-08T05:00:00+00:00",
+                             "completeness": {"source_total_known": True,
+                                              "source_complete": True,
+                                              "result_truncated": False}},
+                    audit={"application": "fixture", "operation": name,
+                           "oauth_actor": "delegated_user", "returned_count": 1,
+                           "scope": "current_delegated_workspace",
+                           "source_complete": True},
+                    allowed_routes=("/object/order/order-1",),
+                    navigation_target="/object/order/order-1")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            companies = _skill(root / "query-skill.json")
+            (root / "orders-skill.json").write_text(json.dumps({
+                "schema_version": 1, "skill_id": "fixture.orders-query",
+                "title": "Query orders", "intent": "Read current orders.",
+                "triggers": ["orders", "订单"],
+                "instructions": ["Call query_orders and trust its current result."],
+                "tool_names": ["query_orders"],
+                "provenance": ["src:fixture@v1:orders.json#orders"],
+                "read_only": True,
+            }) + "\n")
+            orders = BusinessSkill.load(root / "orders-skill.json")
+            chat = _Chat([
+                ("load_skill", {"skill_id": orders.skill_id}),
+                ("query_orders", {}),
+                ("load_skill", {"skill_id": companies.skill_id}),
+                ("query_companies", {}),
+                ("goto", {"url": "/object/company/company-1"}),
+                (None, {"content": "已打开订单 SO-1 对应的公司 Acme 的页面。"}),
+            ])
+            executor = AgentTurnExecutor(
+                channel=_Channel(),
+                config=AgentTurnConfig(
+                    supported_scope="Read orders and companies and open their pages.",
+                    ledger_path=root / "session.jsonl",
+                    deterministic_read_navigation=True,
+                    plain_business_answer_min_page_actions=0,
+                ),
+                chat=chat,
+                business_tools=BusinessToolRuntime((orders, companies),
+                                                   OrderAndCompanyExecutor()),
+                control=ReadOnlyControl(),
+                run_id_factory=lambda _message: "turn-related-record-navigation",
+            )
+
+            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+                execution = executor.execute({
+                    "message_id": "message-1", "text": "打开订单 SO-1 对应的公司页面",
+                    "page_url": "http://app.test/companies",
+                })
+
+            self.assertEqual(_RemoteBrowser.instances[-1].url,
+                             "http://app.test/object/company/company-1")
+            self.assertEqual(execution.user_answer, "已打开订单 SO-1 对应的公司 Acme 的页面。")
+            events = [json.loads(line) for line in
+                      (root / "session.jsonl").read_text().splitlines()]
+            candidates = next(item for item in events
+                              if item["event"] == "business_skill_candidates")
+            self.assertEqual(len(candidates["candidate_ids"]), 2)
+            self.assertFalse(any(item["event"] == "deterministic_navigation_completed"
+                                 for item in events))
+
     def test_turn_answer_limit_reaches_the_session_before_product_rendering(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

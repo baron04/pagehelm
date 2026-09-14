@@ -1815,7 +1815,12 @@ class ServerAgentSession:
                                 result, t0, step=step, question=question,
                                 choice_ids=list(self._clarification_choices),
                                 deterministic="complete_navigation_query")
+                    # A request that names a second read collection may want a related
+                    # record's page ("the customer of order S1"). The record this read found is
+                    # then only the way there, so the model, not this shortcut, decides what
+                    # to open.
                     if (self.deterministic_read_navigation and self._navigation_only
+                            and sum(skill.read_only for skill in self._task_business_skills) == 1
                             and "goto" not in self.disabled_actions
                             and tool_result.navigation_target):
                         target = tool_result.navigation_target
@@ -2266,6 +2271,7 @@ class ServerAgentSession:
                     == (actual.path.rstrip("/") or "/")
                     and expected.query == actual.query)
             if (self.deterministic_read_navigation and self._navigation_only
+                    and sum(skill.read_only for skill in self._task_business_skills) == 1
                     and name == "goto" and latest_business_route
                     and receipt.ok and receipt.observation is not None
                     and receipt.observation.epoch > prior_page_epoch
