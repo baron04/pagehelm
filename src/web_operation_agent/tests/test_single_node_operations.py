@@ -18,6 +18,7 @@ OPS = importlib.util.module_from_spec(SPEC)
 assert SPEC is not None and SPEC.loader is not None
 SPEC.loader.exec_module(OPS)
 REGISTER_PATH = ROOT / "deploy" / "odoo-single-node" / "register.py"
+CADDYFILE = ROOT / "deploy" / "odoo-single-node" / "Caddyfile"
 REGISTER_SPEC = importlib.util.spec_from_file_location("single_node_register", REGISTER_PATH)
 REGISTER = importlib.util.module_from_spec(REGISTER_SPEC)
 assert REGISTER_SPEC is not None and REGISTER_SPEC.loader is not None
@@ -25,6 +26,18 @@ REGISTER_SPEC.loader.exec_module(REGISTER)
 
 
 class SingleNodeOperationsTests(unittest.TestCase):
+    def test_same_origin_gateway_gets_a_trusted_application_origin(self):
+        config = CADDYFILE.read_text(encoding="utf-8")
+        gateway = config.split("handle_path /assistant/* {", 1)[1].split(
+            "\n\t}", 1)[0]
+        self.assertIn("not header Origin *", gateway)
+        self.assertIn(
+            "request_header @same_origin_gateway Origin "
+            "{$WOA_PUBLIC_ORIGIN:https://localhost:8443}",
+            gateway,
+        )
+        self.assertNotIn("header_up Origin", gateway)
+
     def _bundle(self, root: Path):
         for relative in (
                 "agent-state/manifest.json", "agent-state/session-store.sqlite3",

@@ -22,6 +22,15 @@ https://{$WOA_HOSTNAME:localhost}:8443 {
 		@health path /healthz /readyz
 		reverse_proxy @health 127.0.0.1:8766
 
+		# Same-origin browser GETs do not carry Origin. This trusted, loopback-only
+		# application ingress supplies the configured origin only when it is absent;
+		# an explicit cross-origin value remains visible to the core origin check.
+		@same_origin_gateway {
+			path /v1/*
+			not header Origin *
+		}
+		request_header @same_origin_gateway Origin {$WOA_PUBLIC_ORIGIN:https://localhost:8443}
+
 		@gateway path /v1/*
 		reverse_proxy @gateway 127.0.0.1:8766 {
 			flush_interval -1

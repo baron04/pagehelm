@@ -59,6 +59,8 @@ curl -sk "$WOA_PUBLIC_ORIGIN/assistant/healthz"
 curl -sk "$WOA_PUBLIC_ORIGIN/assistant/readyz"
 ```
 
+The reference Caddy ingress supplies `WOA_PUBLIC_ORIGIN` to authenticated Agent requests only when a same-origin browser request omits the `Origin` header. An explicit `Origin` is preserved for the core gateway to validate and reject when it does not match. Keep the gateway listener on loopback, route Odoo and `/assistant/` through the same trusted ingress, and set `WOA_PUBLIC_ORIGIN` to the exact browser-visible origin.
+
 `healthz` reports process liveness. `readyz` reports bounded session and provider admission state without user content. The internal telemetry snapshot is available only inside the Agent container:
 
 ```bash

@@ -59,6 +59,8 @@ curl -sk "$WOA_PUBLIC_ORIGIN/assistant/healthz"
 curl -sk "$WOA_PUBLIC_ORIGIN/assistant/readyz"
 ```
 
+同源浏览器请求可能不带 `Origin`；参考 Caddy 入口只在该请求头缺失时补入 `WOA_PUBLIC_ORIGIN`。显式携带的 `Origin` 会原样交给核心 gateway 校验，不匹配时仍被拒绝。gateway 必须继续只监听 loopback，Odoo 与 `/assistant/` 必须经过同一个可信入口，`WOA_PUBLIC_ORIGIN` 必须与浏览器实际看到的 origin 完全一致。
+
 `healthz` 表示进程存活，`readyz` 只返回有界 session 与 provider 准入状态，不含用户内容。仅容器内部可读的 telemetry 快照可这样检查：
 
 ```bash
