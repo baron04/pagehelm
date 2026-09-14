@@ -36,6 +36,18 @@ class ConclusionRefused(ValueError):
     """The evidence cited cannot support the claim that was made, and why."""
 
 
+def _answer_scope(turn: TurnEvidence, origin) -> str:
+    """Keep executed query syntax in provenance instead of the normal answer surface."""
+    for ref in turn.ids():
+        item = turn.get(ref)
+        if not isinstance(item, QueryEvidence) or item.origin != origin or not item.conditions:
+            continue
+        suffix = "; " + "; ".join(item.conditions)
+        if origin.scope.endswith(suffix):
+            return origin.scope[:-len(suffix)]
+    return origin.scope
+
+
 @dataclass(frozen=True, slots=True)
 class FieldValue:
     """This record's field holds this, or was read and holds nothing."""
@@ -59,7 +71,7 @@ class FieldValue:
         return {"kind": self.kind, "record_id": item.record_id,
                 "field_name": item.field_name, "field_meaning": item.field_meaning,
                 "value": item.value, "empty": item.is_known_empty,
-                "unit": item.unit, "scope": item.origin.scope,
+                "unit": item.unit, "scope": _answer_scope(turn, item.origin),
                 "source_kind": item.origin.kind}
 
 
@@ -108,7 +120,8 @@ class Selection:
                 "rows": rows,
                 "covers_whole_scope": (item.covers_whole_scope and (
                     isinstance(item, SelectionEvidence) or len(members) == query.matched_count)),
-                "scope": query.origin.scope, "source_kind": item.origin.kind}
+                "scope": _answer_scope(turn, query.origin),
+                "source_kind": item.origin.kind}
 
 
 @dataclass(frozen=True, slots=True)
