@@ -118,13 +118,21 @@ python src/web_operation_agent/tests/run_all.py -k test_product.py
 
 ### 自包含 minimal demo
 
-[Contacts 示例](examples/contacts/README.md) 去除了首次运行所需的外部应用配置。它会在 loopback 启动合成的第一方应用和类型化 API，把真实助手 Runtime 注入 Chromium，并运行现有网关、会话 Host 和 ReAct executor：
+[Contacts 示例](examples/contacts/README.md) 去除了首次运行所需的外部应用配置。它的可重复资格命令会在 loopback 启动合成的第一方应用和类型化 API，把真实助手 Runtime 注入 Chromium，并运行现有网关、会话 Host 和 ReAct executor：
 
 ```bash
 python -m pip install --editable .
 python -m playwright install chromium
 PYTHONPATH=src:. python -m examples.contacts.demo --scripted
 ```
+
+它还提供一个普通浏览器参考 Host。这条路径不会启动或注入 Playwright：已登录的应用页面加载不含密钥的同源 bootstrap，应用服务端根据自身 HttpOnly cookie 解析 actor，再绑定独立的委托凭据。会话与 mutation 状态使用本地持久化后端。
+
+```bash
+PYTHONPATH=src:. python -m examples.contacts.server --scripted --port 8765
+```
+
+Agent 网关仍只监听 loopback。部署时可以为它配置一个独立的、浏览器可见的 HTTPS 反向代理 URL；Runtime 资源和认证后的会话流量会使用该 URL，而监听地址的安全策略不变。
 
 显式的 `--scripted` 模式只执行一次固定的零费用装置演示：加载 Skill、查询当前 API、打开 API 授权的精确路由、观察新页面并结束。它不衡量模型能力。去掉 `--scripted` 并配置 OpenAI-compatible provider 后，同一个应用会改用真实模型决策并保持浏览器可交互。
 
@@ -140,7 +148,7 @@ scripts/qualify.sh
 
 有两道门禁取决于环境，它们只会被如实报告，不会被默认当作通过：
 
-- **Chromium 资格**会端到端运行打包的 minimal demo、用已构建 bundle 运行 PageAgent 浏览器用例，并用固定版本的 PageController 运行嵌入式 Runtime。Runtime 用例同时覆盖顶层文档换页和 OFBiz 风格的同源 iframe 表单换页；后者必须返回新的页面观察，而且不能重复提交表单。这些合成用例都不需要 Twenty 或 OFBiz；CI 用 `--require-browser` 把它们设为必需。不加该参数时，缺少 bundle、PageController 或 Chromium 会被报告出来，而不是计为通过。
+- **Chromium 资格**会端到端运行打包的 minimal demo、在没有 init-script 注入的普通浏览器里打开应用原生的 Contacts Host、用已构建 bundle 运行 PageAgent 浏览器用例，并用固定版本的 PageController 运行嵌入式 Runtime。Runtime 用例同时覆盖顶层文档换页和 OFBiz 风格的同源 iframe 表单换页；后者必须返回新的页面观察，而且不能重复提交表单。这些合成用例都不需要 Twenty 或 OFBiz；CI 用 `--require-browser` 把它们设为必需。不加该参数时，缺少 bundle、PageController 或 Chromium 会被报告出来，而不是计为通过。
 - **本地 Twenty 资格**只在全部前置条件就绪时运行：`WOA_TWENTY_BASE_URL`、`WOA_TWENTY_STORAGE_STATE`、`WOA_TWENTY_OAUTH_TOKEN`、`WOA_TWENTY_OAUTH_REGISTRATION`、`WOA_TWENTY_PAGE_CONTROLLER_MODULE`、`WOA_TWENTY_DB_CONTAINER`、`WOA_TWENTY_DB_NAME`、`WOA_TWENTY_DB_USER`、`WOA_TWENTY_WORKSPACE_SCHEMA`。门禁优先读取进程变量，随后读取与 `demo.sh` 相同的 `WOA_MODEL_ENV` 或被忽略的仓库 `.env`；配置文件按数据解析，不作为 shell 代码执行。否则输出 `BLOCKED` 并列出未设置的变量。BLOCKED 表示未被测试，既不是通过，也不是产品失败。需要该门禁的环境可用 `--require-live` 把缺失变成失败。
 
 - **本地 Odoo 资格**是主应用的门禁，只在 `WOA_ODOO_BASE_URL`、`WOA_ODOO_API_KEY_FILE`、`WOA_ODOO_STORAGE_STATE`、`WOA_ODOO_PAGE_CONTROLLER_MODULE` 全部就绪时运行，否则报告 `BLOCKED`。它刻意不调用模型：两个脚本化用例——typed 查询后打开确切记录路由、打开集合——在真实 Chromium 里走真实产品轮次、打真实 Odoo，产物只记录计数、摘要和布尔值，并附夹具运行前后的摘要。通过说明装置成立，不说明模型如何；正因如此，这里失败才值得处理。

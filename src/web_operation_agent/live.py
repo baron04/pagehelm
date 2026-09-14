@@ -348,6 +348,7 @@ class LiveProductServer:
 
     def __init__(self, *, max_sessions: int = 100, sse_wait_s: float = _LONG_POLL_S,
                  host: str = "127.0.0.1", port: int = 0,
+                 public_base_url: str | None = None,
                  session_limits: RemoteSessionLimits | None = None,
                  durable_store: SQLiteSessionStore | None = None,
                  principal_validator: Callable[[PrincipalContext], None] | None = None,
@@ -367,6 +368,7 @@ class LiveProductServer:
         self._closed = False
         self.gateway = EmbeddedGateway(
             self.registry, host=host, port=port, sse_wait_s=sse_wait_s,
+            public_base_url=public_base_url,
             readiness_provider=self.readiness_snapshot)
 
     @property

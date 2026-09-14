@@ -118,13 +118,26 @@ python src/web_operation_agent/tests/run_all.py -k test_product.py
 
 ### Self-contained example
 
-The [Contacts example](examples/contacts/README.md) removes the external application setup from the first run. It starts a synthetic first-party application and typed API on loopback, injects the real assistant runtime into Chromium, and runs the normal gateway, session host and ReAct executor:
+The [Contacts example](examples/contacts/README.md) removes the external application setup from the first run. Its repeatable qualification command starts a synthetic first-party application and typed API on loopback, injects the real assistant runtime into Chromium, and runs the normal gateway, session host and ReAct executor:
 
 ```bash
 python -m pip install --editable .
 python -m playwright install chromium
 PYTHONPATH=src:. python -m examples.contacts.demo --scripted
 ```
+
+It also ships an ordinary-browser reference host. This path does not launch or inject
+Playwright: the signed-in application page loads a non-secret same-origin bootstrap, while
+the application server derives the actor from its HttpOnly cookie and binds a separate
+delegated credential. Session and mutation state use the local durable backends.
+
+```bash
+PYTHONPATH=src:. python -m examples.contacts.server --scripted --port 8765
+```
+
+The Agent gateway still listens only on loopback. Deployments may give it a distinct
+browser-visible HTTPS reverse-proxy URL; runtime assets and authenticated session traffic
+then use that URL without changing the listener's bind policy.
 
 It runs from a checkout and is not installed with the framework. The core distribution ships no application and no demo, which is what lets its wheel assert that it contains neither.
 
@@ -142,7 +155,7 @@ It runs the product suite, the Twenty evaluator foundation tests, the offline Pa
 
 Two gates depend on the environment and are reported, never assumed:
 
-- **Chromium qualification** runs the packaged minimal demo end to end, the PageAgent browser cases against the built bundle, and the embedded Runtime against the pinned PageController. The Runtime cases cover both a top-level document transition and an OFBiz-shaped same-origin iframe form transition; the latter must return a fresh observation without repeating the form submission. These synthetic cases do not need Twenty or OFBiz, and CI makes them required with `--require-browser`. Without the flag, a missing bundle, PageController, or Chromium is reported rather than counted as a pass.
+- **Chromium qualification** runs the packaged minimal demo end to end, opens the application-native Contacts host in an ordinary browser with no init-script injection, runs the PageAgent browser cases against the built bundle, and exercises the embedded Runtime against the pinned PageController. The Runtime cases cover both a top-level document transition and an OFBiz-shaped same-origin iframe form transition; the latter must return a fresh observation without repeating the form submission. These synthetic cases do not need Twenty or OFBiz, and CI makes them required with `--require-browser`. Without the flag, a missing bundle, PageController, or Chromium is reported rather than counted as a pass.
 - **Live Twenty qualification** runs only when every prerequisite is set: `WOA_TWENTY_BASE_URL`, `WOA_TWENTY_STORAGE_STATE`, `WOA_TWENTY_OAUTH_TOKEN`, `WOA_TWENTY_OAUTH_REGISTRATION`, `WOA_TWENTY_PAGE_CONTROLLER_MODULE`, `WOA_TWENTY_DB_CONTAINER`, `WOA_TWENTY_DB_NAME`, `WOA_TWENTY_DB_USER`, `WOA_TWENTY_WORKSPACE_SCHEMA`. The gate reads explicit process values first, then the same `WOA_MODEL_ENV` or ignored repository `.env` used by `demo.sh`; it parses the file as data rather than sourcing shell code. Otherwise it prints `BLOCKED` and names what is unset. A blocked gate is untested — neither a pass nor a product failure. `--require-live` turns that absence into a failure for an environment that must have it.
 
 - **Live Odoo qualification** — the main application's gate — runs only when `WOA_ODOO_BASE_URL`, `WOA_ODOO_API_KEY_FILE`, `WOA_ODOO_STORAGE_STATE` and `WOA_ODOO_PAGE_CONTROLLER_MODULE` are all set, and reports `BLOCKED` otherwise. It is model-free by design: two scripted cases — a typed read into an exact-route open, and a collection open — run through the real product turn in real Chromium against a real Odoo, and the artifact records counts, digests and booleans plus a before/after fixture digest. A pass says the apparatus holds; it says nothing about a model, which is what makes a failure there worth acting on.

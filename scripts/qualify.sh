@@ -82,6 +82,8 @@ run_gate "core distribution boundary" 1 "${PYTHON}" scripts/check_core_boundary.
 run_gate "dependency lock, SBOM and licence notice" 1 \
   "${PYTHON}" scripts/lock_and_sbom.py --check
 run_gate "product suite" 1 "${PYTHON}" src/web_operation_agent/tests/run_all.py
+run_gate "ordinary-browser host (offline)" 1 "${PYTHON}" -m unittest \
+  examples.contacts.tests.test_native_server.NativeContactsHostTests
 run_gate "ofbiz example suite" 1 "${PYTHON}" -m unittest discover \
   -s examples/ofbiz/src/web_operation_agent_ofbiz/tests \
   -t examples/ofbiz/src
@@ -309,7 +311,8 @@ else
   chromium_ready=1
   run_gate "contacts example Chromium qualification" 1 \
     env WOA_REQUIRE_MINIMAL_DEMO_BROWSER=1 PYTHONPATH="${ROOT}/src:${ROOT}" "${PYTHON}" \
-    -m unittest examples.contacts.tests.test_contacts_demo
+    -m unittest examples.contacts.tests.test_contacts_demo \
+      examples.contacts.tests.test_native_server.NativeContactsBrowserTests
 fi
 
 # The panel's own Chromium checks: every state, the confirmation card's keyboard and narrow

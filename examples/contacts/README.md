@@ -7,7 +7,8 @@ Four files, in the order a real integration writes them.
 | [`app.py`](app.py) | The synthetic Contacts application: a list page, a record page per contact, a typed read and write API, two credentials, users with different permissions, two workspaces that repeat contact names, and the same-origin PageController the SPI requires a host to serve | **No** — your application already exists. This file exists so the example runs with nothing provisioned |
 | [`adapter.py`](adapter.py) | All five ports — identity, routes, postconditions, reconciliation, data classification — plus one read and one write over the application's data | **Yes** — this is the file to copy |
 | [`skills/`](skills/) | One Skill artifact per capability: when the tool applies, and the instructions the model follows when it does | **Yes** — version-controlled beside the application it describes |
-| [`demo.py`](demo.py) | The deployment composition: identity binding, mutation journal, control plane, gateway, browser session | **Yes** — but this is the host's job, not the adapter's |
+| [`demo.py`](demo.py) | A Playwright-driven qualification composition for repeatable browser tests | **No** — it proves the chain but is not the product host |
+| [`server.py`](server.py) | The ordinary-browser composition: application login, server-side identity binding, durable session/journal state, shared gateway, and ReAct executor | **Yes** — replace the synthetic login boundary with your application's own |
 
 ## Run it
 
@@ -21,6 +22,21 @@ PYTHONPATH=src:. python -m examples.contacts.demo --scripted --headless --allow-
 
 Both use a scripted model and no network, so they finish without an API key. Point
 `--model-env` at a file with provider credentials to run against a real model.
+
+To use the product as an ordinary signed-in user, without Playwright or browser injection:
+
+```bash
+PYTHONPATH=src:. python -m examples.contacts.server --scripted --port 8765
+```
+
+Open the printed writer or reader login URL in any browser. The application sets its own
+HttpOnly session cookie, derives the actor on the server, and returns one ephemeral Runtime
+capability to that browser tab. Reloading reuses the tab's server session and replaces only
+the document lease. A different tab gets a different capability. `POST /woa/logout` revokes
+the exact principal issuance, closes its Agent sessions, and clears the application cookie.
+The scripted mode always runs the fixed Grace Hopper read walkthrough; omit `--scripted` and
+provide `--model-env` for free-form goals. The example binds only to loopback and contains
+synthetic data.
 
 ## The write is the part worth reading
 
@@ -90,9 +106,12 @@ created it.
 2. **`skills/`** — one artifact per capability. `BusinessSkill.from_bytes` validates that
    the tool names a Skill references actually exist, so a Skill cannot drift from the tool
    surface, and that every `provenance` entry is a citation somebody can go and check.
-3. **`demo.py`** — a real deployment replaces this example's synthetic session with the
-   browser's own, and `MemoryMutationJournal` with a durable one. The production profile
-   refuses a mutation-enabled turn that has neither.
+3. **`server.py`** — connect its bootstrap hook to your authenticated application shell.
+   Keep actor resolution on the application server: the browser supplies a per-tab id, not
+   an actor, token, tenant, or scope. Put the shared Agent gateway behind an HTTPS reverse
+   proxy and pass its browser-visible URL as `public_base_url`; the listener itself remains
+   loopback-only. Use the durable session and mutation stores as the starting point, then
+   replace the local SQLite backend when the deployment spans hosts.
 
 The adapter contract test in [`tests/`](tests/) is the same assertion every integration
 should run: it checks the ports are coherent before any model or browser is involved.

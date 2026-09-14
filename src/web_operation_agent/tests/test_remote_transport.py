@@ -1046,6 +1046,38 @@ class GatewayTests(unittest.TestCase):
             self.gateway.bootstrap_script(
                 self.grant, page_controller_module="http://other.test/controller.js")
 
+    def test_public_proxy_url_is_separate_from_the_loopback_listener(self):
+        registry = RemoteSessionRegistry()
+        grant, _channel = registry.create(
+            allowed_origins=["https://app.example"], session_id="proxied-session")
+        with EmbeddedGateway(
+                registry, public_base_url="https://app.example/assistant") as gateway:
+            config = gateway.bootstrap_config(
+                grant,
+                page_controller_module="https://app.example/woa/page-controller.js")
+            self.assertTrue(gateway.base_url.startswith("http://127.0.0.1:"))
+            self.assertEqual(gateway.public_base_url, "https://app.example/assistant")
+            self.assertEqual(config["endpoint"], "https://app.example/assistant")
+            self.assertEqual(
+                gateway.runtime_url,
+                "https://app.example/assistant/v1/runtime/embedded.js")
+            source = gateway.bootstrap_script(
+                grant,
+                page_controller_module="https://app.example/woa/page-controller.js")
+            self.assertIn("https://app.example/assistant/v1/runtime/embedded.js", source)
+            self.assertNotIn(gateway.base_url, source)
+
+    def test_public_proxy_url_refuses_downgrade_and_ambiguous_paths(self):
+        for value in (
+                "http://app.example/assistant",
+                "https://user:secret@app.example/assistant",
+                "https://app.example/assistant/",
+                "https://app.example/assistant?token=secret",
+                "https://app.example/a/../assistant"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "public_base_url"):
+                    EmbeddedGateway(public_base_url=value)
+
     def test_hello_page_origin_must_match_browser_origin_header(self):
         registry = RemoteSessionRegistry()
         grant, _ = registry.create(

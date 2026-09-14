@@ -60,6 +60,17 @@ def _panel_manifest() -> dict:
 _SENSITIVE_QUERY_KEY = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{1,63}\Z")
 
 
+class _QuietThreadingHTTPServer(ThreadingHTTPServer):
+    """Suppress transport noise when a document closes its long-poll sockets."""
+
+    def handle_error(self, request, client_address) -> None:
+        import sys
+
+        if isinstance(sys.exception(), (BrokenPipeError, ConnectionResetError)):
+            return
+        super().handle_error(request, client_address)
+
+
 def _panel_labels(value: Mapping[str, str] | None) -> dict[str, str]:
     if value is None:
         return {}
@@ -435,19 +446,38 @@ class EmbeddedGateway:
 
     def __init__(self, registry: RemoteSessionRegistry | None = None, *,
                  host: str = "127.0.0.1", port: int = 0, sse_wait_s: float = 15,
+                 public_base_url: str | None = None,
                  readiness_provider: Callable[[], Mapping] | None = None):
         if host not in {"127.0.0.1", "localhost", "::1"}:
             raise ValueError("embedded gateway may bind only to loopback")
         if readiness_provider is not None and not callable(readiness_provider):
             raise TypeError("readiness_provider must be callable or None")
         self.registry = registry or RemoteSessionRegistry()
-        self._server = ThreadingHTTPServer(
+        self._public_base_url = self._validate_public_base_url(public_base_url)
+        self._server = _QuietThreadingHTTPServer(
             (host, port),
             _handler(
                 self.registry, sse_wait_s=sse_wait_s,
                 readiness_provider=readiness_provider),
         )
         self._thread: threading.Thread | None = None
+
+    @staticmethod
+    def _validate_public_base_url(value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str) or value != value.strip() or not value:
+            raise ValueError("public_base_url must be an absolute HTTPS URL")
+        parsed = urlsplit(value)
+        loopback = parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+        if ((parsed.scheme != "https" and not (parsed.scheme == "http" and loopback))
+                or not parsed.netloc or parsed.username is not None
+                or parsed.password is not None or parsed.query or parsed.fragment
+                or value.endswith("/") or "/../" in parsed.path or "/./" in parsed.path):
+            raise ValueError(
+                "public_base_url must be HTTPS (or loopback HTTP), without credentials, "
+                "query, fragment, trailing slash, or relative path segments")
+        return value
 
     @property
     def base_url(self) -> str:
@@ -457,7 +487,12 @@ class EmbeddedGateway:
 
     @property
     def runtime_url(self) -> str:
-        return self.base_url + "/v1/runtime/embedded.js"
+        return self.public_base_url + "/v1/runtime/embedded.js"
+
+    @property
+    def public_base_url(self) -> str:
+        """Browser-visible URL; the listener itself remains loopback-only."""
+        return self._public_base_url or self.base_url
 
     def bootstrap_config(self, grant: SessionGrant, *,
                          page_controller_module: str,
@@ -480,7 +515,7 @@ class EmbeddedGateway:
         if navigation_mode not in {"document", "spa"}:
             raise ValueError("navigation_mode must be document or spa")
         config = {
-            "endpoint": self.base_url,
+            "endpoint": self.public_base_url,
             "sessionId": grant.session_id,
             "clientToken": grant.client_token,
             "pageControllerModule": page_controller_module,

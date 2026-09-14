@@ -20,7 +20,7 @@ import json
 import socket
 import threading
 import urllib.parse
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -83,12 +83,42 @@ _MODEL_ENV_KEYS = (
     "AGENT_OPENAI_MODEL",
     "AGENT_PROVIDER",
 )
+
+
 def _json_bytes(value: object) -> bytes:
     return (json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             + "\n").encode("utf-8")
 
 
-def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str) -> bytes:
+_ASSISTANT_LOADER = b"""
+(() => {
+  if (window.top !== window || window.__WOA_NATIVE_BOOTSTRAP_STARTED__) return;
+  window.__WOA_NATIVE_BOOTSTRAP_STARTED__ = true;
+  let instanceId;
+  try {
+    instanceId = sessionStorage.getItem('woa.runtime.instance.v1');
+    if (!instanceId) {
+      instanceId = crypto.randomUUID().replaceAll('-', '');
+      sessionStorage.setItem('woa.runtime.instance.v1', instanceId);
+    }
+  } catch {
+    instanceId = crypto.randomUUID().replaceAll('-', '');
+  }
+  window.__WOA_RUNTIME_READY__ = fetch('/woa/bootstrap', {
+    method: 'POST', credentials: 'same-origin', cache: 'no-store',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({runtime_instance_id: instanceId}),
+  }).then(response => {
+    if (!response.ok) throw new Error(`assistant bootstrap failed (${response.status})`);
+    return response.json();
+  }).then(payload => import(payload.runtime_module).then(
+    module => module.startEmbeddedRuntime(payload.config)));
+})();
+"""
+
+
+def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
+          assistant_enabled: bool = False) -> bytes:
     contacts = json.dumps(source_contacts, ensure_ascii=False).replace("</", "<\\/")
     title = html.escape(workspace.title())
     return f"""<!doctype html>
@@ -170,6 +200,7 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str) -> bytes
     }});
     render();
   </script>
+  {('<script src="/woa/loader.js"></script>' if assistant_enabled else '')}
 </body>
 </html>
 """.encode("utf-8")
@@ -182,6 +213,19 @@ def _validated(contacts: Sequence[Mapping[str, str]]) -> list[dict[str, str]]:
     return records
 
 
+class _QuietThreadingHTTPServer(ThreadingHTTPServer):
+    """Do not turn an ordinary browser navigation into an operator traceback."""
+
+    allow_reuse_address = True
+
+    def handle_error(self, request, client_address) -> None:
+        import sys
+
+        if isinstance(sys.exception(), (BrokenPipeError, ConnectionResetError)):
+            return
+        super().handle_error(request, client_address)
+
+
 class MinimalContactsApplication:
     """Loopback first-party application and typed API backed by synthetic resettable data."""
 
@@ -189,7 +233,7 @@ class MinimalContactsApplication:
 
     def __init__(self, *, contacts: Sequence[Mapping[str, str]] = DEMO_CONTACTS,
                  other_contacts: Sequence[Mapping[str, str]] = SOUTHWIND_CONTACTS,
-                 write_fault: str = ""):
+                 write_fault: str = "", port: int = 0):
         # Mutable now: the example gained a write, and a store that cannot change cannot
         # demonstrate one. `_lock` is what keeps the create and the readback consistent.
         self.workspaces = {DEMO_WORKSPACE: _validated(contacts),
@@ -200,6 +244,8 @@ class MinimalContactsApplication:
         self.contacts = self.workspaces[DEMO_WORKSPACE]
         if write_fault not in self.WRITE_FAULTS:
             raise ValueError("write_fault is invalid")
+        if isinstance(port, bool) or not isinstance(port, int) or not 0 <= port <= 65535:
+            raise ValueError("port must be an integer from 0 to 65535")
         self.write_fault = write_fault
         #: Every POST this application received, refused or not.
         self.write_requests = 0
@@ -213,6 +259,8 @@ class MinimalContactsApplication:
         if write_fault != "hold_before_commit":
             self.release_post.set()
         self._lock = threading.Lock()
+        self._assistant_bootstrap: Callable[[DemoActor, str], dict] | None = None
+        self._assistant_revoke: Callable[[DemoActor], None] | None = None
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -225,8 +273,19 @@ class MinimalContactsApplication:
                 self.send_header("Content-Length", str(len(body)))
                 self.send_header("Cache-Control", "no-store")
                 self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Referrer-Policy", "no-referrer")
                 self.end_headers()
                 self.wfile.write(body)
+
+            def _redirect(self, location: str, *, cookie: str = "") -> None:
+                self.send_response(302)
+                self.send_header("Location", location)
+                if cookie:
+                    self.send_header("Set-Cookie", cookie)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Referrer-Policy", "no-referrer")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
 
             def _actor(self) -> tuple[DemoActor, str] | None:
                 """Who this request is, by whichever credential it carried."""
@@ -247,6 +306,59 @@ class MinimalContactsApplication:
 
             def do_POST(self):
                 path = urllib.parse.urlsplit(self.path).path
+                if path == "/woa/bootstrap":
+                    resolved = self._actor()
+                    if (owner._assistant_bootstrap is None or resolved is None
+                            or resolved[1] != "page_session"):
+                        self._reply(401, _json_bytes({"error": "unauthenticated"}),
+                                    "application/json")
+                        return
+                    if self.headers.get("Origin") != owner.origin:
+                        self._reply(403, _json_bytes({"error": "origin_refused"}),
+                                    "application/json")
+                        return
+                    try:
+                        length = int(self.headers.get("Content-Length") or 0)
+                        if not 1 <= length <= 1024:
+                            raise ValueError()
+                        payload = json.loads(self.rfile.read(length))
+                        if not isinstance(payload, dict):
+                            raise ValueError()
+                        instance_id = payload.get("runtime_instance_id")
+                        if (set(payload) != {"runtime_instance_id"}
+                                or not isinstance(instance_id, str)
+                                or not 8 <= len(instance_id) <= 128
+                                or any(not (char.isalnum() or char in "-_")
+                                       for char in instance_id)):
+                            raise ValueError()
+                        bootstrap = owner._assistant_bootstrap(resolved[0], instance_id)
+                    except (ValueError, OSError):
+                        self._reply(400, _json_bytes({"error": "invalid_bootstrap"}),
+                                    "application/json")
+                        return
+                    except Exception:
+                        self._reply(503, _json_bytes({"error": "assistant_unavailable"}),
+                                    "application/json")
+                        return
+                    self._reply(200, _json_bytes(bootstrap), "application/json")
+                    return
+                if path == "/woa/logout":
+                    resolved = self._actor()
+                    if (self.headers.get("Origin") != owner.origin or resolved is None
+                            or resolved[1] != "page_session"):
+                        self._reply(403, _json_bytes({"error": "origin_refused"}),
+                                    "application/json")
+                        return
+                    if owner._assistant_revoke is not None:
+                        owner._assistant_revoke(resolved[0])
+                    self.send_response(204)
+                    self.send_header(
+                        "Set-Cookie",
+                        f"{DEMO_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 with owner._lock:
                     owner.write_requests += 1
                 resolved = self._actor()
@@ -327,6 +439,21 @@ class MinimalContactsApplication:
                             "source": source, "permissions": list(actor.permissions),
                         }), "application/json")
                     return
+                if path == "/woa/loader.js" and owner._assistant_bootstrap is not None:
+                    self._reply(200, _ASSISTANT_LOADER,
+                                "text/javascript; charset=utf-8")
+                    return
+                if path.startswith("/demo/login/"):
+                    actor_id = urllib.parse.unquote(path.removeprefix("/demo/login/"))
+                    actor = ACTORS_BY_ID.get(actor_id)
+                    if actor is None:
+                        self._reply(404, b"not found\n", "text/plain; charset=utf-8")
+                        return
+                    self._redirect(
+                        "/contacts",
+                        cookie=(f"{DEMO_SESSION_COOKIE}={actor.session}; Path=/; "
+                                "HttpOnly; SameSite=Strict"))
+                    return
                 if path == "/healthz":
                     self._reply(200, _json_bytes({"ready": True}), "application/json")
                 elif path == "/api/contacts":
@@ -369,17 +496,16 @@ class MinimalContactsApplication:
                         return
                     with owner._lock:
                         records = [dict(item) for item in owner.workspaces[actor.workspace]]
-                    self._reply(200, _html(records, actor.workspace),
+                    self._reply(200, _html(
+                        records, actor.workspace,
+                        assistant_enabled=owner._assistant_bootstrap is not None),
                                 "text/html; charset=utf-8")
                 elif path == "/":
-                    self.send_response(302)
-                    self.send_header("Location", "/contacts")
-                    self.send_header("Content-Length", "0")
-                    self.end_headers()
+                    self._redirect("/contacts")
                 else:
                     self._reply(404, b"not found\n", "text/plain; charset=utf-8")
 
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._server = _QuietThreadingHTTPServer(("127.0.0.1", port), Handler)
         self._thread: threading.Thread | None = None
 
     @property
@@ -393,6 +519,17 @@ class MinimalContactsApplication:
                 target=self._server.serve_forever, name="minimal-contacts", daemon=True)
             self._thread.start()
         return self
+
+    def install_assistant(self, *, bootstrap: Callable[[DemoActor, str], dict],
+                          revoke: Callable[[DemoActor], None]) -> None:
+        """Install server-side hooks; the browser can never supply an actor or token."""
+        if not callable(bootstrap) or not callable(revoke):
+            raise TypeError("assistant bootstrap and revoke hooks must be callable")
+        with self._lock:
+            if self._assistant_bootstrap is not None:
+                raise RuntimeError("assistant hooks are already installed")
+            self._assistant_bootstrap = bootstrap
+            self._assistant_revoke = revoke
 
     def close(self) -> None:
         if self._thread is None:
