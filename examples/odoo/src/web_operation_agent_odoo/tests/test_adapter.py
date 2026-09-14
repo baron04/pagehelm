@@ -13,7 +13,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from web_operation_agent.business import (BusinessToolAuthenticationError,
-                                          BusinessToolPermissionError)
+                                          BusinessToolDispatchError,
+                                          BusinessToolPermissionError,
+                                          BusinessToolUnavailableError)
 
 from web_operation_agent.application import bind_application
 from web_operation_agent.business import (BusinessMutationIndeterminate, BusinessToolError,
@@ -153,6 +155,7 @@ class _FakeOdoo(OdooBusinessToolExecutor):
         self.timeout_s = 5
         self.base_url = BASE
         self.calls = []
+        self.mutation_calls = []
         self.created = []
         self._uid = uid
         self.keys = type("K", (), {"database": "woa", "login": "grower",
@@ -161,8 +164,10 @@ class _FakeOdoo(OdooBusinessToolExecutor):
     def _authenticate(self):
         return self._uid
 
-    def call(self, model, method, args, kwargs=None):
+    def call(self, model, method, args, kwargs=None, *, mutation=False):
         self.calls.append((model, method, args, dict(kwargs or {})))
+        if mutation:
+            self.mutation_calls.append((model, method))
         rows = self.tables.get(model, [])
         # `search*` takes a domain in args[0]; `read` takes a list of ids. Only the former
         # is scoped, and a clause is always a triple.
@@ -238,6 +243,17 @@ class OdooRefusalsAreTypedByWhoRefused(unittest.TestCase):
         refused = self._refusal("odoo.exceptions.AccessDenied")
         self.assertIsInstance(refused, BusinessToolAuthenticationError)
         self.assertNotIsInstance(refused, BusinessToolPermissionError)
+
+    def test_mutation_transport_loss_is_typed_as_an_unknown_dispatch(self):
+        executor = _FakeOdoo({})
+        with patch("web_operation_agent_odoo.adapter.urlopen",
+                   side_effect=TimeoutError("lost response")):
+            with self.assertRaises(BusinessToolDispatchError):
+                OdooBusinessToolExecutor._rpc(
+                    executor, {"service": "object"}, mutation=True)
+            with self.assertRaises(BusinessToolUnavailableError) as read:
+                OdooBusinessToolExecutor._rpc(executor, {"service": "object"})
+        self.assertNotIsInstance(read.exception, BusinessToolDispatchError)
 
 
 def _orders(count):
@@ -675,10 +691,11 @@ class TheOneWrite(unittest.TestCase):
         self.assertEqual(result.audit["identity_binding"], "unverified")
         reads = [call for call in executor.calls if call[1] == "read"]
         self.assertEqual(len(reads), 1)
+        self.assertEqual(executor.mutation_calls, [("res.partner", "create")])
 
     def test_a_readback_that_does_not_match_is_indeterminate_not_success(self):
         class Drifting(_FakeOdoo):
-            def call(self, model, method, args, kwargs=None):
+            def call(self, model, method, args, kwargs=None, *, mutation=False):
                 result = super().call(model, method, args, kwargs)
                 if method == "read":
                     return [{**result[0], "name": "Something Else"}]
@@ -744,7 +761,9 @@ class TheOrderLifecycleWrites(unittest.TestCase):
             self.invoiced: list[int] = []
             self._next_invoice = 50
 
-        def call(self, model, method, args, kwargs=None):
+        def call(self, model, method, args, kwargs=None, *, mutation=False):
+            if mutation:
+                self.mutation_calls.append((model, method))
             if model == "sale.order" and method == "action_confirm":
                 self.calls.append((model, method, args, dict(kwargs or {})))
                 for row in self.tables["sale.order"]:
@@ -808,6 +827,7 @@ class TheOrderLifecycleWrites(unittest.TestCase):
         for route in result.allowed_routes:
             self.assertIn(route, json.dumps(result.content),
                           "a route the model may open has to be one it can see")
+        self.assertEqual(executor.mutation_calls, [("sale.order", "action_confirm")])
 
     def test_an_acknowledged_confirm_that_does_not_read_back_is_indeterminate(self):
         """`action_confirm` returned True and the record is not confirmed: nobody may retry."""
@@ -815,11 +835,11 @@ class TheOrderLifecycleWrites(unittest.TestCase):
         executor.invoice_status = "no"
         original = executor.call
 
-        def confirm_without_effect(model, method, args, kwargs=None):
+        def confirm_without_effect(model, method, args, kwargs=None, *, mutation=False):
             if model == "sale.order" and method == "action_confirm":
                 executor.confirmed.extend(args[0])
                 return True
-            return original(model, method, args, kwargs)
+            return original(model, method, args, kwargs, mutation=mutation)
 
         executor.call = confirm_without_effect
         with self.assertRaises(BusinessMutationIndeterminate) as raised:
@@ -845,6 +865,10 @@ class TheOrderLifecycleWrites(unittest.TestCase):
         self.assertEqual(wizard[0][2][0], {"advance_payment_method": "delivered"})
         self.assertEqual(result.audit["advance_payment_method"], "delivered")
         self.assertIn("not a down payment", result.content["invoice_method"])
+        self.assertEqual(executor.mutation_calls, [
+            ("sale.advance.payment.inv", "create"),
+            ("sale.advance.payment.inv", "create_invoices"),
+        ])
 
     def test_the_created_invoice_is_read_back_and_reported_as_an_unnumbered_draft(self):
         executor = self._Lifecycle(

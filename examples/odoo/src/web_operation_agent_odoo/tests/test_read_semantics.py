@@ -36,7 +36,7 @@ class ApplicationReadMeaning(unittest.TestCase):
 
     def test_an_omitted_field_is_not_reported_as_empty(self):
         class Omitted(_FakeOdoo):
-            def call(self, model, method, args, kwargs=None):
+            def call(self, model, method, args, kwargs=None, *, mutation=False):
                 result = super().call(model, method, args, kwargs)
                 if method == "search_read":
                     for row in result:
@@ -154,7 +154,7 @@ class ApplicationReadMeaning(unittest.TestCase):
 
     def test_duplicate_or_missing_identity_cannot_make_a_scan_complete(self):
         class Broken(_FakeOdoo):
-            def call(self, model, method, args, kwargs=None):
+            def call(self, model, method, args, kwargs=None, *, mutation=False):
                 if method == "search_count":
                     return 2
                 if method == "search_read":

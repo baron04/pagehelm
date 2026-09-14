@@ -43,7 +43,7 @@ class SingleNodeOperationsTests(unittest.TestCase):
                 "agent-state/manifest.json", "agent-state/session-store.sqlite3",
                 "agent-state/mutation-journal.sqlite3",
                 "agent-state/conversation-state.sqlite3", "odoo-database.pgdump",
-                "odoo-data.tar.gz"):
+                "odoo-data.tar.gz", "agent-state/agent-ledgers.tar.gz"):
             path = root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes((relative + "\n").encode())
@@ -57,8 +57,85 @@ class SingleNodeOperationsTests(unittest.TestCase):
             expected = self._bundle(root)
             actual = OPS.verify(root, expected_project="woa-test-stack")
         self.assertEqual(actual, expected)
-        self.assertFalse(actual["credentials_included"])
         self.assertFalse(actual["execution_authority_included"])
+        self.assertFalse(actual["bearer_sessions_included"])
+        self.assertTrue(actual["credential_verifiers_included"])
+        self.assertFalse(actual["secret_material_included"])
+
+    def test_compose_project_environment_cannot_redirect_an_operation(self):
+        with patch.dict(os.environ, {
+                "COMPOSE_PROJECT_NAME": "woa-wrong-stack",
+                "COMPOSE_PROFILES": "qualification"}):
+            env = OPS._environment("woa-test-stack")
+        self.assertNotIn("COMPOSE_PROJECT_NAME", env)
+        self.assertNotIn("COMPOSE_PROFILES", env)
+        with patch.object(OPS, "_run", return_value=b"") as run:
+            OPS._compose(env, "stop", "agent")
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[argv.index("-p") + 1], "woa-test-stack")
+
+    def test_backup_excludes_browser_sessions_and_preserves_agent_ledgers(self):
+        calls = []
+
+        def compose(_env, *args, **_kwargs):
+            calls.append(args)
+            if args[:3] == ("exec", "-T", "db") and "pg_dump" in args:
+                return b"database dump"
+            if args and args[0] == "run" and "-v" in args:
+                host = Path(args[args.index("-v") + 1].split(":", 1)[0])
+                if "agent" in args:
+                    state = host / "state"
+                    state.mkdir()
+                    for name in ("manifest.json", "session-store.sqlite3",
+                                 "mutation-journal.sqlite3",
+                                 "conversation-state.sqlite3"):
+                        (state / name).write_text(name)
+                    (host / "agent-ledgers.tar.gz").write_text("ledgers")
+                elif "odoo" in args:
+                    (host / "odoo-data.tar.gz").write_text("odoo data")
+            return b""
+
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(OPS, "_assert_project_services"), \
+                patch.object(OPS, "_compose", side_effect=compose):
+            result = OPS.backup(
+                project="woa-test-stack", destination=Path(tmp) / "backup")
+
+        self.assertEqual(result["schema_version"], 2)
+        scripts = "\n".join(str(item) for call in calls for item in call)
+        self.assertIn("--exclude='./sessions'", scripts)
+        self.assertIn("agent-ledgers.tar.gz", scripts)
+
+    def test_restore_refuses_unresolved_state_and_failure_stays_stopped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp) / "bundle"
+            bundle.mkdir()
+            manifest = {"created_at_ms": 1}
+            with patch.object(OPS, "verify", return_value=manifest), \
+                    patch.object(OPS, "_assert_project_services"), \
+                    patch.object(OPS, "_unresolved_mutations", return_value=1), \
+                    patch.object(OPS, "backup") as backup:
+                with self.assertRaisesRegex(OPS.OperationsError, "reconciliation"):
+                    OPS.restore(project="woa-test-stack", bundle=bundle)
+            backup.assert_not_called()
+
+            calls = []
+
+            def fail_after_stop(_env, *args, **_kwargs):
+                calls.append(args)
+                if args[:3] == ("exec", "-T", "db") and "dropdb" in args:
+                    raise OPS.OperationsError("injected restore failure")
+                return b""
+
+            with patch.object(OPS, "verify", return_value=manifest), \
+                    patch.object(OPS, "_assert_project_services"), \
+                    patch.object(OPS, "_unresolved_mutations", return_value=0), \
+                    patch.object(OPS, "_live_unresolved_mutations", return_value=0), \
+                    patch.object(OPS, "backup"), \
+                    patch.object(OPS, "_compose", side_effect=fail_after_stop):
+                with self.assertRaisesRegex(OPS.OperationsError, "remain stopped"):
+                    OPS.restore(project="woa-test-stack", bundle=bundle)
+            self.assertFalse(any(call[:2] == ("up", "-d") for call in calls))
 
     def test_tamper_extra_file_and_wrong_project_are_refused(self):
         with tempfile.TemporaryDirectory() as tmp:

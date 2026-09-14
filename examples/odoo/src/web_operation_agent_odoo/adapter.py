@@ -43,6 +43,7 @@ from web_operation_agent.business import (BusinessMutationIndeterminate,
                                           BusinessMutationSpec, BusinessSkill,
                                           BusinessToolAuthenticationError,
                                           BusinessToolContractError, BusinessToolError,
+                                          BusinessToolDispatchError,
                                           BusinessToolIdentityError,
                                           BusinessToolPermissionError,
                                           BusinessToolRequestError, BusinessToolResult,
@@ -559,7 +560,7 @@ class OdooBusinessToolExecutor:
         return effects
 
     # -- transport ----------------------------------------------------------------------
-    def _rpc(self, params: dict) -> object:
+    def _rpc(self, params: dict, *, mutation: bool = False) -> object:
         body = json.dumps({"jsonrpc": "2.0", "method": "call", "params": params}
                           ).encode("utf-8")
         request = Request(self.base_url + "/jsonrpc", data=body, method="POST")
@@ -571,13 +572,22 @@ class OdooBusinessToolExecutor:
             if exc.code in (401, 403):
                 raise BusinessToolAuthenticationError(
                     "Odoo rejected the delegated API key") from exc
-            raise BusinessToolUnavailableError(
-                f"the Odoo API returned HTTP {exc.code}") from exc
+            error = (BusinessToolDispatchError if mutation
+                     else BusinessToolUnavailableError)
+            raise error(f"the Odoo API returned HTTP {exc.code}") from exc
         except (URLError, TimeoutError, OSError) as exc:
-            raise BusinessToolUnavailableError("the Odoo API is unreachable") from exc
+            error = (BusinessToolDispatchError if mutation
+                     else BusinessToolUnavailableError)
+            raise error("the Odoo API is unreachable") from exc
         except json.JSONDecodeError as exc:
+            if mutation:
+                raise BusinessToolDispatchError(
+                    "the Odoo API returned an unreadable mutation response") from exc
             raise BusinessToolContractError("the Odoo API returned invalid JSON") from exc
         if not isinstance(payload, dict):
+            if mutation:
+                raise BusinessToolDispatchError(
+                    "the Odoo API returned an invalid mutation response")
             raise BusinessToolContractError("the Odoo API response is not an object")
         error = payload.get("error")
         if error is not None:
@@ -612,11 +622,12 @@ class OdooBusinessToolExecutor:
             self._uid = uid
         return uid
 
-    def call(self, model: str, method: str, args: list, kwargs: dict | None = None):
+    def call(self, model: str, method: str, args: list, kwargs: dict | None = None,
+             *, mutation: bool = False):
         uid = self._authenticate()
         return self._rpc({"service": "object", "method": "execute_kw",
                           "args": [self.keys.database, uid, self.keys.api_key,
-                                   model, method, args, kwargs or {}]})
+                                   model, method, args, kwargs or {}]}, mutation=mutation)
 
     # -- identity -----------------------------------------------------------------------
     def resolve_delegated_identity(self, *, lifetime_s: int = 300,
@@ -1125,7 +1136,8 @@ class OdooBusinessToolExecutor:
         record_id = quotation.get("id")
         if isinstance(record_id, bool) or not isinstance(record_id, int) or record_id <= 0:
             raise BusinessToolContractError("Odoo returned an invalid quotation id")
-        acknowledged = self.call("sale.order", "action_confirm", [[record_id]])
+        acknowledged = self.call(
+            "sale.order", "action_confirm", [[record_id]], mutation=True)
         if acknowledged is not True:
             raise BusinessMutationIndeterminate(
                 "Odoo did not acknowledge the confirmation",
@@ -1188,7 +1200,7 @@ class OdooBusinessToolExecutor:
                           "active_id": record_id}
         wizard_id = self.call("sale.advance.payment.inv", "create",
                               [{"advance_payment_method": REGULAR_INVOICE}],
-                              {"context": wizard_context})
+                              {"context": wizard_context}, mutation=True)
         if isinstance(wizard_id, list) and wizard_id:
             wizard_id = wizard_id[0]
         if isinstance(wizard_id, bool) or not isinstance(wizard_id, int) or wizard_id <= 0:
@@ -1196,7 +1208,7 @@ class OdooBusinessToolExecutor:
             raise BusinessToolContractError("Odoo returned an invalid invoicing wizard id")
         try:
             self.call("sale.advance.payment.inv", "create_invoices", [[wizard_id]],
-                      {"context": wizard_context})
+                      {"context": wizard_context}, mutation=True)
         except BusinessToolError as exc:
             # The wizard may have created the invoice before failing, so this is uncertain
             # rather than failed, and it is never retried.
@@ -1283,7 +1295,7 @@ class OdooBusinessToolExecutor:
         created = self.call("res.partner", "create", [{
             "name": normalized["name"], "email": normalized["email"],
             "customer_rank": 1, "is_company": True,
-        }])
+        }], mutation=True)
         record_id = created[0] if isinstance(created, list) and created else created
         if isinstance(record_id, bool) or not isinstance(record_id, int) or record_id <= 0:
             raise BusinessMutationIndeterminate(

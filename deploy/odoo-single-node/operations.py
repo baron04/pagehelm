@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
@@ -24,7 +25,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ROOT / "deploy" / "odoo-single-node" / "docker-compose.yml"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 PROJECT = re.compile(r"woa-[a-z0-9][a-z0-9_-]{2,62}\Z")
 
 
@@ -71,12 +72,32 @@ def _run(argv: list[str], *, env: dict[str, str], input_bytes: bytes | None = No
 def _environment(project: str) -> dict[str, str]:
     if not PROJECT.fullmatch(project):
         raise OperationsError("project name must be an explicit woa-* identifier")
-    return {**os.environ, "WOA_PROJECT_NAME": project}
+    env = dict(os.environ)
+    env.pop("COMPOSE_PROJECT_NAME", None)
+    env.pop("COMPOSE_PROFILES", None)
+    env["WOA_PROJECT_NAME"] = project
+    return env
 
 
 def _compose(env: dict[str, str], *args: str, timeout: int = 900) -> bytes:
     return _run(
-        ["docker", "compose", "-f", str(COMPOSE), *args], env=env, timeout=timeout)
+        ["docker", "compose", "-p", env["WOA_PROJECT_NAME"],
+         "-f", str(COMPOSE), *args], env=env, timeout=timeout)
+
+
+def _assert_project_services(env: dict[str, str], *services: str) -> None:
+    """Refuse destructive work unless Compose and Docker agree on every target."""
+    project = env["WOA_PROJECT_NAME"]
+    for service in services:
+        container = _compose(env, "ps", "-q", service).decode().strip()
+        if not container or "\n" in container:
+            raise OperationsError(f"service {service} is not a single running project target")
+        actual = _run([
+            "docker", "inspect", "--format",
+            '{{ index .Config.Labels "com.docker.compose.project" }}', container,
+        ], env=env).decode().strip()
+        if actual != project:
+            raise OperationsError(f"service {service} belongs to a different Compose project")
 
 
 def _digest(path: Path) -> str:
@@ -85,6 +106,31 @@ def _digest(path: Path) -> str:
         for block in iter(lambda: source.read(1024 * 1024), b""):
             value.update(block)
     return value.hexdigest()
+
+
+def _unresolved_mutations(path: Path) -> int:
+    try:
+        with sqlite3.connect(path.resolve().as_uri() + "?mode=ro",
+                             uri=True, timeout=5) as database:
+            row = database.execute(
+                "SELECT count(*) FROM mutation_intents "
+                "WHERE state IN ('dispatching','indeterminate')"
+            ).fetchone()
+    except (OSError, sqlite3.Error) as exc:
+        raise OperationsError("mutation journal could not be inspected") from exc
+    return int(row[0])
+
+
+def _live_unresolved_mutations(env: dict[str, str]) -> int:
+    output = _compose(
+        env, "run", "--rm", "--no-deps", "--entrypoint", "python", "agent",
+        "-m", "web_operation_agent.operations", "inspect", "--mutations",
+        "/var/lib/woa/mutation-journal.sqlite3")
+    try:
+        payload = json.loads(output.decode("utf-8").strip().splitlines()[-1])
+        return int(payload["mutation_journal"]["unresolved"])
+    except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise OperationsError("live mutation preflight returned an invalid result") from exc
 
 
 def _manifest(root: Path, *, project: str, created_at_ms: int) -> dict:
@@ -103,7 +149,9 @@ def _manifest(root: Path, *, project: str, created_at_ms: int) -> dict:
         "project": project,
         "created_at_ms": created_at_ms,
         "execution_authority_included": False,
-        "credentials_included": False,
+        "bearer_sessions_included": False,
+        "credential_verifiers_included": True,
+        "secret_material_included": False,
         "files": files,
     }
 
@@ -117,15 +165,18 @@ def verify(bundle: str | Path, *, expected_project: str | None = None) -> dict:
         raise OperationsError("backup manifest is unreadable") from exc
     if (not isinstance(manifest, dict) or set(manifest) != {
             "schema_version", "project", "created_at_ms",
-            "execution_authority_included", "credentials_included", "files"}
+            "execution_authority_included", "bearer_sessions_included",
+            "credential_verifiers_included", "secret_material_included", "files"}
             or manifest.get("schema_version") != SCHEMA_VERSION
             or manifest.get("execution_authority_included") is not False
-            or manifest.get("credentials_included") is not False
+            or manifest.get("bearer_sessions_included") is not False
+            or manifest.get("credential_verifiers_included") is not True
+            or manifest.get("secret_material_included") is not False
             or not PROJECT.fullmatch(str(manifest.get("project") or ""))
             or not isinstance(manifest.get("created_at_ms"), int)
             or not isinstance(manifest.get("files"), list)
             or not manifest["files"] or len(manifest["files"]) > 32):
-        raise OperationsError("backup manifest does not match schema 1")
+        raise OperationsError("backup manifest does not match schema 2")
     if expected_project is not None and manifest["project"] != expected_project:
         raise OperationsError("backup belongs to a different Compose project")
     expected = {"manifest.json"}
@@ -149,7 +200,7 @@ def verify(bundle: str | Path, *, expected_project: str | None = None) -> dict:
         "agent-state/manifest.json", "agent-state/session-store.sqlite3",
         "agent-state/mutation-journal.sqlite3",
         "agent-state/conversation-state.sqlite3", "odoo-database.pgdump",
-        "odoo-data.tar.gz",
+        "odoo-data.tar.gz", "agent-state/agent-ledgers.tar.gz",
     }
     if not required <= actual:
         raise OperationsError("backup is missing required deployment state")
@@ -158,6 +209,7 @@ def verify(bundle: str | Path, *, expected_project: str | None = None) -> dict:
 
 def backup(*, project: str, destination: str | Path) -> dict:
     env = _environment(project)
+    _assert_project_services(env, "agent", "odoo", "db")
     target = Path(destination).expanduser().resolve()
     if target.exists() or target.is_symlink():
         raise OperationsError("backup destination already exists")
@@ -172,14 +224,18 @@ def backup(*, project: str, destination: str | Path) -> dict:
         stopped = True
         agent = temporary / "agent-state"
         agent.mkdir(mode=0o700)
+        owner = f"{os.getuid()}:{os.getgid()}"
         _compose(
-            env, "run", "--rm", "--no-deps", "--entrypoint", "python",
+            env, "run", "--rm", "--no-deps", "--entrypoint", "bash",
             "-v", f"{agent}:/backup", "agent",
-            "-m", "web_operation_agent.operations", "backup",
-            "--sessions", "/var/lib/woa/session-store.sqlite3",
-            "--mutations", "/var/lib/woa/mutation-journal.sqlite3",
-            "--conversations", "/var/lib/woa/conversation-state.sqlite3",
-            "--destination", "/backup/state")
+            "-lc", "python -m web_operation_agent.operations backup "
+            "--sessions /var/lib/woa/session-store.sqlite3 "
+            "--mutations /var/lib/woa/mutation-journal.sqlite3 "
+            "--conversations /var/lib/woa/conversation-state.sqlite3 "
+            "--destination /backup/state && "
+            "mkdir -p /var/lib/woa/runs && "
+            "tar -C /var/lib/woa -czf /backup/agent-ledgers.tar.gz runs && "
+            f"chown -R {owner} /backup")
         produced = agent / "state"
         for item in produced.iterdir():
             item.rename(agent / item.name)
@@ -189,9 +245,11 @@ def backup(*, project: str, destination: str | Path) -> dict:
             "-d", "woa_trial")
         (temporary / "odoo-database.pgdump").write_bytes(database)
         _compose(
-            env, "run", "--rm", "--no-deps", "--entrypoint", "tar",
-            "-v", f"{temporary}:/backup", "odoo", "-C", "/var/lib/odoo",
-            "-czf", "/backup/odoo-data.tar.gz", ".")
+            env, "run", "--rm", "--no-deps", "--entrypoint", "bash",
+            "-v", f"{temporary}:/backup", "odoo", "-lc",
+            "tar -C /var/lib/odoo --exclude='./sessions' "
+            "--exclude='./sessions/**' -czf /backup/odoo-data.tar.gz . && "
+            f"chown {owner} /backup/odoo-data.tar.gz")
         created = int(time.time() * 1000)
         manifest = _manifest(temporary, project=project, created_at_ms=created)
         (temporary / "manifest.json").write_text(
@@ -203,6 +261,9 @@ def backup(*, project: str, destination: str | Path) -> dict:
         verify(temporary, expected_project=project)
         temporary.rename(target)
         return manifest
+    except OSError as exc:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise OperationsError("backup filesystem operation failed") from exc
     except BaseException:
         shutil.rmtree(temporary, ignore_errors=True)
         raise
@@ -215,42 +276,62 @@ def restore(*, project: str, bundle: str | Path) -> dict:
     env = _environment(project)
     root = Path(bundle).expanduser().resolve()
     manifest = verify(root, expected_project=project)
+    _assert_project_services(env, "agent", "odoo", "db")
+    if _unresolved_mutations(root / "agent-state" / "mutation-journal.sqlite3"):
+        raise OperationsError("backup contains unresolved mutations and requires reconciliation")
+    if _live_unresolved_mutations(env):
+        raise OperationsError("current deployment has unresolved mutations; restore refused")
+    safety = root.parent / (
+        f"{project}-pre-restore-{int(time.time() * 1000)}")
+    backup(project=project, destination=safety)
+    _assert_project_services(env, "agent", "odoo", "db")
     started = time.monotonic()
-    stopped = False
     try:
         _compose(env, "stop", "agent", "odoo")
-        stopped = True
         _compose(env, "exec", "-T", "db", "dropdb", "--if-exists", "-U", "odoo",
                  "woa_trial")
         _compose(env, "exec", "-T", "db", "createdb", "-U", "odoo", "woa_trial")
         dump = (root / "odoo-database.pgdump").read_bytes()
         _run([
-            "docker", "compose", "-f", str(COMPOSE), "exec", "-T", "db",
+            "docker", "compose", "-p", project, "-f", str(COMPOSE),
+            "exec", "-T", "db",
             "pg_restore", "--no-owner", "--no-privileges", "-U", "odoo",
             "-d", "woa_trial"], env=env, input_bytes=dump, timeout=1200)
         _compose(
             env, "run", "--rm", "--no-deps", "--entrypoint", "bash",
             "-v", f"{root}:/backup:ro", "odoo", "-lc",
             "find /var/lib/odoo -mindepth 1 -delete && "
-            "tar -C /var/lib/odoo -xzf /backup/odoo-data.tar.gz")
+            "tar -C /var/lib/odoo -xzf /backup/odoo-data.tar.gz && "
+            "rm -rf /var/lib/odoo/sessions")
         # Core restore validates SQLite again and explicitly strips execution authority.
         _compose(
             env, "run", "--rm", "--no-deps", "--entrypoint", "bash",
             "-v", f"{root}:/backup:ro", "agent", "-lc",
             "rm -rf /tmp/woa-restored && python -m web_operation_agent.operations restore "
             "/backup/agent-state --destination /tmp/woa-restored --writer-isolated && "
-            "find /var/lib/woa -mindepth 1 -delete && "
+            "find /var/lib/woa -mindepth 1 -maxdepth 1 ! -name runs -exec rm -rf {} + && "
             "cp -a /tmp/woa-restored/. /var/lib/woa/ && "
+            "mkdir -p /var/lib/woa/runs && "
+            "tar -C /var/lib/woa --skip-old-files "
+            "-xzf /backup/agent-state/agent-ledgers.tar.gz && "
             "chown -R 10001:10001 /var/lib/woa")
-    finally:
-        if stopped:
-            _compose(env, "up", "-d", "odoo", "agent", timeout=1200)
+        _compose(env, "up", "-d", "odoo", "agent", timeout=1200)
+    except OSError as exc:
+        raise OperationsError(
+            f"restore failed and services remain stopped; safety backup: {safety}") from exc
+    except BaseException as exc:
+        if isinstance(exc, OperationsError):
+            raise OperationsError(
+                f"{exc}; services remain stopped; safety backup: {safety}") from exc
+        raise
     return {
         "schema_version": SCHEMA_VERSION,
         "project": project,
         "backup_created_at_ms": manifest["created_at_ms"],
         "recovery_seconds": round(time.monotonic() - started, 3),
         "execution_authority_restored": False,
+        "bearer_sessions_restored": False,
+        "safety_backup": str(safety),
     }
 
 

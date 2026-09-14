@@ -14,7 +14,8 @@ from web_operation_agent.business import (
     BusinessMutationBlockedError, BusinessMutationIndeterminate, BusinessMutationSpec,
     BusinessSelectionOption,
     BusinessSkill, Citation, FormDraft, FormDraftField,
-    BusinessToolContractError, BusinessToolError, BusinessToolIdentityError,
+    BusinessToolContractError, BusinessToolDispatchError, BusinessToolError,
+    BusinessToolIdentityError,
     BusinessToolPermissionError, BusinessToolRequestError, BusinessToolResult,
     BusinessToolRuntime, BusinessToolUnavailableError,
 )
@@ -1242,6 +1243,33 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertFalse(event["side_effect_possible"])
             digest = ledger.of_kind("business_mutation_proposed")[-1]["proposal"]["digest"]
             self.assertEqual(journal.get(digest).state, "failed")
+
+    def test_a_transport_failure_after_mutation_dispatch_stays_indeterminate(self):
+        class LostAcknowledgement(_MutationExecutor):
+            def execute_mutation(self, name, args, *, context=None):
+                self.executions += 1
+                raise BusinessToolDispatchError("upstream response was lost")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _write_skill(Path(tmp) / "write-skill.json")
+            journal = MemoryMutationJournal()
+            runtime = BusinessToolRuntime(
+                (skill,), LostAcknowledgement(), application_id="fixture",
+                mutation_journal=journal,
+                required_scopes={"create_company": "companies:write"})
+            context = _operation_context()
+            proposal = runtime.prepare_mutation(
+                "create_company", {"name": "Acme"}, {skill.skill_id}, context=context)
+
+            with self.assertRaises(BusinessMutationIndeterminate) as raised:
+                runtime.execute_mutation(
+                    proposal, proposal.content_digest, {skill.skill_id}, context=context)
+
+            self.assertEqual(raised.exception.phase, "dispatch")
+            intent = journal.get(proposal.content_digest)
+            self.assertEqual(intent.state, "indeterminate")
+            self.assertEqual(
+                json.loads(intent.reconciliation_json)["phase"], "dispatch")
 
     def test_a_refused_read_ends_the_turn_at_either_layer_and_never_reaches_the_page(self):
         class RefusingReads(_Executor):

@@ -186,6 +186,12 @@ class BusinessToolUnavailableError(BusinessToolError):
     code = "business_unavailable"
 
 
+class BusinessToolDispatchError(BusinessToolUnavailableError):
+    """A mutating request reached transport but returned no safe outcome."""
+
+    code = "business_dispatch_unknown"
+
+
 class BusinessToolContractError(BusinessToolError):
     """The application integration returned data outside its declared contract."""
 
@@ -1324,6 +1330,16 @@ class BusinessToolRuntime:
                       if context is None
                       else self._executor.execute_mutation(
                           proposal.tool, proposal.args, context=context))
+        except BusinessToolDispatchError as exc:
+            try:
+                self._mutation_journal.finish(
+                    digest, "indeterminate", reconciliation={"phase": "dispatch"})
+            except MutationJournalError:
+                pass
+            self._forget_mutation(digest)
+            raise BusinessMutationIndeterminate(
+                "business mutation transport returned no safe outcome",
+                phase="dispatch") from exc
         except BusinessToolError:
             try:
                 self._mutation_journal.finish(digest, "failed")

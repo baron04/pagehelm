@@ -13,6 +13,7 @@ from web_operation_agent.mutation import SQLiteMutationJournal
 from web_operation_agent.operations import (
     OperationalStateError,
     create_state_backup,
+    inspect_mutation_journal,
     main,
     restore_state_backup,
     verify_state_backup,
@@ -75,6 +76,15 @@ class OperationalBackupTests(unittest.TestCase):
             (root / "occupied").mkdir()
             with self.assertRaisesRegex(OperationalStateError, "already exists"):
                 restore_state_backup(bundle, root / "occupied", writer_isolated=True)
+
+    def test_live_mutation_inspection_is_read_only_and_counts_unresolved(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            _sessions, mutations = self._state(Path(temporary))
+            self.assertEqual(inspect_mutation_journal(mutations), {
+                "present": True, "unresolved": 1})
+            with sqlite3.connect(mutations) as database:
+                self.assertEqual(database.execute(
+                    "SELECT state FROM mutation_intents").fetchone()[0], "dispatching")
 
     def test_tampering_symlinks_and_undeclared_files_fail_verification(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -215,6 +215,26 @@ def _mutation_summary(path: Path) -> dict:
         raise OperationalStateError("restored mutation journal cannot be inspected") from exc
 
 
+def inspect_mutation_journal(path: str | Path) -> dict:
+    """Inspect a live journal without changing it or resolving any write."""
+    candidate = Path(path).expanduser().resolve(strict=False)
+    _regular_file(candidate, "mutation journal")
+    try:
+        with sqlite3.connect(candidate, timeout=5) as database:
+            table = database.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='mutation_intents'"
+            ).fetchone()
+            if table is None:
+                return {"present": False, "unresolved": 0}
+            unresolved = database.execute(
+                "SELECT count(*) FROM mutation_intents "
+                "WHERE state IN ('dispatching','indeterminate')"
+            ).fetchone()[0]
+            return {"present": True, "unresolved": int(unresolved)}
+    except sqlite3.Error as exc:
+        raise OperationalStateError("mutation journal cannot be inspected") from exc
+
+
 def restore_state_backup(bundle: str | Path, destination: str | Path, *,
                          writer_isolated: bool) -> dict:
     """Restore verified databases into a new directory while all writers are stopped."""
@@ -266,6 +286,8 @@ def _parser() -> argparse.ArgumentParser:
     restore.add_argument("bundle")
     restore.add_argument("--destination", required=True)
     restore.add_argument("--writer-isolated", action="store_true")
+    inspect = commands.add_parser("inspect", help="inspect live operational state")
+    inspect.add_argument("--mutations", required=True)
     return parser
 
 
@@ -282,10 +304,12 @@ def main(argv: list[str] | None = None) -> int:
             result = create_state_backup(sources, arguments.destination)
         elif arguments.command == "verify":
             result = verify_state_backup(arguments.bundle)
-        else:
+        elif arguments.command == "restore":
             result = restore_state_backup(
                 arguments.bundle, arguments.destination,
                 writer_isolated=arguments.writer_isolated)
+        else:
+            result = {"mutation_journal": inspect_mutation_journal(arguments.mutations)}
     except OperationalStateError as exc:
         print(json.dumps({"status": "REFUSED", "reason": str(exc)}, ensure_ascii=False))
         return 2
