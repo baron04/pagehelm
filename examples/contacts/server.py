@@ -39,6 +39,7 @@ class NativeServerConfig:
     allow_mutations: bool = False
     max_sessions: int = 10
     public_agent_url: str | None = None
+    session_lease_ms: int = 5_000
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "state_dir", Path(self.state_dir).expanduser())
@@ -48,6 +49,9 @@ class NativeServerConfig:
             raise ValueError("port must be an integer from 0 to 65535")
         if isinstance(self.max_sessions, bool) or not 1 <= self.max_sessions <= 100:
             raise ValueError("max_sessions must be an integer from 1 to 100")
+        if (isinstance(self.session_lease_ms, bool)
+                or not 1_000 <= self.session_lease_ms <= 60_000):
+            raise ValueError("session_lease_ms must be an integer from 1000 to 60000")
 
 
 class NativeContactsHost:
@@ -58,10 +62,11 @@ class NativeContactsHost:
         config.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.application = MinimalContactsApplication(port=config.port)
         self.session_store = SQLiteSessionStore(
-            config.state_dir / "sessions.sqlite3", lease_ms=5_000)
+            config.state_dir / "session-store.sqlite3",
+            lease_ms=config.session_lease_ms)
         self.revocations = SQLitePrincipalRevocations(self.session_store)
         self.mutation_journal = SQLiteMutationJournal(
-            config.state_dir / "mutations.sqlite3")
+            config.state_dir / "mutation-journal.sqlite3")
         self.server = LiveProductServer(
             max_sessions=config.max_sessions,
             durable_store=self.session_store,
@@ -218,6 +223,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--allow-mutations", action="store_true")
     parser.add_argument("--max-sessions", type=int, default=10)
     parser.add_argument("--public-agent-url")
+    parser.add_argument("--session-lease-ms", type=int, default=5_000)
     return parser
 
 
@@ -227,7 +233,8 @@ def main(argv: list[str] | None = None) -> int:
         state_dir=Path(args.state_dir), port=args.port, scripted=args.scripted,
         model_env=Path(args.model_env) if args.model_env else None,
         model=args.model, allow_mutations=args.allow_mutations,
-        max_sessions=args.max_sessions, public_agent_url=args.public_agent_url)
+        max_sessions=args.max_sessions, public_agent_url=args.public_agent_url,
+        session_lease_ms=args.session_lease_ms)
     stopped = threading.Event()
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda _number, _frame: stopped.set())

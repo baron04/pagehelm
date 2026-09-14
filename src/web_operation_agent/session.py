@@ -1826,7 +1826,8 @@ class ServerAgentSession:
                             return self._finish(
                                 result, t0, self._transport_terminal(
                                     "goto", may_write=False), str(exc), steps=step)
-                        self.page_actions += 1
+                        if receipt.error_code != "stale_observation":
+                            self.page_actions += 1
                         write = self._write_outcome(
                             receipt, step, action_may_write=False)
                         self.ledger.append(
@@ -1837,6 +1838,11 @@ class ServerAgentSession:
                             url_after=receipt.url_after, elapsed_ms=receipt.elapsed_ms,
                             write=write["state"], relogin=receipt.relogin,
                             deterministic_business_navigation=True)
+                        if receipt.error_code == "stale_observation":
+                            # The command did not reach the page and the receipt carries a
+                            # replacement observation. Repeating the decision against that
+                            # observation is recovery, not a no-progress loop.
+                            self._reset_no_progress()
                         reason, detail = self._settle_write(write)
                         if reason:
                             return self._finish(result, t0, reason, detail, steps=step)
@@ -2130,6 +2136,9 @@ class ServerAgentSession:
                                     result.agent_said, steps=step)
 
             if name not in BROWSER_ACTIONS:
+                self.ledger.append(
+                    "unknown_tool_rejected", step=step, tool=str(name)[:100],
+                    dispatched=False, side_effect_possible=False)
                 messages += [_assistant_call(call),
                              _tool_result(call, f"There is no tool called {name!r}. "
                                                 f"Available: {sorted(BROWSER_ACTIONS)} and finish.")]
@@ -2202,7 +2211,7 @@ class ServerAgentSession:
                                     self._transport_terminal(name, may_write=action_may_write), str(e),
                                     steps=step)
 
-            if name != "observe":
+            if name != "observe" and receipt.error_code != "stale_observation":
                 self.page_actions += 1
             write = self._write_outcome(receipt, step, action_may_write=action_may_write)
             self.ledger.append("action_receipt", step=step, tool=receipt.action,
@@ -2216,6 +2225,11 @@ class ServerAgentSession:
                                # apart from one that was quietly being recovered.
                                relogin=receipt.relogin,
                                source_route_citations=source_route_citations)
+            if receipt.error_code == "stale_observation":
+                # A document replacement can preserve the same DOM projection while
+                # invalidating the observation identity. The rejected command was never
+                # dispatched, so let the next ReAct decision retry against the fresh fact.
+                self._reset_no_progress()
             reason, detail = self._settle_write(write)
             if reason:
                 return self._finish(result, t0, reason, detail, steps=step)
@@ -2486,6 +2500,11 @@ class ServerAgentSession:
             self._no_progress_warned = True
             return "warn"
         return ""
+
+    def _reset_no_progress(self) -> None:
+        self._last_decision_fingerprint = ""
+        self._same_decision_count = 0
+        self._no_progress_warned = False
 
     def _application_link_ref(self, ref: object, obs: PageObservation) -> tuple[str, str]:
         if self.application_routes is None:

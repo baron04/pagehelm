@@ -266,6 +266,12 @@ class RemoteSessionChannel:
             return self._events[-1].event_id if self._events else ""
 
     @property
+    def close_reason(self) -> str:
+        """Return the bounded reason code for operator and host lifecycle decisions."""
+        with self._condition:
+            return self._close_reason
+
+    @property
     def latest_observation_envelope(self) -> ObservationEnvelope | None:
         with self._condition:
             return (_copy_wire(self._latest_observation)

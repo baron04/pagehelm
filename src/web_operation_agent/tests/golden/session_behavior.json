@@ -7632,6 +7632,15 @@
           "tool": "teleport"
         },
         {
+          "dispatched": false,
+          "event": "unknown_tool_rejected",
+          "run_id": "unknown_tool_name",
+          "seq": 5,
+          "side_effect_possible": false,
+          "step": 1,
+          "tool": "teleport"
+        },
+        {
           "contains_raw_payload": false,
           "data_classes": [
             "agent_instructions",
@@ -7651,7 +7660,7 @@
           },
           "run_id": "unknown_tool_name",
           "schema_version": 1,
-          "seq": 5,
+          "seq": 6,
           "tool_count": 9
         },
         {
@@ -7661,7 +7670,7 @@
           },
           "event": "tool_call",
           "run_id": "unknown_tool_name",
-          "seq": 6,
+          "seq": 7,
           "step": 2,
           "tool": "finish"
         },
@@ -7670,13 +7679,13 @@
           "claim": "not_claimed",
           "event": "success_claim",
           "run_id": "unknown_tool_name",
-          "seq": 7,
+          "seq": 8,
           "step": 2
         },
         {
           "event": "control_run_released",
           "run_id": "unknown_tool_name",
-          "seq": 8
+          "seq": 9
         },
         {
           "agent_said": "there is no such tool",
@@ -7709,7 +7718,7 @@
           "plan_withdrawn": false,
           "policy_blocks": 0,
           "run_id": "unknown_tool_name",
-          "seq": 9,
+          "seq": 10,
           "spend": {
             "cost_cny": 0.0,
             "provider_calls": 0

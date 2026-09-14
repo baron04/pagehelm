@@ -468,6 +468,14 @@ export class EmbeddedWebRuntime {
     this.runtimeInstanceId = crypto.randomUUID()
     this.leaseId = ''
     this.stored = readStored(this.sessionId)
+    const sessionGeneration = String(config.sessionGeneration || '')
+    if (!sessionGeneration) throw new Error('sessionGeneration is required')
+    // The stable session id names replayable progress. A freshly issued capability names a
+    // new execution incarnation: old cursors, actions and approvals must never cross it.
+    if (this.stored.sessionGeneration !== sessionGeneration) {
+      this.stored = {sessionGeneration}
+      writeStored(this.sessionId, this.stored)
+    }
     this.stored.clientId ||= crypto.randomUUID()
     this.stored.epoch = Number(this.stored.epoch || 0)
     this.stored.lastEventId ||= ''

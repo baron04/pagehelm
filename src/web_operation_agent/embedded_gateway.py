@@ -7,6 +7,7 @@ over authenticated POST requests.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -518,6 +519,8 @@ class EmbeddedGateway:
             "endpoint": self.public_base_url,
             "sessionId": grant.session_id,
             "clientToken": grant.client_token,
+            "sessionGeneration": hashlib.sha256(
+                grant.client_token.encode("utf-8")).hexdigest()[:32],
             "pageControllerModule": page_controller_module,
             "navigationMode": navigation_mode,
             "applicationId": grant.application_id,

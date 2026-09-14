@@ -1035,7 +1035,8 @@ class EmbeddedRuntimeTests(unittest.TestCase):
           let startupRejected = false;
           try {
             await mod.startEmbeddedRuntime({endpoint:'http://127.0.0.1:1',
-              sessionId:'reset-test', clientToken:'token', panel:false});
+              sessionId:'reset-test', sessionGeneration:'generation-reset',
+              clientToken:'token', panel:false});
           } catch { startupRejected = true; }
           const singletonReset = !window.__WOA_EMBEDDED_RUNTIME_STARTED__;
           mod.EmbeddedWebRuntime.prototype.start = originalStart;
@@ -1185,13 +1186,14 @@ class EmbeddedRuntimeTests(unittest.TestCase):
           };
           const bfcacheRuntime = new mod.EmbeddedWebRuntime({
             endpoint:'https://gateway.test', sessionId:'bfcache-test',
-            clientToken:'token', panel:false,
+            sessionGeneration:'generation-bfcache', clientToken:'token', panel:false,
           });
           let abortCount = 0;
           let disposeCount = 0;
           bfcacheRuntime.eventAbortController = {abort(){ abortCount += 1; }};
           bfcacheRuntime.controller = {dispose(){ disposeCount += 1; }};
           sessionStorage.setItem('woa.remote.v1.bfcache-test', JSON.stringify({
+            sessionGeneration:'generation-bfcache',
             clientId:bfcacheRuntime.stored.clientId, epoch:7, lastEventId:'e00000007',
             inFlight:null, cachedResult:null,
           }));

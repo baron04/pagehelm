@@ -449,6 +449,13 @@ class MinimalContactsApplication:
                     if actor is None:
                         self._reply(404, b"not found\n", "text/plain; charset=utf-8")
                         return
+                    # A real application calls the revocation hook from its login/logout
+                    # lifecycle. This synthetic route does the same when the browser changes
+                    # actor: old delegated authority must stop before the new cookie exists.
+                    previous = resolved[0] if resolved is not None else None
+                    if (previous is not None and previous.actor != actor.actor
+                            and owner._assistant_revoke is not None):
+                        owner._assistant_revoke(previous)
                     self._redirect(
                         "/contacts",
                         cookie=(f"{DEMO_SESSION_COOKIE}={actor.session}; Path=/; "
