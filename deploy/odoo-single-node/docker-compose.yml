@@ -18,6 +18,7 @@ services:
     restart: unless-stopped
 
   odoo:
+    image: ${WOA_ODOO_IMAGE:-woa-odoo-single-node-app}:${WOA_BUILD_REVISION:-local}
     build:
       context: ../..
       dockerfile: deploy/odoo-single-node/Dockerfile.odoo
@@ -43,6 +44,7 @@ services:
 
   odoo-init:
     profiles: ["setup"]
+    image: ${WOA_ODOO_IMAGE:-woa-odoo-single-node-app}:${WOA_BUILD_REVISION:-local}
     build:
       context: ../..
       dockerfile: deploy/odoo-single-node/Dockerfile.odoo
@@ -62,6 +64,7 @@ services:
 
   odoo-qualification-users:
     profiles: ["qualification"]
+    image: ${WOA_ODOO_IMAGE:-woa-odoo-single-node-app}:${WOA_BUILD_REVISION:-local}
     build:
       context: ../..
       dockerfile: deploy/odoo-single-node/Dockerfile.odoo

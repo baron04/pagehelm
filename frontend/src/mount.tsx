@@ -68,6 +68,8 @@ export function mountPanel(options: MountOptions): PanelHandle {
   element.setAttribute('data-page-agent-ignore', 'true')
   element.setAttribute('role', 'complementary')
   element.setAttribute('aria-label', host.configuration.labels.assistant);
+  element.style.setProperty(
+    'z-index', String(host.configuration.layout.overlay_z_index), 'important');
   (options.container ?? documentRef.body).appendChild(element)
 
   // `:host-context()` is not portable, so the document's explicit theme choice is copied

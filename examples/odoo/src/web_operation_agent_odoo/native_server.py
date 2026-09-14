@@ -28,6 +28,8 @@ from web_operation_agent.mutation import SQLiteMutationJournal
 from web_operation_agent.observability import ObservedChat, RuntimeObservability
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.product import AgentTurnConfig, AgentTurnExecutor
+from web_operation_agent.remote import RemoteProtocolError
+from web_operation_agent.identity import PrincipalContext
 
 from .adapter import OdooApplicationAdapter
 from .demo.demo import ScriptedOdooChat
@@ -95,6 +97,16 @@ class OdooNativeConfig:
             raise ValueError("session_lease_ms must be an integer from 1000 to 60000")
 
 
+@dataclass(slots=True)
+class _ActiveSession:
+    session: LiveProductSession
+    principal: PrincipalContext
+    adapter: OdooApplicationAdapter
+    api_key_path: Path
+    scopes: tuple[str, ...]
+    allow_mutations: bool
+
+
 class _BootstrapHTTPServer:
     """Signed ingress only; the reverse proxy exposes bootstrap but not revoke."""
 
@@ -146,6 +158,11 @@ class _BootstrapHTTPServer:
                     self._json(401, {"error": "invalid_session_event"})
                 except LiveProductCapacityError:
                     self._json(429, {"error": "assistant_capacity", "retryable": True})
+                except RemoteProtocolError as exc:
+                    if exc.code.startswith("session_busy_"):
+                        self._json(409, {"error": exc.code, "retryable": True})
+                    else:
+                        self._json(503, {"error": "assistant_unavailable", "retryable": True})
                 except Exception:
                     self._json(503, {"error": "assistant_unavailable", "retryable": True})
                 else:
@@ -210,9 +227,7 @@ class OdooNativeHost:
             provider_status=self.provider_guard.status)
         self.bootstrap_server = _BootstrapHTTPServer(
             self, config.bootstrap_host, config.bootstrap_port)
-        self._sessions: dict[
-            tuple[str, str, str], tuple[LiveProductSession, object]
-        ] = {}
+        self._sessions: dict[tuple[str, str, str], _ActiveSession] = {}
         self._runtime_actor: dict[tuple[str, str], str] = {}
         self._lock = threading.RLock()
         self._closed = False
@@ -258,7 +273,24 @@ class OdooNativeHost:
             delegation_id="odoo-native-" + uuid.uuid4().hex,
             lifetime_s=self.config.principal_lifetime_s,
             scopes=grant.scopes)
-        return adapter, principal, allow_mutations
+        return adapter, principal, allow_mutations, grant
+
+    def _renew_active(self, active: _ActiveSession, event: OdooSessionEvent) -> None:
+        """Reauthenticate both Odoo identities and extend only unchanged authority."""
+        grant = self.delegations.resolve(event)
+        allow_mutations = self.config.allow_mutations and grant.allow_mutations
+        if (grant.api_key_path != active.api_key_path
+                or grant.scopes != active.scopes
+                or allow_mutations != active.allow_mutations):
+            raise OdooSessionEventError(
+                "delegated authority changed; a new browser session is required")
+        principal = active.adapter.bind_principal(
+            event.page_identity(lifetime_s=self.config.principal_lifetime_s),
+            delegation_id=active.principal.delegation_id,
+            lifetime_s=self.config.principal_lifetime_s,
+            scopes=active.scopes)
+        active.session.renew_principal(principal)
+        active.principal = principal
 
     def bootstrap(self, envelope: object) -> dict:
         event = self.verifier.verify(envelope)
@@ -275,14 +307,15 @@ class OdooNativeHost:
             previous = self._sessions.get(key)
             if previous is not None:
                 try:
-                    previous[0].channel.validate_live()
+                    previous.session.channel.validate_live()
                 except Exception:
-                    previous[0].close("native_bootstrap_replaced")
+                    previous.session.close("native_bootstrap_replaced")
                     self._sessions.pop(key, None)
                 else:
-                    return self._browser_bootstrap(previous[0])
+                    self._renew_active(previous, event)
+                    return self._browser_bootstrap(previous.session)
 
-            adapter, principal, allow_mutations = self._adapter_and_principal(event)
+            adapter, principal, allow_mutations, delegation = self._adapter_and_principal(event)
             bound = bind_application(adapter)
             stable = hashlib.sha256(
                 f"{event.database}\0{event.actor_id}\0{event.runtime_instance_id}"
@@ -342,14 +375,22 @@ class OdooNativeHost:
                 navigation_mode=bound.descriptor.navigation_mode,
                 sensitive_query_keys=bound.ports.routes.session_handoff_query_keys,
                 principal=principal).start()
-            self._sessions[key] = (session, principal)
+            self._sessions[key] = _ActiveSession(
+                session=session, principal=principal, adapter=adapter,
+                api_key_path=delegation.api_key_path, scopes=delegation.scopes,
+                allow_mutations=allow_mutations)
             self._runtime_actor[runtime_key] = event.actor_id
             return self._browser_bootstrap(session)
 
     def _browser_bootstrap(self, session: LiveProductSession) -> dict:
+        now_ms = int(time.time() * 1000)
+        lifetime_ms = max(1, session.grant.expires_at - now_ms)
+        renewal_lead_ms = min(300_000, max(1_000, lifetime_ms // 3))
+        renew_at = max(now_ms + 1, session.grant.expires_at - renewal_lead_ms)
         return {
             "schema_version": 1,
             "runtime_module": self.server.gateway.runtime_url,
+            "renew_at": renew_at,
             "config": self.server.gateway.bootstrap_config(
                 session.grant,
                 page_controller_module=session.page_controller_module,
@@ -362,9 +403,9 @@ class OdooNativeHost:
             (key, value) for key, value in self._sessions.items()
             if key[0] == database and key[1] == actor_id
         ]
-        for key, (session, principal) in matches:
-            self.revocations.revoke(principal, reason=reason)
-            session.close("principal_revoked")
+        for key, active in matches:
+            self.revocations.revoke(active.principal, reason=reason)
+            active.session.close("principal_revoked")
             self._sessions.pop(key, None)
             self._runtime_actor.pop((key[0], key[2]), None)
         return len(matches)

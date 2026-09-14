@@ -1,12 +1,12 @@
 # Odoo 单机试用部署
 
-这是面向单个组织私有试用的参考部署：在一台 Linux Docker Compose 主机上运行固定摘要的 Odoo 18、PostgreSQL 17、服务端 Agent 和 Caddy。Odoo 自己的登录会话建立浏览器身份；浏览器只把短期签名断言转交给 Agent，不能提供 actor id、API key、模型密钥、权限列表或审批。它不是多租户云架构。
+这是面向单个组织私有试用的参考部署：在一台 Linux Docker Compose 主机上运行固定摘要的 Odoo 18、PostgreSQL 17、服务端 Agent 和 Caddy。Odoo 自己的登录会话建立浏览器身份；浏览器只把短期签名断言转交给 Agent，不能提供 actor id、API key、模型密钥、权限列表或审批。助手空闲时会在过期前取得新断言；只有 Odoo 浏览器身份和委托 API 身份仍指向同一 actor、公司、scope 与 delegation，Agent 才为原会话续期。它不是多租户云架构。
 
 ## 前提与边界
 
 需要当前版本的 Docker Engine 与 Compose v2、Python 3.12、Node.js 和干净 checkout。使用有持久 Docker volume 的私有 Linux 主机，只允许运维人员访问 shell 和 Docker。公开端口默认只绑定 loopback；允许远程客户端之前，应放到组织控制的入口之后。内置 Caddy CA 只适合在受控试用中把根证书安装到托管客户端；正式域名应改用组织证书。
 
-部署为每个用户使用一把独立的 Odoo API key。应用自身的访问规则是最终权限来源，delegation manifest 只会进一步缩小 typed 工具 scope。删除 grant 不能撤回已经在执行的任务：需要在 Odoo 撤销 key、让用户退出登录；若必须立即关闭全部已签发的浏览器 capability，再重启 Agent。
+部署为每个用户使用一把独立的 Odoo API key。应用自身的访问规则是最终权限来源，delegation manifest 只会进一步缩小 typed 工具 scope。任务进行中或存在待确认操作时不会续期；配置的 key 路径、scope 或 mutation grant 发生变化也会拒绝续期，这些轮换应通过新浏览器会话生效。删除 grant 不能撤回已经在执行的任务：需要在 Odoo 撤销 key、让用户退出登录；若必须立即关闭全部已签发的浏览器 capability，再重启 Agent。
 
 ## 准备与启动
 

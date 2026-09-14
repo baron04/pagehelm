@@ -73,6 +73,13 @@ class PanelContractTests(unittest.TestCase):
             self.assertIn(tone, contract["tones"], state)
         for name, mapping in contract["progress_states"].items():
             self.assertIn(mapping["panel_state"], contract["panel_states"], name)
+        self.assertGreater(contract["layout"]["overlay_z_index"], 2_147_483_640)
+
+    def test_session_lifecycle_metadata_is_not_rendered_as_an_empty_turn(self):
+        payload = {"state": "session_recovered", "message": "会话已重新连接"}
+        self.assertIsNone(project_event(_event("progress", payload), at=123))
+        self.assertIsNone(project_history_record(
+            {"kind": "progress", "payload": payload}, index=1))
 
     def test_every_panel_state_has_a_status_label(self):
         labels = label_keys()
@@ -205,6 +212,7 @@ class PanelContractTests(unittest.TestCase):
         self.assertEqual(configuration["labels"], contract["label_keys"])
         self.assertEqual(configuration["notices"], contract["notices"])
         self.assertEqual(configuration["progress_states"], contract["progress_states"])
+        self.assertEqual(configuration["layout"], contract["layout"])
         self.assertEqual(configuration["terminal_error_codes"],
                          contract["terminal_error_codes"])
 

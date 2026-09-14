@@ -10,7 +10,7 @@ from __future__ import annotations
 import queue
 import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Protocol, cast
 
@@ -20,7 +20,7 @@ from .identity import PrincipalContext
 from .privacy import redact_sensitive_assignments, redact_session_handoffs
 from .product import AgentTurnError
 from .remote import (RemoteSessionChannel, RemoteSessionClosed, RemoteSessionLimits,
-                     RemoteSessionRegistry)
+                     RemoteSessionRegistry, SessionGrant)
 from .traceview import build_trace_case, render_trace_html, write_trace_bundle
 
 #: How long an idle event request is held open before it returns "nothing yet".
@@ -297,6 +297,18 @@ class LiveProductSession:
             finished=bool(thread and not thread.is_alive() and self._error is None),
             failed=self._error is not None,
         )
+
+    def renew_principal(self, principal: PrincipalContext) -> SessionGrant:
+        """Install a host-reauthenticated principal without replacing the browser session."""
+        self.channel.renew_principal(principal)
+        self.grant = replace(
+            self.grant,
+            application_id=principal.application_id,
+            principal_digest=principal.binding_digest,
+            expires_at=principal.expires_at,
+            session_expires_at=self.channel.expires_at,
+        )
+        return self.grant
 
     def readiness_snapshot(self) -> dict:
         """Return content-free liveness dependencies for the loopback admin endpoint."""

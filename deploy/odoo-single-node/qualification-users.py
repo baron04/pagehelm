@@ -57,6 +57,37 @@ def issue(owner, name):
         "rpc", name, fields.Datetime.now() + timedelta(days=90))
 
 
+def customer(name, email, phone, city):
+    """Create one stable synthetic record used by the manual qualification journey."""
+    partners = env["res.partner"].sudo().with_context(active_test=False)
+    matches = partners.search(["|", ("email", "=", email), ("name", "=", name)], order="id")
+    exact = matches.filtered(lambda record: record.email == email)
+    found = exact[:1] or matches[:1]
+    values = {
+        "name": name,
+        "email": email,
+        "phone": phone,
+        "city": city,
+        "is_company": True,
+        "customer_rank": 1,
+        "company_id": env.company.id,
+        "active": True,
+    }
+    if found:
+        found.write(values)
+    else:
+        found = partners.create(values)
+    duplicates = matches - found
+    if duplicates:
+        # This script is restricted to the disposable qualification profile. Keeping two
+        # active records with the acceptance label would turn a deterministic read into an
+        # ambiguity, so retire only exact-name duplicates inside that isolated fixture.
+        duplicates.filtered(lambda record: record.name == name).write({
+            "active": False, "customer_rank": 0,
+        })
+    return found
+
+
 writer = user(
     "woa-writer@example.test", "WOA Qualification Writer",
     secret("writer-login-password"),
@@ -71,6 +102,13 @@ reader = user(
 )
 writer_key = issue(writer, "woa-single-node-writer")
 reader_key = issue(reader, "woa-single-node-reader")
+azure = customer(
+    "Azure Interior", "azure.interior@example.test", "+1 510 555 0102", "Fremont")
+acme = customer(
+    "Acme Corporation", "acme.corp@example.test", "+1 925 555 0103", "Pleasant Hill")
+env.flush_all()
+if azure.email != "azure.interior@example.test" or acme.email != "acme.corp@example.test":
+    raise RuntimeError("synthetic customer fixture did not reach its exact postcondition")
 env.cr.commit()
 
 OUTPUT.mkdir(mode=0o700, exist_ok=True)

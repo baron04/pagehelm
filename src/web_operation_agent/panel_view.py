@@ -34,6 +34,10 @@ def panel_contract() -> dict:
 
 def _validate_contract(contract: dict) -> None:
     states, tones = contract["panel_states"], set(contract["tones"])
+    overlay_z_index = contract.get("layout", {}).get("overlay_z_index")
+    if (isinstance(overlay_z_index, bool) or not isinstance(overlay_z_index, int)
+            or not 1 <= overlay_z_index <= 2_147_483_646):
+        raise ValueError("panel overlay_z_index must be an integer from 1 to 2147483646")
     unknown_tone = sorted(set(states.values()) - tones)
     if unknown_tone:
         raise ValueError(f"panel state tone is not in the contract: {unknown_tone[0]}")
@@ -172,10 +176,10 @@ def project_event(event: TaskEvent, *, at: int) -> dict | None:
         # An unmapped state is a contract violation on the server side, not something the
         # panel should paper over with a generic line. test_panel_contract pins the set.
         raise ValueError(f"progress state {state!r} has no panel projection")
-    if state == "new_conversation":
+    if state in {"new_conversation", "session_recovered"}:
         # Recorded in the event log because it happened, and because it is what ended the
-        # model's reference history. Not rendered: the panel clears its view instead, so a
-        # divider would be a line above nothing.
+        # model's reference history or re-established the durable connection. Neither is a
+        # user turn: rendering either alone creates a misleading empty turn and "用时 0s".
         return None
     if state == "message_accepted":
         return {**base, "kind": "goal", "tone": "neutral",
@@ -209,6 +213,8 @@ def project_history_record(record: dict, *, index: int) -> dict | None:
     state = str(payload.get("state") or "")
     mapping = contract["progress_states"].get(state)
     if mapping is None:
+        return None
+    if state in {"new_conversation", "session_recovered"}:
         return None
     limits = contract["limits"]
     base = {"id": f"h{index:08d}", "sequence": 0, "replayed": True,

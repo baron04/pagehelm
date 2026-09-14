@@ -218,11 +218,12 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                   const root = document.querySelector('#woa-assistant-root')
                   const style = getComputedStyle(root)
                   return {position: style.position, width: style.width, height: style.height,
-                          pointerEvents: style.pointerEvents}
+                          pointerEvents: style.pointerEvents, zIndex: style.zIndex}
                 }""")
                 self.assertEqual(root_layout, {
                     "position": "fixed", "width": "0px", "height": "0px",
                     "pointerEvents": "none",
+                    "zIndex": str(channel._panel_configuration()["layout"]["overlay_z_index"]),
                 })
                 remained_connected = page.evaluate("""() => {
                   const root = document.querySelector('#woa-assistant-root')
@@ -726,6 +727,49 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         self.assertEqual(result["sent"]["body"]["principal_digest"], "a" * 64)
         self.assertEqual(result["sent"]["options"], {"includeLease": False})
         self.assertEqual(result["leaseId"], "lease-1")
+
+    @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
+    def test_idle_runtime_accepts_only_same_session_principal_renewal(self):
+        source = _runtime_source_b64()
+        script = f"""
+          const mod = await import('data:text/javascript;base64,{source}');
+          const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
+          runtime.stopped = false;
+          runtime.endpoint = 'https://agent.test';
+          runtime.sessionId = 'session-1';
+          runtime.token = 'token-1';
+          runtime.applicationId = 'odoo';
+          runtime.principalBinding = 'old';
+          runtime.config = {{endpoint:'https://agent.test', sessionId:'session-1',
+            clientToken:'token-1', sessionGeneration:'generation-1', applicationId:'odoo'}};
+          runtime.stored = {{taskInFlight:false, inFlight:null}};
+          runtime.panelHost = {{snapshot:() => ({{pendingApproval:null}})}};
+          runtime.panelConfiguration = {{principal_expires_at:1, session_expires_at:1}};
+          let armed = 0;
+          runtime._armExpiry = () => {{ armed += 1; }};
+          const fresh = Date.now() + 60_000;
+          runtime.renewSession({{...runtime.config, principalBinding:'new',
+            principalExpiresAt:fresh, sessionExpiresAt:fresh}});
+          let changed = '';
+          try {{
+            runtime.renewSession({{...runtime.config, sessionId:'other',
+              principalBinding:'newer', principalExpiresAt:fresh, sessionExpiresAt:fresh}});
+          }} catch (error) {{ changed = error.message; }}
+          runtime.stored.taskInFlight = true;
+          let busy = '';
+          try {{ runtime.renewSession({{...runtime.config}}); }}
+          catch (error) {{ busy = error.message; }}
+          process.stdout.write(JSON.stringify({{binding:runtime.principalBinding, armed,
+            principal:runtime.panelConfiguration.principal_expires_at, changed, busy}}));
+        """
+        proc = subprocess.run(["node", "--input-type=module", "-e", script],
+                              text=True, capture_output=True, timeout=10, check=True)
+        result = json.loads(proc.stdout)
+        self.assertEqual(result["binding"], "new")
+        self.assertEqual(result["armed"], 1)
+        self.assertGreater(result["principal"], int(time.time() * 1000))
+        self.assertIn("changed sessionId", result["changed"])
+        self.assertIn("idle runtime", result["busy"])
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_goto_uses_opt_in_spa_navigation_and_keeps_document_default(self):

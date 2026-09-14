@@ -899,6 +899,8 @@ export class EmbeddedWebRuntime {
       throw new Error('hello response did not include the panel configuration')
     }
     this.panelConfiguration = reply.panel
+    this.panelContainer?.style.setProperty(
+      'z-index', String(reply.panel.layout?.overlay_z_index || ''), 'important')
     this._armExpiry()
   }
 
@@ -933,6 +935,43 @@ export class EmbeddedWebRuntime {
     this.eventAbortController?.abort()
     this._panelState('ended')
     this.panelHost?.raise(code, {retryable: false})
+  }
+
+  canRenewSession() {
+    return !this.stopped && !this.stored.taskInFlight && !this.stored.inFlight
+      && !this.panelHost?.snapshot().pendingApproval
+  }
+
+  renewSession(config) {
+    if (!this.canRenewSession()) throw new Error('session renewal requires an idle runtime')
+    const stable = [
+      ['endpoint', this.endpoint, String(config?.endpoint || '').replace(/\/$/, '')],
+      ['sessionId', this.sessionId, String(config?.sessionId || '')],
+      ['clientToken', this.token, String(config?.clientToken || '')],
+      ['sessionGeneration', String(this.config.sessionGeneration || ''),
+        String(config?.sessionGeneration || '')],
+      ['applicationId', this.applicationId, String(config?.applicationId || '')],
+    ]
+    const changed = stable.find(([, before, after]) => before !== after)
+    if (changed) throw new Error(`session renewal changed ${changed[0]}`)
+    const principalBinding = String(config?.principalBinding || '')
+    const principalExpiresAt = Number(config?.principalExpiresAt || 0)
+    const sessionExpiresAt = Number(config?.sessionExpiresAt || 0)
+    if (!principalBinding || principalExpiresAt <= Date.now()
+        || sessionExpiresAt <= Date.now()) {
+      throw new Error('session renewal did not provide a live principal')
+    }
+    this.config = {...this.config, ...config}
+    this.principalBinding = principalBinding
+    if (this.panelConfiguration) {
+      this.panelConfiguration = {
+        ...this.panelConfiguration,
+        principal_expires_at: principalExpiresAt,
+        session_expires_at: sessionExpiresAt,
+      }
+    }
+    this._armExpiry()
+    return this
   }
 
   async observe(causedByActionId = '') {

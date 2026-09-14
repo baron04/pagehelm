@@ -72,6 +72,7 @@ export interface PanelConfiguration {
   notices: Record<string, string>
   panel_states: Record<PanelState, Tone>
   progress_states: Record<string, {panel_state: PanelState; tone: Tone; terminal: boolean}>
+  layout: {overlay_z_index: number}
   approval_visibility: {min_visible_ratio: number; min_visible_ms: number}
   terminal_error_codes: string[]
   terminal_panel_state_by_code: Record<string, PanelState>
@@ -87,6 +88,7 @@ export const DEFAULT_CONFIGURATION: PanelConfiguration = {
   notices: raw.notices,
   panel_states: raw.panel_states as Record<PanelState, Tone>,
   progress_states: raw.progress_states as PanelConfiguration['progress_states'],
+  layout: raw.layout,
   approval_visibility: raw.approval_visibility,
   terminal_error_codes: [...raw.terminal_error_codes],
   terminal_panel_state_by_code: raw.terminal_panel_state_by_code as Record<string, PanelState>,

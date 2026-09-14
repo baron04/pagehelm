@@ -13,7 +13,7 @@
 :host {
   position: fixed;
   inset: 0;
-  z-index: 2147483000;
+  z-index: inherit;
   pointer-events: none;
   /* Everything the host page can push in by inheritance. */
   font: var(--woa-font-size) / var(--woa-line-height) var(--woa-font-stack);

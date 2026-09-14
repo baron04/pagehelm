@@ -380,6 +380,44 @@ class RemoteSessionChannel:
         with self._condition:
             self._ensure_open()
 
+    def renew_principal(self, principal: PrincipalContext) -> None:
+        """Replace a short-lived assertion after the trusted host reauthenticates it.
+
+        Capabilities, leases and durable history stay attached to the same logical actor.
+        Renewal is refused while a turn or approval is in flight because their authority is
+        bound to the old principal digest.
+        """
+        if not isinstance(principal, PrincipalContext):
+            raise TypeError("principal must be a PrincipalContext")
+        with self._condition:
+            self._ensure_open()
+            previous = self.principal
+            if previous is None:
+                raise PrincipalError("an unbound session cannot acquire a principal")
+            stable = ("application_id", "tenant_id", "workspace_id", "actor_id",
+                      "delegation_id", "scopes")
+            if any(getattr(principal, name) != getattr(previous, name) for name in stable):
+                raise PrincipalError("renewed principal changed the bound authority")
+            now_ms = _now_ms()
+            principal.require_live(now_ms=now_ms)
+            if principal.issued_at < previous.issued_at:
+                raise PrincipalError("renewed principal was issued before the current principal")
+            if principal.expires_at <= previous.expires_at:
+                raise PrincipalError("renewed principal does not extend the current principal")
+            blocker = ("turn" if self._active_message_id else
+                       "action" if self._pending_action_id else
+                       "approval" if self._pending_approval_id else "")
+            if blocker:
+                raise RemoteProtocolError(
+                    f"principal renewal requires an idle session ({blocker} in flight)",
+                    code=f"session_busy_{blocker}", status=409)
+            if self._principal_validator is not None:
+                self._principal_validator(principal)
+            self.principal = principal
+            self.expires_at = min(
+                now_ms + self.limits.session_ttl_s * 1000, principal.expires_at)
+            self._condition.notify_all()
+
     def _append_event(self, kind: str, payload: dict, *, turn_id: str = "") -> TaskEvent:
         with self._condition:
             if kind != "terminal" and len(self._events) >= self.limits.max_events - 1:
@@ -819,6 +857,7 @@ class RemoteSessionChannel:
             "notices": dict(contract["notices"]),
             "panel_states": dict(contract["panel_states"]),
             "progress_states": _copy_json(contract["progress_states"]),
+            "layout": dict(contract["layout"]),
             "approval_visibility": dict(contract["approval_visibility"]),
             "terminal_error_codes": list(contract["terminal_error_codes"]),
             "terminal_panel_state_by_code": dict(contract["terminal_panel_state_by_code"]),

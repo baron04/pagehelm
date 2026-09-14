@@ -12,10 +12,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from web_operation_agent.identity import PrincipalContext
+from web_operation_agent.remote import RemoteProtocolError
 from web_operation_agent_odoo.adapter import OdooApplicationAdapter
 
 from web_operation_agent_odoo.native import (
-    OdooDelegationDirectory, OdooSessionEvent, OdooSessionEventError,
+    OdooDelegation, OdooDelegationDirectory, OdooSessionEvent, OdooSessionEventError,
     SignedOdooSessionVerifier, canonical_event, load_session_secret,
     sign_session_event,
 )
@@ -214,7 +215,11 @@ class OrdinaryBrowserHostContract(unittest.TestCase):
             workspace_id="7", actor_id="42", delegation_id="test-delegation",
             issued_at=now_ms, expires_at=now_ms + 300_000,
             scopes=tuple(sorted(adapter.ports.identity.required_scopes)))
-        return adapter, principal, False
+        return adapter, principal, False, OdooDelegation(
+            api_key_path=key,
+            scopes=principal.scopes,
+            allow_mutations=False,
+        )
 
     def test_signed_bootstrap_issues_one_capability_and_logout_revokes_it(self):
         now = int(time.time() * 1000)
@@ -256,6 +261,33 @@ class OrdinaryBrowserHostContract(unittest.TestCase):
                     host.bootstrap_server.base_url + "/bootstrap", envelope)
                 self.assertEqual((replay_status, replay),
                                  (401, {"error": "invalid_session_event"}))
+
+                renewed_event = OdooSessionEvent(
+                    schema_version=1, event="bootstrap", database="trial",
+                    company_id="7", actor_id="42", runtime_instance_id="a" * 32,
+                    issued_at=now + 1, expires_at=now + 30_001, nonce="e" * 32)
+                with patch.object(host, "_renew_active") as renew:
+                    renew_status, renewed = self._post(
+                        host.bootstrap_server.base_url + "/bootstrap",
+                        sign_session_event(renewed_event, SECRET))
+                self.assertEqual(renew_status, 200)
+                self.assertEqual(renewed["config"]["clientToken"],
+                                 payload["config"]["clientToken"])
+                self.assertGreater(renewed["renew_at"], int(time.time() * 1000))
+                renew.assert_called_once()
+
+                busy_event = OdooSessionEvent(
+                    schema_version=1, event="bootstrap", database="trial",
+                    company_id="7", actor_id="42", runtime_instance_id="a" * 32,
+                    issued_at=now + 2, expires_at=now + 30_002, nonce="f" * 32)
+                with patch.object(host, "_renew_active", side_effect=RemoteProtocolError(
+                        "principal renewal requires an idle session",
+                        code="session_busy_turn", status=409)):
+                    busy_status, busy = self._post(
+                        host.bootstrap_server.base_url + "/bootstrap",
+                        sign_session_event(busy_event, SECRET))
+                self.assertEqual((busy_status, busy),
+                                 (409, {"error": "session_busy_turn", "retryable": True}))
 
                 revoke = OdooSessionEvent(
                     schema_version=1, event="revoke", database="trial",

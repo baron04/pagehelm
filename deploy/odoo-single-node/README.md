@@ -1,12 +1,12 @@
 # Odoo single-node pilot deployment
 
-This is the supported reference deployment for a private, single-organization pilot. It runs pinned Odoo 18, PostgreSQL 17, the server Agent, and Caddy on one Linux Docker Compose host. Odoo's own login establishes the browser identity; the browser carries a short-lived signed assertion to the Agent and never supplies an actor id, API key, model key, permission list, or approval. This is not a multi-tenant cloud topology.
+This is the supported reference deployment for a private, single-organization pilot. It runs pinned Odoo 18, PostgreSQL 17, the server Agent, and Caddy on one Linux Docker Compose host. Odoo's own login establishes the browser identity; the browser carries a short-lived signed assertion to the Agent and never supplies an actor id, API key, model key, permission list, or approval. While the assistant is idle, it obtains a fresh assertion before expiry and the Agent renews the same session only after the Odoo browser and delegated API identities still resolve to the same actor, company, scopes and delegation. This is not a multi-tenant cloud topology.
 
 ## Prerequisites and boundaries
 
 Use a current Docker Engine with Compose v2, Python 3.12, Node.js, and a clean checkout. Allocate a private Linux host with persistent Docker volumes and restrict shell and Docker access to operators. The public listener binds to loopback by default; put it behind an organization-controlled ingress before allowing remote clients. The built-in Caddy certificate authority is suitable for a controlled pilot after its root certificate is installed on managed clients. Replace it with the organization's certificate at a public hostname.
 
-The deployment uses one delegated Odoo API key per user. An API key is never shared between users. The application's access rules remain authoritative, while the delegation manifest can narrow the typed-tool scopes further. Removing a grant does not manufacture permission revocation inside an already running task: revoke the key in Odoo and log the user out, then restart the Agent if immediate closure of every issued browser capability is required.
+The deployment uses one delegated Odoo API key per user. An API key is never shared between users. The application's access rules remain authoritative, while the delegation manifest can narrow the typed-tool scopes further. Renewal is refused during a task or pending confirmation and when the configured key path, scopes or mutation grant changes; rotate those values by starting a new browser session. Removing a grant does not manufacture permission revocation inside an already running task: revoke the key in Odoo and log the user out, then restart the Agent if immediate closure of every issued browser capability is required.
 
 ## Prepare the deployment
 

@@ -72,10 +72,23 @@ class NothingThirdPartyIsCommitted(unittest.TestCase):
         self.assertIn("web.assets_backend", manifest)
         self.assertIn("/woa/session-assertion", loader)
         self.assertIn("/assistant/bootstrap", loader)
+        self.assertIn("runtime.renewSession", loader)
+        self.assertIn("ready.catch(() => {})", loader)
         self.assertNotIn("actor_id", loader)
         self.assertIn('auth="user"', controller)
         self.assertIn("request.session.uid", controller)
         self.assertIn("WOA_SESSION_SECRET_FILE", controller)
+
+    def test_the_manual_qualification_customer_is_seeded_idempotently(self):
+        single_node = deploy.DEPLOY_ROOT.parents[2] / "deploy" / "odoo-single-node"
+        source = (single_node / "qualification-users.py").read_text()
+        self.assertIn('"Azure Interior", "azure.interior@example.test"', source)
+        self.assertIn('with_context(active_test=False)', source)
+        self.assertIn("synthetic customer fixture did not reach its exact postcondition", source)
+        compose = (single_node / "docker-compose.yml").read_text()
+        self.assertEqual(
+            compose.count("image: ${WOA_ODOO_IMAGE:-woa-odoo-single-node-app}:"), 3,
+            "runtime, setup and qualification must execute the same Odoo build")
 
 
 class AFetchedAssetIsCheckedTwice(unittest.TestCase):

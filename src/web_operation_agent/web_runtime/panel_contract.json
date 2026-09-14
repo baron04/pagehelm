@@ -25,6 +25,9 @@
     "replaced": "neutral"
   },
   "tones": ["neutral", "ready", "active", "warning", "success", "error"],
+  "layout": {
+    "overlay_z_index": 2147483646
+  },
   "progress_states": {
     "waiting_for_runtime": {"panel_state": "connecting", "tone": "neutral", "terminal": false},
     "session_recovered": {"panel_state": "ready", "tone": "warning", "terminal": false},

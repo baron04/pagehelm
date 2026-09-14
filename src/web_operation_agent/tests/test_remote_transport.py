@@ -185,6 +185,37 @@ class ChannelTests(unittest.TestCase):
             principal_digest=expected.binding_digest))
         self.assertTrue(reply["lease_id"])
 
+    def test_trusted_idle_renewal_extends_only_the_same_authority(self):
+        initial = principal(1_000)
+        with mock.patch("web_operation_agent.remote._now_ms", return_value=2_000):
+            registry = RemoteSessionRegistry(limits=RemoteSessionLimits(session_ttl_s=300))
+            _grant, channel = registry.create(
+                allowed_origins=[ORIGIN], session_id="renewed-session", principal=initial)
+            renewed = dataclasses.replace(initial, issued_at=2_000, expires_at=122_000)
+            channel.renew_principal(renewed)
+            self.assertIs(channel.principal, renewed)
+            self.assertEqual(channel.expires_at, 122_000)
+            with self.assertRaisesRegex(Exception, "changed the bound authority"):
+                channel.renew_principal(dataclasses.replace(
+                    renewed, actor_id="actor-2", expires_at=182_000))
+
+    def test_principal_renewal_refuses_an_active_turn(self):
+        now = int(time.time() * 1000)
+        initial = principal(now)
+        registry = RemoteSessionRegistry()
+        grant, channel = registry.create(
+            allowed_origins=[ORIGIN], session_id="busy-renewal", principal=initial)
+        lease = channel.accept_hello(hello(
+            grant.session_id, application_id="twenty",
+            principal_digest=initial.binding_digest))["lease_id"]
+        channel.accept_message({"message_id": "turn-1", "text": "list companies",
+                                "page_url": ORIGIN + "/start"}, lease_id=lease)
+        channel.wait_for_message(timeout_s=0)
+        with self.assertRaisesRegex(RemoteProtocolError, "idle session") as caught:
+            channel.renew_principal(dataclasses.replace(
+                initial, issued_at=now, expires_at=now + 120_000))
+        self.assertEqual(caught.exception.code, "session_busy_turn")
+
     def test_unbound_session_rejects_a_runtime_declared_principal(self):
         with self.assertRaisesRegex(RemoteProtocolError, "no principal") as caught:
             self.channel.accept_hello(dataclasses.replace(
