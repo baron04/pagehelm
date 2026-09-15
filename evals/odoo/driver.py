@@ -247,16 +247,10 @@ class Driver:
             events.append(outcomes.ApparatusEvent("browser_or_control_channel_crash",
                                                   "control_channel_error"))
         requests, responses, refusals = self._gateway_records(attempt_id)
-        for response in responses:
-            if response["status"] == "http_error" and (response["http_status"] or 0) >= 500:
-                events.append(outcomes.ApparatusEvent("provider_http_5xx",
-                                                      "gateway_response_record"))
-            elif (response["status"] == "transport_error"
-                  and response["error_code"] in {"provider_connection_lost",
-                                                 "backend_exception"}):
-                # A provider deadline is a scorable product result, not an apparatus fault.
-                events.append(outcomes.ApparatusEvent("provider_connection_lost",
-                                                      "gateway_transport_record"))
+        # What the provider did is read from the gateway's typed records, the same for every
+        # arm, never from how the runner reported it.
+        facts = outcomes.gateway_facts(responses, refusals)
+        events.extend(facts.events)
         audit: list[dict[str, Any]] = []
         agent_end: dict[str, Any] | None = None
         if arm == "woa_product" and product_started:
@@ -274,9 +268,7 @@ class Driver:
                                                 host_errors=artifact.get("host_errors") or [],
                                                 document_replaced=bool(
                                                     artifact.get("document_replaced")))
-        terminal = projected["terminal"]
-        if any(item["reason"] == "model_call_budget" for item in refusals):
-            terminal = "model_call_budget"
+        terminal = scored_terminal(projected["terminal"], facts, artifact.get("budget_exhausted"))
         if product_started:
             try:
                 guard_after = self.guard.capture()
@@ -301,7 +293,8 @@ class Driver:
         complete = bool(artifact.get("turns")) and not any(
             turn.get("timed_out") for turn in artifact.get("turns") or [])
         run_faults = any(event.evidence in {"gateway_response_record",
-                                            "gateway_transport_record", "browser_exit",
+                                            "gateway_transport_record",
+                                            "gateway_accounting_record", "browser_exit",
                                             "control_channel_error"} for event in events)
         evaluation = None
         if judged is not None:
@@ -315,12 +308,14 @@ class Driver:
             classification = outcomes.classify(
                 product_started=product_started, dispatch_state=projected["dispatch_state"],
                 runner_terminal=terminal if product_started else None,
-                apparatus_events=events, evaluation=evaluation)
+                apparatus_events=events, evaluation=evaluation,
+                request_contract_violation=facts.request_contract_violation)
         except outcomes.OutcomeContractError:
             classification = outcomes.classify(
                 product_started=product_started, dispatch_state=projected["dispatch_state"],
                 runner_terminal="classification_input_missing", apparatus_events=events,
-                evaluation=outcomes.Evaluation("FAIL", decisive=False))
+                evaluation=outcomes.Evaluation("FAIL", decisive=False),
+                request_contract_violation=facts.request_contract_violation)
         self._append("attempt_outcome", {
             "attempt_id": attempt_id, **classification.as_record(),
             "evaluation_digest": digest_json(judged) if judged else None,
@@ -331,11 +326,14 @@ class Driver:
         self._append("reset_outcome", {"attempt_id": attempt_id, **reset})
         self._append("attempt_cost", _cost(attempt_id, requests, responses))
         turns = artifact.get("turns") or []
+        cancel = [turn["cancel_feedback_ms"] for turn in turns
+                  if turn.get("cancel_feedback_ms") is not None]
         self._append("attempt_metrics", {
             "attempt_id": attempt_id,
             "automatic_wall_ms": sum(int(turn.get("automatic_ms") or 0) for turn in turns),
             "approval_wait_ms": sum(int(turn.get("approval_wait_ms") or 0) for turn in turns),
             "first_feedback_ms": (turns[0].get("first_feedback_ms") if turns else None),
+            "cancel_feedback_ms": max(cancel) if cancel else None,
             "page_actions": projected["page_actions"],
             "invalid_page_actions": projected["invalid_page_actions"],
             "business_calls": projected["business_calls"],
@@ -376,7 +374,8 @@ class Driver:
         present = {entry["kind"] for entry in records}
         product_started = any(entry["kind"] == "attempt_checkpoint"
                               and entry["body"]["product_started"] for entry in records)
-        requests, responses, _ = self._gateway_records(attempt_id)
+        requests, responses, refusals = self._gateway_records(attempt_id)
+        facts = outcomes.gateway_facts(responses, refusals)
         projected = trace.project_woa([])
         audit: list[dict[str, Any]] = []
         audit_available = False
@@ -402,7 +401,8 @@ class Driver:
         classification = outcomes.classify(
             product_started=product_started, dispatch_state=dispatch, runner_terminal=None,
             apparatus_events=[outcomes.ApparatusEvent("browser_or_control_channel_crash",
-                                                      "runner_process_exit")])
+                                                      "runner_process_exit"), *facts.events],
+            request_contract_violation=facts.request_contract_violation)
         if "attempt_outcome" not in present:
             self._append("attempt_outcome", {
                 "attempt_id": attempt_id, **classification.as_record(),
@@ -430,7 +430,8 @@ class Driver:
         if "attempt_metrics" not in present:
             self._append("attempt_metrics", {
                 "attempt_id": attempt_id, "automatic_wall_ms": 0, "approval_wait_ms": 0,
-                "first_feedback_ms": None, "page_actions": projected["page_actions"],
+                "first_feedback_ms": None, "cancel_feedback_ms": None,
+                "page_actions": projected["page_actions"],
                 "invalid_page_actions": projected["invalid_page_actions"],
                 "business_calls": projected["business_calls"],
                 "repeated_observations": projected["repeated_observations"],
@@ -519,6 +520,25 @@ def _agent_counts(state: dict[str, Any] | None) -> dict[str, int] | None:
             "unresolved_mutations": int(state["unresolved_mutations"]),
             "prepared_proposals": len(state["prepared_proposals"]),
             "conversation_rows": int(state["conversation_rows"])}
+
+
+def scored_terminal(runner_terminal: str | None, facts: outcomes.GatewayFacts,
+                    budget_exhausted: str | None = None) -> str | None:
+    """The ending an attempt is scored under.
+
+    An exhausted call budget always ends it, and so does a wall clock the runner enforced by
+    stopping the product, whatever the product then reported. Any other scorable ending the
+    gateway recorded -- an input refused as too long or a provider deadline -- names the ending
+    only where the runner reported no typed product terminal of its own, so a later turn that
+    ended normally keeps its ending.
+    """
+    if facts.terminal == "model_call_budget":
+        return facts.terminal
+    if budget_exhausted is not None:
+        return "wall_clock_budget"
+    if facts.terminal is not None and runner_terminal not in outcomes.PRODUCT_TERMINALS:
+        return facts.terminal
+    return runner_terminal
 
 
 def _with_residue(outcome: str, residue: list[str]) -> str:

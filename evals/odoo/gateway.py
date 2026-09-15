@@ -18,7 +18,13 @@ sending. Refusals are recorded with their reason and answered with a typed error
 retried.
 
 Behind the gateway sits either :class:`ScriptedBackend`, which never contacts a provider, or
-:class:`UpstreamBackend`, the dedicated evaluation provider.
+:class:`UpstreamBackend`, the dedicated evaluation provider. Every result is typed: an answer,
+an HTTP failure with a content-free code (outage, rate limit, refused credential, context-length
+rejection or another rejection), a transport failure, an answer outside the evaluation
+provider's response contract, or a call the spend ledger could not record. Every client
+receives the same typed error for the same fact, ``outcomes.gateway_facts`` classifies attempts
+from these records alone, and once a call could not be accounted the gateway forwards nothing
+more.
 
 Every backend names what it answers from: a provider id, a normalized endpoint digest and a
 credential identity digest. Together with the requested alias and the request contract, that is
@@ -51,6 +57,7 @@ from . import ledger
 
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+MAX_ERROR_BYTES = 64 * 1024
 SCRIPTED_MODEL = "p74-scripted/v1"
 #: Every field a forwarded chat completion may carry besides the model's own option fields.
 #: Anything else could change generation for one arm only, so the gateway refuses it.
@@ -61,6 +68,8 @@ SHARED_REQUEST_FIELDS = frozenset({"model", "messages", "tools", "tool_choice", 
 #: completion client removes exactly these and carries the output cap as ``max_tokens``; any
 #: other field it does not recognise still reaches the gateway and is refused there.
 PAGEAGENT_ENGINE_FIELDS = ("top_p", "max_completion_tokens", "enable_thinking")
+#: The HTTP status of each refusal the gateway answers itself; every other refusal is a 400.
+REFUSAL_STATUS = {"model_call_budget": 429, "accounting_failure": 503}
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,7 +179,7 @@ def provider_binding_digest(identity: dict[str, Any], budgets: GatewayBudgets) -
 
 @dataclass(frozen=True, slots=True)
 class BackendResult:
-    status: str                     # ok | http_error | transport_error
+    status: str     # ok | http_error | transport_error | contract_error | accounting_error
     http_status: int | None
     payload: dict[str, Any] | None
     provider_request_id: str | None
@@ -207,6 +216,19 @@ def _usage(payload: dict[str, Any]) -> dict[str, int] | None:
             "reasoning_tokens": int(reasoning.get("reasoning_tokens") or 0)}
 
 
+#: Scripted provider faults and the typed result each one stands for.
+SCRIPTED_FAULTS = {
+    "http_503": ("http_error", 503, "provider_unavailable"),
+    "http_429": ("http_error", 429, "provider_rate_limited"),
+    "http_401": ("http_error", 401, "provider_authentication"),
+    "http_408": ("http_error", 408, "provider_deadline"),
+    "context_length": ("http_error", 400, "provider_context_length"),
+    "connection_lost": ("transport_error", None, "provider_connection_lost"),
+    "malformed_response": ("contract_error", 200, "provider_response_contract"),
+    "accounting_failure": ("accounting_error", 200, "accounting_failure"),
+}
+
+
 class ScriptedBackend(Backend):
     """A fixed policy that never contacts a provider, with deterministic fault injection.
 
@@ -215,11 +237,13 @@ class ScriptedBackend(Backend):
     attempt is indistinguishable in shape from a metered one and costs exactly nothing.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, slow_answer_s: float = 20.0) -> None:
         self._policies: dict[str, Callable[[dict[str, Any], int], dict[str, Any]]] = {}
         self._faults: dict[tuple[str, int], str] = {}
         self._models: dict[tuple[str, int], str] = {}
         self._lock = threading.Lock()
+        #: How long a ``slow_answer`` keeps the client waiting before its scripted answer.
+        self.slow_answer_s = slow_answer_s
 
     def identity(self) -> dict[str, Any]:
         return {"provider_id": SCRIPTED_PROVIDER_ID,
@@ -232,7 +256,7 @@ class ScriptedBackend(Backend):
         with self._lock:
             self._policies[attempt_id] = policy
             for index, fault in (faults or {}).items():
-                if fault not in {"http_503", "connection_lost"}:
+                if fault not in SCRIPTED_FAULTS and fault != "slow_answer":
                     raise ValueError("unsupported scripted fault")
                 self._faults[(attempt_id, index)] = fault
             for index, model in (model_overrides or {}).items():
@@ -244,12 +268,13 @@ class ScriptedBackend(Backend):
             fault = self._faults.get((attempt_id, call_index))
             model = self._models.get((attempt_id, call_index), SCRIPTED_MODEL)
         request_id = f"scripted-{attempt_id}-{call_index}"
-        if fault == "http_503":
-            return BackendResult("http_error", 503, {"error": {"code": "scripted_outage"}},
-                                 request_id, None, None, None, "provider_http_5xx")
-        if fault == "connection_lost":
-            return BackendResult("transport_error", None, None, request_id, None, None, None,
-                                 "provider_connection_lost")
+        if fault == "slow_answer":
+            time.sleep(self.slow_answer_s)
+        elif fault is not None:
+            status, http_status, code = SCRIPTED_FAULTS[fault]
+            payload = {"error": {"code": code}} if status == "http_error" else None
+            return BackendResult(status, http_status, payload, request_id, None, None, None,
+                                 code)
         if policy is None:
             return BackendResult("http_error", 500, {"error": {"code": "no_script"}},
                                  request_id, None, None, None, "scripted_policy_missing")
@@ -279,14 +304,55 @@ def _provider_base_url(value: str) -> str:
 
 
 def _http_error_code(status: int) -> str:
-    """The product client's content-free classification of an HTTP failure."""
+    """The content-free type of a provider HTTP failure.
+
+    A 408 is the provider's own request deadline, so it gets the type a timeout on this side
+    records: the same fact scores the same whichever form it arrives in.
+    """
     if status == 429:
         return "provider_rate_limited"
-    if status in {408, 425} or 500 <= status <= 599:
+    if status == 408:
+        return "provider_deadline"
+    if status == 425 or 500 <= status <= 599:
         return "provider_unavailable"
     if status in {401, 403}:
         return "provider_authentication"
     return "provider_http"
+
+
+#: How OpenAI-compatible providers name an input longer than the model's context. Only the parsed
+#: error object is read, and only this classification is kept.
+CONTEXT_LENGTH_CODES = frozenset({"context_length_exceeded", "string_above_max_length"})
+CONTEXT_LENGTH_MESSAGE = re.compile(
+    r"context length|context window|maximum context|input length|too many (?:input )?tokens"
+    r"|prompt is too long|reduce the length", re.IGNORECASE)
+
+
+def _context_rejection(detail: bytes) -> bool:
+    try:
+        value = json.loads(detail)
+    except (ValueError, UnicodeDecodeError):
+        return False
+    if not isinstance(value, dict):
+        return False
+    for item in (value, value.get("error")):
+        if not isinstance(item, dict):
+            continue
+        code = item.get("code")
+        if isinstance(code, str) and code.lower() in CONTEXT_LENGTH_CODES:
+            return True
+        message = item.get("message")
+        if isinstance(message, str) and CONTEXT_LENGTH_MESSAGE.search(message):
+            return True
+    return False
+
+
+def provider_error_code(status: int, detail: bytes = b"") -> str:
+    """The typed code of a provider HTTP failure; a rejection naming the context length is one."""
+    code = _http_error_code(status)
+    if code == "provider_http" and status in {400, 413, 422} and _context_rejection(detail):
+        return "provider_context_length"
+    return code
 
 
 def _timed_out(exc: BaseException) -> bool:
@@ -302,6 +368,19 @@ def _reported_model(value: Any) -> str | None:
     return value.strip()
 
 
+def _response_contract(status: int, request_id: str, reported: str | None = None) -> BackendResult:
+    """An answer outside the evaluation provider's response contract; no client receives it."""
+    return BackendResult("contract_error", status, None, request_id, reported, None, None,
+                         "provider_response_contract")
+
+
+def _accounting_failure(result: BackendResult) -> BackendResult:
+    """A dispatched call the spend ledger could not record, so its cost is not known."""
+    return BackendResult("accounting_error", result.http_status, None,
+                         result.provider_request_id, result.response_model, result.usage, None,
+                         "accounting_failure")
+
+
 class UpstreamBackend(Backend):
     """The dedicated evaluation provider behind the gateway.
 
@@ -312,7 +391,9 @@ class UpstreamBackend(Backend):
     no trustworthy usage. The attempt ledger receives the same request id, the HTTP status, the
     returned model string, usage and cost. A dropped connection is ``provider_connection_lost``,
     an apparatus fault; a timeout is ``provider_deadline``, which the protocol scores as a
-    product result.
+    product result. An answer that is not a JSON object, names no model or reports no usage is
+    outside the response contract and is never passed on, and a call the spend ledger could not
+    record is an accounting failure.
     """
 
     def __init__(self, *, base_url: str, key_file: str | Path, requested_model: str,
@@ -335,11 +416,18 @@ class UpstreamBackend(Backend):
     def identity(self) -> dict[str, Any]:
         return dict(self._identity)
 
-    def _unmetered(self, attempt_id: str, request_id: str, error_code: str,
-                   reported: str | None = None) -> None:
-        self.meter.record_unmetered(provider=self.provider, model=self.requested_model,
-                                    run_id=attempt_id, request_id=request_id,
-                                    error_code=error_code, reported_model=reported)
+    def _unmetered(self, result: BackendResult, attempt_id: str,
+                   error_code: str) -> BackendResult:
+        """Record a dispatched call without trustworthy usage; a call that cannot be recorded
+        is an accounting failure instead."""
+        try:
+            self.meter.record_unmetered(provider=self.provider, model=self.requested_model,
+                                        run_id=attempt_id, request_id=result.provider_request_id,
+                                        error_code=error_code,
+                                        reported_model=result.response_model)
+        except Exception:
+            return _accounting_failure(result)
+        return result
 
     def complete(self, body, *, attempt_id, call_index):
         request_id = uuid.uuid4().hex
@@ -355,19 +443,24 @@ class UpstreamBackend(Backend):
                 raw = response.read(MAX_RESPONSE_BYTES + 1)
         except urllib.error.HTTPError as exc:
             status = exc.code
-            exc.close()
-            code = _http_error_code(status)
-            self._unmetered(attempt_id, request_id, code)
-            return BackendResult("http_error", status, {"error": {"code": code}}, request_id,
-                                 None, None, None, code)
+            try:
+                detail = exc.read(MAX_ERROR_BYTES)
+            except OSError:
+                detail = b""
+            finally:
+                exc.close()
+            code = provider_error_code(status, detail)
+            return self._unmetered(BackendResult("http_error", status, {"error": {"code": code}},
+                                                 request_id, None, None, None, code),
+                                   attempt_id, code)
         except OSError as exc:
             if _timed_out(exc):
-                self._unmetered(attempt_id, request_id, "provider_deadline")
-                return BackendResult("transport_error", None, None, request_id, None, None,
-                                     None, "provider_deadline")
-            self._unmetered(attempt_id, request_id, "provider_transport")
-            return BackendResult("transport_error", None, None, request_id, None, None, None,
-                                 "provider_connection_lost")
+                return self._unmetered(BackendResult("transport_error", None, None, request_id,
+                                                     None, None, None, "provider_deadline"),
+                                       attempt_id, "provider_deadline")
+            return self._unmetered(BackendResult("transport_error", None, None, request_id, None,
+                                                 None, None, "provider_connection_lost"),
+                                   attempt_id, "provider_transport")
         payload = None
         if len(raw) <= MAX_RESPONSE_BYTES:
             try:
@@ -375,28 +468,30 @@ class UpstreamBackend(Backend):
             except ValueError:
                 payload = None
         if not isinstance(payload, dict):
-            self._unmetered(attempt_id, request_id, "provider_response")
-            return BackendResult("http_error", status, {"error": {"code": "provider_response"}},
-                                 request_id, None, None, None, "provider_response")
+            return self._unmetered(_response_contract(status, request_id), attempt_id,
+                                   "provider_response")
         reported = _reported_model(payload.get("model"))
         usage = payload.get("usage")
-        usage_record = cost = None
-        if isinstance(usage, dict) and "prompt_tokens" in usage and "completion_tokens" in usage:
-            try:
-                row = self.meter.record(provider=self.provider, model=self.requested_model,
-                                        run_id=attempt_id, usage=usage, request_id=request_id,
-                                        reported_model=reported)
-            except ValueError:
-                self._unmetered(attempt_id, request_id, "provider_usage", reported)
-            else:
-                usage_record, cost = _usage(payload), row["call_cost_cny"]
-        else:
-            self._unmetered(attempt_id, request_id, "provider_usage", reported)
+        if not (isinstance(usage, dict) and "prompt_tokens" in usage
+                and "completion_tokens" in usage):
+            return self._unmetered(_response_contract(status, request_id, reported), attempt_id,
+                                   "provider_usage")
+        try:
+            row = self.meter.record(provider=self.provider, model=self.requested_model,
+                                    run_id=attempt_id, usage=usage, request_id=request_id,
+                                    reported_model=reported)
+        except ValueError:
+            return self._unmetered(_response_contract(status, request_id, reported), attempt_id,
+                                   "provider_usage")
+        except Exception:
+            return _accounting_failure(BackendResult("ok", status, None, request_id, reported,
+                                                     _usage(payload), None, None))
+        usage_record, cost = _usage(payload), row["call_cost_cny"]
         if reported is None:
             # A completion that names no model cannot be attributed; whatever it cost is
             # already accounted above.
-            return BackendResult("http_error", status, {"error": {"code": "provider_response"}},
-                                 request_id, None, usage_record, cost, "provider_response")
+            return BackendResult("contract_error", status, None, request_id, None, usage_record,
+                                 cost, "provider_response_contract")
         return BackendResult("ok", status, payload, request_id, reported, usage_record, cost,
                              None)
 
@@ -420,6 +515,9 @@ class ProviderGateway:
         self._binding: _AttemptBinding | None = None
         self._retired_tokens: set[str] = set()
         self._lock = threading.Lock()
+        self._accounting_failed = False
+        #: Provider answers that arrived after their attempt had ended.
+        self.late_responses = 0
         gateway = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -431,12 +529,17 @@ class ProviderGateway:
 
             def _reply(self, status: int, payload: dict[str, Any]) -> None:
                 body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-                self.send_response(status)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.send_header("Connection", "close")
-                self.end_headers()
-                self.wfile.write(body)
+                try:
+                    self.send_response(status)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    self.wfile.write(body)
+                except OSError:
+                    # The client stopped waiting, as a product does when its user stops a turn;
+                    # what the call did is already in the ledger.
+                    pass
 
             def do_POST(self):  # noqa: N802 - http.server naming
                 gateway._handle(self)
@@ -516,7 +619,9 @@ class ProviderGateway:
             sequence = binding.sequence
             refusal = None
             body: dict[str, Any] | None = None
-            if length <= 0 or length > self.budgets.max_request_bytes:
+            if self._accounting_failed:
+                refusal = "accounting_failure"
+            elif length <= 0 or length > self.budgets.max_request_bytes:
                 refusal = "input_size_budget"
             else:
                 try:
@@ -530,8 +635,7 @@ class ProviderGateway:
                 ledger.append(self.ledger_path, "model_request_refused", {
                     "attempt_id": binding.attempt_id, "request_seq": sequence,
                     "reason": refusal})
-                status = 429 if refusal == "model_call_budget" else 400
-                handler._reply(status, {"error": {"code": refusal}})
+                handler._reply(REFUSAL_STATUS.get(refusal, 400), {"error": {"code": refusal}})
                 return
             binding.calls += 1
             attempt_id, call_index = binding.attempt_id, binding.calls
@@ -544,11 +648,11 @@ class ProviderGateway:
         except Exception:
             result = BackendResult("transport_error", None, None, None, None, None, None,
                                    "backend_exception")
-        ledger.append(self.ledger_path, "model_response_received", {
-            "attempt_id": attempt_id, "request_seq": sequence, "status": result.status,
-            "http_status": result.http_status, "provider_request_id": result.provider_request_id,
-            "response_model": result.response_model, "usage": result.usage,
-            "cost_cny": result.cost_cny, "error_code": result.error_code})
+        if result.status == "accounting_error":
+            with self._lock:
+                # Nothing more may be sent once a call could not be accounted.
+                self._accounting_failed = True
+        self._record_response(attempt_id, sequence, result)
         if result.status == "transport_error":
             # The client sees a lost connection, exactly as it would from a provider.
             handler.close_connection = True
@@ -557,12 +661,30 @@ class ProviderGateway:
             except OSError:
                 pass
             return
-        status = result.http_status or 502
-        if result.status != "ok" and status < 400:
-            # A malformed provider answer arrived with a success status; the client must not
-            # read it as a completion.
-            status = 502
-        handler._reply(status, result.payload or {})
+        if result.status == "ok":
+            handler._reply(result.http_status or 200, result.payload or {})
+            return
+        # Every client receives the same typed error for the same fact. An answer outside the
+        # response contract, or one that could not be accounted, is never passed on.
+        status = (result.http_status if result.status == "http_error" and result.http_status
+                  else 502)
+        handler._reply(status, {"error": {"code": result.error_code}})
+
+    def _record_response(self, attempt_id: str, sequence: int, result: BackendResult) -> None:
+        try:
+            ledger.append(self.ledger_path, "model_response_received", {
+                "attempt_id": attempt_id, "request_seq": sequence, "status": result.status,
+                "http_status": result.http_status,
+                "provider_request_id": result.provider_request_id,
+                "response_model": result.response_model, "usage": result.usage,
+                "cost_cny": result.cost_cny, "error_code": result.error_code})
+        except ledger.LedgerError:
+            if ledger.read(self.ledger_path)[1]["open_attempt"] == attempt_id:
+                raise
+            # The attempt ended before the provider answered. The spend ledger holds whatever
+            # the call cost, and the attempt's cost already counts it as usage unavailable.
+            with self._lock:
+                self.late_responses += 1
 
 
 class GatewayCompletionClient:

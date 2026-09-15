@@ -55,6 +55,22 @@ class RevisionTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(revision.RevisionError):
                 revision.require_commit(value)
 
+    def test_ancestry_and_file_content_are_compared_by_commit(self):
+        (self.root / "apparatus.py").write_text("VERSION = 2\n")
+        git(self.root, "commit", "-q", "-am", "second")
+        second = git(self.root, "rev-parse", "HEAD")
+        self.assertTrue(revision.is_ancestor(self.root, self.first, second))
+        self.assertTrue(revision.is_ancestor(self.root, second, second))
+        self.assertFalse(revision.is_ancestor(self.root, second, self.first))
+        with self.assertRaises(revision.RevisionError):
+            revision.is_ancestor(self.root, "0" * 40, second)
+        paths = ["apparatus.py", "missing.py"]
+        current = revision.content_blob_ids(self.root, paths)
+        self.assertEqual(revision.blob_ids_at(self.root, second, paths), current)
+        self.assertIsNone(current["missing.py"])
+        self.assertNotEqual(revision.blob_ids_at(self.root, self.first, paths)["apparatus.py"],
+                            current["apparatus.py"])
+
 
 if __name__ == "__main__":
     unittest.main()

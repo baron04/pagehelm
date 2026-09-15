@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -36,6 +37,28 @@ def _private_write(path: Path, data: bytes) -> None:
     with os.fdopen(descriptor, "wb") as handle:
         handle.write(data)
     os.chmod(path, 0o600)
+
+
+def keep_manifest(path: Path) -> Path | None:
+    """Keep the fixture manifest at ``path`` under its own digest, beside it.
+
+    A rebuild replaces ``fixture-manifest.json``. The kept copy is written once and never
+    rewritten, so every qualification and batch that bound a manifest can still read it in full.
+    """
+    try:
+        data = path.read_bytes()
+        digest = json.loads(data)["manifest_digest"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        return None
+    kept = path.parent / "manifests" / f"{digest.removeprefix('sha256:')}.json"
+    if not kept.exists():
+        kept.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        descriptor = os.open(kept, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
+    return kept
 
 
 def prepare_inputs(stack: Stack, private: Path) -> None:
@@ -181,8 +204,11 @@ def provision(private: Path, *, destroy_first: bool, stability_interval_s: float
         stack, population=population, seed_truth=truth, recovery=recovery,
         stability=stability,
         browser_version=(private / "qualification" / "browser-version.txt").read_text().strip())
-    _private_write(private / "qualification" / "fixture-manifest.json",
-                   (json.dumps(record, indent=2, sort_keys=True) + "\n").encode())
+    target = private / "qualification" / "fixture-manifest.json"
+    # The manifest this rebuild replaces stays readable in full under its digest.
+    keep_manifest(target)
+    _private_write(target, (json.dumps(record, indent=2, sort_keys=True) + "\n").encode())
+    keep_manifest(target)
     mark("manifest")
     identities = {key: value for key, value in truth.items() if key != "frozen_crons"}
     return {

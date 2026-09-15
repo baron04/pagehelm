@@ -11,6 +11,14 @@ the candidate and fixture every header binds, forged bindings, report gating, th
 and held-out chain rules, the freeze state machine, the escrow and its custody, and the formal
 entry's refusals.
 
+On the live stack it also shows that typed provider failures are classified from the gateway's
+records, alike on both arms; that the attempt wall clock stops a running turn and times the
+panel's cancel feedback; and that an uncertain reset is refused until it is re-armed. Last, the
+formal development entry itself runs end to end on this stack against a loopback provider, its
+records kept in a rehearsal workbench and root: a driver process killed mid-attempt is recovered
+and replaced, and a changed model string, an unrecorded call, a refused credential and an
+operator stop each seal their batch.
+
     python -m evals.odoo.qualify run
     python -m evals.odoo.qualify sample d01 --arm woa_product
 """
@@ -23,8 +31,10 @@ import json
 import os
 import secrets
 import shutil
+import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -212,7 +222,8 @@ def _slot_fields(slot: dict[str, Any]) -> dict[str, Any]:
     return {key: slot[key] for key in ("slot_id", "arm", "task_id", "replicate")}
 
 
-def create_batch(ctx: Context, name: str, specs: list[SlotSpec]) -> Path:
+def create_batch(ctx: Context, name: str, specs: list[SlotSpec], *,
+                 budgets: GatewayBudgets | None = None) -> Path:
     """A new qualification ledger whose schedule is exactly ``specs``; nothing runs yet."""
     ledgers = ctx.root / "ledgers"
     ledgers.mkdir(mode=0o700, exist_ok=True)
@@ -226,8 +237,8 @@ def create_batch(ctx: Context, name: str, specs: list[SlotSpec]) -> Path:
         "provider_config_digest": protocol.provider_config_digest(), "slots": slots,
         "previous_batch": None, "schedule_seed": None,
         "provider_binding_digest": provider_binding_digest(ScriptedBackend().identity(),
-                                                           protocol_budgets()),
-        **batch_bindings(ctx)})
+                                                           budgets or protocol_budgets()),
+        "ledger_contract_digest": ledger.LEDGER_CONTRACT_DIGEST, **batch_bindings(ctx)})
     return path
 
 
@@ -245,10 +256,11 @@ def batch_record(path: Path, summary: dict[str, Any], specs: list[SlotSpec]) -> 
 def run_batch(ctx: Context, name: str, specs: list[SlotSpec], playwright: Any, *,
               budgets: GatewayBudgets | None = None, stack: Stack | None = None,
               recovery_dir: Path | None = None,
-              between: Callable[[ProviderGateway, int], None] | None = None) -> dict[str, Any]:
-    path = create_batch(ctx, name, specs)
+              between: Callable[[ProviderGateway, int], None] | None = None,
+              attempt_wall_s: float | None = None) -> dict[str, Any]:
+    path = create_batch(ctx, name, specs, budgets=budgets)
     with open_driver(ctx, path, playwright, budgets=budgets, stack=stack,
-                     recovery_dir=recovery_dir) as driver:
+                     recovery_dir=recovery_dir, attempt_wall_s=attempt_wall_s) as driver:
         slots = ledger.read(path)[1]["slots"]
         for index, (spec, slot) in enumerate(zip(specs, slots)):
             if between is not None and index:
@@ -386,6 +398,15 @@ def reset_probes(ctx: Context) -> dict[str, Any]:
     (half / "recovery.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
     results["half_restore"] = _restore(ctx, half)
 
+    # An interrupted reset leaves an uncertain record: refused until an operator re-arms it, and
+    # then restored and verified like any other.
+    uncertain = copy("uncertain-reset")
+    record = fixture._seal({**json.loads((uncertain / "recovery.json").read_text()),
+                            "status": "INDETERMINATE"})
+    (uncertain / "recovery.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+    results["uncertain_refused"] = _restore(ctx, uncertain)
+    results["uncertain_rearmed"] = _restore(ctx, uncertain, rearm=True)
+
     # Positive control: a real write, put back by the real baseline.
     writer = OdooActorClient(base_url=ctx.stack.rpc_url, api_key_file=ctx.keys["writer"])
     writer.execute("res.partner", "create", [{"name": "P74 Reset Probe Customer",
@@ -393,7 +414,8 @@ def reset_probes(ctx: Context) -> dict[str, Any]:
     results["positive_reset"] = _restore(ctx, real, rearm=True)
     results["repeat_reset"] = _restore(ctx, real)
     expected = {"wrong_archive": "FAIL", "wrong_project": "FAIL", "missing_object": "FAIL",
-                "half_restore": "FAIL", "positive_reset": "PASS", "repeat_reset": "PASS"}
+                "half_restore": "FAIL", "uncertain_refused": "INDETERMINATE",
+                "uncertain_rearmed": "PASS", "positive_reset": "PASS", "repeat_reset": "PASS"}
     return {"results": {key: {"status": value["status"], "basis": value.get("basis", [])}
                         for key, value in results.items()},
             "as_expected": all(results[key]["status"] == value for key, value in expected.items())}
@@ -417,15 +439,315 @@ def mutation_stack(ctx: Context) -> Stack:
     return dataclasses.replace(ctx.stack, extra_compose=(overlay,))
 
 
+# -- the formal development entry, end to end on this stack --------------------------------------
+
+REHEARSAL_MODEL = "p74-rehearsal/v1"
+REHEARSAL_REVIEWER = "P7.4a qualification rehearsal"
+
+
+class RehearsalProvider:
+    """The evaluation provider of a formal rehearsal, reached through the real upstream path.
+
+    It answers the canary, and every product call from the qualification's script for the task
+    whose attempt the rehearsal ledgers have open; a task without a script ends unable, and a
+    replacement starts its script afresh. For a batch's schedule slot it can refuse the
+    credential, answer under a model string the preflight did not see, or first run an action
+    once, such as making the spend ledger unwritable or asking the running batch to stop.
+    """
+
+    def __init__(self, ctx: Any, ledgers: Path):
+        self.ctx, self.ledgers = ctx, ledgers
+        self.faults: dict[tuple[str, int], str] = {}
+        self.actions: dict[tuple[str, int], Callable[[], Any]] = {}
+        self._policies: dict[tuple[str, str], Callable[[dict[str, Any], int], dict[str, Any]]] = {}
+        self._calls: dict[tuple[str, str], int] = {}
+        self._lock = threading.Lock()
+        provider = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *_args: Any) -> None:
+                return
+
+            def do_POST(self) -> None:  # noqa: N802 - http.server naming
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+                status, payload = provider.answer(body)
+                data = json.dumps(payload).encode()
+                try:
+                    self.send_response(status)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                except OSError:
+                    pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.daemon_threads = True
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    @property
+    def base_url(self) -> str:
+        return f"http://127.0.0.1:{self.server.server_address[1]}/v1"
+
+    def close(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+
+    def _open_attempt(self) -> tuple[str, str, int, str | None]:
+        for path in sorted(self.ledgers.glob("*.jsonl")):
+            summary = ledger.read(path)[1]
+            attempt_id = summary["open_attempt"]
+            if summary["status"] == "OPEN" and attempt_id is not None:
+                attempt = next(item for item in summary["attempts"]
+                               if item["attempt_id"] == attempt_id)
+                slot = [item["slot_id"] for item in summary["slots"]].index(attempt["slot_id"])
+                return summary["batch"]["batch_id"], attempt_id, slot, attempt["task_id"]
+        return "", "", -1, None
+
+    def _program(self, task_id: str | None) -> Callable[[dict[str, Any], int], dict[str, Any]]:
+        if task_id is not None:
+            try:
+                return c_program(self.ctx, task_id)
+            except KeyError:
+                pass
+        return S.WoaProgram({}).policy()
+
+    def answer(self, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        usage = {"prompt_tokens": 10, "completion_tokens": 2}
+        messages = body.get("messages") or [{}]
+        if messages[0].get("content") == canary.CANARY_PROMPT:
+            return 200, {"id": "rehearsal-canary", "object": "chat.completion",
+                         "model": REHEARSAL_MODEL, "usage": usage,
+                         "choices": [{"index": 0, "finish_reason": "stop", "message": {
+                             "role": "assistant", "content": str(canary.CANARY_ANSWER)}}]}
+        batch_id, attempt_id, slot, task_id = self._open_attempt()
+        with self._lock:
+            key = (batch_id, attempt_id)
+            index = self._calls[key] = self._calls.get(key, 0) + 1
+            if key not in self._policies:
+                self._policies[key] = self._program(task_id)
+            policy = self._policies[key]
+            action = self.actions.pop((batch_id, slot), None)
+            fault = self.faults.get((batch_id, slot))
+        if action is not None:
+            action()
+        if fault == "unauthorized":
+            return 401, {"error": {"code": "invalid_api_key"}}
+        model = "p74-rehearsal/drifted" if fault == "drifted" else REHEARSAL_MODEL
+        return 200, {**policy(body, index), "id": f"rehearsal-{index}",
+                     "object": "chat.completion", "model": model, "usage": usage}
+
+
+def rehearsal_paths(root: Path) -> formal.FormalPaths:
+    """Formal paths for a rehearsal: the real checkout, stack inputs and fixture, and everything
+    the entry writes -- workbench records, ledgers, preflights, spend -- under ``root``."""
+    return formal.FormalPaths(repository=REPOSITORY, private_dir=PRIVATE,
+                              workbench=root / "workbench",
+                              spend_ledger=root / "spend" / "model-spend.jsonl",
+                              formal_root=root / "formal",
+                              provider_config_file=root / "provider.json",
+                              rehearsal_qualifications=root / "qualification")
+
+
+def formal_child(root: Path) -> int:
+    """Run the rehearsal's formal development entry in this process; the parent kills it once
+    the first attempt's product has started."""
+    formal.run_development(rehearsal_paths(root), confirm_paid_calls=True)
+    return 0
+
+
+def formal_records_digest() -> dict[str, Any]:
+    """Digests of the formal records a rehearsal must leave alone."""
+    workbench = REPOSITORY / ".workbench"
+    places = {"formal_private": PRIVATE / "formal", "freezes": workbench / formal.FREEZES,
+              "custody": (workbench / formal.CUSTODY).parent,
+              "batches": workbench / formal.BATCHES}
+
+    def digest(path: Path) -> Any:
+        if not path.exists():
+            return None
+        return sorted((str(item.relative_to(path)), hashlib.sha256(item.read_bytes()).hexdigest())
+                      for item in path.rglob("*") if item.is_file())
+
+    return {name: digest(path) for name, path in places.items()}
+
+
+def _rehearsal_records(root: Path, started: str) -> dict[str, dict[str, Any]]:
+    """A synthetic accepted family review, the first freeze on it and an attested custody record;
+    they exist only in the rehearsal workbench."""
+    development, heldout, split = (json.loads(path.read_text()) for path in (
+        harness.DEVELOPMENT_SEAL, harness.HELDOUT_SEAL, harness.SPLIT_VERIFICATION))
+    review = freeze.family_review_record(
+        reviewer=REHEARSAL_REVIEWER, reviewed_at=started, verdict="ACCEPT",
+        development_seal=development, heldout_seal=heldout,
+        findings=["synthetic acceptance that exists only in this rehearsal workbench"])
+    head = subprocess.run(["git", "-C", str(REPOSITORY), "rev-parse", "HEAD"], check=True,
+                          capture_output=True, text=True).stdout.strip()
+    external = freeze.external_review_record(
+        reviewer=REHEARSAL_REVIEWER, reviewed_at=started, reviewed_commit=head,
+        protocol_digest=protocol.document()["protocol_digest"],
+        items={item: {"verdict": "ACCEPT", "evidence": ["synthetic rehearsal acceptance"]}
+               for item in protocol.EXTERNAL_REVIEW["items"]},
+        findings=["synthetic acceptance that exists only in this rehearsal workbench"])
+    stamp = started.replace("-", "").replace(":", "")
+    records = {f"{formal.REVIEWS}/external-review-{stamp}.json": external,
+               f"{formal.FREEZES}/family-review.json": review,
+               f"{formal.FREEZES}/first-freeze.json": freeze.first_freeze_record(
+                   development_seal=development, heldout_seal=heldout,
+                   split_verification=split, family_review=review, external_review=external)}
+    # Escrow copies live outside the repository; the custody record keeps no path, so the copies
+    # are removed as soon as it is written.
+    with tempfile.TemporaryDirectory(prefix="p74-rehearsal-escrow-") as directory:
+        archive = Path(directory) / "archive" / "p74.escrow"
+        secret = Path(directory) / "secret" / "p74.secret"
+        escrow.create(PRIVATE, archive, secret)
+        records[formal.CUSTODY] = escrow.custody_record(
+            private_dir=PRIVATE, archive=archive, secret=secret,
+            original_attestation="rehearsal original", archive_attestation="rehearsal archive",
+            secret_attestation="rehearsal secret", attested_by=REHEARSAL_REVIEWER)
+    return records
+
+
+def formal_rehearsal_probe(ctx: Context, started: str) -> dict[str, Any]:
+    """The formal development entry, end to end on this stack against a loopback provider.
+
+    Four batches run through ``formal.run_development`` with every record in the rehearsal
+    workbench and root: a driver process killed mid-attempt is recovered and replaced before a
+    model string the preflight did not see seals the first; a call the spend ledger cannot
+    record seals the second, which only a committed reconciliation of the provider bill lets the
+    third follow; a refused credential seals the third, which a later preflight must follow; and
+    an operator stop requested during its first attempt seals the fourth.
+    """
+    before = formal_records_digest()
+    root = ctx.root / "formal-rehearsal" / started.replace("-", "").replace(":", "")
+    paths = rehearsal_paths(root)
+    result: dict[str, Any] = {"root": str(root.relative_to(REPOSITORY))}
+    provider = RehearsalProvider(ctx, paths.ledgers)
+    try:
+        paths.workbench.mkdir(parents=True)
+        for command in (("init", "-q"), ("commit", "-q", "--allow-empty", "-m", "rehearsal")):
+            subprocess.run(["git", "-C", str(paths.workbench), *command], check=True,
+                           capture_output=True)
+        for relative, value in _rehearsal_records(root, started).items():
+            formal.commit_record(paths.workbench, relative, value,
+                                 f"rehearsal: record {Path(relative).name}")
+        key = root / "evaluation.key"
+        key.write_text(secrets.token_urlsafe(32) + "\n")
+        os.chmod(key, 0o600)
+        paths.provider_config.write_text(json.dumps({"base_url": provider.base_url,
+                                                     "key_file": str(key)}))
+        # This run is still taking the qualification the entry needs, so the rehearsal records a
+        # synthetic one for the running candidate and manifest, read only through its own paths.
+        manifest = json.loads(fixture_manifest_path(PRIVATE).read_text())
+        paths.rehearsal_qualifications.mkdir(mode=0o700, parents=True)
+        stamp = started.replace("-", "").replace(":", "")
+        (paths.rehearsal_qualifications / f"p74a-qualification-{stamp}.json").write_text(
+            json.dumps({"kind": "p74a_rehearsal_qualification", "status": "READY",
+                        "candidate": manifest["candidate"],
+                        "fixture_manifest_digest": manifest["manifest_digest"],
+                        "offline": {"protocol_digest": protocol.document()["protocol_digest"]}}))
+        result["preflight"] = formal.run_preflight(paths, confirm_paid_calls=True)["status"]
+
+        provider.faults[("p74b-development-001", 1)] = "drifted"
+        first = paths.ledgers / "p74b-development-001.jsonl"
+        child = subprocess.Popen([sys.executable, "-m", "evals.odoo.qualify", "formal-child",
+                                  str(root)], cwd=REPOSITORY, env=_child_env(),
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        deadline = time.monotonic() + 900
+        while child.poll() is None and time.monotonic() < deadline:
+            if first.exists() and any(entry["kind"] == "attempt_checkpoint"
+                                      for entry in ledger.read(first)[0]):
+                break
+            time.sleep(0.2)
+        if child.poll() is None:
+            child.send_signal(signal.SIGKILL)
+        result["child_exit_status"] = child.wait(timeout=120)
+        # The dead driver's Agent may still be mid-turn; cutting its provider path keeps a late
+        # request from reaching the next gateway.
+        ctx.stack.compose("stop", "provider-relay", timeout=120)
+        formal.run_development(paths, confirm_paid_calls=True)
+
+        spend = paths.spend()
+        provider.actions[("p74b-development-002", 0)] = lambda: os.chmod(spend, 0o400)
+        try:
+            formal.run_development(paths, confirm_paid_calls=True)
+        finally:
+            os.chmod(spend, 0o600)
+        # A writable spend ledger is not enough: the unrecorded call is reconciled first.
+        result["reconciliation_required"] = formal.status(paths)["checks"][
+            "billing_reconciliation"].startswith("refused")
+        reconciled = formal.record_billing_reconciliation(
+            paths, spend_batch_id="p74b-development-002", owner=REHEARSAL_REVIEWER,
+            reconciled_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            billed_calls=1, billed_cost_cny=0.0,
+            evidence_digest="sha256:" + hashlib.sha256(b"rehearsal: no bill exists").hexdigest(),
+            notes=["synthetic reconciliation that exists only in this rehearsal workbench"])
+
+        provider.faults[("p74b-development-003", 0)] = "unauthorized"
+        formal.run_development(paths, confirm_paid_calls=True)
+        result["continuation_record_linked"] = ledger.read(
+            paths.ledgers / "p74b-development-003.jsonl")[1]["batch"]["previous_batch"][
+            "continuation_record"] == reconciled["reconciliation_digest"]
+        result["preflight_refused_after_the_credential_seal"] = formal.status(paths)[
+            "checks"]["preflight"].startswith("refused")
+        time.sleep(1.1)  # a preflight's time has whole seconds; this one must follow the seal
+        result["later_preflight"] = formal.run_preflight(paths, confirm_paid_calls=True)["status"]
+
+        provider.actions[("p74b-development-004", 0)] = lambda: formal.stop_development(paths)
+        formal.run_development(paths, confirm_paid_calls=True)
+
+        result["batches"] = [{"seal_reason": summary["seal_reason"], "attempts": [
+            {name: item[name] for name in ("attempt_id", "terminal", "replacement_of",
+                                           "replacement_eligible", "product_outcome",
+                                           "apparatus_code")}
+            for item in summary["attempts"]]}
+            for summary in (ledger.read(path)[1] for path in sorted(paths.ledgers.glob("*.jsonl")))]
+        result["chain_heads_committed"] = formal.status(paths)["checks"]["batch_records"]
+        result["report"] = [entry["verdict_status"]
+                            for entry in formal.development_report(paths)["batches"]]
+    except Exception as exc:  # recorded, so one failed probe cannot lose the whole run
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    finally:
+        provider.close()
+    result["formal_records_untouched"] = formal_records_digest() == before
+    result["holds"] = _rehearsal_holds(result)
+    return result
+
+
+def _rehearsal_holds(result: dict[str, Any]) -> bool:
+    batches = result.get("batches") or []
+    if "error" in result or len(batches) != 4:
+        return False
+    first, unaccounted, credential, stopped = batches
+    interrupted, replacement = (first["attempts"] + [{}, {}])[:2]
+    return (result["preflight"] == "READY" and result["child_exit_status"] == -signal.SIGKILL
+            and interrupted.get("terminal") == "interrupted_attempt"
+            and interrupted.get("replacement_eligible") is True
+            and replacement.get("replacement_of") == interrupted.get("attempt_id")
+            and first["seal_reason"] == "model_identity_changed"
+            and unaccounted["seal_reason"] == "accounting_failure"
+            and unaccounted["attempts"][-1]["apparatus_code"] == "accounting_failure"
+            and result["reconciliation_required"] is True
+            and result["continuation_record_linked"] is True
+            and credential["seal_reason"] == "provider_authentication_failed"
+            and result["preflight_refused_after_the_credential_seal"] is True
+            and result["later_preflight"] == "READY"
+            and stopped["seal_reason"] == "operator_stop" and len(stopped["attempts"]) == 1
+            and result["chain_heads_committed"] == "READY"
+            and result["report"] == ["descriptive_only"] * 4
+            and result["formal_records_untouched"] is True)
+
+
 # -- formal closure probes -------------------------------------------------------------------------
 
-CLOSURE_CHECKS = ("gateway_contract_fails_closed", "upstream_path_accounts_every_call",
+CLOSURE_CHECKS =("gateway_contract_fails_closed", "upstream_path_accounts_every_call",
                   "provider_binding_follows_endpoint_and_key",
                   "headers_bind_the_verified_candidate", "forged_bindings_refused",
                   "reports_gate_only_on_the_frozen_plan", "development_chain_rule_holds",
                   "freezes_refuse_unreviewed_or_arbitrary_records", "escrow_verifies_and_restores",
                   "custody_refuses_a_single_failure_domain",
-                  "formal_entry_refuses_without_prerequisites", "spend_ledgers_untouched")
+                  "formal_entry_refuses_without_prerequisites", "spend_ledgers_untouched",
+                  "ledger_contract_isolates_versions", "qualification_binds_manifest_and_image")
 
 
 class LoopbackProvider:
@@ -527,6 +849,7 @@ def _upstream_probe(probe: Path) -> dict[str, Any]:
                   "role": "assistant", "content": str(canary.CANARY_ANSWER)}}],
               "usage": {"prompt_tokens": 20, "completion_tokens": 2}}
     provider = LoopbackProvider([(200, answer, 0.0), (503, {"error": {"code": "busy"}}, 0.0),
+                                 (408, {"error": {"message": "timed out"}}, 0.0),
                                  (200, answer, 3.0)])
     try:
         backend = UpstreamBackend(base_url=provider.base_url, key_file=key,
@@ -534,7 +857,7 @@ def _upstream_probe(probe: Path) -> dict[str, Any]:
                                   spend_ledger=probe / "spend.jsonl",
                                   batch_id="p74a-closure-probe", timeout_s=1.0)
         calls = [backend.complete(dict(contract), attempt_id="p74a-closure-probe",
-                                  call_index=index) for index in (1, 2, 3)]
+                                  call_index=index) for index in (1, 2, 3, 4)]
     finally:
         provider.close()
     rows = [json.loads(line)["accounting_status"]
@@ -545,9 +868,10 @@ def _upstream_probe(probe: Path) -> dict[str, Any]:
     return {"results": results, "request_id_sent": request_id_sent, "spend_rows": rows,
             "accounts_every_call": (
                 results == [["ok", None], ["http_error", "provider_unavailable"],
+                            ["http_error", "provider_deadline"],
                             ["transport_error", "provider_deadline"]]
                 and request_id_sent
-                and rows == ["reported", "usage_unavailable", "usage_unavailable"])}
+                and rows == ["reported"] + ["usage_unavailable"] * 3)}
 
 
 def _provider_identity_probe(probe: Path) -> dict[str, Any]:
@@ -582,12 +906,20 @@ def _chain_rule_probe(probe: Path, sample: dict[str, Any]) -> dict[str, Any]:
     completed = {"batch_id": "p74a-chain-probe-000", "purpose": "development",
                  "protocol_digest": sample["protocol_digest"],
                  "candidate_commit": sample["candidate"]["commit"],
-                 "chain_head": "sha256:" + "0" * 64, "termination_reason": "batch_completed"}
+                 "chain_head": "sha256:" + "0" * 64, "termination_reason": "batch_completed",
+                 "continuation_record": None}
     other = {**sample["candidate"], "commit": "0" * 40, "agent_image_revision": "0" * 40}
+    heldout = {**development, "purpose": "heldout", "candidate": other}
+    record_digest = "sha256:" + hashlib.sha256(b"a committed continuation record").hexdigest()
 
     def allowed(name: str, header: dict[str, Any]) -> bool:
         return not _refused(lambda: ledger.create(probe / f"chain-{name}.jsonl", {
             **header, "batch_id": f"p74a-chain-{name}"}), ledger.LedgerError)
+
+    def ended(reason: str, purpose: str = "development",
+              continuation: str | None = None) -> dict[str, Any]:
+        return {**completed, "purpose": purpose, "termination_reason": reason,
+                "continuation_record": continuation}
 
     record = {
         "new_candidate_follows_a_completed_batch": allowed(
@@ -595,11 +927,21 @@ def _chain_rule_probe(probe: Path, sample: dict[str, Any]) -> dict[str, Any]:
         "same_candidate_refused_after_completion": not allowed(
             "same-candidate", {**development, "previous_batch": completed}),
         "same_candidate_follows_an_exogenous_stop": allowed("exogenous", {
-            **development, "previous_batch": {**completed,
-                                              "termination_reason": "model_identity_changed"}}),
+            **development, "previous_batch": ended("model_identity_changed")}),
         "heldout_refused_after_completion_under_the_same_protocol": not allowed("heldout", {
-            **development, "purpose": "heldout", "candidate": other,
-            "previous_batch": {**completed, "purpose": "heldout"}}),
+            **heldout, "previous_batch": ended("batch_completed", "heldout")}),
+        "unaccounted_call_needs_its_reconciliation": (
+            not allowed("unreconciled", {**development, "candidate": other,
+                                         "previous_batch": ended("accounting_failure")})
+            and allowed("reconciled", {**development, "candidate": other,
+                                       "previous_batch": ended("accounting_failure",
+                                                               continuation=record_digest)})),
+        "heldout_restart_after_a_refused_credential_needs_its_audit": (
+            not allowed("heldout-unaudited", {
+                **heldout, "previous_batch": ended("provider_authentication_failed", "heldout")})
+            and allowed("heldout-audited", {
+                **heldout, "previous_batch": ended("provider_authentication_failed", "heldout",
+                                                   record_digest)})),
     }
     return {**record, "holds": all(record.values())}
 
@@ -681,15 +1023,40 @@ def _freeze_probe(started: str) -> dict[str, Any]:
         reviewer="P7.4a qualification probe", reviewed_at=started, verdict="REVISE",
         development_seal=development, heldout_seal=heldout,
         findings=["probe: a REVISE verdict must not open the first freeze"])
+    accept = freeze.family_review_record(
+        reviewer="P7.4a qualification probe", reviewed_at=started, verdict="ACCEPT",
+        development_seal=development, heldout_seal=heldout, findings=[])
+    head = subprocess.run(["git", "-C", str(REPOSITORY), "rev-parse", "HEAD"], check=True,
+                          capture_output=True, text=True).stdout.strip()
+    items = {item: {"verdict": "ACCEPT", "evidence": ["probe"]}
+             for item in protocol.EXTERNAL_REVIEW["items"]}
+    revised_item = sorted(items)[0]
+
+    def external(conclusions: dict[str, Any]) -> dict[str, Any]:
+        return freeze.external_review_record(
+            reviewer="P7.4a qualification probe", reviewed_at=started, reviewed_commit=head,
+            protocol_digest=protocol.document()["protocol_digest"], items=conclusions)
+
+    accepted = external(items)
+    revised = external({**items, revised_item: {"verdict": "REVISE",
+                                                "evidence": ["probe: one item revised"]}})
+
+    def first_freeze(family: dict[str, Any], review: Any) -> Any:
+        return freeze.first_freeze_record(development_seal=development, heldout_seal=heldout,
+                                          split_verification=split, family_review=family,
+                                          external_review=review)
+
     record = {
         "stage": protocol.document()["stage"],
         "arbitrary_first_freeze_refused": _refused(
             lambda: protocol.document(first_freeze={"kind": "p74_first_freeze"}),
             freeze.FreezeError),
-        "revised_review_refused": _refused(
-            lambda: freeze.first_freeze_record(development_seal=development, heldout_seal=heldout,
-                                               split_verification=split, family_review=revise),
-            freeze.FreezeError),
+        "revised_review_refused": _refused(lambda: first_freeze(revise, accepted),
+                                           freeze.FreezeError),
+        "revised_external_review_refused": _refused(lambda: first_freeze(accept, revised),
+                                                    freeze.FreezeError),
+        "family_review_never_stands_in_for_the_external_review": _refused(
+            lambda: first_freeze(accept, accept), freeze.FreezeError),
         "second_without_first_refused": _refused(
             lambda: protocol.document(second_freeze={"kind": "p74_second_freeze"}),
             freeze.FreezeError),
@@ -724,7 +1091,81 @@ def _formal_entry_probe() -> dict[str, Any]:
                            formal.FormalError)
     return {"checks": state["checks"], "unconfirmed_refused": unconfirmed,
             "refuses": (unconfirmed and state["development_can_start"] is False
-                        and state["checks"]["first_freeze"].startswith("refused"))}
+                        and state["checks"]["first_freeze"].startswith("refused")
+                        and state["checks"]["external_review"].startswith("refused"))}
+
+
+def _ledger_contract_probe(probe: Path, sample: dict[str, Any]) -> dict[str, Any]:
+    """A ledger written under another contract is refused whole, by the ledger and by the chain,
+    and left as it was written."""
+    root = probe / "contract-probe"
+    path = root / "ledgers" / "p74b-development-001.jsonl"
+    path.parent.mkdir(mode=0o700, parents=True)
+    older = "sha256:" + hashlib.sha256(b"an earlier ledger contract").hexdigest()
+    entry = ledger._new_entry("batch_header", {**sample, "batch_id": "p74b-development-001",
+                                               "ledger_contract_digest": older}, 0, None, None)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(ledger._json_line(entry))
+    written = path.read_bytes()
+    paths = formal.FormalPaths(repository=REPOSITORY, private_dir=PRIVATE,
+                               workbench=probe / "contract-workbench",
+                               spend_ledger=probe / "contract-spend.jsonl", formal_root=root,
+                               provider_config_file=probe / "contract-provider.json")
+    try:
+        formal.development_chain(paths)
+        chain = "read"
+    except formal.FormalError as exc:
+        chain = str(exc)
+    record = {
+        "ledger_refuses_it": _refused(lambda: ledger.read(path), ledger.LedgerContractError),
+        "chain_refuses_it": "another ledger contract" in chain,
+        "left_as_written": path.read_bytes() == written}
+    return {**record, "holds": all(record.values())}
+
+
+def _qualification_binding_probe(probe: Path, candidate: dict[str, Any]) -> dict[str, Any]:
+    """At the paid boundary a qualification must name the fixture manifest and Agent image in
+    place now; a rehearsal's own qualification counts only while its effects stay apart."""
+    manifest = json.loads(fixture_manifest_path(PRIVATE).read_text())
+    root = probe / "qualification-probe"
+    records = root / "qualification"
+    records.mkdir(mode=0o700, parents=True)
+    key = root / "evaluation.key"
+    key.write_text(secrets.token_urlsafe(32) + "\n")
+    os.chmod(key, 0o600)
+    (root / "provider.json").write_text(json.dumps({"base_url": "http://127.0.0.1:9/v1",
+                                                    "key_file": str(key)}))
+    paths = formal.FormalPaths(repository=REPOSITORY, private_dir=PRIVATE,
+                               workbench=root / "workbench", spend_ledger=root / "spend.jsonl",
+                               formal_root=root / "formal",
+                               provider_config_file=root / "provider.json",
+                               rehearsal_qualifications=records)
+    genuine = {"status": "READY", "candidate": candidate,
+               "fixture_manifest_digest": manifest["manifest_digest"],
+               "offline": {"protocol_digest": protocol.document()["protocol_digest"]}}
+    forged = "sha256:" + hashlib.sha256(b"a manifest or an image from another build").hexdigest()
+
+    def verdict(stamp: str, **changes: Any) -> str:
+        (records / f"p74a-qualification-{stamp}.json").write_text(
+            json.dumps({**genuine, **changes}))
+        try:
+            formal.qualification_for_head(paths, candidate=candidate,
+                                          manifest_digest=manifest["manifest_digest"])
+        except formal.FormalError as exc:
+            return str(exc)
+        return "READY"
+
+    record = {
+        "genuine_accepted": verdict("20000101T000001Z") == "READY",
+        "another_manifest_refused": "another fixture manifest" in verdict(
+            "20000101T000002Z", fixture_manifest_digest=forged),
+        "another_image_refused": "another Agent image" in verdict(
+            "20000101T000003Z", candidate={**candidate, "agent_image_id": forged}),
+        "shared_rehearsal_refused": _refused(lambda: formal.qualification_for_head(
+            dataclasses.replace(paths, formal_root=None)), formal.FormalError),
+    }
+    return {**record, "holds": all(record.values())}
 
 
 def closure_checks(ctx: Context, batches: dict[str, Any], *, candidate: dict[str, Any],
@@ -745,7 +1186,13 @@ def closure_checks(ctx: Context, batches: dict[str, Any], *, candidate: dict[str
     held = _escrow_probe(probe)
     custody = _custody_probe()
     entry = _formal_entry_probe()
+    contract_versions = _ledger_contract_probe(probe, headers["samples"])
+    boundary = _qualification_binding_probe(probe, candidate)
     return {
+        "ledger_contract": contract_versions,
+        "ledger_contract_isolates_versions": contract_versions["holds"],
+        "qualification_binding": boundary,
+        "qualification_binds_manifest_and_image": boundary["holds"],
         "gateway_contract": contract, "gateway_contract_fails_closed": contract["fails_closed"],
         "upstream_path": upstream,
         "upstream_path_accounts_every_call": upstream["accounts_every_call"],
@@ -899,6 +1346,35 @@ def run(ctx: Context) -> dict[str, Any]:
             "status"]
         batches["domain_mutation"] = run_batch(ctx, "p74a-domain-mutation", [
             SlotSpec("d08", W, "FAIL")], playwright, stack=mutation_stack(ctx))
+        # Typed provider failures, classified from the gateway's records on either arm.
+        batches["typed_rate_limit"] = run_batch(ctx, "p74a-typed-rate-limit", [
+            SlotSpec("d01", W, "REPLACED_PASS", faults={1: "http_429"})], playwright)
+        batches["typed_rate_limit_pageagent"] = run_batch(
+            ctx, "p74a-typed-rate-limit-pageagent",
+            [SlotSpec("d01", A, "REPLACED_PASS", faults={1: "http_429"})], playwright)
+        batches["typed_response_contract"] = run_batch(ctx, "p74a-typed-response-contract", [
+            SlotSpec("d01", W, "REPLACED_PASS", faults={1: "malformed_response"})], playwright)
+        batches["typed_context_length"] = run_batch(ctx, "p74a-typed-context-length", [
+            SlotSpec("d01", W, "FAIL", faults={1: "context_length"})], playwright)
+        batches["typed_credential"] = run_batch(ctx, "p74a-typed-credential", [
+            SlotSpec("d01", W, "SEAL:provider_authentication_failed", faults={1: "http_401"}),
+            SlotSpec("d02", W, "NOT_RUN")], playwright)
+        # A provider's HTTP 408 is its request deadline: the product's scorable ending on either
+        # arm, never an outage to replace.
+        batches["typed_deadline"] = run_batch(ctx, "p74a-typed-deadline", [
+            SlotSpec("d01", W, "FAIL", faults={1: "http_408"})], playwright)
+        batches["typed_deadline_pageagent"] = run_batch(ctx, "p74a-typed-deadline-pageagent", [
+            SlotSpec("d01", A, "FAIL", faults={1: "http_408"})], playwright)
+        # The product's 2,048-token cap exceeds this gateway's, so every request breaks it.
+        batches["typed_request_contract"] = run_batch(ctx, "p74a-typed-request-contract", [
+            SlotSpec("d01", W, "SEAL:request_contract_violation"), SlotSpec("d02", W, "NOT_RUN")],
+            playwright, budgets=protocol_budgets(max_output_tokens=1024))
+        # A turn still waiting for the provider when the attempt's wall clock runs out is stopped
+        # through the panel, and its stop feedback is timed.
+        batches["attempt_wall"] = run_batch(ctx, "p74a-attempt-wall", [
+            SlotSpec("d01", W, "WALL_CLOCK_BUDGET", faults={1: "slow_answer"})], playwright,
+            attempt_wall_s=8)
+    result["formal_rehearsal"] = formal_rehearsal_probe(ctx, started)
     result["batches"] = {name: {"ledger": batch["ledger"], "status": batch["summary"]["status"],
                                 "seal_reason": batch["summary"]["seal_reason"],
                                 "slots": selected_outcomes(batch)}
@@ -960,7 +1436,7 @@ def evaluate_checks(result: dict[str, Any], batches: dict[str, Any]) -> dict[str
                                                for row in samples) >= 3,
         "negative_controls_fail": all(outcome_is(row, "FAIL") for row in rows("negatives")),
         "provider_fault_replaced_then_cap_sealed": _fault_batch(view["faults_provider"],
-                                                                "provider_http_5xx"),
+                                                                "provider_unavailable"),
         "harness_fault_replaced_then_cap_sealed": _fault_batch(view["faults_harness"],
                                                                "evaluator_exception"),
         "prestart_fault_replaced_then_cap_sealed": _fault_batch(view["faults_prestart"],
@@ -978,6 +1454,28 @@ def evaluate_checks(result: dict[str, Any], batches: dict[str, Any]) -> dict[str
         "baseline_restored_after_reset_failure": result["post_reset_failure_restore"] == "PASS",
         "budget_refusal_is_product_failure": outcome_is(rows("budget")[0], "FAIL"),
         "domain_mutation_fails_evaluator": outcome_is(rows("domain_mutation")[0], "FAIL"),
+        "rate_limit_replaced_on_woa": _replaced(view["typed_rate_limit"], "provider_rate_limited"),
+        "rate_limit_replaced_on_pageagent": _replaced(view["typed_rate_limit_pageagent"],
+                                                      "provider_rate_limited"),
+        "response_contract_fault_replaced": _replaced(view["typed_response_contract"],
+                                                      "provider_response_contract"),
+        "context_rejection_scored_as_product": (
+            view["typed_context_length"]["status"] == "COMPLETE"
+            and outcome_is(rows("typed_context_length")[0], "FAIL")),
+        **{f"deadline_answer_scored_as_product_on_{arm}": (
+            view[name]["status"] == "COMPLETE" and len(rows(name)[0]["attempts"]) == 1
+            and outcome_is(rows(name)[0], "FAIL"))
+           for arm, name in (("woa", "typed_deadline"),
+                             ("pageagent", "typed_deadline_pageagent"))},
+        "refused_credential_seals": (
+            view["typed_credential"]["seal_reason"] == "provider_authentication_failed"
+            and _selected(rows("typed_credential")[0])["replacement_eligible"] is False),
+        "request_outside_contract_seals_as_product_failure": (
+            view["typed_request_contract"]["seal_reason"] == "request_contract_violation"
+            and outcome_is(rows("typed_request_contract")[0], "FAIL")),
+        "attempt_wall_stops_the_turn_and_is_scored": _wall_clock_ok(view["attempt_wall"],
+                                                                   batches["attempt_wall"]),
+        "formal_entry_end_to_end": result["formal_rehearsal"]["holds"] is True,
         "no_unclassified_results": not any(
             attempt["unclassified"] for batch in view.values() for row in batch["slots"]
             for attempt in row["attempts"]),
@@ -992,7 +1490,32 @@ def evaluate_checks(result: dict[str, Any], batches: dict[str, Any]) -> dict[str
                 if attempt["arm"] == "woa_product" and attempt.get("metrics")]
     measured = [value for value in feedback if value is not None]
     checks["submit_feedback_within_300ms"] = bool(measured) and max(measured) <= 300
+    stops = [attempt["metrics"].get("cancel_feedback_ms")
+             for batch in batches.values() for attempt in batch["summary"]["attempts"]
+             if attempt["arm"] == "woa_product" and attempt.get("metrics")]
+    stopped = [value for value in stops if value is not None]
+    checks["cancel_feedback_within_300ms"] = bool(stopped) and max(stopped) <= 300
     return checks
+
+
+def _replaced(batch: dict[str, Any], code: str) -> bool:
+    attempts = batch["slots"][0]["attempts"]
+    if batch["status"] != "COMPLETE" or len(attempts) != 2:
+        return False
+    original, replacement = attempts
+    return (original["apparatus_code"] == code and original["replacement_eligible"] is True
+            and replacement["replacement_of"] == original["attempt_id"]
+            and replacement["product_outcome"] == "PASS"
+            and replacement["apparatus_integrity"] == "VALID")
+
+
+def _wall_clock_ok(view: dict[str, Any], batch: dict[str, Any]) -> bool:
+    attempts = batch["summary"]["attempts"]
+    if view["status"] != "COMPLETE" or len(attempts) != 1:
+        return False
+    (attempt,) = attempts
+    return (attempt["product_outcome"] == "FAIL" and attempt["apparatus_integrity"] == "VALID"
+            and (attempt.get("metrics") or {}).get("cancel_feedback_ms") is not None)
 
 
 def _interrupted_ok(batch: dict[str, Any]) -> bool:
@@ -1029,7 +1552,10 @@ def main(argv: list[str] | None = None) -> int:
     sample.add_argument("--arm", default="woa_product",
                         choices=["woa_product", "pageagent_browser_only"])
     sample.add_argument("--variant", default="")
+    commands.add_parser("formal-child").add_argument("root")
     args = parser.parse_args(argv)
+    if args.command == "formal-child":
+        return formal_child(Path(args.root))
     ctx = load_context()
     if args.command == "child-attempt":
         return child_attempt(ctx, Path(args.ledger), args.index)

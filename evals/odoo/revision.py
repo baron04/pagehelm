@@ -97,3 +97,36 @@ def commit_time(repository: Path, commit: str) -> datetime:
     """When ``commit`` was committed, as an aware timestamp."""
     value = _git(repository, "show", "-s", "--format=%cI", require_commit(commit)).decode()
     return datetime.fromisoformat(value.strip())
+
+
+def is_ancestor(repository: Path, commit: str, descendant: str) -> bool:
+    """Whether ``commit`` is ``descendant`` itself or in its history."""
+    for value in (commit, descendant):
+        if not commit_exists(repository, value):
+            raise RevisionError(f"commit {value[:12]} does not exist in {repository}")
+    completed = subprocess.run(
+        ["git", "-C", str(repository), "merge-base", "--is-ancestor", commit, descendant],
+        capture_output=True, check=False, timeout=60)
+    if completed.returncode not in (0, 1):
+        raise RevisionError(f"commit {commit[:12]} cannot be compared with {descendant[:12]}")
+    return completed.returncode == 0
+
+
+def blob_ids_at(repository: Path, commit: str, paths: list[str]) -> dict[str, str | None]:
+    """The git blob id of each path as committed in ``commit``, or None where it is absent."""
+    if not commit_exists(repository, commit):
+        raise RevisionError(f"commit {commit[:12]} does not exist in {repository}")
+    found: dict[str, str] = {}
+    for line in _git(repository, "ls-tree", "-r", commit, "--", *paths).decode().splitlines():
+        meta, _, path = line.partition("\t")
+        found[path] = meta.split()[2]
+    return {path: found.get(path) for path in paths}
+
+
+def content_blob_ids(repository: Path, paths: list[str]) -> dict[str, str | None]:
+    """The git blob id each path's current content has, or None where the file is missing."""
+    present = [path for path in paths if (Path(repository) / path).is_file()]
+    ids = (_git(repository, "hash-object", "--no-filters", "--", *present).decode().split()
+           if present else [])
+    values = dict(zip(present, ids))
+    return {path: values.get(path) for path in paths}

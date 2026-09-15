@@ -17,7 +17,7 @@ from unittest import mock
 
 from evals.odoo import formal, harness, ledger, protocol
 from evals.odoo.revision import REPOSITORY
-from evals.odoo.tests.test_formal import FormalFixture, answer
+from evals.odoo.tests.test_formal import FormalFixture, answer, recovery
 from evals.odoo.tests.test_freeze import git
 from evals.odoo.tests.test_ledger import CLEAN_AGENT, DIGEST, OTHER, PASS, metrics
 
@@ -55,7 +55,25 @@ class DevelopmentRehearsal(FormalFixture):
         self.provider(*[answer()] * 5)
         self.freeze_commit = self.freeze()
         self.custody()
+        recovery(self.private)
+        self.qualify_head()
         self.assertEqual(self.preflight()["status"], "READY")
+
+    def qualify_head(self, **artifact_changes):
+        """A fixture manifest taken with this checkout's candidate and a newer READY qualification
+        of it; ``artifact_changes`` alter what that qualification bound."""
+        candidate = self.bindings()["candidate"]
+        self.manifest = {"manifest_digest": DIGEST, "fixture_id": "synthetic",
+                         "candidate": candidate}
+        path = harness.fixture_manifest_path(self.private)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self.manifest))
+        count = len(list(path.parent.glob("p74a-qualification-*.json")))
+        artifact = {"status": "READY", "candidate": candidate, "fixture_manifest_digest": DIGEST,
+                    "offline": {"protocol_digest": protocol.document()["protocol_digest"]},
+                    "checks": {}, **artifact_changes}
+        (path.parent / f"p74a-qualification-20260915T{count:06d}Z.json").write_text(
+            json.dumps(artifact))
 
     def bindings(self):
         """What ``harness.batch_bindings`` verifies on a live stack, for this checkout's HEAD."""
@@ -111,7 +129,7 @@ class DevelopmentRehearsal(FormalFixture):
         return harness.finish_batch(prepared.path)
 
     def announced(self, batch_id, name):
-        return formal.committed_record(self.workbench, f"{formal.BATCHES}/{batch_id}/{name}.json")
+        return formal.committed_record(self.workbench, formal.batch_record_path(batch_id, name))
 
     def test_preflight_announcement_attempts_closing_and_a_gated_report(self):
         prepared = self.prepare()
@@ -145,6 +163,10 @@ class DevelopmentRehearsal(FormalFixture):
         (self.checkout / "fix.txt").write_text("a product fix\n")
         git(self.checkout, "add", "fix.txt")
         git(self.checkout, "commit", "-q", "-m", "fix the product")
+        # The new candidate runs only once it has been qualified itself.
+        with self.assertRaisesRegex(formal.FormalError, "has not passed a zero-model"):
+            self.prepare()
+        self.qualify_head()
         second = self.prepare()
         link = second.header["previous_batch"]
         self.assertEqual((second.header["batch_id"], link["candidate_commit"],
@@ -171,6 +193,33 @@ class DevelopmentRehearsal(FormalFixture):
             ledger.create(self.root / "heldout.jsonl", heldout)
         self.assertEqual(formal.status(self.paths)["heldout"], formal.HELDOUT_UNAVAILABLE)
         self.assertEqual(untouchable(), self.before)
+
+    def test_a_batch_is_announced_with_the_full_manifest_it_binds(self):
+        path = harness.fixture_manifest_path(self.private)
+        path.write_text(json.dumps({**self.manifest, "manifest_digest": OTHER}))
+        with self.assertRaisesRegex(formal.FormalError, "not the one the batch binds"):
+            self.prepare()
+        self.assertEqual(list(self.paths.ledgers.glob("*")), [])
+        path.write_text(json.dumps(self.manifest))
+        prepared = self.prepare()
+        record, _ = self.announced(prepared.header["batch_id"], "header")
+        self.assertEqual(record["fixture_manifest"], self.manifest)
+
+    def test_the_paid_entry_itself_needs_a_qualification_of_this_manifest_and_image(self):
+        candidate = self.bindings()["candidate"]
+        stale = {"another_manifest": {"fixture_manifest_digest": OTHER},
+                 "another_image": {"candidate": {**candidate, "agent_image_id": OTHER}}}
+        for label, changes in stale.items():
+            with self.subTest(label=label):
+                self.qualify_head(**changes)
+                # A direct call, not only the command line, refuses before any batch exists.
+                with self.assertRaisesRegex(formal.FormalError, "qualify again"):
+                    self.prepare()
+                self.assertEqual(list(self.paths.ledgers.glob("*")), [])
+        self.qualify_head()
+        prepared = self.prepare()
+        record, _ = self.announced(prepared.header["batch_id"], "header")
+        self.assertTrue(record["qualification_digest"].startswith("sha256:"))
 
     def test_a_changed_key_invalidates_the_preflight_before_any_batch(self):
         settings = json.loads(self.paths.provider_config.read_text())

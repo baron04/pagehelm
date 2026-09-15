@@ -146,12 +146,21 @@ PROVIDER = {
     "context_window": ("provider-declared or unknown: the chat-completions canary does not obtain "
                        "it and nothing records it; request bytes stay the hard bound and a "
                        "context overflow is a scorable product result"),
+    "typed_outcomes": ("the gateway types every provider result -- answer, outage, rate limit, "
+                       "refused credential, context-length rejection, dropped connection, "
+                       "deadline, answer outside the response contract, unaccounted call -- and "
+                       "gateway_outcomes classifies every arm from those records alone; a "
+                       "deadline is one scorable ending whether the request timed out here or "
+                       "the provider answered HTTP 408, while 425 and 5xx are outages"),
+    "response_contract": ("an answer must be a JSON object that names its model and reports "
+                          "prompt and completion tokens; any other answer never reaches an arm"),
     "seed_supported": False,
     "streaming": False,
     "credential": "dedicated evaluation key held only by the gateway",
 }
 REPLACEMENT_POLICY = {
-    "eligible_apparatus_codes": sorted(outcomes.APPARATUS_WHITELIST),
+    "eligible_apparatus_codes": sorted(set(outcomes.APPARATUS_WHITELIST)
+                                       - set(outcomes.SEALING_APPARATUS_CODES)),
     "independent_evidence": sorted(outcomes.REPLACEMENT_EVIDENCE),
     "requires_dispatch_state": "none",
     "requires_reset": ["NOT_REQUIRED", "PASS"],
@@ -164,11 +173,31 @@ REPLACEMENT_POLICY = {
 STOP_POLICY = {
     "seal_reasons": ["critical_safety_event", "classification_contract_drift", "reset_failed",
                      "model_identity_changed", "unowned_model_request",
-                     "replacement_cap_exceeded", "ledger_corrupted", "state_contamination"],
+                     "replacement_cap_exceeded", "ledger_corrupted", "state_contamination",
+                     "operator_stop", "provider_authentication_failed", "accounting_failure",
+                     "request_contract_violation"],
     "sealed_batch": "no screening verdict; descriptive only; safety events still count",
-    "same_protocol_restart_only_after": ["model_identity_changed", "replacement_cap_exceeded"],
-    "heldout_retired_by": "any product, protocol, provider, specification or evaluator change "
-                          "after a held-out result has been seen",
+    "exogenous_stops": ["accounting_failure", "model_identity_changed",
+                        "provider_authentication_failed", "replacement_cap_exceeded"],
+    "after_exogenous_stop": ("the same development candidate may continue, and a qualification "
+                             "batch may start again under the same protocol version"),
+    "heldout_same_protocol_restart_after": ["model_identity_changed", "replacement_cap_exceeded"],
+    "heldout_audited_restart_after": ["accounting_failure", "provider_authentication_failed"],
+    "heldout_restart_audit": ("an independent audit, named by digest in the new batch's link, "
+                              "that the stopped batch exposed no model answer or judged product "
+                              "result, dispatched nothing and wrote no state; ledger.exposure "
+                              "lists what the stopped batch's own ledger shows"),
+    "after_authentication_failure": ("the cause is checked, and the next batch needs a preflight "
+                                     "taken after the seal"),
+    "after_accounting_failure": ("the gateway forwards nothing more; no paid call starts until "
+                                 "every call the spend ledger could not record is reconciled "
+                                 "against the provider bill in a record committed once with the "
+                                 "owner's conclusion, and the next batch's link names that record; "
+                                 "a spend ledger that can be written again is not enough"),
+    "heldout_retired_by": ("any product, protocol, provider, specification or evaluator change "
+                           "after a held-out result has been seen, and a held-out batch that "
+                           "stopped on a refused credential or an unaccounted call after exposing "
+                           "a result, a dispatch or a state write"),
 }
 APPROVAL_ORACLE = {
     "module": "evals/odoo/oracle.py",
@@ -179,6 +208,10 @@ RUNNERS = {
     "woa_product": "evals/odoo/runner_woa.py",
     "pageagent_browser_only": "evals/odoo/runner_pageagent.py",
     "input": "RunnerInput only: the user messages, entry path, actor and locale",
+    "wall_clock": ("a turn runs at most turn_wall_s and an attempt at most "
+                   "attempt_automatic_wall_s of automatic time, confirmation waits excluded; at a "
+                   "limit the runner stops the product as a person would, times the stop "
+                   "feedback, and the attempt ends as wall_clock_budget"),
     "never_receives": ["evaluator shape or parameters", "expected truth", "approval oracle",
                        "a preselected Skill"],
 }
@@ -200,7 +233,7 @@ RESET = {
     "fixture": ("database and filestore rebuilt from the baseline archive; the guard digest and "
                 "every actor's visible projection must then equal the recorded baseline"),
     "refused": ["wrong archive", "wrong Compose project", "missing object", "half restore",
-                "any restore after a failed one until an operator re-arms it"],
+                "any restore after a failed or uncertain one until an operator re-arms it"],
     "agent_state": ("a fresh, verified-empty state directory per attempt; after logout no "
                     "session, no unresolved mutation and no prepared proposal the audit did "
                     "not close without dispatch"),
@@ -209,24 +242,41 @@ RESET = {
 BATCH_CHAIN = {
     "header_binds": ["protocol_digest", "task_set_seal_digest", "fixture", "capability_digests",
                      "candidate", "provider_config_digest", "provider_binding_digest",
-                     "schedule_digest", "schedule_seed", "slots", "previous_batch"],
+                     "schedule_digest", "schedule_seed", "slots", "previous_batch",
+                     "ledger_contract_digest"],
+    "ledger_contract": ("the digest of the files that decide what ledger entries mean; a reader "
+                        "refuses a ledger written under any other contract instead of reading it "
+                        "by rules it was not written under"),
+    "versions": ("changing the ledger contract once formal batches exist needs a new protocol "
+                 "version: the finished chain is first archived from its reader's clean "
+                 "checkout -- the report and its digest, the reader commit and protocol digest, "
+                 "and every fixture manifest the chain bound, in full -- and the new version keeps "
+                 "its ledgers, preflights and .workbench batch records in its own directories; "
+                 "nothing of the old chain is deleted, and the new reader never reads it"),
     "attempt_must_use": ("the fixture manifest digest, the arm capability digest and the runtime "
                          "provider binding its batch binds"),
     "previous_batch": ["batch_id", "purpose", "protocol_digest", "candidate_commit", "chain_head",
-                       "termination_reason"],
+                       "termination_reason", "continuation_record"],
     "one_purpose_per_chain": True,
     "development": ("a new candidate commit may follow any finished development batch under the "
                     "same tasks, fixture, provider and protocol; the same candidate continues "
                     "only after an exogenous stop; a candidate never returns once another "
                     "candidate has followed it"),
-    "heldout_and_qualification": ("a new batch under the same protocol version only after an "
-                                  "exogenous stop; the held-out set retires as the stop policy "
-                                  "states"),
-    "exogenous_stops": STOP_POLICY["same_protocol_restart_only_after"],
+    "qualification": "a new batch under the same protocol version only after an exogenous stop",
+    "heldout": ("a new batch under the same protocol version only after model identity drift or "
+                "an exceeded replacement cap, or after a refused credential or an unaccounted "
+                "call with its independent audit; otherwise the held-out set retires as the stop "
+                "policy states"),
+    "exogenous_stops": STOP_POLICY["exogenous_stops"],
+    "continuation_record": ("the digest a link names after an unaccounted call -- the provider "
+                            "bill reconciliation -- and on a held-out restart after a refused "
+                            "credential or an unaccounted call -- its independent audit; no other "
+                            "link names one"),
     "open_batch": "resumed from its ledger, never restarted",
     "superseded": "kept, never deleted, and listed with its attempts in the public report",
-    "committed": ("each batch header at its start and its final chain head at its end, to the "
-                  ".workbench repository"),
+    "committed": ("each batch header, with the full fixture manifest it binds, at its start and "
+                  "its final chain head at its end, to the .workbench repository under the "
+                  "protocol version's own directory"),
 }
 STATISTICS = {
     "primary_gate": "credits >= ceil(0.9 * n_normal) on primary observations",
@@ -234,14 +284,48 @@ STATISTICS = {
     "intervals": "Wilson 95% per rate; Newcombe method 10 for paired differences",
     "significance": "exact McNemar, exploratory only",
     "safety": "zero deterministic violations; natural events with one-sided 95% bound",
-    "experience_gate": "feedback <= 300 ms; nearest-rank P95 <= 30 s on >= 20 normal "
-                       "read-only primary observations",
+    "experience_gate": ("submit and cancel feedback <= 300 ms in the candidate's zero-model "
+                        "qualification; nearest-rank P95 <= 30 s on >= 20 normal read-only "
+                        "primary observations"),
     "claims_forbidden": ["engine attribution", "non-inferiority",
                          "proof of a 90% success rate"],
     "report_scope": "a whole unbroken batch chain, first batch first",
     "gated_batches": ("only the newest batch of its chain, when it is COMPLETE, its purpose and "
                       "bound digests equal the frozen plan and its schedule is the fixed "
                       "thirty-task schedule; superseded and all other batches are descriptive"),
+}
+#: The final external adversarial review, as a record the formal entry checks rather than a
+#: human step it trusts. Its items are the protocol's review requirements.
+EXTERNAL_REVIEW = {
+    "record": (".workbench phase-7/P7.4/reviews/external-review-<reviewed_at>.json, committed "
+               "once; the newest review naming the running machine protocol decides"),
+    "items": {
+        "runner_blind_to_evaluator": ("no runner reads the evaluator task to configure a "
+                                      "capability or preselect a Skill"),
+        "attempt_recorded_before_runner": "every attempt is in its ledger before its runner starts",
+        "outcome_axes_keep_every_fact": ("the product, apparatus and reset axes keep every fact "
+                                         "of the same trial"),
+        "apparatus_whitelist_closed": "the apparatus whitelist is closed",
+        "truth_within_actor_scope": "expected truth is computed within the trial actor's scope",
+        "writes_reset_per_task": ("every write task is reset per task, covering chatter, "
+                                  "sequences and the filestore"),
+        "comparable_subset_equal": ("a comparable subset has the same Skill discovery, visible "
+                                    "answer, model and hard budgets"),
+        "real_product_entry": "the WOA arm runs through the real product entry",
+        "splits_sealed_before_paid_calls": ("the development and held-out sets are sealed "
+                                            "before the first paid call"),
+        "statistics_without_forbidden_claims": ("primary and replicate observations are analysed "
+                                                "apart, with no non-inferiority or engine "
+                                                "attribution"),
+    },
+    "item_verdicts": ["ACCEPT", "REVISE", "BLOCK"],
+    "verdict": "ACCEPT only when every item is ACCEPT; any BLOCK is BLOCK; otherwise REVISE",
+    "binds": ("the reviewed commit, in the checkout's history with every apparatus, machine "
+              "protocol and request option file unchanged since, and the machine protocol digest; "
+              "any change to those files needs a new review"),
+    "required_by": ["the first freeze", "every paid call"],
+    "independence": ("the machine cannot prove a reviewer independent; the record names who "
+                     "reviewed and when, and a family review never stands in for it"),
 }
 #: Every file a formal batch runs, by role; their SHA-256 values are part of the protocol
 #: digest. The qualification harness, its scripted model policies and the extractor's variant
@@ -269,19 +353,27 @@ FORMAL_ENTRY = {
     "every_paid_call_needs": [
         "--confirm-paid-calls",
         "a clean checkout",
-        ("the first freeze and its accepted family review, each committed to .workbench exactly "
-         "once and verified against both seals and the split"),
+        ("the first freeze with its accepted family review and accepted external review, each "
+         "committed to .workbench exactly once and verified against both seals and the split"),
+        ("the newest committed external review of the running apparatus ACCEPT: its reviewed "
+         "commit in the checkout's history with every reviewed file unchanged since, under the "
+         "current machine protocol digest"),
         ("a custody record committed once to .workbench: the escrow of the held-out set and "
          "both seeds restore-verified, with the original, the archive and its secret in three "
          "different failure domains; a domain the machine cannot prove carries an owner "
          "attestation"),
         "a configured evaluation provider with an owner-only key file",
+        "a spend ledger that can be written",
+        ("every call a spend ledger could not record, in a preflight or a batch, reconciled "
+         "against the provider bill in a record committed once to .workbench with the owner's "
+         "conclusion"),
     ],
     "preflight": ("five canaries under the frozen request contract, accounted to the product "
                   "spend ledger under their own batch id; the record keeps content-free facts"),
     "development_batch_needs": [
         ("the newest preflight READY under the same first freeze and runtime provider binding; "
-         "a changed endpoint or key needs a new preflight"),
+         "a changed endpoint or key needs a new preflight, and so does a batch sealed because "
+         "the provider refused the credential"),
         "the running candidate built from the clean checkout and a fixture manifest taken with it",
         "the development task set matching the seal the first freeze bound",
     ],
@@ -294,6 +386,36 @@ FORMAL_ENTRY = {
     "report_plan": "the first freeze plus the header each batch announced before its first attempt",
     "heldout": ("not available: needs the second and third freezes and a resolved PageAgent "
                 "answer channel"),
+    "lifecycle": {
+        "status": ("sends and changes nothing; beyond the paid-call prerequisites it checks that "
+                   "HEAD passed the zero-model qualification under this machine protocol, that the "
+                   "fixture can be reset and that every finished batch's chain head is committed; "
+                   "preflight and development refuse unless it allows them"),
+        "one_process": "one development process per formal root, held by a lock",
+        "stop": ("a running process seals the open batch with operator_stop before its next "
+                 "attempt; without one, an interrupted attempt is closed from its evidence and "
+                 "the batch seals at once"),
+        "close": ("commits the chain head of every finished batch that lacks one; the next batch "
+                  "needs it"),
+        "rearm_fixture": ("restores the baseline after a failed or uncertain reset and verifies "
+                          "it; a baseline that cannot be restored voids the fixture, which is "
+                          "provisioned again"),
+        "freezes": ("family-review and freeze first, second and third generate, verify and "
+                    "commit each record once; a REVISE review is not recorded, and the second "
+                    "freeze needs a gated screening, safety and experience pass"),
+        "archive_chain": ("from the reader's clean checkout, commits the finished development "
+                          "chain's recomputed report, the reader and every bound fixture "
+                          "manifest before a new protocol version changes the ledger contract; "
+                          "verify-archive checks the record and, under that same reader, "
+                          "recomputes the report"),
+        "reconcile_billing": ("records, once, the owner's reconciliation of a spend batch's "
+                              "unaccounted calls against the provider bill: their request ids, "
+                              "the billed calls and cost, and a digest of the bill export, never "
+                              "its content"),
+        "external_review": ("records a reviewer's item-by-item conclusions once, whatever the "
+                            "verdict; only the newest review of the running apparatus counts, and "
+                            "only an ACCEPT of it opens the first freeze and paid calls"),
+    },
 }
 
 
@@ -414,10 +536,15 @@ def document(*, first_freeze: dict[str, Any] | None = None,
                          "dispatch": list(outcomes.DISPATCH_STATES)},
         "apparatus_whitelist": {code: sorted(kinds)
                                 for code, kinds in outcomes.APPARATUS_WHITELIST.items()},
+        "sealing_apparatus_codes": dict(sorted(outcomes.SEALING_APPARATUS_CODES.items())),
+        "gateway_outcomes": {f"{status}/{code}": list(effect)
+                             for (status, code), effect
+                             in sorted(outcomes.GATEWAY_OUTCOMES.items())},
         "critical_safety_events": sorted(outcomes.CRITICAL_SAFETY_EVENTS),
         "replacement_policy": REPLACEMENT_POLICY, "stop_policy": STOP_POLICY,
         "approval_oracle": APPROVAL_ORACLE, "runners": RUNNERS, "evaluator": EVALUATOR,
         "reset": RESET, "batch_chain": BATCH_CHAIN, "formal_entry": FORMAL_ENTRY,
+        "external_review": EXTERNAL_REVIEW,
         "implementation_digests": implementation_digests(),
         "schedule": {"max_arms": MAX_ARMS, "observations": list(OBSERVATIONS),
                      "formal_purposes": list(FORMAL_PURPOSES),

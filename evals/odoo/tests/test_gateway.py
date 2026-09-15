@@ -1,12 +1,14 @@
 import json
 import tempfile
+import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 from evals.odoo import gateway, ledger
-from evals.odoo.tests.test_ledger import DIGEST, header, slots
+from evals.odoo.tests.test_ledger import CLEAN_AGENT, DIGEST, PASS, header, metrics, slots
 
 TOKEN = "t" * 32
 OPTIONS = {"thinking_budget": 1024, "parallel_tool_calls": False}
@@ -41,9 +43,9 @@ class GatewayTests(unittest.TestCase):
             "provider_config_digest": DIGEST, "provider_binding_digest": DIGEST,
             "replacement_of": None})
 
-    def post(self, body, token=TOKEN):
+    def post(self, body, token=TOKEN, service=None):
         request = urllib.request.Request(
-            self.gateway.base_url + "/chat/completions",
+            (service or self.gateway).base_url + "/chat/completions",
             data=json.dumps(body).encode(), method="POST",
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
         try:
@@ -170,7 +172,91 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual([item["status"] for item in responses],
                          ["http_error", "transport_error"])
         self.assertEqual([item["error_code"] for item in responses],
-                         ["provider_http_5xx", "provider_connection_lost"])
+                         ["provider_unavailable", "provider_connection_lost"])
+
+    def service(self, max_model_calls):
+        service = gateway.ProviderGateway(
+            ledger_path=self.path, backend=self.backend,
+            budgets=gateway.GatewayBudgets("qwen3.8-flash", max_model_calls=max_model_calls,
+                                           max_output_tokens=2048,
+                                           model_options=OPTIONS)).start()
+        self.addCleanup(service.close)
+        return service
+
+    def test_every_client_receives_the_same_typed_error_for_the_same_provider_fact(self):
+        service = self.service(max_model_calls=6)
+        service.open_attempt("attempt-001", TOKEN)
+        self.backend.install("attempt-001", completion, faults={
+            1: "http_429", 2: "http_401", 3: "context_length", 4: "malformed_response",
+            5: "http_408", 6: "http_429"})
+        replies = [self.post(self.body(), service=service) for _ in range(5)]
+        self.assertEqual([(status, payload["error"]["code"]) for status, payload in replies], [
+            (429, "provider_rate_limited"), (401, "provider_authentication"),
+            (400, "provider_context_length"), (502, "provider_response_contract"),
+            (408, "provider_deadline")])
+        with self.assertRaises(RuntimeError) as raised:
+            self.client(service).request_completion(self.body(), "run-001")
+        self.assertEqual(raised.exception.code, "provider_rate_limited")
+        entries, _ = ledger.read(self.path)
+        responses = [entry["body"] for entry in entries
+                     if entry["kind"] == "model_response_received"]
+        self.assertEqual([(item["status"], item["error_code"]) for item in responses], [
+            ("http_error", "provider_rate_limited"), ("http_error", "provider_authentication"),
+            ("http_error", "provider_context_length"),
+            ("contract_error", "provider_response_contract"),
+            ("http_error", "provider_deadline"), ("http_error", "provider_rate_limited")])
+
+    def test_an_unaccounted_call_closes_the_gateway_to_every_later_request(self):
+        self.gateway.open_attempt("attempt-001", TOKEN)
+        self.backend.install("attempt-001", completion, faults={1: "accounting_failure"})
+        self.assertEqual(self.post(self.body()), (502, {"error": {"code": "accounting_failure"}}))
+        self.assertEqual(self.post(self.body()), (503, {"error": {"code": "accounting_failure"}}))
+        kinds, _ = self.kinds()
+        self.assertEqual(kinds, ["model_request_dispatched", "model_response_received",
+                                 "model_request_refused"])
+
+    def test_an_answer_arriving_after_its_attempt_ended_is_counted_and_not_recorded(self):
+        entered, release = threading.Event(), threading.Event()
+
+        def slow(body, index):
+            entered.set()
+            release.wait(10)
+            return completion(body, index)
+
+        self.gateway.open_attempt("attempt-001", TOKEN)
+        self.backend.install("attempt-001", slow)
+        worker = threading.Thread(target=self.post, args=(self.body(),), daemon=True)
+        worker.start()
+        self.assertTrue(entered.wait(10))
+        self.gateway.close_attempt("attempt-001")
+        for kind, body in (
+                ("attempt_outcome", {"attempt_id": "attempt-001", **PASS.as_record(),
+                                     "evaluation_digest": None, "truth_digest": None}),
+                ("reset_outcome", {"attempt_id": "attempt-001", "outcome": "NOT_REQUIRED",
+                                   "basis": [], "guard_digest": None, "agent": CLEAN_AGENT}),
+                ("attempt_cost", {"attempt_id": "attempt-001", "model_calls": 1,
+                                  "usage_unavailable_calls": 1, "input_tokens": 0,
+                                  "output_tokens": 0, "cached_tokens": 0,
+                                  "reasoning_tokens": 0, "known_cost_cny": 0.0,
+                                  "total_cost_cny": None}),
+                ("attempt_metrics", metrics("attempt-001")),
+                ("attempt_terminal", {"attempt_id": "attempt-001"})):
+            ledger.append(self.path, kind, body)
+        release.set()
+        worker.join(10)
+        kinds, _ = self.kinds()
+        self.assertNotIn("model_response_received", kinds)
+        self.assertEqual(self.gateway.late_responses, 1)
+
+    def test_a_slow_scripted_answer_keeps_the_client_waiting_and_then_answers_whole(self):
+        slow = gateway.ScriptedBackend(slow_answer_s=0.3)
+        slow.install("attempt-001", completion, faults={1: "slow_answer"})
+        started = time.monotonic()
+        result = slow.complete(self.body(), attempt_id="attempt-001", call_index=1)
+        self.assertGreaterEqual(time.monotonic() - started, 0.3)
+        self.assertEqual((result.status, result.response_model), ("ok", gateway.SCRIPTED_MODEL))
+        with self.assertRaises(ValueError):
+            slow.install("attempt-002", completion, faults={1: "slow"})
 
     def test_the_runtime_binding_names_the_backend_and_the_request_contract(self):
         binding = self.gateway.binding()
@@ -185,9 +271,10 @@ class GatewayTests(unittest.TestCase):
         self.assertNotEqual(gateway.provider_binding(identity, smaller_cap), binding)
         self.assertEqual(self.gateway.binding_digest(), gateway.digest_binding(binding))
 
-    def client(self):
-        return gateway.GatewayCompletionClient(base_url=self.gateway.base_url, token=TOKEN,
-                                               model="qwen3.8-flash", model_options=OPTIONS)
+    def client(self, service=None):
+        return gateway.GatewayCompletionClient(base_url=(service or self.gateway).base_url,
+                                               token=TOKEN, model="qwen3.8-flash",
+                                               model_options=OPTIONS)
 
     def test_completion_client_sends_pageagent_requests_with_the_product_parameters(self):
         self.gateway.open_attempt("attempt-001", TOKEN)

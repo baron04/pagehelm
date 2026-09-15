@@ -61,6 +61,19 @@ class CanaryTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAILED")
         self.assertEqual(count[0], 5)
 
+    def test_an_unaccounted_call_stops_the_preflight_at_once(self):
+        count = [0]
+
+        def send(_request):
+            count[0] += 1
+            if count[0] == 2:
+                raise canary.PreflightStopped("accounting_failure")
+            return completion()
+        result = canary.run_preflight(send, budgets=BUDGETS)
+        self.assertEqual((result["status"], result["stopped"], count[0]),
+                         ("FAILED", "accounting_failure", 2))
+        self.assertFalse(result["checks"]["five_calls"])
+
 
 if __name__ == "__main__":
     unittest.main()

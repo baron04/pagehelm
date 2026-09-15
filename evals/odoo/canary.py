@@ -85,13 +85,25 @@ def evaluate(responses: list[Any]) -> dict[str, Any]:
             "limitation": "a stable alias at preflight does not prove unchanged weights"}
 
 
+class PreflightStopped(Exception):
+    """``send`` could not account for a call, so nothing more may be sent."""
+
+
 def run_preflight(send: Callable[[dict[str, Any]], dict[str, Any]], *,
                   budgets: GatewayBudgets) -> dict[str, Any]:
-    """Send the canary five times through ``send`` (the provider path) and evaluate."""
+    """Send the canary five times through ``send`` (the provider path) and evaluate.
+
+    A failed call fails the preflight and is never retried. A call that could not be accounted
+    stops it at once, and the remaining canaries are not sent.
+    """
     responses = []
+    stopped = None
     for _ in range(REQUIRED_CALLS):
         try:
             responses.append(send(canary_request(budgets)))
-        except Exception as exc:  # a failed call is a failed preflight, never retried
+        except PreflightStopped as exc:
+            stopped = str(exc) or "stopped"
+            break
+        except Exception as exc:
             responses.append({"error": type(exc).__name__})
-    return evaluate(responses)
+    return {**evaluate(responses), "stopped": stopped}

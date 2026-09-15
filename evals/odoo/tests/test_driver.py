@@ -1,6 +1,7 @@
 import unittest
 
-from evals.odoo.driver import _cost, _with_residue, agent_assertions
+from evals.odoo import outcomes
+from evals.odoo.driver import _cost, _with_residue, agent_assertions, scored_terminal
 
 
 def request(seq):
@@ -69,6 +70,39 @@ class AgentAssertionTests(unittest.TestCase):
         self.assertEqual(_with_residue("PASS", residue), "INDETERMINATE")
         _, before_start = agent_assertions(None, None, [], product_started=False)
         self.assertEqual(_with_residue("NOT_REQUIRED", before_start), "NOT_REQUIRED")
+
+
+class ScoredTerminalTests(unittest.TestCase):
+    def test_a_gateway_ending_names_the_terminal_only_where_the_runner_has_none(self):
+        context = outcomes.GatewayFacts(terminal="context_length_exceeded")
+        budget = outcomes.GatewayFacts(terminal="model_call_budget")
+        for runner in ("provider_error", "failed", None):
+            with self.subTest(runner=runner):
+                self.assertEqual(scored_terminal(runner, context), "context_length_exceeded")
+        self.assertEqual(scored_terminal("completed", context), "completed")
+        self.assertEqual(scored_terminal("completed", budget), "model_call_budget")
+        self.assertEqual(scored_terminal("provider_error", outcomes.GatewayFacts()),
+                         "provider_error")
+
+    def test_a_provider_deadline_scores_alike_whether_it_timed_out_or_answered_408(self):
+        for status in ("transport_error", "http_error"):
+            with self.subTest(status=status):
+                facts = outcomes.gateway_facts(
+                    [{"request_seq": 1, "status": status, "error_code": "provider_deadline"}], [])
+                self.assertEqual((facts.events, facts.terminal), ((), "provider_deadline"))
+                self.assertEqual(scored_terminal("provider_error", facts), "provider_deadline")
+                self.assertEqual(scored_terminal("wall_clock_budget", facts), "wall_clock_budget")
+
+    def test_a_wall_clock_the_runner_enforced_ends_the_attempt_whatever_the_product_said(self):
+        nothing = outcomes.GatewayFacts()
+        for limit in ("turn_wall", "attempt_automatic_wall"):
+            with self.subTest(limit=limit):
+                self.assertEqual(scored_terminal("user_cancelled", nothing, limit),
+                                 "wall_clock_budget")
+        self.assertEqual(scored_terminal("user_cancelled",
+                                         outcomes.GatewayFacts(terminal="model_call_budget"),
+                                         "turn_wall"), "model_call_budget")
+        self.assertEqual(scored_terminal("user_cancelled", nothing), "user_cancelled")
 
 
 if __name__ == "__main__":

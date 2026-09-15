@@ -1,5 +1,6 @@
 """The real provider backend, exercised only against a local fake OpenAI-compatible server."""
 import json
+import os
 import socket
 import tempfile
 import threading
@@ -127,11 +128,13 @@ class UpstreamBackendTests(unittest.TestCase):
                    for index in range(1, 5)]
         self.assertEqual([(item.status, item.http_status, item.error_code) for item in results], [
             ("http_error", 503, "provider_unavailable"),
-            ("http_error", 200, "provider_response"),
-            ("ok", 200, None),
-            ("http_error", 200, "provider_response")])
-        self.assertEqual((results[2].usage, results[2].cost_cny), (None, None))
+            ("contract_error", 200, "provider_response_contract"),
+            ("contract_error", 200, "provider_response_contract"),
+            ("contract_error", 200, "provider_response_contract")])
+        self.assertEqual((results[2].usage, results[2].cost_cny, results[2].response_model),
+                         (None, None, MODEL))
         self.assertIsNotNone(results[3].cost_cny)
+        self.assertTrue(all(item.payload is None for item in results[1:]))
         self.assertEqual([(row["accounting_status"], row.get("error_code")) for row in self.rows()],
                          [("usage_unavailable", "provider_unavailable"),
                           ("usage_unavailable", "provider_response"),
@@ -154,6 +157,50 @@ class UpstreamBackendTests(unittest.TestCase):
                          ("transport_error", "provider_connection_lost"))
         self.assertEqual([row["error_code"] for row in self.rows()],
                          ["provider_deadline", "provider_transport"])
+
+    def test_rate_limits_credentials_deadlines_and_context_rejections_are_typed(self):
+        provider = FakeProvider(self, [
+            (429, b'{"error":{"message":"slow down"}}', 0),
+            (401, b'{"error":{"code":"invalid_api_key"}}', 0),
+            (403, b"forbidden", 0),
+            (400, json.dumps({"error": {"code": "context_length_exceeded"}}).encode(), 0),
+            (400, json.dumps({"error": {"message": "This model's maximum context length is "
+                                                   "32768 tokens."}}).encode(), 0),
+            (413, json.dumps({"message": "Prompt is too long"}).encode(), 0),
+            (400, json.dumps({"error": {"message": "tools[0] is not a valid function"}})
+             .encode(), 0),
+            (408, b'{"error":{"message":"request timed out"}}', 0),
+            (425, b"too early", 0),
+        ])
+        backend = self.backend(provider)
+        codes = [backend.complete(dict(BODY), attempt_id="attempt-004",
+                                  call_index=index).error_code for index in range(1, 10)]
+        # A provider's 408 is its request deadline, typed like a timeout on this side.
+        self.assertEqual(codes, ["provider_rate_limited", "provider_authentication",
+                                 "provider_authentication", "provider_context_length",
+                                 "provider_context_length", "provider_context_length",
+                                 "provider_http", "provider_deadline", "provider_unavailable"])
+        self.assertEqual([row["accounting_status"] for row in self.rows()],
+                         ["usage_unavailable"] * 9)
+
+    @unittest.skipIf(os.geteuid() == 0, "root ignores file permissions")
+    def test_a_call_the_spend_ledger_cannot_record_is_an_accounting_failure(self):
+        provider = FakeProvider(self, [(200, json.dumps(completion()).encode(), 0),
+                                       (503, b"{}", 0)])
+        locked = self.root / "locked"
+        locked.mkdir()
+        backend = gateway.UpstreamBackend(base_url=provider.base_url, key_file=self.key,
+                                          requested_model=MODEL,
+                                          spend_ledger=locked / "spend.jsonl",
+                                          batch_id="p74-test")
+        os.chmod(locked, 0o500)
+        self.addCleanup(os.chmod, locked, 0o700)
+        results = [backend.complete(dict(BODY), attempt_id="attempt-005", call_index=index)
+                   for index in (1, 2)]
+        self.assertEqual([(item.status, item.error_code, item.cost_cny) for item in results],
+                         [("accounting_error", "accounting_failure", None)] * 2)
+        self.assertEqual((results[0].response_model, results[0].http_status), (MODEL, 200))
+        self.assertEqual(len(provider.requests), 2)
 
     def test_endpoint_and_key_are_checked_before_any_call(self):
         for url in ("http://provider.example.test/v1", "ftp://127.0.0.1/v1",

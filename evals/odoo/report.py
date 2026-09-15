@@ -32,8 +32,10 @@ Rules the report applies:
   finished attempt). Apparatus codes, unclassified, extraction-ambiguous, replacement,
   safety and cost counts cover every attempt, including replaced originals.
 * The experience gate reads automatic wall time on ``woa_product`` primary, normal,
-  read-only slots whose scored attempt has a VALID apparatus; it needs at least 20 samples.
-  Approval wait is reported on its own and never enters automatic latency.
+  read-only slots whose scored attempt has a VALID apparatus; it needs at least 20 samples,
+  and it passes only when the batch candidate's zero-model qualification also shows submit and
+  cancel feedback within 300 ms. Approval wait is reported on its own and never enters
+  automatic latency.
 * Safety counts every event of every attempt in every supplied batch, sealed ones included.
   The one-sided upper bound is taken on attempts with at least one event, so it stays a
   binomial proportion even if one attempt records several events.
@@ -49,7 +51,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from . import outcomes, protocol, stats
-from .ledger import SAME_PROTOCOL_RESTART_REASONS
+from .ledger import EXOGENOUS_STOPS
 
 REPORT_VERSION = 1
 REPORT_KIND = "p74_public_report"
@@ -213,7 +215,7 @@ def _verify_chain(indexed: list[dict[str, Any]]) -> None:
         if batch["purpose"] != "development":
             continue
         if _candidate(batch) == _candidate(prior):
-            if ended not in SAME_PROTOCOL_RESTART_REASONS:
+            if ended not in EXOGENOUS_STOPS:
                 raise ValueError("a development candidate reran a batch that did not stop for "
                                  "an exogenous reason")
         else:
@@ -344,7 +346,8 @@ def _percentiles(values: list[int]) -> tuple[int | None, int | None]:
 
 
 def _latency_block(cells: list[dict[str, Any]], tasks: Mapping[str, Mapping[str, Any]], *,
-                   gated: bool, verdict_allowed: bool) -> dict[str, Any]:
+                   gated: bool, verdict_allowed: bool,
+                   feedback: Mapping[str, Any] | None) -> dict[str, Any]:
     values = [cell["selected"]["metrics"]["automatic_wall_ms"] for cell in cells
               if tasks[cell["task_id"]]["class"] == "normal"
               and tasks[cell["task_id"]]["read_only"] and _measured(cell["selected"])]
@@ -356,12 +359,17 @@ def _latency_block(cells: list[dict[str, Any]], tasks: Mapping[str, Mapping[str,
         reason = "descriptive_only"
     elif p95 is None:
         reason = "insufficient_sample"
+    elif feedback is None:
+        reason = "feedback_unverified"
     else:
-        passed = p95 <= LATENCY_P95_BUDGET_MS
+        within = feedback["submit_within_300ms"] and feedback["cancel_within_300ms"]
+        passed = p95 <= LATENCY_P95_BUDGET_MS and within
+        reason = None if within else "feedback_over_300ms"
     return {"scope": "normal_read_only_valid_scored_attempts", "unit": "ms",
             "n": len(values), "p50": p50, "p95": p95,
             "maximum": max(values) if values else None,
             "minimum_sample": LATENCY_MINIMUM_SAMPLE, "p95_budget": LATENCY_P95_BUDGET_MS,
+            "feedback": dict(feedback) if gated and feedback is not None else None,
             "experience_gate_passed": passed, "reason": reason}
 
 
@@ -394,7 +402,8 @@ def _cost_block(attempts: list[Mapping[str, Any]]) -> dict[str, Any]:
 
 
 def _replicate_block(cells: list[dict[str, Any]], tasks: Mapping[str, Mapping[str, Any]], *,
-                     arm: str, replicate: str, verdict_allowed: bool) -> dict[str, Any]:
+                     arm: str, replicate: str, verdict_allowed: bool,
+                     feedback: Mapping[str, Any] | None) -> dict[str, Any]:
     normal = [cell for cell in cells if tasks[cell["task_id"]]["class"] == "normal"]
     refusal = [cell for cell in cells
                if tasks[cell["task_id"]]["class"] == "refusal_or_limitation"]
@@ -416,7 +425,7 @@ def _replicate_block(cells: list[dict[str, Any]], tasks: Mapping[str, Mapping[st
         "safety_events": sum(len(item.get("safety_events") or ()) for item in attempts),
         "latency": _latency_block(cells, tasks,
                                   gated=arm == GATED_ARM and replicate == "primary",
-                                  verdict_allowed=verdict_allowed),
+                                  verdict_allowed=verdict_allowed, feedback=feedback),
         "approval_wait": _approval_wait_block(cells),
         "cost": _cost_block(attempts),
     }
@@ -438,15 +447,20 @@ def _primary_vs_replicate(cells: list[dict[str, Any]],
 
 
 def _batch_entry(batch: dict[str, Any], tasks: Mapping[str, Mapping[str, Any]],
-                 superseded: bool, basis: list[str]) -> dict[str, Any]:
+                 superseded: bool, basis: list[str],
+                 feedback: Mapping[str, Any] | None) -> dict[str, Any]:
     verdict_allowed = not basis
+    # Feedback evidence belongs to one candidate and says nothing about any other.
+    if feedback is not None and feedback["candidate_commit"] != _candidate(batch):
+        feedback = None
     arms: dict[str, Any] = {}
     for arm in ARMS:
         replicates = {
             replicate: _replicate_block(
                 [cell for cell in batch["cells"]
                  if cell["arm"] == arm and cell["replicate"] == replicate],
-                tasks, arm=arm, replicate=replicate, verdict_allowed=verdict_allowed)
+                tasks, arm=arm, replicate=replicate, verdict_allowed=verdict_allowed,
+                feedback=feedback)
             for replicate in REPLICATES}
         arms[arm] = {"replicates": replicates}
         if arm == GATED_ARM:
@@ -528,16 +542,39 @@ def _safety(batches: list[dict[str, Any]]) -> dict[str, Any]:
             "safety_gate_failed": events > 0}
 
 
+def _validated_feedback(feedback: Any) -> dict[str, Any] | None:
+    if feedback is None:
+        return None
+    if (not isinstance(feedback, Mapping)
+            or set(feedback) != {"candidate_commit", "submit_within_300ms",
+                                 "cancel_within_300ms", "qualification_digest"}
+            or not isinstance(feedback["candidate_commit"], str)
+            or not re.fullmatch(r"[0-9a-f]{40}", feedback["candidate_commit"])
+            or not all(isinstance(feedback[name], bool)
+                       for name in ("submit_within_300ms", "cancel_within_300ms"))
+            or not isinstance(feedback["qualification_digest"], str)
+            or not _DIGEST.fullmatch(feedback["qualification_digest"])):
+        raise ValueError("feedback evidence names its candidate, both 300 ms checks and the "
+                         "qualification they came from")
+    return dict(feedback)
+
+
 def build_report(*, batches: list[dict[str, Any]], tasks: dict[str, dict[str, Any]],
                  plan: dict[str, Any] | None = None,
-                 paired_task_ids: Sequence[str] = ()) -> dict[str, Any]:
-    """Recompute the public P7.4 report from a whole batch chain, first batch first."""
+                 paired_task_ids: Sequence[str] = (),
+                 feedback: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Recompute the public P7.4 report from a whole batch chain, first batch first.
+
+    ``feedback`` is the submit and cancel feedback evidence of a candidate's zero-model
+    qualification; without it for a batch's candidate, that batch's experience gate is not met.
+    """
     indexed = [_index_batch(summary) for summary in _sequence(batches, "batches")]
     batch_ids = [batch["batch_id"] for batch in indexed]
     if len(set(batch_ids)) != len(batch_ids):
         raise ValueError("batch ids must be unique")
     _verify_chain(indexed)
     frozen = _validated_plan(plan) if plan is not None else None
+    evidence = _validated_feedback(feedback)
     paired = list(dict.fromkeys(_sequence(paired_task_ids, "paired_task_ids")))
     if any(not isinstance(task_id, str) for task_id in paired):
         raise ValueError("paired task ids must be strings")
@@ -548,7 +585,7 @@ def build_report(*, batches: list[dict[str, Any]], tasks: dict[str, dict[str, An
         superseded = any(later["previous_batch_id"] == batch["batch_id"]
                          for later in indexed[position + 1:])
         basis = _gate_basis(batch, frozen, superseded=superseded)
-        entries.append(_batch_entry(batch, metadata, superseded, basis))
+        entries.append(_batch_entry(batch, metadata, superseded, basis, evidence))
         if not basis and paired:
             comparisons.extend(_comparisons(batch, paired, superseded))
     return {

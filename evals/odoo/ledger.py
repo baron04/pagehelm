@@ -11,10 +11,17 @@ Validation replays the whole chain on every append and on every read. The rules 
 are the protocol's, not conveniences: one open attempt at a time, a fixed record order per
 attempt, legal combinations of the three outcome axes, bounded replacements that follow their
 original immediately, and mandatory seals after safety events, reset failures, unclassified
-results, provider model-string changes and requests that belong to no attempt.
+results, provider model-string changes, requests that belong to no attempt, a refused provider
+credential, a call the spend ledger could not record and a request outside the frozen request
+contract.
+
+Those rules are themselves a contract, defined by this module and the few it relies on. Every
+header binds the digest of that contract, and a ledger written under any other contract is
+refused whole rather than read by rules it was not written under.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from collections import Counter
@@ -33,27 +40,63 @@ _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _ARMS = frozenset({"pageagent_browser_only", "woa_product"})
 _REPLICATES = ("primary", "replicate")
 _ATTEMPT_KINDS = ("attempt_outcome", "reset_outcome", "attempt_cost", "attempt_metrics")
-_METRIC_FIELDS = ("automatic_wall_ms", "approval_wait_ms", "first_feedback_ms", "page_actions",
-                  "invalid_page_actions", "business_calls", "repeated_observations",
-                  "user_turns")
+_METRIC_FIELDS = ("automatic_wall_ms", "approval_wait_ms", "first_feedback_ms",
+                  "cancel_feedback_ms", "page_actions", "invalid_page_actions", "business_calls",
+                  "repeated_observations", "user_turns")
+#: Metrics an attempt may not have measured: no turn started, or no turn was stopped.
+_OPTIONAL_METRICS = frozenset({"first_feedback_ms", "cancel_feedback_ms"})
 _TERMINAL_KINDS = frozenset({"attempt_terminal", "interrupted_attempt"})
 _SEAL_REASONS = frozenset({
     "critical_safety_event", "classification_contract_drift", "reset_failed",
     "model_identity_changed", "unowned_model_request", "replacement_cap_exceeded",
     "ledger_corrupted", "state_contamination", "operator_stop",
+    "provider_authentication_failed", "accounting_failure", "request_contract_violation",
 })
-#: Exogenous stops. After one, the same development candidate may continue, and a held-out or
+#: Stops the product did not cause. After one, the same development candidate may continue and a
 #: qualification batch may start again under the same protocol version.
-SAME_PROTOCOL_RESTART_REASONS = frozenset({"model_identity_changed", "replacement_cap_exceeded"})
+EXOGENOUS_STOPS = frozenset({"model_identity_changed", "replacement_cap_exceeded",
+                             "provider_authentication_failed", "accounting_failure"})
+#: A held-out batch starts again under the same protocol version after these stops as they are,
+HELDOUT_RESTART_REASONS = frozenset({"model_identity_changed", "replacement_cap_exceeded"})
+#: and after these only on an independent audit, named in its link, that the stopped batch exposed
+#: nothing -- no model answer or judged product result, no dispatch and no state write. Without
+#: that audit the held-out set retires.
+HELDOUT_AUDITED_RESTART_REASONS = frozenset({"provider_authentication_failed",
+                                             "accounting_failure"})
 KINDS = frozenset({
     "batch_header", "attempt_started", "model_request_dispatched", "model_request_refused",
     "model_response_received", "attempt_checkpoint", *_ATTEMPT_KINDS, *_TERMINAL_KINDS,
     "unowned_model_request", "batch_sealed", "batch_completed",
 })
+RESPONSE_STATUSES = frozenset({"ok", "http_error", "transport_error", "contract_error",
+                               "accounting_error"})
+REFUSAL_REASONS = frozenset({"model_call_budget", "output_token_budget", "input_size_budget",
+                             "request_contract", "accounting_failure"})
+_REPOSITORY = Path(__file__).resolve().parents[2]
+#: The files whose rules decide what a ledger's entries mean: the validation, the outcome axes and
+#: whitelist, and the shared line encoding and digests.
+CONTRACT_FILES = ("evals/odoo/ledger.py", "evals/odoo/outcomes.py", "evals/twenty/records.py",
+                  "evals/twenty/evaluator.py")
+
+
+def contract_digest(repository: Path = _REPOSITORY) -> str:
+    """The digest of the ledger contract that the files in ``repository`` define."""
+    return digest_json({"ledger_version": LEDGER_VERSION, "files": {
+        relative: "sha256:" + hashlib.sha256((repository / relative).read_bytes()).hexdigest()
+        for relative in CONTRACT_FILES}})
+
+
+#: The contract this reader applies; a header must bind exactly this digest.
+LEDGER_CONTRACT_DIGEST = contract_digest()
 
 
 class LedgerError(EvaluationInputError):
     """The ledger or a prospective entry violates the attempt protocol."""
+
+
+class LedgerContractError(LedgerError):
+    """A ledger was written under another ledger contract. Only the reader that wrote it may read
+    it; no other reader interprets its entries."""
 
 
 def utc_now() -> str:
@@ -212,12 +255,12 @@ class _Replay:
         required = {"batch_id", "protocol_id", "protocol_digest", "schedule_digest", "purpose",
                     "provider_config_digest", "slots", "previous_batch", "task_set_seal_digest",
                     "fixture", "capability_digests", "candidate", "schedule_seed",
-                    "provider_binding_digest"}
+                    "provider_binding_digest", "ledger_contract_digest"}
         _exact(body, required, "batch header")
         _identifier(body["batch_id"], "batch_id")
         _identifier(body["protocol_id"], "protocol_id")
         for name in ("protocol_digest", "schedule_digest", "provider_config_digest",
-                     "task_set_seal_digest", "provider_binding_digest"):
+                     "task_set_seal_digest", "provider_binding_digest", "ledger_contract_digest"):
             _digest(body[name], name)
         if body["purpose"] not in {"apparatus_qualification", "development", "heldout"}:
             raise LedgerError("batch purpose is invalid")
@@ -264,28 +307,43 @@ class _Replay:
         previous = body["previous_batch"]
         if previous is not None:
             _exact(previous, {"batch_id", "purpose", "protocol_digest", "candidate_commit",
-                              "chain_head", "termination_reason"}, "previous batch")
+                              "chain_head", "termination_reason", "continuation_record"},
+                   "previous batch")
             _identifier(previous["batch_id"], "previous batch_id")
             _digest(previous["chain_head"], "previous chain head")
             _digest(previous["protocol_digest"], "previous protocol digest")
+            continuation = _digest(previous["continuation_record"], "continuation record",
+                                   optional=True)
             if previous["purpose"] != body["purpose"]:
                 raise LedgerError("a batch chain holds batches of one purpose")
             if (not isinstance(previous["candidate_commit"], str)
                     or not re.fullmatch(r"[0-9a-f]{40}", previous["candidate_commit"])):
                 raise LedgerError("the previous batch names its full candidate commit")
-            if previous["termination_reason"] not in _SEAL_REASONS | {"batch_completed"}:
+            reason = previous["termination_reason"]
+            if reason not in _SEAL_REASONS | {"batch_completed"}:
                 raise LedgerError("the previous batch names how it ended")
-            exogenous = previous["termination_reason"] in SAME_PROTOCOL_RESTART_REASONS
+            same_protocol = previous["protocol_digest"] == body["protocol_digest"]
             if body["purpose"] == "development":
                 # Development tunes the product: a new candidate may follow any finished batch,
                 # but a candidate never reruns a batch that did not stop for an exogenous reason.
-                if previous["candidate_commit"] == body["candidate"]["commit"] and not exogenous:
+                if (previous["candidate_commit"] == body["candidate"]["commit"]
+                        and reason not in EXOGENOUS_STOPS):
                     raise LedgerError("a development candidate runs one batch; only an exogenous "
                                       "stop lets the same candidate continue")
-            elif previous["protocol_digest"] == body["protocol_digest"] and not exogenous:
+            elif same_protocol and reason not in (
+                    EXOGENOUS_STOPS if body["purpose"] == "apparatus_qualification"
+                    else HELDOUT_RESTART_REASONS | HELDOUT_AUDITED_RESTART_REASONS):
                 raise LedgerError(
                     "a completed batch, or one sealed for a product reason, cannot be followed "
                     "under the same protocol version")
+            audited = (body["purpose"] == "heldout" and same_protocol
+                       and reason in HELDOUT_AUDITED_RESTART_REASONS)
+            if (audited or reason == "accounting_failure") != (continuation is not None):
+                raise LedgerError(
+                    "a batch after an unaccounted call names the reconciliation of the provider "
+                    "bill, a held-out restart after a refused credential or an unaccounted call "
+                    "names the audit that its stopped batch exposed nothing, and no other link "
+                    "names a continuation record")
         self.header = body
 
     def attempt_started(self, body: dict[str, Any]) -> None:
@@ -365,8 +423,7 @@ class _Replay:
         seq = _count(body["request_seq"], "request_seq")
         if seq != len(attempt["requests"]) + attempt["refusals"] + 1:
             raise LedgerError("model request sequence is not contiguous")
-        if body["reason"] not in {"model_call_budget", "output_token_budget",
-                                  "input_size_budget", "request_contract"}:
+        if body["reason"] not in REFUSAL_REASONS:
             raise LedgerError("model refusal reason is invalid")
         attempt["refusals"] += 1
 
@@ -378,7 +435,7 @@ class _Replay:
         seq = body["request_seq"]
         if seq not in attempt["requests"] or seq in attempt["responses"]:
             raise LedgerError("model response does not answer one dispatched request")
-        if body["status"] not in {"ok", "http_error", "transport_error"}:
+        if body["status"] not in RESPONSE_STATUSES:
             raise LedgerError("model response status is invalid")
         usage = body["usage"]
         if usage is not None:
@@ -386,8 +443,9 @@ class _Replay:
                            "reasoning_tokens"}, "usage")
             for key, value in usage.items():
                 _count(value, f"usage.{key}")
-        if body["status"] == "ok":
-            model = body["response_model"]
+        model = body["response_model"]
+        # Any model string a response names counts toward the batch's one model identity.
+        if body["status"] == "ok" or model is not None:
             if not isinstance(model, str) or not model.strip() or len(model) > 120:
                 raise LedgerError("a provider response must report its model string")
             if self.batch_model is None:
@@ -441,7 +499,7 @@ class _Replay:
         elif kind == "attempt_metrics":
             _exact(body, {"attempt_id", *_METRIC_FIELDS}, "attempt_metrics")
             for name in _METRIC_FIELDS:
-                _count(body[name], name, optional=name == "first_feedback_ms")
+                _count(body[name], name, optional=name in _OPTIONAL_METRICS)
             attempt["metrics"] = body
         else:
             fields = {"attempt_id", "model_calls", "usage_unavailable_calls", "input_tokens",
@@ -590,7 +648,7 @@ class _Replay:
                 "batch_id", "protocol_id", "protocol_digest", "schedule_digest", "purpose",
                 "previous_batch", "provider_config_digest", "task_set_seal_digest", "fixture",
                 "capability_digests", "candidate", "schedule_seed",
-                "provider_binding_digest")} if self.header else None,
+                "provider_binding_digest", "ledger_contract_digest")} if self.header else None,
             "slots": [{**{key: slot[key] for key in ("slot_id", "arm", "task_id",
                                                        "replicate")},
                        "attempts": list(slot["attempts"])}
@@ -604,7 +662,18 @@ class _Replay:
 
 
 def replay(entries: list[dict[str, Any]]) -> dict[str, Any]:
-    """Validate a complete entry list and return its status summary."""
+    """Validate a complete entry list and return its status summary.
+
+    A ledger whose header names another ledger contract is refused before any entry is read, so
+    no rule of this contract is applied to it.
+    """
+    if entries:
+        body = entries[0].get("body") if isinstance(entries[0], dict) else None
+        written = body.get("ledger_contract_digest") if isinstance(body, dict) else None
+        if written != LEDGER_CONTRACT_DIGEST:
+            raise LedgerContractError("this ledger was written under another ledger contract "
+                                      f"({written or 'none named'}); only the reader that wrote "
+                                      "it may read it")
     state = _Replay()
     previous = None
     for index, entry in enumerate(entries):
@@ -677,3 +746,30 @@ def read(path: str | Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
 
 def schedule_digest(slots: list[dict[str, Any]]) -> str:
     return digest_json(slots)
+
+
+def exposure(entries: list[dict[str, Any]]) -> list[str]:
+    """What a stopped batch let anyone see or change, read from its own validated entries.
+
+    A held-out batch that stopped on a refused credential or an unaccounted call starts again
+    under the same protocol only when this is empty and an independent audit confirms it: no
+    model answer, no judged product result, no dispatch and no state write.
+    """
+    replay(entries)
+    found: set[str] = set()
+    for entry in entries:
+        kind, body = entry["kind"], entry["body"]
+        attempt = body.get("attempt_id")
+        if kind == "model_response_received" and body["status"] == "ok":
+            found.add(f"model_answer:{attempt}")
+        elif kind == "attempt_checkpoint" and body["dispatch_state"] != "none":
+            found.add(f"dispatch:{attempt}")
+        elif kind == "attempt_outcome":
+            if (body["evaluation_digest"] is not None
+                    or body["product_outcome"] != "NOT_EVALUABLE"):
+                found.add(f"judged_result:{attempt}")
+            if body["dispatch_state"] != "none":
+                found.add(f"dispatch:{attempt}")
+        elif kind == "reset_outcome" and body["outcome"] != "NOT_REQUIRED":
+            found.add(f"state_write:{attempt}")
+    return sorted(found)

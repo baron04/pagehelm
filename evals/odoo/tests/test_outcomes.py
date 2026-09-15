@@ -18,9 +18,9 @@ class ClassificationTests(unittest.TestCase):
         self.assertIsNone(result.seal_reason)
 
     def test_budget_deadline_cancellation_and_refusals_are_scored_as_product(self):
-        for terminal in ("model_call_budget", "context_length_exceeded", "provider_deadline",
-                         "user_cancelled", "invalid_tool_arguments", "policy_refused",
-                         "business_rule_refused", "permission_denied"):
+        for terminal in ("model_call_budget", "context_length_exceeded", "input_size_budget",
+                         "provider_deadline", "user_cancelled", "invalid_tool_arguments",
+                         "policy_refused", "business_rule_refused", "permission_denied"):
             with self.subTest(terminal=terminal):
                 result = classify(product_started=True, dispatch_state="none",
                                   runner_terminal=terminal,
@@ -39,11 +39,13 @@ class ClassificationTests(unittest.TestCase):
                     self.assertEqual(result.apparatus_code, code)
                     self.assertEqual(result.product_outcome, "NOT_EVALUABLE")
                     self.assertFalse(result.unclassified)
+                    self.assertEqual(result.seal_reason,
+                                     outcomes.SEALING_APPARATUS_CODES.get(code))
                     outcomes.validate_combination(result.as_record(), "NOT_REQUIRED")
 
     def test_whitelisted_code_with_foreign_evidence_is_contract_drift(self):
         result = classify(product_started=True, dispatch_state="none", runner_terminal=None,
-                          apparatus_events=[ApparatusEvent("provider_http_5xx",
+                          apparatus_events=[ApparatusEvent("provider_unavailable",
                                                            "runner_process_exit")])
         self.assertEqual((result.product_outcome, result.apparatus_code, result.unclassified),
                          ("FAIL", outcomes.CONTRACT_DRIFT, True))
@@ -101,6 +103,129 @@ class ClassificationTests(unittest.TestCase):
         self.assertTrue(result.unclassified)
 
 
+def gateway_response(seq, status, code=None):
+    return {"request_seq": seq, "status": status, "error_code": code}
+
+
+def gateway_refusal(seq, reason):
+    return {"request_seq": seq, "reason": reason}
+
+
+def event(code):
+    (evidence,) = outcomes.APPARATUS_WHITELIST[code]
+    return ApparatusEvent(code, evidence)
+
+
+class GatewayFactTests(unittest.TestCase):
+    def test_every_typed_gateway_record_has_one_meaning_for_every_arm(self):
+        cases = {
+            "outage": ([gateway_response(1, "http_error", "provider_unavailable")], [],
+                       [event("provider_unavailable")], None, False),
+            "rate_limit": ([gateway_response(1, "http_error", "provider_rate_limited")], [],
+                           [event("provider_rate_limited")], None, False),
+            "refused_credential": ([gateway_response(1, "http_error", "provider_authentication")],
+                                   [], [event("provider_authentication_failed")], None, False),
+            "response_contract": ([gateway_response(1, "contract_error",
+                                                    "provider_response_contract")], [],
+                                  [event("provider_response_contract")], None, False),
+            "connection_lost": ([gateway_response(1, "transport_error",
+                                                  "provider_connection_lost")], [],
+                                [event("provider_connection_lost")], None, False),
+            "deadline": ([gateway_response(1, "transport_error", "provider_deadline")], [], [],
+                         "provider_deadline", False),
+            "provider_deadline": ([gateway_response(1, "http_error", "provider_deadline")], [], [],
+                                  "provider_deadline", False),
+            "unaccounted": ([gateway_response(1, "accounting_error", "accounting_failure")],
+                            [gateway_refusal(2, "accounting_failure")],
+                            [event("accounting_failure")], None, False),
+            "context_length": ([gateway_response(1, "http_error", "provider_context_length")], [],
+                               [], "context_length_exceeded", False),
+            "input_bytes": ([], [gateway_refusal(1, "input_size_budget")], [],
+                            "input_size_budget", False),
+            "call_budget": ([], [gateway_refusal(1, "model_call_budget")], [],
+                            "model_call_budget", False),
+            "request_fields": ([], [gateway_refusal(1, "request_contract")], [], None, True),
+            "output_cap": ([], [gateway_refusal(1, "output_token_budget")], [], None, True),
+            "answered": ([gateway_response(1, "ok")], [], [], None, False),
+        }
+        for label, (responses, refusals, events, terminal, violation) in cases.items():
+            with self.subTest(label=label):
+                facts = outcomes.gateway_facts(responses, refusals)
+                self.assertEqual((list(facts.events), facts.terminal,
+                                  facts.request_contract_violation),
+                                 (events, terminal, violation))
+
+    def test_an_unlisted_gateway_record_is_contract_drift(self):
+        for record in (gateway_response(1, "http_error", "provider_http"),
+                       gateway_response(1, "transport_error", "backend_exception"),
+                       gateway_response(1, "http_error", "scripted_policy_missing"),
+                       gateway_response(1, "teapot")):
+            with self.subTest(record=record):
+                facts = outcomes.gateway_facts([record], [])
+                result = classify(product_started=True, dispatch_state="none",
+                                  runner_terminal="provider_error", apparatus_events=facts.events)
+                self.assertEqual((result.product_outcome, result.unclassified, result.seal_reason),
+                                 ("FAIL", True, outcomes.CONTRACT_DRIFT))
+
+    def test_the_last_ending_counts_and_each_fault_is_listed_once_in_order(self):
+        facts = outcomes.gateway_facts(
+            [gateway_response(3, "http_error", "provider_context_length"),
+             gateway_response(1, "http_error", "provider_rate_limited"),
+             gateway_response(4, "http_error", "provider_rate_limited"),
+             gateway_response(5, "transport_error", "provider_connection_lost")],
+            [gateway_refusal(2, "input_size_budget")])
+        self.assertEqual(facts.terminal, "context_length_exceeded")
+        self.assertEqual(list(facts.events), [event("provider_rate_limited"),
+                                              event("provider_connection_lost")])
+
+
+class ProviderOutcomeTests(unittest.TestCase):
+    def test_a_refused_credential_or_unaccounted_call_seals_and_is_never_replaced(self):
+        for code, seal in outcomes.SEALING_APPARATUS_CODES.items():
+            with self.subTest(code=code):
+                result = classify(
+                    product_started=True, dispatch_state="none", runner_terminal="provider_error",
+                    apparatus_events=[ApparatusEvent("browser_or_control_channel_crash",
+                                                     "browser_exit"), event(code)])
+                self.assertEqual((result.apparatus_code, result.seal_reason), (code, seal))
+                self.assertFalse(outcomes.replacement_eligible(result.as_record(), "NOT_REQUIRED"))
+                outcomes.validate_combination(result.as_record(), "NOT_REQUIRED")
+        limited = classify(product_started=True, dispatch_state="none",
+                           runner_terminal="provider_error",
+                           apparatus_events=[event("provider_rate_limited")])
+        self.assertIsNone(limited.seal_reason)
+        self.assertTrue(outcomes.replacement_eligible(limited.as_record(), "NOT_REQUIRED"))
+
+    def test_a_request_outside_the_frozen_contract_is_a_product_failure_that_seals(self):
+        clean = classify(product_started=True, dispatch_state="none",
+                         runner_terminal="provider_error",
+                         evaluation=Evaluation("PASS", decisive=True),
+                         request_contract_violation=True)
+        self.assertEqual((clean.product_outcome, clean.apparatus_integrity, clean.unclassified,
+                          clean.seal_reason),
+                         ("FAIL", "VALID", False, outcomes.REQUEST_CONTRACT_VIOLATION))
+        outcomes.validate_combination(clean.as_record(), "NOT_REQUIRED")
+        faulted = classify(product_started=True, dispatch_state="dispatched",
+                           runner_terminal="provider_error",
+                           apparatus_events=[event("provider_unavailable")],
+                           request_contract_violation=True)
+        self.assertEqual((faulted.product_outcome, faulted.apparatus_integrity,
+                          faulted.seal_reason),
+                         ("FAIL", "INVALID", outcomes.REQUEST_CONTRACT_VIOLATION))
+        self.assertFalse(outcomes.replacement_eligible(faulted.as_record(), "NOT_REQUIRED"))
+        outcomes.validate_combination(faulted.as_record(), "NOT_REQUIRED")
+
+    def test_a_safety_event_outranks_every_other_seal(self):
+        result = classify(product_started=True, dispatch_state="none", runner_terminal="completed",
+                          apparatus_events=[event("accounting_failure")],
+                          evaluation=Evaluation("FAIL", decisive=True,
+                                                safety_events=("duplicate_write",)),
+                          request_contract_violation=True)
+        self.assertEqual((result.apparatus_code, result.seal_reason),
+                         ("accounting_failure", "critical_safety_event"))
+        outcomes.validate_combination(result.as_record(), "NOT_REQUIRED")
+
+
 class CombinationTests(unittest.TestCase):
     def _base(self, **changes):
         record = classify(product_started=True, dispatch_state="none",
@@ -112,14 +237,17 @@ class CombinationTests(unittest.TestCase):
     def test_contradictory_axes_are_rejected(self):
         bad = [
             self._base(product_outcome="NOT_EVALUABLE"),
-            self._base(apparatus_code="provider_http_5xx"),
+            self._base(apparatus_code="provider_unavailable"),
             self._base(apparatus_integrity="INVALID", apparatus_code="made_up"),
             self._base(unclassified=True),
             self._base(product_outcome="FAIL", apparatus_integrity="INVALID",
                        apparatus_code=outcomes.CONTRACT_DRIFT, unclassified=False),
             self._base(product_started=False),
             self._base(product_outcome="NOT_EVALUABLE", apparatus_integrity="INVALID",
-                       apparatus_code="provider_http_5xx", dispatch_state="dispatched"),
+                       apparatus_code="provider_unavailable", dispatch_state="dispatched"),
+            self._base(product_outcome="NOT_EVALUABLE", apparatus_integrity="INVALID",
+                       apparatus_code="accounting_failure"),
+            self._base(seal_reason="request_contract_violation"),
         ]
         for record in bad:
             with self.subTest(record=record):

@@ -104,6 +104,20 @@ class DocumentTests(unittest.TestCase):
         self.assertEqual(set(parameters["never_forwarded"]), set(gateway.PAGEAGENT_ENGINE_FIELDS))
         self.assertEqual(set(parameters["shared_fields"]), gateway.SHARED_REQUEST_FIELDS)
 
+    def test_the_stop_policy_and_gateway_outcomes_state_what_the_ledger_enforces(self):
+        from evals.odoo import ledger, outcomes
+        document = protocol.document()
+        self.assertEqual(set(document["stop_policy"]["seal_reasons"]), ledger._SEAL_REASONS)
+        self.assertEqual(set(document["stop_policy"]["exogenous_stops"]), ledger.EXOGENOUS_STOPS)
+        self.assertEqual(set(document["stop_policy"]["heldout_same_protocol_restart_after"]),
+                         ledger.HELDOUT_RESTART_REASONS)
+        self.assertEqual(set(document["stop_policy"]["heldout_audited_restart_after"]),
+                         ledger.HELDOUT_AUDITED_RESTART_REASONS)
+        self.assertEqual(document["batch_chain"]["previous_batch"][-1], "continuation_record")
+        self.assertEqual(len(document["gateway_outcomes"]), len(outcomes.GATEWAY_OUTCOMES))
+        self.assertTrue(set(outcomes.SEALING_APPARATUS_CODES).isdisjoint(
+            document["replacement_policy"]["eligible_apparatus_codes"]))
+
 
 class ImplementationBindingTests(unittest.TestCase):
     def test_document_names_runners_evaluator_reset_and_batch_chain(self):

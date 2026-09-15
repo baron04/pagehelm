@@ -1,7 +1,9 @@
 """The three P7.4 freezes as a machine-checked sequence.
 
-The first freeze binds both task-set seals, their split verification and an accepted
-independent family review; without an accepted review there is no first freeze. The second
+The first freeze binds both task-set seals, their split verification, an accepted independent
+family review and an accepted external adversarial review of the protocol and apparatus at a
+named commit; without both there is no first freeze, and neither review stands in for the other.
+The second
 binds that first freeze to the candidate: its commit, the Agent image labelled with it, the
 apparatus and machine-protocol files read from the commit itself, and the capability, provider
 and statistics digests. The third derives the held-out schedule seed from the commit that
@@ -105,10 +107,83 @@ def verify_family_review(review: Any, *, development_seal: dict[str, Any],
     return review
 
 
+# -- the external adversarial review ------------------------------------------------------------
+EXTERNAL_REVIEW_VERDICTS = ("ACCEPT", "REVISE", "BLOCK")
+
+
+def reviewed_files() -> list[str]:
+    """Every file an external review binds by content: the apparatus a formal batch runs, the
+    machine protocol and the product request options it reads."""
+    apparatus = {path for paths in protocol.APPARATUS_MODULES.values() for path in paths}
+    options = protocol.PRODUCT_MODEL_OPTIONS.relative_to(protocol.REPOSITORY).as_posix()
+    return sorted(apparatus | set(MACHINE_PROTOCOL_FILES) | {options})
+
+
+def external_review_record(*, reviewer: str, reviewed_at: str, reviewed_commit: str,
+                           protocol_digest: str, items: Any,
+                           findings: Any = ()) -> dict[str, Any]:
+    """The external adversarial review of the protocol and apparatus at one commit.
+
+    Every item the machine protocol lists carries its own verdict and evidence, and the review
+    accepts only when every item does. The machine cannot prove a reviewer independent, so the
+    record names who reviewed and when; a family review never stands in for it.
+    """
+    if not isinstance(reviewer, str) or not _REVIEWER.fullmatch(reviewer):
+        raise FreezeError("the review names its reviewer")
+    try:
+        commit = require_commit(reviewed_commit, "reviewed_commit")
+    except RevisionError as exc:
+        raise FreezeError(str(exc)) from exc
+    if not isinstance(protocol_digest, str) or not _DIGEST.fullmatch(protocol_digest):
+        raise FreezeError("the review names the machine protocol digest it reviewed")
+    listed = list(protocol.EXTERNAL_REVIEW["items"])
+    if not isinstance(items, dict) or sorted(items) != sorted(listed):
+        raise FreezeError("the review concludes on exactly the items the protocol lists")
+    concluded = {}
+    for item in listed:
+        value = items[item]
+        if (not isinstance(value, dict) or set(value) != {"verdict", "evidence"}
+                or value["verdict"] not in EXTERNAL_REVIEW_VERDICTS):
+            raise FreezeError(f"review item {item} needs a verdict and its evidence")
+        evidence = value["evidence"]
+        if (not isinstance(evidence, list) or not 1 <= len(evidence) <= 20
+                or any(not isinstance(line, str) or not line.strip() or len(line) > 500
+                       for line in evidence)):
+            raise FreezeError(f"review item {item} cites one to 20 lines of evidence")
+        concluded[item] = {"verdict": value["verdict"], "evidence": list(evidence)}
+    findings = list(findings or ())
+    if len(findings) > 50 or any(not isinstance(item, str) or not item.strip() or len(item) > 500
+                                 for item in findings):
+        raise FreezeError("review findings are at most 50 lines of at most 500 characters")
+    verdicts = {value["verdict"] for value in concluded.values()}
+    verdict = ("ACCEPT" if verdicts == {"ACCEPT"} else "BLOCK" if "BLOCK" in verdicts
+               else "REVISE")
+    return _sealed({
+        "artifact_version": FREEZE_VERSION, "kind": "p74_external_review",
+        "protocol_id": protocol.PROTOCOL_ID, "reviewer": reviewer,
+        "reviewed_at": _utc(reviewed_at, "reviewed_at"), "reviewed_commit": commit,
+        "reviewed_protocol_digest": protocol_digest, "items": concluded, "verdict": verdict,
+        "findings": findings,
+    }, "review_digest")
+
+
+def verify_external_review(review: Any) -> dict[str, Any]:
+    """An external review exactly as its own conclusions give it, unchanged since it was sealed."""
+    body = _body(review, "p74_external_review", "review_digest")
+    expected = external_review_record(
+        reviewer=body.get("reviewer"), reviewed_at=body.get("reviewed_at"),
+        reviewed_commit=body.get("reviewed_commit"),
+        protocol_digest=body.get("reviewed_protocol_digest"), items=body.get("items"),
+        findings=body.get("findings"))
+    if review != expected:
+        raise FreezeError("the external review is not what its own conclusions give")
+    return review
+
+
 # -- first freeze -----------------------------------------------------------------------------------
 def first_freeze_record(*, development_seal: dict[str, Any], heldout_seal: dict[str, Any],
-                        split_verification: dict[str, Any],
-                        family_review: dict[str, Any]) -> dict[str, Any]:
+                        split_verification: dict[str, Any], family_review: dict[str, Any],
+                        external_review: dict[str, Any]) -> dict[str, Any]:
     split = _split(development_seal, heldout_seal)
     if split_verification != split:
         raise FreezeError("the split verification does not match these seals")
@@ -116,6 +191,9 @@ def first_freeze_record(*, development_seal: dict[str, Any], heldout_seal: dict[
                                   heldout_seal=heldout_seal)
     if review["verdict"] != "ACCEPT":
         raise FreezeError("the first freeze needs an accepted independent family review")
+    external = verify_external_review(external_review)
+    if external["verdict"] != "ACCEPT":
+        raise FreezeError("the first freeze needs an accepted external adversarial review")
     return _sealed({
         "artifact_version": FREEZE_VERSION, "kind": "p74_first_freeze",
         "protocol_id": protocol.PROTOCOL_ID,
@@ -130,18 +208,23 @@ def first_freeze_record(*, development_seal: dict[str, Any], heldout_seal: dict[
         "refusal_or_limitation_tasks_per_split": split["refusal_or_limitation_tasks_per_split"],
         "family_review_digest": review["review_digest"],
         "family_reviewer": review["reviewer"], "family_reviewed_at": review["reviewed_at"],
+        "external_review_digest": external["review_digest"],
+        "external_reviewer": external["reviewer"],
+        "external_reviewed_at": external["reviewed_at"],
+        "external_reviewed_commit": external["reviewed_commit"],
     }, "first_freeze_digest")
 
 
 def verify_first_freeze(record: Any, *, development_seal: dict[str, Any],
                         heldout_seal: dict[str, Any], split_verification: dict[str, Any],
-                        family_review: dict[str, Any]) -> dict[str, Any]:
+                        family_review: dict[str, Any],
+                        external_review: dict[str, Any]) -> dict[str, Any]:
     _body(record, "p74_first_freeze", "first_freeze_digest")
     expected = first_freeze_record(development_seal=development_seal, heldout_seal=heldout_seal,
                                    split_verification=split_verification,
-                                   family_review=family_review)
+                                   family_review=family_review, external_review=external_review)
     if record != expected:
-        raise FreezeError("the first freeze does not match its seals and review")
+        raise FreezeError("the first freeze does not match its seals and reviews")
     return record
 
 

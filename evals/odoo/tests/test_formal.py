@@ -1,16 +1,18 @@
 """The formal entry points, against temporary repositories and a local fake provider only."""
+import dataclasses
 import json
 import os
 import shutil
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from evals.odoo import canary, escrow, formal, harness, ledger, protocol
-from evals.odoo.revision import RevisionError, committed_once
-from evals.odoo.tests.test_freeze import first, git, review
+from evals.odoo import canary, escrow, fixture, formal, freeze, harness, ledger, protocol
+from evals.odoo.revision import REPOSITORY, RevisionError, committed_once
+from evals.odoo.tests.test_freeze import CandidateRepository, external, first, git, review
 from evals.odoo.tests.test_ledger import CANDIDATE, DIGEST, NEW_CANDIDATE, OTHER, header, slots
 from evals.odoo.tests.test_escrow import separate_domains
 from evals.odoo.tests.test_upstream import FakeProvider, completion
@@ -40,6 +42,32 @@ def repository(root):
     return root
 
 
+def apparatus_repository(root):
+    """A checkout holding a committed copy of every file an external review binds."""
+    root.mkdir(parents=True)
+    for relative in freeze.reviewed_files():
+        (root / relative).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(REPOSITORY / relative, root / relative)
+    (root / "README").write_text("synthetic\n")
+    git(root, "init", "-q")
+    git(root, "add", ".")
+    git(root, "commit", "-q", "-m", "initial")
+    return root
+
+
+def recovery(private, status="READY"):
+    """A sealed fixture recovery record in the state ``status``; no fixture stands behind it."""
+    record = fixture._seal({
+        "artifact_version": 1, "kind": "p74_fixture_recovery", "status": status,
+        "fixture_id": fixture.FIXTURE_ID, "project": "woa-p74-odoo-v1", "database": "woa_trial",
+        "database_archive": {"sha256": DIGEST, "bytes": 1},
+        "filestore_archive": {"sha256": DIGEST, "bytes": 1},
+        "baseline_guard": {"digest": OTHER}, "baseline_digest": OTHER,
+        "actor_projection_digest": DIGEST})
+    (private / "recovery").mkdir(parents=True, exist_ok=True)
+    (private / "recovery" / "recovery.json").write_text(json.dumps(record))
+
+
 @unittest.skipIf(shutil.which("openssl") is None, "openssl is not installed")
 class FormalFixture(unittest.TestCase):
     def setUp(self):
@@ -50,7 +78,7 @@ class FormalFixture(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
         self.workbench = repository(self.root / "workbench")
-        self.checkout = repository(self.root / "checkout")
+        self.checkout = apparatus_repository(self.root / "checkout")
         self.private = self.root / "private"
         for name, data in ESCROWED.items():
             (self.private / name).parent.mkdir(parents=True, exist_ok=True)
@@ -85,8 +113,14 @@ class FormalFixture(unittest.TestCase):
         return git(self.workbench, "rev-parse", "HEAD")
 
     def freeze(self):
+        """An accepted external review of this checkout, the family review and the first freeze
+        binding both, each committed once; returns the commit that recorded the first freeze."""
+        self.external_review = external(reviewed_commit=git(self.checkout, "rev-parse", "HEAD"))
+        self.record(f"{formal.REVIEWS}/external-review-20260915T070000Z.json",
+                    self.external_review)
         self.record(f"{formal.FREEZES}/family-review.json", review())
-        return self.record(f"{formal.FREEZES}/first-freeze.json", first())
+        self.first_freeze = first(external_review=self.external_review)
+        return self.record(f"{formal.FREEZES}/first-freeze.json", self.first_freeze)
 
     def preflight(self, at="2026-09-15T08:00:00Z"):
         return formal.run_preflight(self.paths, confirm_paid_calls=True, clock=lambda: at)
@@ -118,6 +152,12 @@ class PreflightTests(FormalFixture):
         (self.checkout / "notes.txt").write_text("uncommitted\n")
         self.assertRefused(provider, "clean checkout")
         (self.checkout / "notes.txt").unlink()
+        if os.geteuid() != 0:
+            ledger_dir = self.paths.spend().parent
+            ledger_dir.mkdir(parents=True)
+            os.chmod(ledger_dir, 0o500)
+            self.assertRefused(provider, "spend ledger")
+            os.chmod(ledger_dir, 0o700)
         os.chmod(self.key, 0o644)
         self.assertRefused(provider, "evaluation key")
         os.chmod(self.key, 0o600)
@@ -145,7 +185,7 @@ class PreflightTests(FormalFixture):
         self.assertNotIn(canary.CANARY_PROMPT, json.dumps(stored))
         self.assertNotIn("sk-synthetic-evaluation-key", json.dumps(stored))
         self.assertEqual(stored["provider_binding"]["requested_model"], "qwen3.8-flash")
-        self.assertEqual(formal.verified_preflight(self.paths, first()), record)
+        self.assertEqual(formal.verified_preflight(self.paths, self.first_freeze), record)
 
     def test_a_changed_provider_endpoint_or_key_needs_a_new_preflight(self):
         self.provider(*[answer()] * 5)
@@ -166,10 +206,10 @@ class PreflightTests(FormalFixture):
             with self.subTest(label=label):
                 self.paths.provider_config.write_text(json.dumps(value))
                 with self.assertRaisesRegex(formal.FormalError, "run the preflight again"):
-                    formal.verified_preflight(self.paths, first())
+                    formal.verified_preflight(self.paths, self.first_freeze)
         self.paths.provider_config.write_text(json.dumps(
             {**settings, "base_url": settings["base_url"].replace("http://", "HTTP://") + "/"}))
-        self.assertEqual(formal.verified_preflight(self.paths, first()), record)
+        self.assertEqual(formal.verified_preflight(self.paths, self.first_freeze), record)
         self.assertEqual(other_provider.requests, [])
 
     def test_only_the_newest_preflight_counts_and_it_must_have_passed_unchanged(self):
@@ -180,15 +220,36 @@ class PreflightTests(FormalFixture):
         self.assertEqual(failed["status"], "FAILED")
         self.assertFalse(failed["canary"]["checks"]["model_string_5_of_5"])
         with self.assertRaisesRegex(formal.FormalError, "failed"):
-            formal.verified_preflight(self.paths, first())
+            formal.verified_preflight(self.paths, self.first_freeze)
         ready = self.preflight("2026-09-15T09:00:00Z")
-        self.assertEqual(formal.verified_preflight(self.paths, first()), ready)
+        self.assertEqual(formal.verified_preflight(self.paths, self.first_freeze), ready)
         with self.assertRaisesRegex(formal.FormalError, "another first freeze"):
-            formal.verified_preflight(self.paths, first(reviewed_at="2026-09-16T08:00:00Z"))
+            formal.verified_preflight(self.paths, first(external_review=self.external_review,
+                                                        reviewed_at="2026-09-16T08:00:00Z"))
         stored = self.paths.preflights / f"{ready['spend_batch_id']}.json"
         stored.write_text(json.dumps({**ready, "calls": []}))
         with self.assertRaisesRegex(formal.FormalError, "changed"):
-            formal.verified_preflight(self.paths, first())
+            formal.verified_preflight(self.paths, self.first_freeze)
+
+    def test_a_canary_the_spend_ledger_cannot_record_stops_the_preflight_at_once(self):
+        from web_operation_agent.model import SpendMeter
+
+        provider = self.provider(*[answer()] * 5)
+        self.freeze()
+        self.custody()
+        original, written = SpendMeter._append_record, []
+
+        def append(meter, rec, **options):
+            written.append(rec)
+            if len(written) == 2:
+                raise OSError("the spend ledger's disk is full")
+            return original(meter, rec, **options)
+
+        with mock.patch.object(SpendMeter, "_append_record", append):
+            record = self.preflight()
+        self.assertEqual((record["status"], record["canary"]["stopped"], len(provider.requests)),
+                         ("FAILED", "accounting_failure", 2))
+        self.assertEqual([call["status"] for call in record["calls"]], ["ok", "accounting_error"])
 
 
 class DevelopmentTests(FormalFixture):
@@ -271,6 +332,23 @@ class DevelopmentTests(FormalFixture):
             formal.check_candidate_may_run(chain, CANDIDATE["commit"])
         formal.check_candidate_may_run(chain, "d" * 40)
 
+    def test_a_batch_sealed_on_a_refused_credential_needs_a_later_preflight(self):
+        self.provider(*[answer()] * 10)
+        self.freeze()
+        self.custody()
+        self.preflight("2000-01-01T00:00:00Z")
+        path = self.paths.ledgers / "p74b-development-001.jsonl"
+        ledger.create(path, header(slots(1), batch_id="p74b-development-001"))
+        ledger.append(path, "batch_sealed", {"reason": "provider_authentication_failed"})
+        with self.assertRaisesRegex(formal.FormalError, "refused the evaluation credential"):
+            formal.preflight_for_next_batch(self.paths, self.first_freeze)
+        self.assertIn("refused the evaluation credential",
+                      formal.status(self.paths)["checks"]["preflight"])
+        later = datetime.now(timezone.utc) + timedelta(minutes=1)
+        self.preflight(later.strftime("%Y-%m-%dT%H:%M:%SZ"))
+        self.assertEqual(
+            formal.preflight_for_next_batch(self.paths, self.first_freeze)["status"], "READY")
+
     def test_a_batch_record_is_committed_once_and_other_staged_work_is_left_alone(self):
         relative = f"{formal.BATCHES}/p74b-development-001/header.json"
         announced = {"header": {"batch_id": "p74b-development-001"}}
@@ -290,6 +368,28 @@ class DevelopmentTests(FormalFixture):
             committed_once(self.workbench, relative)
 
 
+class QualificationFeedbackTests(FormalFixture):
+    def test_the_newest_ready_qualification_of_the_candidate_supplies_both_feedback_checks(self):
+        root = self.private / "qualification"
+        root.mkdir(parents=True)
+
+        def artifact(stamp, **changes):
+            record = {"status": "READY", "candidate": {"commit": CANDIDATE["commit"]},
+                      "checks": {"submit_feedback_within_300ms": True,
+                                 "cancel_feedback_within_300ms": True}, **changes}
+            (root / f"p74a-qualification-{stamp}.json").write_text(json.dumps(record))
+
+        self.assertIsNone(formal.qualification_feedback(self.paths, CANDIDATE["commit"]))
+        artifact("20260901T000000Z")
+        artifact("20260902T000000Z", checks={"submit_feedback_within_300ms": True})
+        artifact("20260903T000000Z", status="FAILED")
+        artifact("20260904T000000Z", candidate={"commit": NEW_CANDIDATE["commit"]})
+        value = formal.qualification_feedback(self.paths, CANDIDATE["commit"])
+        self.assertEqual((value["submit_within_300ms"], value["cancel_within_300ms"]),
+                         (True, False))
+        self.assertTrue(value["qualification_digest"].startswith("sha256:"))
+
+
 class StatusTests(FormalFixture):
     def test_status_names_what_is_missing_without_sending_anything(self):
         provider = self.provider()
@@ -298,15 +398,391 @@ class StatusTests(FormalFixture):
                          (False, False))
         self.assertEqual((value["checks"]["clean_checkout"],
                           value["checks"]["provider_configuration"]), ("READY", "READY"))
-        for name in ("first_freeze", "escrow_custody", "preflight"):
+        for name in ("first_freeze", "escrow_custody", "preflight", "qualification",
+                     "fixture_recovery"):
             self.assertTrue(value["checks"][name].startswith("refused"), name)
+        self.assertEqual((value["checks"]["batch_records"], value["batches"],
+                          value["development_running"]), ("READY", [], False))
         self.freeze()
         self.custody()
         value = formal.status(self.paths)
         self.assertEqual((value["preflight_can_start"], value["development_can_start"]),
                          (True, False))
+        self.assertTrue(value["runtime_binding_digest"].startswith("sha256:"))
         self.assertEqual(provider.requests, [])
         self.assertFalse(self.paths.spend().exists())
+
+
+class LifecycleTests(FormalFixture):
+    def open_batch(self, slot_count=2, **changes):
+        path = self.paths.ledgers / "p74b-development-001.jsonl"
+        ledger.create(path, header(slots(slot_count), batch_id="p74b-development-001",
+                                   **changes))
+        return path
+
+    def test_one_development_process_holds_the_ledgers_at_a_time(self):
+        self.assertFalse(formal.development_running(self.paths))
+        with formal.development_lock(self.paths):
+            self.assertTrue(formal.development_running(self.paths))
+            with self.assertRaisesRegex(formal.FormalError, "another development process"):
+                with formal.development_lock(self.paths):
+                    pass
+        self.assertFalse(formal.development_running(self.paths))
+
+    def test_close_commits_every_missing_chain_head_and_status_names_the_gap(self):
+        summary = ledger.append(self.open_batch(), "batch_sealed", {"reason": "operator_stop"})
+        self.assertEqual([(row["status"], row["chain_head_committed"])
+                          for row in formal.batch_records(self.paths)], [("SEALED", False)])
+        self.assertIn("run close", formal.status(self.paths)["checks"]["batch_records"])
+        (closed,) = formal.close_finished_batches(self.paths)
+        self.assertEqual(closed["chain_head"], summary["chain_head"])
+        self.assertEqual(formal.status(self.paths)["checks"]["batch_records"], "READY")
+        self.assertEqual(formal.close_finished_batches(self.paths), [closed])
+        with formal.development_lock(self.paths), self.assertRaisesRegex(
+                formal.FormalError, "development process is running"):
+            formal.close_finished_batches(self.paths)
+
+    def test_stop_asks_a_running_process_and_otherwise_seals_the_open_batch_at_once(self):
+        self.open_batch()
+        with formal.development_lock(self.paths):
+            self.assertEqual(formal.stop_development(self.paths),
+                             {"status": "STOP_REQUESTED", "batch_id": "p74b-development-001"})
+            self.assertTrue(formal.stop_requested(self.paths.stop_request,
+                                                  "p74b-development-001"))
+            self.assertFalse(formal.stop_requested(self.paths.stop_request,
+                                                   "p74b-development-002"))
+            self.assertEqual(formal.status(self.paths)["stop_requested_for"],
+                             "p74b-development-001")
+        value = formal.stop_development(self.paths)
+        self.assertEqual((value["status"], value["seal_reason"]), ("SEALED", "operator_stop"))
+        self.assertFalse(self.paths.stop_request.exists())
+        record, _ = formal.committed_record(
+            self.workbench, formal.batch_record_path("p74b-development-001", "chain-head"))
+        self.assertEqual(record["seal_reason"], "operator_stop")
+        with self.assertRaisesRegex(formal.FormalError, "no development batch is open"):
+            formal.stop_development(self.paths)
+
+    def test_a_batch_that_owes_a_seal_is_stopped_for_that_seal(self):
+        ledger.append(self.open_batch(), "unowned_model_request",
+                      {"body_digest": DIGEST, "reason": "no_open_attempt"})
+        self.assertEqual(formal.stop_development(self.paths)["seal_reason"],
+                         "unowned_model_request")
+
+    def test_the_fixture_must_be_ready_and_rearm_asks_first_and_waits_for_an_open_attempt(self):
+        self.assertIn("cannot be read", formal.status(self.paths)["checks"]["fixture_recovery"])
+        recovery(self.private, status="FAILED")
+        self.assertIn("rearm-fixture", formal.status(self.paths)["checks"]["fixture_recovery"])
+        with self.assertRaisesRegex(formal.FormalError, "--confirm-rearm"):
+            formal.rearm_fixture(self.paths, confirm_rearm=False)
+        ledger.append(self.open_batch(slot_count=1), "attempt_started", {
+            "attempt_id": "attempt-001", "slot_id": "s000", "arm": "woa_product",
+            "task_id": "task-000", "replicate": "primary", "run_id": "run-001",
+            "fixture_digest": DIGEST, "capability_digest": DIGEST,
+            "provider_config_digest": DIGEST, "provider_binding_digest": DIGEST,
+            "replacement_of": None})
+        with self.assertRaisesRegex(formal.FormalError, "interrupted attempt"):
+            formal.rearm_fixture(self.paths, confirm_rearm=True)
+        recovery(self.private)
+        self.assertEqual(formal.status(self.paths)["checks"]["fixture_recovery"], "READY")
+        self.assertEqual(formal.rearm_fixture(self.paths, confirm_rearm=True),
+                         {"status": "READY", "restored": False})
+
+    def test_status_checks_that_head_qualified_with_this_manifest_image_and_protocol(self):
+        head = git(self.checkout, "rev-parse", "HEAD")
+        candidate = {"commit": head, "agent_image_id": DIGEST, "agent_image_revision": head}
+        root = self.private / "qualification"
+        root.mkdir(parents=True)
+        (root / "fixture-manifest.json").write_text(json.dumps(
+            {"manifest_digest": DIGEST, "candidate": candidate}))
+        self.assertIn("has not passed", formal.status(self.paths)["checks"]["qualification"])
+        digest = protocol.document()["protocol_digest"]
+
+        def artifact(stamp, **changes):
+            record = {"status": "READY", "candidate": candidate,
+                      "fixture_manifest_digest": DIGEST,
+                      "offline": {"protocol_digest": digest}, **changes}
+            (root / f"p74a-qualification-{stamp}.json").write_text(json.dumps(record))
+
+        def check():
+            return formal.status(self.paths)["checks"]["qualification"]
+
+        artifact("20260901T000000Z")
+        artifact("20260902T000000Z", candidate={**candidate, "commit": NEW_CANDIDATE["commit"]})
+        self.assertEqual(check(), "READY")
+        # A manifest taken or an image built after the qualification leaves it behind.
+        artifact("20260903T000000Z", fixture_manifest_digest=OTHER)
+        self.assertIn("another fixture manifest", check())
+        artifact("20260904T000000Z", candidate={**candidate, "agent_image_id": OTHER})
+        self.assertIn("another Agent image", check())
+        artifact("20260905T000000Z", offline={"protocol_digest": DIGEST})
+        self.assertIn("another machine protocol", check())
+        artifact("20260906T000000Z", status="FAILED")
+        self.assertIn("did not pass", check())
+
+    def test_freeze_commands_record_each_freeze_once_after_verifying_it(self):
+        with self.assertRaisesRegex(formal.FormalError, "only an ACCEPT"):
+            formal.record_family_review(self.paths, reviewer="Independent Reviewer",
+                                        reviewed_at="2026-09-15T08:00:00Z", verdict="REVISE",
+                                        findings=["two families repeat"])
+        with self.assertRaisesRegex(formal.FormalError, "family-review"):
+            formal.record_first_freeze(self.paths)
+        recorded = formal.record_family_review(self.paths, reviewer="Independent Reviewer",
+                                               reviewed_at="2026-09-15T08:00:00Z",
+                                               verdict="ACCEPT", findings=[])
+        self.assertEqual(recorded["review_digest"], review()["review_digest"])
+        # An accepted family review does not stand in for the external review.
+        with self.assertRaisesRegex(formal.FormalError, "no committed external review"):
+            formal.record_first_freeze(self.paths)
+        conclusions = external(reviewed_commit=git(self.checkout, "rev-parse", "HEAD"))
+        review_file = self.root / "external-review.json"
+        review_file.write_text(json.dumps({key: conclusions[key] for key in (
+            "reviewer", "reviewed_at", "reviewed_commit", "items", "findings")}))
+        reviewed = formal.record_external_review(self.paths, review_file=review_file)
+        self.assertEqual((reviewed["verdict"], reviewed["review_digest"]),
+                         ("ACCEPT", conclusions["review_digest"]))
+        taken = formal.record_first_freeze(self.paths)
+        self.assertEqual(taken["first_freeze_digest"],
+                         first(external_review=conclusions)["first_freeze_digest"])
+        self.assertEqual(formal.record_first_freeze(self.paths)["commit"], taken["commit"])
+        self.assertEqual(formal.verify_freezes(self.paths)["stage"], "first_frozen")
+        with self.assertRaisesRegex(formal.FormalError, "no formal development batch"):
+            formal.record_second_freeze(self.paths)
+        with self.assertRaisesRegex(formal.FormalError, "second-freeze"):
+            formal.record_third_freeze(self.paths)
+
+    def test_the_second_freeze_needs_a_gated_screening_safety_and_experience_pass(self):
+        self.freeze()
+
+        def value(verdict_status="gated", gate="PASS", robust=True, experience=True,
+                  safety=False):
+            primary = {"normal": {"gate_verdict": gate, "robust": robust},
+                       "latency": {"experience_gate_passed": experience}}
+            return {"batches": [{"verdict_status": verdict_status,
+                                 "arms": {"woa_product": {"replicates": {"primary": primary}}}}],
+                    "safety": {"safety_gate_failed": safety}}
+
+        refusals = {"descriptive": (value(verdict_status="descriptive_only"), "not gated"),
+                    "screening": (value(gate="FAIL"), "screening gate"),
+                    "not_robust": (value(robust=False), "--accept-not-robust"),
+                    "experience": (value(experience=None), "experience gate"),
+                    "safety": (value(safety=True), "safety gate")}
+        for label, (report_value, pattern) in refusals.items():
+            with self.subTest(label=label), mock.patch.object(
+                    formal, "development_report", return_value=report_value):
+                with self.assertRaisesRegex(formal.FormalError, pattern):
+                    formal.record_second_freeze(self.paths)
+        candidate = CandidateRepository(self)
+        paths = dataclasses.replace(self.paths, repository=candidate.root)
+        path = paths.ledgers / "p74b-development-001.jsonl"
+        ledger.create(path, header(slots(1), batch_id="p74b-development-001",
+                                   candidate=candidate.candidate()))
+        summary = ledger.append(path, "batch_sealed", {"reason": "operator_stop"})
+        with mock.patch.object(formal, "development_report", return_value=value(robust=False)):
+            formal.record_second_freeze(paths, accept_not_robust=True)
+        record, _ = formal.committed_record(self.workbench,
+                                            f"{formal.FREEZES}/second-freeze.json")
+        self.assertEqual((record["candidate"], record["development_chain_head"]),
+                         (candidate.candidate(), summary["chain_head"]))
+        self.assertEqual(formal.verify_freezes(paths)["stage"], "second_frozen")
+
+
+class ChainVersionTests(FormalFixture):
+    OLDER_CONTRACT = "sha256:" + "1" * 64
+
+    def finished_chain(self, preflight):
+        """Two sealed development batches, each announced with its manifest and closed."""
+        task_id = json.loads(harness.DEVELOPMENT_TASK_SET.read_text())["tasks"][0]["task_id"]
+        schedule = [{"slot_id": "p001", "arm": "woa_product", "task_id": task_id,
+                     "replicate": "primary"}]
+        manifest = {"manifest_digest": DIGEST, "fixture_id": "synthetic"}
+        previous = None
+        for number, candidate in ((1, CANDIDATE), (2, NEW_CANDIDATE)):
+            batch_id = f"p74b-development-{number:03d}"
+            value = header(schedule, batch_id=batch_id, candidate=candidate, previous=previous,
+                           ledger_contract_digest=ledger.LEDGER_CONTRACT_DIGEST)
+            path = self.paths.ledgers / f"{batch_id}.jsonl"
+            ledger.create(path, value)
+            formal._announce(self.paths, value, {"fixture_manifest": manifest,
+                                                 "preflight_digest": preflight["preflight_digest"]})
+            summary = ledger.append(path, "batch_sealed", {"reason": "operator_stop"})
+            formal.close_batch(self.paths, summary)
+            previous = formal.link_to(summary)
+
+    def test_an_archived_chain_recomputes_under_its_reader_and_no_later_reader_reads_it(self):
+        self.provider(*[answer()] * 5)
+        self.freeze()
+        self.custody()
+        preflight = self.preflight()
+        with mock.patch.object(ledger, "LEDGER_CONTRACT_DIGEST", self.OLDER_CONTRACT):
+            self.finished_chain(preflight)
+            archived = formal.archive_development_chain(self.paths)
+            verified = formal.verify_chain_archive(self.paths, recompute=True)
+        self.assertEqual((verified["archive_digest"], verified["recomputed"]),
+                         (archived["archive_digest"], True))
+        record, _ = formal.committed_record(self.workbench, formal.chain_archive_path())
+        self.assertEqual((record["ledger_contract_digest"], list(record["fixture_manifests"]),
+                          [item["batch_id"] for item in record["batches"]]),
+                         (self.OLDER_CONTRACT, [DIGEST],
+                          ["p74b-development-001", "p74b-development-002"]))
+        old_ledgers = self.paths.ledgers
+        written = {path.name: path.read_bytes() for path in old_ledgers.glob("*.jsonl")}
+        # A later reader refuses the chain rather than read it by rules it was not written under.
+        with self.assertRaisesRegex(formal.FormalError, "another ledger contract"):
+            formal.development_chain(self.paths)
+        self.assertIn("another ledger contract",
+                      formal.status(self.paths)["checks"]["batch_records"])
+        with self.assertRaisesRegex(formal.FormalError, "reader that wrote"):
+            formal.verify_chain_archive(self.paths, recompute=True)
+        # A new protocol version opens its own chain and still verifies the archive it inherits.
+        with mock.patch.object(protocol, "PROTOCOL_ID", "p74-odoo-v2"):
+            self.assertEqual(formal.development_chain(self.paths), [])
+            inherited = formal.verify_chain_archive(self.paths, protocol_id="p74-odoo-v1")
+            self.assertEqual(inherited["archive_digest"], archived["archive_digest"])
+            self.paths.ledgers.mkdir(parents=True)
+            name = sorted(written)[0]
+            (self.paths.ledgers / name).write_bytes(written[name])
+            os.chmod(self.paths.ledgers / name, 0o600)
+            with self.assertRaisesRegex(formal.FormalError, "another ledger contract"):
+                formal.development_chain(self.paths)
+        self.assertEqual({path.name: path.read_bytes() for path in old_ledgers.glob("*.jsonl")},
+                         written)
+
+
+class ReconciliationTests(FormalFixture):
+    def stopped_preflight(self):
+        """A preflight whose second canary the spend ledger could not record."""
+        from web_operation_agent.model import SpendMeter
+
+        original, written = SpendMeter._append_record, []
+
+        def append(meter, rec, **options):
+            written.append(rec)
+            if len(written) == 2:
+                raise OSError("the spend ledger's disk is full")
+            return original(meter, rec, **options)
+
+        with mock.patch.object(SpendMeter, "_append_record", append):
+            return self.preflight()
+
+    def test_no_paid_call_follows_an_unaccounted_call_until_the_bill_is_reconciled(self):
+        provider = self.provider(*[answer()] * 7)
+        self.freeze()
+        self.custody()
+        stopped = self.stopped_preflight()
+        self.assertEqual(stopped["canary"]["stopped"], "accounting_failure")
+        self.assertEqual(formal.unaccounted_calls(self.paths), {stopped["spend_batch_id"]: [
+            stopped["calls"][1]["provider_request_id"]]})
+        self.assertIn("reconcile-billing",
+                      formal.status(self.paths)["checks"]["billing_reconciliation"])
+        # A spend ledger that can be written again is not enough.
+        self.assertEqual(formal.status(self.paths)["checks"]["spend_ledger"], "READY")
+        with self.assertRaisesRegex(formal.FormalError, "reconciliation"):
+            self.preflight("2026-09-15T09:00:00Z")
+        self.assertEqual(len(provider.requests), 2)
+        arguments = {"owner": "Evaluation Owner", "reconciled_at": "2026-09-15T08:30:00Z",
+                     "billed_calls": 2, "billed_cost_cny": 0.0004, "evidence_digest": DIGEST,
+                     "notes": ["the bill lists both canaries"]}
+        with self.assertRaisesRegex(formal.FormalError, "no unaccounted call"):
+            formal.record_billing_reconciliation(self.paths, spend_batch_id="p74b-other",
+                                                 **arguments)
+        for label, changes in {"owner": {"owner": ""}, "time": {"reconciled_at": "today"},
+                               "calls": {"billed_calls": -1},
+                               "evidence": {"evidence_digest": "a bill"}}.items():
+            with self.subTest(label=label), self.assertRaises(formal.FormalError):
+                formal.record_billing_reconciliation(
+                    self.paths, spend_batch_id=stopped["spend_batch_id"],
+                    **{**arguments, **changes})
+        recorded = formal.record_billing_reconciliation(
+            self.paths, spend_batch_id=stopped["spend_batch_id"], **arguments)
+        self.assertEqual(formal.check_reconciliations(self.paths),
+                         {stopped["spend_batch_id"]: recorded["reconciliation_digest"]})
+        self.assertEqual(formal.status(self.paths)["checks"]["billing_reconciliation"], "READY")
+        self.assertEqual(self.preflight("2026-09-15T09:00:00Z")["status"], "READY")
+        # A reconciliation changed after it was committed no longer counts.
+        target = self.workbench / recorded["record"]
+        target.write_text(target.read_text().replace("Evaluation Owner", "Someone Else"))
+        with self.assertRaises(formal.FormalError):
+            formal.check_reconciliations(self.paths)
+
+
+class ExternalReviewTests(FormalFixture):
+    def review_file(self, record):
+        path = self.root / f"review-{record['review_digest'][7:19]}.json"
+        path.write_text(json.dumps({key: record[key] for key in (
+            "reviewer", "reviewed_at", "reviewed_commit", "items", "findings")}))
+        return path
+
+    def test_only_the_newest_review_of_the_running_apparatus_opens_paid_calls(self):
+        provider = self.provider(*[answer()] * 5)
+        self.freeze()
+        self.custody()
+        self.assertEqual(formal.status(self.paths)["checks"]["external_review"], "READY")
+        head = git(self.checkout, "rev-parse", "HEAD")
+        revised = external({"real_product_entry": "REVISE"}, reviewed_commit=head,
+                           reviewed_at="2026-09-15T09:00:00Z")
+        recorded = formal.record_external_review(self.paths, review_file=self.review_file(revised))
+        self.assertEqual(recorded["verdict"], "REVISE")
+        # The first freeze still verifies, but the newest review of this apparatus decides.
+        self.assertEqual(formal.verified_first_freeze(self.paths)[0], self.first_freeze)
+        self.assertIn("is REVISE", formal.status(self.paths)["checks"]["external_review"])
+        with self.assertRaisesRegex(formal.FormalError, "is REVISE"):
+            self.preflight()
+        self.assertEqual(provider.requests, [])
+        accepted = external(reviewed_commit=head, reviewed_at="2026-09-15T10:00:00Z")
+        formal.record_external_review(self.paths, review_file=self.review_file(accepted))
+        record = self.preflight()
+        self.assertEqual((record["status"], record["external_review_digest"]),
+                         ("READY", accepted["review_digest"]))
+
+    def test_a_review_binds_its_commit_and_every_reviewed_file(self):
+        head = git(self.checkout, "rev-parse", "HEAD")
+        with self.assertRaisesRegex(formal.FormalError, "reviewed commit"):
+            formal.record_external_review(self.paths, review_file=self.review_file(
+                external(reviewed_commit="d" * 40)))
+        # A later commit outside the reviewed files leaves the review standing ...
+        (self.checkout / "README").write_text("a later product change\n")
+        git(self.checkout, "commit", "-q", "-am", "change the readme")
+        accepted = external(reviewed_commit=head)
+        formal.record_external_review(self.paths, review_file=self.review_file(accepted))
+        self.assertEqual(formal.verified_external_review(self.paths)[0], accepted)
+        # ... and one that changes an apparatus file needs a new review.
+        evaluator = self.checkout / "evals/odoo/evaluator.py"
+        evaluator.write_bytes(evaluator.read_bytes() + b"# changed after the review\n")
+        git(self.checkout, "commit", "-q", "-am", "change the evaluator")
+        with self.assertRaisesRegex(formal.FormalError, "changed after the reviewed commit"):
+            formal.verified_external_review(self.paths)
+        with self.assertRaisesRegex(formal.FormalError, "changed after the reviewed commit"):
+            formal.record_external_review(self.paths, review_file=self.review_file(
+                external(reviewed_commit=head, reviewed_at="2026-09-15T11:00:00Z")))
+
+
+class RehearsalQualificationTests(FormalFixture):
+    def test_a_rehearsal_qualification_counts_only_while_paid_effects_are_kept_apart(self):
+        head = git(self.checkout, "rev-parse", "HEAD")
+        candidate = {"commit": head, "agent_image_id": DIGEST, "agent_image_revision": head}
+        manifest = harness.fixture_manifest_path(self.private)
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text(json.dumps({"manifest_digest": DIGEST, "candidate": candidate}))
+        records = self.root / "rehearsal" / "qualification"
+        records.mkdir(parents=True)
+        (records / "p74a-qualification-20260915T000000Z.json").write_text(json.dumps({
+            "status": "READY", "candidate": candidate, "fixture_manifest_digest": DIGEST,
+            "offline": {"protocol_digest": protocol.document()["protocol_digest"]}}))
+        self.provider()
+        shared = dataclasses.replace(self.paths, rehearsal_qualifications=records)
+        with self.assertRaisesRegex(formal.FormalError, "its own formal root.*loopback provider"):
+            formal.qualification_for_head(shared)
+        self.assertIn("kept apart", formal.status(shared)["checks"]["qualification"])
+        apart = dataclasses.replace(shared, formal_root=self.root / "rehearsal" / "formal",
+                                    provider_config_file=self.paths.provider_config)
+        self.assertEqual(formal.qualification_for_head(apart)["artifact"],
+                         "p74a-qualification-20260915T000000Z.json")
+        apart.provider_config.write_text(json.dumps(
+            {"base_url": "https://provider.example.test/v1", "key_file": str(self.key)}))
+        with self.assertRaisesRegex(formal.FormalError, "loopback provider"):
+            formal.qualification_for_head(apart)
+        # Without a rehearsal directory the private records decide, and none qualified HEAD.
+        self.assertIn("has not passed", formal.status(self.paths)["checks"]["qualification"])
 
 
 if __name__ == "__main__":

@@ -38,6 +38,9 @@ class PageAgentRunnerConfig:
     max_steps: int = 12
     max_page_actions: int = 20
     wall_time_s: int = 120
+    #: Automatic time the attempt may take. The arm is single-turn, so its one turn gets the
+    #: smaller of this and ``wall_time_s``.
+    attempt_wall_s: float = 300
     viewport: tuple[int, int] = (1440, 1000)
     headless: bool = True
 
@@ -115,7 +118,8 @@ def run(runner_input: RunnerInput, config: PageAgentRunnerConfig, *, client: Any
             "language": runner_input.locale if runner_input.locale in {"en-US", "zh-CN"}
             else "en-US",
             "max_steps": config.max_steps, "max_page_actions": config.max_page_actions,
-            "wall_ms": config.wall_time_s * 1000, "navigation_mode": "spa",
+            "wall_ms": int(min(config.wall_time_s, config.attempt_wall_s) * 1000),
+            "navigation_mode": "spa",
             "capability_profile": "browser_only", "instructions": "", "tools": [],
             "run_token": token, "request_options": contract.bridge_request_options(),
         }

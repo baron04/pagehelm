@@ -20,13 +20,15 @@ TASKS = {task: {"class": "refusal_or_limitation" if task in REFUSALS else "norma
          for task in TASK_IDS}
 SEED = protocol.derive_schedule_seed("e" * 40, purpose="development")
 CAPABILITIES = {PAGEAGENT: DIGEST, WOA: DIGEST}
+FEEDBACK = {"candidate_commit": CANDIDATE["commit"], "submit_within_300ms": True,
+            "cancel_within_300ms": True, "qualification_digest": DIGEST}
 
 PASS = classify(product_started=True, dispatch_state="none", runner_terminal="completed",
                 evaluation=Evaluation("PASS", decisive=True))
 FAIL = classify(product_started=True, dispatch_state="none", runner_terminal="completed",
                 evaluation=Evaluation("FAIL", decisive=True))
 OUTAGE = classify(product_started=True, dispatch_state="none", runner_terminal=None,
-                  apparatus_events=[ApparatusEvent("provider_http_5xx",
+                  apparatus_events=[ApparatusEvent("provider_unavailable",
                                                    "gateway_response_record")])
 UNSAFE = classify(product_started=True, dispatch_state="acknowledged",
                   runner_terminal="completed",
@@ -139,7 +141,8 @@ def follows(summary, *, reason=None):
             "protocol_digest": summary["batch"]["protocol_digest"],
             "candidate_commit": summary["batch"]["candidate"]["commit"],
             "chain_head": summary["chain_head"],
-            "termination_reason": reason or summary["seal_reason"] or "batch_completed"}
+            "termination_reason": reason or summary["seal_reason"] or "batch_completed",
+            "continuation_record": None}
 
 
 def cell(value, arm=WOA, replicate="primary", batch=0):
@@ -230,7 +233,7 @@ class GateTests(unittest.TestCase):
                           block["normal"]["sensitivity_gate_verdict"],
                           block["normal"]["robust"]), (22, "FAIL", False))
         self.assertEqual((block["attempts"], block["replacements"]), (31, 1))
-        self.assertEqual(block["apparatus_codes"]["provider_http_5xx"], 1)
+        self.assertEqual(block["apparatus_codes"]["provider_unavailable"], 1)
         self.assertEqual(block["axes"]["product_outcome"]["NOT_EVALUABLE"], 0)
         self.assertEqual((block["cost"]["model_calls"], block["cost"]["known_cost_cny"],
                           block["cost"]["total_cost_cny"]), (2, 0.05, 0.05))
@@ -364,13 +367,38 @@ class CostAndLatencyTests(unittest.TestCase):
         walls = dict(zip(READ_ONLY, [1000 * index for index in range(1, 20)] + [99000]))
         batch.run_all(lambda item: (PASS, {"wall_ms": walls.get(item["task_id"], 1200)}))
         value = report.build_report(batches=[batch.complete()], tasks=TASKS,
-                                    plan=plan_for(slot_list))
+                                    plan=plan_for(slot_list), feedback=FEEDBACK)
         latency = cell(value)["latency"]
         self.assertEqual((latency["n"], latency["p50"], latency["p95"], latency["maximum"]),
                          (20, 10000, 19000, 99000))
         self.assertEqual(latency["p95"], stats.nearest_rank_percentile(list(walls.values()), 95))
         self.assertIs(latency["experience_gate_passed"], True)
         self.assertIsNone(latency["reason"])
+        self.assertEqual(latency["feedback"], FEEDBACK)
+
+    def test_the_experience_gate_needs_both_feedback_checks_of_the_batch_candidate(self):
+        slot_list = formal_slots()
+        batch = Batch(self, slot_list)
+        batch.run_all(lambda item: (PASS, {"wall_ms": 1000}))
+        summary = batch.complete()
+        cases = {
+            "unverified": (None, None, "feedback_unverified"),
+            "cancel_over_budget": ({**FEEDBACK, "cancel_within_300ms": False}, False,
+                                   "feedback_over_300ms"),
+            "another_candidate": ({**FEEDBACK, "candidate_commit": NEW_CANDIDATE["commit"]}, None,
+                                  "feedback_unverified"),
+            "both_within": (FEEDBACK, True, None),
+        }
+        for label, (feedback, passed, reason) in cases.items():
+            with self.subTest(label=label):
+                latency = cell(report.build_report(batches=[summary], tasks=TASKS,
+                                                   plan=plan_for(slot_list),
+                                                   feedback=feedback))["latency"]
+                self.assertEqual((latency["experience_gate_passed"], latency["reason"]),
+                                 (passed, reason))
+        with self.assertRaises(ValueError):
+            report.build_report(batches=[summary], tasks=TASKS, plan=plan_for(slot_list),
+                                feedback={**FEEDBACK, "cancel_within_300ms": "yes"})
 
 
 class ComparisonTests(unittest.TestCase):

@@ -169,6 +169,11 @@ def _read_record(path: Path) -> dict[str, Any]:
     return record
 
 
+def recovery_record(directory: Path) -> dict[str, Any]:
+    """The fixture's sealed recovery record; a changed record is refused."""
+    return _read_record(Path(directory) / "recovery.json")
+
+
 def prepare_snapshot(stack: Stack, guard: FixtureGuard, directory: Path, *,
                      actor_projection: dict[str, Any]) -> dict[str, Any]:
     """Archive the qualified baseline while the application writers are stopped."""
@@ -219,16 +224,16 @@ def restore(stack: Stack, guard: FixtureGuard, directory: Path, *,
     """Put the baseline back and verify it; the caller supplies the actor projection reader.
 
     ``actor_projection`` is a zero-argument callable returning the actor-visible projection,
-    read independently of the product after Odoo is back. A previous FAILED reset blocks
-    further resets until an operator re-arms the record deliberately; an uncertain one stays
-    uncertain.
+    read independently of the product after Odoo is back. A previous failed or uncertain reset
+    blocks further resets until an operator re-arms the record deliberately; a re-armed restore
+    is verified like any other.
     """
     record_path = directory / "recovery.json"
     try:
         record = _read_record(record_path)
     except (OSError, ValueError, StackError):
         return {"status": "INDETERMINATE", "basis": ["recovery_record_unreadable"]}
-    if record["status"] in {"RESTORING", "INDETERMINATE"}:
+    if record["status"] in {"RESTORING", "INDETERMINATE"} and not rearm_after_failure:
         return {"status": "INDETERMINATE", "basis": ["previous_reset_reported_no_outcome"]}
     if record["status"] == "FAILED" and not rearm_after_failure:
         return {"status": "FAIL", "basis": ["previous_reset_failed_requires_operator"]}

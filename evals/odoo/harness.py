@@ -114,24 +114,33 @@ def batch_bindings(ctx: Context) -> dict[str, Any]:
 @contextmanager
 def open_driver(ctx: Context, path: Path, playwright: Any, *, backend: Backend,
                 budgets: GatewayBudgets | None = None, stack: Stack | None = None,
-                recovery_dir: Path | None = None) -> Iterator[Driver]:
-    """A driver and its gateway bound to an existing ledger; the gateway closes on exit."""
+                recovery_dir: Path | None = None,
+                attempt_wall_s: float | None = None) -> Iterator[Driver]:
+    """A driver and its gateway bound to an existing ledger; the gateway closes on exit.
+
+    ``attempt_wall_s`` shortens the attempt's automatic wall clock for a qualification probe;
+    formal batches run the protocol's.
+    """
     stack = stack or ctx.stack
     gateway = ProviderGateway(
         ledger_path=path, backend=backend, port=stack.gateway_port,
         budgets=budgets or protocol_budgets()).start()
     evidence = ctx.root / "evidence" / path.stem
+    turn_wall_s = protocol.BUDGETS["turn_wall_s"]
+    attempt_wall_s = attempt_wall_s or protocol.BUDGETS["attempt_automatic_wall_s"]
     config = DriverConfig(
         stack=stack, ledger_path=path, evidence_root=evidence,
         recovery_dir=recovery_dir or ctx.private_dir / "recovery", actor_key_files=ctx.keys,
         woa=WoaRunnerConfig(base_url=stack.base_url, actors=ctx.actors,
-                            evidence_dir=evidence / "screens"),
+                            evidence_dir=evidence / "screens", turn_timeout_s=turn_wall_s,
+                            attempt_wall_s=attempt_wall_s),
         pageagent=PageAgentRunnerConfig(
             base_url=stack.base_url, actors=ctx.actors, evidence_dir=evidence / "screens",
             bundle_path=ctx.bundle,
             bundle_sha256="sha256:" + hashlib.sha256(ctx.bundle.read_bytes()).hexdigest(),
             max_steps=protocol.BUDGETS["pageagent_max_steps"],
-            max_page_actions=protocol.BUDGETS["pageagent_max_page_actions"]),
+            max_page_actions=protocol.BUDGETS["pageagent_max_page_actions"],
+            wall_time_s=turn_wall_s, attempt_wall_s=attempt_wall_s),
         contract=PageAgentProviderContract(
             model=protocol.PROVIDER["requested_model_alias"], temperature=0.0, top_p=1.0,
             max_completion_tokens=protocol.BUDGETS["max_output_tokens_per_call"],

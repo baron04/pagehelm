@@ -1,8 +1,10 @@
 import json
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from evals.odoo import ledger, outcomes
 from evals.odoo.outcomes import ApparatusEvent, Evaluation, classify
@@ -24,8 +26,9 @@ def slots(count=4, arm="woa_product"):
 
 def metrics(attempt_id, wall_ms=1200):
     return {"attempt_id": attempt_id, "automatic_wall_ms": wall_ms, "approval_wait_ms": 0,
-            "first_feedback_ms": 80, "page_actions": 0, "invalid_page_actions": 0,
-            "business_calls": 1, "repeated_observations": 0, "user_turns": 1}
+            "first_feedback_ms": 80, "cancel_feedback_ms": None, "page_actions": 0,
+            "invalid_page_actions": 0, "business_calls": 1, "repeated_observations": 0,
+            "user_turns": 1}
 
 
 def header(slot_list, *, previous=None, protocol=DIGEST, purpose="development", seed="0" * 32,
@@ -36,7 +39,8 @@ def header(slot_list, *, previous=None, protocol=DIGEST, purpose="development", 
              "task_set_seal_digest": DIGEST,
              "fixture": {"manifest_digest": DIGEST, "baseline_guard_digest": OTHER},
              "capability_digests": {"pageagent_browser_only": DIGEST, "woa_product": DIGEST},
-             "candidate": CANDIDATE, "schedule_seed": seed, "provider_binding_digest": DIGEST}
+             "candidate": CANDIDATE, "schedule_seed": seed, "provider_binding_digest": DIGEST,
+             "ledger_contract_digest": ledger.LEDGER_CONTRACT_DIGEST}
     return {**value, **changes}
 
 
@@ -101,7 +105,7 @@ class LedgerHarness:
 PASS = classify(product_started=True, dispatch_state="none", runner_terminal="completed",
                 evaluation=Evaluation("PASS", decisive=True))
 OUTAGE = classify(product_started=True, dispatch_state="none", runner_terminal=None,
-                  apparatus_events=[ApparatusEvent("provider_http_5xx",
+                  apparatus_events=[ApparatusEvent("provider_unavailable",
                                                    "gateway_response_record")])
 
 
@@ -373,15 +377,60 @@ class ReplacementTests(unittest.TestCase):
         self.assertIsNotNone(ledger.read(harness.path)[1]["attempts"][0]["metrics"])
 
 
+class ProviderRecordTests(unittest.TestCase):
+    def response(self, harness, attempt, seq, **changes):
+        ledger.append(harness.path, "model_request_dispatched", {
+            "attempt_id": attempt, "request_seq": seq, "body_digest": DIGEST,
+            "requested_model": "qwen3.8-flash", "max_output_tokens": 2048,
+            "parameters": {"temperature": 0.0, "max_tokens": 2048, "tool_choice": "auto",
+                           "tools": 0, "options": {"thinking_budget": 1024}}})
+        return ledger.append(harness.path, "model_response_received", {
+            "attempt_id": attempt, "request_seq": seq, "status": "ok", "http_status": 200,
+            "provider_request_id": f"req-{seq}", "response_model": "first", "usage": None,
+            "cost_cny": None, "error_code": None, **changes})
+
+    def test_typed_failures_are_recorded_and_any_model_string_they_name_still_counts(self):
+        harness = LedgerHarness(self, slots(2))
+        attempt = harness.start("s000")
+        self.response(harness, attempt, 1, status="contract_error",
+                      error_code="provider_response_contract")
+        summary = self.response(harness, attempt, 2, status="accounting_error",
+                                error_code="accounting_failure", response_model="second")
+        self.assertEqual((summary["provider_model"], summary["pending_seal"]),
+                         ("first", "model_identity_changed"))
+        ledger.append(harness.path, "model_request_refused",
+                      {"attempt_id": attempt, "request_seq": 3, "reason": "accounting_failure"})
+        with self.assertRaises(ledger.LedgerError):
+            self.response(harness, attempt, 4, status="teapot", response_model=None)
+
+    def test_a_refused_credential_an_unaccounted_call_and_a_contract_violation_seal(self):
+        for code, evidence in (("provider_authentication_failed", "gateway_response_record"),
+                               ("accounting_failure", "gateway_accounting_record")):
+            with self.subTest(code=code):
+                harness = LedgerHarness(self, slots(2))
+                fault = classify(product_started=True, dispatch_state="none",
+                                 runner_terminal="provider_error",
+                                 apparatus_events=[ApparatusEvent(code, evidence)])
+                summary = harness.finish(harness.start("s000"), fault)
+                self.assertEqual(summary["pending_seal"], code)
+                self.assertFalse(summary["attempts"][0]["replacement_eligible"])
+        harness = LedgerHarness(self, slots(2))
+        violation = classify(product_started=True, dispatch_state="none",
+                             runner_terminal="provider_error", request_contract_violation=True)
+        summary = harness.finish(harness.start("s000"), violation)
+        self.assertEqual((summary["pending_seal"], summary["attempts"][0]["product_outcome"]),
+                         ("request_contract_violation", "FAIL"))
+
+
 NEW_CANDIDATE = {"commit": "e" * 40, "agent_image_id": "sha256:" + "f" * 64,
                  "agent_image_revision": "e" * 40}
 
 
 def link(*, purpose="development", protocol=DIGEST, candidate=CANDIDATE,
-         reason="batch_completed"):
+         reason="batch_completed", record=None):
     return {"batch_id": "batch-000", "purpose": purpose, "protocol_digest": protocol,
             "candidate_commit": candidate["commit"], "chain_head": OTHER,
-            "termination_reason": reason}
+            "termination_reason": reason, "continuation_record": record}
 
 
 class BatchChainTests(unittest.TestCase):
@@ -402,21 +451,56 @@ class BatchChainTests(unittest.TestCase):
 
     def test_the_same_development_candidate_continues_only_after_an_exogenous_stop(self):
         expected = {"batch_completed": "refused", "critical_safety_event": "refused",
-                    "operator_stop": "refused", "model_identity_changed": "allowed",
-                    "replacement_cap_exceeded": "allowed"}
+                    "operator_stop": "refused", "request_contract_violation": "refused",
+                    "model_identity_changed": "allowed", "replacement_cap_exceeded": "allowed",
+                    "provider_authentication_failed": "allowed", "accounting_failure": "allowed"}
         for reason, outcome in expected.items():
             with self.subTest(reason=reason):
-                self.assertEqual(self.outcome(previous=link(reason=reason)), outcome)
+                record = OTHER if reason == "accounting_failure" else None
+                self.assertEqual(self.outcome(previous=link(reason=reason, record=record)),
+                                 outcome)
         self.assertEqual(self.outcome(previous=link(), protocol=OTHER), "refused")
+
+    def test_an_unaccounted_call_is_followed_only_with_its_bill_reconciliation(self):
+        for candidate in (CANDIDATE, NEW_CANDIDATE):
+            with self.subTest(candidate=candidate["commit"][:1]):
+                self.assertEqual(self.outcome(previous=link(reason="accounting_failure"),
+                                              candidate=candidate), "refused")
+                self.assertEqual(self.outcome(previous=link(reason="accounting_failure",
+                                                            record=OTHER), candidate=candidate),
+                                 "allowed")
+        # No other ending carries a continuation record.
+        self.assertEqual(self.outcome(previous=link(reason="model_identity_changed",
+                                                    record=OTHER)), "refused")
 
     def test_heldout_batches_keep_the_strict_protocol_rule(self):
         heldout = {"purpose": "heldout", "candidate": NEW_CANDIDATE}
         self.assertEqual(self.outcome(previous=link(purpose="heldout"), **heldout), "refused")
         self.assertEqual(self.outcome(previous=link(purpose="heldout"), protocol=OTHER, **heldout),
                          "allowed")
+        for reason in ("model_identity_changed", "replacement_cap_exceeded"):
+            with self.subTest(reason=reason):
+                self.assertEqual(self.outcome(previous=link(purpose="heldout", reason=reason),
+                                              **heldout), "allowed")
+
+    def test_a_heldout_restart_after_a_refused_credential_or_unaccounted_call_needs_its_audit(self):
+        heldout = {"purpose": "heldout", "candidate": NEW_CANDIDATE}
+        for reason in ("provider_authentication_failed", "accounting_failure"):
+            with self.subTest(reason=reason):
+                self.assertEqual(self.outcome(previous=link(purpose="heldout", reason=reason),
+                                              **heldout), "refused")
+                self.assertEqual(self.outcome(previous=link(purpose="heldout", reason=reason,
+                                                            record=OTHER), **heldout), "allowed")
+        # A new protocol version needs no audit after a refused credential, and a qualification
+        # batch starts again after any exogenous stop without one.
         self.assertEqual(self.outcome(previous=link(purpose="heldout",
-                                                    reason="model_identity_changed"), **heldout),
-                         "allowed")
+                                                    reason="provider_authentication_failed"),
+                                      protocol=OTHER, **heldout), "allowed")
+        qualification = {"purpose": "apparatus_qualification", "seed": None,
+                         "candidate": NEW_CANDIDATE}
+        self.assertEqual(self.outcome(previous=link(purpose="apparatus_qualification",
+                                                    reason="provider_authentication_failed"),
+                                      **qualification), "allowed")
 
     def test_a_link_names_its_purpose_candidate_and_ending(self):
         partial = {key: value for key, value in link().items() if key != "candidate_commit"}
@@ -431,6 +515,64 @@ class BatchChainTests(unittest.TestCase):
         harness.finish(harness.start("s000"), PASS)
         with self.assertRaises(ledger.LedgerError):
             ledger.append(harness.path, "batch_completed", {})
+
+
+class LedgerContractTests(unittest.TestCase):
+    def test_a_ledger_written_under_another_contract_is_refused_whole_and_left_alone(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "batch.jsonl"
+            older = "sha256:" + "1" * 64
+            with mock.patch.object(ledger, "LEDGER_CONTRACT_DIGEST", older):
+                ledger.create(path, header(slots(1), ledger_contract_digest=older))
+                self.assertEqual(ledger.append(path, "batch_sealed",
+                                               {"reason": "operator_stop"})["status"], "SEALED")
+            written = path.read_bytes()
+            with self.assertRaisesRegex(ledger.LedgerContractError, "another ledger contract"):
+                ledger.read(path)
+            with self.assertRaises(ledger.LedgerContractError):
+                ledger.append(path, "unowned_model_request",
+                              {"body_digest": DIGEST, "reason": "no_open_attempt"})
+            self.assertEqual(path.read_bytes(), written)
+            unnamed = {key: value for key, value in header(slots(1)).items()
+                       if key != "ledger_contract_digest"}
+            with self.assertRaises(ledger.LedgerContractError):
+                ledger.create(Path(directory) / "unnamed.jsonl", unnamed)
+            self.assertFalse((Path(directory) / "unnamed.jsonl").exists())
+
+    def test_the_contract_digest_follows_the_files_that_define_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative in ledger.CONTRACT_FILES:
+                (root / relative).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(ledger._REPOSITORY / relative, root / relative)
+            self.assertEqual(ledger.contract_digest(root), ledger.LEDGER_CONTRACT_DIGEST)
+            outcomes_file = root / "evals/odoo/outcomes.py"
+            outcomes_file.write_bytes(outcomes_file.read_bytes() + b"\n")
+            self.assertNotEqual(ledger.contract_digest(root), ledger.LEDGER_CONTRACT_DIGEST)
+
+
+REFUSED_CREDENTIAL = classify(product_started=True, dispatch_state="none",
+                              runner_terminal="provider_error",
+                              apparatus_events=[ApparatusEvent("provider_authentication_failed",
+                                                               "gateway_response_record")])
+
+
+class ExposureTests(unittest.TestCase):
+    def test_a_credential_refused_before_any_answer_exposes_nothing(self):
+        harness = LedgerHarness(self, slots(2), purpose="heldout")
+        harness.finish(harness.start("s000"), REFUSED_CREDENTIAL)
+        ledger.append(harness.path, "batch_sealed", {"reason": "provider_authentication_failed"})
+        self.assertEqual(ledger.exposure(ledger.read(harness.path)[0]), [])
+
+    def test_a_batch_that_answered_was_judged_or_wrote_state_exposes_it(self):
+        harness = LedgerHarness(self, slots(2), purpose="heldout")
+        first = harness.start("s000")
+        harness.model_call(first, 1)
+        harness.finish(first, PASS, reset="PASS", calls=1)
+        harness.finish(harness.start("s001"), REFUSED_CREDENTIAL)
+        self.assertEqual(ledger.exposure(ledger.read(harness.path)[0]),
+                         ["judged_result:attempt-001", "model_answer:attempt-001",
+                          "state_write:attempt-001"])
 
 
 if __name__ == "__main__":

@@ -10,6 +10,12 @@ unexpanded view of the newest turn.
 It receives a ``RunnerInput`` -- messages, entry path, actor -- and an approval hook, never
 the task's evaluator specification. Capabilities are the actor's delegation, fixed by the
 deployment before the run.
+
+A turn runs at most ``turn_timeout_s`` and the whole attempt at most ``attempt_wall_s`` of
+automatic time; time spent on a confirmation card is charged to neither. At a limit the runner
+presses the panel's stop button, as a person would, times how long the panel takes to show that
+it is stopping, and sends no further message. A turn the product did not finish in time is the
+product's result to score, never a failure of the control channel.
 """
 from __future__ import annotations
 
@@ -55,6 +61,17 @@ _FEEDBACK_JS = """([before]) => {
   const s = document.querySelector('#woa-assistant').shadowRoot;
   return Boolean(s.querySelector('.woa-pending')) || s.querySelectorAll('li.woa-turn').length > before;
 }"""
+_STOP_BUTTON = "button.woa-send[data-stop]"
+_STOP_FEEDBACK_JS = """() => {
+  const s = document.querySelector('#woa-assistant').shadowRoot;
+  const stop = s.querySelector('button.woa-send[data-stop]');
+  const panel = s.querySelector('section.woa-window');
+  return !stop || stop.disabled || Boolean(panel && panel.dataset.state === 'stopping');
+}"""
+_STOPPED_JS = """() => {
+  const s = document.querySelector('#woa-assistant').shadowRoot;
+  return !s.querySelector('button.woa-send[data-stop]');
+}"""
 
 
 class RunnerPreStartError(RuntimeError):
@@ -78,10 +95,14 @@ class WoaRunnerConfig:
     actors: dict[str, ActorCredential]
     evidence_dir: Path
     turn_timeout_s: float = 150
+    #: Automatic time the whole attempt may take; confirmation waits are not charged to it.
+    attempt_wall_s: float = 300
     approval_visible_wait_ms: int = 700
     #: How long a navigated page may take to render its view after the turn ends. A page
     #: still showing the old view afterwards is recorded as it is, for the evaluator to judge.
     view_settle_s: float = 15
+    #: How long a turn the runner stopped may take to wind down before the attempt ends.
+    stop_settle_s: float = 30
     viewport: tuple[int, int] = (1440, 1000)
     headless: bool = True
     chromium: Any = field(default=None, compare=False)
@@ -141,14 +162,50 @@ def settle_view(page: Any, before: dict[str, str], timeout_s: float) -> int | No
     return None
 
 
+def turn_budget(*, turn_timeout_s: float, attempt_wall_s: float,
+                automatic_used_s: float) -> tuple[float, str]:
+    """How much automatic time the next turn may use, and which limit that is."""
+    remaining = attempt_wall_s - automatic_used_s
+    if remaining < turn_timeout_s:
+        return max(0.0, remaining), "attempt_automatic_wall"
+    return float(turn_timeout_s), "turn_wall"
+
+
+def stop_turn(page: Any, config: WoaRunnerConfig) -> dict[str, Any]:
+    """Stop the running turn with the panel's stop button and time the panel's feedback.
+
+    The time runs from just before the click to the first frame in which the panel shows that
+    it is stopping or has stopped, so it is never shorter than what a person would see.
+    """
+    from playwright.sync_api import Error as PlaywrightError
+
+    feedback_ms = None
+    try:
+        clicked = time.monotonic()
+        page.locator(_ROOT).locator(_STOP_BUTTON).click(timeout=5_000)
+        page.wait_for_function(_STOP_FEEDBACK_JS, polling="raf", timeout=5_000)
+        feedback_ms = int((time.monotonic() - clicked) * 1000)
+    except PlaywrightError:
+        pass
+    try:
+        page.wait_for_function(_STOPPED_JS, polling=100,
+                               timeout=int(config.stop_settle_s * 1000))
+        stopped = True
+    except PlaywrightError:
+        stopped = False
+    return {"cancel_feedback_ms": feedback_ms, "stopped": stopped}
+
+
 def run(runner_input: RunnerInput, config: WoaRunnerConfig, *,
         approval_hook: Callable[[dict[str, Any]], dict[str, Any]] | None,
         checkpoint: Callable[[dict[str, Any]], None], playwright: Any) -> dict[str, Any]:
+    from playwright.sync_api import TimeoutError as PlaywrightTimeout
+
     artifact: dict[str, Any] = {
         "runner": "woa_product", "task_id": runner_input.task_id, "actor": runner_input.actor,
         "product_started": False, "turns": [], "page_errors": [], "final": None,
         "logged_out": False, "browser_exit": None, "control_channel_error": None,
-        "approvals": [],
+        "approvals": [], "budget_exhausted": None,
     }
     browser = playwright.chromium.launch(headless=config.headless)
     try:
@@ -169,7 +226,14 @@ def run(runner_input: RunnerInput, config: WoaRunnerConfig, *,
         except Exception as exc:
             raise RunnerPreStartError("credential_or_identity_before_start",
                                       "pre_start_check") from exc
+        automatic_used = 0.0
         for index, message in enumerate(runner_input.messages):
+            budget_s, limit = turn_budget(turn_timeout_s=config.turn_timeout_s,
+                                          attempt_wall_s=config.attempt_wall_s,
+                                          automatic_used_s=automatic_used)
+            if budget_s <= 0:
+                artifact["budget_exhausted"] = limit
+                break
             before = page.locator(_ROOT).locator(_TURNS).count()
             view_before = breadcrumb(page)
             box = page.locator(_ROOT).locator("textarea")
@@ -185,12 +249,17 @@ def run(runner_input: RunnerInput, config: WoaRunnerConfig, *,
             except Exception:
                 feedback_ms = None
             approval_wait = 0.0
-            deadline = submitted + config.turn_timeout_s
             state = None
-            while time.monotonic() < deadline:
-                remaining_ms = max(1_000, int((deadline - time.monotonic()) * 1000))
-                handle = page.wait_for_function(_SETTLED_JS, arg=[before], polling=100,
-                                                timeout=remaining_ms)
+            while True:
+                # A confirmation wait is not automatic time, so it moves the deadline.
+                left = submitted + budget_s + approval_wait - time.monotonic()
+                if left <= 0:
+                    break
+                try:
+                    handle = page.wait_for_function(_SETTLED_JS, arg=[before], polling=100,
+                                                    timeout=max(1, int(left * 1000)))
+                except PlaywrightTimeout:
+                    break
                 state = handle.json_value()
                 if state != "approval":
                     break
@@ -208,18 +277,24 @@ def run(runner_input: RunnerInput, config: WoaRunnerConfig, *,
                 approval_wait += time.monotonic() - seen
                 artifact["approvals"].append({"turn": index, "card": card, "verdict": verdict})
                 checkpoint({"product_started": True, "turn": index, "approval": True})
+            automatic = max(0.0, time.monotonic() - submitted - approval_wait)
+            automatic_used += automatic
             if state != "settled":
-                artifact["turns"].append({"index": index, "timed_out": True,
-                                          "first_feedback_ms": feedback_ms})
+                stopped = stop_turn(page, config)
+                artifact["budget_exhausted"] = limit
+                artifact["turns"].append({
+                    "index": index, "timed_out": True, "limit": limit,
+                    "first_feedback_ms": feedback_ms, **stopped,
+                    "automatic_ms": int(automatic * 1000),
+                    "approval_wait_ms": int(approval_wait * 1000)})
                 break
             answer = page.evaluate(_ANSWER_JS)
-            elapsed = time.monotonic() - submitted
             settle_ms = settle_view(page, view_before, config.view_settle_s)
             artifact["turns"].append({
                 "index": index, "timed_out": False, "answer_kind": answer["kind"],
                 "visible_answer": answer["text"], "path": page.evaluate("() => location.pathname"),
                 "view_settle_ms": settle_ms, "first_feedback_ms": feedback_ms,
-                "automatic_ms": int(max(0.0, elapsed - approval_wait) * 1000),
+                "cancel_feedback_ms": None, "automatic_ms": int(automatic * 1000),
                 "approval_wait_ms": int(approval_wait * 1000),
             })
         artifact["final"] = breadcrumb(page)

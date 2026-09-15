@@ -28,11 +28,23 @@ def review(verdict="ACCEPT", **changes):
     return freeze.family_review_record(**{**arguments, **changes})
 
 
-def first(**review_changes):
+def external(verdicts=None, **changes):
+    """An external review of the running apparatus; ``verdicts`` replaces some items' ACCEPT."""
+    items = {item: {"verdict": (verdicts or {}).get(item, "ACCEPT"),
+                    "evidence": [f"evals/odoo: {item} checked against the code"]}
+             for item in protocol.EXTERNAL_REVIEW["items"]}
+    arguments = {"reviewer": "Adversarial Reviewer", "reviewed_at": "2026-09-15T07:00:00Z",
+                 "reviewed_commit": "c" * 40,
+                 "protocol_digest": protocol.document()["protocol_digest"], "items": items}
+    return freeze.external_review_record(**{**arguments, **changes})
+
+
+def first(external_review=None, **review_changes):
     development, heldout, split = seals()
     return freeze.first_freeze_record(development_seal=development, heldout_seal=heldout,
                                       split_verification=split,
-                                      family_review=review(**review_changes))
+                                      family_review=review(**review_changes),
+                                      external_review=external_review or external())
 
 
 def git(root, *args):
@@ -63,32 +75,77 @@ class CandidateRepository:
 
 
 class FirstFreezeTests(unittest.TestCase):
-    def test_only_an_accepted_review_of_these_seals_opens_the_first_freeze(self):
+    def test_only_accepted_reviews_of_these_seals_open_the_first_freeze(self):
         development, heldout, split = seals()
         record = first()
         self.assertEqual(protocol.document(first_freeze=record)["stage"], "first_frozen")
-        self.assertEqual(record["family_review_digest"], review()["review_digest"])
+        self.assertEqual((record["family_review_digest"], record["external_review_digest"]),
+                         (review()["review_digest"], external()["review_digest"]))
         self.assertEqual(freeze.verify_first_freeze(
             record, development_seal=development, heldout_seal=heldout,
-            split_verification=split, family_review=review()), record)
+            split_verification=split, family_review=review(), external_review=external()),
+            record)
         with self.assertRaises(freeze.FreezeError):
             first(verdict="REVISE", findings=["two held-out families repeat development ones"])
         with self.assertRaises(freeze.FreezeError):
             freeze.first_freeze_record(development_seal=development, heldout_seal=heldout,
                                        split_verification=split,
-                                       family_review={**review(), "reviewer": "Someone Else"})
+                                       family_review={**review(), "reviewer": "Someone Else"},
+                                       external_review=external())
         with self.assertRaises(freeze.FreezeError):
             freeze.first_freeze_record(development_seal=heldout, heldout_seal=development,
-                                       split_verification=split, family_review=review())
+                                       split_verification=split, family_review=review(),
+                                       external_review=external())
         for changes in ({"reviewed_at": "yesterday"}, {"reviewer": ""}, {"verdict": "OK"}):
             with self.subTest(changes=changes), self.assertRaises(freeze.FreezeError):
                 review(**changes)
+        # The family review is another judgement and never stands in for the external one.
+        for label, stand_in in (("family_review", review()),
+                                ("revised", external({"real_product_entry": "REVISE"}))):
+            with self.subTest(label=label), self.assertRaises(freeze.FreezeError):
+                first(external_review=stand_in)
 
     def test_a_changed_first_freeze_is_not_a_freeze(self):
         with self.assertRaises(freeze.FreezeError):
             protocol.document(first_freeze={**first(), "normal_tasks_per_split": 30})
         with self.assertRaises(freeze.FreezeError):
             protocol.document(first_freeze={"kind": "p74_first_freeze"})
+
+
+class ExternalReviewTests(unittest.TestCase):
+    def test_the_review_concludes_on_every_listed_item_and_its_verdict_follows_them(self):
+        self.assertEqual(external()["verdict"], "ACCEPT")
+        self.assertEqual(external({"real_product_entry": "REVISE"})["verdict"], "REVISE")
+        self.assertEqual(external({"real_product_entry": "REVISE",
+                                   "apparatus_whitelist_closed": "BLOCK"})["verdict"], "BLOCK")
+        items = external()["items"]
+        partial = {key: value for key, value in items.items() if key != "real_product_entry"}
+        refusals = {
+            "missing_item": {"items": partial},
+            "extra_item": {"items": {**items, "vibes": items["real_product_entry"]}},
+            "no_evidence": {"items": {**items, "real_product_entry": {
+                "verdict": "ACCEPT", "evidence": []}}},
+            "unknown_verdict": {"items": {**items, "real_product_entry": {
+                "verdict": "LGTM", "evidence": ["looks fine"]}}},
+            "short_commit": {"reviewed_commit": "c" * 7},
+            "no_protocol_digest": {"protocol_digest": "the current one"},
+            "no_reviewer": {"reviewer": ""},
+        }
+        for label, changes in refusals.items():
+            with self.subTest(label=label), self.assertRaises(freeze.FreezeError):
+                external(**changes)
+
+    def test_a_changed_review_is_refused_and_the_reviewed_files_are_named(self):
+        record = external()
+        self.assertEqual(freeze.verify_external_review(record), record)
+        tampered = {**record, "items": {**record["items"], "real_product_entry": {
+            "verdict": "REVISE", "evidence": ["changed after it was sealed"]}}}
+        with self.assertRaises(freeze.FreezeError):
+            freeze.verify_external_review(tampered)
+        files = freeze.reviewed_files()
+        self.assertTrue(set(freeze.MACHINE_PROTOCOL_FILES) <= set(files))
+        self.assertTrue({"src/web_operation_agent/policies/model_options.json",
+                         "evals/odoo/ledger.py", "evals/odoo/formal.py"} <= set(files))
 
 
 class SecondFreezeTests(unittest.TestCase):
