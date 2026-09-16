@@ -109,14 +109,37 @@ def verify_family_review(review: Any, *, development_seal: dict[str, Any],
 
 # -- the external adversarial review ------------------------------------------------------------
 EXTERNAL_REVIEW_VERDICTS = ("ACCEPT", "REVISE", "BLOCK")
+#: Files a formal batch does not run but a paid step relies on: the escrow custody check and the
+#: zero-model qualification, whose READY and feedback checks the paid entry and the report read.
+REVIEW_BOUND_FILES = ("evals/odoo/escrow.py", "evals/odoo/qualify.py", "evals/odoo/scripted.py",
+                      "evals/odoo/variants.py", "src/web_operation_agent/model.py",
+                      "src/web_operation_agent/policies/prices.json", "evals/twenty/protocol.py",
+                      "evals/twenty/taskset.py", "evals/__init__.py", "evals/odoo/__init__.py",
+                      "evals/twenty/__init__.py", "evals/pageagent/__init__.py")
+#: A review's time, to the second, in the one spelling that sorts as it reads.
+_SECOND = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")
 
 
 def reviewed_files() -> list[str]:
     """Every file an external review binds by content: the apparatus a formal batch runs, the
-    machine protocol and the product request options it reads."""
+    files the paid entry's custody and qualification checks come from, the model client and price
+    table the gateway costs calls with, the modules and packages imported on the way, the machine
+    protocol and the product request options it reads."""
     apparatus = {path for paths in protocol.APPARATUS_MODULES.values() for path in paths}
     options = protocol.PRODUCT_MODEL_OPTIONS.relative_to(protocol.REPOSITORY).as_posix()
-    return sorted(apparatus | set(MACHINE_PROTOCOL_FILES) | {options})
+    return sorted(apparatus | set(REVIEW_BOUND_FILES) | set(MACHINE_PROTOCOL_FILES) | {options})
+
+
+def _review_findings(findings: Any) -> list[dict[str, Any]]:
+    """Findings outside the listed items, each marked whether it blocks acceptance."""
+    findings = list(findings or ())
+    if len(findings) > 50 or any(
+            not isinstance(item, dict) or set(item) != {"blocking", "text"}
+            or not isinstance(item["blocking"], bool) or not isinstance(item["text"], str)
+            or not item["text"].strip() or len(item["text"]) > 500 for item in findings):
+        raise FreezeError("review findings are at most 50 entries, each a text of at most 500 "
+                          "characters marked blocking or not")
+    return [{"blocking": item["blocking"], "text": item["text"]} for item in findings]
 
 
 def external_review_record(*, reviewer: str, reviewed_at: str, reviewed_commit: str,
@@ -125,11 +148,14 @@ def external_review_record(*, reviewer: str, reviewed_at: str, reviewed_commit: 
     """The external adversarial review of the protocol and apparatus at one commit.
 
     Every item the machine protocol lists carries its own verdict and evidence, and the review
-    accepts only when every item does. The machine cannot prove a reviewer independent, so the
-    record names who reviewed and when; a family review never stands in for it.
+    accepts only when every item does and no finding blocks. The machine cannot prove a reviewer
+    independent, so the record names who reviewed and when; a family review never stands in for
+    it.
     """
     if not isinstance(reviewer, str) or not _REVIEWER.fullmatch(reviewer):
         raise FreezeError("the review names its reviewer")
+    if not isinstance(reviewed_at, str) or not _SECOND.fullmatch(reviewed_at):
+        raise FreezeError("reviewed_at is a UTC time to the second, such as 2026-09-16T08:00:00Z")
     try:
         commit = require_commit(reviewed_commit, "reviewed_commit")
     except RevisionError as exc:
@@ -151,13 +177,11 @@ def external_review_record(*, reviewer: str, reviewed_at: str, reviewed_commit: 
                        for line in evidence)):
             raise FreezeError(f"review item {item} cites one to 20 lines of evidence")
         concluded[item] = {"verdict": value["verdict"], "evidence": list(evidence)}
-    findings = list(findings or ())
-    if len(findings) > 50 or any(not isinstance(item, str) or not item.strip() or len(item) > 500
-                                 for item in findings):
-        raise FreezeError("review findings are at most 50 lines of at most 500 characters")
+    findings = _review_findings(findings)
     verdicts = {value["verdict"] for value in concluded.values()}
-    verdict = ("ACCEPT" if verdicts == {"ACCEPT"} else "BLOCK" if "BLOCK" in verdicts
-               else "REVISE")
+    blocked = any(item["blocking"] for item in findings)
+    verdict = ("BLOCK" if "BLOCK" in verdicts
+               else "ACCEPT" if verdicts == {"ACCEPT"} and not blocked else "REVISE")
     return _sealed({
         "artifact_version": FREEZE_VERSION, "kind": "p74_external_review",
         "protocol_id": protocol.PROTOCOL_ID, "reviewer": reviewer,

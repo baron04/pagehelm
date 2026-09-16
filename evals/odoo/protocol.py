@@ -217,8 +217,9 @@ RUNNERS = {
 }
 EVALUATOR = {
     "modules": ["evals/odoo/evaluator.py", "evals/odoo/extractor.py", "evals/odoo/rpc.py"],
-    "process": ("a separate process whose PYTHONPATH is the checkout root only; it writes no "
-                "result if a product, adapter or other engine module was loaded"),
+    "process": ("a separate process whose PYTHONPATH is the checkout root; the environment can "
+                "still import the product, so it writes no result if a product, adapter or other "
+                "engine module was loaded"),
     "truth": "Odoo JSON-RPC as the trial's own actor, through domains the evaluator writes",
     "judges": ["the final answer from the arm's answer channel", "final page", "harness trace",
                "names of changed fixture guard components"],
@@ -247,6 +248,12 @@ BATCH_CHAIN = {
     "ledger_contract": ("the digest of the files that decide what ledger entries mean; a reader "
                         "refuses a ledger written under any other contract instead of reading it "
                         "by rules it was not written under"),
+    "ledger_contract_change": ("pauses the development chain: this protocol version cannot yet "
+                               "open a successor, because reviews, freezes, custody and bill "
+                               "reconciliations are not kept per version and an archived chain "
+                               "is not verified against its reader, ledgers and records; until "
+                               "that upgrade is built and reviewed, no batch follows a change to "
+                               "the ledger contract"),
     "versions": ("changing the ledger contract once formal batches exist needs a new protocol "
                  "version: the finished chain is first archived from its reader's clean "
                  "checkout -- the report and its digest, the reader commit and protocol digest, "
@@ -297,8 +304,13 @@ STATISTICS = {
 #: The final external adversarial review, as a record the formal entry checks rather than a
 #: human step it trusts. Its items are the protocol's review requirements.
 EXTERNAL_REVIEW = {
-    "record": (".workbench phase-7/P7.4/reviews/external-review-<reviewed_at>.json, committed "
-               "once; the newest review naming the running machine protocol decides"),
+    "record": (".workbench phase-7/P7.4/reviews/external-review-<reviewed_at>-<digest>.json, "
+               "a regular file named by its own time and digest, read as committed, with no "
+               "JSON key named twice, committed once on the .workbench main line and never "
+               "changed or removed; reviewed_at is a UTC second no later than the recording or "
+               "the commit that recorded it; reviews are ordered by that main line, one review "
+               "per commit, never by a written time, and one recorded on a merged branch is "
+               "refused"),
     "items": {
         "runner_blind_to_evaluator": ("no runner reads the evaluator task to configure a "
                                       "capability or preselect a Skill"),
@@ -319,10 +331,15 @@ EXTERNAL_REVIEW = {
                                                 "attribution"),
     },
     "item_verdicts": ["ACCEPT", "REVISE", "BLOCK"],
-    "verdict": "ACCEPT only when every item is ACCEPT; any BLOCK is BLOCK; otherwise REVISE",
+    "findings": ("findings outside the items, each marked blocking or not; a blocking finding "
+                 "keeps a review from accepting"),
+    "verdict": ("BLOCK when any item is BLOCK; ACCEPT only when every item is ACCEPT and no "
+                "finding blocks; otherwise REVISE"),
     "binds": ("the reviewed commit, in the checkout's history with every apparatus, machine "
-              "protocol and request option file unchanged since, and the machine protocol digest; "
-              "any change to those files needs a new review"),
+              "protocol and request option file unchanged since -- including the escrow custody "
+              "check and the zero-model qualification the paid entry relies on, the model client "
+              "and price table the gateway costs calls with, and the packages imported on the way "
+              "-- and the machine protocol digest; any change to those files needs a new review"),
     "required_by": ["the first freeze", "every paid call"],
     "independence": ("the machine cannot prove a reviewer independent; the record names who "
                      "reviewed and when, and a family review never stands in for it"),
@@ -372,7 +389,7 @@ FORMAL_ENTRY = {
                   "spend ledger under their own batch id; the record keeps content-free facts"),
     "development_batch_needs": [
         ("the newest preflight READY under the same first freeze and runtime provider binding; "
-         "a changed endpoint or key needs a new preflight, and so does a batch sealed because "
+         "a changed endpoint or key needs a new preflight, and so does a batch in which "
          "the provider refused the credential"),
         "the running candidate built from the clean checkout and a fixture manifest taken with it",
         "the development task set matching the seal the first freeze bound",

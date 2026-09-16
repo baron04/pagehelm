@@ -1,7 +1,14 @@
-"""The WOA runner's wall-clock arithmetic, without a browser."""
+"""The WOA runner's wall-clock arithmetic and the stage its faults are recorded at, without a
+browser."""
+import importlib.util
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
-from evals.odoo.runner_woa import turn_budget
+from evals.odoo import runner_woa
+from evals.odoo.runner_woa import WoaRunnerConfig, turn_budget
+from evals.odoo.tasks import RunnerInput
 
 
 class TurnBudgetTests(unittest.TestCase):
@@ -13,6 +20,141 @@ class TurnBudgetTests(unittest.TestCase):
             with self.subTest(used=used):
                 self.assertEqual(turn_budget(turn_timeout_s=150, attempt_wall_s=300,
                                              automatic_used_s=used), expected)
+
+
+class Broken(RuntimeError):
+    """A fault a browser call raised."""
+
+
+class Page:
+    """Just enough of a Playwright page for one settled turn; ``fail`` names the call that raises,
+    and ``crash`` makes the page report a crash just before it does."""
+
+    def __init__(self, fail=None, crash=False):
+        self.fail, self.crash, self.handlers = fail, crash, {}
+        self.root = mock.MagicMock()
+        self.root.locator.return_value.count.return_value = 0
+
+    def _maybe_fail(self, call):
+        if call == self.fail:
+            if self.crash:
+                self.handlers["crash"](self)
+            raise Broken(call)
+
+    def on(self, event, handler):
+        self.handlers[event] = handler
+
+    def locator(self, _selector):
+        return self.root
+
+    def wait_for_function(self, script, **_kwargs):
+        if script == runner_woa._SETTLED_JS:
+            self._maybe_fail("turn")
+        handle = mock.MagicMock()
+        handle.json_value.return_value = "settled"
+        return handle
+
+    def evaluate(self, script, *_args):
+        if script == runner_woa._ANSWER_JS:
+            return {"kind": "plain", "text": "done"}
+        return "/odoo"
+
+    def screenshot(self, **_kwargs):
+        self._maybe_fail("screenshot")
+
+
+@unittest.skipIf(importlib.util.find_spec("playwright") is None, "playwright is not installed")
+class FaultStageTests(unittest.TestCase):
+    """The reviews of 582e11c: a fault after every turn had ended was recorded as losing sight of
+    the product while it ran."""
+
+    def run_with(self, fail=None, *, crash=False, logged_out=True, messages=1):
+        page = Page(fail, crash)
+        context = mock.MagicMock()
+        context.new_page.return_value = page
+        if fail == "context_close":
+            context.close.side_effect = Broken(fail)
+        browser = mock.MagicMock()
+        browser.new_context.return_value = context
+        if fail == "browser_close":
+            browser.close.side_effect = Broken(fail)
+        playwright = mock.MagicMock()
+        playwright.chromium.launch.return_value = browser
+
+        read = []
+
+        def breadcrumb(_page):
+            # The view is read before each turn too; the final page is the read after the last.
+            read.append(True)
+            if len(read) > len(runner_input.messages):
+                page._maybe_fail("final_page")
+            return {"path": "/odoo", "breadcrumb": "", "title": ""}
+
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        config = WoaRunnerConfig(base_url="https://odoo.test", actors={},
+                                 evidence_dir=Path(directory.name))
+        runner_input = RunnerInput(task_id="t", actor="writer", locale="zh-CN", entry_path=None,
+                                   messages=("列出客户",) * messages)
+
+        def settle_view(*_args):
+            page._maybe_fail("settle")
+            return 0
+
+        with mock.patch.object(runner_woa, "login"), \
+                mock.patch.object(runner_woa, "breadcrumb", breadcrumb), \
+                mock.patch.object(runner_woa, "settle_view", settle_view), \
+                mock.patch.object(runner_woa, "logout", return_value=logged_out):
+            return runner_woa.run(runner_input, config, approval_hook=None,
+                                  checkpoint=lambda _value: None, playwright=playwright)
+
+    def faults(self, artifact):
+        return {key: (artifact[key]["type"] if isinstance(artifact[key], dict) else artifact[key])
+                for key in ("browser_exit", "control_channel_error", "final_page_error",
+                            "teardown_error") if artifact[key]}
+
+    def test_a_fault_while_the_product_runs_is_the_control_channel_or_the_browser(self):
+        self.assertEqual(self.faults(self.run_with("turn")), {"control_channel_error": "Broken"})
+        self.assertEqual(self.faults(self.run_with("turn", crash=True)),
+                         {"browser_exit": "page_crashed"})
+        # A turn still to come keeps the run going, so waiting on its view is still the run.
+        two_turns = self.run_with("settle", messages=2)
+        self.assertEqual((self.faults(two_turns), len(two_turns["turns"])),
+                         ({"control_channel_error": "Broken"}, 1))
+
+    def test_a_fault_after_every_turn_ended_is_recorded_at_its_own_stage(self):
+        clean = self.run_with()
+        self.assertEqual((self.faults(clean), clean["logged_out"], len(clean["turns"])),
+                         ({}, True, 1))
+        cases = {"settle": {"final_page_error": "Broken"},
+                 "final_page": {"final_page_error": "Broken"},
+                 "screenshot": {"teardown_error": "Broken"},
+                 "context_close": {"teardown_error": "Broken"},
+                 "browser_close": {"teardown_error": "close_failed"}}
+        for fail, expected in cases.items():
+            with self.subTest(fail=fail):
+                artifact = self.run_with(fail)
+                self.assertEqual(self.faults(artifact), expected)
+                self.assertEqual(len(artifact["turns"]), 1)
+        # A page that crashes while being torn down is not a browser lost during the run.
+        self.assertEqual(self.faults(self.run_with("screenshot", crash=True)),
+                         {"teardown_error": "Broken"})
+        # A failed logout is left for the driver to record from ``logged_out``.
+        self.assertEqual(self.faults(self.run_with(logged_out=False)), {})
+
+    def test_a_browser_that_will_not_close_after_a_run_fault_stays_the_runs_fault(self):
+        artifact = {"browser_exit": None, "control_channel_error": None,
+                    "final_page_error": None, "teardown_error": None}
+        runner_woa.record_fault(artifact, "run", "Broken")
+        runner_woa.record_fault(artifact, "run", "close_failed")
+        self.assertEqual(self.faults(artifact), {"browser_exit": "close_failed",
+                                                 "control_channel_error": "Broken"})
+        # After the run, the first fault of teardown is kept.
+        artifact = {"browser_exit": None, "control_channel_error": None,
+                    "final_page_error": None, "teardown_error": None}
+        runner_woa.record_fault(artifact, "teardown", "Broken")
+        runner_woa.record_fault(artifact, "teardown", "close_failed")
+        self.assertEqual(self.faults(artifact), {"teardown_error": "Broken"})
 
 
 if __name__ == "__main__":

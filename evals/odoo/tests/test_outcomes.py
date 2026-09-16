@@ -32,9 +32,16 @@ class ClassificationTests(unittest.TestCase):
         for code, evidence_kinds in outcomes.APPARATUS_WHITELIST.items():
             for evidence in evidence_kinds:
                 with self.subTest(code=code, evidence=evidence):
+                    # The ending a runner reports beside each fault: none where it lost sight of
+                    # the product, the generic provider failure beside a provider record, and an
+                    # ordinary ending otherwise.
+                    terminal = (None if evidence in outcomes.TERMINAL_LOSS_EVIDENCE
+                                else "provider_error" if evidence in outcomes.PROVIDER_EVIDENCE
+                                else "completed")
                     result = classify(
-                        product_started=True, dispatch_state="none", runner_terminal=None,
-                        apparatus_events=[ApparatusEvent(code, evidence)])
+                        product_started=True, dispatch_state="none", runner_terminal=terminal,
+                        apparatus_events=[ApparatusEvent(code, evidence)],
+                        provider_record_in_turn=True)
                     self.assertEqual(result.apparatus_integrity, "INVALID")
                     self.assertEqual(result.apparatus_code, code)
                     self.assertEqual(result.product_outcome, "NOT_EVALUABLE")
@@ -81,7 +88,7 @@ class ClassificationTests(unittest.TestCase):
 
     def test_uncertain_write_stays_indeterminate_after_a_fault(self):
         result = classify(product_started=True, dispatch_state="dispatched",
-                          runner_terminal=None,
+                          runner_terminal="provider_error", provider_record_in_turn=True,
                           apparatus_events=[ApparatusEvent("provider_connection_lost",
                                                            "gateway_transport_record")])
         self.assertEqual(result.product_outcome, "INDETERMINATE")
@@ -101,6 +108,218 @@ class ClassificationTests(unittest.TestCase):
                           evaluation=Evaluation("FAIL", decisive=True,
                                                 safety_events=("looks_bad",)))
         self.assertTrue(result.unclassified)
+
+
+class FaultEvidenceTests(unittest.TestCase):
+    """The report's items 3 and 4: facts established before a fault survive it, and a fault
+    unrelated to the provider never explains an ending nobody mapped."""
+
+    def test_only_a_provider_record_explains_an_unmapped_terminal(self):
+        for unrelated in (ApparatusEvent("evaluator_exception", "evaluator_process_exit"),
+                          ApparatusEvent("browser_or_control_channel_crash",
+                                         "control_channel_error"),
+                          ApparatusEvent("fixture_baseline_unstable", "fixture_capture")):
+            with self.subTest(code=unrelated.code):
+                result = classify(product_started=True, dispatch_state="none",
+                                  runner_terminal="terminal_nobody_mapped",
+                                  apparatus_events=[unrelated],
+                                  evaluation=Evaluation("FAIL", decisive=False))
+                self.assertEqual((result.product_outcome, result.unclassified,
+                                  result.seal_reason),
+                                 ("FAIL", True, "classification_contract_drift"))
+                self.assertFalse(outcomes.replacement_eligible(result.as_record(),
+                                                               "NOT_REQUIRED"))
+        explained = classify(product_started=True, dispatch_state="none",
+                             runner_terminal="provider_error", provider_record_in_turn=True,
+                             apparatus_events=[event("provider_rate_limited")])
+        self.assertEqual((explained.product_outcome, explained.unclassified),
+                         ("NOT_EVALUABLE", False))
+
+    def test_a_provider_fault_or_contract_violation_explains_only_the_generic_provider_error(self):
+        facts = {"provider_fault": ({"apparatus_events": [event("provider_rate_limited")]},
+                                    "apparatus:provider_rate_limited/gateway_response_record"),
+                 "request_contract_violation": ({"request_contract_violation": True},
+                                                outcomes.REQUEST_CONTRACT_VIOLATION)}
+        for label, (kwargs, kept) in facts.items():
+            with self.subTest(label=label):
+                result = classify(product_started=True, dispatch_state="none",
+                                  runner_terminal="terminal_nobody_mapped", **kwargs)
+                self.assertEqual((result.product_outcome, result.apparatus_code,
+                                  result.unclassified, result.seal_reason),
+                                 ("FAIL", outcomes.CONTRACT_DRIFT, True,
+                                  "classification_contract_drift"))
+                # Both facts stay: the unmapped ending and the fault or violation beside it.
+                self.assertEqual(result.basis, ("unlisted_terminal:terminal_nobody_mapped", kept))
+                self.assertFalse(outcomes.replacement_eligible(result.as_record(),
+                                                               "NOT_REQUIRED"))
+                outcomes.validate_combination(result.as_record(), "NOT_REQUIRED")
+        # A bare engine status is no provider ending, and the generic ending needs its record.
+        for terminal, kwargs in (("error", {"apparatus_events": [event("provider_rate_limited")]}),
+                                 ("provider_error", {})):
+            with self.subTest(terminal=terminal, kwargs=kwargs):
+                self.assertTrue(classify(product_started=True, dispatch_state="none",
+                                         runner_terminal=terminal, **kwargs).unclassified)
+
+    def test_a_started_product_with_no_ending_is_drift_unless_the_runner_lost_sight_of_it(self):
+        # The report on 0114a25: a missing ending was accepted as a valid result.
+        for label, events in {"nothing": [], "provider_fault": [event("provider_rate_limited")],
+                              "evaluator": [event("evaluator_exception")]}.items():
+            with self.subTest(label=label):
+                result = classify(product_started=True, dispatch_state="none",
+                                  runner_terminal=None, apparatus_events=events,
+                                  evaluation=Evaluation("PASS", decisive=True),
+                                  gateway_terminal="provider_deadline")
+                self.assertEqual((result.product_outcome, result.unclassified,
+                                  result.seal_reason),
+                                 ("FAIL", True, "classification_contract_drift"))
+                self.assertEqual(result.basis[0], "missing_terminal")
+                self.assertEqual(result.basis[-1], "gateway_terminal:provider_deadline")
+        for evidence in sorted(outcomes.TERMINAL_LOSS_EVIDENCE):
+            with self.subTest(evidence=evidence):
+                lost = classify(product_started=True, dispatch_state="none", runner_terminal=None,
+                                apparatus_events=[ApparatusEvent(
+                                    "browser_or_control_channel_crash", evidence)])
+                self.assertEqual((lost.product_outcome, lost.unclassified),
+                                 ("NOT_EVALUABLE", False))
+
+    def test_nothing_that_failed_after_every_turn_ended_explains_a_missing_ending(self):
+        # The reviews of 8574cb0 and 582e11c: a failed logout, screenshot or browser close after
+        # the run showed nothing about how the product ended, yet explained a missing ending.
+        for evidence in ("final_page_error", "guard_capture_error", "teardown_error",
+                         "logout_failed"):
+            with self.subTest(evidence=evidence):
+                fault = ApparatusEvent("browser_or_control_channel_crash", evidence)
+                self.assertNotIn(evidence, outcomes.TERMINAL_LOSS_EVIDENCE)
+                missing = classify(product_started=True, dispatch_state="none",
+                                   runner_terminal=None, apparatus_events=[fault])
+                self.assertEqual((missing.product_outcome, missing.unclassified,
+                                  missing.seal_reason),
+                                 ("FAIL", True, "classification_contract_drift"))
+                self.assertFalse(outcomes.replacement_eligible(missing.as_record(),
+                                                               "NOT_REQUIRED"))
+                # Beside an ending the product did report, it stays an ordinary fault: a judgement
+                # that stands is kept and never replaced, and none at all is replaceable.
+                judged = classify(product_started=True, dispatch_state="none",
+                                  runner_terminal="completed", apparatus_events=[fault],
+                                  evaluation=Evaluation("PASS", decisive=True))
+                self.assertEqual((judged.product_outcome, judged.apparatus_integrity,
+                                  judged.apparatus_code),
+                                 ("PASS", "INVALID", "browser_or_control_channel_crash"))
+                self.assertFalse(outcomes.replacement_eligible(judged.as_record(),
+                                                               "NOT_REQUIRED"))
+                outcomes.validate_combination(judged.as_record(), "NOT_REQUIRED")
+                ended = classify(product_started=True, dispatch_state="none",
+                                 runner_terminal="completed", apparatus_events=[fault])
+                self.assertEqual((ended.product_outcome, ended.unclassified),
+                                 ("NOT_EVALUABLE", False))
+                self.assertTrue(outcomes.replacement_eligible(ended.as_record(), "NOT_REQUIRED"))
+
+    def test_a_turn_that_did_not_stop_keeps_its_result_and_is_never_replaced(self):
+        # The review of 48cf127: a turn the runner could not stop was scored as a clean product
+        # result, though the product may still have been running.
+        not_stopped = ApparatusEvent("turn_not_stopped", "stop_not_confirmed")
+        self.assertNotIn("stop_not_confirmed", outcomes.TERMINAL_LOSS_EVIDENCE)
+        self.assertNotIn("stop_not_confirmed", outcomes.REPLACEMENT_EVIDENCE)
+        result = classify(product_started=True, dispatch_state="none",
+                          runner_terminal="wall_clock_budget", apparatus_events=[not_stopped],
+                          evaluation=Evaluation("FAIL", decisive=True))
+        self.assertEqual((result.product_outcome, result.apparatus_integrity,
+                          result.apparatus_code),
+                         ("FAIL", "INVALID", "turn_not_stopped"))
+        self.assertFalse(outcomes.replacement_eligible(result.as_record(), "PASS"))
+        outcomes.validate_combination(result.as_record(), "PASS")
+        # It shows nothing about an ending the product never reported.
+        missing = classify(product_started=True, dispatch_state="none", runner_terminal=None,
+                           apparatus_events=[not_stopped])
+        self.assertEqual((missing.product_outcome, missing.unclassified), ("FAIL", True))
+
+    def test_a_provider_record_explains_the_generic_failure_only_within_its_turn(self):
+        # The review of 582e11c (R4): a record from an earlier turn explained the last turn's
+        # generic provider failure.
+        rate_limited = [event("provider_rate_limited")]
+        outside = classify(product_started=True, dispatch_state="none",
+                           runner_terminal="provider_error", apparatus_events=rate_limited)
+        self.assertEqual((outside.unclassified, outside.basis),
+                         (True, ("unlisted_terminal:provider_error",
+                                 "apparatus:provider_rate_limited/gateway_response_record")))
+        within = classify(product_started=True, dispatch_state="none",
+                          runner_terminal="provider_error", apparatus_events=rate_limited,
+                          provider_record_in_turn=True)
+        self.assertEqual((within.product_outcome, within.unclassified), ("NOT_EVALUABLE", False))
+        # Saying a record is in the turn explains nothing without the record.
+        self.assertTrue(classify(product_started=True, dispatch_state="none",
+                                 runner_terminal="provider_error",
+                                 provider_record_in_turn=True).unclassified)
+
+    def test_every_turn_before_the_last_needs_a_closed_ending(self):
+        # The review of 582e11c (R1, R2): only the last turn's ending was ever checked.
+        facts = outcomes.gateway_facts(
+            [gateway_response(2, "http_error", "provider_rate_limited"),
+             gateway_response(4, "http_error", "provider_context_length")],
+            [gateway_refusal(6, "request_contract")])
+        self.assertEqual((facts.terminals, facts.explaining_seqs),
+                         (((4, "context_length_exceeded"),), (2, 6)))
+        self.assertTrue(outcomes.explained_within(facts, 1))
+        self.assertFalse(outcomes.explained_within(facts, 2, 5))
+        self.assertFalse(outcomes.explained_within(facts, 6))
+        self.assertFalse(outcomes.explained_within(facts, None))
+        turns = [("completed", 0, 1), ("provider_error", 1, 2), ("provider_error", 2, 4),
+                 ("provider_error", 4, 6), ("provider_error", 6, 7), ("provider_error", 2, None),
+                 ("control_plane_error", 7, 8), (None, 8, 9)]
+        self.assertEqual(outcomes.unclosed_earlier_turns(turns, facts), (
+            "unexplained_turn_ending:4:provider_error",
+            "unexplained_turn_ending:5:provider_error",
+            "unlisted_turn_ending:6:control_plane_error", "missing_turn_ending:7"))
+        result = classify(product_started=True, dispatch_state="none",
+                          runner_terminal="completed",
+                          evaluation=Evaluation("PASS", decisive=True),
+                          unclosed_turns=("unlisted_turn_ending:0:control_plane_error",))
+        self.assertEqual((result.product_outcome, result.unclassified, result.basis),
+                         ("FAIL", True, ("unlisted_turn_ending:0:control_plane_error",)))
+
+    def test_an_unmapped_ending_keeps_the_gateway_ending_it_was_not_replaced_by(self):
+        result = classify(product_started=True, dispatch_state="none",
+                          runner_terminal="terminal_nobody_mapped",
+                          evaluation=Evaluation("PASS", decisive=True),
+                          gateway_terminal="context_length_exceeded")
+        self.assertEqual(result.basis, ("unlisted_terminal:terminal_nobody_mapped",
+                                        "gateway_terminal:context_length_exceeded"))
+        self.assertTrue(result.unclassified)
+
+    def test_a_confirmed_write_is_not_erased_by_a_later_fault(self):
+        result = classify(product_started=True, dispatch_state="acknowledged",
+                          runner_terminal="provider_error", provider_record_in_turn=True,
+                          apparatus_events=[event("provider_connection_lost")])
+        self.assertEqual((result.product_outcome, result.basis),
+                         ("INDETERMINATE", ("write_before_apparatus_fault",)))
+        self.assertFalse(outcomes.replacement_eligible(result.as_record(), "PASS"))
+        outcomes.validate_combination(result.as_record(), "PASS")
+        with self.assertRaises(outcomes.OutcomeContractError):
+            outcomes.validate_combination({**result.as_record(),
+                                           "product_outcome": "NOT_EVALUABLE"}, "PASS")
+
+    def test_a_decided_failure_before_a_fault_is_kept_and_never_replaced(self):
+        result = classify(product_started=True, dispatch_state="none",
+                          runner_terminal="provider_error", provider_record_in_turn=True,
+                          apparatus_events=[event("provider_rate_limited")],
+                          evaluation=Evaluation("FAIL", decisive=True,
+                                                reasons=("clarification:answer_facts",)))
+        self.assertEqual((result.product_outcome, result.apparatus_integrity),
+                         ("FAIL", "INVALID"))
+        self.assertFalse(outcomes.replacement_eligible(result.as_record(), "NOT_REQUIRED"))
+
+    def test_gateway_facts_name_the_first_faulty_request(self):
+        facts = outcomes.gateway_facts(
+            [gateway_response(1, "ok"),
+             gateway_response(2, "transport_error", "provider_deadline"),
+             gateway_response(4, "http_error", "provider_rate_limited"),
+             gateway_response(5, "http_error", "provider_unavailable")],
+            [gateway_refusal(3, "model_call_budget")])
+        self.assertEqual(facts.first_event_seq, 4)
+        # The ending keeps the number of the request that named it: the later refusal.
+        self.assertEqual((facts.terminal, facts.terminal_seq), ("model_call_budget", 3))
+        self.assertIsNone(outcomes.gateway_facts(
+            [gateway_response(1, "http_error", "provider_deadline")], []).first_event_seq)
 
 
 def gateway_response(seq, status, code=None):
@@ -163,7 +382,8 @@ class GatewayFactTests(unittest.TestCase):
             with self.subTest(record=record):
                 facts = outcomes.gateway_facts([record], [])
                 result = classify(product_started=True, dispatch_state="none",
-                                  runner_terminal="provider_error", apparatus_events=facts.events)
+                                  runner_terminal="provider_error", provider_record_in_turn=True,
+                                  apparatus_events=facts.events)
                 self.assertEqual((result.product_outcome, result.unclassified, result.seal_reason),
                                  ("FAIL", True, outcomes.CONTRACT_DRIFT))
 
@@ -185,20 +405,21 @@ class ProviderOutcomeTests(unittest.TestCase):
             with self.subTest(code=code):
                 result = classify(
                     product_started=True, dispatch_state="none", runner_terminal="provider_error",
+                    provider_record_in_turn=True,
                     apparatus_events=[ApparatusEvent("browser_or_control_channel_crash",
                                                      "browser_exit"), event(code)])
                 self.assertEqual((result.apparatus_code, result.seal_reason), (code, seal))
                 self.assertFalse(outcomes.replacement_eligible(result.as_record(), "NOT_REQUIRED"))
                 outcomes.validate_combination(result.as_record(), "NOT_REQUIRED")
         limited = classify(product_started=True, dispatch_state="none",
-                           runner_terminal="provider_error",
+                           runner_terminal="provider_error", provider_record_in_turn=True,
                            apparatus_events=[event("provider_rate_limited")])
         self.assertIsNone(limited.seal_reason)
         self.assertTrue(outcomes.replacement_eligible(limited.as_record(), "NOT_REQUIRED"))
 
     def test_a_request_outside_the_frozen_contract_is_a_product_failure_that_seals(self):
         clean = classify(product_started=True, dispatch_state="none",
-                         runner_terminal="provider_error",
+                         runner_terminal="provider_error", provider_record_in_turn=True,
                          evaluation=Evaluation("PASS", decisive=True),
                          request_contract_violation=True)
         self.assertEqual((clean.product_outcome, clean.apparatus_integrity, clean.unclassified,
@@ -206,7 +427,7 @@ class ProviderOutcomeTests(unittest.TestCase):
                          ("FAIL", "VALID", False, outcomes.REQUEST_CONTRACT_VIOLATION))
         outcomes.validate_combination(clean.as_record(), "NOT_REQUIRED")
         faulted = classify(product_started=True, dispatch_state="dispatched",
-                           runner_terminal="provider_error",
+                           runner_terminal="provider_error", provider_record_in_turn=True,
                            apparatus_events=[event("provider_unavailable")],
                            request_contract_violation=True)
         self.assertEqual((faulted.product_outcome, faulted.apparatus_integrity,

@@ -350,7 +350,8 @@ def _latency_block(cells: list[dict[str, Any]], tasks: Mapping[str, Mapping[str,
                    feedback: Mapping[str, Any] | None) -> dict[str, Any]:
     values = [cell["selected"]["metrics"]["automatic_wall_ms"] for cell in cells
               if tasks[cell["task_id"]]["class"] == "normal"
-              and tasks[cell["task_id"]]["read_only"] and _measured(cell["selected"])]
+              and tasks[cell["task_id"]]["read_only"] and _measured(cell["selected"])
+              and cell["selected"]["metrics"]["automatic_wall_ms"] is not None]
     p50, p95 = _percentiles(values)
     passed = reason = None
     if not gated:
@@ -375,7 +376,8 @@ def _latency_block(cells: list[dict[str, Any]], tasks: Mapping[str, Mapping[str,
 
 def _approval_wait_block(cells: list[dict[str, Any]]) -> dict[str, Any]:
     values = [cell["selected"]["metrics"]["approval_wait_ms"] for cell in cells
-              if _measured(cell["selected"])]
+              if _measured(cell["selected"])
+              and cell["selected"]["metrics"]["approval_wait_ms"] is not None]
     p50, p95 = _percentiles(values)
     return {"scope": "valid_scored_attempts", "unit": "ms", "n": len(values),
             "with_wait": sum(1 for value in values if value > 0), "total": sum(values),

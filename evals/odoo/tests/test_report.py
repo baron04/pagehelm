@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from evals.odoo import ledger, protocol, report, stats
+from evals.odoo import ledger, outcomes, protocol, report, stats
 from evals.odoo.outcomes import ApparatusEvent, Evaluation, classify
 from evals.odoo.tests.test_ledger import (CANDIDATE, CLEAN_AGENT, DIGEST, NEW_CANDIDATE, header,
                                           metrics)
@@ -27,9 +27,10 @@ PASS = classify(product_started=True, dispatch_state="none", runner_terminal="co
                 evaluation=Evaluation("PASS", decisive=True))
 FAIL = classify(product_started=True, dispatch_state="none", runner_terminal="completed",
                 evaluation=Evaluation("FAIL", decisive=True))
-OUTAGE = classify(product_started=True, dispatch_state="none", runner_terminal=None,
+OUTAGE = classify(product_started=True, dispatch_state="none", runner_terminal="provider_error",
                   apparatus_events=[ApparatusEvent("provider_unavailable",
-                                                   "gateway_response_record")])
+                                                   "gateway_response_record")],
+                  provider_record_in_turn=True)
 UNSAFE = classify(product_started=True, dispatch_state="acknowledged",
                   runner_terminal="completed",
                   evaluation=Evaluation("FAIL", decisive=True,
@@ -73,8 +74,9 @@ class Batch:
         return self.by_cell[(arm, task_id, replicate)]
 
     def run(self, slot_id, classification, *, reset="NOT_REQUIRED", replacement_of=None,
-            wall_ms=1200, approval_ms=0, calls=()):
-        """Record one attempt; ``calls`` lists per-call costs, None meaning usage unknown."""
+            wall_ms=1200, approval_ms=0, calls=(), interrupted=False):
+        """Record one attempt; ``calls`` lists per-call costs, None meaning usage unknown, and an
+        ``interrupted`` attempt closes as a recovered driver closes it."""
         self.counter += 1
         attempt_id = f"attempt-{self.counter:03d}"
         item = self.slots[slot_id]
@@ -114,7 +116,13 @@ class Batch:
             "total_cost_cny": None if unavailable else round(sum(known), 6)})
         ledger.append(self.path, "attempt_metrics",
                       {**metrics(attempt_id, wall_ms), "approval_wait_ms": approval_ms})
-        ledger.append(self.path, "attempt_terminal", {"attempt_id": attempt_id})
+        if interrupted:
+            ledger.append(self.path, "interrupted_attempt", {
+                "attempt_id": attempt_id, "evidence_kinds": ["runner_process_exit"],
+                "replacement_eligible": outcomes.replacement_eligible(
+                    classification.as_record(), reset)})
+        else:
+            ledger.append(self.path, "attempt_terminal", {"attempt_id": attempt_id})
         return attempt_id
 
     def run_all(self, choose=lambda item: (PASS, {})):
@@ -360,6 +368,23 @@ class CostAndLatencyTests(unittest.TestCase):
         self.assertEqual((wait["n"], wait["with_wait"], wait["total"], wait["maximum"]),
                          (12, 1, 7000, 7000))
         self.assertEqual(cell(value, replicate="replicate")["latency"]["reason"], "not_gated")
+
+    def test_an_attempt_whose_times_a_dead_driver_never_took_is_in_no_time_sample(self):
+        # The review of 582e11c: a recovered attempt's times were written as 0 ms and entered the
+        # latency sample of a valid read-only attempt.
+        slot_list = formal_slots()
+        batch = Batch(self, slot_list)
+        recovered = READ_ONLY[0]
+        batch.run_all(lambda item: (PASS, {"wall_ms": None, "approval_ms": None,
+                                           "interrupted": True}
+                                    if item["task_id"] == recovered else {}))
+        value = report.build_report(batches=[batch.complete()], tasks=TASKS,
+                                    plan=plan_for(slot_list), feedback=FEEDBACK)
+        primary = [item for item in slot_list
+                   if item["arm"] == WOA and item["replicate"] == "primary"]
+        self.assertEqual((cell(value)["latency"]["n"], cell(value)["approval_wait"]["n"]),
+                         (len(READ_ONLY) - 1, len(primary) - 1))
+        self.assertEqual(cell(value)["latency"]["reason"], "insufficient_sample")
 
     def test_twenty_samples_use_the_nearest_rank_p95(self):
         slot_list = formal_slots()

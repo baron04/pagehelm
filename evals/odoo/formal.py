@@ -87,6 +87,7 @@ import ipaddress
 import json
 import os
 import urllib.parse
+from collections import Counter
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -103,8 +104,8 @@ from .gateway import (BackendResult, ScriptedBackend, UpstreamBackend, digest_bi
 from .population import digest_json
 from .projection import actor_projection
 from .revision import (REPOSITORY, RevisionError, blob_ids_at, commit_path, commit_time,
-                       committed_once, content_blob_ids, is_ancestor, repository_state,
-                       require_clean_head)
+                       committed_once, content_blob_ids, file_at, first_parent_commits,
+                       is_ancestor, path_history, repository_state, require_clean_head)
 from .stack import StackError
 
 FREEZES = "phase-7/P7.4/freezes"
@@ -203,6 +204,17 @@ def _json_bytes(value: Any) -> bytes:
     return (json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode()
 
 
+def _strict_json(text: str) -> Any:
+    """JSON in which no object names a key twice: a repeated key shows a reader one value while
+    the parser keeps another."""
+    def unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        if len({key for key, _ in pairs}) != len(pairs):
+            raise ValueError("a JSON object names a key twice")
+        return dict(pairs)
+
+    return json.loads(text, object_pairs_hook=unique)
+
+
 def _write_private(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -219,10 +231,16 @@ def _clean_checkout(paths: FormalPaths, what: str) -> str:
 
 # -- records committed to .workbench -----------------------------------------------------------
 def committed_record(workbench: Path, relative: str) -> tuple[dict[str, Any], str]:
-    """A JSON record committed to ``.workbench`` exactly once, and the commit that recorded it."""
+    """A JSON record committed to ``.workbench`` exactly once, and the commit that recorded it.
+
+    The record is read as that commit holds it, and the working tree must hold the same bytes.
+    """
     try:
         commit = committed_once(workbench, relative)
-        return json.loads((workbench / relative).read_text(encoding="utf-8")), commit
+        data = file_at(workbench, commit, relative)
+        if (workbench / relative).read_bytes() != data:
+            raise RevisionError(f"{relative} differs from the commit that recorded it")
+        return _strict_json(data.decode("utf-8")), commit
     except (OSError, ValueError, RevisionError) as exc:
         raise FormalError(f"{relative} is not a committed record: {exc}") from exc
 
@@ -271,17 +289,69 @@ def _seals() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
             json.loads(harness.SPLIT_VERIFICATION.read_text()))
 
 
+def external_review_path(record: dict[str, Any]) -> str:
+    """Where an external review is recorded: named by the time it names and its own digest."""
+    stamp = record["reviewed_at"].replace("-", "").replace(":", "")
+    return f"{REVIEWS}/external-review-{stamp}-{record['review_digest'][7:19]}.json"
+
+
 def committed_external_reviews(paths: FormalPaths) -> list[tuple[dict[str, Any], str]]:
-    """Every committed external review, each verified as sealed, oldest review first."""
+    """Every recorded external review, each verified as sealed, in the order it was recorded.
+
+    The order is the ``.workbench`` history's, never a time a reviewer wrote. A review is read from
+    that history rather than from whatever the working tree holds, so a recorded review that was
+    changed or removed -- committed or not -- and a review file that was never recorded are
+    refused rather than skipped.
+    """
+    try:
+        history = path_history(paths.workbench, REVIEWS)
+    except RevisionError as exc:
+        raise FormalError(f"the external review history cannot be read: {exc}") from exc
+    recorded: list[str] = []
+    for _, status, path in history:
+        name = Path(path).name
+        if (status != "A" or path in recorded or Path(path).parent.as_posix() != REVIEWS
+                or not (name.startswith("external-review-") and name.endswith(".json"))):
+            raise FormalError(f"{path} was changed, removed or misplaced after reviews were "
+                              "recorded; a recorded review is never changed")
+        recorded.append(path)
+    per_commit = Counter(commit for commit, _, _ in history)
+    if any(count > 1 for count in per_commit.values()):
+        raise FormalError("a commit records more than one external review; each review is recorded "
+                          "by a commit of its own, so the history alone orders them")
+    try:
+        main_line = first_parent_commits(paths.workbench)
+    except RevisionError as exc:
+        raise FormalError(f"the external review history cannot be read: {exc}") from exc
+    if any(commit not in main_line for commit in per_commit):
+        # Merged branches have no one order: which review came last would depend on the merge.
+        raise FormalError("an external review was recorded on a branch merged into .workbench; "
+                          "reviews are recorded on its main line only")
+    directory = paths.workbench / REVIEWS
+    present = ({f"{REVIEWS}/{item.name}" for item in directory.iterdir()}
+               if directory.is_dir() else set())
+    if present - set(recorded):
+        raise FormalError("a review file that was never recorded sits among the external "
+                          f"reviews ({', '.join(sorted(present - set(recorded)))})")
     reviews = []
-    for path in sorted((paths.workbench / REVIEWS).glob("external-review-*.json")):
-        record, commit = committed_record(paths.workbench, f"{REVIEWS}/{path.name}")
+    for path in recorded:
+        record, commit = committed_record(paths.workbench, path)
         try:
             freeze.verify_external_review(record)
+            recorded_at = commit_time(paths.workbench, commit)
         except freeze.FreezeError as exc:
-            raise FormalError(f"{path.name} does not verify: {exc}") from exc
+            raise FormalError(f"{Path(path).name} does not verify: {exc}") from exc
+        except RevisionError as exc:
+            raise FormalError(f"{Path(path).name} cannot be dated: {exc}") from exc
+        if path != external_review_path(record):
+            # A name is a function of the review's own time and digest, so a review recorded once
+            # cannot be recorded again under another name.
+            raise FormalError(f"{Path(path).name} is not named by the time and digest it records")
+        if _moment(record["reviewed_at"]) > recorded_at:
+            raise FormalError(f"{Path(path).name} names a time later than the commit that recorded "
+                              "it")
         reviews.append((record, commit))
-    return sorted(reviews, key=lambda item: item[0]["reviewed_at"])
+    return reviews
 
 
 def check_review_binding(paths: FormalPaths, review: dict[str, Any]) -> None:
@@ -320,12 +390,15 @@ def verified_external_review(paths: FormalPaths) -> tuple[dict[str, Any], str]:
     return record, commit
 
 
-def record_external_review(paths: FormalPaths, *, review_file: Path) -> dict[str, Any]:
+def record_external_review(paths: FormalPaths, *, review_file: Path,
+                           clock: Callable[[], str] = _utc) -> dict[str, Any]:
     """Generate, verify and commit a reviewer's item-by-item conclusions, whatever the verdict;
-    only an ACCEPT of the running apparatus opens the first freeze and paid calls."""
+    only an ACCEPT of the running apparatus opens the first freeze and paid calls. A review is
+    recorded after the time it names, and the newest recorded review decides."""
     _clean_checkout(paths, "recording an external review")
+    committed_external_reviews(paths)
     try:
-        supplied = json.loads(Path(review_file).read_text(encoding="utf-8"))
+        supplied = _strict_json(Path(review_file).read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise FormalError("the review file cannot be read") from exc
     fields = {"reviewer", "reviewed_at", "reviewed_commit", "items", "findings"}
@@ -340,9 +413,10 @@ def record_external_review(paths: FormalPaths, *, review_file: Path) -> dict[str
             findings=supplied.get("findings"))
     except freeze.FreezeError as exc:
         raise FormalError(f"the external review does not verify: {exc}") from exc
+    if record["reviewed_at"] > clock():
+        raise FormalError("reviewed_at is later than now; a review is recorded after it concludes")
     check_review_binding(paths, record)
-    stamp = record["reviewed_at"].replace("-", "").replace(":", "")
-    relative = f"{REVIEWS}/external-review-{stamp}.json"
+    relative = external_review_path(record)
     message = f"p7.4: record the external review of {record['reviewed_commit'][:12]}"
     return {"record": relative, "verdict": record["verdict"],
             "review_digest": record["review_digest"],
@@ -583,6 +657,25 @@ def _owner(value: Any) -> str:
     return value
 
 
+def late_answers(ledger_path: Path) -> list[dict[str, Any]]:
+    """Answers that reached the gateway after their batch was terminal, kept beside its ledger.
+
+    A terminal ledger takes no further record, so these are the only trace of a call that was
+    still being answered; the bill reconciliation reads them with the ledger's own records.
+    """
+    path = ledger_path.with_suffix(".late-answers")
+    answers = []
+    for line in path.read_text(encoding="utf-8").splitlines() if path.exists() else []:
+        try:
+            body = json.loads(line)
+        except ValueError as exc:
+            raise FormalError(f"{path.name} holds a line that is not a late answer") from exc
+        if not isinstance(body, dict) or not {"status", "attempt_id", "request_seq"} <= set(body):
+            raise FormalError(f"{path.name} holds a line that is not a late answer")
+        answers.append({"provider_request_id": None, **body})
+    return answers
+
+
 def unaccounted_calls(paths: FormalPaths) -> dict[str, list[str]]:
     """The request ids of every paid call a spend ledger could not record, by spend batch id: in a
     preflight and in each development batch."""
@@ -598,10 +691,12 @@ def unaccounted_calls(paths: FormalPaths) -> dict[str, list[str]]:
                if isinstance(call, dict) and call.get("status") == "accounting_error"]
         if ids:
             found[str(record.get("spend_batch_id") or path.stem)] = sorted(map(str, ids))
-    for _, entries, summary in development_chain(paths):
-        ids = [entry["body"]["provider_request_id"] for entry in entries
-               if entry["kind"] == "model_response_received"
-               and entry["body"]["status"] == "accounting_error"]
+    for path, entries, summary in development_chain(paths):
+        bodies = [entry["body"] for entry in entries
+                  if entry["kind"] in {"model_response_received", "late_model_response"}]
+        bodies += late_answers(path)
+        ids = [body["provider_request_id"] or f"{body['attempt_id']}#{body['request_seq']}"
+               for body in bodies if body["status"] == "accounting_error"]
         if ids:
             found[summary["batch"]["batch_id"]] = sorted(map(str, ids))
     return found
@@ -804,8 +899,15 @@ def preflight_for_next_batch(paths: FormalPaths, first_freeze: dict[str, Any]) -
     credential, only one taken after that seal."""
     record = verified_preflight(paths, first_freeze)
     chain = development_chain(paths)
-    if chain and chain[-1][2]["seal_reason"] == "provider_authentication_failed" and (
-            _moment(record["started_at"]) <= _moment(chain[-1][1][-1]["at"])):
+    # A refused credential is read from the gateway's records, so a batch that sealed for another
+    # reason -- contract drift beside it, say -- still needs a later preflight.
+    refused = bool(chain) and (
+        chain[-1][2]["seal_reason"] == "provider_authentication_failed"
+        or (chain[-1][2]["status"] != "OPEN" and any(
+            entry["kind"] == "model_response_received"
+            and entry["body"]["error_code"] == "provider_authentication"
+            for entry in chain[-1][1])))
+    if refused and (_moment(record["started_at"]) <= _moment(chain[-1][1][-1]["at"])):
         raise FormalError("the provider refused the evaluation credential in the last batch; run "
                           "the preflight again before the next batch")
     return record

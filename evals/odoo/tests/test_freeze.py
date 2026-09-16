@@ -135,6 +135,22 @@ class ExternalReviewTests(unittest.TestCase):
             with self.subTest(label=label), self.assertRaises(freeze.FreezeError):
                 external(**changes)
 
+    def test_a_review_time_has_one_spelling_and_a_blocking_finding_keeps_it_from_accepting(self):
+        for spelling in ("2026-09-16T12:00:00.500Z", "20260916T000000Z", "2026-09-16T12:00Z",
+                         "2026-09-16 12:00:00Z"):
+            with self.subTest(spelling=spelling), self.assertRaises(freeze.FreezeError):
+                external(reviewed_at=spelling)
+        note = {"blocking": False, "text": "a note"}
+        gate = {"blocking": True, "text": "a gate outside the listed items fails"}
+        self.assertEqual(external(findings=[note])["verdict"], "ACCEPT")
+        self.assertEqual(external(findings=[note, gate])["verdict"], "REVISE")
+        self.assertEqual(external({"real_product_entry": "BLOCK"}, findings=[gate])["verdict"],
+                         "BLOCK")
+        for findings in (["a bare line"], [{"blocking": "yes", "text": "x"}],
+                         [{"blocking": True, "text": ""}]):
+            with self.subTest(findings=findings), self.assertRaises(freeze.FreezeError):
+                external(findings=findings)
+
     def test_a_changed_review_is_refused_and_the_reviewed_files_are_named(self):
         record = external()
         self.assertEqual(freeze.verify_external_review(record), record)
@@ -145,7 +161,8 @@ class ExternalReviewTests(unittest.TestCase):
         files = freeze.reviewed_files()
         self.assertTrue(set(freeze.MACHINE_PROTOCOL_FILES) <= set(files))
         self.assertTrue({"src/web_operation_agent/policies/model_options.json",
-                         "evals/odoo/ledger.py", "evals/odoo/formal.py"} <= set(files))
+                         "evals/odoo/ledger.py", "evals/odoo/formal.py", "evals/odoo/escrow.py",
+                         "evals/odoo/qualify.py"} <= set(files))
 
 
 class SecondFreezeTests(unittest.TestCase):

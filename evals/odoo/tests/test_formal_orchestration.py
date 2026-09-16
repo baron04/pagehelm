@@ -14,6 +14,7 @@ import importlib.util
 import json
 import os
 import threading
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -24,9 +25,10 @@ from types import SimpleNamespace
 from typing import Any, Callable
 from unittest import mock, skipIf
 
-from evals.odoo import (canary, driver, fixture, formal, gateway, harness, ledger, protocol,
-                        runner_woa)
+from evals.odoo import (canary, driver, evaluator, fixture, formal, gateway, harness, ledger,
+                        protocol, runner_woa)
 from evals.odoo.runner_woa import ActorCredential
+from evals.odoo.stack import StackError
 from evals.odoo.tasks import EvaluatorInput, RunnerInput
 from evals.odoo.tests.test_formal import FormalFixture
 from evals.odoo.tests.test_formal_rehearsal import untouchable
@@ -49,6 +51,15 @@ class DriverDied(BaseException):
     """Stands for a driver process killed mid-attempt: nothing after it runs."""
 
 
+def post(request) -> bool:
+    """Send one product call through the gateway; whether it was answered."""
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status == 200
+    except (urllib.error.URLError, OSError):
+        return False
+
+
 class Provider:
     """An OpenAI-compatible provider on loopback: the canary's answer, or a scripted product
     call with the fault scheduled for its number."""
@@ -56,6 +67,8 @@ class Provider:
     def __init__(self, test):
         self.model = MODEL
         self.faults: dict[int, str] = {}
+        #: Product call number -> (set when the call arrives, set to let it be answered).
+        self.held: dict[int, tuple[threading.Event, threading.Event]] = {}
         self.product_calls = 0
         self.lock = threading.Lock()
         provider = self
@@ -90,11 +103,16 @@ class Provider:
     def answer(self, body: dict[str, Any]) -> tuple[int, Any]:
         is_canary = body["messages"][0]["content"] == canary.CANARY_PROMPT
         with self.lock:
-            fault = None
+            fault = hold = None
             if not is_canary:
                 self.product_calls += 1
                 fault = self.faults.get(self.product_calls)
+                hold = self.held.get(self.product_calls)
             model = self.model
+        if hold is not None:
+            arrived, release = hold
+            arrived.set()
+            release.wait(10)
         completion = {"id": "loopback", "object": "chat.completion", "model": model,
                       "choices": [{"index": 0, "finish_reason": "stop", "message": {
                           "role": "assistant",
@@ -104,6 +122,10 @@ class Provider:
             return 429, {"error": {"message": "slow down"}}
         if fault == "unauthorized":
             return 401, {"error": {"code": "invalid_api_key"}}
+        if fault == "deadline":
+            return 408, {"error": {"message": "the provider timed out the request"}}
+        if fault == "bad_request":
+            return 400, {"error": {"message": "the request could not be read"}}
         if fault == "context_length":
             return 400, {"error": {"code": "context_length_exceeded"}}
         if fault == "malformed":
@@ -121,11 +143,59 @@ class World:
     audit: list = field(default_factory=list)
     guard: dict = field(default_factory=lambda: copy.deepcopy(BASELINE_GUARD))
     attempts: int = 0
+    #: The attempt whose runner last returned.
+    ran: int = 0
     failing_judgements: set = field(default_factory=set)
     die_on: set = field(default_factory=set)
     write_on: set = field(default_factory=set)
     reset_fails_on: set = field(default_factory=set)
     oversized_output_on: set = field(default_factory=set)
+    #: Attempt number -> how many user turns it takes, each with one model call.
+    turns_on: dict[int, int] = field(default_factory=dict)
+    #: Attempt number -> the turns a failing judgement attributes its failure to.
+    failing_turns: dict[int, list[int]] = field(default_factory=dict)
+    #: How many user messages every task sends.
+    messages: int = 1
+    #: Attempt number -> the product ending its audit reports for the last turn instead of the
+    #: usual one.
+    terminal_on: dict[int, str] = field(default_factory=dict)
+    #: Attempt number -> the ending the audit reports for each turn, None where it reports none.
+    endings_on: dict[int, list] = field(default_factory=dict)
+    #: Attempts whose last turn the runner stops at its wall clock.
+    stopped_on: set = field(default_factory=set)
+    #: Attempts whose last turn does not stop within the settle window after the stop button.
+    stop_fails_on: set = field(default_factory=set)
+    #: Attempts whose final page cannot be read after every turn ended.
+    final_page_fails_on: set = field(default_factory=set)
+    #: Attempts whose screenshot fails once the final page was read.
+    teardown_fails_on: set = field(default_factory=set)
+    #: Attempts whose fixture guard cannot be read after the run.
+    guard_fails_on: set = field(default_factory=set)
+    #: Attempts whose Agent audit cannot be exported after the run.
+    audit_fails_on: set = field(default_factory=set)
+    #: Attempts whose driver dies while restoring the fixture, once the outcome is on the ledger.
+    die_in_restore_on: set = field(default_factory=set)
+    #: Attempt number -> an event set once its only call reached the provider; the turn ends
+    #: without waiting for the answer.
+    late_on: dict[int, threading.Event] = field(default_factory=dict)
+    #: Attempt number -> what happens as the evaluator judges it.
+    on_judge: dict[int, Callable[[], Any]] = field(default_factory=dict)
+    #: Attempt number -> the visible answer of each turn.
+    answers: dict[int, list[str]] = field(default_factory=dict)
+    #: Attempt number -> how many turns end before the control channel breaks.
+    crash_after_turn: dict[int, int] = field(default_factory=dict)
+    #: Attempt number -> the final page the runner captured, or None where it captured none.
+    page_on: dict[int, Any] = field(default_factory=dict)
+    #: Attempts whose control channel breaks after every turn has ended.
+    control_crash_on: set = field(default_factory=set)
+    #: Attempts whose turns end without the runner reporting that they ended.
+    unsettled_on: set = field(default_factory=set)
+    #: Attempts whose audit records no ending at all.
+    silent_on: set = field(default_factory=set)
+    #: Attempts whose logout through the Odoo menu fails after the run.
+    logout_fails_on: set = field(default_factory=set)
+    #: Attempt number -> the evaluator job and truth the real judgement runs with.
+    real_judge: dict[int, tuple[dict, dict]] = field(default_factory=dict)
     before_call: dict[int, Callable[[], Any]] = field(default_factory=dict)
 
 
@@ -144,7 +214,10 @@ class Stack:
         return dict(EMPTY_AGENT)
 
     def export_audit(self):
-        return list(self.world.audit)
+        world = self.world
+        if world.ran == world.attempts and world.attempts in world.audit_fails_on:
+            raise StackError("the Agent audit could not be exported")
+        return list(world.audit)
 
     def agent_state(self):
         return {**EMPTY_AGENT, "conversation_rows": 1}
@@ -231,10 +304,9 @@ class FormalOrchestrationTests(FormalFixture):
                     for role in harness.ACTORS},
             task_set=TASK_SET, inputs=self.inputs)
 
-    @staticmethod
-    def inputs(task_id):
+    def inputs(self, task_id):
         return (RunnerInput(task_id=task_id, actor="writer", locale="zh-CN", entry_path=None,
-                            messages=("列出客户",)),
+                            messages=("列出客户",) * self.world.messages),
                 EvaluatorInput(task_id=task_id, task_digest=DIGEST, stratum="lookup_navigation",
                                task_class="normal", actor="writer", shape="lookup", params={},
                                approval_oracle=None, max_mutations=0, reset_profile="none"))
@@ -251,21 +323,44 @@ class FormalOrchestrationTests(FormalFixture):
                                   commit.encode()).hexdigest()}}
 
     def guard(self, stack):
-        return SimpleNamespace(capture=lambda: copy.deepcopy(stack.world.guard))
+        world = stack.world
+
+        def capture():
+            if world.ran == world.attempts and world.attempts in world.guard_fails_on:
+                world.guard_fails_on.discard(world.attempts)
+                raise StackError("the guard could not be read")
+            return copy.deepcopy(world.guard)
+
+        return SimpleNamespace(capture=capture)
 
     def restore(self, stack, guard, directory, *, actor_projection, rearm_after_failure=False):
+        if self.world.attempts in self.world.die_in_restore_on:
+            # The outcome is already on the ledger; the audit the recovery reads shows more.
+            self.world.die_in_restore_on.discard(self.world.attempts)
+            self.world.audit = [*self.world.audit,
+                                {"event": "business_mutation_execution_started",
+                                 "run_id": "run-0", "proposal_digest": DIGEST}]
+            raise DriverDied()
         failed = self.world.attempts in self.world.reset_fails_on
         self.world.guard = copy.deepcopy(BASELINE_GUARD)
         return ({"status": "FAIL", "basis": ["changed:res_partner"], "guard_digest": DIGEST}
                 if failed else {"status": "PASS", "basis": [],
                                 "guard_digest": BASELINE_GUARD["digest"]})
 
-    def evaluator(self, command, _directory, *, inject_exit=False):
+    def evaluator(self, command, directory, *, inject_exit=False):
         if command == "truth":
             return {"truth": "synthetic"}
+        if self.world.attempts in self.world.on_judge:
+            self.world.on_judge[self.world.attempts]()
+        if self.world.attempts in self.world.real_judge:
+            job, truth = self.world.real_judge[self.world.attempts]
+            observation = json.loads((directory / "observation.json").read_text())
+            return evaluator.judge(evaluator.Context(job), truth, observation)
         failed = self.world.attempts in self.world.failing_judgements
         return {"status": "FAIL" if failed else "PASS", "decisive": True, "reasons": [],
-                "safety_events": [], "extraction_ambiguous": False}
+                "safety_events": [], "extraction_ambiguous": False,
+                "failed_turns": self.world.failing_turns.get(self.world.attempts, []) if failed
+                else []}
 
     def runner(self, runner_input, _config, *, approval_hook, checkpoint, playwright):
         world = self.world
@@ -276,33 +371,71 @@ class FormalOrchestrationTests(FormalFixture):
             raise DriverDied()
         if number in world.before_call:
             world.before_call[number]()
-        body = {"model": "qwen3.8-flash", "temperature": 0.0,
-                "max_tokens": 4096 if number in world.oversized_output_on else 2048,
-                "thinking_budget": 1024, "parallel_tool_calls": False,
-                "messages": [{"role": "user", "content": runner_input.messages[0]}]}
-        request = urllib.request.Request(
-            world.gateway.base_url + "/chat/completions", data=json.dumps(body).encode(),
-            method="POST", headers={"Content-Type": "application/json",
-                                    "Authorization": f"Bearer {world.token}"})
-        try:
-            with urllib.request.urlopen(request, timeout=10) as response:
-                answered = response.status == 200
-        except (urllib.error.URLError, OSError):
-            answered = False
+        turns = world.turns_on.get(number, 1)
+        recorded = world.crash_after_turn.get(number, turns)
+        answered = []
+        for turn in range(recorded):
+            if turn:
+                checkpoint({"product_started": True, "turn": turn})
+            body = {"model": "qwen3.8-flash", "temperature": 0.0,
+                    "max_tokens": 4096 if number in world.oversized_output_on else 2048,
+                    "thinking_budget": 1024, "parallel_tool_calls": False,
+                    "messages": [{"role": "user", "content": runner_input.messages[0]}]}
+            request = urllib.request.Request(
+                world.gateway.base_url + "/chat/completions", data=json.dumps(body).encode(),
+                method="POST", headers={"Content-Type": "application/json",
+                                        "Authorization": f"Bearer {world.token}"})
+            if number in world.late_on:
+                threading.Thread(target=post, args=(request,), daemon=True).start()
+                answered.append(world.late_on[number].wait(10))
+            else:
+                answered.append(post(request))
+            wall_stopped = number in world.stopped_on or number in world.stop_fails_on
+            stopped = wall_stopped and turn == recorded - 1
+            if number not in world.unsettled_on and not stopped:
+                checkpoint({"product_started": True, "turn": turn, "settled": True})
+        if recorded < turns:
+            # The next message was sent when the channel broke.
+            checkpoint({"product_started": True, "turn": recorded})
+        world.ran = number
         if number in world.write_on:
             world.guard["tables"]["res_partner"] = {"rows": 41, "digest": "one more"}
-        world.audit = [{"event": "run_finished", "run_id": "run",
-                        "terminal_reason": "agent_finished" if answered else "provider_error",
-                        "steps_used": 1, "business_control": {}, "page_actions": 0}]
+        endings = world.endings_on.get(number) or [
+            "agent_finished" if answered[turn] else "provider_error" for turn in range(recorded)]
+        if number in world.terminal_on and endings:
+            endings[-1] = world.terminal_on[number]
+        world.audit = [{"event": "run_finished", "run_id": f"run-{turn}",
+                        "terminal_reason": ending, "steps_used": 1, "business_control": {},
+                        "page_actions": 0} for turn, ending in enumerate(endings)
+                       if ending is not None and number not in world.silent_on]
+        answers = world.answers.get(number, ["done"] * recorded)
+        fault = {"at_monotonic": 1.0, "type": "TargetClosedError"}
+        final_page_failed = number in world.final_page_fails_on
         return {"runner": "woa_product", "task_id": runner_input.task_id,
                 "actor": runner_input.actor, "product_started": True, "page_errors": [],
-                "final": {"path": "/odoo", "breadcrumb": "", "title": ""}, "logged_out": True,
-                "browser_exit": None, "control_channel_error": None, "approvals": [],
-                "budget_exhausted": None,
-                "turns": [{"index": 0, "timed_out": False, "answer_kind": "plain",
-                           "visible_answer": "done", "path": "/odoo", "view_settle_ms": 0,
-                           "first_feedback_ms": 40, "cancel_feedback_ms": None,
-                           "automatic_ms": 1500, "approval_wait_ms": 0}]}
+                "final": (None if final_page_failed
+                          else world.page_on[number] if number in world.page_on
+                          else {"path": "/odoo", "breadcrumb": "", "title": ""}),
+                "logged_out": (number not in world.logout_fails_on and not final_page_failed
+                               and number not in world.teardown_fails_on),
+                "browser_exit": None, "approvals": [],
+                "budget_exhausted": ("turn_wall" if number in world.stopped_on
+                                     or number in world.stop_fails_on else None),
+                "control_channel_error": (fault if recorded < turns
+                                          or number in world.control_crash_on else None),
+                "final_page_error": fault if final_page_failed else None,
+                "teardown_error": fault if number in world.teardown_fails_on else None,
+                "turns": [{"index": turn,
+                           "timed_out": ((number in world.stopped_on
+                                          or number in world.stop_fails_on)
+                                         and turn == recorded - 1),
+                           "answer_kind": "plain", "visible_answer": answers[turn],
+                           "path": "/odoo", "view_settle_ms": 0, "first_feedback_ms": 40,
+                           "cancel_feedback_ms": None, "automatic_ms": 1500,
+                           "approval_wait_ms": 0,
+                           **({"stopped": False} if number in world.stop_fails_on
+                              and turn == recorded - 1 else {})}
+                          for turn in range(recorded)]}
 
     # -- helpers ------------------------------------------------------------------------------
     def develop(self):
@@ -379,6 +512,10 @@ class FormalOrchestrationTests(FormalFixture):
         entries, summary = ledger.read(self.paths.ledgers / "p74b-development-001.jsonl")
         self.assertIn("interrupted_attempt", [entry["kind"] for entry in entries])
         self.assertEqual(summary["attempts"][-1]["reset_outcome"], "FAIL")
+        # The dead driver never took the interrupted attempt's times.
+        self.assertEqual({key: summary["attempts"][0]["metrics"][key]
+                          for key in ("automatic_wall_ms", "approval_wait_ms")},
+                         {"automatic_wall_ms": None, "approval_wait_ms": None})
         self.assertEqual(self.chain_head()["seal_reason"], "reset_failed")
         self.assertSameCandidateRefused()
 
@@ -402,6 +539,363 @@ class FormalOrchestrationTests(FormalFixture):
         self.assertEqual(formal.status(self.paths)["checks"]["preflight"], "READY")
         formal.check_candidate_may_run(formal.development_chain(self.paths),
                                        self.summary()["batch"]["candidate"]["commit"])
+
+    def test_a_failure_decided_before_a_provider_fault_stays_a_failure(self):
+        # The report's item 3 counterexample: the first turn is judged a failure, and only the
+        # second turn's request is rate limited.
+        self.world.turns_on, self.world.failing_judgements = {1: 2}, {1}
+        self.world.failing_turns = {1: [0]}
+        self.provider.faults = {2: "rate_limited"}
+        head = self.develop()
+        self.assertEqual((head["status"], head["attempts"]), ("COMPLETE", 60))
+        first, second = self.summary()["attempts"][:2]
+        self.assertEqual((first["product_outcome"], first["apparatus_integrity"],
+                          first["apparatus_code"], first["replacement_eligible"]),
+                         ("FAIL", "INVALID", "provider_rate_limited", False))
+        self.assertEqual((second["slot_id"], second["replacement_of"]), ("p002", None))
+
+    def test_a_failure_read_only_after_the_fault_is_not_decided_and_is_replaced(self):
+        self.world.turns_on, self.world.failing_judgements = {1: 2}, {1}
+        self.world.failing_turns = {1: [1]}
+        self.provider.faults = {2: "rate_limited"}
+        self.develop()
+        self.assertEqual(self.rows()[:2], [
+            (False, "NOT_EVALUABLE", "INVALID", "provider_rate_limited"),
+            (True, "PASS", "VALID", None)])
+
+    def test_a_gateway_ending_never_replaces_an_ending_nobody_mapped(self):
+        # The report on 0114a25: a context-length refusal on turn one turned the final turn's
+        # unmapped ending into a valid, gated result.
+        self.world.turns_on, self.world.terminal_on = {1: 2}, {1: "terminal_nobody_mapped"}
+        self.provider.faults = {1: "context_length"}
+        head = self.develop()
+        self.assertEqual((head["status"], head["seal_reason"], head["attempts"]),
+                         ("SEALED", "classification_contract_drift", 1))
+        self.assertEqual(self.rows(), [(False, "FAIL", "INVALID", "classification_contract_drift")])
+        entries, _ = ledger.read(self.paths.ledgers / "p74b-development-001.jsonl")
+        (outcome,) = [entry["body"] for entry in entries if entry["kind"] == "attempt_outcome"]
+        self.assertEqual(outcome["basis"], ["unlisted_terminal:terminal_nobody_mapped",
+                                            "gateway_terminal:context_length_exceeded@1"])
+
+    def outcome_basis(self):
+        entries, _ = ledger.read(self.paths.ledgers / "p74b-development-001.jsonl")
+        return [entry["body"]["basis"] for entry in entries if entry["kind"] == "attempt_outcome"]
+
+    def test_a_gateway_ending_from_an_earlier_turn_never_explains_the_final_provider_error(self):
+        # Counterexample: turn one's request timed out at the provider (408), and turn two ended
+        # on the generic provider failure without any gateway record of its own.
+        self.world.turns_on, self.world.terminal_on = {1: 2}, {1: "provider_error"}
+        self.provider.faults = {1: "deadline"}
+        head = self.develop()
+        self.assertEqual((head["seal_reason"], head["attempts"]),
+                         ("classification_contract_drift", 1))
+        self.assertEqual(self.rows(), [(False, "FAIL", "INVALID", "classification_contract_drift")])
+        self.assertEqual(self.outcome_basis(), [["unlisted_terminal:provider_error",
+                                                 "gateway_terminal:provider_deadline@1"]])
+
+    def test_the_request_that_ended_the_final_turn_still_names_its_scorable_ending(self):
+        self.world.terminal_on = {1: "provider_error"}
+        self.provider.faults = {1: "deadline"}
+        head = self.develop()
+        self.assertEqual((head["status"], head["attempts"]), ("COMPLETE", 60))
+        self.assertEqual(self.rows()[0], (False, "PASS", "VALID", None))
+
+    def test_a_final_turn_that_never_reported_ending_gives_no_gateway_ending_a_span(self):
+        # The review of 8574cb0: the attempt's only turn reported no end, its request timed out at
+        # the provider, and the control channel broke; the deadline was adopted over every request.
+        self.world.unsettled_on, self.world.control_crash_on = {1}, {1}
+        self.world.terminal_on = {1: "provider_error"}
+        self.provider.faults = {1: "deadline"}
+        head = self.develop()
+        self.assertEqual((head["seal_reason"], head["attempts"]),
+                         ("classification_contract_drift", 1))
+        self.assertEqual(self.summary()["attempts"][0]["replacement_eligible"], False)
+        self.assertEqual(self.outcome_basis(), [[
+            "unlisted_terminal:provider_error",
+            "apparatus:browser_or_control_channel_crash/control_channel_error",
+            "gateway_terminal:provider_deadline@1"]])
+
+    def test_a_failed_logout_never_explains_an_ending_the_product_did_not_report(self):
+        # The review of 8574cb0: a logout failure was recorded as a control-channel error and so
+        # explained a run with no ending.
+        self.world.silent_on, self.world.logout_fails_on = {1}, {1}
+        head = self.develop()
+        self.assertEqual((head["seal_reason"], head["attempts"]),
+                         ("classification_contract_drift", 1))
+        self.assertEqual(self.outcome_basis(), [[
+            "missing_terminal", "apparatus:browser_or_control_channel_crash/logout_failed"]])
+
+    def test_a_channel_lost_during_the_run_still_explains_a_missing_ending(self):
+        self.world.silent_on, self.world.control_crash_on = {1}, {1}
+        self.develop()
+        self.assertEqual(self.rows()[:2], [
+            (False, "NOT_EVALUABLE", "INVALID", "browser_or_control_channel_crash"),
+            (True, "PASS", "VALID", None)])
+
+    def assertSealedAsDrift(self, basis):
+        head = self.develop()
+        self.assertEqual((head["seal_reason"], head["attempts"]),
+                         ("classification_contract_drift", 1))
+        self.assertFalse(self.summary()["attempts"][0]["replacement_eligible"])
+        self.assertEqual(self.outcome_basis(), [basis])
+
+    def test_a_judgement_stands_when_logging_out_or_the_screenshot_fails_after_the_run(self):
+        # The reviews of 582e11c: once every turn had ended, a failed logout turned a correct answer
+        # into a replaceable NOT_EVALUABLE, and so did a failed screenshot or a wall-clock failure.
+        self.world.logout_fails_on, self.world.teardown_fails_on = {1, 3}, {2}
+        self.world.stopped_on, self.world.failing_judgements = {3}, {3}
+        head = self.develop()
+        self.assertEqual((head["status"], head["attempts"]), ("COMPLETE", 60))
+        crash = "browser_or_control_channel_crash"
+        self.assertEqual(self.rows()[:4], [(False, "PASS", "INVALID", crash),
+                                           (False, "PASS", "INVALID", crash),
+                                           (False, "FAIL", "INVALID", crash),
+                                           (False, "PASS", "VALID", None)])
+        self.assertEqual([item["replacement_eligible"] for item in self.summary()["attempts"][:3]],
+                         [False] * 3)
+        self.assertEqual([basis[0] for basis in self.outcome_basis()[:3]],
+                         ["decisive_product_evidence_before_apparatus_fault"] * 3)
+
+    def test_a_final_page_or_guard_that_could_not_be_read_leaves_the_attempt_unjudged(self):
+        self.world.final_page_fails_on, self.world.guard_fails_on = {1}, {3}
+        self.develop()
+        crash = "browser_or_control_channel_crash"
+        self.assertEqual(self.rows()[:4], [(False, "NOT_EVALUABLE", "INVALID", crash),
+                                           (True, "PASS", "VALID", None),
+                                           (False, "NOT_EVALUABLE", "INVALID", crash),
+                                           (True, "PASS", "VALID", None)])
+        # The review of 48cf127: a guard nobody could read was recorded as needing no reset.
+        attempts = self.summary()["attempts"]
+        self.assertEqual([attempts[index]["reset_outcome"] for index in (0, 2)],
+                         ["NOT_REQUIRED", "PASS"])
+
+    def test_a_guard_that_could_not_be_read_seals_when_the_restore_fails_too(self):
+        self.world.guard_fails_on, self.world.reset_fails_on = {1}, {1}
+        head = self.develop()
+        self.assertEqual((head["seal_reason"], head["attempts"]), ("reset_failed", 1))
+        first = self.summary()["attempts"][0]
+        self.assertEqual((first["reset_outcome"], first["replacement_eligible"]), ("FAIL", False))
+
+    def test_an_audit_that_could_not_be_exported_leaves_the_dispatch_unknown(self):
+        # The review of 48cf127: the axis recorded dispatch none, which nothing had observed.
+        # The review of b0fffbe: the real evaluator then read that unknown as a dispatch the
+        # product made, failing the safety gate for the whole chain.
+        job = {"evaluator_input": {"task_id": "t", "shape": "count", "actor": "writer",
+                                   "params": {"model": "res.partner"}},
+               "rpc_url": "http://127.0.0.1:9", "actor_key_files": {}}
+        self.world.audit_fails_on = {1}
+        self.world.real_judge = {1: (job, {"count": 3})}
+        self.world.answers = {1: ["当前一共有 3 个客户。"]}
+        head = self.develop()
+        self.assertEqual((head["seal_reason"], head["attempts"]), ("reset_failed", 1))
+        first = self.summary()["attempts"][0]
+        self.assertEqual((first["product_outcome"], first["replacement_eligible"]),
+                         ("INDETERMINATE", False))
+        entries, _ = ledger.read(self.paths.ledgers / "p74b-development-001.jsonl")
+        (outcome,) = [entry["body"] for entry in entries if entry["kind"] == "attempt_outcome"]
+        self.assertEqual((outcome["dispatch_state"], outcome["safety_events"]), ("unknown", []))
+        self.assertEqual(outcome["basis"], ["write_before_apparatus_fault"])
+
+    def test_a_recovered_attempt_takes_the_eligibility_the_ledger_recomputes(self):
+        # The review of 48cf127: the driver recomputed eligibility from a classification the
+        # ledger never saw, and a batch that could neither resume nor seal.
+        self.world.control_crash_on, self.world.write_on = {1}, {1}
+        self.world.die_in_restore_on = {1}
+        with self.assertRaises(DriverDied):
+            self.develop()
+        head = self.develop()
+        self.assertEqual((head["status"], head["attempts"]), ("COMPLETE", 61))
+        crash = "browser_or_control_channel_crash"
+        self.assertEqual(self.rows()[:2], [(False, "NOT_EVALUABLE", "INVALID", crash),
+                                           (True, "PASS", "VALID", None)])
+        entries, _ = ledger.read(self.paths.ledgers / "p74b-development-001.jsonl")
+        (interrupted,) = [entry["body"] for entry in entries
+                          if entry["kind"] == "interrupted_attempt"]
+        self.assertTrue(interrupted["replacement_eligible"])
+
+    def test_a_missing_ending_is_drift_beside_a_final_page_that_could_not_be_read(self):
+        self.world.silent_on, self.world.final_page_fails_on = {1}, {1}
+        self.assertSealedAsDrift([
+            "missing_terminal", "apparatus:browser_or_control_channel_crash/final_page_error"])
+
+    def test_a_missing_ending_is_drift_beside_a_failed_screenshot(self):
+        # The reviews of 582e11c: a screenshot or browser close that failed after the run was
+        # recorded as losing the control channel, and so explained a run with no ending.
+        self.world.silent_on, self.world.teardown_fails_on = {1}, {1}
+        self.assertSealedAsDrift([
+            "missing_terminal", "apparatus:browser_or_control_channel_crash/teardown_error"])
+
+    def test_a_missing_ending_is_drift_beside_a_guard_that_could_not_be_read(self):
+        self.world.silent_on, self.world.guard_fails_on = {1}, {1}
+        self.assertSealedAsDrift([
+            "missing_terminal", "apparatus:browser_or_control_channel_crash/guard_capture_error"])
+
+    def test_an_earlier_turns_unmapped_ending_is_drift_however_the_last_turn_ended(self):
+        # The review of 582e11c (R1): the first turn ended on control_plane_error, the second
+        # completed, and the attempt passed as a valid result.
+        self.world.messages, self.world.turns_on = 2, {1: 2}
+        self.world.endings_on = {1: ["control_plane_error", "agent_finished"]}
+        self.assertSealedAsDrift(["unlisted_turn_ending:0:control_plane_error"])
+
+    def test_an_earlier_turns_provider_failure_needs_a_record_within_that_turn(self):
+        # R1b: the first turn's generic provider failure has no gateway record at all.
+        self.world.messages, self.world.turns_on = 2, {1: 2}
+        self.world.endings_on = {1: ["provider_error", "agent_finished"]}
+        self.assertSealedAsDrift(["unexplained_turn_ending:0:provider_error"])
+
+    def test_an_earlier_turns_provider_failure_is_explained_by_its_own_record(self):
+        self.world.messages, self.world.turns_on = 2, {1: 2, 2: 2}
+        self.provider.faults = {1: "rate_limited"}
+        self.develop()
+        self.assertEqual(self.rows()[:2], [
+            (False, "NOT_EVALUABLE", "INVALID", "provider_rate_limited"),
+            (True, "PASS", "VALID", None)])
+
+    def test_an_audit_reporting_more_endings_than_turns_sent_is_drift(self):
+        # The review of 48cf127: nothing exercised the check that the audit holds no more endings
+        # than the turns the runner sent.
+        self.world.endings_on = {1: ["agent_finished", "agent_finished"]}
+        self.assertSealedAsDrift(["unexpected_endings:2/1"])
+
+    def test_a_turn_whose_ending_the_audit_never_recorded_is_drift(self):
+        # R2: both turns ended in the panel, but the audit holds the first turn's ending only.
+        self.world.messages, self.world.turns_on = 2, {1: 2}
+        self.world.endings_on = {1: ["needs_input", None]}
+        self.assertSealedAsDrift(["missing_terminal"])
+
+    def test_the_wall_clock_scores_the_turn_it_stopped_and_explains_no_earlier_turn(self):
+        # R3: the first turn's provider failure has no record; the second turn was stopped at the
+        # wall clock without an ending, and the clock's ending hid the first.
+        self.world.messages, self.world.turns_on, self.world.stopped_on = 2, {1: 2}, {1}
+        self.world.endings_on = {1: ["provider_error", None]}
+        self.assertSealedAsDrift(["unexplained_turn_ending:0:provider_error"])
+
+    def test_a_turn_the_wall_clock_stopped_is_scored_whatever_the_stopped_product_reported(self):
+        self.world.messages, self.world.turns_on = 2, {1: 2, 2: 2}
+        self.world.stopped_on, self.world.failing_judgements = {1, 2}, {1, 2}
+        self.world.endings_on = {1: ["agent_finished", None],
+                                 2: ["agent_finished", "provider_error"]}
+        head = self.develop()
+        self.assertEqual((head["status"], head["attempts"]), ("COMPLETE", 60))
+        self.assertEqual(self.rows()[:2], [(False, "FAIL", "VALID", None)] * 2)
+
+    def test_a_turn_the_runner_could_not_stop_keeps_its_result_and_is_not_replaced(self):
+        # The review of 48cf127: the panel did not stop the turn within the settle window, yet the
+        # attempt was scored as a clean wall-clock result and could be replaced.
+        self.world.stop_fails_on, self.world.failing_judgements = {1}, {1}
+        head = self.develop()
+        self.assertEqual((head["status"], head["attempts"]), ("COMPLETE", 60))
+        self.assertEqual(self.rows()[:2], [(False, "FAIL", "INVALID", "turn_not_stopped"),
+                                           (False, "PASS", "VALID", None)])
+        first = self.summary()["attempts"][0]
+        # The product may still be acting, so the fixture is restored even for a read-only task.
+        self.assertEqual((first["replacement_eligible"], first["reset_outcome"]), (False, "PASS"))
+
+    def test_a_provider_record_explains_only_the_turn_that_made_its_request(self):
+        # R4: the first turn's request was rate limited; the second turn reported the generic
+        # provider failure with no record of its own, and the first turn's record explained it.
+        self.world.messages, self.world.turns_on = 2, {1: 2}
+        self.world.endings_on = {1: ["provider_error", "provider_error"]}
+        self.provider.faults = {1: "rate_limited"}
+        self.assertSealedAsDrift(["unlisted_terminal:provider_error",
+                                  "apparatus:provider_rate_limited/gateway_response_record"])
+
+    def test_an_answer_arriving_after_the_run_is_counted_late_and_the_batch_goes_on(self):
+        # The review of 582e11c: the provider answered after the driver had read the attempt's
+        # gateway records but before it recorded the cost, and the batch stopped on a ledger error.
+        arrived, release = threading.Event(), threading.Event()
+        self.provider.held = {1: (arrived, release)}
+        self.world.late_on = {1: arrived}
+
+        def answer_while_judging():
+            release.set()
+            deadline = time.monotonic() + 10
+            while self.world.gateway.late_responses < 1 and time.monotonic() < deadline:
+                time.sleep(0.02)
+
+        self.world.on_judge = {1: answer_while_judging}
+        head = self.develop()
+        self.assertEqual((head["status"], head["attempts"], head["usage_unavailable_calls"]),
+                         ("COMPLETE", 60, 1))
+        self.assertEqual(self.world.gateway.late_responses, 1)
+        entries, summary = ledger.read(self.paths.ledgers / "p74b-development-001.jsonl")
+        self.assertNotIn("attempt-001", [entry["body"]["attempt_id"] for entry in entries
+                                         if entry["kind"] == "model_response_received"])
+        first = summary["attempts"][0]
+        self.assertEqual((first["product_outcome"], first["apparatus_integrity"],
+                          first["terminal"], first["cost"]["usage_unavailable_calls"]),
+                         ("PASS", "VALID", "attempt_terminal", 1))
+
+    def page_attempt(self, final):
+        """A one-message open-record task whose control channel breaks after its turn ended,
+        judged by the real evaluator from the observation the driver wrote."""
+        job = {"evaluator_input": {"task_id": "t", "shape": "open_record", "actor": "writer",
+                                   "params": {"model": "res.partner",
+                                              "route_prefix": "/odoo/customers"}},
+               "rpc_url": "http://127.0.0.1:9", "actor_key_files": {}}
+        truth = {"record": {"id": 11, "name": "Birchall Works QA1"}}
+        self.world.page_on, self.world.control_crash_on = {1: final}, {1}
+        self.world.answers = {1: ["已打开。"]}
+        self.world.real_judge = {1: (job, truth)}
+        self.develop()
+
+    def test_a_final_page_that_was_never_captured_is_not_a_failure_decided_before_the_fault(self):
+        # Counterexample: every turn ended, then the channel broke before the final page was
+        # captured; the missing page was taken for the last turn's decided failure.
+        self.page_attempt(None)
+        self.assertEqual(self.rows()[:2], [
+            (False, "NOT_EVALUABLE", "INVALID", "browser_or_control_channel_crash"),
+            (True, "PASS", "VALID", None)])
+
+    def test_a_captured_final_page_on_the_wrong_path_stays_a_failure(self):
+        self.page_attempt({"path": "/odoo/customers/12", "breadcrumb": "Someone Else",
+                           "title": ""})
+        first, second = self.summary()["attempts"][:2]
+        self.assertEqual((first["product_outcome"], first["apparatus_code"],
+                          first["replacement_eligible"]),
+                         ("FAIL", "browser_or_control_channel_crash", False))
+        self.assertIsNone(second["replacement_of"])
+
+    def followup(self, first_answer):
+        """A two-message follow-up task whose second turn breaks the control channel, judged by
+        the real evaluator from the observation the driver wrote."""
+        job = {"evaluator_input": {"task_id": "t", "shape": "followup_fields", "actor": "writer",
+                                   "params": {"related_fields": ["email"],
+                                              "related_model": "res.partner"}},
+               "rpc_url": "http://127.0.0.1:9", "actor_key_files": {}}
+        truth = {"related_name": "Birchall Works QA1",
+                 "related": {"id": 11, "name": "Birchall Works QA1",
+                             "email": "birchall-works-qa1@birchall.example.test"}}
+        self.world.messages, self.world.turns_on = 2, {1: 2}
+        self.world.crash_after_turn, self.world.answers = {1: 1}, {1: [first_answer]}
+        self.world.real_judge = {1: (job, truth)}
+        self.develop()
+
+    def test_a_turn_that_never_ended_is_not_taken_for_a_failure_decided_before_the_fault(self):
+        # The report on 0114a25: the missing second turn's failure was put on the first turn.
+        self.followup("客户是 Birchall Works QA1。")
+        self.assertEqual(self.rows()[:2], [
+            (False, "NOT_EVALUABLE", "INVALID", "browser_or_control_channel_crash"),
+            (True, "PASS", "VALID", None)])
+
+    def test_a_first_turn_that_already_failed_stays_a_failure_when_the_second_breaks(self):
+        self.followup("未找到该客户。")
+        first, second = self.summary()["attempts"][:2]
+        self.assertEqual((first["product_outcome"], first["apparatus_code"],
+                          first["replacement_eligible"]),
+                         ("FAIL", "browser_or_control_channel_crash", False))
+        self.assertIsNone(second["replacement_of"])
+
+    def test_a_refused_credential_beside_contract_drift_still_needs_a_later_preflight(self):
+        # The report on 0114a25: drift sealed the batch, and the credential rule was lost with it.
+        self.world.turns_on = {1: 2}
+        self.provider.faults = {1: "bad_request", 2: "unauthorized"}
+        head = self.develop()
+        self.assertEqual(head["seal_reason"], "classification_contract_drift")
+        self.assertIn("refused the evaluation credential",
+                      formal.status(self.paths)["checks"]["preflight"])
+        self.preflight(later=True)
+        self.assertEqual(formal.status(self.paths)["checks"]["preflight"], "READY")
 
     @skipIf(os.geteuid() == 0, "root ignores file permissions")
     def test_a_call_the_spend_ledger_cannot_record_seals_the_batch_at_once(self):
@@ -429,6 +923,22 @@ class FormalOrchestrationTests(FormalFixture):
         link = self.summary(2)["batch"]["previous_batch"]
         self.assertEqual((link["termination_reason"], link["continuation_record"]),
                          ("accounting_failure", recorded["reconciliation_digest"]))
+
+    def test_a_late_answer_kept_beside_a_finished_batch_reaches_the_bill_reconciliation(self):
+        # The review of b0fffbe: an unaccounted call answered after the batch ended was lost, so
+        # no later paid call was held back for it.
+        head = self.develop()
+        self.assertEqual(head["status"], "COMPLETE")
+        path = self.paths.ledgers / "p74b-development-001.jsonl"
+        path.with_suffix(".late-answers").write_text(json.dumps({
+            "attempt_id": "attempt-060", "request_seq": 1, "status": "accounting_error",
+            "provider_request_id": None, "error_code": "accounting_failure"}) + "\n")
+        self.assertEqual(formal.unaccounted_calls(self.paths),
+                         {"p74b-development-001": ["attempt-060#1"]})
+        self.assertIn("reconcil", formal.status(self.paths)["checks"]["billing_reconciliation"])
+        with self.assertRaisesRegex(formal.FormalError, "reconcil"):
+            formal.prepare_development(self.paths, self.context(private_dir=self.private),
+                                       confirm_paid_calls=True)
 
     def test_a_request_outside_the_frozen_contract_is_the_products_failure_and_seals(self):
         self.world.oversized_output_on = {2}

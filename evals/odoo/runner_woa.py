@@ -205,8 +205,13 @@ def run(runner_input: RunnerInput, config: WoaRunnerConfig, *,
         "runner": "woa_product", "task_id": runner_input.task_id, "actor": runner_input.actor,
         "product_started": False, "turns": [], "page_errors": [], "final": None,
         "logged_out": False, "browser_exit": None, "control_channel_error": None,
-        "approvals": [], "budget_exhausted": None,
+        "final_page_error": None, "teardown_error": None, "approvals": [],
+        "budget_exhausted": None,
     }
+    # A fault while the product runs costs the runner its sight of the product. Once every turn has
+    # ended, reading the final page and tearing down are recorded apart: they show nothing about
+    # how the product ended.
+    stage = ["run"]
     browser = playwright.chromium.launch(headless=config.headless)
     try:
         context = browser.new_context(ignore_https_errors=True,
@@ -214,7 +219,8 @@ def run(runner_input: RunnerInput, config: WoaRunnerConfig, *,
                                                 "height": config.viewport[1]})
         page = context.new_page()
         page.on("pageerror", lambda error: artifact["page_errors"].append(type(error).__name__))
-        page.on("crash", lambda _page: artifact.update(browser_exit="page_crashed"))
+        page.on("crash", lambda _page: stage[0] == "run" and artifact.update(
+            browser_exit="page_crashed"))
         try:
             login(page, config, runner_input.actor)
             if runner_input.entry_path:
@@ -289,15 +295,26 @@ def run(runner_input: RunnerInput, config: WoaRunnerConfig, *,
                     "approval_wait_ms": int(approval_wait * 1000)})
                 break
             answer = page.evaluate(_ANSWER_JS)
-            settle_ms = settle_view(page, view_before, config.view_settle_s)
-            artifact["turns"].append({
+            turn = {
                 "index": index, "timed_out": False, "answer_kind": answer["kind"],
                 "visible_answer": answer["text"], "path": page.evaluate("() => location.pathname"),
-                "view_settle_ms": settle_ms, "first_feedback_ms": feedback_ms,
+                "view_settle_ms": None, "first_feedback_ms": feedback_ms,
                 "cancel_feedback_ms": None, "automatic_ms": int(automatic * 1000),
                 "approval_wait_ms": int(approval_wait * 1000),
-            })
+            }
+            # The visible answer is the turn's result. It is recorded, and the turn counts as ended,
+            # before waiting on the page, so a later fault cannot lose what the user already saw.
+            artifact["turns"].append(turn)
+            checkpoint({"product_started": True, "turn": index, "settled": True})
+            if index == len(runner_input.messages) - 1:
+                # The last message's turn has ended and no further one will be sent: waiting on
+                # the page is already reading the final view, not running the product.
+                stage[0] = "final_page"
+            turn["view_settle_ms"] = settle_view(page, view_before, config.view_settle_s)
+            turn["path"] = page.evaluate("() => location.pathname")
+        stage[0] = "final_page"
         artifact["final"] = breadcrumb(page)
+        stage[0] = "teardown"
         config.evidence_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         page.screenshot(path=str(config.evidence_dir / "final.png"))
         artifact["logged_out"] = logout(page)
@@ -305,12 +322,27 @@ def run(runner_input: RunnerInput, config: WoaRunnerConfig, *,
     except RunnerPreStartError:
         raise
     except Exception as exc:
-        if artifact["browser_exit"] is None:
-            artifact["control_channel_error"] = {
-                "at_monotonic": round(time.monotonic(), 3), "type": type(exc).__name__}
+        record_fault(artifact, stage[0], type(exc).__name__)
     finally:
         try:
             browser.close()
         except Exception:
-            artifact["browser_exit"] = artifact["browser_exit"] or "close_failed"
+            record_fault(artifact, stage[0], "close_failed")
     return artifact
+
+
+def record_fault(artifact: dict[str, Any], stage: str, kind: str) -> None:
+    """Record a fault at the stage the run had reached, keeping the first fault of a stage.
+
+    During the run a failed browser close is the browser's exit and any other fault the control
+    channel's, unless the browser had already exited. After it, a fault reading the final page or
+    tearing down is recorded as that, never as losing sight of the product.
+    """
+    fault = {"at_monotonic": round(time.monotonic(), 3), "type": kind}
+    if stage == "run":
+        if kind == "close_failed":
+            artifact["browser_exit"] = artifact["browser_exit"] or "close_failed"
+        elif artifact["browser_exit"] is None:
+            artifact["control_channel_error"] = fault
+    elif not (artifact["final_page_error"] or artifact["teardown_error"]):
+        artifact[f"{stage}_error"] = fault

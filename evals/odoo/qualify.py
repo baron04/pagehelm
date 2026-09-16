@@ -588,9 +588,9 @@ def _rehearsal_records(root: Path, started: str) -> dict[str, dict[str, Any]]:
         protocol_digest=protocol.document()["protocol_digest"],
         items={item: {"verdict": "ACCEPT", "evidence": ["synthetic rehearsal acceptance"]}
                for item in protocol.EXTERNAL_REVIEW["items"]},
-        findings=["synthetic acceptance that exists only in this rehearsal workbench"])
-    stamp = started.replace("-", "").replace(":", "")
-    records = {f"{formal.REVIEWS}/external-review-{stamp}.json": external,
+        findings=[{"blocking": False,
+                   "text": "synthetic acceptance that exists only in this rehearsal workbench"}])
+    records = {formal.external_review_path(external): external,
                f"{formal.FREEZES}/family-review.json": review,
                f"{formal.FREEZES}/first-freeze.json": freeze.first_freeze_record(
                    development_seal=development, heldout_seal=heldout,
@@ -1032,14 +1032,17 @@ def _freeze_probe(started: str) -> dict[str, Any]:
              for item in protocol.EXTERNAL_REVIEW["items"]}
     revised_item = sorted(items)[0]
 
-    def external(conclusions: dict[str, Any]) -> dict[str, Any]:
+    def external(conclusions: dict[str, Any], findings: Any = ()) -> dict[str, Any]:
         return freeze.external_review_record(
             reviewer="P7.4a qualification probe", reviewed_at=started, reviewed_commit=head,
-            protocol_digest=protocol.document()["protocol_digest"], items=conclusions)
+            protocol_digest=protocol.document()["protocol_digest"], items=conclusions,
+            findings=findings)
 
     accepted = external(items)
     revised = external({**items, revised_item: {"verdict": "REVISE",
                                                 "evidence": ["probe: one item revised"]}})
+    # A blocking finding outside the listed items keeps every item's ACCEPT from accepting.
+    blocked = external(items, [{"blocking": True, "text": "probe: a gate outside the items"}])
 
     def first_freeze(family: dict[str, Any], review: Any) -> Any:
         return freeze.first_freeze_record(development_seal=development, heldout_seal=heldout,
@@ -1055,6 +1058,8 @@ def _freeze_probe(started: str) -> dict[str, Any]:
                                            freeze.FreezeError),
         "revised_external_review_refused": _refused(lambda: first_freeze(accept, revised),
                                                     freeze.FreezeError),
+        "blocking_finding_refused": (blocked["verdict"] == "REVISE" and _refused(
+            lambda: first_freeze(accept, blocked), freeze.FreezeError)),
         "family_review_never_stands_in_for_the_external_review": _refused(
             lambda: first_freeze(accept, accept), freeze.FreezeError),
         "second_without_first_refused": _refused(

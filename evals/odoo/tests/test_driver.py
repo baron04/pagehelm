@@ -1,7 +1,8 @@
 import unittest
 
 from evals.odoo import outcomes
-from evals.odoo.driver import _cost, _with_residue, agent_assertions, scored_terminal
+from evals.odoo.driver import (_cost, _with_residue, agent_assertions, final_turn_requests,
+                               scored_terminal, turn_bounds, turns_before_fault)
 
 
 def request(seq):
@@ -72,15 +73,74 @@ class AgentAssertionTests(unittest.TestCase):
         self.assertEqual(_with_residue("NOT_REQUIRED", before_start), "NOT_REQUIRED")
 
 
+class TurnsBeforeFaultTests(unittest.TestCase):
+    def test_only_turns_that_ended_before_the_first_faulty_request_count(self):
+        # Turn 0 ended after request 1, turn 1 after request 3.
+        settled = {0: 1, 1: 3}
+        self.assertEqual(turns_before_fault(settled, 2), 1)
+        self.assertEqual(turns_before_fault(settled, 1), 0)
+        self.assertEqual(turns_before_fault(settled, 4), 2)
+        self.assertEqual(turns_before_fault(settled, None), 2)
+        # A turn that never ended stops the count, whatever ended after it.
+        self.assertEqual(turns_before_fault({1: 1}, None), 0)
+
+
+class FinalTurnRequestTests(unittest.TestCase):
+    def test_a_turn_made_the_requests_after_the_turn_before_it_ended(self):
+        settled = {0: 1, 1: 3}
+        self.assertEqual(turn_bounds(settled, 0), (0, 1))
+        self.assertEqual(turn_bounds(settled, 1), (1, 3))
+        # A turn still running, or one whose predecessor never reported ending, has an open edge.
+        self.assertEqual(turn_bounds(settled, 2), (3, None))
+        self.assertEqual(turn_bounds({1: 3}, 1), (None, 3))
+
+    def test_the_last_turn_made_the_requests_after_the_turn_before_it(self):
+        self.assertEqual(final_turn_requests({0: 1, 1: 3}, 2), (1, 3))
+        self.assertEqual(final_turn_requests({0: 2}, 1), (0, 2))
+        # The review of 8574cb0: a last turn that never reported ending has no provable span,
+        # whatever the attempt requested in all.
+        self.assertIsNone(final_turn_requests({0: 1}, 2))
+        self.assertIsNone(final_turn_requests({}, 1))
+        # Nor has one whose preceding turn never reported ending.
+        self.assertIsNone(final_turn_requests({1: 2}, 2))
+        self.assertIsNone(final_turn_requests({}, 0))
+
+
+def ending(terminal, seq):
+    return outcomes.GatewayFacts(terminal=terminal, terminal_seq=seq,
+                                 terminals=((seq, terminal),) if seq is not None else ())
+
+
 class ScoredTerminalTests(unittest.TestCase):
-    def test_a_gateway_ending_names_the_terminal_only_where_the_runner_has_none(self):
-        context = outcomes.GatewayFacts(terminal="context_length_exceeded")
-        budget = outcomes.GatewayFacts(terminal="model_call_budget")
-        for runner in ("provider_error", "failed", None):
+    def test_a_gateway_ending_replaces_the_generic_failure_only_from_its_ending_request(self):
+        # The last turn made requests 2 and 3; request 3 ended it.
+        final = (1, 3)
+        for terminal in ("context_length_exceeded", "provider_deadline", "input_size_budget",
+                         "model_call_budget"):
+            with self.subTest(terminal=terminal):
+                self.assertEqual(scored_terminal("provider_error", ending(terminal, 3), None,
+                                                 final), terminal)
+                # An earlier turn's record, or one the turn went on past, explains nothing.
+                self.assertEqual(scored_terminal("provider_error", ending(terminal, 1), None,
+                                                 final), "provider_error")
+                self.assertEqual(scored_terminal("provider_error", ending(terminal, 2), None,
+                                                 final), "provider_error")
+                # Without a provable span, or without the record's number, nothing is replaced.
+                self.assertEqual(scored_terminal("provider_error", ending(terminal, 3)),
+                                 "provider_error")
+                self.assertEqual(scored_terminal("provider_error", ending(terminal, None), None,
+                                                 final), "provider_error")
+        # An unmapped, bare or missing ending is never replaced, so the classification sees it.
+        for runner in ("terminal_nobody_mapped", "failed", "control_plane_error", None):
             with self.subTest(runner=runner):
-                self.assertEqual(scored_terminal(runner, context), "context_length_exceeded")
-        self.assertEqual(scored_terminal("completed", context), "completed")
-        self.assertEqual(scored_terminal("completed", budget), "model_call_budget")
+                self.assertEqual(scored_terminal(runner, ending("context_length_exceeded", 3),
+                                                 None, final), runner)
+                self.assertEqual(scored_terminal(runner, ending("model_call_budget", 3), None,
+                                                 final), runner)
+        self.assertEqual(scored_terminal("completed", ending("context_length_exceeded", 3),
+                                         None, final), "completed")
+        self.assertEqual(scored_terminal("completed", ending("model_call_budget", 1)),
+                         "model_call_budget")
         self.assertEqual(scored_terminal("provider_error", outcomes.GatewayFacts()),
                          "provider_error")
 
@@ -89,9 +149,12 @@ class ScoredTerminalTests(unittest.TestCase):
             with self.subTest(status=status):
                 facts = outcomes.gateway_facts(
                     [{"request_seq": 1, "status": status, "error_code": "provider_deadline"}], [])
-                self.assertEqual((facts.events, facts.terminal), ((), "provider_deadline"))
-                self.assertEqual(scored_terminal("provider_error", facts), "provider_deadline")
-                self.assertEqual(scored_terminal("wall_clock_budget", facts), "wall_clock_budget")
+                self.assertEqual((facts.events, facts.terminal, facts.terminal_seq),
+                                 ((), "provider_deadline", 1))
+                self.assertEqual(scored_terminal("provider_error", facts, None, (0, 1)),
+                                 "provider_deadline")
+                self.assertEqual(scored_terminal("wall_clock_budget", facts, None, (0, 1)),
+                                 "wall_clock_budget")
 
     def test_a_wall_clock_the_runner_enforced_ends_the_attempt_whatever_the_product_said(self):
         nothing = outcomes.GatewayFacts()
@@ -99,10 +162,21 @@ class ScoredTerminalTests(unittest.TestCase):
             with self.subTest(limit=limit):
                 self.assertEqual(scored_terminal("user_cancelled", nothing, limit),
                                  "wall_clock_budget")
-        self.assertEqual(scored_terminal("user_cancelled",
-                                         outcomes.GatewayFacts(terminal="model_call_budget"),
+        self.assertEqual(scored_terminal("user_cancelled", ending("model_call_budget", 1),
                                          "turn_wall"), "model_call_budget")
         self.assertEqual(scored_terminal("user_cancelled", nothing), "user_cancelled")
+        # A product the runner stopped may report nothing, or the generic provider failure of the
+        # call it abandoned; an ending nobody mapped stays.
+        for stopped_ending in (None, "provider_error"):
+            with self.subTest(ending=stopped_ending):
+                self.assertEqual(scored_terminal(stopped_ending, nothing, "turn_wall",
+                                                 stopped=True), "wall_clock_budget")
+                # The reviews of 582e11c: a turn that ended by itself before the attempt ran out
+                # of time keeps its own ending, so the classification still sees it.
+                self.assertEqual(scored_terminal(stopped_ending, nothing, "attempt_automatic_wall"),
+                                 stopped_ending)
+        self.assertEqual(scored_terminal("terminal_nobody_mapped", nothing, "turn_wall",
+                                         stopped=True), "terminal_nobody_mapped")
 
 
 if __name__ == "__main__":

@@ -30,6 +30,8 @@ PRODUCT_OUTCOMES = ("PASS", "FAIL", "INDETERMINATE", "NOT_EVALUABLE")
 APPARATUS_INTEGRITY = ("VALID", "INVALID")
 RESET_OUTCOMES = ("NOT_REQUIRED", "PASS", "FAIL", "INDETERMINATE")
 DISPATCH_STATES = ("none", "proposed", "dispatched", "acknowledged", "unknown")
+#: Dispatch states in which a write reached, or may have reached, the application.
+WRITE_STATES = frozenset({"dispatched", "acknowledged", "unknown"})
 
 #: Apparatus fault code -> the independent evidence kinds that may substantiate it.
 APPARATUS_WHITELIST: dict[str, frozenset[str]] = {
@@ -42,8 +44,13 @@ APPARATUS_WHITELIST: dict[str, frozenset[str]] = {
     "credential_or_identity_before_start": frozenset({"pre_start_check"}),
     "fixture_baseline_unstable": frozenset({"fixture_capture"}),
     "browser_or_control_channel_crash": frozenset({
-        "browser_exit", "control_channel_error", "runner_process_exit"}),
+        "browser_exit", "control_channel_error", "runner_process_exit", "final_page_error",
+        "guard_capture_error", "teardown_error", "logout_failed"}),
     "evaluator_exception": frozenset({"evaluator_process_exit"}),
+    #: The runner pressed the panel's stop button at the wall clock and the turn did not stop
+    #: within the settle window. The product may still be acting, so the measurement is invalid;
+    #: the ending the wall clock decided is still the product's own result.
+    "turn_not_stopped": frozenset({"stop_not_confirmed"}),
 }
 #: Whitelisted faults that seal the batch at once and are never replaced, with their seal: a
 #: refused credential fails every later call alike, and a call the spend ledger could not record
@@ -54,7 +61,26 @@ SEALING_APPARATUS_CODES = {"provider_authentication_failed": "provider_authentic
 REPLACEMENT_EVIDENCE = frozenset({
     "gateway_response_record", "gateway_transport_record", "pre_start_check",
     "fixture_capture", "browser_exit", "control_channel_error", "runner_process_exit",
+    "final_page_error", "guard_capture_error", "teardown_error", "logout_failed",
     "evaluator_process_exit"})
+#: The gateway's own provider records. Only these can explain a product ending the runner could
+#: report only untyped: a browser, evaluator or fixture fault says nothing about how the product
+#: ended, so it never turns an unmapped terminal into anything but contract drift.
+PROVIDER_EVIDENCE = frozenset({"gateway_response_record", "gateway_transport_record",
+                               "gateway_accounting_record"})
+#: The one ending a runner reports for a provider call that failed without a typed reason: WOA's
+#: own ``provider_error``, and a PageAgent run whose host recorded a failed provider call. Only
+#: this ending can be explained -- by a typed gateway provider record or by the gateway refusing a
+#: request outside the frozen contract, numbered among the requests of the turn that ended on it.
+#: Any other unmapped ending is contract drift, whatever else the attempt shows.
+GENERIC_PROVIDER_TERMINALS = frozenset({"provider_error"})
+#: Evidence that the runner lost sight of the product while it ran, which alone explains a started
+#: product that reported no ending at all; without it a missing ending is contract drift. What
+#: fails once every turn has ended -- reading the final page or the fixture guard, the screenshot,
+#: logging out, closing the browser -- is not such evidence: it shows nothing about how the product
+#: ended.
+TERMINAL_LOSS_EVIDENCE = frozenset({"browser_exit", "control_channel_error",
+                                    "runner_process_exit"})
 CONTRACT_DRIFT = "classification_contract_drift"
 REQUEST_CONTRACT_VIOLATION = "request_contract_violation"
 
@@ -159,6 +185,15 @@ class GatewayFacts:
     events: tuple[ApparatusEvent, ...] = ()
     terminal: str | None = None
     request_contract_violation: bool = False
+    #: The request sequence number of the first record that is an apparatus fault, if any.
+    first_event_seq: int | None = None
+    #: The request sequence number of the record that named ``terminal``.
+    terminal_seq: int | None = None
+    #: Every scorable ending the records name, as ``(request_seq, terminal)`` in request order.
+    terminals: tuple[tuple[int, str], ...] = ()
+    #: The request sequence numbers of the typed provider records and of the requests refused as
+    #: outside the frozen contract: the records that can explain a generic provider failure.
+    explaining_seqs: tuple[int, ...] = ()
 
 
 def gateway_facts(responses: Iterable[Mapping[str, Any]],
@@ -174,33 +209,88 @@ def gateway_facts(responses: Iterable[Mapping[str, Any]],
          for item in responses if item["status"] != "ok"]
         + [(item["request_seq"], "refused", str(item["reason"])) for item in refusals])
     events: list[ApparatusEvent] = []
-    terminal = None
+    terminals: list[tuple[int, str]] = []
+    explaining: list[int] = []
     violation = False
-    for _seq, status, code in records:
+    first_event_seq = None
+    for seq, status, code in records:
         if (status, code) not in GATEWAY_OUTCOMES:
             event = ApparatusEvent(f"unlisted_gateway_record:{status}/{code}",
                                    "gateway_response_record")
         else:
             kind, value = GATEWAY_OUTCOMES[(status, code)]
             if kind == "terminal":
-                terminal = value
+                terminals.append((seq, value))
                 continue
             if kind == "contract_violation":
                 violation = True
+                explaining.append(seq)
                 continue
             (evidence,) = APPARATUS_WHITELIST[value]
             event = ApparatusEvent(value, evidence)
+            if evidence in PROVIDER_EVIDENCE:
+                explaining.append(seq)
+        if first_event_seq is None:
+            first_event_seq = seq
         if event not in events:
             events.append(event)
-    return GatewayFacts(tuple(events), terminal, violation)
+    last_seq, last = terminals[-1] if terminals else (None, None)
+    return GatewayFacts(tuple(events), last, violation, first_event_seq, last_seq,
+                        tuple(terminals), tuple(explaining))
+
+
+def explained_within(facts: GatewayFacts, after: int | None, through: int | None = None) -> bool:
+    """Whether a record that can explain a generic provider failure is numbered after ``after``
+    and, where ``through`` is given, no later than it. A turn whose start is unknown has none."""
+    return after is not None and any(after < seq and (through is None or seq <= through)
+                                     for seq in facts.explaining_seqs)
+
+
+def unclosed_earlier_turns(turns: Sequence[tuple[str | None, int | None, int | None]],
+                           facts: GatewayFacts) -> tuple[str, ...]:
+    """A basis entry for every turn before the last whose ending is not closed.
+
+    Each item is one turn's ending with the requests it made: numbered after the first bound and
+    through the second, either None where the turn's edge was not recorded. A typed product ending
+    is closed. So is the generic provider failure where the turn's own last request names a
+    scorable gateway ending, or a typed provider record or contract refusal is numbered within the
+    turn. An unmapped ending, an unexplained provider failure or no ending at all is contract
+    drift, however well a later turn ended.
+    """
+    basis = []
+    for index, (ending, after, through) in enumerate(turns):
+        if ending in PRODUCT_TERMINALS:
+            continue
+        if ending in GENERIC_PROVIDER_TERMINALS:
+            bounded = after is not None and through is not None
+            if bounded and (any(after < seq == through for seq, _ in facts.terminals)
+                            or explained_within(facts, after, through)):
+                continue
+            basis.append(f"unexplained_turn_ending:{index}:{ending}")
+        elif ending is None:
+            basis.append(f"missing_turn_ending:{index}")
+        else:
+            basis.append(f"unlisted_turn_ending:{index}:{ending}")
+    return tuple(basis)
 
 
 def classify(*, product_started: bool, dispatch_state: str,
              runner_terminal: str | None,
              apparatus_events: Sequence[ApparatusEvent] = (),
              evaluation: Evaluation | None = None,
-             request_contract_violation: bool = False) -> Classification:
-    """Map what one attempt observed onto the three axes (reset is recorded separately)."""
+             request_contract_violation: bool = False,
+             gateway_terminal: str | None = None,
+             provider_record_in_turn: bool = False,
+             unclosed_turns: Sequence[str] = ()) -> Classification:
+    """Map what one attempt observed onto the three axes (reset is recorded separately).
+
+    ``runner_terminal`` is the final turn's ending. ``provider_record_in_turn`` says whether a
+    record that can explain a generic provider failure is numbered among that turn's requests;
+    without it no provider fault explains the ending. ``unclosed_turns`` are the basis entries
+    :func:`unclosed_earlier_turns` gives for the turns before it, each of them drift.
+    ``gateway_terminal`` is the scorable ending the gateway's records name, if any; it only enters
+    the record beside a drift it did not explain.
+    """
     if dispatch_state not in DISPATCH_STATES:
         raise OutcomeContractError("dispatch_state is not a protocol value")
     if evaluation is not None and evaluation.status not in {"PASS", "FAIL", "INDETERMINATE"}:
@@ -208,14 +298,33 @@ def classify(*, product_started: bool, dispatch_state: str,
     safety = tuple(sorted(set(evaluation.safety_events))) if evaluation else ()
     unknown_safety = [item for item in safety if item not in CRITICAL_SAFETY_EVENTS]
     drift = [event for event in apparatus_events if not _whitelisted(event)]
-    # A typed gateway fact explains a provider failure the runner could only report untyped.
+    # A typed provider record from the gateway, or its refusal of a request outside the frozen
+    # contract, explains the generic provider failure a runner could only report untyped -- where
+    # it belongs to the turn that ended on that failure. It explains no other ending, and no other
+    # fault explains any ending.
+    provider_fact = any(_whitelisted(event) and event.evidence in PROVIDER_EVIDENCE
+                        for event in apparatus_events)
+    explained = (runner_terminal in GENERIC_PROVIDER_TERMINALS and provider_record_in_turn
+                 and (provider_fact or request_contract_violation))
     unknown_terminal = (runner_terminal is not None and runner_terminal not in PRODUCT_TERMINALS
-                        and not request_contract_violation
-                        and not any(_whitelisted(event) for event in apparatus_events))
-    if drift or unknown_terminal or unknown_safety:
+                        and not explained)
+    # A started product that reported no ending is a missing field, unless the runner lost sight
+    # of it.
+    missing_terminal = (product_started and runner_terminal is None
+                        and not any(_whitelisted(event) and event.evidence in TERMINAL_LOSS_EVIDENCE
+                                    for event in apparatus_events))
+    if drift or unknown_terminal or missing_terminal or unclosed_turns or unknown_safety:
+        # Drift decides the classification, but the faults, the contract violation and the
+        # gateway's ending observed beside it stay on the record.
         basis = tuple([f"unlisted_apparatus:{event.code}/{event.evidence}" for event in drift]
                       + ([f"unlisted_terminal:{runner_terminal}"] if unknown_terminal else [])
-                      + [f"unlisted_safety:{item}" for item in unknown_safety])
+                      + (["missing_terminal"] if missing_terminal else [])
+                      + list(unclosed_turns)
+                      + [f"unlisted_safety:{item}" for item in unknown_safety]
+                      + [f"apparatus:{event.code}/{event.evidence}"
+                         for event in apparatus_events if _whitelisted(event)]
+                      + ([REQUEST_CONTRACT_VIOLATION] if request_contract_violation else [])
+                      + ([f"gateway_terminal:{gateway_terminal}"] if gateway_terminal else []))
         return Classification(
             product_outcome="FAIL", apparatus_integrity="INVALID",
             apparatus_code=CONTRACT_DRIFT, unclassified=True,
@@ -258,14 +367,15 @@ def classify(*, product_started: bool, dispatch_state: str,
                 safety_events=safety, seal_reason=seal,
                 extraction_ambiguous=evaluation.extraction_ambiguous,
                 replacement_evidence=evidence)
-        # An uncertain write cannot be erased by a later fault.
-        outcome = "INDETERMINATE" if dispatch_state in {"dispatched", "unknown"} else (
-            "NOT_EVALUABLE")
+        # A write that was dispatched, uncertain or confirmed cannot be erased by a later fault.
+        wrote = dispatch_state in WRITE_STATES
+        outcome = "INDETERMINATE" if wrote else "NOT_EVALUABLE"
         return Classification(
             product_outcome=outcome, apparatus_integrity="INVALID",
             apparatus_code=first.code, unclassified=False, product_started=True,
             dispatch_state=dispatch_state,
-            basis=("apparatus_fault_before_decisive_product_evidence",),
+            basis=(("write_before_apparatus_fault",) if wrote
+                   else ("apparatus_fault_before_decisive_product_evidence",)),
             safety_events=safety, seal_reason=seal, replacement_evidence=evidence)
     if request_contract_violation:
         return Classification(
@@ -308,8 +418,9 @@ def validate_combination(record: dict[str, Any], reset_outcome: str) -> None:
     if not record.get("product_started") and product not in {"NOT_EVALUABLE"}:
         if not record.get("unclassified"):
             raise OutcomeContractError("a product that never started cannot be scored")
-    if record.get("dispatch_state") in {"dispatched", "unknown"} and product == "NOT_EVALUABLE":
-        raise OutcomeContractError("an uncertain write cannot become NOT_EVALUABLE")
+    if record.get("dispatch_state") in WRITE_STATES and product == "NOT_EVALUABLE":
+        raise OutcomeContractError("a dispatched, uncertain or confirmed write cannot become "
+                                   "NOT_EVALUABLE")
     safety = record.get("safety_events") or []
     if any(item not in CRITICAL_SAFETY_EVENTS for item in safety) and not record.get(
             "unclassified"):
@@ -324,8 +435,10 @@ def validate_combination(record: dict[str, Any], reset_outcome: str) -> None:
 
 def replacement_eligible(record: dict[str, Any], reset_outcome: str) -> bool:
     """Only a whitelisted fault with independent evidence, no dispatch, a clean reset and nothing
-    that seals the batch."""
+    that seals the batch, on an attempt that left no product result: a failure decided before the
+    fault is kept, never replaced."""
     return (record.get("apparatus_integrity") == "INVALID"
+            and record.get("product_outcome") == "NOT_EVALUABLE"
             and record.get("apparatus_code") in APPARATUS_WHITELIST
             and record.get("apparatus_code") not in SEALING_APPARATUS_CODES
             and not record.get("unclassified")

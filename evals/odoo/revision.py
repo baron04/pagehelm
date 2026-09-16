@@ -73,17 +73,23 @@ def file_at(repository: Path, commit: str, path: str) -> bytes:
 
 
 def committed_once(repository: Path, path: str) -> str:
-    """The one commit that recorded ``path``, provided nothing has changed it since.
+    """The one commit that recorded ``path`` as a regular file, provided nothing has changed it
+    since.
 
     A record edited by a later commit or in the working tree no longer shows what was decided
-    at the commit that recorded it, so both are refused.
+    at the commit that recorded it, so both are refused. So is a record committed as a symbolic
+    link: what it points at can change while git sees no change to the record.
     """
     commits = _git(repository, "log", "--format=%H", "--", path).decode().split()
     if len(commits) != 1:
         raise RevisionError(f"{path} must be committed exactly once and never changed")
+    commit = require_commit(commits[0], path)
+    entry = _git(repository, "ls-tree", commit, "--", path).decode().split()
+    if not entry or entry[0] != "100644" or (Path(repository) / path).is_symlink():
+        raise RevisionError(f"{path} must be committed as a regular file")
     if _git(repository, "status", "--porcelain", "--untracked-files=normal", "--", path).strip():
         raise RevisionError(f"{path} differs from the commit that recorded it")
-    return require_commit(commits[0], path)
+    return commit
 
 
 def commit_path(repository: Path, path: str, message: str) -> str:
@@ -91,6 +97,28 @@ def commit_path(repository: Path, path: str, message: str) -> str:
     _git(repository, "add", "--", path)
     _git(repository, "commit", "-q", "--only", "-m", message, "--", path)
     return committed_once(repository, path)
+
+
+def path_history(repository: Path, directory: str) -> list[tuple[str, str, str]]:
+    """Every change under ``directory`` as ``(commit, status, path)``, oldest commit first in
+    topological order, so the order cannot be chosen by any timestamp. The full history is read,
+    and the directory is matched whatever its letter case: a merge that keeps one side's tree does
+    not hide a change made on the other side, nor does a path spelled in other letters."""
+    raw = _git(repository, "log", "--reverse", "--topo-order", "--no-renames", "--full-history",
+               "--format=commit %H", "--name-status", "--", f":(icase){directory}").decode()
+    changes, commit = [], None
+    for line in raw.splitlines():
+        if line.startswith("commit "):
+            commit = require_commit(line[7:], "commit")
+        elif line.strip() and commit is not None:
+            status, _, path = line.partition("\t")
+            changes.append((commit, status, path))
+    return changes
+
+
+def first_parent_commits(repository: Path) -> set[str]:
+    """The commits on HEAD's first-parent line: the main line, without what merges brought in."""
+    return set(_git(repository, "rev-list", "--first-parent", "HEAD").decode().split())
 
 
 def commit_time(repository: Path, commit: str) -> datetime:

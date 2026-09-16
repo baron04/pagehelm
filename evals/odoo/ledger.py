@@ -43,8 +43,12 @@ _ATTEMPT_KINDS = ("attempt_outcome", "reset_outcome", "attempt_cost", "attempt_m
 _METRIC_FIELDS = ("automatic_wall_ms", "approval_wait_ms", "first_feedback_ms",
                   "cancel_feedback_ms", "page_actions", "invalid_page_actions", "business_calls",
                   "repeated_observations", "user_turns")
-#: Metrics an attempt may not have measured: no turn started, or no turn was stopped.
-_OPTIONAL_METRICS = frozenset({"first_feedback_ms", "cancel_feedback_ms"})
+#: Metrics an attempt may not have measured: no turn started, no turn was stopped, or the driver
+#: died before the attempt's times were taken.
+_OPTIONAL_METRICS = frozenset({"first_feedback_ms", "cancel_feedback_ms", "automatic_wall_ms",
+                               "approval_wait_ms"})
+#: Times every attempt that finished normally measured; only an interrupted attempt lacks them.
+_RUN_TIMES = ("automatic_wall_ms", "approval_wait_ms")
 _TERMINAL_KINDS = frozenset({"attempt_terminal", "interrupted_attempt"})
 _SEAL_REASONS = frozenset({
     "critical_safety_event", "classification_contract_drift", "reset_failed",
@@ -66,7 +70,7 @@ HELDOUT_AUDITED_RESTART_REASONS = frozenset({"provider_authentication_failed",
 KINDS = frozenset({
     "batch_header", "attempt_started", "model_request_dispatched", "model_request_refused",
     "model_response_received", "attempt_checkpoint", *_ATTEMPT_KINDS, *_TERMINAL_KINDS,
-    "unowned_model_request", "batch_sealed", "batch_completed",
+    "unowned_model_request", "late_model_response", "batch_sealed", "batch_completed",
 })
 RESPONSE_STATUSES = frozenset({"ok", "http_error", "transport_error", "contract_error",
                                "accounting_error"})
@@ -432,6 +436,8 @@ class _Replay:
                       "provider_request_id", "response_model", "usage", "cost_cny",
                       "error_code"}, "model_response_received")
         attempt = self._require_open(body["attempt_id"])
+        if attempt["records"]:
+            raise LedgerError("model responses must precede the attempt's outcome records")
         seq = body["request_seq"]
         if seq not in attempt["requests"] or seq in attempt["responses"]:
             raise LedgerError("model response does not answer one dispatched request")
@@ -540,6 +546,10 @@ class _Replay:
         attempt = self._require_open(body.get("attempt_id"))
         if attempt["records"] != list(_ATTEMPT_KINDS):
             raise LedgerError("an attempt ends only after outcome, reset, cost and metrics")
+        if kind == "attempt_terminal" and any(attempt["metrics"][name] is None
+                                              for name in _RUN_TIMES):
+            raise LedgerError("an attempt that finished reports its automatic and confirmation "
+                              "times")
         outcome, reset = attempt["outcome"], attempt["reset"]
         eligible = outcomes.replacement_eligible(outcome, reset)
         if kind == "interrupted_attempt":
@@ -594,6 +604,17 @@ class _Replay:
             _exact(body, {"body_digest", "reason"}, "unowned_model_request")
             _digest(body["body_digest"], "body_digest")
             self._mark_seal("unowned_model_request")
+        elif kind == "late_model_response":
+            # An answer that reached the gateway after its attempt had closed there. It costs the
+            # attempt nothing -- the call is already counted as usage unavailable -- but a call
+            # the spend ledger could not record still seals the batch and must be reconciled.
+            _exact(body, {"attempt_id", "request_seq", "status", "provider_request_id",
+                          "error_code"}, "late_model_response")
+            if body["status"] not in RESPONSE_STATUSES:
+                raise LedgerError("model response status is invalid")
+            _count(body["request_seq"], "request_seq")
+            if body["status"] == "accounting_error":
+                self._mark_seal("accounting_failure")
         elif kind == "batch_sealed":
             _exact(body, {"reason"}, "batch_sealed")
             if body["reason"] not in _SEAL_REASONS:

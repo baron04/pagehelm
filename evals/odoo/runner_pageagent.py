@@ -22,7 +22,8 @@ from typing import Any
 
 from evals.pageagent.host import PageAgentProviderContract, PageAgentProviderProxy
 
-from .runner_woa import ActorCredential, RunnerPreStartError, breadcrumb, login, logout
+from .runner_woa import (ActorCredential, RunnerPreStartError, breadcrumb, login, logout,
+                         record_fault)
 from .tasks import RunnerInput
 
 BLOCKED_ASSISTANT_ROUTES = ("**/woa/session-assertion", "**/assistant/**")
@@ -57,8 +58,10 @@ def run(runner_input: RunnerInput, config: PageAgentRunnerConfig, *, client: Any
         "actor": runner_input.actor, "product_started": False, "bridge": None,
         "host_errors": [], "page_errors": [], "dialogs": 0, "blocked_assistant_requests": 0,
         "final": None, "logged_out": False, "browser_exit": None,
-        "control_channel_error": None, "document_replaced": False, "turns": [],
+        "control_channel_error": None, "final_page_error": None, "teardown_error": None,
+        "document_replaced": False, "turns": [],
     }
+    stage = ["run"]
     token = secrets.token_urlsafe(32)
     proxy = PageAgentProviderProxy(run_token=token, run_id=run_id, client=client,
                                    contract=contract)
@@ -76,7 +79,8 @@ def run(runner_input: RunnerInput, config: PageAgentRunnerConfig, *, client: Any
             context.route(pattern, refuse)
         page = context.new_page()
         page.on("pageerror", lambda error: artifact["page_errors"].append(type(error).__name__))
-        page.on("crash", lambda _page: artifact.update(browser_exit="page_crashed"))
+        page.on("crash", lambda _page: stage[0] == "run" and artifact.update(
+            browser_exit="page_crashed"))
 
         def dialog(value: Any) -> None:
             artifact["dialogs"] += 1
@@ -138,7 +142,9 @@ def run(runner_input: RunnerInput, config: PageAgentRunnerConfig, *, client: Any
                                   "answer_kind": "plain", "visible_answer": answer,
                                   "first_feedback_ms": None,
                                   "automatic_ms": int(elapsed * 1000), "approval_wait_ms": 0})
+        stage[0] = "final_page"
         artifact["final"] = breadcrumb(page)
+        stage[0] = "teardown"
         config.evidence_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         page.screenshot(path=str(config.evidence_dir / "final.png"))
         artifact["logged_out"] = logout(page)
@@ -147,12 +153,10 @@ def run(runner_input: RunnerInput, config: PageAgentRunnerConfig, *, client: Any
     except RunnerPreStartError:
         raise
     except Exception as exc:
-        if artifact["browser_exit"] is None:
-            artifact["control_channel_error"] = {
-                "at_monotonic": round(time.monotonic(), 3), "type": type(exc).__name__}
+        record_fault(artifact, stage[0], type(exc).__name__)
     finally:
         try:
             browser.close()
         except Exception:
-            artifact["browser_exit"] = artifact["browser_exit"] or "close_failed"
+            record_fault(artifact, stage[0], "close_failed")
     return artifact

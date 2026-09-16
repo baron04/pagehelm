@@ -110,6 +110,15 @@ class TraceTests(unittest.TestCase):
                          "document_replaced")
         stopped = {**bridge, "status": "stopped", "terminal_reason": "page_action_budget"}
         self.assertEqual(trace.project_pageagent(stopped)["terminal"], "page_action_budget")
+        # A failed run ended on its provider only where the host recorded a failed provider call.
+        failed = {**bridge, "status": "error"}
+        self.assertEqual(trace.project_pageagent(
+            failed, host_errors=[("provider", "provider_rate_limited")])["terminal"],
+            "provider_error")
+        self.assertEqual(trace.project_pageagent(
+            failed, host_errors=[("provider", "provider_deadline")])["terminal"],
+            "provider_deadline")
+        self.assertEqual(trace.project_pageagent(failed)["terminal"], "error")
 
 
 class LeakCheckTests(unittest.TestCase):

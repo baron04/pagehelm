@@ -248,6 +248,112 @@ class GatewayTests(unittest.TestCase):
         self.assertNotIn("model_response_received", kinds)
         self.assertEqual(self.gateway.late_responses, 1)
 
+    def test_an_answer_arriving_once_the_attempt_closed_here_is_late_while_its_ledger_is_open(self):
+        # The review of 582e11c: the driver had read the attempt's records, and an answer written
+        # before it recorded the cost made that cost disagree and stopped the batch.
+        entered, release = threading.Event(), threading.Event()
+
+        def slow(body, index):
+            entered.set()
+            release.wait(10)
+            return completion(body, index)
+
+        self.gateway.open_attempt("attempt-001", TOKEN)
+        self.backend.install("attempt-001", slow)
+        worker = threading.Thread(target=self.post, args=(self.body(),), daemon=True)
+        worker.start()
+        self.assertTrue(entered.wait(10))
+        self.gateway.close_attempt("attempt-001")
+        release.set()
+        worker.join(10)
+        kinds, summary = self.kinds()
+        self.assertEqual((kinds, summary["open_attempt"]),
+                         (["model_request_dispatched", "late_model_response"], "attempt-001"))
+        self.assertEqual(self.gateway.late_responses, 1)
+        for kind, body in (
+                ("attempt_outcome", {"attempt_id": "attempt-001", **PASS.as_record(),
+                                     "evaluation_digest": None, "truth_digest": None}),
+                ("reset_outcome", {"attempt_id": "attempt-001", "outcome": "NOT_REQUIRED",
+                                   "basis": [], "guard_digest": None, "agent": CLEAN_AGENT}),
+                ("attempt_cost", {"attempt_id": "attempt-001", "model_calls": 1,
+                                  "usage_unavailable_calls": 1, "input_tokens": 0,
+                                  "output_tokens": 0, "cached_tokens": 0,
+                                  "reasoning_tokens": 0, "known_cost_cny": 0.0,
+                                  "total_cost_cny": None}),
+                ("attempt_metrics", metrics("attempt-001")),
+                ("attempt_terminal", {"attempt_id": "attempt-001"})):
+            ledger.append(self.path, kind, body)
+
+    def test_a_late_answer_the_spend_ledger_could_not_record_still_seals_the_batch(self):
+        # The review of 48cf127: an accounting failure was lost with the attempt that closed
+        # before its answer arrived, so nothing was left to reconcile against the bill.
+        self.gateway.open_attempt("attempt-001", TOKEN)
+        self.backend.install("attempt-001", completion)
+        self.assertEqual(self.post(self.body())[0], 200)
+        self.gateway.close_attempt("attempt-001")
+        unaccounted = gateway.BackendResult("accounting_error", 502, None, "req-2", None, None,
+                                            None, "accounting_failure")
+        self.gateway._record_response("attempt-001", 2, unaccounted)
+        kinds, summary = self.kinds()
+        self.assertEqual(kinds[-1], "late_model_response")
+        self.assertEqual((summary["pending_seal"], self.gateway.late_responses),
+                         ("accounting_failure", 1))
+        entries, _ = ledger.read(self.path)
+        (late,) = [entry["body"] for entry in entries if entry["kind"] == "late_model_response"]
+        self.assertEqual((late["attempt_id"], late["request_seq"], late["provider_request_id"]),
+                         ("attempt-001", 2, "req-2"))
+
+    def test_a_call_still_in_flight_is_waited_for_before_the_batch_ends(self):
+        # The review of b0fffbe: a batch that ends while a call is being answered leaves that
+        # answer nowhere to go, because a terminal ledger takes no further record.
+        entered, release = threading.Event(), threading.Event()
+
+        def slow(body, index):
+            entered.set()
+            release.wait(10)
+            return completion(body, index)
+
+        self.gateway.open_attempt("attempt-001", TOKEN)
+        self.backend.install("attempt-001", slow)
+        worker = threading.Thread(target=self.post, args=(self.body(),), daemon=True)
+        worker.start()
+        self.assertTrue(entered.wait(10))
+        self.assertEqual(self.gateway.drain(0.2), 1)
+        release.set()
+        self.assertEqual(self.gateway.drain(10), 0)
+        worker.join(10)
+        kinds, _ = self.kinds()
+        self.assertEqual(kinds, ["model_request_dispatched", "model_response_received"])
+
+    def test_a_late_answer_after_the_batch_ended_is_kept_beside_its_ledger(self):
+        # The review of b0fffbe: the record was dropped once the batch was terminal, so a call the
+        # spend ledger could not record left no trace for the bill reconciliation.
+        self.gateway.open_attempt("attempt-001", TOKEN)
+        self.backend.install("attempt-001", completion)
+        self.assertEqual(self.post(self.body())[0], 200)
+        self.gateway.close_attempt("attempt-001")
+        for kind, body in (
+                ("attempt_outcome", {"attempt_id": "attempt-001", **PASS.as_record(),
+                                     "evaluation_digest": None, "truth_digest": None}),
+                ("reset_outcome", {"attempt_id": "attempt-001", "outcome": "NOT_REQUIRED",
+                                   "basis": [], "guard_digest": None, "agent": CLEAN_AGENT}),
+                ("attempt_cost", {"attempt_id": "attempt-001", "model_calls": 1,
+                                  "usage_unavailable_calls": 0, "input_tokens": 0,
+                                  "output_tokens": 0, "cached_tokens": 0, "reasoning_tokens": 0,
+                                  "known_cost_cny": 0.0, "total_cost_cny": 0.0}),
+                ("attempt_metrics", metrics("attempt-001")),
+                ("attempt_terminal", {"attempt_id": "attempt-001"}),
+                ("batch_completed", {})):
+            ledger.append(self.path, kind, body)
+        unaccounted = gateway.BackendResult("accounting_error", 502, None, None, None, None,
+                                            None, "accounting_failure")
+        self.gateway._record_response("attempt-001", 2, unaccounted)
+        beside = self.path.with_suffix(".late-answers")
+        (late,) = [json.loads(line) for line in beside.read_text().splitlines()]
+        self.assertEqual((late["attempt_id"], late["request_seq"], late["status"]),
+                         ("attempt-001", 2, "accounting_error"))
+        self.assertEqual(self.gateway.late_responses, 1)
+
     def test_a_slow_scripted_answer_keeps_the_client_waiting_and_then_answers_whole(self):
         slow = gateway.ScriptedBackend(slow_answer_s=0.3)
         slow.install("attempt-001", completion, faults={1: "slow_answer"})

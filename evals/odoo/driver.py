@@ -37,6 +37,14 @@ from .stack import REPOSITORY, Stack, StackError
 from .tasks import EvaluatorInput, RunnerInput
 
 
+#: Evidence of a fault that cut the run short or left out part of what the evaluator reads: the
+#: provider's typed records, the browser or control channel lost while the product ran, and the
+#: final page or fixture guard that could not be read. A judgement stands beside any other fault.
+OBSERVATION_FAULT_EVIDENCE = frozenset({
+    "gateway_response_record", "gateway_transport_record", "gateway_accounting_record",
+    "browser_exit", "control_channel_error", "final_page_error", "guard_capture_error"})
+
+
 @dataclass(frozen=True)
 class DriverConfig:
     stack: Stack
@@ -104,8 +112,9 @@ class Driver:
                      "--observation", str(directory / "observation.json")]
         if inject_exit:
             argv = [sys.executable, "-c", "raise SystemExit(70)"]
-        # PYTHONPATH carries only the checkout root: an evaluator that tried to import the
-        # product would fail to start instead of silently sharing its code.
+        # PYTHONPATH carries only the checkout root. The virtual environment can still import the
+        # product, so what keeps the evaluator apart is its own refusal to write a result once a
+        # product, adapter or engine module was loaded.
         env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
         env["PYTHONPATH"] = str(REPOSITORY)
         try:
@@ -160,6 +169,8 @@ class Driver:
                                              self.config.actor_key_files.items()}}
         self._write(evidence, "evaluator-job.json", evaluator_job)
         opened = False
+        settled: dict[int, int] = {}
+        checkpoints: list[dict[str, Any]] = []
         try:
             before = self.guard.capture()
             if "baseline_drift" in plan.inject:
@@ -184,9 +195,14 @@ class Driver:
                 raise _PreStart("evaluator_exception", "evaluator_process_exit")
             if "identity_before_start" in plan.inject:
                 raise _PreStart("credential_or_identity_before_start", "pre_start_check")
-            checkpoints = []
 
             def checkpoint(value: dict[str, Any]) -> None:
+                if value.get("settled"):
+                    # How many model requests the attempt had made when this turn ended: a turn
+                    # whose count stays below the first faulty request ended before the fault.
+                    requests, _, refusals = self._gateway_records(attempt_id)
+                    settled[int(value["turn"])] = len(requests) + len(refusals)
+                    return
                 checkpoints.append(value)
                 self._append("attempt_checkpoint", {
                     "attempt_id": attempt_id, "product_started": True,
@@ -242,10 +258,22 @@ class Driver:
         if artifact.get("browser_exit"):
             events.append(outcomes.ApparatusEvent("browser_or_control_channel_crash",
                                                   "browser_exit"))
-        elif artifact.get("control_channel_error") or (product_started
-                                                       and not artifact.get("logged_out")):
+        elif artifact.get("control_channel_error"):
             events.append(outcomes.ApparatusEvent("browser_or_control_channel_crash",
                                                   "control_channel_error"))
+        elif artifact.get("final_page_error"):
+            # Every turn had ended when the final page could not be read: what the evaluator reads
+            # from that page is missing, but nothing shows that the product's ending was lost.
+            events.append(outcomes.ApparatusEvent("browser_or_control_channel_crash",
+                                                  "final_page_error"))
+        elif artifact.get("teardown_error"):
+            events.append(outcomes.ApparatusEvent("browser_or_control_channel_crash",
+                                                  "teardown_error"))
+        elif product_started and not artifact.get("logged_out"):
+            # Logging out through the Odoo menu failed after the run: the channel is suspect, but
+            # nothing shows that the product's ending was lost.
+            events.append(outcomes.ApparatusEvent("browser_or_control_channel_crash",
+                                                  "logout_failed"))
         requests, responses, refusals = self._gateway_records(attempt_id)
         # What the provider did is read from the gateway's typed records, the same for every
         # arm, never from how the runner reported it.
@@ -254,29 +282,70 @@ class Driver:
         audit: list[dict[str, Any]] = []
         agent_end: dict[str, Any] | None = None
         if arm == "woa_product" and product_started:
+            audit_available = False
             try:
                 audit = self.config.stack.export_audit()
                 agent_end = self.config.stack.agent_state()
+                audit_available = True
             except StackError:
                 events.append(outcomes.ApparatusEvent("browser_or_control_channel_crash",
                                                       "control_channel_error"))
             else:
                 self._write(evidence, "agent-end.json", agent_end)
             projected = trace.project_woa(audit)
+            if not audit_available:
+                # Nothing was read of what the product dispatched, which is not the same as
+                # having read that it dispatched nothing.
+                projected = {**projected, "dispatch_state": "unknown", "audit_readable": False}
         elif arm != "woa_product":
             projected = trace.project_pageagent(artifact.get("bridge"),
                                                 host_errors=artifact.get("host_errors") or [],
                                                 document_replaced=bool(
                                                     artifact.get("document_replaced")))
-        terminal = scored_terminal(projected["terminal"], facts, artifact.get("budget_exhausted"))
+        recorded_turns = artifact.get("turns") or []
+        # The turns the product was sent: those the runner recorded, and one it had sent when the
+        # run broke off before recording it.
+        sent = (max(len(recorded_turns),
+                    len({int(value["turn"]) for value in checkpoints if "turn" in value}))
+                if product_started else 0)
+        if arm == "woa_product":
+            # The audit records one ending per turn, in order. Every turn before the last must have
+            # a closed ending of its own; the last turn's ending is the one scored.
+            endings = [item["terminal"] for item in projected["turns"]]
+            final_ending = endings[sent - 1] if 0 < sent <= len(endings) else None
+            unclosed = outcomes.unclosed_earlier_turns(
+                [(endings[index] if index < len(endings) else None, *turn_bounds(settled, index))
+                 for index in range(sent - 1)], facts)
+            if len(endings) > sent:
+                unclosed += (f"unexpected_endings:{len(endings)}/{sent}",)
+        else:
+            final_ending, unclosed = projected["terminal"], ()
+        # A provider record explains the last turn's generic failure only if it is numbered after
+        # the turn before it ended; a gateway ending replaces it only if its own request is the one
+        # the turn ended on.
+        in_turn = sent > 0 and outcomes.explained_within(facts, turn_bounds(settled, sent - 1)[0])
+        stopped = (bool(recorded_turns) and len(recorded_turns) == sent
+                   and bool(recorded_turns[-1].get("timed_out")))
+        # A turn the runner asked to stop and that did not stop leaves the product running: the
+        # attempt is not replaced, and the fixture is restored before the next one starts.
+        not_stopped = stopped and recorded_turns[-1].get("stopped") is False
+        if not_stopped:
+            events.append(outcomes.ApparatusEvent("turn_not_stopped", "stop_not_confirmed"))
+        terminal = scored_terminal(final_ending, facts, artifact.get("budget_exhausted"),
+                                   final_turn_requests(settled, sent), stopped=stopped)
+        gateway_ending = (f"{facts.terminal}@{facts.terminal_seq}" if facts.terminal is not None
+                          else None)
+        guard_unreadable = False
         if product_started:
             try:
                 guard_after = self.guard.capture()
                 guard_changes = fixture.differences(self.baseline_guard, guard_after)
             except StackError:
+                guard_unreadable = True
                 events.append(outcomes.ApparatusEvent("browser_or_control_channel_crash",
-                                                      "control_channel_error"))
+                                                      "guard_capture_error"))
             observation = {"arm": arm, "turns": artifact.get("turns") or [],
+                           "expected_turns": len(plan.runner_input.messages),
                            "final": artifact.get("final"), "trace": projected,
                            "approvals": artifact.get("approvals") or [],
                            "guard_changes": guard_changes}
@@ -290,18 +359,22 @@ class Driver:
         self._write(evidence, "trace.json", projected)
         if audit:
             self._write(evidence, "agent-audit.json", audit)
-        complete = bool(artifact.get("turns")) and not any(
-            turn.get("timed_out") for turn in artifact.get("turns") or [])
-        run_faults = any(event.evidence in {"gateway_response_record",
-                                            "gateway_transport_record",
-                                            "gateway_accounting_record", "browser_exit",
-                                            "control_channel_error"} for event in events)
+        # Faults that cut the run or what the evaluator reads of it. A fault after the observation
+        # was complete -- the screenshot, logging out, closing the browser -- leaves the judgement
+        # standing, whatever it decided.
+        observation_faults = any(event.evidence in OBSERVATION_FAULT_EVIDENCE for event in events)
         evaluation = None
         if judged is not None:
+            # A failure the evaluator read from a turn that ended before the first apparatus
+            # fault was already decided; the fault cannot turn it into a missing observation.
+            earlier = turns_before_fault(settled, facts.first_event_seq)
+            decided_before_fault = (bool(judged["decisive"]) and judged["status"] == "FAIL"
+                                    and any(turn < earlier
+                                            for turn in judged.get("failed_turns") or []))
             evaluation = outcomes.Evaluation(
                 status=judged["status"],
-                decisive=bool(judged["decisive"]) and complete and not run_faults
-                or bool(judged["safety_events"]),
+                decisive=(bool(judged["decisive"]) and not observation_faults
+                          or decided_before_fault or bool(judged["safety_events"])),
                 reasons=tuple(judged["reasons"]), safety_events=tuple(judged["safety_events"]),
                 extraction_ambiguous=bool(judged["extraction_ambiguous"]))
         try:
@@ -309,20 +382,24 @@ class Driver:
                 product_started=product_started, dispatch_state=projected["dispatch_state"],
                 runner_terminal=terminal if product_started else None,
                 apparatus_events=events, evaluation=evaluation,
-                request_contract_violation=facts.request_contract_violation)
+                request_contract_violation=facts.request_contract_violation,
+                gateway_terminal=gateway_ending, provider_record_in_turn=in_turn,
+                unclosed_turns=unclosed)
         except outcomes.OutcomeContractError:
             classification = outcomes.classify(
                 product_started=product_started, dispatch_state=projected["dispatch_state"],
                 runner_terminal="classification_input_missing", apparatus_events=events,
                 evaluation=outcomes.Evaluation("FAIL", decisive=False),
-                request_contract_violation=facts.request_contract_violation)
+                request_contract_violation=facts.request_contract_violation,
+                gateway_terminal=gateway_ending, unclosed_turns=unclosed)
         self._append("attempt_outcome", {
             "attempt_id": attempt_id, **classification.as_record(),
             "evaluation_digest": digest_json(judged) if judged else None,
             "truth_digest": digest_json(truth) if truth else None})
         agent = (agent_assertions(agent_start, agent_end, audit, product_started=product_started)
                  if arm == "woa_product" else None)
-        reset = self._reset(plan, guard_changes, agent)
+        reset = self._reset(plan, guard_changes, agent,
+                            forced=not_stopped or guard_unreadable)
         self._append("reset_outcome", {"attempt_id": attempt_id, **reset})
         self._append("attempt_cost", _cost(attempt_id, requests, responses))
         turns = artifact.get("turns") or []
@@ -345,9 +422,15 @@ class Driver:
         return summary
 
     def _reset(self, plan: AttemptPlan, guard_changes: list[str],
-               agent: tuple[dict[str, Any], list[str]] | None) -> dict[str, Any]:
+               agent: tuple[dict[str, Any], list[str]] | None, *,
+               forced: bool = False) -> dict[str, Any]:
+        """Put the fixture back where the task, the observed state or ``forced`` requires it.
+
+        ``forced`` covers what the attempt could not observe: a turn that did not stop, and a
+        guard the apparatus could not read. Neither may be recorded as needing no reset.
+        """
         record, residue = agent if agent is not None else (None, [])
-        required = plan.evaluator_input.reset_profile != "none" or bool(guard_changes)
+        required = forced or plan.evaluator_input.reset_profile != "none" or bool(guard_changes)
         if not required:
             return {"outcome": _with_residue("NOT_REQUIRED", residue), "basis": list(residue),
                     "guard_digest": None, "agent": record}
@@ -407,9 +490,6 @@ class Driver:
             self._append("attempt_outcome", {
                 "attempt_id": attempt_id, **classification.as_record(),
                 "evaluation_digest": None, "truth_digest": None})
-        _, status = ledger.read(self.config.ledger_path)
-        outcome_record = next(item for item in status["attempts"]
-                              if item["attempt_id"] == attempt_id)
         if "reset_outcome" not in present:
             record, residue = agent if agent is not None else (None, [])
             changes = fixture.differences(self.baseline_guard, self.guard.capture())
@@ -428,22 +508,25 @@ class Driver:
         if "attempt_cost" not in present:
             self._append("attempt_cost", _cost(attempt_id, requests, responses))
         if "attempt_metrics" not in present:
+            # The dead driver never took the attempt's times: they are unknown, never zero, so no
+            # latency or confirmation-wait sample counts them.
             self._append("attempt_metrics", {
-                "attempt_id": attempt_id, "automatic_wall_ms": 0, "approval_wait_ms": 0,
+                "attempt_id": attempt_id, "automatic_wall_ms": None, "approval_wait_ms": None,
                 "first_feedback_ms": None, "cancel_feedback_ms": None,
                 "page_actions": projected["page_actions"],
                 "invalid_page_actions": projected["invalid_page_actions"],
                 "business_calls": projected["business_calls"],
                 "repeated_observations": projected["repeated_observations"],
                 "user_turns": 0})
-        _, status = ledger.read(self.config.ledger_path)
+        entries, status = ledger.read(self.config.ledger_path)
+        # The ledger recomputes eligibility from the outcome it holds, so this reads that same
+        # record: a classification recomputed here can differ -- the audit may show more, or no
+        # longer be readable -- and the two answers must not disagree.
+        recorded = next(entry["body"] for entry in reversed(entries)
+                        if entry["kind"] == "attempt_outcome"
+                        and entry["body"]["attempt_id"] == attempt_id)
         closing = next(item for item in status["attempts"] if item["attempt_id"] == attempt_id)
-        eligible = outcomes.replacement_eligible(
-            {**classification.as_record(), **{
-                key: closing[key] for key in ("product_outcome", "apparatus_integrity",
-                                              "apparatus_code", "unclassified")}},
-            closing["reset_outcome"])
-        del outcome_record
+        eligible = outcomes.replacement_eligible(recorded, closing["reset_outcome"])
         return ledger.append(self.config.ledger_path, "interrupted_attempt", {
             "attempt_id": attempt_id, "evidence_kinds": ["runner_process_exit"],
             "replacement_eligible": eligible})
@@ -457,13 +540,11 @@ class Driver:
         if status["pending_seal"]:
             # Something outside any attempt -- an unowned model request -- already requires
             # the batch to stop; no further attempt may start.
-            return ledger.append(self.config.ledger_path, "batch_sealed",
-                                 {"reason": status["pending_seal"]})
+            return self._seal(status["pending_seal"])
         summary = self.run_attempt(plan)
         last = summary["attempts"][-1]
         if summary["pending_seal"]:
-            return ledger.append(self.config.ledger_path, "batch_sealed",
-                                 {"reason": summary["pending_seal"]})
+            return self._seal(summary["pending_seal"])
         if last["replacement_eligible"]:
             follow = replacement or AttemptPlan(
                 slot=plan.slot, runner_input=plan.runner_input,
@@ -471,9 +552,16 @@ class Driver:
             follow.replacement_of = last["attempt_id"]
             summary = self.run_attempt(follow)
             if summary["pending_seal"]:
-                return ledger.append(self.config.ledger_path, "batch_sealed",
-                                     {"reason": summary["pending_seal"]})
+                return self._seal(summary["pending_seal"])
         return summary
+
+    def _seal(self, reason: str) -> dict[str, Any]:
+        """Seal the batch once every call it made has been recorded: a sealed ledger takes no
+        answer, so a call still being answered would have nowhere left to be written."""
+        self.gateway.drain()
+        _, status = ledger.read(self.config.ledger_path)
+        return ledger.append(self.config.ledger_path, "batch_sealed",
+                             {"reason": status["pending_seal"] or reason})
 
 
 class _PreStart(Exception):
@@ -522,22 +610,68 @@ def _agent_counts(state: dict[str, Any] | None) -> dict[str, int] | None:
             "conversation_rows": int(state["conversation_rows"])}
 
 
+def turns_before_fault(settled: dict[int, int], first_fault_seq: int | None) -> int:
+    """How many leading turns ended before the attempt's first faulty gateway record.
+
+    ``settled`` maps each turn that ended to the number of model requests made by then. Without a
+    gateway fault every ended turn counts: a browser or control-channel fault never cuts a turn
+    that had already ended, because an unfinished turn is not reported as ended.
+    """
+    count = 0
+    while count in settled and (first_fault_seq is None or settled[count] < first_fault_seq):
+        count += 1
+    return count
+
+
+def turn_bounds(settled: dict[int, int], index: int) -> tuple[int | None, int | None]:
+    """The request numbers turn ``index`` made, as ``(after, through)``.
+
+    ``settled`` maps each turn that ended to the number of requests made by then. A turn made the
+    requests numbered above what the turn before it had made -- none before the first turn --
+    through what it had made when it ended. A bound whose count was not recorded is ``None``.
+    """
+    return (0 if index == 0 else settled.get(index - 1)), settled.get(index)
+
+
+def final_turn_requests(settled: dict[int, int], turns: int) -> tuple[int, int] | None:
+    """The request numbers the last of ``turns`` turns made, as ``(after, through)``.
+
+    Without the count at its own end, or at the end of the turn before it, the span cannot be
+    proven and is ``None``: every request of the attempt is not a turn's span.
+    """
+    if turns <= 0:
+        return None
+    after, through = turn_bounds(settled, turns - 1)
+    return None if after is None or through is None else (after, through)
+
+
 def scored_terminal(runner_terminal: str | None, facts: outcomes.GatewayFacts,
-                    budget_exhausted: str | None = None) -> str | None:
+                    budget_exhausted: str | None = None,
+                    final_turn: tuple[int, int] | None = None, *,
+                    stopped: bool = False) -> str | None:
     """The ending an attempt is scored under.
 
-    An exhausted call budget always ends it, and so does a wall clock the runner enforced by
-    stopping the product, whatever the product then reported. Any other scorable ending the
-    gateway recorded -- an input refused as too long or a provider deadline -- names the ending
-    only where the runner reported no typed product terminal of its own, so a later turn that
-    ended normally keeps its ending.
+    An exhausted call budget ends an attempt whose product reported a typed ending, and so does a
+    wall clock the runner enforced. Where the runner stopped the last turn at that clock
+    (``stopped``), the stopped product's generic provider failure or missing ending is the clock's
+    too; a turn that ended by itself keeps its own. A scorable ending the gateway recorded -- an
+    exhausted call budget, an input refused as too long, a context-length refusal or a provider
+    deadline -- replaces the generic provider failure only where its record is provably the
+    request that ended the last turn: numbered within ``final_turn`` and the last request of it.
+    Anywhere else, and for an ending nobody mapped, the runner's ending is kept, and the
+    classification sees it as drift.
     """
-    if facts.terminal == "model_call_budget":
+    generic = runner_terminal in outcomes.GENERIC_PROVIDER_TERMINALS
+    if facts.terminal == "model_call_budget" and runner_terminal in outcomes.PRODUCT_TERMINALS:
         return facts.terminal
-    if budget_exhausted is not None:
+    if budget_exhausted is not None and (
+            runner_terminal in outcomes.PRODUCT_TERMINALS
+            or stopped and (generic or runner_terminal is None)):
         return "wall_clock_budget"
-    if facts.terminal is not None and runner_terminal not in outcomes.PRODUCT_TERMINALS:
-        return facts.terminal
+    if generic and final_turn is not None:
+        for seq, terminal in facts.terminals:
+            if final_turn[0] < seq == final_turn[1]:
+                return terminal
     return runner_terminal
 
 

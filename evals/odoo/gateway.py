@@ -37,6 +37,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import os
 import re
 import socket
 import threading
@@ -508,14 +509,20 @@ class ProviderGateway:
     """Loopback HTTP endpoint bound to one ledger and one backend."""
 
     def __init__(self, *, ledger_path: str | Path, backend: Backend, budgets: GatewayBudgets,
-                 host: str = "127.0.0.1", port: int = 0):
+                 host: str = "127.0.0.1", port: int = 0, drain_timeout_s: float = 190.0):
         self.ledger_path = Path(ledger_path)
         self.backend = backend
         self.budgets = budgets
         self._binding: _AttemptBinding | None = None
         self._retired_tokens: set[str] = set()
         self._lock = threading.Lock()
+        self._recorded = threading.Condition(self._lock)
         self._accounting_failed = False
+        #: Calls forwarded to the provider whose answer is not yet recorded.
+        self._in_flight = 0
+        #: How long a batch waits for those answers before it ends; the upstream request deadline
+        #: plus a margin, so a batch does not end while a call it made is still being answered.
+        self.drain_timeout_s = float(drain_timeout_s)
         #: Provider answers that arrived after their attempt had ended.
         self.late_responses = 0
         gateway = self
@@ -569,7 +576,20 @@ class ProviderGateway:
         self._thread.start()
         return self
 
+    def drain(self, timeout_s: float | None = None) -> int:
+        """Wait until every forwarded call has been recorded; how many are still in flight.
+
+        A batch that ends while a call is still being answered would leave that answer nowhere to
+        go: its attempt has closed, and once the batch is terminal its ledger takes nothing more.
+        """
+        deadline = time.monotonic() + (self.drain_timeout_s if timeout_s is None else timeout_s)
+        with self._recorded:
+            while self._in_flight and time.monotonic() < deadline:
+                self._recorded.wait(min(0.2, max(0.0, deadline - time.monotonic())))
+            return self._in_flight
+
     def close(self) -> None:
+        self.drain()
         self._server.shutdown()
         self._server.server_close()
         if self._thread is not None:
@@ -638,6 +658,7 @@ class ProviderGateway:
                 handler._reply(REFUSAL_STATUS.get(refusal, 400), {"error": {"code": refusal}})
                 return
             binding.calls += 1
+            self._in_flight += 1
             attempt_id, call_index = binding.attempt_id, binding.calls
             ledger.append(self.ledger_path, "model_request_dispatched", {
                 "attempt_id": attempt_id, "request_seq": sequence, "body_digest": body_digest,
@@ -671,21 +692,48 @@ class ProviderGateway:
         handler._reply(status, {"error": {"code": result.error_code}})
 
     def _record_response(self, attempt_id: str, sequence: int, result: BackendResult) -> None:
-        try:
-            ledger.append(self.ledger_path, "model_response_received", {
-                "attempt_id": attempt_id, "request_seq": sequence, "status": result.status,
-                "http_status": result.http_status,
-                "provider_request_id": result.provider_request_id,
-                "response_model": result.response_model, "usage": result.usage,
-                "cost_cny": result.cost_cny, "error_code": result.error_code})
-        except ledger.LedgerError:
-            if ledger.read(self.ledger_path)[1]["open_attempt"] == attempt_id:
-                raise
-            # The attempt ended before the provider answered. The spend ledger holds whatever
-            # the call cost, and the attempt's cost already counts it as usage unavailable.
-            with self._lock:
-                self.late_responses += 1
+        with self._recorded:
+            try:
+                self._record_locked(attempt_id, sequence, result)
+            finally:
+                self._in_flight = max(0, self._in_flight - 1)
+                self._recorded.notify_all()
 
+    def _record_locked(self, attempt_id: str, sequence: int, result: BackendResult) -> None:
+        binding = self._binding
+        if binding is None or binding.attempt_id != attempt_id:
+            # The attempt closed on the gateway before the provider answered, so the driver
+            # may already have read its records and costed them. The attempt's cost counts the
+            # call as usage unavailable; the answer is recorded at batch level so that a call
+            # the spend ledger could not record still seals the batch and is reconciled.
+            self.late_responses += 1
+            late = {"attempt_id": attempt_id, "request_seq": sequence,
+                    "status": result.status,
+                    "provider_request_id": result.provider_request_id,
+                    "error_code": result.error_code}
+            try:
+                ledger.append(self.ledger_path, "late_model_response", late)
+            except ledger.LedgerError:
+                # The batch is already terminal and its ledger takes nothing more, so the
+                # answer is kept beside it: an unaccounted call must still reach the bill
+                # reconciliation rather than be lost with the batch.
+                self._write_late(late)
+            return
+        ledger.append(self.ledger_path, "model_response_received", {
+            "attempt_id": attempt_id, "request_seq": sequence, "status": result.status,
+            "http_status": result.http_status,
+            "provider_request_id": result.provider_request_id,
+            "response_model": result.response_model, "usage": result.usage,
+            "cost_cny": result.cost_cny, "error_code": result.error_code})
+
+
+
+    def _write_late(self, late: dict[str, Any]) -> None:
+        """Keep a late answer beside a terminal batch's ledger, where the bill check reads it."""
+        path = self.ledger_path.with_suffix(".late-answers")
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(descriptor, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(late, sort_keys=True, ensure_ascii=False) + "\n")
 
 class GatewayCompletionClient:
     """PageAgent's server-held completion client, routed through the same gateway.

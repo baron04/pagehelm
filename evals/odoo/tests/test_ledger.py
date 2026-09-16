@@ -104,9 +104,10 @@ class LedgerHarness:
 
 PASS = classify(product_started=True, dispatch_state="none", runner_terminal="completed",
                 evaluation=Evaluation("PASS", decisive=True))
-OUTAGE = classify(product_started=True, dispatch_state="none", runner_terminal=None,
+OUTAGE = classify(product_started=True, dispatch_state="none", runner_terminal="provider_error",
                   apparatus_events=[ApparatusEvent("provider_unavailable",
-                                                   "gateway_response_record")])
+                                                   "gateway_response_record")],
+                  provider_record_in_turn=True)
 
 
 class LifecycleTests(unittest.TestCase):
@@ -150,6 +151,40 @@ class LifecycleTests(unittest.TestCase):
         harness.model_call(attempt, 1, usage=False)
         with self.assertRaises(ledger.LedgerError):
             harness.finish(attempt, PASS, calls=1, unavailable=0)
+
+    def test_a_response_after_the_outcome_is_refused_and_only_an_interruption_lacks_times(self):
+        harness = LedgerHarness(self, slots(2))
+        attempt = harness.start("s000")
+        ledger.append(harness.path, "model_request_dispatched", {
+            "attempt_id": attempt, "request_seq": 1, "body_digest": DIGEST,
+            "requested_model": "qwen3.8-flash", "max_output_tokens": 2048,
+            "parameters": {"temperature": 0.0, "max_tokens": 2048, "tool_choice": "auto",
+                           "tools": 0, "options": {}}})
+        ledger.append(harness.path, "attempt_outcome", {
+            "attempt_id": attempt, **PASS.as_record(), "evaluation_digest": None,
+            "truth_digest": None})
+        # The review of 582e11c: a response after the outcome made the costed calls disagree.
+        with self.assertRaisesRegex(ledger.LedgerError, "precede the attempt's outcome"):
+            ledger.append(harness.path, "model_response_received", {
+                "attempt_id": attempt, "request_seq": 1, "status": "ok", "http_status": 200,
+                "provider_request_id": None, "response_model": "m", "usage": None,
+                "cost_cny": None, "error_code": None})
+        ledger.append(harness.path, "reset_outcome", {
+            "attempt_id": attempt, "outcome": "NOT_REQUIRED", "basis": [], "guard_digest": None,
+            "agent": CLEAN_AGENT})
+        ledger.append(harness.path, "attempt_cost", {
+            "attempt_id": attempt, "model_calls": 1, "usage_unavailable_calls": 1,
+            "input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "reasoning_tokens": 0,
+            "known_cost_cny": 0.0, "total_cost_cny": None})
+        ledger.append(harness.path, "attempt_metrics", {
+            **metrics(attempt), "automatic_wall_ms": None, "approval_wait_ms": None})
+        # Times a driver never took are unknown: an attempt that finished normally has them.
+        with self.assertRaisesRegex(ledger.LedgerError, "automatic and confirmation times"):
+            ledger.append(harness.path, "attempt_terminal", {"attempt_id": attempt})
+        summary = ledger.append(harness.path, "interrupted_attempt", {
+            "attempt_id": attempt, "evidence_kinds": ["runner_process_exit"],
+            "replacement_eligible": False})
+        self.assertIsNone(summary["attempts"][0]["metrics"]["automatic_wall_ms"])
 
     def test_dispatched_request_parameters_are_validated(self):
         harness = LedgerHarness(self, slots(1))
@@ -311,6 +346,19 @@ class MandatorySealTests(unittest.TestCase):
         with self.assertRaises(ledger.LedgerError):
             other.start("s000")
 
+    def test_a_late_answer_is_recorded_and_seals_only_when_it_could_not_be_accounted(self):
+        harness = LedgerHarness(self, slots(2))
+        late = {"attempt_id": "attempt-001", "request_seq": 1, "status": "http_error",
+                "provider_request_id": "req-1", "error_code": "provider_unavailable"}
+        summary = ledger.append(harness.path, "late_model_response", late)
+        self.assertIsNone(summary["pending_seal"])
+        with self.assertRaises(ledger.LedgerError):
+            ledger.append(harness.path, "late_model_response", {**late, "status": "later"})
+        summary = ledger.append(harness.path, "late_model_response",
+                                {**late, "status": "accounting_error", "error_code":
+                                 "accounting_failure"})
+        self.assertEqual(summary["pending_seal"], "accounting_failure")
+
     def test_unclassified_result_forces_a_seal(self):
         harness = LedgerHarness(self, slots(2))
         attempt = harness.start("s000")
@@ -409,14 +457,15 @@ class ProviderRecordTests(unittest.TestCase):
             with self.subTest(code=code):
                 harness = LedgerHarness(self, slots(2))
                 fault = classify(product_started=True, dispatch_state="none",
-                                 runner_terminal="provider_error",
+                                 runner_terminal="provider_error", provider_record_in_turn=True,
                                  apparatus_events=[ApparatusEvent(code, evidence)])
                 summary = harness.finish(harness.start("s000"), fault)
                 self.assertEqual(summary["pending_seal"], code)
                 self.assertFalse(summary["attempts"][0]["replacement_eligible"])
         harness = LedgerHarness(self, slots(2))
         violation = classify(product_started=True, dispatch_state="none",
-                             runner_terminal="provider_error", request_contract_violation=True)
+                             runner_terminal="provider_error", request_contract_violation=True,
+                             provider_record_in_turn=True)
         summary = harness.finish(harness.start("s000"), violation)
         self.assertEqual((summary["pending_seal"], summary["attempts"][0]["product_outcome"]),
                          ("request_contract_violation", "FAIL"))
@@ -552,7 +601,7 @@ class LedgerContractTests(unittest.TestCase):
 
 
 REFUSED_CREDENTIAL = classify(product_started=True, dispatch_state="none",
-                              runner_terminal="provider_error",
+                              runner_terminal="provider_error", provider_record_in_turn=True,
                               apparatus_events=[ApparatusEvent("provider_authentication_failed",
                                                                "gateway_response_record")])
 

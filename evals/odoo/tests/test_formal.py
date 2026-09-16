@@ -116,8 +116,7 @@ class FormalFixture(unittest.TestCase):
         """An accepted external review of this checkout, the family review and the first freeze
         binding both, each committed once; returns the commit that recorded the first freeze."""
         self.external_review = external(reviewed_commit=git(self.checkout, "rev-parse", "HEAD"))
-        self.record(f"{formal.REVIEWS}/external-review-20260915T070000Z.json",
-                    self.external_review)
+        self.record(formal.external_review_path(self.external_review), self.external_review)
         self.record(f"{formal.FREEZES}/family-review.json", review())
         self.first_freeze = first(external_review=self.external_review)
         return self.record(f"{formal.FREEZES}/first-freeze.json", self.first_freeze)
@@ -705,31 +704,50 @@ class ReconciliationTests(FormalFixture):
             formal.check_reconciliations(self.paths)
 
 
+#: The time the review tests record at; a review may not name a later one.
+NOW = "2026-09-16T00:00:00Z"
+
+
 class ExternalReviewTests(FormalFixture):
+    def setUp(self):
+        super().setUp()
+        # Reviews are recorded by commits dated at NOW, so no review time lies after its commit.
+        dated = mock.patch.dict(os.environ, {"GIT_AUTHOR_DATE": NOW.replace("Z", "+00:00"),
+                                             "GIT_COMMITTER_DATE": NOW.replace("Z", "+00:00")})
+        dated.start()
+        self.addCleanup(dated.stop)
+
     def review_file(self, record):
         path = self.root / f"review-{record['review_digest'][7:19]}.json"
         path.write_text(json.dumps({key: record[key] for key in (
             "reviewer", "reviewed_at", "reviewed_commit", "items", "findings")}))
         return path
 
+    def record_review(self, value, *, now=NOW):
+        return formal.record_external_review(self.paths, review_file=self.review_file(value),
+                                             clock=lambda: now)
+
+    def gate(self):
+        return formal.status(self.paths)["checks"]["external_review"]
+
     def test_only_the_newest_review_of_the_running_apparatus_opens_paid_calls(self):
         provider = self.provider(*[answer()] * 5)
         self.freeze()
         self.custody()
-        self.assertEqual(formal.status(self.paths)["checks"]["external_review"], "READY")
+        self.assertEqual(self.gate(), "READY")
         head = git(self.checkout, "rev-parse", "HEAD")
         revised = external({"real_product_entry": "REVISE"}, reviewed_commit=head,
                            reviewed_at="2026-09-15T09:00:00Z")
-        recorded = formal.record_external_review(self.paths, review_file=self.review_file(revised))
+        recorded = self.record_review(revised)
         self.assertEqual(recorded["verdict"], "REVISE")
         # The first freeze still verifies, but the newest review of this apparatus decides.
         self.assertEqual(formal.verified_first_freeze(self.paths)[0], self.first_freeze)
-        self.assertIn("is REVISE", formal.status(self.paths)["checks"]["external_review"])
+        self.assertIn("is REVISE", self.gate())
         with self.assertRaisesRegex(formal.FormalError, "is REVISE"):
             self.preflight()
         self.assertEqual(provider.requests, [])
         accepted = external(reviewed_commit=head, reviewed_at="2026-09-15T10:00:00Z")
-        formal.record_external_review(self.paths, review_file=self.review_file(accepted))
+        self.record_review(accepted)
         record = self.preflight()
         self.assertEqual((record["status"], record["external_review_digest"]),
                          ("READY", accepted["review_digest"]))
@@ -737,13 +755,12 @@ class ExternalReviewTests(FormalFixture):
     def test_a_review_binds_its_commit_and_every_reviewed_file(self):
         head = git(self.checkout, "rev-parse", "HEAD")
         with self.assertRaisesRegex(formal.FormalError, "reviewed commit"):
-            formal.record_external_review(self.paths, review_file=self.review_file(
-                external(reviewed_commit="d" * 40)))
+            self.record_review(external(reviewed_commit="d" * 40))
         # A later commit outside the reviewed files leaves the review standing ...
         (self.checkout / "README").write_text("a later product change\n")
         git(self.checkout, "commit", "-q", "-am", "change the readme")
         accepted = external(reviewed_commit=head)
-        formal.record_external_review(self.paths, review_file=self.review_file(accepted))
+        self.record_review(accepted)
         self.assertEqual(formal.verified_external_review(self.paths)[0], accepted)
         # ... and one that changes an apparatus file needs a new review.
         evaluator = self.checkout / "evals/odoo/evaluator.py"
@@ -752,8 +769,195 @@ class ExternalReviewTests(FormalFixture):
         with self.assertRaisesRegex(formal.FormalError, "changed after the reviewed commit"):
             formal.verified_external_review(self.paths)
         with self.assertRaisesRegex(formal.FormalError, "changed after the reviewed commit"):
-            formal.record_external_review(self.paths, review_file=self.review_file(
-                external(reviewed_commit=head, reviewed_at="2026-09-15T11:00:00Z")))
+            self.record_review(external(reviewed_commit=head, reviewed_at="2026-09-15T11:00:00Z"))
+
+    def test_the_custody_check_and_the_qualification_are_bound_as_well(self):
+        head = git(self.checkout, "rev-parse", "HEAD")
+        self.record_review(external(reviewed_commit=head))
+        for relative in freeze.REVIEW_BOUND_FILES:
+            with self.subTest(relative=relative):
+                path = self.checkout / relative
+                original = path.read_bytes()
+                path.write_bytes(original + b"# changed after the review\n")
+                git(self.checkout, "commit", "-q", "-am", f"change {relative}")
+                with self.assertRaisesRegex(formal.FormalError,
+                                            "changed after the reviewed commit"):
+                    formal.verified_external_review(self.paths)
+                path.write_bytes(original)
+                git(self.checkout, "commit", "-q", "-am", f"restore {relative}")
+                self.assertEqual(self.gate(), "READY")
+
+    def test_the_review_recorded_last_decides_whatever_time_it_names(self):
+        head = git(self.checkout, "rev-parse", "HEAD")
+        # A block reviewed at 09:00 but recorded after the acceptance decides.
+        self.record_review(external(reviewed_commit=head, reviewed_at="2026-09-15T10:00:00Z",
+                                    reviewer="Reviewer A"))
+        blocked = external({"apparatus_whitelist_closed": "BLOCK"}, reviewed_commit=head,
+                           reviewed_at="2026-09-15T09:00:00Z", reviewer="Reviewer B")
+        self.assertEqual(self.record_review(blocked)["verdict"], "BLOCK")
+        self.assertIn("is BLOCK", self.gate())
+        accepted = external(reviewed_commit=head, reviewed_at="2026-09-15T08:00:00Z",
+                            reviewer="Reviewer C")
+        self.record_review(accepted)
+        self.assertEqual(formal.verified_external_review(self.paths)[0], accepted)
+        # A time the recording has not reached is refused, and so is any other spelling of a time.
+        with self.assertRaisesRegex(formal.FormalError, "later than now"):
+            self.record_review(external(reviewed_commit=head, reviewed_at="2026-09-16T00:00:01Z"))
+        for spelling in ("2026-09-15T12:00:00.500Z", "20260915T120000Z"):
+            with self.subTest(spelling=spelling), self.assertRaises(freeze.FreezeError):
+                external(reviewed_commit=head, reviewed_at=spelling)
+
+    def test_a_review_dated_after_the_commit_that_recorded_it_is_refused(self):
+        head = git(self.checkout, "rev-parse", "HEAD")
+        future = external(reviewed_commit=head, reviewed_at="2099-01-01T00:00:00Z")
+        self.record(formal.external_review_path(future), future)
+        self.assertIn("later than the commit that recorded it", self.gate())
+
+    def test_a_review_merged_away_on_a_side_branch_stops_paid_calls(self):
+        # The report on 0114a25: a merge keeping one side's tree hid a block recorded on the other.
+        head = git(self.checkout, "rev-parse", "HEAD")
+        self.record_review(external(reviewed_commit=head, reviewed_at="2026-09-15T08:00:00Z"))
+        base = git(self.workbench, "rev-parse", "--abbrev-ref", "HEAD")
+        git(self.workbench, "checkout", "-q", "-b", "side")
+        self.record_review(external({"real_product_entry": "BLOCK"}, reviewed_commit=head,
+                                    reviewed_at="2026-09-15T09:00:00Z"))
+        git(self.workbench, "checkout", "-q", base)
+        git(self.workbench, "merge", "-q", "-s", "ours", "side", "-m", "keep the acceptance only")
+        self.assertIn("merged into .workbench", self.gate())
+        with self.assertRaises(formal.FormalError):
+            formal.verified_external_review(self.paths)
+
+    def test_a_review_recorded_on_a_merged_branch_is_refused_whichever_way_it_was_merged(self):
+        # The review of 582e11c (E4): an acceptance recorded on a side branch, merged into a main
+        # line that had recorded a revision later, came last in the history and decided.
+        head = git(self.checkout, "rev-parse", "HEAD")
+        base = git(self.workbench, "rev-parse", "--abbrev-ref", "HEAD")
+        git(self.workbench, "checkout", "-q", "-b", "side")
+        self.record_review(external(reviewed_commit=head, reviewed_at="2026-09-15T08:00:00Z"))
+        git(self.workbench, "checkout", "-q", base)
+        self.record_review(external({"real_product_entry": "REVISE"}, reviewed_commit=head,
+                                    reviewed_at="2026-09-15T09:00:00Z"))
+        git(self.workbench, "merge", "-q", "--no-edit", "side")
+        self.assertIn("merged into .workbench", self.gate())
+        git(self.workbench, "reset", "-q", "--hard", "HEAD~1")
+        git(self.workbench, "checkout", "-q", "side")
+        git(self.workbench, "merge", "-q", "--no-edit", base)
+        self.assertIn("merged into .workbench", self.gate())
+
+    def test_a_review_recorded_as_a_symbolic_link_is_refused(self):
+        # E3: a link to a file outside .workbench, which changes while git sees no change at all.
+        head = git(self.checkout, "rev-parse", "HEAD")
+        revised = external({"real_product_entry": "REVISE"}, reviewed_commit=head,
+                           reviewed_at="2026-09-15T08:00:00Z")
+        outside = self.root / "outside-review.json"
+        outside.write_text(json.dumps(revised))
+        relative = formal.external_review_path(revised)
+        (self.workbench / relative).parent.mkdir(parents=True, exist_ok=True)
+        (self.workbench / relative).symlink_to(outside)
+        git(self.workbench, "add", "--", relative)
+        git(self.workbench, "commit", "-q", "-m", "record a review as a link")
+        self.assertIn("regular file", self.gate())
+        outside.write_text(json.dumps(external(reviewed_commit=head,
+                                               reviewed_at="2026-09-15T08:00:00Z")))
+        self.assertIn("regular file", self.gate())
+
+    def test_a_recorded_review_replayed_under_another_name_is_refused(self):
+        # E2: the bytes of an earlier acceptance, committed again under a new name after a block.
+        head = git(self.checkout, "rev-parse", "HEAD")
+        accepted = self.record_review(external(reviewed_commit=head,
+                                               reviewed_at="2026-09-15T08:00:00Z"))
+        self.record_review(external({"real_product_entry": "BLOCK"}, reviewed_commit=head,
+                                    reviewed_at="2026-09-15T09:00:00Z"))
+        replay = f"{formal.REVIEWS}/external-review-20260915T100000Z-000000000000.json"
+        (self.workbench / replay).write_bytes((self.workbench / accepted["record"]).read_bytes())
+        git(self.workbench, "add", "--", replay)
+        git(self.workbench, "commit", "-q", "-m", "replay the acceptance")
+        self.assertIn("not named by the time and digest", self.gate())
+
+    def test_a_review_recorded_under_a_directory_spelled_in_other_letters_is_refused(self):
+        head = git(self.checkout, "rev-parse", "HEAD")
+        self.record_review(external(reviewed_commit=head, reviewed_at="2026-09-15T08:00:00Z"))
+        blocked = external({"real_product_entry": "BLOCK"}, reviewed_commit=head,
+                           reviewed_at="2026-09-15T09:00:00Z")
+        source = self.root / "blocked-review.json"
+        source.write_text(json.dumps(blocked))
+        blob = git(self.workbench, "hash-object", "-w", str(source))
+        spelled = formal.external_review_path(blocked).replace("/reviews/", "/Reviews/")
+        git(self.workbench, "update-index", "--add", "--cacheinfo", f"100644,{blob},{spelled}")
+        git(self.workbench, "commit", "-q", "-m", "record a block under another spelling")
+        self.assertIn("misplaced", self.gate())
+
+    def test_a_review_that_names_a_key_twice_is_refused(self):
+        head = git(self.checkout, "rev-parse", "HEAD")
+        accepted = external(reviewed_commit=head, reviewed_at="2026-09-15T08:00:00Z")
+        # A reader sees the item revised; a parser that keeps the last key sees it accepted.
+        doubled = json.dumps(accepted).replace(
+            '"items": {', '"items": {"real_product_entry": {"evidence": ["revised"], '
+                          '"verdict": "REVISE"}, ', 1)
+        self.assertEqual(json.loads(doubled), accepted)
+        review_file = self.root / "doubled-review.json"
+        review_file.write_text(doubled)
+        with self.assertRaisesRegex(formal.FormalError, "cannot be read"):
+            formal.record_external_review(self.paths, review_file=review_file, clock=lambda: NOW)
+        relative = formal.external_review_path(accepted)
+        (self.workbench / relative).parent.mkdir(parents=True, exist_ok=True)
+        (self.workbench / relative).write_text(doubled)
+        git(self.workbench, "add", "--", relative)
+        git(self.workbench, "commit", "-q", "-m", "record a review that names an item twice")
+        self.assertIn("names a key twice", self.gate())
+
+    def test_two_reviews_recorded_by_one_commit_are_refused(self):
+        head = git(self.checkout, "rev-parse", "HEAD")
+        for name, value in (("external-review-20260915T080000Z-a.json",
+                             external(reviewed_commit=head, reviewed_at="2026-09-15T08:00:00Z")),
+                            ("external-review-20260915T090000Z-b.json",
+                             external({"real_product_entry": "BLOCK"}, reviewed_commit=head,
+                                      reviewed_at="2026-09-15T09:00:00Z"))):
+            target = self.workbench / formal.REVIEWS / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(value))
+        git(self.workbench, "add", "--", formal.REVIEWS)
+        git(self.workbench, "commit", "-q", "-m", "record two reviews at once")
+        self.assertIn("more than one external review", self.gate())
+
+    def test_a_removed_changed_or_unrecorded_review_file_stops_paid_calls(self):
+        head = git(self.checkout, "rev-parse", "HEAD")
+        self.record_review(external(reviewed_commit=head, reviewed_at="2026-09-15T08:00:00Z"))
+        blocked = self.record_review(external({"real_product_entry": "BLOCK"},
+                                              reviewed_commit=head,
+                                              reviewed_at="2026-09-15T09:00:00Z"))
+        self.assertIn("is BLOCK", self.gate())
+        target = self.workbench / blocked["record"]
+        kept = target.read_bytes()
+        # A review file nobody recorded is refused rather than read or skipped.
+        stray = self.workbench / formal.REVIEWS / "external-review-20260915T100000Z.json"
+        stray.write_bytes(kept)
+        self.assertIn("never recorded", self.gate())
+        stray.unlink()
+        # Removing the block from the working tree does not reopen the
+        # acceptance before it.
+        target.unlink()
+        self.assertTrue(self.gate().startswith("refused"))
+        self.assertNotIn("is BLOCK", self.gate())
+        target.write_bytes(kept)
+        self.assertIn("is BLOCK", self.gate())
+        # Neither does removing it by a commit, which is refused for good.
+        git(self.workbench, "rm", "-q", "--", blocked["record"])
+        git(self.workbench, "commit", "-q", "-m", "remove the block")
+        self.assertIn("changed, removed", self.gate())
+        with self.assertRaisesRegex(formal.FormalError, "changed, removed"):
+            self.record_review(external(reviewed_commit=head, reviewed_at="2026-09-15T10:00:00Z"))
+
+    def test_a_blocking_finding_keeps_a_review_of_accepted_items_from_accepting(self):
+        head = git(self.checkout, "rev-parse", "HEAD")
+        blocking = external(reviewed_commit=head, reviewed_at="2026-09-15T08:00:00Z", findings=[
+            {"blocking": True, "text": "the review gate orders reviews by a written time"}])
+        self.assertEqual(self.record_review(blocking)["verdict"], "REVISE")
+        self.assertIn("is REVISE", self.gate())
+        noted = external(reviewed_commit=head, reviewed_at="2026-09-15T09:00:00Z", findings=[
+            {"blocking": False, "text": "a note that blocks nothing"}])
+        self.assertEqual(self.record_review(noted)["verdict"], "ACCEPT")
+        self.assertEqual(self.gate(), "READY")
 
 
 class RehearsalQualificationTests(FormalFixture):

@@ -86,6 +86,9 @@ def project_woa(events: Sequence[dict[str, Any]]) -> dict[str, Any]:
     return {
         "turns": turns,
         "terminal": turns[-1]["terminal"] if turns else None,
+        #: Whether these facts come from an audit that was read at all. A projection of nothing
+        #: says nothing about what the product dispatched.
+        "audit_readable": True,
         "page_actions": page_actions, "invalid_page_actions": invalid,
         "business_calls": business, "repeated_observations": repeated,
         "approvals": approvals, "proposals": proposals, "dispatch_state": dispatch,
@@ -127,9 +130,12 @@ def project_pageagent(bridge: dict[str, Any] | None, *, host_errors: Sequence[tu
         terminal = "completed" if bridge.get("success_claim") else "agent_unable"
     else:
         codes = [code for _host, code in host_errors]
+        # A run that failed after its host recorded a failed provider call ended on that call;
+        # without such a record, its bare status stays unmapped.
         terminal = ("model_call_budget" if "model_call_budget" in codes else
                     "provider_deadline" if "provider_deadline" in codes else
-                    str(bridge.get("status") or "unknown"))
+                    "provider_error" if any(host == "provider" for host, _code in host_errors)
+                    else str(bridge.get("status") or "unknown"))
     return {
         "turns": [{"terminal_reason": terminal, "terminal": terminal,
                    "steps_used": int(metrics.get("steps") or 0)}],

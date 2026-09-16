@@ -50,6 +50,45 @@ class RevisionTests(unittest.TestCase):
         with self.assertRaises(revision.RevisionError):
             revision.file_at(self.root, "0" * 40, "apparatus.py")
 
+    def test_a_record_is_committed_once_and_as_a_regular_file(self):
+        (self.root / "record.json").write_text("{}\n")
+        git(self.root, "add", "record.json")
+        git(self.root, "commit", "-q", "-m", "record")
+        self.assertEqual(revision.committed_once(self.root, "record.json"),
+                         git(self.root, "rev-parse", "HEAD"))
+        # The review of 582e11c: a link's target changes while git sees no change to the link.
+        outside = tempfile.TemporaryDirectory()
+        self.addCleanup(outside.cleanup)
+        target = Path(outside.name) / "record.json"
+        target.write_text("{}\n")
+        (self.root / "link.json").symlink_to(target)
+        git(self.root, "add", "link.json")
+        git(self.root, "commit", "-q", "-m", "link")
+        with self.assertRaisesRegex(revision.RevisionError, "regular file"):
+            revision.committed_once(self.root, "link.json")
+
+    def test_the_main_line_leaves_out_what_merges_brought_in(self):
+        base = git(self.root, "rev-parse", "--abbrev-ref", "HEAD")
+        git(self.root, "checkout", "-q", "-b", "side")
+        (self.root / "records").mkdir()
+        (self.root / "records" / "side.json").write_text("{}\n")
+        git(self.root, "add", "records")
+        git(self.root, "commit", "-q", "-m", "side")
+        side = git(self.root, "rev-parse", "HEAD")
+        git(self.root, "checkout", "-q", base)
+        (self.root / "apparatus.py").write_text("VERSION = 2\n")
+        git(self.root, "commit", "-q", "-am", "main")
+        git(self.root, "merge", "-q", "--no-edit", "side")
+        main_line = revision.first_parent_commits(self.root)
+        self.assertIn(self.first, main_line)
+        self.assertNotIn(side, main_line)
+        # A directory's history is read whatever letters its path is spelled in.
+        blob = git(self.root, "hash-object", "-w", str(self.root / "records" / "side.json"))
+        git(self.root, "update-index", "--add", "--cacheinfo", f"100644,{blob},Records/x.json")
+        git(self.root, "commit", "-q", "-m", "other letters")
+        self.assertEqual(sorted(path for _, _, path in revision.path_history(self.root, "records")),
+                         ["Records/x.json", "records/side.json"])
+
     def test_commits_are_full_lowercase_shas(self):
         for value in ("eeea4a0", "A" * 40, None, 7):
             with self.subTest(value=value), self.assertRaises(revision.RevisionError):
