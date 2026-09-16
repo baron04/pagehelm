@@ -46,14 +46,10 @@ class PageAgentRunnerConfig:
     headless: bool = True
 
 
-def run(runner_input: RunnerInput, config: PageAgentRunnerConfig, *, client: Any,
-        contract: PageAgentProviderContract, run_id: str, playwright: Any) -> dict[str, Any]:
-    if len(runner_input.messages) != 1:
-        raise ValueError("the browser-only arm runs single-turn tasks only")
-    bundle = config.bundle_path.read_bytes()
-    if "sha256:" + hashlib.sha256(bundle).hexdigest() != config.bundle_sha256:
-        raise RunnerPreStartError("credential_or_identity_before_start", "pre_start_check")
-    artifact: dict[str, Any] = {
+def empty_artifact(runner_input: RunnerInput) -> dict[str, Any]:
+    """The record of a run that has not happened yet, with every field this arm reports. One
+    definition serves the runner and the driver; a missing field is a broken contract."""
+    return {
         "runner": "pageagent_browser_only", "task_id": runner_input.task_id,
         "actor": runner_input.actor, "product_started": False, "bridge": None,
         "host_errors": [], "page_errors": [], "dialogs": 0, "blocked_assistant_requests": 0,
@@ -61,6 +57,16 @@ def run(runner_input: RunnerInput, config: PageAgentRunnerConfig, *, client: Any
         "control_channel_error": None, "final_page_error": None, "teardown_error": None,
         "document_replaced": False, "turns": [],
     }
+
+
+def run(runner_input: RunnerInput, config: PageAgentRunnerConfig, *, client: Any,
+        contract: PageAgentProviderContract, run_id: str, playwright: Any) -> dict[str, Any]:
+    if len(runner_input.messages) != 1:
+        raise ValueError("the browser-only arm runs single-turn tasks only")
+    bundle = config.bundle_path.read_bytes()
+    if "sha256:" + hashlib.sha256(bundle).hexdigest() != config.bundle_sha256:
+        raise RunnerPreStartError("credential_or_identity_before_start", "pre_start_check")
+    artifact: dict[str, Any] = empty_artifact(runner_input)
     stage = ["run"]
     token = secrets.token_urlsafe(32)
     proxy = PageAgentProviderProxy(run_token=token, run_id=run_id, client=client,
@@ -137,10 +143,13 @@ def run(runner_input: RunnerInput, config: PageAgentRunnerConfig, *, client: Any
                 "() => Object.hasOwn(globalThis, '__WOA_PAGEAGENT_BASELINE__')")
             artifact["document_replaced"] = installed is False
         elapsed = time.monotonic() - started
-        answer = (artifact["bridge"] or {}).get("answer", "")
-        artifact["turns"].append({"index": 0, "timed_out": artifact["bridge"] is None,
-                                  "answer_kind": "plain", "visible_answer": answer,
-                                  "first_feedback_ms": None,
+        # A bridge that never returned left no answer to read: that is not an empty answer.
+        bridge = artifact["bridge"]
+        answer = bridge["answer"] if isinstance(bridge, dict) and "answer" in bridge else None
+        artifact["turns"].append({"index": 0, "timed_out": bridge is None,
+                                  "answer_kind": None if answer is None else "plain",
+                                  "visible_answer": answer, "path": None, "view_settle_ms": None,
+                                  "first_feedback_ms": None, "cancel_feedback_ms": None,
                                   "automatic_ms": int(elapsed * 1000), "approval_wait_ms": 0})
         stage[0] = "final_page"
         artifact["final"] = breadcrumb(page)

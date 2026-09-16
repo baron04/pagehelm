@@ -216,7 +216,8 @@ RUNNERS = {
                        "a preselected Skill"],
 }
 EVALUATOR = {
-    "modules": ["evals/odoo/evaluator.py", "evals/odoo/extractor.py", "evals/odoo/rpc.py"],
+    "modules": ["evals/odoo/evaluator.py", "evals/odoo/extractor.py", "evals/odoo/rpc.py",
+                "evals/odoo/capture.py"],
     "process": ("a separate process whose PYTHONPATH is the checkout root; the environment can "
                 "still import the product, so it writes no result if a product, adapter or other "
                 "engine module was loaded"),
@@ -355,7 +356,8 @@ APPARATUS_MODULES = {
     "candidate": ["evals/odoo/revision.py"],
     "approval_oracle": [APPROVAL_ORACLE["module"]],
     "attempts": ["evals/odoo/driver.py", "evals/odoo/ledger.py", "evals/odoo/outcomes.py",
-                 "evals/odoo/trace.py", "evals/twenty/records.py", "evals/twenty/evaluator.py"],
+                 "evals/odoo/trace.py", "evals/odoo/capture.py", "evals/odoo/consumers.py",
+                 "evals/twenty/records.py", "evals/twenty/evaluator.py"],
     "provider": ["evals/odoo/gateway.py", "evals/odoo/provider_relay.py",
                  "evals/odoo/canary.py"],
     "tasks_and_fixture": ["evals/odoo/tasks.py", "evals/odoo/population.py",

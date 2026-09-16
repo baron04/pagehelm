@@ -27,7 +27,7 @@ from typing import Any
 
 from evals.pageagent.host import PageAgentProviderContract
 
-from . import fixture, ledger, outcomes, runner_pageagent, runner_woa, trace
+from . import capture, fixture, ledger, outcomes, runner_pageagent, runner_woa, trace
 from .gateway import Backend, GatewayCompletionClient, ProviderGateway
 from .oracle import ApprovalOracle
 from .population import digest_json
@@ -37,12 +37,14 @@ from .stack import REPOSITORY, Stack, StackError
 from .tasks import EvaluatorInput, RunnerInput
 
 
-#: Evidence of a fault that cut the run short or left out part of what the evaluator reads: the
-#: provider's typed records, the browser or control channel lost while the product ran, and the
-#: final page or fixture guard that could not be read. A judgement stands beside any other fault.
-OBSERVATION_FAULT_EVIDENCE = frozenset({
+#: Evidence of a fault that cut the run short: the provider's typed records, and the browser or
+#: control channel lost while the product ran. After one of these, only a failure the evaluator
+#: read from a turn that had already ended is the product's own. A fault that lost one observed
+#: component instead -- the final page, the fixture guard, the audit -- is not here: it takes
+#: away the failures that rest on that component and leaves the rest of the judgement standing.
+RUN_CUT_EVIDENCE = frozenset({
     "gateway_response_record", "gateway_transport_record", "gateway_accounting_record",
-    "browser_exit", "control_channel_error", "final_page_error", "guard_capture_error"})
+    "browser_exit", "control_channel_error"})
 
 
 @dataclass(frozen=True)
@@ -103,7 +105,7 @@ class Driver:
         return actor_projection(self.config.stack.rpc_url, self.config.actor_key_files)
 
     def _evaluator(self, command: str, directory: Path, *, inject_exit: bool = False
-                   ) -> dict[str, Any] | None:
+                   ) -> capture.Capture:
         argv = [sys.executable, "-m", "evals.odoo.evaluator", command,
                 "--job", str(directory / "evaluator-job.json"),
                 "--output", str(directory / f"evaluator-{command}.json")]
@@ -120,12 +122,16 @@ class Driver:
         try:
             completed = subprocess.run(argv, cwd=REPOSITORY, env=env, capture_output=True,
                                        timeout=self.config.evaluator_timeout_s, check=False)
-        except (OSError, subprocess.TimeoutExpired):
-            return None
+            scope = {"command": command, "directory": directory.name}
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return capture.Unavailable(type(exc).__name__, "evaluator_output",
+                                       {"command": command, "directory": directory.name})
         if completed.returncode != 0:
             (directory / f"evaluator-{command}.stderr").write_bytes(completed.stderr[-4000:])
-            return None
-        return json.loads((directory / f"evaluator-{command}.json").read_text())
+            return capture.Unavailable(f"exit_{completed.returncode}", "evaluator_output", scope)
+        return capture.read("evaluator_output", scope,
+                            lambda: json.loads(
+                                (directory / f"evaluator-{command}.json").read_text()))
 
     def _gateway_records(self, attempt_id: str) -> tuple[list[dict], list[dict], list[dict]]:
         entries, _ = ledger.read(self.config.ledger_path)
@@ -157,13 +163,20 @@ class Driver:
             "replacement_of": plan.replacement_of})
         events: list[outcomes.ApparatusEvent] = []
         product_started = False
-        artifact: dict[str, Any] = {"turns": [], "final": None, "approvals": []}
+        # The record of a run that has not happened, in the shape its own runner returns: what
+        # the driver reads of an attempt that never started and of one that ended is read alike.
+        runner = runner_woa if arm == "woa_product" else runner_pageagent
+        artifact: dict[str, Any] = runner.empty_artifact(plan.runner_input)
         projected = trace.project_woa([]) if arm == "woa_product" else trace.project_pageagent(None)
         truth = judged = None
         guard_changes: list[str] = []
         agent_start: dict[str, Any] | None = None
         token = "p74" + secrets.token_urlsafe(32)
+        #: What every observation of this attempt belongs to. The evaluator refuses one that
+        #: names another attempt, run or arm.
+        scope = {"attempt_id": attempt_id, "run_id": run_id, "arm": arm}
         evaluator_job = {"evaluator_input": asdict(plan.evaluator_input),
+                         "scope": dict(scope),
                          "rpc_url": self.config.stack.rpc_url,
                          "actor_key_files": {k: str(v) for k, v in
                                              self.config.actor_key_files.items()}}
@@ -190,9 +203,10 @@ class Driver:
                                     "control_channel_error") from exc
                 # Written before the product starts, so recovering a dead driver still has it.
                 self._write(evidence, "agent-start.json", agent_start)
-            truth = self._evaluator("truth", evidence)
-            if truth is None:
+            truth_read = self._evaluator("truth", evidence)
+            if not truth_read.available:
                 raise _PreStart("evaluator_exception", "evaluator_process_exit")
+            truth = truth_read.value
             if "identity_before_start" in plan.inject:
                 raise _PreStart("credential_or_identity_before_start", "pre_start_check")
 
@@ -218,7 +232,14 @@ class Driver:
                 decided = [0]
 
                 def approval_hook(card: dict[str, Any]) -> dict[str, Any]:
-                    proposals = trace.project_woa(self.config.stack.export_audit())["proposals"]
+                    read = capture.read("agent_audit", scope, self.config.stack.export_audit,
+                                        errors=(StackError,))
+                    if not read.available:
+                        # Nobody could read what the product proposed, so nothing can be matched
+                        # against the card. An unseen proposal is never approved.
+                        return {"decision": "deny", "reasons": ["proposals_unobserved"],
+                                "safety_events": []}
+                    proposals = trace.project_woa(read.value)["proposals"]
                     pending = proposals[decided[0]:]
                     decided[0] = len(proposals)
                     if oracle is None:
@@ -238,7 +259,7 @@ class Driver:
                 artifact = runner_pageagent.run(plan.runner_input, self.config.pageagent,
                                                 client=client, contract=self.config.contract,
                                                 run_id=run_id, playwright=self.playwright)
-            product_started = bool(artifact.get("product_started"))
+            product_started = artifact["product_started"]
         except _PreStart as exc:
             events.append(outcomes.ApparatusEvent(exc.code, exc.evidence))
         except runner_woa.RunnerPreStartError as exc:
@@ -255,21 +276,21 @@ class Driver:
                             api_key_file=self.config.actor_key_files["writer"]).execute(
                 "res.partner", "create", [{"name": "P74 Unrequested Side Effect",
                                            "customer_rank": 1}])
-        if artifact.get("browser_exit"):
+        if artifact["browser_exit"]:
             events.append(outcomes.ApparatusEvent("browser_or_control_channel_crash",
                                                   "browser_exit"))
-        elif artifact.get("control_channel_error"):
+        elif artifact["control_channel_error"]:
             events.append(outcomes.ApparatusEvent("browser_or_control_channel_crash",
                                                   "control_channel_error"))
-        elif artifact.get("final_page_error"):
+        elif artifact["final_page_error"]:
             # Every turn had ended when the final page could not be read: what the evaluator reads
             # from that page is missing, but nothing shows that the product's ending was lost.
             events.append(outcomes.ApparatusEvent("browser_or_control_channel_crash",
                                                   "final_page_error"))
-        elif artifact.get("teardown_error"):
+        elif artifact["teardown_error"]:
             events.append(outcomes.ApparatusEvent("browser_or_control_channel_crash",
                                                   "teardown_error"))
-        elif product_started and not artifact.get("logged_out"):
+        elif product_started and not artifact["logged_out"]:
             # Logging out through the Odoo menu failed after the run: the channel is suspect, but
             # nothing shows that the product's ending was lost.
             events.append(outcomes.ApparatusEvent("browser_or_control_channel_crash",
@@ -281,28 +302,30 @@ class Driver:
         events.extend(facts.events)
         audit: list[dict[str, Any]] = []
         agent_end: dict[str, Any] | None = None
+        audit_read: capture.Capture = capture.Unavailable("product_not_started", "agent_audit",
+                                                          scope)
         if arm == "woa_product" and product_started:
-            audit_available = False
-            try:
-                audit = self.config.stack.export_audit()
-                agent_end = self.config.stack.agent_state()
-                audit_available = True
-            except StackError:
+            audit_read = capture.read("agent_audit", scope, self.config.stack.export_audit,
+                                      errors=(StackError,))
+            state_read = capture.read("agent_state", scope, self.config.stack.agent_state,
+                                      errors=(StackError,))
+            if not audit_read.available or not state_read.available:
                 events.append(outcomes.ApparatusEvent("browser_or_control_channel_crash",
                                                       "control_channel_error"))
-            else:
+            if state_read.available:
+                agent_end = state_read.value
                 self._write(evidence, "agent-end.json", agent_end)
+            audit = audit_read.value if audit_read.available else []
             projected = trace.project_woa(audit)
-            if not audit_available:
-                # Nothing was read of what the product dispatched, which is not the same as
-                # having read that it dispatched nothing.
-                projected = {**projected, "dispatch_state": "unknown", "audit_readable": False}
+            if not audit_read.available:
+                # Nothing was read of what the product dispatched or counted, which is not the
+                # same as having read that it dispatched nothing and did no work.
+                projected = {**projected, **trace.UNREAD_TRACE}
         elif arm != "woa_product":
-            projected = trace.project_pageagent(artifact.get("bridge"),
-                                                host_errors=artifact.get("host_errors") or [],
-                                                document_replaced=bool(
-                                                    artifact.get("document_replaced")))
-        recorded_turns = artifact.get("turns") or []
+            projected = trace.project_pageagent(artifact["bridge"],
+                                                host_errors=artifact["host_errors"],
+                                                document_replaced=artifact["document_replaced"])
+        recorded_turns = artifact["turns"]
         # The turns the product was sent: those the runner recorded, and one it had sent when the
         # run broke off before recording it.
         sent = (max(len(recorded_turns),
@@ -331,27 +354,55 @@ class Driver:
         not_stopped = stopped and recorded_turns[-1].get("stopped") is False
         if not_stopped:
             events.append(outcomes.ApparatusEvent("turn_not_stopped", "stop_not_confirmed"))
-        terminal = scored_terminal(final_ending, facts, artifact.get("budget_exhausted"),
+        # Only the product's own arm has a budget it can exhaust; the browser-only arm reports
+        # its limits as its own ending.
+        budget = artifact["budget_exhausted"] if arm == "woa_product" else None
+        terminal = scored_terminal(final_ending, facts, budget,
                                    final_turn_requests(settled, sent), stopped=stopped)
         gateway_ending = (f"{facts.terminal}@{facts.terminal_seq}" if facts.terminal is not None
                           else None)
-        guard_unreadable = False
+        guard_read: capture.Capture = capture.Unavailable("product_not_started", "fixture_guard",
+                                                          scope)
+        page_read = _final_page(artifact, scope)
+        # Each arm's trace is projected from that arm's own record -- WOA's audit, the
+        # browser-only arm's in-page bridge -- so it carries the source it was read from and
+        # whether that source showed the record whole.
+        if arm == "woa_product":
+            # An audit that was exported is whole only if it holds an ending for every turn the
+            # attempt sent: a truncated export answers, and answering is not being whole.
+            projection = (capture.Present(projected, "agent_audit", scope,
+                                          complete=len(projected["turns"]) >= sent)
+                          if audit_read.available else audit_read)
+        else:
+            projection = capture.Present(projected, "runner_artifact", scope,
+                                         complete=artifact["bridge"] is not None)
         if product_started:
-            try:
-                guard_after = self.guard.capture()
-                guard_changes = fixture.differences(self.baseline_guard, guard_after)
-            except StackError:
-                guard_unreadable = True
+            guard_read = capture.read(
+                "fixture_guard", scope,
+                lambda: fixture.differences(self.baseline_guard, self.guard.capture()),
+                errors=(StackError,))
+            if not guard_read.available:
                 events.append(outcomes.ApparatusEvent("browser_or_control_channel_crash",
                                                       "guard_capture_error"))
-            observation = {"arm": arm, "turns": artifact.get("turns") or [],
-                           "expected_turns": len(plan.runner_input.messages),
-                           "final": artifact.get("final"), "trace": projected,
-                           "approvals": artifact.get("approvals") or [],
-                           "guard_changes": guard_changes}
+            guard_changes = guard_read.value if guard_read.available else []
+            expected = len(plan.runner_input.messages)
+            observation = {
+                "arm": arm, "expected_turns": expected,
+                "turns": capture.as_record(capture.Present(
+                    recorded_turns, "runner_artifact", scope,
+                    complete=len(recorded_turns) == expected)),
+                "final": capture.as_record(page_read),
+                "trace": capture.as_record(projection),
+                # Only the product has an approval channel; the browser-only arm has none, so
+                # its empty list is what that arm is, not a record the runner failed to write.
+                "approvals": capture.as_record(capture.Present(
+                    artifact["approvals"] if arm == "woa_product" else [],
+                    "runner_artifact", scope)),
+                "guard_changes": capture.as_record(guard_read)}
             self._write(evidence, "observation.json", observation)
-            judged = self._evaluator("judge", evidence,
-                                     inject_exit="evaluator_exit" in plan.inject)
+            judgement = self._evaluator("judge", evidence,
+                                        inject_exit="evaluator_exit" in plan.inject)
+            judged = judgement.value if judgement.available else None
             if judged is None:
                 events.append(outcomes.ApparatusEvent("evaluator_exception",
                                                       "evaluator_process_exit"))
@@ -359,22 +410,33 @@ class Driver:
         self._write(evidence, "trace.json", projected)
         if audit:
             self._write(evidence, "agent-audit.json", audit)
-        # Faults that cut the run or what the evaluator reads of it. A fault after the observation
-        # was complete -- the screenshot, logging out, closing the browser -- leaves the judgement
-        # standing, whatever it decided.
-        observation_faults = any(event.evidence in OBSERVATION_FAULT_EVIDENCE for event in events)
+        # What the apparatus lost, and what it cut. These are not the same fault: a component
+        # nobody could read takes away the failures that rest on it and no others, while a fault
+        # that cut the run leaves nothing attributable to the product after it. A fault once the
+        # observation was complete -- the screenshot, logging out, closing the browser -- takes
+        # away neither.
+        lost = {name for name, read in (("final", page_read), ("guard_changes", guard_read),
+                                        ("trace", projection)) if not read.available}
+        run_cut = (bool(artifact["browser_exit"] or artifact["control_channel_error"])
+                   or any(event.evidence in RUN_CUT_EVIDENCE for event in facts.events))
         evaluation = None
         if judged is not None:
             # A failure the evaluator read from a turn that ended before the first apparatus
             # fault was already decided; the fault cannot turn it into a missing observation.
             earlier = turns_before_fault(settled, facts.first_event_seq)
-            decided_before_fault = (bool(judged["decisive"]) and judged["status"] == "FAIL"
-                                    and any(turn < earlier
-                                            for turn in judged.get("failed_turns") or []))
+            observed = [failure for failure in judged["failures"]
+                        if not set(failure["on"]) & lost]
+            before_cut = [failure for failure in observed
+                          if failure["turn"] is not None and failure["turn"] < earlier]
+            if judged["status"] == "PASS":
+                # A pass rests on every component its task reads: one of them lost would have
+                # failed the judgement instead. Only a cut run takes it away.
+                decisive = bool(judged["decisive"]) and not run_cut
+            else:
+                decisive = bool(judged["decisive"]) and bool(
+                    judged["safety_events"] or before_cut or (observed and not run_cut))
             evaluation = outcomes.Evaluation(
-                status=judged["status"],
-                decisive=(bool(judged["decisive"]) and not observation_faults
-                          or decided_before_fault or bool(judged["safety_events"])),
+                status=judged["status"], decisive=decisive,
                 reasons=tuple(judged["reasons"]), safety_events=tuple(judged["safety_events"]),
                 extraction_ambiguous=bool(judged["extraction_ambiguous"]))
         try:
@@ -397,24 +459,22 @@ class Driver:
             "evaluation_digest": digest_json(judged) if judged else None,
             "truth_digest": digest_json(truth) if truth else None})
         agent = (agent_assertions(agent_start, agent_end, audit, product_started=product_started)
-                 if arm == "woa_product" else None)
+                 if arm == "woa_product" else None)  # an unread audit leaves proposals unclosed
         reset = self._reset(plan, guard_changes, agent,
-                            forced=not_stopped or guard_unreadable)
+                            forced=(not_stopped or not guard_read.available
+                                    or (arm == "woa_product" and not audit_read.available)))
         self._append("reset_outcome", {"attempt_id": attempt_id, **reset})
         self._append("attempt_cost", _cost(attempt_id, requests, responses))
-        turns = artifact.get("turns") or []
+        turns = artifact["turns"]
         cancel = [turn["cancel_feedback_ms"] for turn in turns
-                  if turn.get("cancel_feedback_ms") is not None]
+                  if turn["cancel_feedback_ms"] is not None]
         self._append("attempt_metrics", {
             "attempt_id": attempt_id,
-            "automatic_wall_ms": sum(int(turn.get("automatic_ms") or 0) for turn in turns),
-            "approval_wait_ms": sum(int(turn.get("approval_wait_ms") or 0) for turn in turns),
-            "first_feedback_ms": (turns[0].get("first_feedback_ms") if turns else None),
+            "automatic_wall_ms": sum(turn["automatic_ms"] for turn in turns),
+            "approval_wait_ms": sum(turn["approval_wait_ms"] for turn in turns),
+            "first_feedback_ms": (turns[0]["first_feedback_ms"] if turns else None),
             "cancel_feedback_ms": max(cancel) if cancel else None,
-            "page_actions": projected["page_actions"],
-            "invalid_page_actions": projected["invalid_page_actions"],
-            "business_calls": projected["business_calls"],
-            "repeated_observations": projected["repeated_observations"],
+            **_trace_counts(projected),
             "user_turns": len(plan.runner_input.messages)})
         self._append("attempt_terminal", {"attempt_id": attempt_id})
         _, summary = ledger.read(self.config.ledger_path)
@@ -426,8 +486,11 @@ class Driver:
                forced: bool = False) -> dict[str, Any]:
         """Put the fixture back where the task, the observed state or ``forced`` requires it.
 
-        ``forced`` covers what the attempt could not observe: a turn that did not stop, and a
-        guard the apparatus could not read. Neither may be recorded as needing no reset.
+        ``forced`` covers what the attempt could not observe: a turn that did not stop, a guard
+        the apparatus could not read, and an audit it could not export. None of them may be
+        recorded as needing no reset -- the guard watches a fixed set of tables, so an attempt
+        whose dispatch nobody read is put back by a verified restore rather than by that
+        whitelist alone.
         """
         record, residue = agent if agent is not None else (None, [])
         required = forced or plan.evaluator_input.reset_profile != "none" or bool(guard_changes)
@@ -437,7 +500,7 @@ class Driver:
         result = fixture.restore(self.config.stack, self.guard, self.config.recovery_dir,
                                  actor_projection=self._projection)
         return {"outcome": _with_residue(result["status"], residue),
-                "basis": [*residue, *(result.get("basis") or [])],
+                "basis": [*residue, *result["basis"]],
                 "guard_digest": result.get("guard_digest"), "agent": record}
 
     def recover_open_attempt(self) -> dict[str, Any] | None:
@@ -461,26 +524,31 @@ class Driver:
         facts = outcomes.gateway_facts(responses, refusals)
         projected = trace.project_woa([])
         audit: list[dict[str, Any]] = []
-        audit_available = False
+        scope = {"attempt_id": attempt_id, "arm": started["arm"], "recovered": True}
+        audit_read: capture.Capture = capture.Unavailable("product_not_started", "agent_audit",
+                                                          scope)
         agent = None
         if started["arm"] == "woa_product":
             start_path = self.config.evidence_root / attempt_id / "agent-start.json"
             agent_start = json.loads(start_path.read_text()) if start_path.exists() else None
             agent_end = None
             if product_started:
-                try:
-                    # The dead driver never logged out. Ending its session first means nothing
-                    # can still act for it while its audit, Agent state and fixture are read.
-                    agent_end = self.config.stack.end_orphaned_sessions()
-                    audit = self.config.stack.export_audit()
-                    audit_available = True
+                # The dead driver never logged out. Ending its session first means nothing
+                # can still act for it while its audit, Agent state and fixture are read.
+                state_read = capture.read("agent_state", scope,
+                                          self.config.stack.end_orphaned_sessions,
+                                          errors=(StackError,))
+                agent_end = state_read.value if state_read.available else None
+                audit_read = capture.read("agent_audit", scope,
+                                          self.config.stack.export_audit, errors=(StackError,))
+                if audit_read.available:
+                    audit = audit_read.value
                     projected = trace.project_woa(audit)
-                except StackError:
-                    pass
+                else:
+                    projected = {**projected, **trace.UNREAD_TRACE}
             agent = agent_assertions(agent_start, agent_end, audit,
                                      product_started=product_started)
-        dispatch = (projected["dispatch_state"] if audit_available or not product_started
-                    else "unknown")
+        dispatch = projected["dispatch_state"]
         classification = outcomes.classify(
             product_started=product_started, dispatch_state=dispatch, runner_terminal=None,
             apparatus_events=[outcomes.ApparatusEvent("browser_or_control_channel_crash",
@@ -498,7 +566,7 @@ class Driver:
                                          self.config.recovery_dir,
                                          actor_projection=self._projection)
                 outcome = result["status"]
-                basis = ["interrupted_attempt_changed_fixture", *result.get("basis", [])]
+                basis = ["interrupted_attempt_changed_fixture", *result["basis"]]
                 guard_digest = result.get("guard_digest")
             else:
                 outcome, basis, guard_digest = "NOT_REQUIRED", [], None
@@ -513,11 +581,21 @@ class Driver:
             self._append("attempt_metrics", {
                 "attempt_id": attempt_id, "automatic_wall_ms": None, "approval_wait_ms": None,
                 "first_feedback_ms": None, "cancel_feedback_ms": None,
-                "page_actions": projected["page_actions"],
-                "invalid_page_actions": projected["invalid_page_actions"],
-                "business_calls": projected["business_calls"],
-                "repeated_observations": projected["repeated_observations"],
+                **_trace_counts(projected),
                 "user_turns": 0})
+        # The dead driver's calls settle here: a lease it took out and never closed is written
+        # down as unresolved, so the attempt ends with every call it made accounted for, and the
+        # bill reconciliation names the ones nobody knows the cost of.
+        settled = {body["request_seq"] for body in responses}
+        settled |= {entry["body"]["request_seq"] for entry in
+                    ledger.read(self.config.ledger_path)[0]
+                    if entry["kind"] == "model_response_unresolved"
+                    and entry["body"]["attempt_id"] == attempt_id}
+        for request in requests:
+            if request["request_seq"] not in settled:
+                self._append("model_response_unresolved", {
+                    "attempt_id": attempt_id, "request_seq": request["request_seq"],
+                    "reason": "driver_process_exit"})
         entries, status = ledger.read(self.config.ledger_path)
         # The ledger recomputes eligibility from the outcome it holds, so this reads that same
         # record: a classification recomputed here can differ -- the audit may show more, or no
@@ -556,9 +634,8 @@ class Driver:
         return summary
 
     def _seal(self, reason: str) -> dict[str, Any]:
-        """Seal the batch once every call it made has been recorded: a sealed ledger takes no
-        answer, so a call still being answered would have nowhere left to be written."""
-        self.gateway.drain()
+        """Seal the batch. Every call it made settled when its attempt closed on the gateway, so
+        a sealed ledger leaves no answer without somewhere to have been written."""
         _, status = ledger.read(self.config.ledger_path)
         return ledger.append(self.config.ledger_path, "batch_sealed",
                              {"reason": status["pending_seal"] or reason})
@@ -621,6 +698,31 @@ def turns_before_fault(settled: dict[int, int], first_fault_seq: int | None) -> 
     while count in settled and (first_fault_seq is None or settled[count] < first_fault_seq):
         count += 1
     return count
+
+
+def _final_page(artifact: dict[str, Any], scope: dict[str, Any]) -> capture.Capture:
+    """The page the run left behind, or why it was never read.
+
+    A page the runner could not read is not a page showing nothing: the evaluator must not put a
+    failure on a turn whose page nobody saw.
+    """
+    final = artifact["final"]
+    if isinstance(final, dict):
+        return capture.Present(final, "final_page", scope)
+    for field in ("final_page_error", "control_channel_error"):
+        fault = artifact[field]
+        if fault:
+            return capture.Unavailable(str(fault["type"]), "final_page", scope)
+    if artifact["browser_exit"]:
+        return capture.Unavailable(str(artifact["browser_exit"]), "final_page", scope)
+    return capture.Unavailable("not_captured", "final_page", scope)
+
+
+def _trace_counts(projected: dict[str, Any]) -> dict[str, int | None]:
+    """The counts the projected trace supports. A trace nobody could read supports none of
+    them: they are recorded as unknown, never as an attempt that did no work."""
+    return {name: projected[name] for name in
+            ("page_actions", "invalid_page_actions", "business_calls", "repeated_observations")}
 
 
 def turn_bounds(settled: dict[int, int], index: int) -> tuple[int | None, int | None]:

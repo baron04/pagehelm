@@ -6,10 +6,14 @@ counter is used as a shared hard budget. Instead both traces are projected onto 
 content-free schema that is reported, never enforced: page actions, invalid page actions,
 business calls, repeated observations, approvals, the furthest mutation dispatch state and the
 engine terminal mapped onto the protocol's product terminals.
+
+A count is projected only from a record that carries it. Where a trace says nothing -- a
+PageAgent bridge that never reported its metrics, an engine that does not measure repeats -- the
+count is ``None``, never zero: an engine's silence is not a record of doing no work.
 """
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 PAGE_ACTION_TOOLS = frozenset({
@@ -30,6 +34,9 @@ WOA_TERMINALS = {
     "token_budget": "token_budget", "no_progress": "no_progress",
     "action_policy_budget": "policy_refused", "user_cancelled": "user_cancelled",
 }
+#: Where each projected approval count is read from in the product's own run record.
+_APPROVAL_COUNTS = {"requested": "approval_requested", "granted": "approval_granted",
+                    "denied": "approval_denied"}
 _DISPATCH_ORDER = {"none": 0, "proposed": 1, "dispatched": 2, "acknowledged": 3}
 #: Audit events after which the run that made a proposal can no longer dispatch it. The product
 #: records each with ``dispatched=False`` and ``side_effect_possible=False`` but keeps the
@@ -43,28 +50,72 @@ CLOSED_WITHOUT_DISPATCH = frozenset({
 })
 
 
+#: What a projection can still say when the audit behind it could not be exported: none of the
+#: counts it would have carried, no approval it would have shown, and a dispatch that has to be
+#: taken as unknown because nothing was read either way.
+UNREAD_TRACE: dict[str, Any] = {
+    "page_actions": None, "invalid_page_actions": None, "business_calls": None,
+    "repeated_observations": None, "approvals": None, "dispatch_state": "unknown",
+}
+
+
+def _text(record: Mapping[str, Any], name: str) -> str | None:
+    """The string ``record`` carries under ``name``, or ``None`` when it carries none."""
+    value = record.get(name)
+    return value if isinstance(value, str) and value else None
+
+
+def _targets(record: Mapping[str, Any], name: str) -> list[str] | None:
+    """The list of names ``record`` carries, or ``None`` when it carries none. A proposal whose
+    targets were not recorded has unknown targets, which no approval may be matched against."""
+    value = record.get(name)
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        return None
+    return list(value)
+
+
+def _count(record: Mapping[str, Any], name: str) -> int | None:
+    """The count ``record`` carries under ``name``, or ``None`` when it carries none."""
+    value = record.get(name)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _add(total: int | None, *parts: int | None) -> int | None:
+    """Add counts that may be unknown. A sum missing one of its parts is unknown."""
+    if total is None or any(part is None for part in parts):
+        return None
+    return total + sum(part for part in parts if part is not None)
+
+
 def project_woa(events: Sequence[dict[str, Any]]) -> dict[str, Any]:
     turns = []
-    page_actions = invalid = business = repeated = 0
-    approvals = {"requested": 0, "granted": 0, "denied": 0}
+    page_actions: int | None = 0
+    invalid: int | None = 0
+    business = repeated = 0
+    approvals: dict[str, int] | None = {"requested": 0, "granted": 0, "denied": 0}
     proposals: list[dict[str, Any]] = []
     dispatch = "none"
     last_observation: dict[str, str] = {}
     for event in events:
         kind = event.get("event")
-        run_id = str(event.get("run_id", ""))
+        run_id = _text(event, "run_id")
         if kind == "observation":
-            digest = str(event.get("digest", ""))
-            if digest and last_observation.get(run_id) == digest:
-                repeated += 1
-            last_observation[run_id] = digest
+            digest = _text(event, "digest")
+            # Only two observations that both name the same run and the same page repeat; one
+            # that names neither is not evidence of a repeat.
+            if digest is not None and run_id is not None:
+                if last_observation.get(run_id) == digest:
+                    repeated += 1
+                last_observation[run_id] = digest
         elif kind == "tool_call":
             tool = event.get("tool")
             if tool not in PAGE_ACTION_TOOLS and tool not in AGENT_TOOLS:
                 business += 1
         elif kind == "business_mutation_proposed":
-            proposals.append({"effect": event.get("effect"),
-                              "targets": list(event.get("targets") or [])})
+            proposals.append({"effect": _text(event, "effect"),
+                              "targets": _targets(event, "targets")})
             dispatch = _furthest(dispatch, "proposed")
         elif kind == "business_mutation_execution_started":
             dispatch = _furthest(dispatch, "dispatched")
@@ -73,22 +124,27 @@ def project_woa(events: Sequence[dict[str, Any]]) -> dict[str, Any]:
         elif kind == "business_mutation_indeterminate":
             dispatch = "unknown"
         elif kind == "run_finished":
-            control = event.get("business_control") or {}
-            approvals["requested"] += int(control.get("approval_requested", 0))
-            approvals["granted"] += int(control.get("approval_granted", 0))
-            approvals["denied"] += int(control.get("approval_denied", 0))
-            page_actions += int(event.get("page_actions") or 0)
-            invalid += int(event.get("policy_blocks") or 0) + int(event.get("write_refusals") or 0)
-            reason = str(event.get("terminal_reason") or "")
+            control = event.get("business_control")
+            decided = ({name: _count(control, field) for name, field in _APPROVAL_COUNTS.items()}
+                       if isinstance(control, Mapping) else
+                       dict.fromkeys(_APPROVAL_COUNTS))
+            # A run whose record does not carry its approval counts leaves the attempt's
+            # approvals unknown; reading the missing counts as zero would report a dispatch
+            # nobody confirmed as one nobody approved.
+            approvals = ({name: approvals[name] + value for name, value in decided.items()}
+                         if approvals is not None and None not in decided.values() else None)
+            page_actions = _add(page_actions, _count(event, "page_actions"))
+            invalid = _add(invalid, _count(event, "policy_blocks"),
+                           _count(event, "write_refusals"))
+            # A run record that names no ending closed no turn: that is a missing ending, not
+            # an ending named by the empty string.
+            reason = _text(event, "terminal_reason")
             turns.append({"terminal_reason": reason,
                           "terminal": WOA_TERMINALS.get(reason, reason),
-                          "steps_used": int(event.get("steps_used") or 0)})
+                          "steps_used": _count(event, "steps_used")})
     return {
         "turns": turns,
         "terminal": turns[-1]["terminal"] if turns else None,
-        #: Whether these facts come from an audit that was read at all. A projection of nothing
-        #: says nothing about what the product dispatched.
-        "audit_readable": True,
         "page_actions": page_actions, "invalid_page_actions": invalid,
         "business_calls": business, "repeated_observations": repeated,
         "approvals": approvals, "proposals": proposals, "dispatch_state": dispatch,
@@ -121,7 +177,8 @@ def closed_proposals(events: Sequence[dict[str, Any]]) -> set[str]:
 
 def project_pageagent(bridge: dict[str, Any] | None, *, host_errors: Sequence[tuple[str, str]] = (),
                       document_replaced: bool = False) -> dict[str, Any]:
-    metrics = (bridge or {}).get("metrics") or {}
+    reported = bridge.get("metrics") if isinstance(bridge, Mapping) else None
+    metrics = reported if isinstance(reported, Mapping) else None
     if bridge is None:
         terminal = "document_replaced" if document_replaced else None
     elif bridge.get("terminal_reason") == "page_action_budget":
@@ -138,12 +195,14 @@ def project_pageagent(bridge: dict[str, Any] | None, *, host_errors: Sequence[tu
                     else str(bridge.get("status") or "unknown"))
     return {
         "turns": [{"terminal_reason": terminal, "terminal": terminal,
-                   "steps_used": int(metrics.get("steps") or 0)}],
+                   "steps_used": None if metrics is None else _count(metrics, "steps")}],
         "terminal": terminal,
-        "page_actions": int(metrics.get("page_actions") or 0),
-        "invalid_page_actions": 0,
-        "business_calls": int(metrics.get("business_calls") or 0),
-        "repeated_observations": 0,
+        "page_actions": None if metrics is None else _count(metrics, "page_actions"),
+        # The bridge reports neither refused page actions nor repeated observations, so this
+        # arm has no count of them to project.
+        "invalid_page_actions": None,
+        "business_calls": None if metrics is None else _count(metrics, "business_calls"),
+        "repeated_observations": None,
         "approvals": {"requested": 0, "granted": 0, "denied": 0},
         "proposals": [],
         "dispatch_state": "none",

@@ -65,16 +65,45 @@ class TraceTests(unittest.TestCase):
             {"event": "business_mutation_execution_started", "run_id": "r1"},
             {"event": "business_mutation_result", "run_id": "r1"},
             {"event": "run_finished", "run_id": "r1", "terminal_reason": "agent_finished",
-             "page_actions": 1, "policy_blocks": 1, "steps_used": 4,
-             "business_control": {"approval_requested": 1, "approval_granted": 1}},
+             "page_actions": 1, "policy_blocks": 1, "write_refusals": 0, "steps_used": 4,
+             "business_control": {"approval_requested": 1, "approval_granted": 1,
+                                  "approval_denied": 0}},
         ]
         projected = trace.project_woa(events)
         self.assertEqual(projected["terminal"], "completed")
+        self.assertEqual(projected["page_actions"], 1)
+        self.assertEqual(projected["invalid_page_actions"], 1)
         self.assertEqual(projected["business_calls"], 2)
         self.assertEqual(projected["repeated_observations"], 1)
         self.assertEqual(projected["dispatch_state"], "acknowledged")
         self.assertEqual(projected["approvals"], {"requested": 1, "granted": 1, "denied": 0})
+        self.assertEqual(projected["turns"][0]["steps_used"], 4)
         self.assertEqual(projected["proposals"][0]["effect"], EFFECT)
+
+    def test_a_run_record_without_its_counts_projects_them_as_unknown(self):
+        """A record that says nothing about a count is not a record of zero: the product always
+        writes all of them, so a record missing one was not read whole."""
+        complete = {"event": "run_finished", "run_id": "r", "terminal_reason": "agent_finished",
+                    "page_actions": 2, "policy_blocks": 0, "write_refusals": 1, "steps_used": 3,
+                    "business_control": {"approval_requested": 0, "approval_granted": 0,
+                                         "approval_denied": 0}}
+        whole = trace.project_woa([complete])
+        self.assertEqual((whole["page_actions"], whole["invalid_page_actions"]), (2, 1))
+        self.assertEqual(whole["approvals"], {"requested": 0, "granted": 0, "denied": 0})
+        for dropped in ("page_actions", "policy_blocks", "write_refusals", "steps_used",
+                        "business_control"):
+            partial = {key: value for key, value in complete.items() if key != dropped}
+            projected = trace.project_woa([partial, complete])
+            unknown = {"page_actions": ("page_actions",),
+                       "policy_blocks": ("invalid_page_actions",),
+                       "write_refusals": ("invalid_page_actions",),
+                       "steps_used": (), "business_control": ()}[dropped]
+            for name in ("page_actions", "invalid_page_actions"):
+                self.assertEqual(projected[name] is None, name in unknown, (dropped, name))
+            self.assertEqual(projected["approvals"] is None, dropped == "business_control")
+            self.assertEqual(projected["turns"][0]["steps_used"] is None, dropped == "steps_used")
+            # The counts the audit does support are still projected.
+            self.assertEqual(projected["business_calls"], 0)
 
     def test_indeterminate_write_wins_and_unknown_terminal_passes_through(self):
         events = [{"event": "business_mutation_execution_started", "run_id": "r"},
@@ -106,6 +135,13 @@ class TraceTests(unittest.TestCase):
                   "metrics": {"page_actions": 3, "business_calls": 0, "steps": 4}}
         self.assertEqual(trace.project_pageagent(bridge)["terminal"], "completed")
         self.assertEqual(trace.project_pageagent(bridge)["page_actions"], 3)
+        # The bridge measures neither refused page actions nor repeated observations, and a
+        # bridge that reported nothing supports no count at all.
+        self.assertIsNone(trace.project_pageagent(bridge)["invalid_page_actions"])
+        self.assertIsNone(trace.project_pageagent(bridge)["repeated_observations"])
+        lost = trace.project_pageagent(None, document_replaced=True)
+        self.assertEqual([lost[name] for name in ("page_actions", "business_calls")], [None, None])
+        self.assertIsNone(trace.project_pageagent({"status": "stopped"})["page_actions"])
         self.assertEqual(trace.project_pageagent(None, document_replaced=True)["terminal"],
                          "document_replaced")
         stopped = {**bridge, "status": "stopped", "terminal_reason": "page_action_budget"}

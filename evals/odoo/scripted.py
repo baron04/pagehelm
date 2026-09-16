@@ -323,19 +323,37 @@ def element_index(body: dict[str, Any], pattern: str) -> int | None:
 
 @dataclass(frozen=True)
 class PageAgentProgram:
-    """A fixed sequence of PageAgent actions; element indices are resolved per request."""
+    """A fixed sequence of PageAgent actions; element indices are resolved per request.
+
+    A step whose element is not in the page's state yet waits and asks again rather than ending
+    the run: the application renders the menu a click opened after that click returns, and the
+    state captured in between holds neither the old menu nor the new one. The waiting is bounded
+    for the whole program, so a program cannot wait its way to an element that is never there,
+    and each wait is an ordinary step of the run -- counted, billed and inside the same budgets.
+    """
     steps: tuple[Callable[[dict[str, Any]], dict[str, Any]], ...]
+    #: How many times, over the whole program, a step may wait for the page to render.
+    waits: int = 3
+    #: The seconds each of those waits asks the engine for.
+    wait_s: int = 1
 
     def policy(self) -> Callable[[dict[str, Any], int], dict[str, Any]]:
+        progress = {"position": 0, "waited": 0}
+
         def respond(body: dict[str, Any], index: int) -> dict[str, Any]:
-            position = index - 1
+            position = progress["position"]
             if position >= len(self.steps):
                 return agent_output({"done": {"text": "Script exhausted.", "success": False}},
                                     index)
             try:
                 action = self.steps[position](body)
             except Unresolved:
-                action = {"done": {"text": "Unresolved element.", "success": False}}
+                if progress["waited"] >= self.waits:
+                    return agent_output(
+                        {"done": {"text": "Unresolved element.", "success": False}}, index)
+                progress["waited"] += 1
+                return agent_output({"wait": {"seconds": self.wait_s}}, index)
+            progress["position"] += 1
             return agent_output(action, index)
         return respond
 

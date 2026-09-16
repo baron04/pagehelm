@@ -103,10 +103,37 @@ class PageAgentProgramTests(unittest.TestCase):
         request = {"messages": [{"role": "user", "content": state}]}
         self.assertEqual(S.click_text(r">Invoicing")(request),
                          {"click_element_by_index": {"index": 3}})
-        policy = S.PageAgentProgram((S.click_text(r">Missing"),)).policy()
-        arguments = json.loads(policy(request, 1)["choices"][0]["message"]["tool_calls"][0][
-            "function"]["arguments"])
-        self.assertEqual(arguments["action"]["done"]["success"], False)
+    def action(self, answer):
+        return json.loads(answer["choices"][0]["message"]["tool_calls"][0][
+            "function"]["arguments"])["action"]
+
+    def test_a_step_waits_for_a_page_that_has_not_rendered_and_then_goes_on(self):
+        """The application renders the menu a click opened after that click returns, so the
+        state captured in between holds neither. Waiting is a step; giving up is not."""
+        empty = {"messages": [{"role": "user", "content": "Interactive elements:\n"}]}
+        rendered = {"messages": [{"role": "user", "content": (
+            "Interactive elements:\n*[4]<a role=menuitem>Customers />\n")}]}
+        policy = S.PageAgentProgram((S.click_text(r">Customers"), S.done_text("Opened.")),
+                                    waits=2).policy()
+        self.assertEqual(self.action(policy(empty, 1)), {"wait": {"seconds": 1}})
+        # The element arrived; the same step runs, and the program goes on from there.
+        self.assertEqual(self.action(policy(rendered, 2)),
+                         {"click_element_by_index": {"index": 4}})
+        self.assertEqual(self.action(policy(empty, 3))["done"]["text"], "Opened.")
+
+    def test_a_program_cannot_wait_its_way_to_an_element_that_is_never_there(self):
+        empty = {"messages": [{"role": "user", "content": "Interactive elements:\n"}]}
+        policy = S.PageAgentProgram((S.click_text(r">Missing"),), waits=2).policy()
+        for call in (1, 2):
+            self.assertEqual(self.action(policy(empty, call)), {"wait": {"seconds": 1}})
+        done = self.action(policy(empty, 3))["done"]
+        self.assertEqual((done["success"], done["text"]), (False, "Unresolved element."))
+
+    def test_a_program_that_ran_out_of_steps_says_so(self):
+        request = {"messages": [{"role": "user", "content": "Interactive elements:\n"}]}
+        policy = S.PageAgentProgram((S.done_text("Done."),)).policy()
+        self.assertEqual(self.action(policy(request, 1))["done"]["text"], "Done.")
+        self.assertEqual(self.action(policy(request, 2))["done"]["text"], "Script exhausted.")
 
 
 if __name__ == "__main__":

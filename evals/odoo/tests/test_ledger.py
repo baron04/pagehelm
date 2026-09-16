@@ -178,6 +178,10 @@ class LifecycleTests(unittest.TestCase):
             "known_cost_cny": 0.0, "total_cost_cny": None})
         ledger.append(harness.path, "attempt_metrics", {
             **metrics(attempt), "automatic_wall_ms": None, "approval_wait_ms": None})
+        # The call the dead driver dispatched settles as unresolved, after the records the
+        # recovery wrote from what was persisted before it.
+        ledger.append(harness.path, "model_response_unresolved", {
+            "attempt_id": attempt, "request_seq": 1, "reason": "driver_process_exit"})
         # Times a driver never took are unknown: an attempt that finished normally has them.
         with self.assertRaisesRegex(ledger.LedgerError, "automatic and confirmation times"):
             ledger.append(harness.path, "attempt_terminal", {"attempt_id": attempt})
@@ -322,6 +326,31 @@ class AgentStateTests(unittest.TestCase):
 
 
 class MandatorySealTests(unittest.TestCase):
+    def test_a_batch_seals_for_the_most_serious_reason_it_met_not_the_first(self):
+        """The design review of 102c2f4: the reason a batch sealed for was whichever arrived
+        first, so the timing of a provider answer could outrank what the product did."""
+        harness = LedgerHarness(self, slots(2))
+        attempt = harness.start("s000")
+        harness.model_call(attempt, 1, model="first")
+        harness.model_call(attempt, 2, model="second")
+        summary = ledger.read(harness.path)[1]
+        self.assertEqual(summary["pending_seal"], "model_identity_changed")
+        unsafe = classify(product_started=True, dispatch_state="acknowledged",
+                          runner_terminal="completed",
+                          evaluation=Evaluation("FAIL", decisive=True,
+                                                safety_events=("unauthorized_dispatch",)))
+        summary = harness.finish(attempt, unsafe, calls=2)
+        # The safety event outranks the model string the second answer happened to name, and
+        # neither reason is lost.
+        self.assertEqual((summary["pending_seal"], summary["seal_reasons"]),
+                         ("critical_safety_event",
+                          ["critical_safety_event", "model_identity_changed"]))
+        with self.assertRaises(ledger.LedgerError):
+            ledger.append(harness.path, "batch_sealed", {"reason": "model_identity_changed"})
+        summary = ledger.append(harness.path, "batch_sealed",
+                                {"reason": "critical_safety_event"})
+        self.assertEqual(summary["seal_reason"], "critical_safety_event")
+
     def test_model_string_change_forces_a_seal(self):
         harness = LedgerHarness(self, slots(2))
         attempt = harness.start("s000")
@@ -346,18 +375,47 @@ class MandatorySealTests(unittest.TestCase):
         with self.assertRaises(ledger.LedgerError):
             other.start("s000")
 
-    def test_a_late_answer_is_recorded_and_seals_only_when_it_could_not_be_accounted(self):
+    def test_a_call_settles_exactly_once_and_an_attempt_ends_only_when_all_of_them_have(self):
+        """The design review of 102c2f4: a call whose answer had not arrived was left for a
+        record the ledger would no longer take. Each one settles once, before the attempt ends."""
         harness = LedgerHarness(self, slots(2))
-        late = {"attempt_id": "attempt-001", "request_seq": 1, "status": "http_error",
-                "provider_request_id": "req-1", "error_code": "provider_unavailable"}
-        summary = ledger.append(harness.path, "late_model_response", late)
-        self.assertIsNone(summary["pending_seal"])
-        with self.assertRaises(ledger.LedgerError):
-            ledger.append(harness.path, "late_model_response", {**late, "status": "later"})
-        summary = ledger.append(harness.path, "late_model_response",
-                                {**late, "status": "accounting_error", "error_code":
-                                 "accounting_failure"})
-        self.assertEqual(summary["pending_seal"], "accounting_failure")
+        attempt = harness.start("s000")
+        for seq in (1, 2):
+            ledger.append(harness.path, "model_request_dispatched", {
+                "attempt_id": attempt, "request_seq": seq, "body_digest": DIGEST,
+                "requested_model": "qwen3.8-flash", "max_output_tokens": 2048,
+                "parameters": {"temperature": 0.0, "max_tokens": 2048, "tool_choice": "auto",
+                               "tools": 0, "options": {}}})
+        unresolved = {"attempt_id": attempt, "request_seq": 1,
+                      "reason": "provider_deadline_elapsed"}
+        ledger.append(harness.path, "model_response_unresolved", unresolved)
+        # Once, and only for a reason the provider's own deadline gives.
+        for refused in (unresolved, {**unresolved, "reason": "we_gave_up"}):
+            with self.assertRaises(ledger.LedgerError):
+                ledger.append(harness.path, "model_response_unresolved", refused)
+        with self.assertRaisesRegex(ledger.LedgerError, "does not answer one dispatched request"):
+            ledger.append(harness.path, "model_response_received", {
+                "attempt_id": attempt, "request_seq": 1, "status": "ok", "http_status": 200,
+                "provider_request_id": None, "response_model": "m", "usage": None,
+                "cost_cny": None, "error_code": None})
+        for kind, body in (
+                ("attempt_outcome", {"attempt_id": attempt, **PASS.as_record(),
+                                     "evaluation_digest": None, "truth_digest": None}),
+                ("reset_outcome", {"attempt_id": attempt, "outcome": "NOT_REQUIRED", "basis": [],
+                                   "guard_digest": None, "agent": CLEAN_AGENT}),
+                ("attempt_cost", {"attempt_id": attempt, "model_calls": 2,
+                                  "usage_unavailable_calls": 2, "input_tokens": 0,
+                                  "output_tokens": 0, "cached_tokens": 0, "reasoning_tokens": 0,
+                                  "known_cost_cny": 0.0, "total_cost_cny": None}),
+                ("attempt_metrics", metrics(attempt))):
+            ledger.append(harness.path, kind, body)
+        # The second call never settled, so the attempt cannot end on it until it does.
+        with self.assertRaisesRegex(ledger.LedgerError, "every call it made has settled"):
+            ledger.append(harness.path, "attempt_terminal", {"attempt_id": attempt})
+        ledger.append(harness.path, "model_response_unresolved",
+                      {**unresolved, "request_seq": 2, "reason": "driver_process_exit"})
+        summary = ledger.append(harness.path, "attempt_terminal", {"attempt_id": attempt})
+        self.assertIsNone(summary["open_attempt"])
 
     def test_unclassified_result_forces_a_seal(self):
         harness = LedgerHarness(self, slots(2))

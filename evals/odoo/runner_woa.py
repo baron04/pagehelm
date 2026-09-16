@@ -201,13 +201,7 @@ def run(runner_input: RunnerInput, config: WoaRunnerConfig, *,
         checkpoint: Callable[[dict[str, Any]], None], playwright: Any) -> dict[str, Any]:
     from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
-    artifact: dict[str, Any] = {
-        "runner": "woa_product", "task_id": runner_input.task_id, "actor": runner_input.actor,
-        "product_started": False, "turns": [], "page_errors": [], "final": None,
-        "logged_out": False, "browser_exit": None, "control_channel_error": None,
-        "final_page_error": None, "teardown_error": None, "approvals": [],
-        "budget_exhausted": None,
-    }
+    artifact: dict[str, Any] = empty_artifact(runner_input)
     # A fault while the product runs costs the runner its sight of the product. Once every turn has
     # ended, reading the final page and tearing down are recorded apart: they show nothing about
     # how the product ended.
@@ -288,8 +282,12 @@ def run(runner_input: RunnerInput, config: WoaRunnerConfig, *,
             if state != "settled":
                 stopped = stop_turn(page, config)
                 artifact["budget_exhausted"] = limit
+                # The stopped turn reports the same fields as one that answered. Nobody read an
+                # answer from it, which is recorded as null rather than left out.
                 artifact["turns"].append({
                     "index": index, "timed_out": True, "limit": limit,
+                    "answer_kind": None, "visible_answer": None, "path": None,
+                    "view_settle_ms": None,
                     "first_feedback_ms": feedback_ms, **stopped,
                     "automatic_ms": int(automatic * 1000),
                     "approval_wait_ms": int(approval_wait * 1000)})
@@ -329,6 +327,22 @@ def run(runner_input: RunnerInput, config: WoaRunnerConfig, *,
         except Exception:
             record_fault(artifact, stage[0], "close_failed")
     return artifact
+
+
+def empty_artifact(runner_input: RunnerInput) -> dict[str, Any]:
+    """The record of a run that has not happened yet, with every field this arm reports.
+
+    One definition serves the runner and the driver, so a run that never started and one that
+    ended is read the same way: a field missing from an artifact is a broken contract, never a
+    value for a reader to fill in.
+    """
+    return {
+        "runner": "woa_product", "task_id": runner_input.task_id, "actor": runner_input.actor,
+        "product_started": False, "turns": [], "page_errors": [], "final": None,
+        "logged_out": False, "browser_exit": None, "control_channel_error": None,
+        "final_page_error": None, "teardown_error": None, "approvals": [],
+        "budget_exhausted": None,
+    }
 
 
 def record_fault(artifact: dict[str, Any], stage: str, kind: str) -> None:

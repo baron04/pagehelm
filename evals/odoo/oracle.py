@@ -44,9 +44,14 @@ class ApprovalOracle:
         reasons = []
         if len(server_proposals) != 1:
             reasons.append("server_proposal_count")
+        elif (server_proposals[0]["effect"] is None
+              or server_proposals[0]["targets"] is None):
+            # A proposal whose effect or targets the audit did not record cannot be matched
+            # against the card, and an unmatched card is never approved.
+            reasons.append("server_proposal_unobserved")
         else:
-            server = (_clean(str(server_proposals[0].get("effect") or "")),
-                      sorted(_clean(str(item)) for item in server_proposals[0].get("targets") or []))
+            server = (_clean(str(server_proposals[0]["effect"])),
+                      sorted(_clean(str(item)) for item in server_proposals[0]["targets"]))
             if server != visible:
                 reasons.append("card_differs_from_server_proposal")
         if visible != expected:

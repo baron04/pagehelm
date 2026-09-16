@@ -657,46 +657,40 @@ def _owner(value: Any) -> str:
     return value
 
 
-def late_answers(ledger_path: Path) -> list[dict[str, Any]]:
-    """Answers that reached the gateway after their batch was terminal, kept beside its ledger.
-
-    A terminal ledger takes no further record, so these are the only trace of a call that was
-    still being answered; the bill reconciliation reads them with the ledger's own records.
-    """
-    path = ledger_path.with_suffix(".late-answers")
-    answers = []
-    for line in path.read_text(encoding="utf-8").splitlines() if path.exists() else []:
-        try:
-            body = json.loads(line)
-        except ValueError as exc:
-            raise FormalError(f"{path.name} holds a line that is not a late answer") from exc
-        if not isinstance(body, dict) or not {"status", "attempt_id", "request_seq"} <= set(body):
-            raise FormalError(f"{path.name} holds a line that is not a late answer")
-        answers.append({"provider_request_id": None, **body})
-    return answers
-
-
 def unaccounted_calls(paths: FormalPaths) -> dict[str, list[str]]:
-    """The request ids of every paid call a spend ledger could not record, by spend batch id: in a
-    preflight and in each development batch."""
+    """The request ids of every paid call whose spend is not recorded, by spend batch id: in a
+    preflight and in each development batch.
+
+    A call the spend ledger could not record is one of them, and so is a call that never settled
+    within the provider's own deadline: nobody knows what it cost, so the bill must say.
+    """
     found: dict[str, list[str]] = {}
     for path in sorted(paths.preflights.glob("p74b-preflight-*.json")):
+        # A preflight whose calls cannot be read is not a preflight with no unaccounted call:
+        # this gate answers what the bill must cover, and it does not answer from a file it
+        # could not read.
         try:
             record = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if not isinstance(record, dict):
-            continue
-        ids = [call.get("provider_request_id") for call in record.get("calls") or []
+        except (OSError, ValueError) as exc:
+            raise FormalError(f"{path.name} cannot be read, so the calls it made are "
+                              "unaccounted for") from exc
+        if (not isinstance(record, dict) or not isinstance(record.get("calls"), list)
+                or not isinstance(record.get("spend_batch_id"), str)):
+            raise FormalError(f"{path.name} does not record the calls it made")
+        ids = [call["provider_request_id"] for call in record["calls"]
                if isinstance(call, dict) and call.get("status") == "accounting_error"]
         if ids:
-            found[str(record.get("spend_batch_id") or path.stem)] = sorted(map(str, ids))
+            found[record["spend_batch_id"]] = sorted(map(str, ids))
     for path, entries, summary in development_chain(paths):
         bodies = [entry["body"] for entry in entries
-                  if entry["kind"] in {"model_response_received", "late_model_response"}]
-        bodies += late_answers(path)
-        ids = [body["provider_request_id"] or f"{body['attempt_id']}#{body['request_seq']}"
-               for body in bodies if body["status"] == "accounting_error"]
+                  if entry["kind"] == "model_response_received"
+                  and entry["body"]["status"] == "accounting_error"]
+        # A call left unresolved has no answer to carry a provider request id, so it is named
+        # the way the ledger names it.
+        bodies += [entry["body"] for entry in entries
+                   if entry["kind"] == "model_response_unresolved"]
+        ids = [body.get("provider_request_id") or f"{body['attempt_id']}#{body['request_seq']}"
+               for body in bodies]
         if ids:
             found[summary["batch"]["batch_id"]] = sorted(map(str, ids))
     return found
@@ -1036,6 +1030,7 @@ def batch_records(paths: FormalPaths) -> list[dict[str, Any]]:
         rows.append({
             "batch_id": batch_id, "status": summary["status"],
             "seal_reason": summary["seal_reason"], "pending_seal": summary["pending_seal"],
+            "seal_reasons": summary["seal_reasons"],
             "open_attempt": summary["open_attempt"], "attempts": len(summary["attempts"]),
             "header_committed": bool(announced and announced.get("header") == entries[0]["body"]),
             "chain_head_committed": bool(head and head.get("chain_head") == summary["chain_head"]),
@@ -1372,6 +1367,9 @@ def close_batch(paths: FormalPaths, summary: dict[str, Any]) -> dict[str, Any]:
     costs = [item["cost"] for item in summary["attempts"] if item["cost"]]
     value = {"artifact_version": 1, "kind": "p74_batch_chain_head_record", "batch_id": batch_id,
              "status": summary["status"], "seal_reason": summary["seal_reason"],
+             # What the batch sealed for is the most serious reason it met; the others are kept
+             # here rather than lost behind it.
+             "seal_reasons": summary["seal_reasons"],
              "chain_head": summary["chain_head"], "attempts": len(summary["attempts"]),
              "model_calls": sum(cost["model_calls"] for cost in costs),
              "usage_unavailable_calls": sum(cost["usage_unavailable_calls"] for cost in costs),

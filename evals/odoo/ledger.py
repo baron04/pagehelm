@@ -43,10 +43,13 @@ _ATTEMPT_KINDS = ("attempt_outcome", "reset_outcome", "attempt_cost", "attempt_m
 _METRIC_FIELDS = ("automatic_wall_ms", "approval_wait_ms", "first_feedback_ms",
                   "cancel_feedback_ms", "page_actions", "invalid_page_actions", "business_calls",
                   "repeated_observations", "user_turns")
-#: Metrics an attempt may not have measured: no turn started, no turn was stopped, or the driver
-#: died before the attempt's times were taken.
+#: Metrics an attempt may not have measured: no turn started, no turn was stopped, the driver
+#: died before the attempt's times were taken, or the audit those counts come from could not be
+#: read. A count nobody could read is null; it is never zero, which would report an attempt as
+#: having done no work.
 _OPTIONAL_METRICS = frozenset({"first_feedback_ms", "cancel_feedback_ms", "automatic_wall_ms",
-                               "approval_wait_ms"})
+                               "approval_wait_ms", "page_actions", "invalid_page_actions",
+                               "business_calls", "repeated_observations"})
 #: Times every attempt that finished normally measured; only an interrupted attempt lacks them.
 _RUN_TIMES = ("automatic_wall_ms", "approval_wait_ms")
 _TERMINAL_KINDS = frozenset({"attempt_terminal", "interrupted_attempt"})
@@ -56,6 +59,16 @@ _SEAL_REASONS = frozenset({
     "ledger_corrupted", "state_contamination", "operator_stop",
     "provider_authentication_failed", "accounting_failure", "request_contract_violation",
 })
+#: The order seal reasons reduce in, most serious first. A batch seals for the most serious
+#: reason it met, never for whichever provider answer happened to arrive first; the reasons it
+#: outranks are kept beside it in the summary. What the product or the evidence itself shows
+#: comes before a stop that came from outside it, and an operator's own stop comes last.
+_SEAL_PRIORITY = (
+    "critical_safety_event", "ledger_corrupted", "state_contamination",
+    "classification_contract_drift", "request_contract_violation", "unowned_model_request",
+    "reset_failed", "provider_authentication_failed", "accounting_failure",
+    "model_identity_changed", "replacement_cap_exceeded", "operator_stop",
+)
 #: Stops the product did not cause. After one, the same development candidate may continue and a
 #: qualification batch may start again under the same protocol version.
 EXOGENOUS_STOPS = frozenset({"model_identity_changed", "replacement_cap_exceeded",
@@ -70,10 +83,13 @@ HELDOUT_AUDITED_RESTART_REASONS = frozenset({"provider_authentication_failed",
 KINDS = frozenset({
     "batch_header", "attempt_started", "model_request_dispatched", "model_request_refused",
     "model_response_received", "attempt_checkpoint", *_ATTEMPT_KINDS, *_TERMINAL_KINDS,
-    "unowned_model_request", "late_model_response", "batch_sealed", "batch_completed",
+    "unowned_model_request", "model_response_unresolved", "batch_sealed", "batch_completed",
 })
 RESPONSE_STATUSES = frozenset({"ok", "http_error", "transport_error", "contract_error",
                                "accounting_error"})
+#: Why a dispatched call settled without an answer. The provider's own deadline is the only
+#: reason a call may be left unresolved; the apparatus has no timeout of its own to add.
+UNRESOLVED_REASONS = frozenset({"provider_deadline_elapsed", "driver_process_exit"})
 REFUSAL_REASONS = frozenset({"model_call_budget", "output_token_budget", "input_size_budget",
                              "request_contract", "accounting_failure"})
 _REPOSITORY = Path(__file__).resolve().parents[2]
@@ -232,6 +248,8 @@ class _Replay:
         self.attempt_order: list[str] = []
         self.open_attempt: str | None = None
         self.pending_seal: str | None = None
+        #: Every reason the batch met, whether or not it is the one sealed for.
+        self.seal_reasons: set[str] = set()
         self.terminal: dict[str, Any] | None = None
         self.batch_model: str | None = None
         self.replacements_by_arm: Counter[str] = Counter()
@@ -251,8 +269,11 @@ class _Replay:
         return None
 
     def _mark_seal(self, reason: str) -> None:
-        if self.pending_seal is None:
-            self.pending_seal = reason
+        """Keep every reason the batch met, and seal for the most serious of them."""
+        if reason not in _SEAL_PRIORITY:
+            raise LedgerError("seal reason is invalid")
+        self.seal_reasons.add(reason)
+        self.pending_seal = min(self.seal_reasons, key=_SEAL_PRIORITY.index)
 
     # -- entry kinds -----------------------------------------------------------------------
     def header_entry(self, body: dict[str, Any]) -> None:
@@ -400,7 +421,8 @@ class _Replay:
                 raise LedgerError("replacement cap is exhausted; the batch must seal")
             self.replacements_by_arm[body["arm"]] += 1
         self.attempts[attempt_id] = {
-            **body, "records": [], "requests": {}, "responses": {}, "refusals": 0,
+            **body, "records": [], "requests": {}, "responses": {}, "unresolved": set(),
+            "refusals": 0,
             "outcome": None, "reset": None, "cost": None, "metrics": None, "terminal": None,
             "replacement_eligible": False,
         }
@@ -439,7 +461,8 @@ class _Replay:
         if attempt["records"]:
             raise LedgerError("model responses must precede the attempt's outcome records")
         seq = body["request_seq"]
-        if seq not in attempt["requests"] or seq in attempt["responses"]:
+        if (seq not in attempt["requests"] or seq in attempt["responses"]
+                or seq in attempt["unresolved"]):
             raise LedgerError("model response does not answer one dispatched request")
         if body["status"] not in RESPONSE_STATUSES:
             raise LedgerError("model response status is invalid")
@@ -459,6 +482,26 @@ class _Replay:
             elif model != self.batch_model:
                 self._mark_seal("model_identity_changed")
         attempt["responses"][seq] = body
+
+    def model_unresolved(self, body: dict[str, Any]) -> None:
+        """A dispatched call that never settled within the provider's own deadline.
+
+        It is written while its attempt is still open, so the call is settled exactly once and
+        no answer is left to arrive after this ledger would take it. Its cost is unknown: the
+        attempt counts it as usage unavailable and the bill reconciliation must clear it.
+        """
+        _exact(body, {"attempt_id", "request_seq", "reason"}, "model_response_unresolved")
+        attempt = self._require_open(body["attempt_id"])
+        # Unlike an answer, this record may follow the attempt's outcome records: it adds no
+        # usage and no cost, and a driver that died mid-attempt settles its calls on recovery,
+        # where the outcome is written from what was persisted before them.
+        seq = body["request_seq"]
+        if (seq not in attempt["requests"] or seq in attempt["responses"]
+                or seq in attempt["unresolved"]):
+            raise LedgerError("model response does not answer one dispatched request")
+        if body["reason"] not in UNRESOLVED_REASONS:
+            raise LedgerError("unresolved reason is invalid")
+        attempt["unresolved"].add(seq)
 
     def checkpoint(self, body: dict[str, Any]) -> None:
         _exact(body, {"attempt_id", "product_started", "dispatch_state", "evidence"},
@@ -546,6 +589,11 @@ class _Replay:
         attempt = self._require_open(body.get("attempt_id"))
         if attempt["records"] != list(_ATTEMPT_KINDS):
             raise LedgerError("an attempt ends only after outcome, reset, cost and metrics")
+        # Every call the attempt dispatched settled exactly once: an answer, or a record that
+        # the provider's deadline passed without one. Nothing is left for a later arrival.
+        if any(seq not in attempt["responses"] and seq not in attempt["unresolved"]
+               for seq in attempt["requests"]):
+            raise LedgerError("an attempt ends only once every call it made has settled")
         if kind == "attempt_terminal" and any(attempt["metrics"][name] is None
                                               for name in _RUN_TIMES):
             raise LedgerError("an attempt that finished reports its automatic and confirmation "
@@ -604,17 +652,8 @@ class _Replay:
             _exact(body, {"body_digest", "reason"}, "unowned_model_request")
             _digest(body["body_digest"], "body_digest")
             self._mark_seal("unowned_model_request")
-        elif kind == "late_model_response":
-            # An answer that reached the gateway after its attempt had closed there. It costs the
-            # attempt nothing -- the call is already counted as usage unavailable -- but a call
-            # the spend ledger could not record still seals the batch and must be reconciled.
-            _exact(body, {"attempt_id", "request_seq", "status", "provider_request_id",
-                          "error_code"}, "late_model_response")
-            if body["status"] not in RESPONSE_STATUSES:
-                raise LedgerError("model response status is invalid")
-            _count(body["request_seq"], "request_seq")
-            if body["status"] == "accounting_error":
-                self._mark_seal("accounting_failure")
+        elif kind == "model_response_unresolved":
+            self.model_unresolved(body)
         elif kind == "batch_sealed":
             _exact(body, {"reason"}, "batch_sealed")
             if body["reason"] not in _SEAL_REASONS:
@@ -665,6 +704,9 @@ class _Replay:
             "status": status,
             "seal_reason": self.terminal["reason"] if self.terminal else None,
             "pending_seal": self.pending_seal,
+            # Every reason met, most serious first: the batch seals for the first of them and
+            # the rest are kept rather than lost to whichever arrived first.
+            "seal_reasons": sorted(self.seal_reasons, key=_SEAL_PRIORITY.index),
             "batch": {key: self.header[key] for key in (
                 "batch_id", "protocol_id", "protocol_digest", "schedule_digest", "purpose",
                 "previous_batch", "provider_config_digest", "task_set_seal_digest", "fixture",
