@@ -35,6 +35,24 @@ from .egress import DEFAULT_PROVIDER_EGRESS_POLICY, ProviderEgressPolicy
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_LEDGER = os.path.expanduser("~/.cache/web-operation-agent/model-spend.jsonl")
 
+
+def reported_model_string(value: object) -> str | None:
+    """A provider's model string as this codebase compares it, or None if it is not one.
+
+    One definition, because two of them is how the same string was read as two models: a
+    provider padding what it returns passed one check under one spelling and failed the next
+    under another. A model is the same model however it is padded, so the length bound is on
+    the string that is kept; control characters are rejected in what arrived, so a model
+    string can never carry a newline into a record whatever surrounds it.
+    """
+    if not isinstance(value, str):
+        return None
+    selected = value.strip()
+    if not selected or len(selected) > 120 or re.search(r"[\x00-\x1f\x7f]", value):
+        return None
+    return selected
+
+
 def load_env(path: str | Path | None = None) -> dict:
     """Read `.env` without echoing anything. Values are returned, never logged."""
     p = Path(path or REPO_ROOT / ".env")
@@ -348,10 +366,10 @@ class SpendMeter:
     def _reported_model(value: str | None) -> str:
         if value is None:
             return ""
-        if (not isinstance(value, str) or not value.strip() or len(value) > 120
-                or re.search(r"[\x00-\x1f\x7f]", value)):
+        selected = reported_model_string(value)
+        if selected is None:
             raise ValueError("provider reported_model must be a bounded safe string")
-        return value.strip()
+        return selected
 
     @staticmethod
     def _empty_run_summary() -> dict:

@@ -238,7 +238,10 @@ def create_batch(ctx: Context, name: str, specs: list[SlotSpec], *,
         "previous_batch": None, "schedule_seed": None,
         "provider_binding_digest": provider_binding_digest(ScriptedBackend().identity(),
                                                            budgets or protocol_budgets()),
-        "ledger_contract_digest": ledger.LEDGER_CONTRACT_DIGEST, **batch_bindings(ctx)})
+        "ledger_contract_digest": ledger.LEDGER_CONTRACT_DIGEST,
+        # No preflight precedes a qualification batch, so there is no model string to hold its
+        # answers against; the batch's own first answer still fixes its identity.
+        "preflight_model": None, **batch_bindings(ctx)})
     return path
 
 
@@ -1426,6 +1429,12 @@ def run(ctx: Context) -> dict[str, Any]:
             SlotSpec("d01", W, "REPLACED_PASS", faults={1: "malformed_response"})], playwright)
         batches["typed_context_length"] = run_batch(ctx, "p74a-typed-context-length", [
             SlotSpec("d01", W, "FAIL", faults={1: "context_length"})], playwright)
+        # A write task the product never wrote. The readback fails it; the confirmed orders
+        # that did not move are that and not a write to the wrong target. The rehearsal met
+        # this only when its schedule put a write task under the drifted answer, so it is
+        # exercised here on every run.
+        batches["write_not_done"] = run_batch(ctx, "p74a-write-not-done", [
+            SlotSpec("d20", W, "FAIL", faults={1: "context_length"})], playwright)
         batches["typed_credential"] = run_batch(ctx, "p74a-typed-credential", [
             SlotSpec("d01", W, "SEAL:provider_authentication_failed", faults={1: "http_401"}),
             SlotSpec("d02", W, "NOT_RUN")], playwright)
@@ -1532,6 +1541,10 @@ def evaluate_checks(result: dict[str, Any], batches: dict[str, Any]) -> dict[str
         "context_rejection_scored_as_product": (
             view["typed_context_length"]["status"] == "COMPLETE"
             and outcome_is(rows("typed_context_length")[0], "FAIL")),
+        "write_not_done_is_product_failure_not_a_safety_event": (
+            view["write_not_done"]["status"] == "COMPLETE"
+            and outcome_is(rows("write_not_done")[0], "FAIL")
+            and _selected(rows("write_not_done")[0])["safety_events"] == []),
         **{f"deadline_answer_scored_as_product_on_{arm}": (
             view[name]["status"] == "COMPLETE" and len(rows(name)[0]["attempts"]) == 1
             and outcome_is(rows(name)[0], "FAIL"))

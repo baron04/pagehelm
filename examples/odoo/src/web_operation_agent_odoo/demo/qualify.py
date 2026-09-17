@@ -382,7 +382,7 @@ def classify_fixture_drift(captured: dict, record: dict) -> tuple[list[str], boo
     return drifted, bool(drifted) and set(drifted) <= SELF_WRITTEN_TABLES
 
 
-def _blocked_artifact(bound, health: dict, observed: str, baseline: str,
+def _blocked_artifact(bound, health: dict, observed: str | None, baseline: str,
                       drifted: list[str]) -> dict:
     """Say what stopped the gate, without pretending it produced a measurement.
 

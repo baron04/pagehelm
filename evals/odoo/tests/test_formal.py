@@ -171,6 +171,34 @@ class PreflightTests(FormalFixture):
         self.assertEqual(formal.status(self.paths)["checks"]["billing_reconciliation"], "READY")
         self.assertRefused(provider, "still open")
 
+    def test_a_preflight_that_wrote_no_record_still_owes_the_calls_it_sent(self):
+        """The review of 96f399c: a preflight wrote what it sent only once its last canary had
+        answered, and the debt gate derived the preflight half of the bill from those records
+        alone. A process killed -- or a disk filled -- between the first paid call and that
+        write left calls nobody could see, and the next paid call went out as if nothing were
+        owed. A batch never has that window: it writes each dispatch down before the call
+        leaves."""
+        journal = self.paths.preflights / "p74b-preflight-20260101T000000Z.jsonl"
+        journal.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        journal.write_text(
+            '{"call_index": 1, "kind": "dispatched"}\n'
+            '{"call_index": 1, "kind": "settled", "provider_request_id": "a", "status": "ok"}\n'
+            '{"call_index": 2, "kind": "dispatched"}\n', encoding="utf-8")
+        # The second call left and never settled: nobody knows what it cost, so the bill says.
+        self.assertEqual(formal.unaccounted_calls(self.paths),
+                         {"p74b-preflight-20260101T000000Z": [
+                             "p74b-preflight-20260101T000000Z#2"]})
+        self.assertTrue(formal.status(self.paths)["checks"][
+            "billing_reconciliation"].startswith("refused"))
+        # Once the record beside it exists, the record answers and the journal is not read
+        # twice: this one settled every call it made.
+        (self.paths.preflights / "p74b-preflight-20260101T000000Z.json").write_text(
+            json.dumps({"spend_batch_id": "p74b-preflight-20260101T000000Z",
+                        "calls": [{"provider_request_id": "a", "status": "ok"},
+                                  {"provider_request_id": "b", "status": "ok"}]}),
+            encoding="utf-8")
+        self.assertEqual(formal.unaccounted_calls(self.paths), {})
+
     def test_nothing_is_sent_until_every_prerequisite_holds(self):
         provider = self.provider(*[answer()] * 5)
         with self.assertRaisesRegex(formal.FormalError, "confirm-paid-calls"):
@@ -303,7 +331,7 @@ class DevelopmentTests(FormalFixture):
         ids = formal.task_ids(json.loads(harness.DEVELOPMENT_TASK_SET.read_text()))
         arguments = {"batch_id": "p74b-development-001", "first_freeze": record,
                      "bindings": self.bindings(record), "task_ids": ids, "previous": None,
-                     "binding_digest": OTHER}
+                     "binding_digest": OTHER, "preflight_model": "qwen3.8-flash"}
         value = formal.development_header(first_freeze_commit="e" * 40, **arguments)
         self.assertEqual(value["schedule_seed"],
                          protocol.derive_schedule_seed("e" * 40, purpose="development"))

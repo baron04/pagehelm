@@ -164,6 +164,27 @@ class Ledger(unittest.TestCase):
             )
         self.assertFalse(self.path.exists())
 
+    def test_the_bound_is_on_the_model_string_not_on_the_padding_around_it(self):
+        """A model is the same model however the provider pads what it returns. The bound was
+        read off the padded string, so a name of the maximum length arrived one character over
+        and the call it belonged to could not be spent against -- while the apparatus measuring
+        this product had already recorded the same answer as good."""
+        m = self._meter()
+        padded = "x" * 120 + " "
+        m.record(
+            provider="p", model="configured", run_id="r1",
+            usage={"prompt_tokens": 1, "completion_tokens": 1},
+            request_id="a" * 32, reported_model=padded,
+        )
+        self.assertEqual(m.run_report("r1")["provider_reported_models"], ["x" * 120])
+        # What is over the bound once the padding is gone is still refused.
+        with self.assertRaisesRegex(ValueError, "reported_model"):
+            m.record(
+                provider="p", model="configured", run_id="r1",
+                usage={"prompt_tokens": 1, "completion_tokens": 1},
+                request_id="b" * 32, reported_model="x" * 121,
+            )
+
     def test_cached_tokens_are_read_from_the_provider_reply(self):
         m = self._meter()
         m.record(provider="p", model="m", run_id="r1",

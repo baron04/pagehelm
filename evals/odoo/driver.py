@@ -230,13 +230,17 @@ class Driver:
                 oracle = (ApprovalOracle.from_spec(plan.evaluator_input.approval_oracle)
                           if plan.evaluator_input.approval_oracle else None)
                 decided = [0]
+                attributable = [True]
 
                 def approval_hook(card: dict[str, Any]) -> dict[str, Any]:
                     read = capture.read("agent_audit", scope, self.config.stack.export_audit,
                                         errors=(StackError,))
                     if not read.available:
                         # Nobody could read what the product proposed, so nothing can be matched
-                        # against the card. An unseen proposal is never approved.
+                        # against the card. An unseen proposal is never approved -- and the
+                        # proposals this card would have consumed stay unconsumed, so no later
+                        # card in this attempt can be told apart from them either.
+                        attributable[0] = False
                         return {"decision": "deny", "reasons": ["proposals_unobserved"],
                                 "safety_events": []}
                     proposals = trace.project_woa(read.value)["proposals"]
@@ -247,7 +251,8 @@ class Driver:
                                 "safety_events": []}
                     return oracle.decide(visible_effect=card["effect"],
                                          visible_targets=card["targets"],
-                                         server_proposals=pending)
+                                         server_proposals=pending,
+                                         attributable=attributable[0])
 
                 artifact = runner_woa.run(plan.runner_input, self.config.woa,
                                           approval_hook=approval_hook, checkpoint=checkpoint,
@@ -471,8 +476,10 @@ class Driver:
             "attempt_id": attempt_id, **classification.as_record(),
             "evaluation_digest": digest_json(judged) if judged else None,
             "truth_digest": digest_json(truth) if truth else None})
-        agent = (agent_assertions(agent_start, agent_end, audit, product_started=product_started)
-                 if arm == "woa_product" else None)  # an unread audit leaves proposals unclosed
+        agent = (agent_assertions(agent_start, agent_end, audit,
+                                  product_started=product_started,
+                                  audit_observed=audit_read.available)
+                 if arm == "woa_product" else None)
         reset = self._reset(plan, guard_changes, agent,
                             forced=(not_stopped or not guard_read.available
                                     or (arm == "woa_product" and not audit_read.available)))
@@ -560,7 +567,8 @@ class Driver:
                 else:
                     projected = {**projected, **trace.UNREAD_TRACE}
             agent = agent_assertions(agent_start, agent_end, audit,
-                                     product_started=product_started)
+                                     product_started=product_started,
+                                     audit_observed=audit_read.available)
         dispatch = projected["dispatch_state"]
         classification = outcomes.classify(
             product_started=product_started, dispatch_state=dispatch, runner_terminal=None,
@@ -673,8 +681,8 @@ class _PreStart(Exception):
 
 
 def agent_assertions(start: dict[str, Any] | None, end: dict[str, Any] | None,
-                     audit: list[dict[str, Any]], *, product_started: bool
-                     ) -> tuple[dict[str, Any], list[str]]:
+                     audit: list[dict[str, Any]], *, product_started: bool,
+                     audit_observed: bool = True) -> tuple[dict[str, Any], list[str]]:
     """The content-free Agent-state assertions of one WOA attempt and the residue they show.
 
     ``start`` is the verified-empty state the attempt began from and ``end`` the state once
@@ -698,7 +706,12 @@ def agent_assertions(start: dict[str, Any] | None, end: dict[str, Any] | None,
     residue += [f"agent_residue:{key}" for key in ("active_sessions", "unresolved_mutations")
                 if end[key]]
     if record["open_proposals"]:
-        residue.append("agent_residue:open_proposals")
+        # The review of 753817e: an audit nobody could export was passed here as an empty one,
+        # so every proposal the product had prepared counted as still open and a reset that
+        # could only be undecided was published as a failure. A proposal nobody read the
+        # closure of is unasserted, which is what the reset says.
+        residue.append("agent_residue:open_proposals" if audit_observed
+                       else "agent_audit_unreadable")
     return record, residue
 
 
@@ -804,11 +817,16 @@ def scored_terminal(runner_terminal: str | None, facts: outcomes.GatewayFacts,
     return runner_terminal
 
 
+#: Residue markers that say the apparatus could not read what it would have asserted. A reset
+#: held up by one of these alone is undecided; residue the apparatus did observe is a failure.
+UNASSERTED_RESIDUE = frozenset({"agent_state_unreadable", "agent_audit_unreadable"})
+
+
 def _with_residue(outcome: str, residue: list[str]) -> str:
     """A reset that would otherwise pass cannot while Agent residue, or no assertion, remains."""
     if outcome not in {"PASS", "NOT_REQUIRED"} or not residue:
         return outcome
-    return "INDETERMINATE" if "agent_state_unreadable" in residue else "FAIL"
+    return "FAIL" if set(residue) - UNASSERTED_RESIDUE else "INDETERMINATE"
 
 
 def _cost(attempt_id: str, requests: list[dict], responses: list[dict]) -> dict[str, Any]:

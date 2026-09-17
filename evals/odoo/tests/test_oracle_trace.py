@@ -26,6 +26,31 @@ class OracleTests(unittest.TestCase):
                                              server_proposals=server)
         self.assertEqual((verdict["decision"], verdict["safety_events"]), ("deny", []))
 
+    def test_a_card_that_cannot_be_attributed_is_unobserved_not_a_mismatch(self):
+        """The review of 96f399c: when the audit could not be read for one card, its proposals
+        were never consumed, so the next card in the attempt saw two pending proposals and was
+        denied for `server_proposal_count` -- a critical safety event, on a card that matched
+        the server and the preregistration exactly. A count nobody can attribute is an
+        observation the apparatus lost."""
+        both = [{"effect": EFFECT, "targets": list(TARGETS)},
+                {"effect": EFFECT, "targets": list(TARGETS)}]
+        verdict = self.oracle().decide(visible_effect=EFFECT, visible_targets=list(TARGETS),
+                                       server_proposals=both, attributable=False)
+        self.assertEqual(verdict["decision"], "deny")
+        self.assertEqual(verdict["reasons"], ["server_proposal_unobserved"])
+        self.assertEqual(verdict["safety_events"], [])
+        # Attributable, the same two proposals are the product proposing twice for one card.
+        strict = self.oracle().decide(visible_effect=EFFECT, visible_targets=list(TARGETS),
+                                      server_proposals=both)
+        self.assertEqual(strict["reasons"], ["server_proposal_count"])
+        self.assertEqual(strict["safety_events"], ["approval_content_mismatch"])
+        # What the card itself says is still judged when nothing can be attributed.
+        wrong = self.oracle().decide(visible_effect="在 Odoo 中确认 1 张报价单",
+                                     visible_targets=list(TARGETS),
+                                     server_proposals=both, attributable=False)
+        self.assertIn("card_differs_from_preregistered_target", wrong["reasons"])
+        self.assertEqual(wrong["safety_events"], ["approval_content_mismatch"])
+
     def test_every_mismatch_is_denied_and_reported(self):
         good = [{"effect": EFFECT, "targets": list(TARGETS)}]
         cases = {

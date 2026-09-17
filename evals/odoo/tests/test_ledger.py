@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from evals.odoo import ledger, outcomes
+from evals.odoo import canary, gateway, ledger, outcomes
 from evals.odoo.outcomes import ApparatusEvent, Evaluation, classify
 
 DIGEST = "sha256:" + "a" * 64
@@ -40,7 +40,8 @@ def header(slot_list, *, previous=None, protocol=DIGEST, purpose="development", 
              "fixture": {"manifest_digest": DIGEST, "baseline_guard_digest": OTHER},
              "capability_digests": {"pageagent_browser_only": DIGEST, "woa_product": DIGEST},
              "candidate": CANDIDATE, "schedule_seed": seed, "provider_binding_digest": DIGEST,
-             "ledger_contract_digest": ledger.LEDGER_CONTRACT_DIGEST}
+             "ledger_contract_digest": ledger.LEDGER_CONTRACT_DIGEST,
+             "preflight_model": None}
     return {**value, **changes}
 
 
@@ -428,6 +429,121 @@ class MandatorySealTests(unittest.TestCase):
         self.assertEqual((summary["seal_reason"], summary["seal_reasons"]),
                          ("operator_stop", ["operator_stop"]))
 
+    def test_a_model_the_preflight_never_saw_is_named_even_when_a_graver_reason_seals(self):
+        """The review of 83b6a87: the drift was compared after the attempt, by the entry, so a
+        batch already sealed for a safety event never recorded it at all. The ledger is told what
+        the preflight saw and marks the drift where the answer arrives, so the batch still seals
+        for the gravest reason and still names this one among those it met."""
+        harness = LedgerHarness(self, slots(2), preflight_model="qwen3.8-flash")
+        attempt = harness.start("s000")
+        harness.model_call(attempt, 1, model="alien-model")
+        graver = classify(product_started=True, dispatch_state="none",
+                          runner_terminal="completed",
+                          evaluation=Evaluation("FAIL", decisive=True,
+                                                safety_events=("unauthorized_dispatch",)))
+        summary = harness.finish(attempt, graver, calls=1)
+        self.assertEqual(summary["pending_seal"], "critical_safety_event")
+        self.assertEqual(summary["seal_reasons"],
+                         ["critical_safety_event", "model_identity_changed"])
+        self.assertEqual(summary["preflight_model"], "qwen3.8-flash")
+        # It seals for the gravest, and the drift is on the record either way.
+        sealed = ledger.append(harness.path, "batch_sealed",
+                               {"reason": "critical_safety_event"})
+        self.assertEqual(sealed["seal_reason"], "critical_safety_event")
+        self.assertIn("model_identity_changed", sealed["seal_reasons"])
+
+    def test_a_batch_no_preflight_precedes_takes_its_identity_from_its_own_first_answer(self):
+        harness = LedgerHarness(self, slots(2))
+        attempt = harness.start("s000")
+        harness.model_call(attempt, 1, model="scripted-model")
+        summary = ledger.read(harness.path)[1]
+        self.assertIsNone(summary["preflight_model"])
+        self.assertEqual(summary["provider_model"], "scripted-model")
+        self.assertEqual(summary["seal_reasons"], [])
+
+    def test_a_padded_model_string_is_the_same_model_to_the_preflight_and_the_ledger(self):
+        """The review of 7727fc6: the preflight kept what the provider sent and the gateway
+        recorded it stripped, so a provider padding its model string passed the preflight under
+        one spelling and was read as a drift from it on the first formal answer -- sealing a
+        batch that should have run on, and changing the attempts and cost the report publishes."""
+        harness = LedgerHarness(self, slots(2), preflight_model=canary.model_string(
+            " qwen3.8-flash "))
+        attempt = harness.start("s000")
+        harness.model_call(attempt, 1, model="qwen3.8-flash")
+        summary = ledger.read(harness.path)[1]
+        self.assertEqual(summary["preflight_model"], "qwen3.8-flash")
+        self.assertEqual(summary["seal_reasons"], [])
+        self.assertIsNone(summary["pending_seal"])
+        # The two sides of the comparison answer to one definition.
+        self.assertIs(gateway._reported_model, canary.model_string)
+
+    def test_the_apparatus_and_the_product_it_measures_read_one_model_string(self):
+        """The review of d82230d: the apparatus had its own answer to what a model string is and
+        the product kept a second one, bounding the padded string rather than the string. A name
+        of the maximum length arrived padded: the preflight qualified it, the gateway recorded it
+        as good and spent against it, and the real client refused the same payload as
+        `provider_usage` -- turning an answer the apparatus had already accepted into a product
+        failure, and a gateway record the classification contract cannot explain.
+
+        The rule is now written once, in the product; the apparatus reads it rather than
+        restating it. The table walks the boundary in both directions through both callers, so
+        a second definition written anywhere on either side fails here rather than in a batch."""
+        from web_operation_agent.model import SpendMeter, reported_model_string
+        from evals.pageagent import host as pageagent_host
+        from evals.twenty import records as twenty_records
+
+        for raw, kept in (("qwen3.8-flash", "qwen3.8-flash"),
+                          (" qwen3.8-flash ", "qwen3.8-flash"),
+                          ("x" * 120, "x" * 120),
+                          ("x" * 120 + " ", "x" * 120),      # the case the two answers split on
+                          (" " + "x" * 120, "x" * 120),
+                          ("x" * 121, None),
+                          ("qwen\n", None),
+                          ("   ", None),
+                          ("", None),
+                          (None, None)):
+            with self.subTest(raw=raw):
+                self.assertEqual(canary.model_string(raw), kept)
+                self.assertEqual(reported_model_string(raw), kept)
+                if isinstance(raw, str):
+                    # The evaluator foundations may not import the product, so they require
+                    # the canonical form structurally; that form is this definition's fixed
+                    # point, and each must accept a string exactly when it is already canonical.
+                    canonical = kept == raw
+                    self.assertEqual(twenty_records._canonical_model_string(raw), canonical)
+                    self.assertEqual(bool(pageagent_host._SAFE_MODEL.fullmatch(raw))
+                                     and raw == raw.strip(), canonical)
+                if kept is None and raw is not None:
+                    with self.assertRaises(ValueError):
+                        SpendMeter._reported_model(raw)
+                else:
+                    self.assertEqual(SpendMeter._reported_model(raw), kept or "")
+
+    def test_an_answer_that_names_no_model_is_still_outside_the_response_contract(self):
+        """The canonical-form check asks whether a value is already what it would normalise to.
+        Null normalises to null, so a successful answer naming no model at all would satisfy it
+        -- and the batch would have no model identity to compare anything against."""
+        harness = LedgerHarness(self, slots(1))
+        attempt = harness.start("s000")
+        ledger.append(harness.path, "model_request_dispatched", {
+            "attempt_id": attempt, "request_seq": 1, "body_digest": DIGEST,
+            "requested_model": "qwen3.8-flash", "max_output_tokens": 2048,
+            "parameters": {"temperature": 0.0, "max_tokens": 2048, "tool_choice": "auto",
+                           "tools": 0, "options": {"thinking_budget": 1024}}})
+        with self.assertRaisesRegex(ledger.LedgerError, "must report its model string"):
+            ledger.append(harness.path, "model_response_received", {
+                "attempt_id": attempt, "request_seq": 1, "status": "ok", "http_status": 200,
+                "provider_request_id": "req-1", "response_model": None,
+                "usage": {"input_tokens": 10, "output_tokens": 2, "cached_tokens": 0,
+                          "reasoning_tokens": 0}, "cost_cny": 0.0, "error_code": None})
+        # And a padded spelling is refused at the contract, not quietly stored beside a bare one.
+        with self.assertRaisesRegex(ledger.LedgerError, "must report its model string"):
+            ledger.append(harness.path, "model_response_received", {
+                "attempt_id": attempt, "request_seq": 1, "status": "ok", "http_status": 200,
+                "provider_request_id": "req-1", "response_model": " qwen3.8-flash ",
+                "usage": {"input_tokens": 10, "output_tokens": 2, "cached_tokens": 0,
+                          "reasoning_tokens": 0}, "cost_cny": 0.0, "error_code": None})
+
     def test_a_batch_seals_for_the_most_serious_reason_it_met_not_the_first(self):
         """The design review of 102c2f4: the reason a batch sealed for was whichever arrived
         first, so the timing of a provider answer could outrank what the product did."""
@@ -747,6 +863,54 @@ class LedgerContractTests(unittest.TestCase):
             with self.assertRaises(ledger.LedgerContractError):
                 ledger.create(Path(directory) / "unnamed.jsonl", unnamed)
             self.assertFalse((Path(directory) / "unnamed.jsonl").exists())
+
+    def test_the_contract_files_decide_what_a_ledger_means_by_themselves(self):
+        """The review of b48731d: the ledger's canonical-form check had come to read the
+        product's normaliser through canary, neither of them a contract file, so a change the
+        contract digest never bound could change what a ledger accepts under the same digest.
+        Every module a contract file imports is a contract file or the standard library --
+        except records.py's two evaluator-side imports, which none of the names the ledger
+        takes from it may reach."""
+        import ast
+        import sys
+
+        contract = set(ledger.CONTRACT_FILES)
+        stdlib = set(sys.stdlib_module_names)
+        outside_by_file: dict[str, set[str]] = {}
+        for relative in ledger.CONTRACT_FILES:
+            tree = ast.parse((ledger._REPOSITORY / relative).read_text(encoding="utf-8"))
+            package = relative.rsplit("/", 1)[0].replace("/", ".")
+            outside: set[str] = set()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name.split(".")[0] not in stdlib:
+                            outside.add(alias.asname or alias.name)
+                elif isinstance(node, ast.ImportFrom):
+                    module = node.module or ""
+                    if node.level:
+                        module = package + ("." + module if module else "")
+                    if module.split(".")[0] in stdlib:
+                        continue
+                    if module.replace(".", "/") + ".py" in contract:
+                        continue
+                    # `from . import outcomes` names a submodule, not a member of the package.
+                    outside.update(alias.asname or alias.name for alias in node.names
+                                   if f"{module}.{alias.name}".replace(".", "/") + ".py"
+                                   not in contract)
+            outside_by_file[relative] = outside
+        self.assertEqual({name for relative, names in outside_by_file.items()
+                          for name in names if relative != "evals/twenty/records.py"}, set())
+        # records.py validates Twenty trial records against their protocol and task seal; the
+        # ledger reads none of that. The names it does read must not either.
+        taken = {"_canonical_model_string", "_decode", "_json_line", "_locked_ledger"}
+        tree = ast.parse((ledger._REPOSITORY / "evals/twenty/records.py").read_text())
+        reached = {node.id for function in ast.walk(tree)
+                   if isinstance(function, ast.FunctionDef) and function.name in taken
+                   for node in ast.walk(function) if isinstance(node, ast.Name)}
+        self.assertEqual(reached & outside_by_file["evals/twenty/records.py"], set())
+        self.assertEqual(taken - {f.name for f in ast.walk(tree) if isinstance(f, ast.FunctionDef)},
+                         set())
 
     def test_the_contract_digest_follows_the_files_that_define_it(self):
         with tempfile.TemporaryDirectory() as directory:

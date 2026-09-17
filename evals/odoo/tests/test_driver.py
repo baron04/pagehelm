@@ -58,6 +58,22 @@ class AgentAssertionTests(unittest.TestCase):
                          (1, ["agent_residue:open_proposals"]))
         self.assertEqual(_with_residue("PASS", residue), "FAIL")
 
+    def test_an_audit_nobody_read_leaves_a_proposal_unasserted_not_open(self):
+        """The review of 753817e: an audit that could not be exported was passed here as an
+        empty one, so every proposal the product had prepared counted as still open and the
+        reset -- which could only be undecided -- was published as a failure. The published
+        reset axis counts INDETERMINATE and FAIL separately."""
+        end = {**EMPTY, "prepared_proposals": ["p1"], "conversation_rows": 1}
+        record, residue = agent_assertions(EMPTY, end, [], product_started=True,
+                                           audit_observed=False)
+        self.assertEqual((record["open_proposals"], residue), (1, ["agent_audit_unreadable"]))
+        self.assertEqual(_with_residue("PASS", residue), "INDETERMINATE")
+        # Residue the apparatus did observe is still a failure, unread audit or not.
+        dirty = {**end, "active_sessions": 1}
+        _, mixed = agent_assertions(EMPTY, dirty, [], product_started=True,
+                                    audit_observed=False)
+        self.assertEqual(_with_residue("PASS", mixed), "FAIL")
+
     def test_sessions_and_unresolved_mutations_are_residue(self):
         end = {**EMPTY, "active_sessions": 1, "unresolved_mutations": 1}
         _, residue = agent_assertions(EMPTY, end, [DENIED], product_started=True)

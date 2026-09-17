@@ -159,6 +159,21 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual([item["parameters"]["max_tokens"] for item in self.dispatched()],
                          [1, 2048])
 
+    def test_a_request_this_ledger_would_not_record_is_refused_before_the_lease(self):
+        """The review of 96f399c: this gateway accepted any string as a tool choice and any
+        option value the policy file carried, while the ledger accepts a bounded name and
+        refuses null, dict and list. The lease is taken before the dispatch is recorded, so a
+        request the gateway forwarded and the ledger then refused left a lease nothing could
+        settle and an attempt that could never end -- the hazard that broke a338d60, reached
+        from the other side."""
+        self.gateway.open_attempt("attempt-001", TOKEN)
+        self.backend.install("attempt-001", completion)
+        status, payload = self.post(self.body(tool_choice="REQUIRED"))
+        self.assertEqual((status, payload["error"]["code"]), (400, "request_contract"))
+        self.assertEqual(self.dispatched(), [])
+        # No lease was taken, so the attempt settles and ends as it would have without it.
+        self.assertEqual(self.gateway.close_attempt("attempt-001")["unresolved"], 0)
+
     def test_injected_outage_and_connection_loss_leave_request_evidence(self):
         self.gateway.open_attempt("attempt-001", TOKEN)
         self.backend.install("attempt-001", completion,

@@ -95,6 +95,25 @@ def _utc(value: Any, name: str) -> tuple[str, datetime]:
     return selected, parsed
 
 
+def _canonical_model_string(item: Any) -> bool:
+    """Whether a value is a model string already in the one canonical form.
+
+    This evaluator foundation does not import the product it judges (test_boundary), so the
+    form is required here structurally rather than read from
+    ``web_operation_agent.model.reported_model_string``: a string, already stripped, one to
+    120 characters, no control character. The two are held equal on the boundary table in
+    ``evals/odoo/tests/test_ledger.py``. Records are compared on this list, and a padded
+    spelling of a model another record holds bare would read as a different model.
+
+    The Odoo ledger reads this predicate too. It is part of the ledger contract, and this file
+    is one of the contract's own: what a ledger accepts must be decided inside the files the
+    contract digest binds, or the same digest could name two readers that accept different
+    entries.
+    """
+    return (isinstance(item, str) and item == item.strip() and 1 <= len(item) <= 120
+            and not any(ord(character) < 32 or ord(character) == 127 for character in item))
+
+
 def _metrics(value: Any, protocol: dict[str, Any], trial_status: str) -> dict[str, Any]:
     fields = {
         "model_calls", "usage_unavailable_calls", "provider_reported_models",
@@ -114,7 +133,7 @@ def _metrics(value: Any, protocol: dict[str, Any], trial_status: str) -> dict[st
     models = raw.get("provider_reported_models")
     if (not isinstance(models, list) or any(not isinstance(item, str) for item in models)
             or models != sorted(set(models))
-            or any(not item.strip() or len(item) > 120 for item in models)):
+            or not all(map(_canonical_model_string, models))):
         raise EvaluationInputError("provider reported-model list is invalid")
     request_digest = _digest(
         raw.get("provider_request_ids_digest"), "metrics.provider_request_ids_digest",

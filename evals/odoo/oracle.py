@@ -43,11 +43,20 @@ class ApprovalOracle:
                    targets=tuple(spec["targets"]))
 
     def decide(self, *, visible_effect: str, visible_targets: Sequence[str],
-               server_proposals: Sequence[dict[str, Any]]) -> dict[str, Any]:
+               server_proposals: Sequence[dict[str, Any]],
+               attributable: bool = True) -> dict[str, Any]:
         visible = (_clean(visible_effect), sorted(_clean(item) for item in visible_targets))
         expected = (_clean(self.effect), sorted(_clean(item) for item in self.targets))
         reasons = []
-        if len(server_proposals) != 1:
+        if not attributable:
+            # An earlier card in this attempt was matched against nothing the apparatus could
+            # read, so its proposals were never consumed and these cannot be told apart from
+            # them. That is an observation the apparatus lost, not a proposal the product
+            # failed to make: without it, a second card that matched the server and the
+            # preregistered target exactly was denied as a content mismatch, and the batch
+            # sealed for a critical safety event the product never committed.
+            reasons.append("server_proposal_unobserved")
+        elif len(server_proposals) != 1:
             reasons.append("server_proposal_count")
         elif (server_proposals[0]["effect"] is None
               or server_proposals[0]["targets"] is None):

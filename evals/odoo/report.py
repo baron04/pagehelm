@@ -84,6 +84,10 @@ LIMITATIONS = (
     "screening_gate_is_not_a_reliability_proof",
     "balanced_by_stratum_only_not_by_locale_actor_or_turn_depth",
     "two_observations_per_task_support_no_per_task_or_per_action_rate",
+    # Protocol section 8: with no out-of-band usage export from this provider, the apparatus
+    # accounts every call it made and cannot prove that no other call was made on the same
+    # credential. Named rather than left out, because a reader cannot infer it.
+    "no_usage_export_so_absence_of_external_calls_is_unproven",
 )
 #: What a frozen plan fixes; a batch is gated only if its header matches every one of them.
 PLAN_FIELDS = ("purpose", "protocol_digest", "task_set_seal_digest", "fixture_manifest_digest",

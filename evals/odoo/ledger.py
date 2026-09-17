@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from evals.twenty.evaluator import EvaluationInputError, digest_json
-from evals.twenty.records import _decode, _json_line, _locked_ledger
+from evals.twenty.records import _canonical_model_string, _decode, _json_line, _locked_ledger
 
 from . import outcomes
 
@@ -230,6 +230,22 @@ def _request_parameters(value: Any, max_output_tokens: Any) -> dict[str, Any]:
     return parameters
 
 
+def records_request_parameters(value: Any, max_output_tokens: Any) -> bool:
+    """Whether this ledger would accept these generation parameters on a dispatch.
+
+    The gateway asks before it takes a lease. It appends the dispatch entry only after the
+    lease exists, so a request it forwards that this ledger then refuses would leave a lease
+    nothing can settle and an attempt that can never end (protocol section 7, "any attempt
+    ends only once every lease it holds has settled"). One rule decides what a dispatched
+    request may carry, and it is this one.
+    """
+    try:
+        _request_parameters(value, max_output_tokens)
+    except LedgerError:
+        return False
+    return True
+
+
 def _entry_digest(entry: dict[str, Any]) -> str:
     return digest_json({key: value for key, value in entry.items() if key != "digest"})
 
@@ -253,6 +269,8 @@ class _Replay:
         self.cost_unknown: set[str] = set()
         self.terminal: dict[str, Any] | None = None
         self.batch_model: str | None = None
+        #: What the preflight saw the provider answer under, from the header.
+        self.preflight_model: str | None = None
         self.replacements_by_arm: Counter[str] = Counter()
         self.previous_at: datetime | None = None
         self.head: str | None = None
@@ -281,8 +299,18 @@ class _Replay:
         required = {"batch_id", "protocol_id", "protocol_digest", "schedule_digest", "purpose",
                     "provider_config_digest", "slots", "previous_batch", "task_set_seal_digest",
                     "fixture", "capability_digests", "candidate", "schedule_seed",
-                    "provider_binding_digest", "ledger_contract_digest"}
+                    "provider_binding_digest", "ledger_contract_digest", "preflight_model"}
         _exact(body, required, "batch header")
+        # The model string the preflight saw, or null for a batch no preflight precedes. The
+        # review of 83b6a87: a provider answering under another string was a fact the entry
+        # compared *after* the attempt, so a batch already sealed for a graver reason never
+        # recorded it at all. The ledger is told, and marks it where the answer arrives.
+        # Canonical form is decided inside the contract's own files: the review of b48731d found
+        # this check reading the product's normaliser through canary, so a change to a file the
+        # contract digest never bound could change what a ledger accepts under the same digest.
+        if (body["preflight_model"] is not None
+                and not _canonical_model_string(body["preflight_model"])):
+            raise LedgerError("the preflight model is a model string or null")
         _identifier(body["batch_id"], "batch_id")
         _identifier(body["protocol_id"], "protocol_id")
         for name in ("protocol_digest", "schedule_digest", "provider_config_digest",
@@ -371,6 +399,7 @@ class _Replay:
                     "names the audit that its stopped batch exposed nothing, and no other link "
                     "names a continuation record")
         self.header = body
+        self.preflight_model = body["preflight_model"]
 
     def attempt_started(self, body: dict[str, Any]) -> None:
         required = {"attempt_id", "slot_id", "arm", "task_id", "replicate", "run_id",
@@ -484,11 +513,17 @@ class _Replay:
         model = body["response_model"]
         # Any model string a response names counts toward the batch's one model identity.
         if body["status"] == "ok" or model is not None:
-            if not isinstance(model, str) or not model.strip() or len(model) > 120:
+            # A successful answer naming no model at all is outside the response contract; the
+            # predicate refuses null as it refuses a padded or unbounded string.
+            if not _canonical_model_string(model):
                 raise LedgerError("a provider response must report its model string")
             if self.batch_model is None:
                 self.batch_model = model
             elif model != self.batch_model:
+                self._mark_seal("model_identity_changed")
+            # And against what the preflight saw, at the answer rather than after the attempt:
+            # a batch that seals for a graver reason still names this one among those it met.
+            if self.preflight_model is not None and model != self.preflight_model:
                 self._mark_seal("model_identity_changed")
         attempt["responses"][seq] = body
 
@@ -818,6 +853,7 @@ class _Replay:
             "attempts": attempts,
             "open_attempt": self.open_attempt,
             "provider_model": self.batch_model,
+            "preflight_model": self.preflight_model,
             "replacements": dict(self.replacements_by_arm),
             "chain_head": self.head,
         }

@@ -14,7 +14,9 @@ from pathlib import Path
 
 from web_operation_agent_odoo.demo.fixture import (BUSINESS_TABLES, FixtureMismatch,
                                                    FixtureUnavailable,
-                                                   OdooPostgresFixture, load_json,
+                                                   OdooPostgresFixture, _sealed,
+                                                   atomic_write_json,
+                                                   clear_uncertain_record, load_json,
                                                    prepare_snapshot, restore_snapshot)
 from web_operation_agent_odoo.demo.qualify import (SELF_WRITTEN_TABLES,
                                                    classify_fixture_drift)
@@ -359,3 +361,63 @@ class ClassifyingDriftBeforeTheGateRuns(unittest.TestCase):
     def test_every_self_written_table_is_one_the_projection_actually_covers(self):
         self.assertTrue(SELF_WRITTEN_TABLES)
         self.assertTrue(SELF_WRITTEN_TABLES <= set(BUSINESS_TABLES))
+
+
+class ClearUncertainRecordTests(unittest.TestCase):
+    """An interrupted restore asks a person to look; this is how they say they did.
+
+    Before it, the only ways past an uncertain record were editing a sealed file by hand or
+    taking a fresh snapshot, which moves the baseline to whatever the database drifted to.
+    """
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        root = Path(self.directory.name)
+        self.snapshot, self.record = root / "baseline.pgdump", root / "recovery.json"
+        self.fixture = _fixture(FakePostgres())
+        prepare_snapshot(fixture=self.fixture, snapshot_path=self.snapshot,
+                                     record_path=self.record)
+
+    def _make_uncertain(self):
+        record = json.loads(self.record.read_text())
+        atomic_write_json(
+            self.record, _sealed({**record, "status": "INDETERMINATE"}))
+
+    def test_a_restore_refuses_an_uncertain_record_until_someone_looks(self):
+        self._make_uncertain()
+        blocked = restore_snapshot(
+            fixture=self.fixture, snapshot_path=self.snapshot, record_path=self.record)
+        self.assertEqual(blocked["status"], "INDETERMINATE")
+        # Every outcome names the same fields: the caller reported one of these and crashed on
+        # the key the other left out.
+        self.assertIn("observed_digest", blocked)
+        self.assertIn("baseline_digest", blocked)
+
+        cleared = clear_uncertain_record(
+            fixture=self.fixture, snapshot_path=self.snapshot, record_path=self.record,
+            looked_by="Evaluation Owner", note="only mail_message drifted; no business table")
+        self.assertEqual(cleared["status"], "READY")
+        self.assertEqual(cleared["cleared_by_inspection"]["looked_by"], "Evaluation Owner")
+        # The baseline is exactly where it was: looking is not re-baselining.
+        self.assertEqual(cleared["baseline_digest"],
+                         json.loads(self.snapshot.with_name("recovery.json").read_text())
+                         ["baseline_digest"])
+        after = restore_snapshot(
+            fixture=self.fixture, snapshot_path=self.snapshot, record_path=self.record)
+        self.assertEqual(after["status"], "PASS")
+
+    def test_clearing_names_who_looked_and_what_they_saw(self):
+        self._make_uncertain()
+        for looked_by, note in (("", "a note"), ("Someone", ""), ("  ", "  ")):
+            with self.subTest(looked_by=looked_by, note=note):
+                with self.assertRaises(FixtureMismatch):
+                    clear_uncertain_record(
+                        fixture=self.fixture, snapshot_path=self.snapshot,
+                        record_path=self.record, looked_by=looked_by, note=note)
+
+    def test_only_an_uncertain_record_is_cleared_by_looking(self):
+        with self.assertRaises(FixtureMismatch):
+            clear_uncertain_record(
+                fixture=self.fixture, snapshot_path=self.snapshot, record_path=self.record,
+                looked_by="Evaluation Owner", note="nothing was wrong")

@@ -15,6 +15,23 @@ import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+
+def model_string(value: Any) -> str | None:
+    """A provider's model string as this apparatus compares it, or null if it is not one.
+
+    The review of 7727fc6: the preflight kept what the provider sent and the gateway recorded it
+    stripped, so a provider padding its model string passed the preflight under one spelling and
+    was read as a drift from it on the first formal answer. The review of d82230d: the apparatus
+    then had its own answer and the product kept a second one, bounding the padding rather than
+    the string, so a padded answer the apparatus recorded as good was the one the product could
+    not spend against. The definition lives in the product the apparatus measures; this reads it
+    rather than restating it, so there is nowhere for a third spelling to appear.
+    """
+    from web_operation_agent.model import reported_model_string
+
+    return reported_model_string(value)
+
+
 if TYPE_CHECKING:
     from .gateway import GatewayBudgets
 
@@ -71,7 +88,8 @@ def semantic_answer(response: dict[str, Any]) -> int | None:
 
 def evaluate(responses: list[Any]) -> dict[str, Any]:
     schemas = [response_schema(item) for item in responses]
-    models = [item.get("model") if isinstance(item, dict) else None for item in responses]
+    models = [model_string(item.get("model")) if isinstance(item, dict) else None
+              for item in responses]
     answers = [semantic_answer(item) if isinstance(item, dict) else None for item in responses]
     checks = {
         "five_calls": len(responses) == REQUIRED_CALLS,

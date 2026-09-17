@@ -333,6 +333,32 @@ def prepare_snapshot(*, fixture: OdooPostgresFixture, snapshot_path: Path,
     return record
 
 
+def clear_uncertain_record(*, fixture: OdooPostgresFixture, snapshot_path: Path,
+                           record_path: Path, looked_by: str, note: str) -> dict:
+    """Record that a person looked at an uncertain fixture, so a restore may run again.
+
+    An interrupted restore leaves the record saying nobody knows what the database holds, and
+    :func:`restore_snapshot` refuses to guess. Saying so was the whole point -- but there was no
+    way to say "I looked", so the only ways out were editing a sealed record by hand or taking a
+    fresh snapshot, which moves the baseline to whatever the database drifted to. This is the
+    third way: it changes no data and takes no snapshot, it names who looked and what they saw,
+    and it leaves the baseline exactly where it was. What follows it is an ordinary restore.
+    """
+    archive = snapshot_path.read_bytes()
+    record = _validated_record(load_json(record_path), fixture, archive)
+    if record["status"] not in {"RESTORING", "INDETERMINATE"}:
+        raise FixtureMismatch("only an uncertain record is cleared by looking at it")
+    if not looked_by.strip() or not note.strip():
+        raise FixtureMismatch("clearing an uncertain record names who looked and what they saw")
+    cleared = _sealed({**record, "status": "READY", "updated_at": utc_now(),
+                       "cleared_by_inspection": {"looked_by": looked_by.strip(),
+                                                 "note": note.strip(),
+                                                 "at": utc_now(),
+                                                 "observed_digest": fixture.capture()["digest"]}})
+    atomic_write_json(record_path, cleared)
+    return cleared
+
+
 def _validated_record(value: dict, fixture: OdooPostgresFixture, archive: bytes) -> dict:
     if value.get("artifact_version") != ARTIFACT_VERSION \
             or value.get("kind") != "woa_odoo_recovery":
@@ -363,14 +389,18 @@ def restore_snapshot(*, fixture: OdooPostgresFixture, snapshot_path: Path,
     except OSError as exc:
         raise FixtureMismatch("the snapshot file is unavailable") from exc
     record = _validated_record(load_json(record_path), fixture, archive)
+    # Every outcome names the same fields, and a digest nobody read is null rather than an
+    # empty string: the caller reported one of these and crashed on the key the other left out.
     if record["status"] in {"RESTORING", "INDETERMINATE"}:
         return {"kind": "woa_odoo_restore", "status": "INDETERMINATE",
-                "reason": "a previous restore did not report an outcome"}
+                "reason": "a previous restore did not report an outcome",
+                "baseline_digest": record["baseline_digest"],
+                "observed_digest": record.get("observed_digest")}
     if record["status"] == "FAILED":
         return {"kind": "woa_odoo_restore", "status": "FAIL",
                 "reason": "a previous restore left the fixture off its baseline",
                 "baseline_digest": record["baseline_digest"],
-                "observed_digest": record.get("observed_digest", "")}
+                "observed_digest": record.get("observed_digest")}
     active = _sealed({**record, "status": "RESTORING", "updated_at": utc_now()})
     atomic_write_json(record_path, active)
     try:
@@ -419,18 +449,23 @@ def main(argv: list[str] | None = None) -> int:
         python -m web_operation_agent_odoo.demo.fixture state    --container ... --database ...
         python -m web_operation_agent_odoo.demo.fixture snapshot --snapshot .private/odoo/baseline.pgdump ...
         python -m web_operation_agent_odoo.demo.fixture restore  --snapshot .private/odoo/baseline.pgdump ...
+        python -m web_operation_agent_odoo.demo.fixture clear    --looked-by NAME --note "what you saw" ...
     """
     import argparse
 
     parser = argparse.ArgumentParser(
         prog="web-operation-agent-odoo-fixture",
         description="Snapshot and restore the local Odoo fixture a live gate runs against.")
-    parser.add_argument("command", choices=("state", "snapshot", "restore"))
+    parser.add_argument("command", choices=("state", "snapshot", "restore", "clear"))
     parser.add_argument("--container", required=True)
     parser.add_argument("--database", required=True)
     parser.add_argument("--db-user", default="odoo")
     parser.add_argument("--snapshot", default="")
     parser.add_argument("--record", default="")
+    parser.add_argument("--looked-by", default="",
+                        help="who inspected an uncertain fixture, for `clear`")
+    parser.add_argument("--note", default="",
+                        help="what the inspection found, for `clear`")
     arguments = parser.parse_args(argv)
 
     fixture = OdooPostgresFixture(container=arguments.container,
@@ -442,7 +477,11 @@ def main(argv: list[str] | None = None) -> int:
     if not arguments.snapshot or not arguments.record:
         parser.error("snapshot and restore need --snapshot and --record")
     snapshot_path, record_path = Path(arguments.snapshot), Path(arguments.record)
-    if arguments.command == "snapshot":
+    if arguments.command == "clear":
+        outcome = clear_uncertain_record(
+            fixture=fixture, snapshot_path=snapshot_path, record_path=record_path,
+            looked_by=arguments.looked_by, note=arguments.note)
+    elif arguments.command == "snapshot":
         outcome = prepare_snapshot(fixture=fixture, snapshot_path=snapshot_path,
                                    record_path=record_path)
     else:

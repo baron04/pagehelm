@@ -222,6 +222,16 @@ def _write_private(path: Path, value: dict[str, Any]) -> None:
         handle.write(_json_bytes(value))
 
 
+def _append_private(path: Path, value: dict[str, Any]) -> None:
+    """Add one line to a private journal, flushed to disk before the caller goes on."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(json.dumps(value, sort_keys=True).encode("utf-8") + b"\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
 def _clean_checkout(paths: FormalPaths, what: str) -> str:
     try:
         return require_clean_head(paths.repository)["commit"]
@@ -665,6 +675,26 @@ def unaccounted_calls(paths: FormalPaths) -> dict[str, list[str]]:
     within the provider's own deadline: nobody knows what it cost, so the bill must say.
     """
     found: dict[str, list[str]] = {}
+    for path in sorted(paths.preflights.glob("p74b-preflight-*.jsonl")):
+        # A preflight that wrote no record is one whose calls only this journal names. A call
+        # the journal shows leaving and never settling is exactly a call nobody can price.
+        if path.with_suffix(".json").exists():
+            continue
+        run = path.name[: -len(".jsonl")]
+        try:
+            lines = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+                     if line.strip()]
+        except (OSError, ValueError) as exc:
+            raise FormalError(f"{path.name} cannot be read, so the calls it made are "
+                              "unaccounted for") from exc
+        settled = {entry.get("call_index") for entry in lines if entry.get("kind") == "settled"
+                   and entry.get("status") != "accounting_error"}
+        owed_here = sorted(
+            str(entry.get("provider_request_id") or f"{run}#{entry.get('call_index')}")
+            for entry in lines
+            if entry.get("kind") == "dispatched" and entry.get("call_index") not in settled)
+        if owed_here:
+            found[run] = owed_here
     for path in sorted(paths.preflights.glob("p74b-preflight-*.json")):
         # A preflight whose calls cannot be read is not a preflight with no unaccounted call:
         # this gate answers what the bill must cover, and it does not answer from a file it
@@ -907,6 +937,12 @@ def _preflight_under_lock(paths: FormalPaths, *, confirm_paid_calls: bool,
     if target.exists():
         raise FormalError("a preflight was already recorded at this second")
     backend = provider_backend(paths, batch_id=run_id)
+    # A preflight records what it sent only when its last canary has answered, so a process
+    # killed or a disk filled in between would leave paid calls that no gate could see. A batch
+    # never has that window -- protocol section 7 has it write each dispatch down before the
+    # call leaves -- and this journal gives the preflight the same order. It is read only when
+    # the record beside it is missing, so the two can never count one call twice.
+    journal = paths.preflights / f"{run_id}.jsonl"
     calls: list[dict[str, Any]] = []
 
     # What the bill already owed when the prerequisites passed. They are reconciled -- the gate
@@ -919,8 +955,14 @@ def _preflight_under_lock(paths: FormalPaths, *, confirm_paid_calls: bool,
         # this preflight ran must stop the ones that have not gone out.
         if unaccounted_calls(paths) != owed:
             raise canary.PreflightStopped("accounting_failure")
-        result = backend.complete(body, attempt_id=run_id, call_index=len(calls) + 1)
-        calls.append(_call_record(result))
+        index = len(calls) + 1
+        _append_private(journal, {"call_index": index, "kind": "dispatched"})
+        result = backend.complete(body, attempt_id=run_id, call_index=index)
+        settled = _call_record(result)
+        calls.append(settled)
+        _append_private(journal, {"call_index": index, "kind": "settled",
+                                  "status": settled["status"],
+                                  "provider_request_id": settled["provider_request_id"]})
         if result.status == "accounting_error":
             raise canary.PreflightStopped("accounting_failure")
         return result.payload if result.status == "ok" else {"error": {"code": result.error_code}}
@@ -1155,6 +1197,7 @@ def task_ids(task_set: dict[str, Any]) -> list[str]:
 
 def development_header(*, batch_id: str, first_freeze: dict[str, Any], first_freeze_commit: str,
                        bindings: dict[str, Any], task_ids: list[str], binding_digest: str,
+                       preflight_model: str | None,
                        previous: dict[str, Any] | None) -> dict[str, Any]:
     """A development batch header; its seed and schedule derive from the first-freeze commit."""
     seed = protocol.derive_schedule_seed(first_freeze_commit, purpose="development")
@@ -1165,7 +1208,10 @@ def development_header(*, batch_id: str, first_freeze: dict[str, Any], first_fre
             "provider_config_digest": protocol.provider_config_digest(),
             "provider_binding_digest": binding_digest, "slots": slots,
             "previous_batch": previous, "schedule_seed": seed,
-            "ledger_contract_digest": ledger.LEDGER_CONTRACT_DIGEST, **bindings}
+            "ledger_contract_digest": ledger.LEDGER_CONTRACT_DIGEST,
+            # The ledger marks a drift from it where the answer arrives, so a batch sealed for a
+            # graver reason still names it among the reasons it met.
+            "preflight_model": preflight_model, **bindings}
 
 
 def development_plan(*, first_freeze: dict[str, Any], first_freeze_commit: str,
@@ -1364,7 +1410,8 @@ def prepare_development(paths: FormalPaths, ctx: harness.Context, *,
                "first_freeze_commit": ready.first_freeze_commit, "bindings": bindings,
                "task_ids": task_ids(ctx.task_set),
                "binding_digest": provider_binding_digest(backend.identity(),
-                                                         harness.protocol_budgets())}
+                                                         harness.protocol_budgets()),
+               "preflight_model": preflight["canary"]["model_strings"][0]}
     if open_batch is not None:
         path, entries, _ = open_batch
         header = entries[0]["body"]
@@ -1418,15 +1465,6 @@ def _attempt_plan(ctx: harness.Context, slot: dict[str, Any]) -> AttemptPlan:
                        runner_input=runner, evaluator_input=evaluator)
 
 
-def _check_provider_model(path: Path, summary: dict[str, Any],
-                          preflight_model: str) -> dict[str, Any]:
-    """Seal a running batch whose provider now answers under a model the preflight never saw."""
-    if (summary["status"] == "OPEN" and summary["provider_model"] is not None
-            and summary["provider_model"] != preflight_model):
-        return ledger.append(path, "batch_sealed", {"reason": "model_identity_changed"})
-    return summary
-
-
 def _seal_if_owed(path: Path, summary: dict[str, Any]) -> dict[str, Any]:
     if summary["disposition"] == "must_seal":
         return ledger.append(path, "batch_sealed", {"reason": summary["pending_seal"]})
@@ -1446,7 +1484,9 @@ def drive_batch(ctx: harness.Context, prepared: PreparedBatch, playwright: Any) 
     """
     path = prepared.path
     batch_id = prepared.header["batch_id"]
-    preflight_model = prepared.preflight["canary"]["model_strings"][0]
+    # The model the preflight saw is in the batch header, and the ledger marks a drift from it
+    # where the answer arrives: the reviews of f85c1c1 and 83b6a87 both found that comparing it
+    # here, after the attempt, lost the fact whenever a graver reason sealed the batch first.
 
     def stopped(summary: dict[str, Any]) -> bool:
         if summary["status"] == "OPEN" and stop_requested(prepared.stop_request, batch_id):
@@ -1458,12 +1498,6 @@ def drive_batch(ctx: harness.Context, prepared: PreparedBatch, playwright: Any) 
         summary = ledger.read(path)[1]
         if summary["open_attempt"] is not None:
             summary = _seal_if_owed(path, driver.recover_open_attempt())
-        # The review of f85c1c1: a batch that held while the provider had already answered under
-        # another model string could not be sealed for it -- the ledger refused every reason
-        # while it held -- so the entry resumed, ran the replacement and the next slot, and only
-        # then compared. The drift is a fault the batch met, and §7 seals for it at once, so it
-        # is asked here, before anything else this run would send.
-        summary = _check_provider_model(path, summary, preflight_model)
         # The slot an interrupted attempt ran is owed its replacement whether the driver that ran
         # it died in this process or in an earlier one. The qualification of 6382d75: this stood
         # inside the recovery above, and a batch that held for a bill had already closed that
@@ -1480,10 +1514,6 @@ def drive_batch(ctx: harness.Context, prepared: PreparedBatch, playwright: Any) 
             plan = _attempt_plan(ctx, slot)
             plan.replacement_of = last["attempt_id"]
             summary = _seal_if_owed(path, driver.run_attempt(plan))
-            # The review of 8c4025d: the model string was compared against the preflight only
-            # after a slot, never after this replacement -- and a batch whose killed attempt
-            # answered nothing gets its first answer here.
-            summary = _check_provider_model(path, summary, preflight_model)
         for slot in summary["slots"]:
             current = ledger.read(path)[1]
             if next(item for item in current["slots"] if item["slot_id"] == slot["slot_id"])[
@@ -1493,7 +1523,6 @@ def drive_batch(ctx: harness.Context, prepared: PreparedBatch, playwright: Any) 
             if current["disposition"] != "running" or stopped(current):
                 break
             current = driver.run_slot(_attempt_plan(ctx, slot))
-            _check_provider_model(path, current, preflight_model)
     summary = harness.finish_batch(path)
     if summary["status"] != "OPEN" and stop_requested(prepared.stop_request, batch_id):
         prepared.stop_request.unlink(missing_ok=True)
