@@ -331,7 +331,12 @@ class Driver:
         sent = (max(len(recorded_turns),
                     len({int(value["turn"]) for value in checkpoints if "turn" in value}))
                 if product_started else 0)
-        if arm == "woa_product":
+        if arm == "woa_product" and not audit_read.available and product_started:
+            # Nobody read how any turn ended. That is not an audit reporting turns without
+            # endings: there are no endings to check, and the fault that lost them is the
+            # attempt's evidence.
+            final_ending, unclosed = None, ()
+        elif arm == "woa_product":
             # The audit records one ending per turn, in order. Every turn before the last must have
             # a closed ending of its own; the last turn's ending is the one scored.
             endings = [item["terminal"] for item in projected["turns"]]
@@ -448,10 +453,18 @@ class Driver:
                 gateway_terminal=gateway_ending, provider_record_in_turn=in_turn,
                 unclosed_turns=unclosed)
         except outcomes.OutcomeContractError:
+            # The review of 8c4025d: this fallback replaced the judgement with a bare FAIL and
+            # dropped the safety events it held, which the protocol counts whatever the other
+            # axes say. It keeps them now, so a branch nothing reaches today would not lose a
+            # fact if it ever did.
             classification = outcomes.classify(
                 product_started=product_started, dispatch_state=projected["dispatch_state"],
                 runner_terminal="classification_input_missing", apparatus_events=events,
-                evaluation=outcomes.Evaluation("FAIL", decisive=False),
+                evaluation=(outcomes.Evaluation(
+                    "FAIL", decisive=False, reasons=evaluation.reasons,
+                    safety_events=evaluation.safety_events,
+                    extraction_ambiguous=evaluation.extraction_ambiguous)
+                    if evaluation is not None else None),
                 request_contract_violation=facts.request_contract_violation,
                 gateway_terminal=gateway_ending, unclosed_turns=unclosed)
         self._append("attempt_outcome", {
@@ -474,7 +487,7 @@ class Driver:
             "approval_wait_ms": sum(turn["approval_wait_ms"] for turn in turns),
             "first_feedback_ms": (turns[0]["first_feedback_ms"] if turns else None),
             "cancel_feedback_ms": max(cancel) if cancel else None,
-            **_trace_counts(projected),
+            **_trace_counts(projected, whole=projection.available and projection.complete),
             "user_turns": len(plan.runner_input.messages)})
         self._append("attempt_terminal", {"attempt_id": attempt_id})
         _, summary = ledger.read(self.config.ledger_path)
@@ -560,19 +573,20 @@ class Driver:
                 "evaluation_digest": None, "truth_digest": None})
         if "reset_outcome" not in present:
             record, residue = agent if agent is not None else (None, [])
+            # An attempt whose driver died is put back by a verified restore, whatever the guard
+            # shows. The guard watches a fixed set of tables, the audit may no longer be
+            # readable, and the task's own reset profile is not known here: none of that adds up
+            # to an attempt that needed no reset.
             changes = fixture.differences(self.baseline_guard, self.guard.capture())
-            if changes:
-                result = fixture.restore(self.config.stack, self.guard,
-                                         self.config.recovery_dir,
-                                         actor_projection=self._projection)
-                outcome = result["status"]
-                basis = ["interrupted_attempt_changed_fixture", *result["basis"]]
-                guard_digest = result.get("guard_digest")
-            else:
-                outcome, basis, guard_digest = "NOT_REQUIRED", [], None
+            result = fixture.restore(self.config.stack, self.guard, self.config.recovery_dir,
+                                     actor_projection=self._projection)
+            basis = [("interrupted_attempt_changed_fixture" if changes
+                      else "interrupted_attempt_state_unobserved"), *result["basis"]]
             self._append("reset_outcome", {
-                "attempt_id": attempt_id, "outcome": _with_residue(outcome, residue),
-                "basis": [*residue, *basis], "guard_digest": guard_digest, "agent": record})
+                "attempt_id": attempt_id,
+                "outcome": _with_residue(result["status"], residue),
+                "basis": [*residue, *basis], "guard_digest": result.get("guard_digest"),
+                "agent": record})
         if "attempt_cost" not in present:
             self._append("attempt_cost", _cost(attempt_id, requests, responses))
         if "attempt_metrics" not in present:
@@ -581,7 +595,11 @@ class Driver:
             self._append("attempt_metrics", {
                 "attempt_id": attempt_id, "automatic_wall_ms": None, "approval_wait_ms": None,
                 "first_feedback_ms": None, "cancel_feedback_ms": None,
-                **_trace_counts(projected),
+                # Whether the dead driver's audit holds every turn cannot be shown: the
+                # checkpoints it left do not say how many turns it sent, so there is no count
+                # to compare the export against. These are unknown here, exactly as the times
+                # this same record leaves unknown.
+                **_trace_counts(projected, whole=False),
                 "user_turns": 0})
         # The dead driver's calls settle here: a lease it took out and never closed is written
         # down as unresolved, so the attempt ends with every call it made accounted for, and the
@@ -613,23 +631,29 @@ class Driver:
                  ) -> dict[str, Any]:
         """One scheduled slot: the original attempt, then at most one policy replacement."""
         _, status = ledger.read(self.config.ledger_path)
-        if status["status"] != "OPEN":
-            return status
-        if status["pending_seal"]:
+        if status["disposition"] == "must_seal":
             # Something outside any attempt -- an unowned model request -- already requires
             # the batch to stop; no further attempt may start.
             return self._seal(status["pending_seal"])
+        if status["disposition"] != "running":
+            return status
         summary = self.run_attempt(plan)
         last = summary["attempts"][-1]
-        if summary["pending_seal"]:
+        if summary["disposition"] == "must_seal":
             return self._seal(summary["pending_seal"])
-        if last["replacement_eligible"]:
+        # Both reviews of 8c4025d found this: the disposition was read once, at the top, and the
+        # replacement then branched on `pending_seal` alone. An attempt that leaves a call
+        # nobody settled holds the batch without owing a seal, and the replacement was started
+        # into a ledger that refuses it. The attempt just changed what the batch may do, so the
+        # question is asked again; the entry that resumes the batch runs the replacement its
+        # slot is owed once the bill accounts for that call.
+        if summary["disposition"] == "running" and last["replacement_eligible"]:
             follow = replacement or AttemptPlan(
                 slot=plan.slot, runner_input=plan.runner_input,
                 evaluator_input=plan.evaluator_input, policy=plan.policy)
             follow.replacement_of = last["attempt_id"]
             summary = self.run_attempt(follow)
-            if summary["pending_seal"]:
+            if summary["disposition"] == "must_seal":
                 return self._seal(summary["pending_seal"])
         return summary
 
@@ -718,10 +742,13 @@ def _final_page(artifact: dict[str, Any], scope: dict[str, Any]) -> capture.Capt
     return capture.Unavailable("not_captured", "final_page", scope)
 
 
-def _trace_counts(projected: dict[str, Any]) -> dict[str, int | None]:
+def _trace_counts(projected: dict[str, Any], *, whole: bool) -> dict[str, int | None]:
     """The counts the projected trace supports. A trace nobody could read supports none of
-    them: they are recorded as unknown, never as an attempt that did no work."""
-    return {name: projected[name] for name in
+    them, and neither does one read in part: the review of 6376c20 found the completeness of a
+    capture recorded and never consumed, so a truncated export counted what it happened to show
+    as what the attempt did. They are recorded as unknown, never as an attempt that did no work.
+    """
+    return {name: (projected[name] if whole else None) for name in
             ("page_actions", "invalid_page_actions", "business_calls", "repeated_observations")}
 
 

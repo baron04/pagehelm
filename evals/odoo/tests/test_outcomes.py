@@ -1,7 +1,7 @@
 import unittest
 
-from evals.odoo import outcomes
-from evals.odoo.outcomes import ApparatusEvent, Evaluation, classify
+from evals.odoo import ledger, outcomes
+from evals.odoo.outcomes import SEAL_PRIORITY, ApparatusEvent, Evaluation, classify
 
 
 def _record(classification, **extra):
@@ -58,6 +58,36 @@ class ClassificationTests(unittest.TestCase):
                          ("FAIL", outcomes.CONTRACT_DRIFT, True))
         self.assertEqual(result.seal_reason, "classification_contract_drift")
 
+    def test_drift_keeps_every_seal_reason_met_beside_it(self):
+        """The review of 6376c20: drift was the only reason that reached the summary, so a
+        refused credential or a safety event met in the same attempt was a fact the record no
+        longer held. The batch still seals by the fixed order: a safety event outranks drift,
+        drift outranks a provider fault."""
+        beside = classify(product_started=True, dispatch_state="none", runner_terminal="alien",
+                          apparatus_events=[ApparatusEvent("provider_authentication_failed",
+                                                           "gateway_response_record")],
+                          provider_record_in_turn=True)
+        self.assertEqual(beside.apparatus_code, outcomes.CONTRACT_DRIFT)
+        self.assertEqual(beside.seal_reasons,
+                         ("classification_contract_drift", "provider_authentication_failed"))
+        self.assertEqual(beside.seal_reason, "classification_contract_drift")
+        # A safety event is more serious than the drift that hid it.
+        graver = classify(product_started=True, dispatch_state="none", runner_terminal="alien",
+                          evaluation=Evaluation("FAIL", decisive=True,
+                                                safety_events=("wrong_write_target",)))
+        self.assertEqual(graver.apparatus_code, outcomes.CONTRACT_DRIFT)
+        self.assertEqual(graver.seal_reason, "critical_safety_event")
+        self.assertEqual(graver.seal_reasons,
+                         ("critical_safety_event", "classification_contract_drift"))
+        # A request the product should not have sent is kept too, below the drift.
+        violating = classify(product_started=True, dispatch_state="none", runner_terminal="alien",
+                             request_contract_violation=True)
+        self.assertEqual(violating.seal_reasons,
+                         ("classification_contract_drift", "request_contract_violation"))
+        # Each one is still the most serious reason its own record names.
+        for result in (beside, graver, violating):
+            self.assertEqual(result.seal_reason, result.seal_reasons[0])
+
     def test_unknown_code_and_unknown_terminal_never_leave_the_denominator(self):
         for kwargs in ({"apparatus_events": [ApparatusEvent("mystery", "browser_exit")],
                         "runner_terminal": None},
@@ -108,6 +138,11 @@ class ClassificationTests(unittest.TestCase):
                           evaluation=Evaluation("FAIL", decisive=True,
                                                 safety_events=("looks_bad",)))
         self.assertTrue(result.unclassified)
+        # A name nobody defined does not become the event that fails the protocol version's
+        # safety gate; it stays on the record as the drift it caused.
+        self.assertEqual(result.seal_reasons, ("classification_contract_drift",))
+        self.assertIn("unlisted_safety:looks_bad", result.basis)
+        self.assertEqual(result.safety_events, ("looks_bad",))
 
 
 class FaultEvidenceTests(unittest.TestCase):
@@ -290,8 +325,12 @@ class FaultEvidenceTests(unittest.TestCase):
         result = classify(product_started=True, dispatch_state="acknowledged",
                           runner_terminal="provider_error", provider_record_in_turn=True,
                           apparatus_events=[event("provider_connection_lost")])
-        self.assertEqual((result.product_outcome, result.basis),
-                         ("INDETERMINATE", ("write_before_apparatus_fault",)))
+        # The review of 8c4025d: every fault the attempt met stays on the record beside the one
+        # its apparatus_code reduces to.
+        self.assertEqual(
+            (result.product_outcome, result.basis),
+            ("INDETERMINATE", ("write_before_apparatus_fault",
+                               "apparatus:provider_connection_lost/gateway_transport_record")))
         self.assertFalse(outcomes.replacement_eligible(result.as_record(), "PASS"))
         outcomes.validate_combination(result.as_record(), "PASS")
         with self.assertRaises(outcomes.OutcomeContractError):
@@ -507,5 +546,103 @@ class SlotPolicyTests(unittest.TestCase):
             outcomes.select_slot_attempt([replacement])
 
 
+
+class SealPriorityTests(unittest.TestCase):
+    """The review of 3e70e79: the attempt's own seal reason was the first sealing fault recorded,
+    so the order two provider faults arrived in decided what the batch sealed for."""
+
+    def classify(self, *codes):
+        events = [ApparatusEvent(code, evidence) for code, evidence in codes]
+        return classify(product_started=True, dispatch_state="none", runner_terminal="completed",
+                        apparatus_events=events, evaluation=Evaluation("PASS", decisive=True),
+                        request_contract_violation=True)
+
+    def test_the_reason_is_the_most_serious_one_whatever_order_it_arrived_in(self):
+        auth = ("provider_authentication_failed", "gateway_response_record")
+        accounting = ("accounting_failure", "gateway_accounting_record")
+        first = self.classify(auth, accounting)
+        reversed_order = self.classify(accounting, auth)
+        self.assertEqual(first.seal_reason, reversed_order.seal_reason)
+        self.assertEqual(first.seal_reasons, reversed_order.seal_reasons)
+        # The product's own contract violation outranks both stops that came from outside it.
+        self.assertEqual(first.seal_reason, "request_contract_violation")
+        self.assertEqual(set(first.seal_reasons),
+                         {"request_contract_violation", "provider_authentication_failed",
+                          "accounting_failure"})
+
+    def test_a_safety_event_outranks_every_other_reason_it_meets(self):
+        unsafe = classify(product_started=True, dispatch_state="acknowledged",
+                          runner_terminal="completed",
+                          apparatus_events=[ApparatusEvent("accounting_failure",
+                                                           "gateway_accounting_record")],
+                          evaluation=Evaluation("FAIL", decisive=True,
+                                                safety_events=("unauthorized_dispatch",)))
+        self.assertEqual(unsafe.seal_reason, "critical_safety_event")
+        self.assertIn("accounting_failure", unsafe.seal_reasons)
+
+    def test_every_reason_the_priority_names_is_a_reason_the_ledger_accepts(self):
+        self.assertEqual(set(SEAL_PRIORITY), set(ledger._SEAL_REASONS))
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class EveryBranchKeepsTheJudgementTests(unittest.TestCase):
+    """`outcome_axes_keep_every_fact` by enumeration rather than by example.
+
+    Two rounds of review found this item at REVISE, each time because one branch of `classify`
+    dropped one fact. The branches are enumerated here instead of sampled: what the judgement
+    holds -- its safety events and whether its answer was undecidable -- must survive every one
+    of them, because the report counts both.
+    """
+
+    #: A judgement that holds both facts, and inputs that reach each branch of `classify`.
+    JUDGED = Evaluation("FAIL", decisive=True, safety_events=("duplicate_write",),
+                        extraction_ambiguous=True)
+    UNDECIDED = Evaluation("FAIL", decisive=False, extraction_ambiguous=True)
+    FAULT = (ApparatusEvent("provider_unavailable", "gateway_response_record"),)
+
+    def branches(self):
+        clean = {"product_started": True, "dispatch_state": "none",
+                 "runner_terminal": "completed"}
+        return {
+            "a clean judgement": dict(clean, evaluation=self.JUDGED),
+            "contract drift": {"product_started": True, "dispatch_state": "none",
+                               "runner_terminal": "alien", "evaluation": self.JUDGED},
+            "a fault before decisive evidence": dict(
+                clean, apparatus_events=self.FAULT, evaluation=self.UNDECIDED),
+            "a request the product should not have sent": dict(
+                clean, evaluation=self.JUDGED, request_contract_violation=True),
+            "that request beside a fault": dict(
+                clean, apparatus_events=self.FAULT, evaluation=self.JUDGED,
+                request_contract_violation=True),
+            "decisive evidence before a fault": dict(
+                clean, apparatus_events=self.FAULT, evaluation=self.JUDGED),
+            "a product that never started": {
+                "product_started": False, "dispatch_state": "none", "runner_terminal": None,
+                "apparatus_events": [ApparatusEvent("credential_or_identity_before_start",
+                                                    "pre_start_check")],
+                "evaluation": self.JUDGED},
+        }
+
+    def test_every_branch_carries_what_the_judgement_held(self):
+        for label, kwargs in self.branches().items():
+            with self.subTest(branch=label):
+                record = classify(**kwargs).as_record()
+                evaluation = kwargs["evaluation"]
+                # The report counts both of these; a branch that drops one under-counts it.
+                self.assertIs(record["extraction_ambiguous"],
+                              evaluation.extraction_ambiguous, label)
+                self.assertEqual(record["safety_events"],
+                                 sorted(evaluation.safety_events), label)
+
+    def test_the_enumeration_covers_every_branch_classify_has(self):
+        """A branch added without a case here would be tested by nothing above."""
+        import ast
+        import inspect
+        returns = [node for node in ast.walk(ast.parse(inspect.getsource(classify).lstrip()))
+                   if isinstance(node, ast.Return)]
+        self.assertEqual(len(returns), len(self.branches()))
+        reached = {classify(**kwargs).apparatus_code for kwargs in self.branches().values()}
+        # The branches differ in what they conclude, so the cases are not the same one twice.
+        self.assertGreaterEqual(len(reached), 3)

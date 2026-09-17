@@ -132,6 +132,45 @@ class PreflightTests(FormalFixture):
         self.assertEqual(provider.requests, [])
         self.assertFalse(self.paths.spend().exists())
 
+    def test_no_canary_goes_out_beside_a_running_development_process(self):
+        """The review of f85c1c1: the preflight read the chain once and never took the lock a
+        development batch holds, so five canaries could go out beside a running batch and a cost
+        that batch left unknown partway through reached none of them."""
+        provider = self.provider(*[answer()] * 5)
+        self.freeze()
+        self.custody()
+        with formal.development_lock(self.paths):
+            self.assertTrue(formal.development_running(self.paths))
+            self.assertRefused(provider, "another development process")
+        # The lock is the only thing that was in the way.
+        self.assertEqual(self.preflight()["status"], "READY")
+
+    def test_no_canary_goes_out_while_an_attempt_of_the_newest_batch_is_open(self):
+        """The review of 8c4025d: a driver killed mid-attempt leaves a dispatched call that is
+        neither an accounting error nor yet unresolved -- the recovery writes it down -- so the
+        reconciliation gate saw no debt and five paid canaries went out before it existed."""
+        provider = self.provider(*[answer()] * 5)
+        self.freeze()
+        self.custody()
+        path = self.paths.ledgers / "p74b-development-001.jsonl"
+        ledger.create(path, header(slots(1), batch_id="p74b-development-001"))
+        ledger.append(path, "attempt_started", {
+            "attempt_id": "attempt-001", "slot_id": "s000", "arm": "woa_product",
+            "task_id": "task-000", "replicate": "primary", "run_id": "run-001",
+            "fixture_digest": DIGEST, "capability_digest": DIGEST,
+            "provider_config_digest": DIGEST, "provider_binding_digest": DIGEST,
+            "replacement_of": None})
+        # The call the dead driver dispatched is on the ledger; nothing has settled it yet, so
+        # `unaccounted_calls` sees no debt at all.
+        ledger.append(path, "model_request_dispatched", {
+            "attempt_id": "attempt-001", "request_seq": 1, "body_digest": DIGEST,
+            "requested_model": "qwen3.8-flash", "max_output_tokens": 2048,
+            "parameters": {"temperature": 0.0, "max_tokens": 2048, "tool_choice": "auto",
+                           "tools": 0, "options": {"thinking_budget": 1024}}})
+        self.assertEqual(formal.unaccounted_calls(self.paths), {})
+        self.assertEqual(formal.status(self.paths)["checks"]["billing_reconciliation"], "READY")
+        self.assertRefused(provider, "still open")
+
     def test_nothing_is_sent_until_every_prerequisite_holds(self):
         provider = self.provider(*[answer()] * 5)
         with self.assertRaisesRegex(formal.FormalError, "confirm-paid-calls"):
@@ -511,8 +550,13 @@ class LifecycleTests(FormalFixture):
         # A manifest taken or an image built after the qualification leaves it behind.
         artifact("20260903T000000Z", fixture_manifest_digest=OTHER)
         self.assertIn("another fixture manifest", check())
-        artifact("20260904T000000Z", candidate={**candidate, "agent_image_id": OTHER})
-        self.assertIn("another Agent image", check())
+        # The manifest no longer names a candidate, so the image is checked where the running
+        # stack is: the paid entry passes what it verified there, and status cannot.
+        artifact("20260904T000000Z")
+        self.assertEqual(check(), "READY")
+        with self.assertRaisesRegex(formal.FormalError, "another Agent image"):
+            formal.qualification_for_head(
+                self.paths, candidate={**candidate, "agent_image_id": OTHER})
         artifact("20260905T000000Z", offline={"protocol_digest": DIGEST})
         self.assertIn("another machine protocol", check())
         artifact("20260906T000000Z", status="FAILED")
@@ -693,14 +737,57 @@ class ReconciliationTests(FormalFixture):
                     **{**arguments, **changes})
         recorded = formal.record_billing_reconciliation(
             self.paths, spend_batch_id=stopped["spend_batch_id"], **arguments)
-        self.assertEqual(formal.check_reconciliations(self.paths),
-                         {stopped["spend_batch_id"]: recorded["reconciliation_digest"]})
+        batch = stopped["spend_batch_id"]
+        # The check answers with what covers the batch: its debts and the records that account
+        # for them, so a second debt later changes the answer.
+        covered = formal.check_reconciliations(self.paths)
+        self.assertEqual(set(covered), {batch})
+        self.assertTrue(covered[batch].startswith("sha256:"))
+        claims = formal.reconciliation_claims(self.paths, batch)
+        self.assertEqual([record["reconciliation_digest"] for record in claims.values()],
+                         [recorded["reconciliation_digest"]])
+        self.assertEqual(recorded["covered_calls"], [stopped["calls"][1]["provider_request_id"]])
         self.assertEqual(formal.status(self.paths)["checks"]["billing_reconciliation"], "READY")
         self.assertEqual(self.preflight("2026-09-15T09:00:00Z")["status"], "READY")
+        # Nothing is left to reconcile, and the same record is not written twice.
+        with self.assertRaisesRegex(formal.FormalError, "already reconciled"):
+            formal.record_billing_reconciliation(self.paths, spend_batch_id=batch, **arguments)
         # A reconciliation changed after it was committed no longer counts.
         target = self.workbench / recorded["record"]
         target.write_text(target.read_text().replace("Evaluation Owner", "Someone Else"))
         with self.assertRaises(formal.FormalError):
+            formal.check_reconciliations(self.paths)
+
+
+    def test_a_reconciliation_of_calls_no_spend_batch_left_unaccounted_is_refused(self):
+        """A batch that owes nothing has no reconciliation to write. A record standing against
+        one covers calls nobody made, and the check that reads only debted batches would never
+        have read it."""
+        self.assertEqual(formal.unaccounted_calls(self.paths), {})
+        self.assertEqual(formal.check_reconciliations(self.paths), {})
+        record = formal.reconciliation_record(
+            spend_batch_id="p74b-development-009", request_ids=["attempt-001#1"],
+            owner="Evaluation Owner", reconciled_at="2026-09-15T08:30:00Z", billed_calls=1,
+            billed_cost_cny=0.0002, evidence_digest=DIGEST, notes=["a bill nobody owed"])
+        formal.commit_record(
+            self.workbench,
+            f"{formal.RECONCILIATIONS}/p74b-development-009/"
+            f"{formal._claim_name('p74b-development-009', ['attempt-001#1'])}.json",
+            record, "a reconciliation of calls nobody made")
+        with self.assertRaisesRegex(formal.FormalError, "never left unaccounted"):
+            formal.check_reconciliations(self.paths)
+
+    def test_a_reconciliation_beside_the_spend_batches_is_refused(self):
+        """Each batch's reconciliations live in its own directory, so a file left beside them --
+        the shape the one-file-per-batch layout wrote -- is a record nothing reads."""
+        record = formal.reconciliation_record(
+            spend_batch_id="p74b-development-009", request_ids=["attempt-001#1"],
+            owner="Evaluation Owner", reconciled_at="2026-09-15T08:30:00Z", billed_calls=1,
+            billed_cost_cny=0.0002, evidence_digest=DIGEST, notes=["the earlier layout"])
+        formal.commit_record(self.workbench,
+                             f"{formal.RECONCILIATIONS}/p74b-development-009.json", record,
+                             "a reconciliation outside any spend batch")
+        with self.assertRaisesRegex(formal.FormalError, "outside any spend batch"):
             formal.check_reconciliations(self.paths)
 
 

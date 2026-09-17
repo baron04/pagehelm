@@ -27,7 +27,7 @@ and the same runtime binding, so a changed endpoint or key needs a new preflight
 batch sealed because the provider refused the credential; it also needs the verified candidate
 with a fixture manifest taken on it, a fixture whose resets may run, the chain head of the batch
 before it committed, the development task set its first-freeze seal describes, and a READY
-zero-model qualification of the candidate taken with that manifest and Agent image. The entry
+zero-model qualification of that candidate on the fixture that manifest describes. The entry
 itself checks that qualification, not only the command line, and a rehearsal's own
 qualification counts only while its paid effects stay apart. Its header is
 committed to ``.workbench`` before the first attempt and its chain head when it ends; a response
@@ -729,46 +729,115 @@ def reconciliation_record(*, spend_batch_id: str, request_ids: list[str], owner:
     return {**body, "reconciliation_digest": digest_json(body)}
 
 
+def reconciliation_claims(paths: FormalPaths, spend_batch_id: str) -> dict[str, dict[str, Any]]:
+    """Every committed reconciliation of that spend batch, by the calls it covers.
+
+    A batch may owe a bill more than once -- a driver dies, the batch resumes, another dies --
+    so each reconciliation is its own record, named by the digest of the calls it accounts for.
+    A record is never rewritten; a later debt is a later record.
+    """
+    directory = paths.workbench / RECONCILIATIONS / spend_batch_id
+    claims: dict[str, dict[str, Any]] = {}
+    for path in sorted(directory.glob("*.json")) if directory.is_dir() else []:
+        relative = f"{RECONCILIATIONS}/{spend_batch_id}/{path.name}"
+        record, _ = committed_record(paths.workbench, relative)
+        body = {key: value for key, value in record.items() if key != "reconciliation_digest"}
+        covered = record.get("unaccounted_request_ids")
+        if (record.get("kind") != RECONCILIATION_KIND
+                or record.get("reconciliation_digest") != digest_json(body)
+                or record.get("spend_batch_id") != spend_batch_id
+                or not isinstance(covered, list) or not covered
+                or sorted(covered) != covered or len(set(covered)) != len(covered)
+                or record.get("conclusion") != "RECONCILED"
+                or path.name != f"{_claim_name(spend_batch_id, covered)}.json"):
+            raise FormalError(f"{relative} does not reconcile the calls it names")
+        for other, names in claims.items():
+            if set(names["unaccounted_request_ids"]) & set(covered):
+                raise FormalError(f"{relative} covers calls already reconciled by {other}")
+        claims[relative] = record
+    return claims
+
+
+def _claim_name(spend_batch_id: str, request_ids: list[str]) -> str:
+    """A reconciliation's file name: the digest of the calls it accounts for.
+
+    The same debt is the same path, so a retry of the same reconciliation is refused as a
+    duplicate rather than written twice, and another debt is another path.
+    """
+    return digest_json({"protocol_id": protocol.PROTOCOL_ID, "spend_batch_id": spend_batch_id,
+                        "unaccounted_request_ids": sorted(request_ids)}).removeprefix("sha256:")
+
+
 def record_billing_reconciliation(paths: FormalPaths, *, spend_batch_id: str, owner: str,
                                   reconciled_at: str, billed_calls: Any, billed_cost_cny: Any,
                                   evidence_digest: Any, notes: Any = ()) -> dict[str, Any]:
-    """Generate and commit, once, the owner's reconciliation of a spend batch's unaccounted
-    calls."""
+    """Generate and commit, once, the owner's reconciliation of the calls this spend batch still
+    owes a bill for."""
     _clean_checkout(paths, "recording a reconciliation")
     calls = unaccounted_calls(paths)
     if spend_batch_id not in calls:
         raise FormalError("no unaccounted call is recorded under that spend batch id")
+    covered = sorted(set(calls[spend_batch_id]) - {
+        name for record in reconciliation_claims(paths, spend_batch_id).values()
+        for name in record["unaccounted_request_ids"]})
+    if not covered:
+        raise FormalError("every call of that spend batch is already reconciled")
     record = reconciliation_record(
-        spend_batch_id=spend_batch_id, request_ids=calls[spend_batch_id], owner=owner,
+        spend_batch_id=spend_batch_id, request_ids=covered, owner=owner,
         reconciled_at=reconciled_at, billed_calls=billed_calls, billed_cost_cny=billed_cost_cny,
         evidence_digest=evidence_digest, notes=notes)
-    relative = f"{RECONCILIATIONS}/{spend_batch_id}.json"
+    relative = f"{RECONCILIATIONS}/{spend_batch_id}/{_claim_name(spend_batch_id, covered)}.json"
     return {"record": relative, "reconciliation_digest": record["reconciliation_digest"],
+            "covered_calls": covered,
             "commit": commit_record(paths.workbench, relative, record,
                                     f"p7.4b: reconcile the provider bill for {spend_batch_id}")}
 
 
 def check_reconciliations(paths: FormalPaths) -> dict[str, str]:
-    """Every unaccounted call reconciled in its committed record, and each record's digest by
-    spend batch id; a spend ledger that can be written again is not enough."""
+    """Every call whose cost is unknown reconciled in a committed record, and the digest that
+    covers each spend batch; a spend ledger that can be written again is not enough.
+
+    The records of one batch must cover its calls exactly: every call accounted for, none twice,
+    and none that this batch never made.
+    """
+    debts = unaccounted_calls(paths)
+    directory = paths.workbench / RECONCILIATIONS
+    # A batch that owes nothing has no record to write, so a record standing against one is a
+    # reconciliation of calls nobody made: it is read here rather than left unexamined.
+    try:
+        entries = sorted(directory.iterdir()) if directory.is_dir() else []
+    except OSError as exc:
+        # A directory of reconciliations this gate cannot list is not a batch that owes nothing.
+        raise FormalError(f"{RECONCILIATIONS} cannot be read, so what it accounts for is "
+                          "unknown") from exc
+    stray = [item.name for item in entries if not item.is_dir()]
+    if stray:
+        # Each batch's reconciliations live in its own directory. A file beside them is a record
+        # this check would never read, so it is refused rather than passed over.
+        raise FormalError(f"{RECONCILIATIONS} holds a reconciliation outside any spend batch "
+                          f"({', '.join(stray[:3])})")
+    recorded = [item.name for item in entries]
     digests: dict[str, str] = {}
     missing = []
-    for spend_batch_id, request_ids in unaccounted_calls(paths).items():
-        relative = f"{RECONCILIATIONS}/{spend_batch_id}.json"
-        if not (paths.workbench / relative).exists():
+    for spend_batch_id in sorted({*debts, *recorded}):
+        request_ids = debts.get(spend_batch_id)
+        claims = reconciliation_claims(paths, spend_batch_id)
+        covered = {name for record in claims.values()
+                   for name in record["unaccounted_request_ids"]}
+        if request_ids is None:
+            if claims:
+                raise FormalError(f"{RECONCILIATIONS}/{spend_batch_id} reconciles calls that "
+                                  "spend batch never left unaccounted")
+            continue
+        if not claims or covered != set(request_ids):
             missing.append(spend_batch_id)
             continue
-        record, _ = committed_record(paths.workbench, relative)
-        body = {key: value for key, value in record.items() if key != "reconciliation_digest"}
-        if (record.get("kind") != RECONCILIATION_KIND
-                or record.get("reconciliation_digest") != digest_json(body)
-                or record.get("spend_batch_id") != spend_batch_id
-                or record.get("unaccounted_request_ids") != sorted(request_ids)
-                or record.get("conclusion") != "RECONCILED"):
-            raise FormalError(f"{relative} does not reconcile the calls it names")
-        digests[spend_batch_id] = record["reconciliation_digest"]
+        digests[spend_batch_id] = digest_json({
+            "spend_batch_id": spend_batch_id, "unaccounted_request_ids": sorted(request_ids),
+            "reconciliation_digests": sorted(record["reconciliation_digest"]
+                                             for record in claims.values())})
     if missing:
-        raise FormalError("a call the spend ledger could not record awaits its provider bill "
+        raise FormalError("a call whose cost is unknown awaits its provider bill "
                           f"reconciliation ({', '.join(missing)}); run reconcile-billing")
     return digests
 
@@ -806,6 +875,26 @@ def _call_record(result: BackendResult) -> dict[str, Any]:
 def run_preflight(paths: FormalPaths, *, confirm_paid_calls: bool,
                   clock: Callable[[], str] = _utc) -> dict[str, Any]:
     """Five canaries through the evaluation provider, accounted on their own, kept content-free."""
+    # The review of 8c4025d: a driver killed mid-attempt leaves a dispatched call that is
+    # neither an accounting error nor yet unresolved -- the recovery writes it down -- so the
+    # reconciliation gate saw no debt and five paid canaries went out before it existed. The
+    # batch that owns that attempt settles its calls when it resumes; this waits for it, the
+    # way rearm-fixture already does. It is asked here rather than among the shared
+    # prerequisites, because the run that resumes the batch is the one that closes the attempt.
+    # The review of f85c1c1: this read the chain once and never took the lock a development
+    # batch holds, so a preflight could send all five canaries beside a running batch -- and a
+    # cost that batch left unknown partway through reached none of them. The preflight is one of
+    # the formal root's paid processes: it holds the same lock, so no batch runs beside it.
+    with development_lock(paths):
+        return _preflight_under_lock(paths, confirm_paid_calls=confirm_paid_calls, clock=clock)
+
+
+def _preflight_under_lock(paths: FormalPaths, *, confirm_paid_calls: bool,
+                          clock: Callable[[], str]) -> dict[str, Any]:
+    chain = development_chain(paths)
+    if chain and chain[-1][2]["open_attempt"] is not None:
+        raise FormalError("an attempt of the newest development batch is still open; its calls "
+                          "settle when that batch resumes, and no canary is sent before they do")
     ready = paid_call_prerequisites(paths, confirm_paid_calls=confirm_paid_calls)
     budgets = harness.protocol_budgets()
     try:
@@ -820,7 +909,16 @@ def run_preflight(paths: FormalPaths, *, confirm_paid_calls: bool,
     backend = provider_backend(paths, batch_id=run_id)
     calls: list[dict[str, Any]] = []
 
+    # What the bill already owed when the prerequisites passed. They are reconciled -- the gate
+    # above refuses otherwise -- so what matters before each canary is whether another one
+    # appeared since, not whether any exists.
+    owed = unaccounted_calls(paths)
+
     def send(body: dict[str, Any]) -> dict[str, Any]:
+        # Asked before each canary, not once before the first: a cost that became unknown while
+        # this preflight ran must stop the ones that have not gone out.
+        if unaccounted_calls(paths) != owed:
+            raise canary.PreflightStopped("accounting_failure")
         result = backend.complete(body, attempt_id=run_id, call_index=len(calls) + 1)
         calls.append(_call_record(result))
         if result.status == "accounting_error":
@@ -951,7 +1049,7 @@ def qualification_for_head(paths: FormalPaths, *, candidate: dict[str, Any] | No
     """The newest zero-model qualification of this checkout's HEAD, provided it passed under the
     current machine protocol with the fixture manifest and Agent image in place now.
 
-    The paid entry also passes the candidate and manifest it verified on the running stack, so a
+    The paid entry passes the candidate and manifest it verified on the running stack, so a
     manifest taken or an image built after the qualification leaves that qualification behind.
     """
     head = _clean_checkout(paths, "a qualified candidate")
@@ -981,8 +1079,10 @@ def qualification_for_head(paths: FormalPaths, *, candidate: dict[str, Any] | No
             raise FormalError(f"{path.name} qualified another machine protocol")
         if record.get("fixture_manifest_digest") != current.get("manifest_digest"):
             raise FormalError(f"{path.name} was taken with another fixture manifest; qualify again")
-        if qualified != current.get("candidate") or (candidate is not None
-                                                     and qualified != candidate):
+        # The qualification names the Agent image it ran and the fixture it ran on. The manifest
+        # no longer names a candidate -- rebuilding the Agent leaves the fixture as it was -- so
+        # the image is checked against the one the caller verified on the running stack.
+        if candidate is not None and qualified != candidate:
             raise FormalError(f"{path.name} qualified another Agent image; qualify again")
         return {"artifact": path.name, "started_at": record.get("started_at"),
                 "qualification_digest": "sha256:" + hashlib.sha256(data).hexdigest()}
@@ -1268,9 +1368,24 @@ def prepare_development(paths: FormalPaths, ctx: harness.Context, *,
     if open_batch is not None:
         path, entries, _ = open_batch
         header = entries[0]["body"]
+        # A batch that held resumes on the bindings it began with: the candidate, the fixture
+        # manifest and the provider binding it names are verified above and compared here, so a
+        # batch cannot wait out a rebuild and then run on something else.
         if header != development_header(previous=header["previous_batch"], **derived):
             raise FormalError("the open development batch runs under other bindings; seal it "
                               "with operator_stop before another starts")
+        held = ledger.read(path)[1]["cost_unknown"]
+        if held:
+            # Every prerequisite above already refused an unreconciled call, so what is left is
+            # to apply the records that account for these ones: that is what lifts the hold.
+            coverage = check_reconciliations(paths)[batch_id]
+            for record in reconciliation_claims(paths, batch_id).values():
+                covered = sorted(set(record["unaccounted_request_ids"]) & set(held))
+                if covered:
+                    ledger.append(path, "billing_reconciliation_applied", {
+                        "covered_calls": covered,
+                        "reconciliation_digest": record["reconciliation_digest"],
+                        "coverage_digest": coverage})
     else:
         check_candidate_may_run(chain, bindings["candidate"]["commit"])
         check_batch_records(batch_records(paths))
@@ -1303,8 +1418,17 @@ def _attempt_plan(ctx: harness.Context, slot: dict[str, Any]) -> AttemptPlan:
                        runner_input=runner, evaluator_input=evaluator)
 
 
+def _check_provider_model(path: Path, summary: dict[str, Any],
+                          preflight_model: str) -> dict[str, Any]:
+    """Seal a running batch whose provider now answers under a model the preflight never saw."""
+    if (summary["status"] == "OPEN" and summary["provider_model"] is not None
+            and summary["provider_model"] != preflight_model):
+        return ledger.append(path, "batch_sealed", {"reason": "model_identity_changed"})
+    return summary
+
+
 def _seal_if_owed(path: Path, summary: dict[str, Any]) -> dict[str, Any]:
-    if summary["status"] == "OPEN" and summary["open_attempt"] is None and summary["pending_seal"]:
+    if summary["disposition"] == "must_seal":
         return ledger.append(path, "batch_sealed", {"reason": summary["pending_seal"]})
     return summary
 
@@ -1334,27 +1458,42 @@ def drive_batch(ctx: harness.Context, prepared: PreparedBatch, playwright: Any) 
         summary = ledger.read(path)[1]
         if summary["open_attempt"] is not None:
             summary = _seal_if_owed(path, driver.recover_open_attempt())
-            last = summary["attempts"][-1]
-            if (summary["status"] == "OPEN" and last["replacement_eligible"]
-                    and last["replacement_of"] is None and not stopped(summary)):
-                slot = next(item for item in summary["slots"] if item["slot_id"] == last["slot_id"])
-                plan = _attempt_plan(ctx, slot)
-                plan.replacement_of = last["attempt_id"]
-                summary = _seal_if_owed(path, driver.run_attempt(plan))
+        # The review of f85c1c1: a batch that held while the provider had already answered under
+        # another model string could not be sealed for it -- the ledger refused every reason
+        # while it held -- so the entry resumed, ran the replacement and the next slot, and only
+        # then compared. The drift is a fault the batch met, and §7 seals for it at once, so it
+        # is asked here, before anything else this run would send.
+        summary = _check_provider_model(path, summary, preflight_model)
+        # The slot an interrupted attempt ran is owed its replacement whether the driver that ran
+        # it died in this process or in an earlier one. The qualification of 6382d75: this stood
+        # inside the recovery above, and a batch that held for a bill had already closed that
+        # attempt in the run before, so the run that resumed it skipped the replacement its slot
+        # was owed and went on to the next slot. A driver that died may also have left a call
+        # nobody settled; while its cost is unknown neither the replacement nor a slot runs.
+        last = summary["attempts"][-1] if summary["attempts"] else None
+        if (last is not None and summary["disposition"] == "running"
+                and last["replacement_eligible"] and last["replacement_of"] is None
+                # Asked after the disposition, which `stopped` is not part of: it seals, and a
+                # batch that holds refuses a seal, so asking it first would raise here.
+                and not stopped(summary)):
+            slot = next(item for item in summary["slots"] if item["slot_id"] == last["slot_id"])
+            plan = _attempt_plan(ctx, slot)
+            plan.replacement_of = last["attempt_id"]
+            summary = _seal_if_owed(path, driver.run_attempt(plan))
+            # The review of 8c4025d: the model string was compared against the preflight only
+            # after a slot, never after this replacement -- and a batch whose killed attempt
+            # answered nothing gets its first answer here.
+            summary = _check_provider_model(path, summary, preflight_model)
         for slot in summary["slots"]:
             current = ledger.read(path)[1]
-            if current["status"] != "OPEN":
-                break
             if next(item for item in current["slots"] if item["slot_id"] == slot["slot_id"])[
                     "attempts"]:
                 continue
-            if stopped(current):
+            # Sealed, complete, holding or owing a seal: only a running batch takes the slot.
+            if current["disposition"] != "running" or stopped(current):
                 break
             current = driver.run_slot(_attempt_plan(ctx, slot))
-            if (current["status"] == "OPEN" and current["provider_model"] is not None
-                    and current["provider_model"] != preflight_model):
-                # The provider now answers under a model string the preflight did not see.
-                ledger.append(path, "batch_sealed", {"reason": "model_identity_changed"})
+            _check_provider_model(path, current, preflight_model)
     summary = harness.finish_batch(path)
     if summary["status"] != "OPEN" and stop_requested(prepared.stop_request, batch_id):
         prepared.stop_request.unlink(missing_ok=True)
@@ -1560,7 +1699,19 @@ def development_report(paths: FormalPaths) -> dict[str, Any]:
             raise FormalError(str(exc)) from exc
         if late:
             raise FormalError(f"{header['batch_id']} was announced after its first attempt")
-    task_set = json.loads(harness.DEVELOPMENT_TASK_SET.read_text())
+    # The review of 8c4025d: the report read the task set from disk and never held it against
+    # the seal the freeze bound, so moving one task from normal to refusal after a batch
+    # completed changed the denominator the gate divides by -- twenty-five to twenty-four --
+    # and could turn a failing screening gate into a passing one, with both reports verifying.
+    # The classes and strata it reads are the frozen ones or the report is refused.
+    try:
+        task_set = json.loads(harness.DEVELOPMENT_TASK_SET.read_text(encoding="utf-8"))
+        seal = tasks.verify_task_content(
+            task_set, json.loads(harness.DEVELOPMENT_SEAL.read_text(encoding="utf-8")))
+    except (OSError, ValueError, KeyError, TypeError, tasks.TaskSetError) as exc:
+        raise FormalError(f"the development task set does not match its seal: {exc}") from exc
+    if seal["seal_digest"] != first["development_seal_digest"]:
+        raise FormalError("the development task set is not the one the first freeze sealed")
     # ``record`` is now the newest batch's announcement, which names the preflight it relied on.
     preflight = preflight_record(paths, record.get("preflight_digest"))
     plan = development_plan(first_freeze=first, first_freeze_commit=commit,
@@ -1625,8 +1776,8 @@ def status(paths: FormalPaths) -> dict[str, Any]:
             "preflight_can_start": preflight,
             "development_can_start": preflight and all(
                 checks[name] == "READY" for name in DEVELOPMENT_CHECKS),
-            "development_also_needs": ("the verified candidate and a fixture manifest taken with "
-                                       "it, checked when the batch starts"),
+            "development_also_needs": ("the verified candidate and a fixture manifest describing "
+                                       "the fixture it runs on, checked when the batch starts"),
             "runtime_binding_digest": binding, "batches": found.get("batches"),
             "development_running": development_running(paths), "stop_requested_for": stop,
             "heldout": HELDOUT_UNAVAILABLE}

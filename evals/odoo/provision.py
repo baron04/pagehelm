@@ -160,6 +160,51 @@ def _wait_login(stack: Stack, timeout_s: float = 300) -> None:
     raise StackError("the Odoo login page did not become reachable")
 
 
+def reuse_fixture(private: Path, *, build: bool = True) -> dict[str, Any]:
+    """Bring the stack up on a rebuilt Agent image and keep the fixture that is already there.
+
+    Seeding, the baseline snapshot, the stability proof and the manifest describe the fixture,
+    and a rebuilt candidate leaves the fixture alone: the database is seeded through Odoo's own
+    RPC and the Agent reaches it only as a trial's actor. So a candidate-only rebuild checks
+    rather than repeats them -- the recorded manifest must describe the fixture that is up, and
+    the live fixture must still be the recorded baseline. Either check failing means the fixture
+    is not the one that was qualified, and it says to rebuild it whole.
+    """
+    stack = Stack(private_dir=private)
+    timings: dict[str, float] = {}
+    started = time.monotonic()
+    prepare_inputs(stack, private)
+    stack.run([sys.executable, "-m", "web_operation_agent_odoo.deploy", "assets"], timeout=600)
+    if build:
+        stack.build("odoo", "agent")
+    timings["inputs_and_images"] = round(time.monotonic() - started, 1)
+    stack.compose("up", "-d", timeout=900)
+    _wait_login(stack)
+    timings["stack_up"] = round(time.monotonic() - started, 1)
+    recovery = json.loads((private / "recovery" / "recovery.json").read_text())
+    population = population_module.generate(
+        (private / "seeds" / "development.seed").read_text().strip())
+    target = private / "qualification" / "fixture-manifest.json"
+    record = manifest.verify_manifest(
+        json.loads(target.read_text()),
+        inputs=manifest.fixture_inputs(stack, population=population),
+        baseline_guard_digest=recovery["baseline_digest"])
+    guard = fixture.FixtureGuard(stack)
+    live = guard.capture()["digest"]
+    timings["fixture_verified"] = round(time.monotonic() - started, 1)
+    if live != recovery["baseline_digest"]:
+        raise StackError(
+            "the fixture is not the recorded baseline any more; provision --destroy-first")
+    return {
+        "kind": "p74_provision_record", "fixture_id": fixture.FIXTURE_ID, "reused_fixture": True,
+        "population_digest": digest_json(population),
+        "baseline_guard_digest": recovery["baseline_digest"],
+        "candidate": stack.verify_candidate(),
+        "stability_status": record["stability_proof"]["status"],
+        "manifest_digest": record["manifest_digest"], "timings_s": timings,
+    }
+
+
 def provision(private: Path, *, destroy_first: bool, stability_interval_s: float,
               build: bool = True) -> dict[str, Any]:
     stack = Stack(private_dir=private)
@@ -227,12 +272,19 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m evals.odoo.provision")
     parser.add_argument("--private-dir", default=str(REPOSITORY / ".private" / "p74-odoo-v1"))
     parser.add_argument("--destroy-first", action="store_true")
+    parser.add_argument("--reuse-fixture", action="store_true",
+                        help="rebuild the candidate and keep the fixture that is already "
+                             "provisioned, provided it is still the one the manifest describes")
     parser.add_argument("--stability-interval", type=float, default=300)
     parser.add_argument("--no-build", action="store_true")
     parser.add_argument("--record")
     args = parser.parse_args(argv)
-    result = provision(Path(args.private_dir), destroy_first=args.destroy_first,
-                       stability_interval_s=args.stability_interval, build=not args.no_build)
+    if args.reuse_fixture and args.destroy_first:
+        parser.error("--reuse-fixture keeps the fixture; --destroy-first replaces it")
+    result = (reuse_fixture(Path(args.private_dir), build=not args.no_build)
+              if args.reuse_fixture else
+              provision(Path(args.private_dir), destroy_first=args.destroy_first,
+                        stability_interval_s=args.stability_interval, build=not args.no_build))
     if args.record:
         _private_write(Path(args.record), (json.dumps(result, indent=2, sort_keys=True)
                                            + "\n").encode())

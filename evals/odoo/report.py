@@ -68,12 +68,22 @@ FORBIDDEN_KEYS = frozenset({"prompt", "answer", "messages", "record_name",
                             "provider_request_id"})
 CLAIMS = ("success_rate_proven", "engine_attribution", "non_inferiority")
 #: Stated in every report, whatever its numbers: what the measurement cannot show.
+#:
+#: The last two are about what the thirty tasks are made of. The others describe the provider
+#: and the fixture, and a reader could take the balance the strata do have for a balance across
+#: every dimension the task set declares. It is balanced by stratum and by nothing else: the
+#: development set is twenty-nine Chinese tasks to one English, twenty-nine of the writer actor
+#: to one reader and none of the third, and no task runs more than two turns where the protocol
+#: allows four. Each task is observed exactly twice, so a figure for one task, one tool or one
+#: business action rests on at most four attempts.
 LIMITATIONS = (
     "provider_alias_is_not_a_model_snapshot",
     "results_hold_only_for_the_recorded_provider_alias_and_utc_window",
     "canary_detects_some_drift_and_cannot_prove_unchanged_weights",
     "synthetic_single_application_fixture",
     "screening_gate_is_not_a_reliability_proof",
+    "balanced_by_stratum_only_not_by_locale_actor_or_turn_depth",
+    "two_observations_per_task_support_no_per_task_or_per_action_rate",
 )
 #: What a frozen plan fixes; a batch is gated only if its header matches every one of them.
 PLAN_FIELDS = ("purpose", "protocol_digest", "task_set_seal_digest", "fixture_manifest_digest",

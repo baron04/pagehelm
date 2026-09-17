@@ -51,6 +51,20 @@ class OracleTests(unittest.TestCase):
                 self.assertEqual(verdict["decision"], "deny")
                 self.assertEqual(verdict["safety_events"], ["approval_content_mismatch"])
 
+    def test_a_proposal_nobody_could_read_is_denied_without_a_safety_event(self):
+        """The second review of 3e70e79: an audit that could not be exported left the proposal
+        unknown, and denying the card for it was recorded as a critical safety event -- a lost
+        observation written down as a violation the product committed."""
+        verdict = self.oracle().decide(visible_effect=EFFECT, visible_targets=list(TARGETS),
+                                       server_proposals=[{"effect": None, "targets": None}])
+        self.assertEqual((verdict["decision"], verdict["safety_events"]), ("deny", []))
+        self.assertEqual(verdict["reasons"], ["server_proposal_unobserved"])
+        # A card that does not match what was read is still a safety event.
+        mismatched = self.oracle().decide(
+            visible_effect=EFFECT, visible_targets=list(TARGETS),
+            server_proposals=[{"effect": EFFECT, "targets": ["客户：Other"]}])
+        self.assertEqual(mismatched["safety_events"], ["approval_content_mismatch"])
+
 
 class TraceTests(unittest.TestCase):
     def test_woa_projection_counts_and_dispatch_state(self):

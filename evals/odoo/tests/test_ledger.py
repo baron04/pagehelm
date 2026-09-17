@@ -326,6 +326,108 @@ class AgentStateTests(unittest.TestCase):
 
 
 class MandatorySealTests(unittest.TestCase):
+    def test_an_attempt_must_seal_for_the_most_serious_reason_it_names(self):
+        """The review of 3e70e79: the attempt chose one reason and the ledger saw only that one,
+        so the batch's reason followed whichever fault the driver recorded first."""
+        harness = LedgerHarness(self, slots(2))
+        attempt = harness.start("s000")
+        outcome = classify(product_started=True, dispatch_state="none",
+                           runner_terminal="completed",
+                           apparatus_events=[ApparatusEvent("accounting_failure",
+                                                            "gateway_accounting_record")],
+                           evaluation=Evaluation("PASS", decisive=True),
+                           request_contract_violation=True).as_record()
+        self.assertEqual(outcome["seal_reason"], "request_contract_violation")
+        for broken in ({**outcome, "seal_reason": "accounting_failure"},
+                       {**outcome, "seal_reasons": ["operator_stop", "made_up"]},
+                       {**outcome, "seal_reasons": []}):
+            with self.assertRaises(ledger.LedgerError):
+                ledger.append(harness.path, "attempt_outcome",
+                              {"attempt_id": attempt, **broken, "evaluation_digest": None,
+                               "truth_digest": None})
+        # Both reasons reach the batch, and it seals for the more serious one.
+        summary = harness.finish(attempt, classify(
+            product_started=True, dispatch_state="none", runner_terminal="completed",
+            apparatus_events=[ApparatusEvent("accounting_failure", "gateway_accounting_record")],
+            evaluation=Evaluation("PASS", decisive=True), request_contract_violation=True))
+        self.assertEqual(summary["pending_seal"], "request_contract_violation")
+        self.assertEqual(summary["seal_reasons"],
+                         ["request_contract_violation", "accounting_failure"])
+
+    def test_a_call_whose_cost_is_unknown_holds_the_batch_until_the_bill_accounts_for_it(self):
+        """The reviews of 6376c20: the entry checked reconciliation once, before the batch, so a
+        call left unresolved in the fifth attempt did not stop the other fifty-five. The cost of
+        a paid call is unknown until the bill says, and a batch that owes one makes no more."""
+        harness = LedgerHarness(self, slots(2))
+        attempt = harness.start("s000")
+        request = {"attempt_id": attempt, "request_seq": 1, "body_digest": DIGEST,
+                   "requested_model": "qwen3.8-flash", "max_output_tokens": 2048,
+                   "parameters": {"temperature": 0.0, "max_tokens": 2048, "tool_choice": "auto",
+                                  "tools": 0, "options": {}}}
+        ledger.append(harness.path, "model_request_dispatched", request)
+        summary = ledger.append(harness.path, "model_response_unresolved", {
+            "attempt_id": attempt, "request_seq": 1, "reason": "driver_process_exit"})
+        self.assertEqual(summary["cost_unknown"], [f"{attempt}#1"])
+        # The attempt still closes: what it already did is recorded, and the reset still runs.
+        with self.assertRaisesRegex(ledger.LedgerError, "holds for a call whose cost is unknown"):
+            ledger.append(harness.path, "model_request_dispatched", {**request, "request_seq": 2})
+        harness.finish(attempt, PASS, calls=1, unavailable=1)
+        for kind, body in (("attempt_started", None), ("batch_completed", {})):
+            with self.assertRaisesRegex(ledger.LedgerError, "cost is unknown"):
+                if kind == "attempt_started":
+                    harness.start("s001")
+                else:
+                    ledger.append(harness.path, "batch_completed", body)
+        # Nor may the operator stop a batch that owes a bill: nobody could resume it to pay.
+        with self.assertRaisesRegex(ledger.LedgerError, "before stopping the batch"):
+            ledger.append(harness.path, "batch_sealed", {"reason": "operator_stop"})
+        # The reconciliation covers the calls it names, and only calls this batch owes.
+        applied = {"covered_calls": [f"{attempt}#1"], "reconciliation_digest": DIGEST,
+                   "coverage_digest": DIGEST}
+        for refused in ({**applied, "covered_calls": []},
+                        {**applied, "covered_calls": [f"{attempt}#2"]},
+                        {**applied, "covered_calls": [f"{attempt}#1", f"{attempt}#1"]}):
+            with self.assertRaises(ledger.LedgerError):
+                ledger.append(harness.path, "billing_reconciliation_applied", refused)
+        summary = ledger.append(harness.path, "billing_reconciliation_applied", applied)
+        self.assertEqual(summary["cost_unknown"], [])
+        # The same batch goes on; it was never ended.
+        harness.finish(harness.start("s001"), PASS)
+        self.assertEqual(ledger.append(harness.path, "batch_completed", {})["status"],
+                         "COMPLETE")
+
+    def test_a_batch_that_holds_still_seals_for_a_fault_it_met(self):
+        """A safety event does not wait on a bill."""
+        harness = LedgerHarness(self, slots(2))
+        attempt = harness.start("s000")
+        ledger.append(harness.path, "model_request_dispatched", {
+            "attempt_id": attempt, "request_seq": 1, "body_digest": DIGEST,
+            "requested_model": "qwen3.8-flash", "max_output_tokens": 2048,
+            "parameters": {"temperature": 0.0, "max_tokens": 2048, "tool_choice": "auto",
+                           "tools": 0, "options": {}}})
+        ledger.append(harness.path, "model_response_unresolved", {
+            "attempt_id": attempt, "request_seq": 1, "reason": "provider_deadline_elapsed"})
+        unsafe = classify(product_started=True, dispatch_state="acknowledged",
+                          runner_terminal="completed",
+                          evaluation=Evaluation("FAIL", decisive=True,
+                                                safety_events=("unauthorized_dispatch",)))
+        harness.finish(attempt, unsafe, calls=1, unavailable=1)
+        summary = ledger.append(harness.path, "batch_sealed",
+                                {"reason": "critical_safety_event"})
+        self.assertEqual(summary["seal_reason"], "critical_safety_event")
+        # The debt is still recorded, and the paid entry still reads it.
+        self.assertEqual(summary["cost_unknown"], [f"{attempt}#1"])
+
+    def test_a_seal_the_batch_was_told_to_take_joins_the_reasons_it_met(self):
+        """The review of 6376c20: a reason given to `batch_sealed` rather than met by an attempt
+        -- an operator's stop -- ended the batch without joining `seal_reasons`, so the summary
+        named a seal its own fact set did not hold."""
+        harness = LedgerHarness(self, slots(2))
+        harness.finish(harness.start("s000"), PASS)
+        summary = ledger.append(harness.path, "batch_sealed", {"reason": "operator_stop"})
+        self.assertEqual((summary["seal_reason"], summary["seal_reasons"]),
+                         ("operator_stop", ["operator_stop"]))
+
     def test_a_batch_seals_for_the_most_serious_reason_it_met_not_the_first(self):
         """The design review of 102c2f4: the reason a batch sealed for was whichever arrived
         first, so the timing of a provider answer could outrank what the product did."""
@@ -684,3 +786,200 @@ class ExposureTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DispositionTests(unittest.TestCase):
+    """What a batch may do next, as one value and one table.
+
+    The reviews of 6376c20 and the qualification of 6382d75 found three defects in this area,
+    and none of them was a rule anyone had left out: each was a combination of `open_attempt`,
+    `pending_seal`, `cost_unknown` and `status` that the driver, the entry or the harness read
+    on its own and no one enumerated. They are enumerated here.
+    """
+
+    def _running(self):
+        return LedgerHarness(self, slots(2))
+
+    def _attempt_open(self):
+        harness = self._running()
+        harness.start("s000")
+        return harness
+
+    def _must_seal(self):
+        harness = self._running()
+        harness.finish(harness.start("s000"), PASS, reset="FAIL")
+        return harness
+
+    def _holding(self):
+        harness = self._running()
+        attempt = harness.start("s000")
+        ledger.append(harness.path, "model_request_dispatched", {
+            "attempt_id": attempt, "request_seq": 1, "body_digest": DIGEST,
+            "requested_model": "qwen3.8-flash", "max_output_tokens": 2048,
+            "parameters": {"temperature": 0.0, "max_tokens": 2048, "tool_choice": "auto",
+                           "tools": 0, "options": {"thinking_budget": 1024}}})
+        for kind, body in (
+                ("attempt_outcome", {"attempt_id": attempt, **PASS.as_record(),
+                                     "evaluation_digest": None, "truth_digest": None}),
+                ("reset_outcome", {"attempt_id": attempt, "outcome": "NOT_REQUIRED", "basis": [],
+                                   "guard_digest": None, "agent": CLEAN_AGENT}),
+                ("attempt_cost", {"attempt_id": attempt, "model_calls": 1,
+                                  "usage_unavailable_calls": 1, "input_tokens": 0,
+                                  "output_tokens": 0, "cached_tokens": 0, "reasoning_tokens": 0,
+                                  "known_cost_cny": 0.0, "total_cost_cny": None}),
+                ("attempt_metrics", metrics(attempt)),
+                ("model_response_unresolved", {"attempt_id": attempt, "request_seq": 1,
+                                               "reason": "provider_deadline_elapsed"}),
+                ("attempt_terminal", {"attempt_id": attempt})):
+            ledger.append(harness.path, kind, body)
+        return harness
+
+    def _sealed(self):
+        harness = self._must_seal()
+        ledger.append(harness.path, "batch_sealed", {"reason": "reset_failed"})
+        return harness
+
+    def _complete(self):
+        harness = self._running()
+        for slot_id in ("s000", "s001"):
+            harness.finish(harness.start(slot_id), PASS)
+        ledger.append(harness.path, "batch_completed", {})
+        return harness
+
+    def test_each_state_of_the_ledger_has_one_disposition(self):
+        for name in ("running", "attempt_open", "must_seal", "holding", "sealed", "complete"):
+            with self.subTest(disposition=name):
+                summary = ledger.read(getattr(self, f"_{name}")().path)[1]
+                self.assertEqual(summary["disposition"], name)
+                self.assertIn(summary["disposition"], ledger.DISPOSITIONS)
+
+    def test_what_each_disposition_lets_the_batch_do(self):
+        """The table the driver, the entry and the harness now share, asked of the writer itself.
+
+        `complete` is refused everywhere here because every one of these batches still has a slot
+        with no attempt; that a full batch completes is :meth:`test_a_full_batch_completes` below.
+        """
+        expected = {
+            #              start  seal(operator_stop)  seal(the one it owes)
+            "running":      (True,  True,   None),
+            "attempt_open": (False, False,  None),
+            "must_seal":    (False, False,  True),
+            "holding":      (False, False,  None),
+        }
+        for name, (starts, stops, owed) in expected.items():
+            harness = getattr(self, f"_{name}")()
+            attempt = ledger.read(harness.path)[1]["open_attempt"]
+            with self.subTest(disposition=name):
+                self.assertEqual(self._accepts(harness, "attempt_started", attempt), starts)
+                # An operator's stop is the seal a batch takes only while it is running.
+                self.assertEqual(self._accepts(harness, "batch_sealed", attempt), stops)
+                if owed is not None:
+                    self.assertEqual(
+                        self._accepts(harness, "batch_sealed", attempt, reason="__owed__"), owed)
+                self.assertFalse(self._accepts(harness, "batch_completed", attempt))
+
+    def test_forwarding_follows_the_hold_and_not_the_disposition(self):
+        """The review of 8c4025d: the table above claimed a call may be forwarded whenever an
+        attempt is open, and proved it from a fixture that happened to owe no bill. An attempt
+        open while the batch holds is still `attempt_open` -- the attempt must be closed before
+        anything else, whatever it owes -- so what a call may do follows `cost_unknown`, which
+        is what the gateway reads. The two are asserted apart."""
+        open_attempt = self._attempt_open()
+        held = self._attempt_open()
+        attempt = ledger.read(held.path)[1]["open_attempt"]
+        ledger.append(held.path, "model_request_dispatched", {
+            "attempt_id": attempt, "request_seq": 1, "body_digest": DIGEST,
+            "requested_model": "qwen3.8-flash", "max_output_tokens": 2048,
+            "parameters": {"temperature": 0.0, "max_tokens": 2048, "tool_choice": "auto",
+                           "tools": 0, "options": {"thinking_budget": 1024}}})
+        ledger.append(held.path, "model_response_unresolved", {
+            "attempt_id": attempt, "request_seq": 1, "reason": "provider_deadline_elapsed"})
+        summaries = {name: ledger.read(item.path)[1]
+                     for name, item in (("free", open_attempt), ("held", held))}
+        # Both are the same disposition, and they differ on what a call may do.
+        self.assertEqual({item["disposition"] for item in summaries.values()}, {"attempt_open"})
+        self.assertFalse(summaries["free"]["cost_unknown"])
+        self.assertTrue(summaries["held"]["cost_unknown"])
+        self.assertTrue(self._accepts(
+            open_attempt, "model_request_dispatched",
+            ledger.read(open_attempt.path)[1]["open_attempt"]))
+        self.assertFalse(self._accepts(held, "model_request_dispatched", attempt, seq=2))
+
+    def test_a_full_batch_completes_and_a_complete_one_takes_nothing_more(self):
+        harness = self._running()
+        for slot_id in ("s000", "s001"):
+            harness.finish(harness.start(slot_id), PASS)
+        self.assertEqual(ledger.read(harness.path)[1]["disposition"], "running")
+        self.assertTrue(self._accepts(harness, "batch_completed"))
+        ledger.append(harness.path, "batch_completed", {})
+        summary = ledger.read(harness.path)[1]
+        self.assertEqual((summary["disposition"], summary["status"]), ("complete", "COMPLETE"))
+        for kind in ("attempt_started", "batch_sealed", "batch_completed"):
+            with self.subTest(kind=kind):
+                self.assertFalse(self._accepts(harness, kind))
+
+    def _accepts(self, harness, kind, attempt=None, *, reason="operator_stop", seq=1):
+        summary = ledger.read(harness.path)[1]
+        # The ledger schedules slots in order, so the probe asks for the one that is next
+        # rather than for a slot the batch would refuse whatever its disposition.
+        slot = next((item for item in summary["slots"] if not item["attempts"]),
+                    summary["slots"][-1])
+        bodies = {
+            "attempt_started": {
+                "attempt_id": "probe", "slot_id": slot["slot_id"], "arm": slot["arm"],
+                "task_id": slot["task_id"], "replicate": slot["replicate"], "run_id": "run-probe",
+                "fixture_digest": DIGEST, "capability_digest": DIGEST,
+                "provider_config_digest": DIGEST, "provider_binding_digest": DIGEST,
+                "replacement_of": None},
+            "model_request_dispatched": {
+                "attempt_id": attempt, "request_seq": seq, "body_digest": DIGEST,
+                "requested_model": "qwen3.8-flash", "max_output_tokens": 2048,
+                "parameters": {"temperature": 0.0, "max_tokens": 2048, "tool_choice": "auto",
+                               "tools": 0, "options": {"thinking_budget": 1024}}},
+            "batch_sealed": {"reason": reason},
+            "batch_completed": {},
+        }
+        # Appended to a copy through the writer itself: an entry this test builds by hand is
+        # refused for its shape, which would answer "the batch may not" for every rule alike.
+        copy = harness.path.with_name(f"probe-{kind}.jsonl")
+        copy.write_bytes(harness.path.read_bytes())
+        copy.chmod(0o600)
+        if kind == "batch_sealed" and reason == "__owed__":
+            bodies[kind] = {"reason": summary["pending_seal"]}
+        try:
+            ledger.append(copy, kind, bodies[kind])
+        except ledger.LedgerError:
+            return False
+        finally:
+            copy.unlink(missing_ok=True)
+        return True
+
+    def test_a_batch_that_holds_still_seals_for_a_model_the_preflight_never_saw(self):
+        """The review of f85c1c1: the ledger refused every reason supplied from outside while a
+        batch held, not the operator's stop its own comment named. A provider answering under
+        another model string is a fault the batch met, and the protocol seals for it at once."""
+        harness = self._holding()
+        summary = ledger.read(harness.path)[1]
+        self.assertEqual(summary["disposition"], "holding")
+        self.assertTrue(summary["cost_unknown"])
+        # The fault it met seals it; the operator's own stop still cannot end it.
+        self.assertFalse(self._accepts(harness, "batch_sealed", reason="operator_stop"))
+        self.assertTrue(self._accepts(harness, "batch_sealed",
+                                      reason="model_identity_changed"))
+        sealed = ledger.append(harness.path, "batch_sealed",
+                               {"reason": "model_identity_changed"})
+        self.assertEqual((sealed["status"], sealed["seal_reason"]),
+                         ("SEALED", "model_identity_changed"))
+
+    def test_a_batch_that_holds_still_seals_for_the_fault_it_met(self):
+        """The one asymmetry in the table: `must_seal` outranks `holding`, so a safety event
+        does not wait on a bill, and an operator's stop still cannot end a batch that owes one."""
+        harness = self._holding()
+        ledger.append(harness.path, "unowned_model_request",
+                      {"body_digest": DIGEST, "reason": "no_attempt_open"})
+        summary = ledger.read(harness.path)[1]
+        self.assertEqual(summary["disposition"], "must_seal")
+        self.assertTrue(summary["cost_unknown"])
+        # It seals for the fault, and still not for an operator's stop.
+        self.assertTrue(self._accepts(harness, "batch_sealed", reason="__owed__"))
+        self.assertFalse(self._accepts(harness, "batch_sealed"))

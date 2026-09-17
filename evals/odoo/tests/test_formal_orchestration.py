@@ -553,6 +553,13 @@ class FormalOrchestrationTests(FormalFixture):
         entries, summary = ledger.read(self.paths.ledgers / "p74b-development-001.jsonl")
         self.assertIn("interrupted_attempt", [entry["kind"] for entry in entries])
         self.assertEqual(summary["attempts"][-1]["reset_outcome"], "FAIL")
+        # The review of 3e70e79: a recovered attempt restored only when the guard, a fixed set of
+        # tables, happened to show a difference. It is put back by a verified restore either way.
+        recovered = next(entry["body"] for entry in entries
+                         if entry["kind"] == "reset_outcome"
+                         and entry["body"]["attempt_id"] == "attempt-001")
+        self.assertEqual(recovered["outcome"], "PASS")
+        self.assertIn("interrupted_attempt_state_unobserved", recovered["basis"])
         # The dead driver never took the interrupted attempt's times.
         self.assertEqual({key: summary["attempts"][0]["metrics"][key]
                           for key in ("automatic_wall_ms", "approval_wait_ms")},
@@ -772,13 +779,43 @@ class FormalOrchestrationTests(FormalFixture):
         outcome = next(entry["body"] for entry in entries
                        if entry["kind"] == "attempt_outcome")
         self.assertEqual((outcome["dispatch_state"], outcome["safety_events"]), ("unknown", []))
-        self.assertEqual(outcome["basis"], ["write_before_apparatus_fault"])
+        # The review of 8c4025d: the fault the attempt met stays on the record beside the
+        # apparatus_code it reduces to.
+        self.assertEqual(outcome["basis"],
+                         ["write_before_apparatus_fault",
+                          "apparatus:browser_or_control_channel_crash/control_channel_error"])
         # The counts that audit would have carried are unknown, never an attempt that did no work.
         metrics = next(entry["body"] for entry in entries
                        if entry["kind"] == "attempt_metrics")
         self.assertEqual([metrics[name] for name in
                           ("page_actions", "invalid_page_actions", "business_calls",
                            "repeated_observations")], [None] * 4)
+
+    def test_an_audit_nobody_could_export_is_not_a_turn_that_never_ended(self):
+        """The second review of 3e70e79: with more than one user turn, an audit that could not be
+        exported was read as turns that reported no ending, which is classification drift and
+        seals the chain. Nobody read how any turn ended; that is not reading that none did."""
+        job = {"evaluator_input": {"task_id": "t", "shape": "followup_fields", "actor": "writer",
+                                   "params": {"related_fields": ["email"],
+                                              "related_model": "res.partner"}},
+               "rpc_url": "http://127.0.0.1:9", "actor_key_files": {}}
+        truth = {"related_name": "Birchall Works QA1",
+                 "related": {"id": 11, "name": "Birchall Works QA1",
+                             "email": "birchall-works-qa1@birchall.example.test"}}
+        self.world.messages, self.world.turns_on = 2, {1: 2}
+        self.world.audit_fails_on, self.world.real_judge = {1}, {1: (job, truth)}
+        self.world.answers = {1: ["客户是 Birchall Works QA1。",
+                                  "邮箱是 birchall-works-qa1@birchall.example.test。"]}
+        head = self.develop()
+        self.assertEqual((head["status"], head["seal_reason"]), ("COMPLETE", None))
+        first = self.summary()["attempts"][0]
+        # Both answers were right; what nobody read is the audit, so the dispatch is unknown and
+        # the attempt is INDETERMINATE -- the same as the single-turn case, and not a product
+        # failure the protocol would seal the chain for.
+        self.assertEqual((first["product_outcome"], first["apparatus_integrity"],
+                          first["apparatus_code"], first["unclassified"]),
+                         ("INDETERMINATE", "INVALID", "browser_or_control_channel_crash", False))
+        self.assertNotIn("missing_turn_ending:0", self.outcome_basis()[0])
 
     def test_an_audit_that_could_not_be_exported_seals_when_the_restore_fails_too(self):
         self.world.audit_fails_on, self.world.reset_fails_on = {1}, {1}
@@ -833,6 +870,12 @@ class FormalOrchestrationTests(FormalFixture):
         self.assertEqual((observation["trace"]["status"], observation["trace"]["complete"]),
                          ("present", False))
         self.assertEqual(observation["turns"]["complete"], True)
+        # The review of 6376c20: completeness was recorded and nothing consumed it, so the
+        # counts a truncated export happened to show stood for what the attempt did.
+        metrics = self.summary()["attempts"][0]["metrics"]
+        self.assertEqual([metrics[name] for name in
+                          ("page_actions", "invalid_page_actions", "business_calls",
+                           "repeated_observations")], [None, None, None, None])
 
     def test_an_earlier_turns_unmapped_ending_is_drift_however_the_last_turn_ended(self):
         # The review of 582e11c (R1): the first turn ended on control_plane_error, the second
@@ -1020,20 +1063,27 @@ class FormalOrchestrationTests(FormalFixture):
         head = self.develop()
         self.assertEqual((head["status"], head["attempts"]), ("COMPLETE", 60))
         link = self.summary(2)["batch"]["previous_batch"]
+        # The link names what covers the sealed batch: its debts and every record that accounts
+        # for them, so a batch reconciled by two records is linked by both.
+        coverage = formal.check_reconciliations(self.paths)["p74b-development-001"]
         self.assertEqual((link["termination_reason"], link["continuation_record"]),
-                         ("accounting_failure", recorded["reconciliation_digest"]))
+                         ("accounting_failure", coverage))
+        self.assertIn(recorded["reconciliation_digest"],
+                      [record["reconciliation_digest"] for record in
+                       formal.reconciliation_claims(self.paths, "p74b-development-001").values()])
 
-    def test_a_call_that_never_settled_is_written_down_and_held_back_for_the_bill(self):
-        # The review of b0fffbe: an unaccounted call answered after the batch ended was lost, so
-        # no later paid call was held back for it. It is now written down while its attempt is
-        # still open, and nobody knows what it cost until the bill says.
+    def test_a_call_whose_cost_is_unknown_holds_the_batch_where_it_stands(self):
+        """The reviews of 6376c20: the batch went on spending after a call nobody could account
+        for, because the entry checked reconciliation once, before the batch. The batch holds
+        where it stands now, and the same batch resumes once the bill accounts for that call --
+        a driver that dies in the fifth attempt does not cost the other fifty-five."""
         arrived, release = threading.Event(), threading.Event()
         self.provider.held = {1: (arrived, release)}
         self.world.late_on, self.world.provider_deadline_s = {1: arrived}, 0.2
         head = self.develop()
         release.set()
-        self.assertEqual((head["status"], head["attempts"], head["usage_unavailable_calls"]),
-                         ("COMPLETE", 60, 1))
+        self.assertEqual((head["status"], head["attempts"]), ("OPEN", 1))
+        self.assertEqual(self.summary()["cost_unknown"], ["attempt-001#1"])
         entries, _ = ledger.read(self.paths.ledgers / "p74b-development-001.jsonl")
         (unresolved,) = [entry["body"] for entry in entries
                          if entry["kind"] == "model_response_unresolved"]
@@ -1043,9 +1093,85 @@ class FormalOrchestrationTests(FormalFixture):
         self.assertEqual(formal.unaccounted_calls(self.paths),
                          {"p74b-development-001": ["attempt-001#1"]})
         self.assertIn("reconcil", formal.status(self.paths)["checks"]["billing_reconciliation"])
+        # Nothing runs while the bill is owed, in this batch or any other.
         with self.assertRaisesRegex(formal.FormalError, "reconcil"):
             formal.prepare_development(self.paths, self.context(private_dir=self.private),
                                        confirm_paid_calls=True)
+        self.assertEqual(self.summary()["attempts"][-1]["attempt_id"], "attempt-001")
+        formal.record_billing_reconciliation(
+            self.paths, spend_batch_id="p74b-development-001", owner="Evaluation Owner",
+            reconciled_at="2026-09-15T12:00:00Z", billed_calls=1, billed_cost_cny=0.0006,
+            evidence_digest=DIGEST, notes=["the provider bill lists the unsettled call"])
+        # The same batch goes on from where it held, and finishes its own schedule.
+        head = self.develop()
+        self.assertEqual((head["status"], head["attempts"], head["batch_id"]),
+                         ("COMPLETE", 60, "p74b-development-001"))
+        self.assertEqual(self.summary()["cost_unknown"], [])
+
+    def test_a_batch_that_owes_a_second_bill_is_reconciled_by_a_second_record(self):
+        """A driver dies, the batch resumes, another dies: the same batch owes the bill twice.
+        Each debt is its own record, covering the calls the earlier records did not."""
+        first_arrived, first_release = threading.Event(), threading.Event()
+        next_arrived, next_release = threading.Event(), threading.Event()
+        self.provider.held = {1: (first_arrived, first_release),
+                              2: (next_arrived, next_release)}
+        self.world.late_on = {1: first_arrived, 2: next_arrived}
+        self.world.provider_deadline_s = 0.2
+        head = self.develop()
+        first_release.set()
+        self.assertEqual((head["status"], self.summary()["cost_unknown"]),
+                         ("OPEN", ["attempt-001#1"]))
+        first = formal.record_billing_reconciliation(
+            self.paths, spend_batch_id="p74b-development-001", owner="Evaluation Owner",
+            reconciled_at="2026-09-15T12:00:00Z", billed_calls=1, billed_cost_cny=0.0006,
+            evidence_digest=DIGEST, notes=["the bill lists the first unsettled call"])
+        # The batch resumes, and the next driver leaves a call of its own unsettled.
+        head = self.develop()
+        next_release.set()
+        self.assertEqual((head["status"], self.summary()["cost_unknown"]),
+                         ("OPEN", ["attempt-002#1"]))
+        self.assertEqual(formal.unaccounted_calls(self.paths),
+                         {"p74b-development-001": ["attempt-001#1", "attempt-002#1"]})
+        self.assertIn("reconcil", formal.status(self.paths)["checks"]["billing_reconciliation"])
+        # The second record covers the second debt and nothing the first already covered.
+        second = formal.record_billing_reconciliation(
+            self.paths, spend_batch_id="p74b-development-001", owner="Evaluation Owner",
+            reconciled_at="2026-09-15T13:00:00Z", billed_calls=1, billed_cost_cny=0.0006,
+            evidence_digest=DIGEST, notes=["the bill lists the second unsettled call"])
+        self.assertEqual((first["covered_calls"], second["covered_calls"]),
+                         (["attempt-001#1"], ["attempt-002#1"]))
+        self.assertEqual(sorted(formal.reconciliation_claims(
+            self.paths, "p74b-development-001")), sorted([first["record"], second["record"]]))
+        # Both debts are covered, so the same batch runs its remaining slots and completes.
+        head = self.develop()
+        self.assertEqual((head["status"], head["attempts"], head["batch_id"]),
+                         ("COMPLETE", 60, "p74b-development-001"))
+        self.assertEqual(self.summary()["cost_unknown"], [])
+        applied = [entry["body"]["covered_calls"] for entry in ledger.read(
+            self.paths.ledgers / "p74b-development-001.jsonl")[0]
+            if entry["kind"] == "billing_reconciliation_applied"]
+        self.assertEqual(applied, [["attempt-001#1"], ["attempt-002#1"]])
+
+    def test_an_attempt_that_holds_the_batch_is_not_followed_by_its_replacement(self):
+        """Both reviews of 8c4025d, independently: `run_slot` read the disposition once, at the
+        top, and then branched on `pending_seal` alone. An attempt that leaves a call nobody
+        settled holds the batch without owing a seal, and the replacement its slot is eligible
+        for was started into a ledger that refuses it -- a LedgerError out of the paid entry
+        where the design says the batch holds."""
+        arrived, release = threading.Event(), threading.Event()
+        self.provider.held = {1: (arrived, release)}
+        self.world.late_on, self.world.provider_deadline_s = {1: arrived}, 0.2
+        self.world.control_crash_on = {1}
+        head = self.develop()
+        release.set()
+        first = self.summary()["attempts"][0]
+        # The attempt is eligible for a replacement and the batch holds for its unsettled call.
+        self.assertIs(first["replacement_eligible"], True)
+        self.assertEqual(self.summary()["cost_unknown"], ["attempt-001#1"])
+        self.assertEqual(self.summary()["disposition"], "holding")
+        # No replacement was attempted, and the batch is still open rather than thrown out of.
+        self.assertEqual([item["replacement_of"] for item in self.summary()["attempts"]], [None])
+        self.assertEqual(head["status"], "OPEN")
 
     def test_a_request_outside_the_frozen_contract_is_the_products_failure_and_seals(self):
         self.world.oversized_output_on = {2}

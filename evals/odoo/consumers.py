@@ -120,6 +120,54 @@ CONSUMERS: dict[str, tuple[Consumer, ...]] = {
     ),
 }
 
+#: Conditional substitutions a consumer makes deliberately, with the reason. A conditional that
+#: yields an empty value reads the same to a static check whether it fills in a missing
+#: observation or states a fact, so each one is written down here and the check exempts these
+#: functions from that one rule only -- `or []` and `.get(name, [])` stay forbidden everywhere.
+#: Each entry names the expression it exempts, not the function around it. The review of 6376c20:
+#: one reason covered a whole function, so the three other substitutions written in it -- one of
+#: them the line that carried the previous round's blocking defect -- were exempted by a reason
+#: about none of them. An expression that is rewritten stops matching and must be justified again.
+DELIBERATE_SUBSTITUTIONS = (
+    ("evals/odoo/evaluator.py", "_text", "'' if answer is None else str(answer)",
+     "A turn the runner stopped, or one whose bridge never returned, shows no answer at all. "
+     "The task asked for one, so the judgement reads it as an empty answer and fails the "
+     "product; the turn itself was observed, and it is its content that is absent."),
+    ("evals/odoo/evaluator.py", "judge",
+     "[ex.Money(_decimal(naive), p['currency'])] if _decimal(naive) != _decimal(amount) else []",
+     "It chooses between a value and an empty one from the task's own truth -- the forbidden "
+     "answers a currency sum has only when the naive total differs -- rather than from an "
+     "observation. What `judge` reads of the attempt goes through `_read`, `_page_is` and "
+     "`_no_changes`, which this rule still covers."),
+    ("evals/odoo/driver.py", "Driver.run_attempt",
+     "max(len(recorded_turns), len({int(value['turn']) for value in checkpoints if 'turn' in "
+     "value})) if product_started else 0",
+     "A product that did not start sent no turn. `product_started` is read from the runner's "
+     "own record, so the zero is that observation's consequence rather than a stand-in for a "
+     "count nobody took."),
+    ("evals/odoo/driver.py", "Driver.run_attempt",
+     "audit_read.value if audit_read.available else []",
+     "The empty audit is read only by `agent_assertions`, and there it counts every prepared "
+     "proposal as still open: an audit nobody read closes nothing. It moves the attempt toward "
+     "residue, never toward clean, and what the product dispatched and counted is taken from "
+     "`UNREAD_TRACE` on the next line rather than from this list."),
+    ("evals/odoo/driver.py", "Driver.run_attempt",
+     "guard_read.value if guard_read.available else []",
+     "A guard nobody could capture shows no differences, and this list is never read as a "
+     "fixture that did not change: the unread capture raises its own apparatus event above, and "
+     "the reset is forced whatever the list holds."),
+    ("evals/odoo/driver.py", "Driver.run_attempt",
+     "artifact['approvals'] if arm == 'woa_product' else []",
+     "Only the product has an approval channel. The browser-only arm has none to observe, so "
+     "the empty list is what that arm is rather than a record its runner failed to write."),
+    ("evals/odoo/driver.py", "agent_assertions",
+     "set(end['prepared_proposals']) if end is not None else set()",
+     "An end state nobody could read holds no proposals to compare, and the zero counts that "
+     "follow are never read as an attempt that left nothing open: `_agent_counts` records that "
+     "state as null, and a started attempt whose end state was unreadable returns "
+     "`agent_state_unreadable` residue below before any count of it is judged."),
+)
+
 #: Functions that turn a record into a capture and decide nothing themselves. They read every
 #: component alike, so they are listed once rather than under each source.
 SHARED_READERS = (

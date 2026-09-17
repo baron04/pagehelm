@@ -210,6 +210,22 @@ def verify_seal(value: Any, seal: Any, *, population: dict[str, Any]) -> dict[st
     return expected
 
 
+def verify_task_content(value: Any, seal: Any) -> dict[str, Any]:
+    """Every task is the one the seal froze, by the seal's own per-task digests.
+
+    :func:`verify_seal` answers a wider question and needs the population to answer it. A reader
+    that already holds the seal the freeze bound needs only this: that the tasks in front of it
+    are the tasks that seal names, so a class or a stratum cannot be moved after a batch ran.
+    """
+    task_set = validate_task_set(value)
+    sealed = _validated_seal(seal)
+    nonce = task_set["commitment_nonce"]
+    found = {task["task_id"]: _task_digest(nonce, task) for task in task_set["tasks"]}
+    if found != sealed["task_digests"]:
+        raise TaskSetError("task set no longer matches its frozen seal")
+    return sealed
+
+
 def _validated_seal(seal: Any) -> dict[str, Any]:
     if not isinstance(seal, dict) or seal.get("kind") != "p74_odoo_task_set_seal":
         raise TaskSetError("seal header is invalid")

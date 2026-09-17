@@ -59,16 +59,12 @@ _SEAL_REASONS = frozenset({
     "ledger_corrupted", "state_contamination", "operator_stop",
     "provider_authentication_failed", "accounting_failure", "request_contract_violation",
 })
-#: The order seal reasons reduce in, most serious first. A batch seals for the most serious
-#: reason it met, never for whichever provider answer happened to arrive first; the reasons it
-#: outranks are kept beside it in the summary. What the product or the evidence itself shows
-#: comes before a stop that came from outside it, and an operator's own stop comes last.
-_SEAL_PRIORITY = (
-    "critical_safety_event", "ledger_corrupted", "state_contamination",
-    "classification_contract_drift", "request_contract_violation", "unowned_model_request",
-    "reset_failed", "provider_authentication_failed", "accounting_failure",
-    "model_identity_changed", "replacement_cap_exceeded", "operator_stop",
-)
+#: The order seal reasons reduce in, defined with the outcome axes so an attempt's own reason and
+#: its batch's reason are chosen by one rule rather than two.
+_SEAL_PRIORITY = outcomes.SEAL_PRIORITY
+#: What a batch may do next, most constrained first. A reader branches on one of these rather
+#: than re-deriving it from `status`, `open_attempt`, `pending_seal` and `cost_unknown`.
+DISPOSITIONS = ("complete", "sealed", "attempt_open", "must_seal", "holding", "running")
 #: Stops the product did not cause. After one, the same development candidate may continue and a
 #: qualification batch may start again under the same protocol version.
 EXOGENOUS_STOPS = frozenset({"model_identity_changed", "replacement_cap_exceeded",
@@ -83,7 +79,8 @@ HELDOUT_AUDITED_RESTART_REASONS = frozenset({"provider_authentication_failed",
 KINDS = frozenset({
     "batch_header", "attempt_started", "model_request_dispatched", "model_request_refused",
     "model_response_received", "attempt_checkpoint", *_ATTEMPT_KINDS, *_TERMINAL_KINDS,
-    "unowned_model_request", "model_response_unresolved", "batch_sealed", "batch_completed",
+    "unowned_model_request", "model_response_unresolved", "billing_reconciliation_applied",
+    "batch_sealed", "batch_completed",
 })
 RESPONSE_STATUSES = frozenset({"ok", "http_error", "transport_error", "contract_error",
                                "accounting_error"})
@@ -250,6 +247,10 @@ class _Replay:
         self.pending_seal: str | None = None
         #: Every reason the batch met, whether or not it is the one sealed for.
         self.seal_reasons: set[str] = set()
+        #: Calls whose cost nobody knows, as ``<attempt>#<request>``. While any is outstanding
+        #: the batch holds: it takes no new attempt, forwards no new call and cannot complete.
+        #: The hold is lifted by a reconciliation of the provider's bill, applied here.
+        self.cost_unknown: set[str] = set()
         self.terminal: dict[str, Any] | None = None
         self.batch_model: str | None = None
         self.replacements_by_arm: Counter[str] = Counter()
@@ -385,6 +386,9 @@ class _Replay:
             raise LedgerError("an attempt is already open; the driver is exclusive")
         if self.pending_seal is not None:
             raise LedgerError(f"batch must seal ({self.pending_seal}) before another attempt")
+        if self.cost_unknown:
+            raise LedgerError("this batch holds for a call whose cost is unknown; reconcile it "
+                              "before another attempt")
         if attempt_id in self.attempts or any(
                 item["run_id"] == body["run_id"] for item in self.attempts.values()):
             raise LedgerError("attempt and run ids must be unique")
@@ -436,6 +440,11 @@ class _Replay:
         attempt = self._require_open(body["attempt_id"])
         if attempt["records"]:
             raise LedgerError("model requests must precede the attempt's outcome records")
+        # The last line of the hold: whatever entry point forwarded this call, a batch that owes
+        # a bill for one it already made does not make another.
+        if self.cost_unknown:
+            raise LedgerError("this batch holds for a call whose cost is unknown; reconcile it "
+                              "before forwarding another")
         seq = _count(body["request_seq"], "request_seq")
         if seq != len(attempt["requests"]) + attempt["refusals"] + 1:
             raise LedgerError("model request sequence is not contiguous")
@@ -502,6 +511,32 @@ class _Replay:
         if body["reason"] not in UNRESOLVED_REASONS:
             raise LedgerError("unresolved reason is invalid")
         attempt["unresolved"].add(seq)
+        # Nobody knows what this call cost, so the batch holds until the bill says.
+        self.cost_unknown.add(f"{body['attempt_id']}#{seq}")
+
+    def billing_applied(self, body: dict[str, Any]) -> None:
+        """A committed reconciliation of the provider's bill, applied to the calls it covers.
+
+        It lifts the hold those calls put on the batch and nothing else: the record itself lives
+        in the workbench, and this entry names only which calls it accounts for and the digest
+        of the record that accounts for them. A batch that still holds any other call keeps
+        holding.
+        """
+        _exact(body, {"covered_calls", "reconciliation_digest", "coverage_digest"},
+               "billing_reconciliation_applied")
+        _digest(body["reconciliation_digest"], "reconciliation_digest")
+        _digest(body["coverage_digest"], "coverage_digest")
+        covered = body["covered_calls"]
+        if (not isinstance(covered, list) or not covered
+                or any(not isinstance(item, str) for item in covered)):
+            raise LedgerError("a reconciliation names the calls it covers")
+        if sorted(covered) != covered or len(set(covered)) != len(covered):
+            raise LedgerError("covered calls are listed once, in order")
+        unknown = [item for item in covered if item not in self.cost_unknown]
+        if unknown:
+            raise LedgerError("a reconciliation covers only calls whose cost this batch does "
+                              f"not know ({', '.join(unknown[:3])})")
+        self.cost_unknown.difference_update(covered)
 
     def checkpoint(self, body: dict[str, Any]) -> None:
         _exact(body, {"attempt_id", "product_started", "dispatch_state", "evidence"},
@@ -526,11 +561,21 @@ class _Replay:
         if kind == "attempt_outcome":
             fields = {"attempt_id", "product_outcome", "apparatus_integrity", "apparatus_code",
                       "unclassified", "product_started", "dispatch_state", "basis",
-                      "safety_events", "seal_reason", "extraction_ambiguous",
+                      "safety_events", "seal_reason", "seal_reasons", "extraction_ambiguous",
                       "replacement_evidence", "evaluation_digest", "truth_digest"}
             _exact(body, fields, "attempt_outcome")
             _digest(body["evaluation_digest"], "evaluation_digest", optional=True)
             _digest(body["truth_digest"], "truth_digest", optional=True)
+            # An attempt names every reason it seals for, and seals for the most serious of
+            # them. The batch reduces the same set by the same order, so which fault the driver
+            # recorded first cannot decide what the batch sealed for.
+            reasons = body["seal_reasons"]
+            if not isinstance(reasons, list) or any(item not in _SEAL_REASONS
+                                                    for item in reasons):
+                raise LedgerError("attempt seal reasons are invalid")
+            if bool(body["seal_reason"]) != bool(reasons) or (
+                    reasons and body["seal_reason"] != min(reasons, key=_SEAL_PRIORITY.index)):
+                raise LedgerError("an attempt seals for the most serious reason it names")
             attempt["outcome"] = body
         elif kind == "reset_outcome":
             _exact(body, {"attempt_id", "outcome", "basis", "guard_digest", "agent"},
@@ -611,8 +656,9 @@ class _Replay:
         attempt["replacement_eligible"] = eligible
         attempt["terminal"] = kind
         self.open_attempt = None
-        if outcome["seal_reason"]:
-            self._mark_seal(outcome["seal_reason"])
+        # Every reason the attempt named, not only the one it reduced to.
+        for reason in outcome["seal_reasons"]:
+            self._mark_seal(reason)
         if reset in {"FAIL", "INDETERMINATE"}:
             self._mark_seal("reset_failed")
         if (outcome["apparatus_integrity"] == "INVALID" and outcome["apparatus_code"]
@@ -654,6 +700,8 @@ class _Replay:
             self._mark_seal("unowned_model_request")
         elif kind == "model_response_unresolved":
             self.model_unresolved(body)
+        elif kind == "billing_reconciliation_applied":
+            self.billing_applied(body)
         elif kind == "batch_sealed":
             _exact(body, {"reason"}, "batch_sealed")
             if body["reason"] not in _SEAL_REASONS:
@@ -662,9 +710,28 @@ class _Replay:
                 raise LedgerError("close the open attempt before sealing the batch")
             if self.pending_seal is not None and body["reason"] != self.pending_seal:
                 raise LedgerError(f"the batch must seal for {self.pending_seal}")
+            # A batch that holds for a cost nobody knows still seals for a fault it met -- a
+            # safety event must not wait on a bill. What it must not do is end on the operator's
+            # own stop, which would leave that cost owed by a batch nobody can resume.
+            #
+            # The review of f85c1c1: this refused every reason supplied from outside while the
+            # batch held, not the operator's stop it names -- and a model the preflight never
+            # saw is a fault the batch met, so the entry could not seal for it and ran on.
+            if (self.cost_unknown and self.pending_seal is None
+                    and body["reason"] == "operator_stop"):
+                raise LedgerError("this batch holds for a call whose cost is unknown; reconcile "
+                                  "it before stopping the batch")
+            # The review of 6376c20: a reason given here rather than met by an attempt -- an
+            # operator's stop -- became the terminal without joining the reasons the batch met,
+            # so the summary named a seal its own fact set did not hold. It is marked last, so
+            # that an operator's stop cannot satisfy the checks above by being counted early.
+            self._mark_seal(body["reason"])
             self.terminal = {"kind": kind, "reason": body["reason"]}
         elif kind == "batch_completed":
             _exact(body, set(), "batch_completed")
+            if self.cost_unknown:
+                raise LedgerError("a batch holding for a call whose cost is unknown cannot "
+                                  f"complete ({', '.join(sorted(self.cost_unknown)[:3])})")
             if self.open_attempt is not None or self.pending_seal is not None:
                 raise LedgerError("a batch with an open attempt or a pending seal cannot complete")
             if any(not slot["attempts"] for slot in self.slots.values()):
@@ -675,6 +742,28 @@ class _Replay:
             self.terminal = {"kind": kind, "reason": None}
         else:
             raise LedgerError("unknown ledger entry kind")
+
+    def _disposition(self, status: str) -> str:
+        """The one answer to what this batch may do next, in the order the rules outrank.
+
+        An attempt still open is closed before anything else; a fault the batch already met
+        seals it even while it holds for a bill -- a safety event does not wait on a bill -- and
+        a cost nobody knows stops everything else.
+
+        This answers what the *batch* may do. Whether a call may be forwarded is a question
+        about the hold, which outlives an open attempt and which the gateway reads directly:
+        an attempt open while the batch holds is still ``attempt_open``, because closing it
+        comes first whatever it owes.
+        """
+        if self.terminal is not None:
+            return "complete" if status == "COMPLETE" else "sealed"
+        if self.open_attempt is not None:
+            return "attempt_open"
+        if self.pending_seal is not None:
+            return "must_seal"
+        if self.cost_unknown:
+            return "holding"
+        return "running"
 
     def summary(self) -> dict[str, Any]:
         status = "OPEN"
@@ -702,8 +791,18 @@ class _Replay:
             "artifact_version": LEDGER_VERSION,
             "kind": "p74_attempt_ledger_status",
             "status": status,
+            #: What this batch may do next, from what the ledger holds. Every rule below was
+            #: read as its own condition in three places -- the driver, the entry and the
+            #: harness -- and the defects the reviews found there were combinations of those
+            #: conditions no single place enumerated, not rules anyone had left out. An
+            #: operator's stop is deliberately not here: it lives outside the ledger, and a
+            #: caller weighs it against this.
+            "disposition": self._disposition(status),
             "seal_reason": self.terminal["reason"] if self.terminal else None,
             "pending_seal": self.pending_seal,
+            #: The calls this batch holds for. While any is listed it takes no new attempt,
+            #: forwards no new call and cannot complete; a reconciliation of the bill lifts it.
+            "cost_unknown": sorted(self.cost_unknown),
             # Every reason met, most serious first: the batch seals for the first of them and
             # the rest are kept rather than lost to whichever arrived first.
             "seal_reasons": sorted(self.seal_reasons, key=_SEAL_PRIORITY.index),

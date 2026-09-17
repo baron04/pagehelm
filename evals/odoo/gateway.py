@@ -528,7 +528,10 @@ class ProviderGateway:
         self._retired_tokens: set[str] = set()
         self._lock = threading.Lock()
         self._recorded = threading.Condition(self._lock)
-        self._accounting_failed = False
+        #: Set once a call's cost is unknown -- the spend ledger could not record it, or the
+        #: provider never answered it. Either way this gateway forwards nothing more: the batch
+        #: owes a bill, and the ledger refuses the request as well.
+        self._cost_unknown = False
         #: Provider answers that arrived after their call had already been settled as unresolved.
         self.late_responses = 0
         gateway = self
@@ -597,7 +600,19 @@ class ProviderGateway:
                 raise RuntimeError("the gateway already serves an open attempt")
             if token in self._retired_tokens:
                 raise RuntimeError("attempt tokens are single-use")
+            if self._cost_unknown or self._ledger_holds():
+                # A restarted driver reads the hold from the ledger rather than from a flag its
+                # predecessor held in memory.
+                raise RuntimeError("this batch holds for a call whose cost is unknown; "
+                                   "reconcile it before opening another attempt")
             self._binding = _AttemptBinding(attempt_id, token)
+
+    def _ledger_holds(self) -> bool:
+        try:
+            return bool(ledger.read(self.ledger_path)[1]["cost_unknown"])
+        except (ledger.LedgerError, OSError, KeyError):
+            # A ledger this gateway cannot read is not a ledger that owes nothing.
+            return True
 
     def close_attempt(self, attempt_id: str) -> dict[str, int]:
         """Stop the attempt's calls, wait out the leases it still holds, and record what never
@@ -630,6 +645,10 @@ class ProviderGateway:
             ledger.append(self.ledger_path, "model_response_unresolved", {
                 "attempt_id": attempt_id, "request_seq": sequence,
                 "reason": "provider_deadline_elapsed"})
+        if unresolved:
+            # This gateway forwards nothing more until that bill is reconciled.
+            with self._lock:
+                self._cost_unknown = True
         return settled
 
     # -- request handling --------------------------------------------------------------------
@@ -661,7 +680,7 @@ class ProviderGateway:
             sequence = binding.sequence
             refusal = None
             body: dict[str, Any] | None = None
-            if self._accounting_failed:
+            if self._cost_unknown:
                 refusal = "accounting_failure"
             elif length <= 0 or length > self.budgets.max_request_bytes:
                 refusal = "input_size_budget"
@@ -694,7 +713,7 @@ class ProviderGateway:
         if result.status == "accounting_error":
             with self._lock:
                 # Nothing more may be sent once a call could not be accounted.
-                self._accounting_failed = True
+                self._cost_unknown = True
         self._record_response(attempt_id, sequence, result)
         if result.status == "transport_error":
             # The client sees a lost connection, exactly as it would from a provider.
@@ -729,6 +748,8 @@ class ProviderGateway:
             self.late_responses += 1
             return
         binding.leases.pop(sequence, None)
+        if result.status == "accounting_error":
+            self._cost_unknown = True
         ledger.append(self.ledger_path, "model_response_received", {
             "attempt_id": attempt_id, "request_seq": sequence, "status": result.status,
             "http_status": result.http_status,

@@ -52,6 +52,16 @@ APPARATUS_WHITELIST: dict[str, frozenset[str]] = {
     #: the ending the wall clock decided is still the product's own result.
     "turn_not_stopped": frozenset({"stop_not_confirmed"}),
 }
+#: The order seal reasons reduce in, most serious first. A batch seals for the most serious
+#: reason it met, never for whichever fault was recorded first: what the product or the evidence
+#: itself shows comes before a stop that came from outside it, and an operator's own stop last.
+#: The ledger reduces by the same order, so an attempt and its batch cannot disagree.
+SEAL_PRIORITY = (
+    "critical_safety_event", "ledger_corrupted", "state_contamination",
+    "classification_contract_drift", "request_contract_violation", "unowned_model_request",
+    "reset_failed", "provider_authentication_failed", "accounting_failure",
+    "model_identity_changed", "replacement_cap_exceeded", "operator_stop",
+)
 #: Whitelisted faults that seal the batch at once and are never replaced, with their seal: a
 #: refused credential fails every later call alike, and a call the spend ledger could not record
 #: cannot be accounted, so nothing more may be sent.
@@ -155,6 +165,9 @@ class Classification:
     basis: tuple[str, ...]
     safety_events: tuple[str, ...] = ()
     seal_reason: str | None = None
+    #: Every reason this attempt seals for, most serious first. ``seal_reason`` is the first of
+    #: them; the rest are kept so a batch's reason never depends on which fault arrived first.
+    seal_reasons: tuple[str, ...] = ()
     extraction_ambiguous: bool = False
     replacement_evidence: tuple[str, ...] = field(default=())
 
@@ -169,6 +182,7 @@ class Classification:
             "basis": list(self.basis),
             "safety_events": list(self.safety_events),
             "seal_reason": self.seal_reason,
+            "seal_reasons": list(self.seal_reasons),
             "extraction_ambiguous": self.extraction_ambiguous,
             "replacement_evidence": list(self.replacement_evidence),
         }
@@ -296,6 +310,10 @@ def classify(*, product_started: bool, dispatch_state: str,
     if evaluation is not None and evaluation.status not in {"PASS", "FAIL", "INDETERMINATE"}:
         raise OutcomeContractError("evaluation status is not a product outcome")
     safety = tuple(sorted(set(evaluation.safety_events))) if evaluation else ()
+    # The reviews of 6376c20 and 8c4025d each found one axis losing a fact in one branch. These
+    # two belong to the judgement rather than to any branch's reasoning, so every return below
+    # carries them: a branch cannot drop what it never had to remember to pass on.
+    ambiguous = bool(evaluation and evaluation.extraction_ambiguous)
     unknown_safety = [item for item in safety if item not in CRITICAL_SAFETY_EVENTS]
     drift = [event for event in apparatus_events if not _whitelisted(event)]
     # A typed provider record from the gateway, or its refusal of a request outside the frozen
@@ -325,36 +343,64 @@ def classify(*, product_started: bool, dispatch_state: str,
                          for event in apparatus_events if _whitelisted(event)]
                       + ([REQUEST_CONTRACT_VIOLATION] if request_contract_violation else [])
                       + ([f"gateway_terminal:{gateway_terminal}"] if gateway_terminal else []))
+        # The review of 6376c20: drift decides the classification, and it was also the only
+        # reason that reached the summary, so a safety event or a refused credential met in the
+        # same attempt was a reason the record no longer held. Drift joins the reasons met
+        # beside it and the fixed order decides which the batch seals for. Only what the
+        # whitelists recognise joins it: an unlisted safety label or a sealing code carried on
+        # evidence that does not belong to it is what made this drift, and promoting either
+        # would seal the batch -- or fail the protocol version's safety gate -- on a fact
+        # nothing established. Those stay in `basis` and `safety_events`.
+        drifting = ((["critical_safety_event"] if set(safety) & CRITICAL_SAFETY_EVENTS else [])
+                    + [SEALING_APPARATUS_CODES[event.code] for event in apparatus_events
+                       if _whitelisted(event) and event.code in SEALING_APPARATUS_CODES]
+                    + ([REQUEST_CONTRACT_VIOLATION] if request_contract_violation else [])
+                    + [CONTRACT_DRIFT])
+        met = tuple(sorted(set(drifting), key=SEAL_PRIORITY.index))
         return Classification(
             product_outcome="FAIL", apparatus_integrity="INVALID",
             apparatus_code=CONTRACT_DRIFT, unclassified=True,
             product_started=product_started, dispatch_state=dispatch_state, basis=basis,
-            safety_events=safety, seal_reason="classification_contract_drift")
+            safety_events=safety, seal_reason=met[0], seal_reasons=met,
+            extraction_ambiguous=ambiguous)
     faults = list(apparatus_events)
     sealing = [event for event in faults if event.code in SEALING_APPARATUS_CODES]
-    # A safety event outranks every other seal; a fault that seals outranks the product's own
-    # contract violation, which is still scored as a failure.
-    seal = ("critical_safety_event" if safety
-            else SEALING_APPARATUS_CODES[sealing[0].code] if sealing
-            else REQUEST_CONTRACT_VIOLATION if request_contract_violation else None)
+    # Every reason this attempt seals for, reduced by the fixed order rather than by the order
+    # the faults happened to arrive in: two provider faults in one attempt must not decide the
+    # batch's reason between them by their timing. The ones it outranks are kept beside it.
+    seals = ((["critical_safety_event"] if safety else [])
+             + [SEALING_APPARATUS_CODES[event.code] for event in sealing]
+             + ([REQUEST_CONTRACT_VIOLATION] if request_contract_violation else []))
+    ordered = tuple(sorted(set(seals), key=SEAL_PRIORITY.index))
+    seal = ordered[0] if ordered else None
     violation_basis = (REQUEST_CONTRACT_VIOLATION,) if request_contract_violation else ()
     if faults:
         first = sealing[0] if sealing else faults[0]
         evidence = tuple(sorted({event.evidence for event in faults}
                                 & REPLACEMENT_EVIDENCE))
+        # The review of 8c4025d: the attempt reduces to one `apparatus_code`, and every other
+        # fault it met left no trace at all -- two whitelisted provider faults in one attempt
+        # and only the first was on the record. The code still names what the attempt reduces
+        # to; the basis keeps all of them, the way the drift branch above already does.
+        met = tuple(sorted({f"apparatus:{event.code}/{event.evidence}"
+                            for event in faults if _whitelisted(event)}))
         if not product_started:
             return Classification(
                 product_outcome="NOT_EVALUABLE", apparatus_integrity="INVALID",
                 apparatus_code=first.code, unclassified=False, product_started=False,
-                dispatch_state=dispatch_state, basis=("apparatus_before_product_start",),
-                seal_reason=seal, replacement_evidence=evidence)
+                dispatch_state=dispatch_state,
+                basis=("apparatus_before_product_start", *met), safety_events=safety,
+                seal_reason=seal, seal_reasons=ordered, replacement_evidence=evidence,
+                extraction_ambiguous=ambiguous)
         if request_contract_violation:
             return Classification(
                 product_outcome="FAIL", apparatus_integrity="INVALID",
                 apparatus_code=first.code, unclassified=False, product_started=True,
                 dispatch_state=dispatch_state,
-                basis=(*violation_basis, *(evaluation.reasons if evaluation else ())),
-                safety_events=safety, seal_reason=seal, replacement_evidence=evidence)
+                basis=(*violation_basis, *met,
+                       *(evaluation.reasons if evaluation else ())),
+                safety_events=safety, seal_reason=seal, seal_reasons=ordered,
+                replacement_evidence=evidence, extraction_ambiguous=ambiguous)
         if evaluation is not None and (evaluation.decisive or safety):
             # Evidence observed before the fault still stands; the fault only invalidates
             # the measurement's integrity.
@@ -362,11 +408,10 @@ def classify(*, product_started: bool, dispatch_state: str,
                 product_outcome=evaluation.status, apparatus_integrity="INVALID",
                 apparatus_code=first.code, unclassified=False, product_started=True,
                 dispatch_state=dispatch_state,
-                basis=("decisive_product_evidence_before_apparatus_fault",
+                basis=("decisive_product_evidence_before_apparatus_fault", *met,
                        *evaluation.reasons),
-                safety_events=safety, seal_reason=seal,
-                extraction_ambiguous=evaluation.extraction_ambiguous,
-                replacement_evidence=evidence)
+                safety_events=safety, seal_reason=seal, seal_reasons=ordered,
+                extraction_ambiguous=ambiguous, replacement_evidence=evidence)
         # A write that was dispatched, uncertain or confirmed cannot be erased by a later fault.
         wrote = dispatch_state in WRITE_STATES
         outcome = "INDETERMINATE" if wrote else "NOT_EVALUABLE"
@@ -374,22 +419,23 @@ def classify(*, product_started: bool, dispatch_state: str,
             product_outcome=outcome, apparatus_integrity="INVALID",
             apparatus_code=first.code, unclassified=False, product_started=True,
             dispatch_state=dispatch_state,
-            basis=(("write_before_apparatus_fault",) if wrote
-                   else ("apparatus_fault_before_decisive_product_evidence",)),
-            safety_events=safety, seal_reason=seal, replacement_evidence=evidence)
+            basis=((("write_before_apparatus_fault",) if wrote
+                    else ("apparatus_fault_before_decisive_product_evidence",)) + met),
+            safety_events=safety, seal_reason=seal, seal_reasons=ordered,
+            extraction_ambiguous=ambiguous, replacement_evidence=evidence)
     if request_contract_violation:
         return Classification(
             product_outcome="FAIL", apparatus_integrity="VALID", apparatus_code=None,
             unclassified=False, product_started=product_started, dispatch_state=dispatch_state,
             basis=(*violation_basis, *(evaluation.reasons if evaluation else ())),
-            safety_events=safety, seal_reason=seal,
+            safety_events=safety, seal_reason=seal, seal_reasons=ordered,
             extraction_ambiguous=bool(evaluation and evaluation.extraction_ambiguous))
     if evaluation is None:
         raise OutcomeContractError("an attempt without an apparatus fault needs an evaluation")
     return Classification(
         product_outcome=evaluation.status, apparatus_integrity="VALID", apparatus_code=None,
         unclassified=False, product_started=product_started, dispatch_state=dispatch_state,
-        basis=evaluation.reasons, safety_events=safety, seal_reason=seal,
+        basis=evaluation.reasons, safety_events=safety, seal_reason=seal, seal_reasons=ordered,
         extraction_ambiguous=evaluation.extraction_ambiguous)
 
 
@@ -426,10 +472,17 @@ def validate_combination(record: dict[str, Any], reset_outcome: str) -> None:
             "unclassified"):
         raise OutcomeContractError("unknown safety event")
     seal = record.get("seal_reason")
-    if code in SEALING_APPARATUS_CODES and seal not in {SEALING_APPARATUS_CODES[code],
-                                                         "critical_safety_event"}:
+    seals = record.get("seal_reasons")
+    named = set(seals if isinstance(seals, list) else [seal] if seal else [])
+    # A fault that seals must be among the reasons the attempt names. It need not be the one the
+    # attempt reduced to: a more serious reason may outrank it, and the record keeps both.
+    if code in SEALING_APPARATUS_CODES and SEALING_APPARATUS_CODES[code] not in named:
         raise OutcomeContractError("a fault that seals the batch must carry its seal")
-    if seal == REQUEST_CONTRACT_VIOLATION and product != "FAIL":
+    if bool(seal) != bool(named):
+        raise OutcomeContractError("an attempt names every reason it seals for")
+    if seal is not None and named and seal != min(named, key=SEAL_PRIORITY.index):
+        raise OutcomeContractError("an attempt seals for the most serious reason it names")
+    if REQUEST_CONTRACT_VIOLATION in named and product != "FAIL":
         raise OutcomeContractError("a request outside the frozen contract is a product failure")
 
 

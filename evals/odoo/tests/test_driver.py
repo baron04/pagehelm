@@ -1,8 +1,9 @@
 import unittest
 
 from evals.odoo import outcomes
-from evals.odoo.driver import (_cost, _with_residue, agent_assertions, final_turn_requests,
-                               scored_terminal, turn_bounds, turns_before_fault)
+from evals.odoo.driver import (_cost, _trace_counts, _with_residue, agent_assertions,
+                               final_turn_requests, scored_terminal, turn_bounds,
+                               turns_before_fault)
 
 
 def request(seq):
@@ -181,3 +182,14 @@ class ScoredTerminalTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TraceCountTests(unittest.TestCase):
+    def test_a_trace_read_in_part_counts_nothing(self):
+        """The review of 6376c20: a capture's completeness was recorded and never read, so an
+        export that showed three of five turns counted three turns' work as the attempt's."""
+        projected = {"page_actions": 3, "invalid_page_actions": 0, "business_calls": 2,
+                     "repeated_observations": 1}
+        self.assertEqual(_trace_counts(projected, whole=True), projected)
+        self.assertEqual(_trace_counts(projected, whole=False),
+                         {name: None for name in projected})

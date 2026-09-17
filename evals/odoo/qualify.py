@@ -639,33 +639,82 @@ def formal_rehearsal_probe(ctx: Context, started: str) -> dict[str, Any]:
         # This run is still taking the qualification the entry needs, so the rehearsal records a
         # synthetic one for the running candidate and manifest, read only through its own paths.
         manifest = json.loads(fixture_manifest_path(PRIVATE).read_text())
+        # The rehearsal stands in for the qualification this run is still taking, so it names
+        # the Agent image verified on the running stack and the manifest that image runs on.
         paths.rehearsal_qualifications.mkdir(mode=0o700, parents=True)
         stamp = started.replace("-", "").replace(":", "")
         (paths.rehearsal_qualifications / f"p74a-qualification-{stamp}.json").write_text(
             json.dumps({"kind": "p74a_rehearsal_qualification", "status": "READY",
-                        "candidate": manifest["candidate"],
+                        "candidate": ctx.stack.verify_candidate(),
                         "fixture_manifest_digest": manifest["manifest_digest"],
                         "offline": {"protocol_digest": protocol.document()["protocol_digest"]}}))
         result["preflight"] = formal.run_preflight(paths, confirm_paid_calls=True)["status"]
 
         provider.faults[("p74b-development-001", 1)] = "drifted"
-        first = paths.ledgers / "p74b-development-001.jsonl"
+        # The driver is killed with a call in flight rather than wherever a poll happens to catch
+        # it. Waiting for the attempt's checkpoint left the kill racing the dispatch that follows
+        # it: a run that killed the driver first left no call to settle, and the rehearsal of an
+        # unsettled call then rehearsed nothing. The provider holds the first call until the
+        # parent has killed the process, so there is always one.
+        arrived, release = threading.Event(), threading.Event()
+
+        def hold_the_first_call() -> None:
+            arrived.set()
+            release.wait(120)
+
+        provider.actions[("p74b-development-001", 0)] = hold_the_first_call
         child = subprocess.Popen([sys.executable, "-m", "evals.odoo.qualify", "formal-child",
                                   str(root)], cwd=REPOSITORY, env=_child_env(),
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         deadline = time.monotonic() + 900
         while child.poll() is None and time.monotonic() < deadline:
-            if first.exists() and any(entry["kind"] == "attempt_checkpoint"
-                                      for entry in ledger.read(first)[0]):
+            if arrived.wait(0.2):
                 break
-            time.sleep(0.2)
         if child.poll() is None:
             child.send_signal(signal.SIGKILL)
         result["child_exit_status"] = child.wait(timeout=120)
+        # Whether the premise of the rest held: a driver killed with nothing in flight settles
+        # nothing, and the checks below would pass over an apparatus that was never exercised.
+        result["killed_driver_had_a_call_in_flight"] = arrived.is_set()
+        release.set()
         # The dead driver's Agent may still be mid-turn; cutting its provider path keeps a late
         # request from reaching the next gateway.
         ctx.stack.compose("stop", "provider-relay", timeout=120)
+        resumed = formal.run_development(paths, confirm_paid_calls=True)
+
+        # The killed driver dispatched a call it never settled. Its cost is unknown, so the batch
+        # holds where it stands: it owes the slot a replacement and has fifty-eight slots left,
+        # and it runs neither until the provider's bill accounts for that call.
+        held = ledger.read(paths.ledgers / "p74b-development-001.jsonl")[1]
+        requests = len([entry for entry in ledger.read(
+            paths.ledgers / "p74b-development-001.jsonl")[0]
+            if entry["kind"] == "model_request_dispatched"])
+        result["killed_driver_holds_the_batch"] = (
+            resumed["status"] == "OPEN" and bool(held["cost_unknown"])
+            and held["attempts"][-1]["replacement_of"] is None)
+        result["killed_driver_call_awaits_the_bill"] = formal.status(paths)["checks"][
+            "billing_reconciliation"].startswith("refused")
+        try:
+            formal.run_development(paths, confirm_paid_calls=True)
+            result["held_batch_refused_without_the_bill"] = False
+        except formal.FormalError as exc:
+            result["held_batch_refused_without_the_bill"] = "reconcil" in str(exc)
+        # Nothing was forwarded while it held.
+        result["nothing_forwarded_while_held"] = requests == len(
+            [entry for entry in ledger.read(paths.ledgers / "p74b-development-001.jsonl")[0]
+             if entry["kind"] == "model_request_dispatched"])
+        formal.record_billing_reconciliation(
+            paths, spend_batch_id="p74b-development-001", owner=REHEARSAL_REVIEWER,
+            reconciled_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            billed_calls=1, billed_cost_cny=0.0,
+            evidence_digest="sha256:" + hashlib.sha256(b"rehearsal: no bill exists").hexdigest(),
+            notes=["synthetic reconciliation that exists only in this rehearsal workbench"])
+        # The same batch resumes: the replacement it owed runs first, then its remaining slots.
         formal.run_development(paths, confirm_paid_calls=True)
+        cleared = ledger.read(paths.ledgers / "p74b-development-001.jsonl")[1]
+        result["held_batch_resumed_itself"] = (
+            not cleared["cost_unknown"]
+            and any(item["replacement_of"] is not None for item in cleared["attempts"]))
 
         spend = paths.spend()
         provider.actions[("p74b-development-002", 0)] = lambda: os.chmod(spend, 0o400)
@@ -685,9 +734,17 @@ def formal_rehearsal_probe(ctx: Context, started: str) -> dict[str, Any]:
 
         provider.faults[("p74b-development-003", 0)] = "unauthorized"
         formal.run_development(paths, confirm_paid_calls=True)
-        result["continuation_record_linked"] = ledger.read(
-            paths.ledgers / "p74b-development-003.jsonl")[1]["batch"]["previous_batch"][
-            "continuation_record"] == reconciled["reconciliation_digest"]
+        # The link names what covers the sealed batch -- its debts and every record that
+        # accounts for them -- rather than one record, because a batch may owe the bill more
+        # than once. This assertion still named the single record 59941d6 replaced.
+        coverage = formal.check_reconciliations(paths)["p74b-development-002"]
+        linked = ledger.read(paths.ledgers / "p74b-development-003.jsonl")[1]["batch"][
+            "previous_batch"]["continuation_record"]
+        result["continuation_record_linked"] = (
+            linked == coverage
+            and reconciled["reconciliation_digest"] in [
+                record["reconciliation_digest"] for record
+                in formal.reconciliation_claims(paths, "p74b-development-002").values()])
         result["preflight_refused_after_the_credential_seal"] = formal.status(paths)[
             "checks"]["preflight"].startswith("refused")
         time.sleep(1.1)  # a preflight's time has whole seconds; this one must follow the seal
@@ -721,6 +778,12 @@ def _rehearsal_holds(result: dict[str, Any]) -> bool:
     first, unaccounted, credential, stopped = batches
     interrupted, replacement = (first["attempts"] + [{}, {}])[:2]
     return (result["preflight"] == "READY" and result["child_exit_status"] == -signal.SIGKILL
+            and result["killed_driver_had_a_call_in_flight"] is True
+            and result["killed_driver_call_awaits_the_bill"] is True
+            and result["killed_driver_holds_the_batch"] is True
+            and result["held_batch_refused_without_the_bill"] is True
+            and result["nothing_forwarded_while_held"] is True
+            and result["held_batch_resumed_itself"] is True
             and interrupted.get("terminal") == "interrupted_attempt"
             and interrupted.get("replacement_eligible") is True
             and replacement.get("replacement_of") == interrupted.get("attempt_id")
@@ -1205,9 +1268,11 @@ def closure_checks(ctx: Context, batches: dict[str, Any], *, candidate: dict[str
         "provider_binding_follows_endpoint_and_key": identity["follows"],
         "development_chain": chain, "development_chain_rule_holds": chain["holds"],
         "custody": custody, "custody_refuses_a_single_failure_domain": custody["refuses"],
+        # Every header names the Agent image this checkout built and the manifest of the fixture
+        # it ran on. The manifest itself names no candidate: it describes the fixture, which a
+        # rebuilt Agent leaves alone.
         "headers_bind_the_verified_candidate": (
             candidate["agent_image_revision"] == candidate["commit"]
-            and manifest_record["candidate"] == candidate
             and all(item["candidate"] == candidate
                     and item["fixture"]["manifest_digest"] == manifest_record["manifest_digest"]
                     for item in headers.values())),

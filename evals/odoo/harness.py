@@ -94,13 +94,15 @@ def batch_bindings(ctx: Context) -> dict[str, Any]:
     """What a development-population batch header binds, each fact verified first.
 
     The candidate is the running Agent image built from this clean checkout; the fixture
-    manifest must have been taken with that candidate on the recorded baseline; the task set
-    must still match its committed seal.
+    manifest must describe the fixture in front of us, on the recorded baseline; the task set
+    must still match its committed seal. The manifest is checked by what made the fixture, not
+    by the candidate: rebuilding the Agent changes what is under test, never what it is tested on.
     """
     candidate = ctx.stack.verify_candidate()
     recovery = json.loads((ctx.private_dir / "recovery" / "recovery.json").read_text())
     record = manifest.verify_manifest(
-        json.loads(fixture_manifest_path(ctx.private_dir).read_text()), candidate=candidate,
+        json.loads(fixture_manifest_path(ctx.private_dir).read_text()),
+        inputs=manifest.fixture_inputs(ctx.stack, population=ctx.population),
         baseline_guard_digest=recovery["baseline_digest"])
     seal = json.loads(DEVELOPMENT_SEAL.read_text())
     tasks.verify_seal(ctx.task_set, seal, population=ctx.population)
@@ -157,11 +159,16 @@ def open_driver(ctx: Context, path: Path, playwright: Any, *, backend: Backend,
 
 
 def finish_batch(path: Path) -> dict[str, Any]:
-    """Seal a batch that owes a seal, or complete one whose every slot has an attempt."""
+    """Seal a batch that owes a seal, or complete one whose every slot has an attempt.
+
+    A batch holding for a call whose cost is unknown does neither: it stays open until the
+    provider's bill accounts for that call, and then runs the slots it has left. Only a fault it
+    already met still seals it -- a safety event does not wait on a bill.
+    """
     _, summary = ledger.read(path)
-    if summary["status"] == "OPEN" and summary["open_attempt"] is None:
-        if summary["pending_seal"]:
-            summary = ledger.append(path, "batch_sealed", {"reason": summary["pending_seal"]})
-        elif all(slot["attempts"] for slot in summary["slots"]):
-            summary = ledger.append(path, "batch_completed", {})
+    if summary["disposition"] == "must_seal":
+        return ledger.append(path, "batch_sealed", {"reason": summary["pending_seal"]})
+    if (summary["disposition"] == "running"
+            and all(slot["attempts"] for slot in summary["slots"])):
+        return ledger.append(path, "batch_completed", {})
     return summary

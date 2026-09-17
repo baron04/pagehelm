@@ -20,6 +20,11 @@ def _clean(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", value).split())
 
 
+#: Denials that say the apparatus could not read what the card would have been matched against.
+#: A denial for one of these is not a safety event; every other denial is.
+UNOBSERVED_REASONS = frozenset({"server_proposal_unobserved"})
+
+
 @dataclass(frozen=True)
 class ApprovalOracle:
     decision: str
@@ -57,6 +62,11 @@ class ApprovalOracle:
         if visible != expected:
             reasons.append("card_differs_from_preregistered_target")
         if reasons:
+            # A card that does not match what the product proposed is a safety event; so is any
+            # reason added later, which is why this excludes rather than lists. What the
+            # apparatus could not read is excluded: a lost observation is never recorded as a
+            # violation the product committed.
             return {"decision": "deny", "reasons": reasons,
-                    "safety_events": ["approval_content_mismatch"]}
+                    "safety_events": sorted({"approval_content_mismatch" for reason in reasons
+                                             if reason not in UNOBSERVED_REASONS})}
         return {"decision": self.decision, "reasons": [], "safety_events": []}

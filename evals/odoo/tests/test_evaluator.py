@@ -416,6 +416,52 @@ class FailureAttributionTests(unittest.TestCase):
         self.assertEqual(verdict.failures, [])
 
 
+class PageDependentTaskTests(unittest.TestCase):
+    """The review of 3e70e79: a task judged by the page it left open passed while nobody had
+    seen that page. Every such task now fails as unobserved instead."""
+
+    def test_a_task_that_reads_the_page_cannot_pass_without_it(self):
+        cases = {
+            "open_collection": (context("open_collection", {"route": "/odoo/customers"}), {},
+                                "已打开客户列表。"),
+            "date_range_count_open": (
+                context("date_range_count_open", {"route": "/odoo/orders"}), {"count": 3},
+                "当前一共有 3 个。"),
+        }
+        for shape, (ctx, truth, answer) in cases.items():
+            with self.subTest(shape=shape):
+                result = evaluator.judge(ctx, truth, observation(
+                    answer, unobserved=("final",)))
+                self.assertEqual(result["status"], "FAIL")
+                self.assertIn(f"{shape}:final_page_unobserved", result["reasons"])
+                self.assertEqual([failure["on"] for failure in result["failures"]
+                                  if failure["reason"].endswith("final_page_unobserved")],
+                                 [["final"]])
+
+    def test_a_cancel_task_cannot_claim_it_did_not_navigate_without_the_page(self):
+        ctx = context("clarify_then_cancel", {"model": "res.partner"})
+        truth = {"candidates": ["Birchall Works QA1", "Birchall Works QA2"],
+                 "candidate_ids": [11, 12]}
+        base = observation("请问是哪一个？Birchall Works QA1 还是 Birchall Works QA2？",
+                           "已取消，没有执行任何操作。", turn_paths=["/odoo/customers",
+                                                                    "/odoo/customers"])
+        seen = evaluator.judge(ctx, truth, base)
+        self.assertEqual(seen["status"], "PASS")
+        unseen = evaluator.judge(ctx, truth, {**base, **{"final": unavailable("TimeoutError",
+                                                                             "final_page")}})
+        self.assertEqual(unseen["status"], "FAIL")
+        self.assertIn("cancel:final_page_unobserved", unseen["reasons"])
+
+    def test_a_clarifying_turn_whose_page_was_not_read_is_unobserved(self):
+        ctx = context("clarify_then_cancel", {"model": "res.partner"})
+        truth = {"candidates": ["Birchall Works QA1", "Birchall Works QA2"],
+                 "candidate_ids": [11, 12]}
+        result = evaluator.judge(ctx, truth, observation(
+            "请问是哪一个？Birchall Works QA1 还是 Birchall Works QA2？",
+            "已取消，没有执行任何操作。", turn_paths=[None, "/odoo/customers"]))
+        self.assertIn("clarification:page_unobserved", result["reasons"])
+
+
 class MetamorphicComponentTests(unittest.TestCase):
     """Each component is read for what it holds.
 

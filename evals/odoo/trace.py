@@ -50,10 +50,12 @@ CLOSED_WITHOUT_DISPATCH = frozenset({
 })
 
 
-#: What a projection can still say when the audit behind it could not be exported: none of the
-#: counts it would have carried, no approval it would have shown, and a dispatch that has to be
-#: taken as unknown because nothing was read either way.
+#: What a projection can still say when the audit behind it could not be exported: nothing it
+#: would have carried. Not the counts, not the approvals, and not how any turn ended -- an audit
+#: nobody read says neither that a turn ended nor that it did not -- and a dispatch that has to
+#: be taken as unknown because nothing was read either way.
 UNREAD_TRACE: dict[str, Any] = {
+    "turns": None, "terminal": None,
     "page_actions": None, "invalid_page_actions": None, "business_calls": None,
     "repeated_observations": None, "approvals": None, "dispatch_state": "unknown",
 }
