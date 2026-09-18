@@ -253,7 +253,13 @@ REGULAR_INVOICE = "delivered"
 
 
 def _query_schema(collection: _Collection, description: str) -> dict:
-    filters = {}
+    # The narrowest read this collection offers, and the only way to reach one of two records
+    # that share a name: a name search can never single either of them out, so their routes
+    # stay unauthorised and neither can be opened.
+    filters = {"record_id": {
+        "type": "integer", "minimum": 1,
+        "description": (f"Exact {collection.model} id from a record this turn already read; "
+                        "not a display name.")}}
     if "partner_id" in collection.fields:
         filters["customer_id"] = {
             "type": "integer", "minimum": 1,
@@ -700,6 +706,11 @@ class OdooBusinessToolExecutor:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
             raise BusinessToolRequestError("limit must be an integer from 1 to 50")
         domain = []
+        if "record_id" in args:
+            record_id = args["record_id"]
+            if isinstance(record_id, bool) or not isinstance(record_id, int) or record_id < 1:
+                raise BusinessToolRequestError("record_id must be a positive integer")
+            domain.append(["id", "=", record_id])
         if "customer_id" in args:
             customer_id = args["customer_id"]
             if isinstance(customer_id, bool) or not isinstance(customer_id, int) or customer_id < 1:
@@ -976,7 +987,11 @@ class OdooBusinessToolExecutor:
             folded and matched == 1
             and business_text_key(str(visible[0].get(field, "")))
             == business_text_key(needle))
-        unique_match = bool(folded and matched == 1)
+        # A read narrowed to one record -- by a name that matched it alone, or by its own id --
+        # is the record the user asked for. Two customers of the same name are reachable only
+        # by the second: no name singles either of them out.
+        by_record_id = any(term[0] == "id" for term in extra_domain)
+        unique_match = bool((folded or by_record_id) and matched == 1)
         # A name search matches parts of names; how many of the matches carry the whole name
         # is what an answer needs before it may say that a record of that name exists.
         exact_matches = (sum(1 for _row, item in pairs
