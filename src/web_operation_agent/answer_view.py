@@ -26,6 +26,7 @@ _WORDS = {
         "undetermined": "无法确定",
         "not_found": "未找到",
         "not_found_scope": "仅指本次查询过、且当前账号有权访问的范围，不代表整个系统中不存在",
+        "capability_gap": "当前会话不支持这项操作，本次没有执行任何更改。",
         "partial": "已回答目前可以确认的部分",
         "partial_why": "还无法确认",
         "gap": "缺口",
@@ -43,6 +44,8 @@ _WORDS = {
         "not_found": "Not found",
         "not_found_scope": ("only within what this search covered and the current account can "
                             "access; not a claim that it exists nowhere"),
+        "capability_gap": ("That operation is not supported in this session, "
+                            "so it was not executed."),
         "partial": "Answered the part supported by current data",
         "partial_why": "still not confirmed",
         "gap": "gap",
@@ -65,6 +68,24 @@ def _language(user_text: str) -> str:
 def _source_line(words: dict, item: dict) -> str:
     return {"page": words["source_page"], "typed": words["source_typed"],
             "computed": words["source_computed"]}[item["source_kind"]]
+
+
+def capability_gap_answer(user_text: str) -> str:
+    """The one sentence a capability gap gets, fixed here rather than left to the model.
+
+    It says what the check found and what followed: this session cannot perform the change,
+    and nothing ran. It is deliberately about *this session*, not about the product forever --
+    installing the capability is a configuration away, and a sentence claiming permanent
+    non-support would be false the moment someone installs it.
+
+    It also deliberately avoids saying the capability was "not found". The first draft read
+    "没有找到可执行这项操作的能力", which is literally a not-found sentence, and a not-found
+    sentence is the exact confusion this whole path exists to end: a missing capability is
+    not an absent record.
+    """
+    return ("当前会话不支持这项操作，本次没有执行任何更改。"
+            if _language(user_text) == "zh" else
+            "That operation is not supported in this session, so it was not executed.")
 
 
 def unavailable_answer(user_text: str) -> str:
@@ -170,6 +191,11 @@ def render(answer: VerifiedAnswer, *, user_text: str, max_chars: int,
 
 def _one(words: dict, item: dict, *, presentation: str) -> list[str]:
     kind = item["kind"]
+    if kind == "capability_gap":
+        # No source line: this conclusion stands on a search of this session's own catalog,
+        # not on anything read from the application, and labelling it "source: typed read"
+        # would say the application answered a question it was never asked.
+        return [words["capability_gap"]]
     if kind == "page_observation":
         label = "页面显示" if words is _WORDS["zh"] else "The page shows"
         return [f"**{label}**（{_literal(item['detail'])}）：{_literal(item['value'])}",

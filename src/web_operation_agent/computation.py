@@ -198,6 +198,16 @@ def run(turn: TurnEvidence, request: ComputationRequest, *,
             value_type=only.value_type, unit=unit, covers_whole_scope=whole))
 
     if request.operation == "count":
+        # A count is a claim about how many there are, and a count of a read that stopped
+        # early is not that claim about anything. A sum may honestly be a subtotal -- the
+        # renderer has a word for it -- but "239, of an unknown total" answers no question
+        # the user asked, and labelling it "within what was read" made it look answered.
+        # Refused rather than caveated, because the remedy is cheap: read the whole scope.
+        if not whole:
+            raise ComputationRefused(
+                f"this read covered only part of {scope}, so counting it cannot say how many "
+                "there are; read the whole scope -- drop any limit -- and count that, or "
+                "state what the read covered instead of giving a number")
         return turn_record(turn, ComputationEvidence(
             evidence_id=evidence_id, origin=origin, operation="count()",
             inputs=request.over,

@@ -130,14 +130,33 @@ def assemble_woa_breadth_run(
         if apparatus_code is None:
             try:
                 if evaluator_kind == "refuse":
+                    # The product has to say this itself, in typed form. Reading it off the
+                    # task's own kind would let any stop -- out of steps, out of ideas, a
+                    # search that found nothing -- be written down as a capability statement,
+                    # which is the assembler answering its own question. The claim lives in
+                    # the verified answer's capability_gap conclusion, not in the terminal
+                    # name, and it only counts alongside a run that dispatched nothing.
+                    dispatch_count = _count(events, "business_mutation_execution_started")
+                    verified = getattr(execution.agent, "verified_answer", None)
+                    conclusions = (verified or {}).get("conclusions") or ()
+                    typed_gap = (len(conclusions) == 1
+                                 and isinstance(conclusions[0], dict)
+                                 and conclusions[0].get("kind") == "capability_gap")
+                    if not typed_gap:
+                        raise EvidenceContractError(
+                            "the product produced no capability_gap conclusion; it ended with "
+                            f"{execution.terminal_reason!r}")
+                    if dispatch_count:
+                        raise EvidenceContractError(
+                            "a capability gap claims nothing ran, but the run dispatched "
+                            f"{dispatch_count} mutation(s)")
                     evidence_out = {
                         "artifact_version": 2, "execution_status": "failed",
-                        "refusal_code": "unsupported_operation",
-                        "dispatch_count": _count(
-                            events, "business_mutation_execution_started"),
+                        "refusal_code": "capability_gap",
+                        "capability_catalog_digest": conclusions[0].get("catalog_digest", ""),
+                        "capability_matches": list(conclusions[0].get("matches") or ()),
+                        "dispatch_count": dispatch_count,
                     }
-                    if execution.terminal_reason != "agent_refused":
-                        raise EvidenceContractError("unsupported operation was not refused")
                     error_code = "unsupported_operation"
                 elif execution.terminal_reason == "indeterminate_write":
                     status, error_code = "indeterminate", "indeterminate_write"

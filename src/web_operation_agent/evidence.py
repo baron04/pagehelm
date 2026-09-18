@@ -32,7 +32,11 @@ _EVIDENCE_ID = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*#[0-9]{1,6}")
 #: Runtime observation, `computed` is this server executing a bounded operation over other
 #: evidence. The distinction is load-bearing: a page observation must never be described as
 #: an API read, which is exactly what one failing answer did.
-SOURCE_KINDS = ("typed", "page", "computed")
+#: `capability` is this server enumerating what the current actor could execute and comparing
+#: it against the goal. It is not a read of the application's data, and keeping it out of
+#: `typed` matters: "nothing in this session can do that" and "the application holds no such
+#: record" are different claims, and collapsing them is how a missing tool became a NotFound.
+SOURCE_KINDS = ("typed", "page", "computed", "capability")
 MAX_TURN_EVIDENCE_BYTES = 256 * 1024
 
 
@@ -286,7 +290,53 @@ class SelectionEvidence:
             raise TypeError("covers_whole_scope must be a boolean")
 
 
-Evidence = Union[RecordEvidence, QueryEvidence, PageEvidence,
+@dataclass(frozen=True, slots=True)
+class CapabilityEvidence:
+    """What this session could execute for one goal, and what the search for it matched.
+
+    A capability gap is a claim about the session, not about the data, so what it stands on
+    is the search itself: which application and version, which actor's delegation, the digest
+    of the whole catalog that was searched, and what matched. `matches` is the load-bearing
+    field. Empty means the catalog was searched and holds nothing that performs the goal; a
+    non-empty list means the turn has a capability and must use it rather than decline.
+
+    The catalog digest covers the entire public catalog available to the actor, not the
+    Skills a matcher happened to pre-select. That distinction is the whole point: a matcher
+    that misses is a matcher bug, and it must not be able to present itself as the
+    application lacking the capability.
+    """
+
+    evidence_id: str
+    origin: Origin
+    application: str
+    application_version: str
+    actor: str
+    catalog_digest: str
+    goal: str
+    matches: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _require_id(self.evidence_id)
+        _require_origin(self.origin)
+        if self.origin.kind != "capability":
+            raise ValueError("capability evidence must come from a capability resolution")
+        object.__setattr__(self, "application", _text(self.application, "application"))
+        object.__setattr__(self, "application_version",
+                           _text(self.application_version, "application_version"))
+        object.__setattr__(self, "actor", _text(self.actor, "actor"))
+        object.__setattr__(self, "catalog_digest", _text(self.catalog_digest, "catalog_digest"))
+        object.__setattr__(self, "goal", _text(self.goal, "goal"))
+        matches = tuple(self.matches)
+        if any(not isinstance(name, str) or not name.strip() for name in matches):
+            raise ValueError("every matched capability is named")
+        object.__setattr__(self, "matches", matches)
+
+    @property
+    def found_nothing(self) -> bool:
+        return not self.matches
+
+
+Evidence = Union[RecordEvidence, QueryEvidence, PageEvidence, CapabilityEvidence,
                  ComputationEvidence, SelectionEvidence]
 
 
@@ -365,8 +415,11 @@ class TurnEvidence:
         return tuple(mapping.values())
 
     def record(self, item: Evidence) -> str:
+        # `capture` deliberately does not accept CapabilityEvidence: an adapter imports what
+        # it read, and what this session can execute is not something an adapter gets to
+        # assert. It is minted here or not at all.
         if not isinstance(item, (RecordEvidence, QueryEvidence, PageEvidence,
-                                 ComputationEvidence, SelectionEvidence)):
+                                 ComputationEvidence, SelectionEvidence, CapabilityEvidence)):
             raise TypeError("only evidence can be recorded")
         if item.evidence_id in self._items:
             raise ValueError(f"evidence {item.evidence_id} was already recorded this turn")

@@ -1012,8 +1012,15 @@ def _chain_rule_probe(probe: Path, sample: dict[str, Any]) -> dict[str, Any]:
     return {**record, "holds": all(record.values())}
 
 
-def _custody_probe() -> dict[str, Any]:
-    """Two directories on this machine are one failure domain, and the entry says so."""
+def _custody_probe(probe: Path) -> dict[str, Any]:
+    """Two directories on this machine are one failure domain, and the entry says so.
+
+    The entry half is asked of a rehearsal workbench with no custody record, not of the live
+    one. Asked of the live entry it was really checking that no custody had been registered
+    yet, so registering a valid custody -- the thing the protocol requires before any paid
+    call -- turned this probe permanently false and locked every later candidate out of
+    qualification.
+    """
     paths = formal.FormalPaths()
     try:
         pointer = json.loads(paths.escrow_record.read_text())
@@ -1025,7 +1032,7 @@ def _custody_probe() -> dict[str, Any]:
     refused = _refused(lambda: escrow.custody_record(
         private_dir=paths.private_dir, archive=pointer["archive"], secret=pointer["secret"]),
         escrow.EscrowError)
-    entry = formal.status(paths)["checks"]["escrow_custody"]
+    entry = formal.status(rehearsal_paths(probe / "custody"))["checks"]["escrow_custody"]
     return {"local_copies_share_the_original_domain": shared, "local_custody_refused": refused,
             "entry_custody_check": entry,
             "refuses": shared and refused and entry.startswith("refused")}
@@ -1155,13 +1162,27 @@ def _escrow_probe(probe: Path) -> dict[str, Any]:
                                       and restored["matches_private_files"] is True)}
 
 
-def _formal_entry_probe() -> dict[str, Any]:
-    paths = formal.FormalPaths()
-    state = formal.status(paths)
-    unconfirmed = _refused(lambda: formal.paid_call_prerequisites(paths, confirm_paid_calls=False),
+def _formal_entry_probe(probe: Path) -> dict[str, Any]:
+    """A paid call is refused when its prerequisites are not on record, and when it is not
+    confirmed.
+
+    Both halves are asked of a rehearsal workbench. The prerequisite half used to be asked of
+    the live entry, which meant it held only while the chain was still incomplete: recording
+    the external review and the first freeze -- exactly what the protocol requires before any
+    paid call -- made it false forever, and with it the whole zero-model qualification, so no
+    candidate after the first could ever open another batch. The property under test is that
+    a missing freeze or review stops a paid call, and an empty workbench states it without
+    depending on how far the real chain has come.
+    """
+    empty = rehearsal_paths(probe / "formal-entry")
+    state = formal.status(empty)
+    unconfirmed = _refused(lambda: formal.paid_call_prerequisites(empty, confirm_paid_calls=False),
                            formal.FormalError)
+    missing = _refused(lambda: formal.paid_call_prerequisites(empty, confirm_paid_calls=True),
+                       formal.FormalError)
     return {"checks": state["checks"], "unconfirmed_refused": unconfirmed,
-            "refuses": (unconfirmed and state["development_can_start"] is False
+            "missing_prerequisites_refused": missing,
+            "refuses": (unconfirmed and missing and state["development_can_start"] is False
                         and state["checks"]["first_freeze"].startswith("refused")
                         and state["checks"]["external_review"].startswith("refused"))}
 
@@ -1255,8 +1276,8 @@ def closure_checks(ctx: Context, batches: dict[str, Any], *, candidate: dict[str
     chain = _chain_rule_probe(probe, headers["samples"])
     freezes = _freeze_probe(started)
     held = _escrow_probe(probe)
-    custody = _custody_probe()
-    entry = _formal_entry_probe()
+    custody = _custody_probe(probe)
+    entry = _formal_entry_probe(probe)
     contract_versions = _ledger_contract_probe(probe, headers["samples"])
     boundary = _qualification_binding_probe(probe, candidate)
     return {

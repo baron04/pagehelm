@@ -161,7 +161,11 @@ COLLECTIONS: tuple[_Collection, ...] = (
     _Collection(
         tool="query_customers", model="res.partner",
         domain=[("customer_rank", ">", 0)],
-        fields=("name", "email", "phone", "mobile", "city", "country_id"),
+        # `vat` is the tax identification number. Without it here the only route to it was
+        # the customer page, where Odoo renders it as an input -- and a page observation
+        # carries labels, not input values, so the question could only ever be answered
+        # "undetermined".
+        fields=("name", "email", "phone", "mobile", "city", "country_id", "vat"),
         scope="customers visible to the delegated user",
         action_xml_id="account.res_partner_action_customer", route="/odoo/customers",
         answer_fields=("name", "email"),
@@ -1092,9 +1096,14 @@ class OdooBusinessToolExecutor:
         order = self._one_order(reference, _ORDERS, "sales order")
         status = self._label(order, "invoice_status")
         if status != "to invoice":
-            raise BusinessToolError(
+            # Typed, because the product has to be able to say which rule refused. As a bare
+            # BusinessToolError this reached the user as "a business rule refused this
+            # operation", and a turn that never learned the rule answered with whatever the
+            # order query had returned instead.
+            raise BusinessMutationRefusedError(
                 f"sales order {reference} has invoice status {status or 'unknown'}; only "
-                "an order with something still to invoice can be invoiced")
+                "an order with something still to invoice can be invoiced",
+                reason="nothing_to_invoice")
         return order
 
     def prepare_mutation(self, name: str, args: dict, *,

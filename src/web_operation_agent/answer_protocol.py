@@ -5,10 +5,10 @@ import json
 from dataclasses import asdict
 
 from .computation import COMPARISONS, ComputationRequest, run
-from .conclusion import (Aggregate, AnswerDraft, ConclusionRefused, FieldValue, NotFound, PageFact,
-                         Selection, Undetermined, verify)
-from .evidence import (ComputationEvidence, PageEvidence, QueryEvidence, RecordEvidence,
-                       SelectionEvidence, TurnEvidence)
+from .conclusion import (Aggregate, AnswerDraft, CapabilityGap, ConclusionRefused, FieldValue,
+                         NotFound, PageFact, Selection, Undetermined, verify)
+from .evidence import (CapabilityEvidence, ComputationEvidence, PageEvidence, QueryEvidence,
+                       RecordEvidence, SelectionEvidence, TurnEvidence)
 
 MAX_INDEX_BYTES = 24 * 1024
 MAX_CONCLUSIONS = 50
@@ -33,7 +33,8 @@ ANSWER_SCHEMA = {
                                             **({"fields": _FIELDS} if kind == "selection" else {})},
                              "required": ["kind", "evidence_ref"]}
                             for kind in ("field_value", "selection", "aggregate", "not_found",
-                                         "undetermined", "page_observation")]}},
+                                         "undetermined", "page_observation",
+                                         "capability_gap")]}},
     }, "required": ["version", "coverage", "conclusions"],
 }
 FINISH_ANSWER_TOOL = {"type": "function", "function": {
@@ -43,7 +44,11 @@ FINISH_ANSWER_TOOL = {"type": "function", "function": {
         "Answer only what was asked: for a total, one aggregate is enough, without a table. "
         "Use outcome=acted for a completed navigation or approved mutation, optionally "
         "including additional evidence-backed conclusions in answer. "
-        "Use outcome=unable if the available evidence/tools cannot answer."),
+        "When the user asked to change data and the capability check found nothing in this "
+        "session that performs it, finish with outcome=unable and a single capability_gap "
+        "conclusion citing that check: do not search for the record first, do not answer with "
+        "a related query, and do not substitute a different change. "
+        "Use outcome=unable without an answer if the available evidence cannot answer."),
     "parameters": {"type": "object", "additionalProperties": False,
                    "properties": {"outcome": {"type": "string", "enum": [
                        "answered", "partial", "unable", "acted"]}, "answer": ANSWER_SCHEMA},
@@ -76,7 +81,10 @@ aggregate conclusion; do not append a full table unless the user asked for the d
 Use exactly the ref shown in the index, never a source label, record ID or tool name.
 The server renders
 the facts you select. Empty read fields differ from unread fields. A zero-result query
-establishes absence only in its executed conditions. Missing tools do not establish absence.
+establishes absence only in its executed conditions. Missing tools do not establish absence:
+when the change the user asked for has no capability in this session, the capability check
+gives you a reference, and capability_gap citing it is the entire answer. Do not look the
+record up first and do not answer with what a related query returned.
 For an explicit navigation request, navigate to the authorized route; page receipts still
 decide execution state. Use outcome=acted only after a successful navigation or approved
 mutation; the server supplies that action's actual result, without a model-written claim.
@@ -155,6 +163,14 @@ def submit(turn: TurnEvidence, args: dict) -> dict | None:
             if not item.covers_whole_scope:
                 raise ConclusionRefused("a partial search cannot establish not_found")
             conclusions.append(NotFound(item.looked_for or item.collection, ref))
+        elif kind == "capability_gap" and isinstance(item, CapabilityEvidence):
+            # A declined change is the whole answer or it is not one. Mixed with field values
+            # it becomes "I cannot do that, but here is what I found", which is the substitute
+            # answer this conclusion exists to replace.
+            if len(entries) != 1:
+                raise ConclusionRefused(
+                    "a capability gap is the entire answer and carries no other conclusion")
+            conclusions.append(CapabilityGap(ref))
         elif kind == "undetermined":
             about = (f"{item.record_id}.{item.field_name}" if isinstance(item, RecordEvidence)
                      else item.collection if isinstance(item, QueryEvidence)

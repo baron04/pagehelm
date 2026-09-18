@@ -1,34 +1,35 @@
 {
-  "schema_version": 1,
-  "skill_id": "odoo.sales.customers-query",
-  "title": "Query Odoo customers",
-  "intent": "Read the customers currently visible to the signed-in Odoo user.",
-  "triggers": [
-    "customer",
-    "customers",
-    "client",
-    "clients",
-    "partner",
-    "客户",
-    "顾客"
-  ],
-  "instructions": [
-    "Call query_customers to obtain current Odoo data; do not answer from this Skill or from page text.",
-    "The tool reads the same scope as Odoo's Customers page: partners with a customer rank above zero. Ordinary contacts and vendors are out of scope.",
-    "Use name_contains only when the user supplied a customer-name filter.",
-    "When the user asks to open the Customers list, call query_customers once, then call goto with /odoo/customers, the collection route authorized by that ToolResult.",
-    "When the user asks to open one customer, call query_customers with their name, require exactly one current match, then call goto with that result's exact ui_path. The goto result already contains a fresh observation; do not call wait_for or observe after a successful navigation.",
-    "For navigation, require a unique current match; a zero-result search answers only within the tool's actual scope, and multiple targets require clarification.",
-    "Use the current answer evidence and finish contract to answer the question. Compute totals, filters and counts with compute; the server renders the conclusions you cite, not the last raw query table.",
-    "The read includes phone, mobile and email. Cite the requested fields from current evidence; a returned empty field differs from a field that was not read. res.partner ids can filter order and invoice queries through customer_id."
-  ],
-  "tool_names": [
-    "query_customers"
-  ],
-  "provenance": [
-    "src:odoo@18.0:addons/account/views/partner_view.xml#account.res_partner_action_customer",
-    "src:odoo@18.0:odoo/addons/base/models/res_partner.py#res.partner",
-    "api:odoo@18.0:/jsonrpc#object.execute_kw"
-  ],
-  "read_only": true
+ "schema_version": 1,
+ "skill_id": "odoo.sales.customers-query",
+ "title": "Query Odoo customers",
+ "intent": "Read the customers currently visible to the signed-in Odoo user.",
+ "triggers": [
+  "customer",
+  "customers",
+  "client",
+  "clients",
+  "partner",
+  "客户",
+  "顾客"
+ ],
+ "instructions": [
+  "Call query_customers to obtain current Odoo data; do not answer from this Skill or from page text.",
+  "The tool reads the same scope as Odoo's Customers page: partners with a customer rank above zero. Ordinary contacts and vendors are out of scope.",
+  "Use name_contains only when the user supplied a customer-name filter.",
+  "When the user asks to open the Customers list, call query_customers once, then call goto with /odoo/customers, the collection route authorized by that ToolResult.",
+  "When the user asks to open one customer, call query_customers with their name, require exactly one current match, then call goto with that result's exact ui_path. The goto result already contains a fresh observation; do not call wait_for or observe after a successful navigation.",
+  "For navigation, require a unique current match; a zero-result search answers only within the tool's actual scope, and multiple targets require clarification.",
+  "Use the current answer evidence and finish contract to answer the question. Compute totals, filters and counts with compute; the server renders the conclusions you cite, not the last raw query table.",
+  "The read includes phone, mobile, email and vat, the tax identification number. Cite the requested fields from current evidence; a returned empty field differs from a field that was not read. res.partner ids can filter order and invoice queries through customer_id.",
+  "When the question is how many customers there are, call query_customers with no limit, so the read covers the whole scope; then count with compute. A count over a read that was limited or truncated can only answer for the part that was read, and the answer says so."
+ ],
+ "tool_names": [
+  "query_customers"
+ ],
+ "provenance": [
+  "src:odoo@18.0:addons/account/views/partner_view.xml#account.res_partner_action_customer",
+  "src:odoo@18.0:odoo/addons/base/models/res_partner.py#res.partner",
+  "api:odoo@18.0:/jsonrpc#object.execute_kw"
+ ],
+ "read_only": true
 }

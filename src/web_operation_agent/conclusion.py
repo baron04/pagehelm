@@ -21,8 +21,8 @@ from dataclasses import dataclass
 from typing import Union
 
 from .evidence import (
-    ComputationEvidence, EvidenceUnknown, PageEvidence, QueryEvidence, RecordEvidence,
-    SelectionEvidence, TurnEvidence,
+    CapabilityEvidence, ComputationEvidence, EvidenceUnknown, PageEvidence, QueryEvidence,
+    RecordEvidence, SelectionEvidence, TurnEvidence,
 )
 
 #: How much of the question this answer covers. The model proposes one; the server may only
@@ -221,7 +221,38 @@ class PageFact:
                 "source_kind": "page"}
 
 
-Conclusion = Union[FieldValue, Selection, Aggregate, NotFound, Undetermined, PageFact]
+@dataclass(frozen=True, slots=True)
+class CapabilityGap:
+    """Nothing in this session performs what was asked, bound to the search that establishes it.
+
+    This is the one conclusion that is not about the application's data, and it is a
+    conclusion rather than a bare flag for the same reason as the rest: the claim has to
+    stand on something a reader can check. What it stands on is the capability search --
+    the whole catalog for this actor, not the Skills a matcher pre-selected.
+
+    It refuses a search that matched something. A turn holding a capability has to use it,
+    and letting this conclusion through anyway would turn every hard task into "I can't",
+    which is the projection problem wearing its last remaining hat.
+    """
+
+    evidence_id: str
+
+    kind = "capability_gap"
+
+    def verify(self, turn: TurnEvidence) -> dict:
+        item = _one(turn, self.evidence_id, CapabilityEvidence, "a capability gap")
+        if not item.found_nothing:
+            raise ConclusionRefused(
+                "that capability search matched " + ", ".join(item.matches)
+                + ", so this session can perform it; use the capability instead of declining")
+        return {"kind": self.kind, "goal": item.goal, "application": item.application,
+                "application_version": item.application_version, "actor": item.actor,
+                "catalog_digest": item.catalog_digest, "matches": list(item.matches),
+                "scope": item.origin.scope, "source_kind": item.origin.kind}
+
+
+Conclusion = Union[FieldValue, Selection, Aggregate, NotFound, Undetermined, PageFact,
+                   CapabilityGap]
 
 #: `action_succeeded` is deliberately absent. Whether a write happened already comes from the
 #: mutation journal's terminal state and a same-actor readback, and routing it through a

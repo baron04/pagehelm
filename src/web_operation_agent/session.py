@@ -29,7 +29,7 @@ from urllib.parse import urlencode, urljoin, urlsplit
 from .application import ApplicationRoutePort, SourceCapability
 from . import answer_protocol
 from . import page_answer
-from .answer_view import render_payload, unavailable_answer
+from .answer_view import capability_gap_answer, render_payload, unavailable_answer
 from .affordance import SourceAffordance, resolve_source_affordances
 from .browser import BrowserExecutor, TransportError, TurnCancelled
 from .business import (BUSINESS_SKILL_MATCHER_VERSION, BusinessMutationBlockedError,
@@ -48,8 +48,8 @@ from .ledger import SessionLedger
 from .model import BudgetExhausted, ProviderError
 from .privacy import SessionHandoffPolicy, redact_sensitive_assignments
 from .schemas import (BROWSER_ACTIONS, ActionReceipt, ControlPlan, OperationContract,
-                      PageObservation, empty_contract)
-from .evidence import EvidenceUnknown, TurnEvidence
+                      PageObservation, digest, empty_contract)
+from .evidence import CapabilityEvidence, EvidenceUnknown, Origin, TurnEvidence
 
 #: Describe a plan by its actual origin. A page-only plan must never be presented to the model
 #: as source-derived, because that would change the information available to that mode.
@@ -93,6 +93,35 @@ _NAVIGATION_EXTRA_GOAL = re.compile(
 
 def _is_navigation_only(prompt: str) -> bool:
     return bool(_NAVIGATION_ONLY.fullmatch(prompt) and not _NAVIGATION_EXTRA_GOAL.search(prompt))
+
+#: What a verified capability gap ends the turn as. The claim itself lives in the
+#: `capability_gap` conclusion and its CapabilityEvidence, which is what a reader checks; this
+#: is only the terminal name, and it stays inside the evaluation protocol's frozen product
+#: vocabulary. A distinct name would be better English and would currently be scored as
+#: classification drift, so changing it means changing the apparatus first -- one line, here.
+CAPABILITY_GAP_TERMINAL = "agent_refused"
+
+
+def _is_capability_gap(verified: dict | None) -> bool:
+    """A verified answer that is exactly one capability gap and nothing else."""
+    if not verified:
+        return False
+    conclusions = verified.get("conclusions") or ()
+    return (len(conclusions) == 1
+            and isinstance(conclusions[0], dict)
+            and conclusions[0].get("kind") == "capability_gap")
+
+CAPABILITY_GAP_SYSTEM = """\
+A capability check searched every capability installed for this actor -- not only the Skills \
+selected for this task -- and matched nothing. Its result is recorded as {ref}.
+* If the user asked you to change data, finish with outcome=unable and a single \
+capability_gap conclusion citing {ref}. Do not look the record up first, do not answer with \
+a related query, and do not substitute a different change.
+* This overrides walking the user to the record: with no capability, do not `goto` it and \
+do not offer to have it done by hand on that page. Having no tool is not the same as finding \
+nothing, and a record you looked up is not an answer to a change you cannot make.
+* This says nothing about reading. A question you can answer by reading, you still answer.
+"""
 
 AGENT_SYSTEM = """\
 You operate a web application through a browser you drive one action at a time. You cannot \
@@ -1134,6 +1163,12 @@ class ServerAgentSession:
             system += "\n" + CAPABILITY_SYSTEM
         if self.scope_first_policy:
             system += "\n" + SCOPE_FIRST_SYSTEM
+        capability_ref = self._register_capability_evidence()
+        if capability_ref and not self.evidence.get(capability_ref).matches:
+            # Only when the search came back empty. A turn that has the capability reaches it
+            # through the Skills it already loaded, and telling every read-only turn how to
+            # decline is both noise and an invitation.
+            system += "\n" + CAPABILITY_GAP_SYSTEM.format(ref=capability_ref)
         messages = [{"role": "system", "content": system},
                     {"role": "user", "content": self._opening(obs)}]
         self._sync_plan_message(messages)
@@ -2047,7 +2082,8 @@ class ServerAgentSession:
                 except (ValueError, TypeError, EvidenceUnknown) as exc:
                     feedback = "COMPUTATION REFUSED: " + str(exc)[:500]
                     self.ledger.append("answer_computation_refused", step=step,
-                                       error_type=type(exc).__name__)
+                                       error_type=type(exc).__name__,
+                                       detail=str(exc)[:500])
                 messages += [_assistant_call(call), _tool_result(call, feedback)]
                 continue
 
@@ -2099,8 +2135,13 @@ class ServerAgentSession:
                         verified = answer_protocol.submit(self.evidence, args)
                 except (ValueError, TypeError, EvidenceUnknown) as exc:
                     self._answer_repairs += 1
+                    # The message, not only the class. A run recorded three refusals as
+                    # "ValueError" and nothing else, which is enough to know the answer was
+                    # rejected and not enough to know why -- the reviewer reading it later
+                    # cannot tell a bad reference from an impossible coverage claim.
                     self.ledger.append("answer_contract_refused", step=step,
-                                       reason=type(exc).__name__, repair=self._answer_repairs)
+                                       reason=type(exc).__name__, detail=str(exc)[:500],
+                                       repair=self._answer_repairs)
                     if self._answer_repairs > answer_protocol.MAX_ANSWER_REPAIRS:
                         result.agent_said = unavailable_answer(self.task.prompt)
                         return self._finish(result, t0, "agent_refused", result.agent_said,
@@ -2111,6 +2152,19 @@ class ServerAgentSession:
                         "otherwise finish with outcome=unable. " + self._render_answer_action())]
                     continue
                 result.verified_answer = verified
+                if _is_capability_gap(verified):
+                    # The claim is that nothing ran, so it is recorded with the two counts
+                    # that make that checkable rather than taken on the model's word. The
+                    # sentence is fixed here; a model free to phrase it is free to soften it
+                    # back into "here is what I found instead".
+                    result.agent_said = capability_gap_answer(self.task.prompt)
+                    self.ledger.append(
+                        "capability_gap", step=step,
+                        capability_digest=self._active_capability_digest(),
+                        mutation_proposals=self._mutation_proposal_count(),
+                        dispatches=self._mutation_dispatch_count())
+                    return self._finish(result, t0, CAPABILITY_GAP_TERMINAL,
+                                        result.agent_said, steps=step)
                 result.agent_said = (render_payload(verified, user_text=self.task.prompt,
                                                    max_chars=max(512, self.max_agent_said_chars))
                                      if verified is not None else unavailable_answer(self.task.prompt))
@@ -3222,6 +3276,71 @@ class ServerAgentSession:
         if business_skills:
             body.append(business_skills)
         return "\n\n".join(body)
+
+    def _register_capability_evidence(self) -> str:
+        """Search the whole installed catalog for this turn's goal and record what it found.
+
+        Run once, before the loop, so a decline always has something to stand on and never
+        has to be inferred from the turn simply stopping. The search covers the typed Skill
+        catalog plus the non-typed surfaces this deployment actually enables, because a gap
+        is a statement about the whole executable surface.
+        """
+        if self.business_tools is None or self.principal is None:
+            return ""
+        # Only the surfaces that can make a change. Navigation and observation are not
+        # capabilities to change anything, and counting `goto` here would mean a deployment
+        # with any page action enabled could never report a capability gap at all.
+        extra = []
+        if self.allow_form_prefill:
+            extra.append("form_handoff")
+        writing_actions = {"fill", "select", "submit", "click"} - set(self.disabled_actions)
+        extra += [f"page:{name}" for name in sorted(writing_actions & BROWSER_ACTIONS)]
+        try:
+            matches = self.business_tools.resolve_capability(
+                self.task.prompt,
+                allow_mutations=self.business_mutation_approval is not None,
+                extra=tuple(extra))
+        except (ValueError, TypeError) as exc:
+            # A capability check that cannot run leaves the turn without the reference, so no
+            # gap can be claimed. That is the safe direction: the model falls back to ordinary
+            # work rather than declining on a search that never happened.
+            self.ledger.append("capability_check_unavailable", reason=str(exc)[:200])
+            return ""
+        item = CapabilityEvidence(
+            evidence_id="capability#1",
+            origin=Origin(kind="capability", reference=f"capability-check:{self.run_id}",
+                          observed_at=str(time.time()),
+                          scope=self.task.supported_scope or self.arm),
+            application=self.principal.application_id,
+            application_version=self.contract.content_digest,
+            actor=self.principal.actor_authority_digest,
+            catalog_digest=self.business_tools.catalog_sha256,
+            goal=self.task.prompt[:500],
+            matches=tuple(matches))
+        self.evidence.record(item)
+        self.ledger.append("capability_check", goal_chars=len(self.task.prompt),
+                           catalog_digest=item.catalog_digest,
+                           matches=list(item.matches))
+        return item.evidence_id
+
+    def _active_capability_digest(self) -> str:
+        """A digest of the business tools this turn could actually call.
+
+        An unsupported-operation refusal is a claim about the toolset, so the toolset is what
+        is recorded. Names alone, sorted: the digest answers "which capabilities were live",
+        and a reader comparing two runs can see the set change without the ledger carrying
+        the tool definitions themselves.
+        """
+        names = sorted(self.business_tools.tool_names) if self.business_tools is not None else []
+        return digest({"business_tools": names})
+
+    def _mutation_proposal_count(self) -> int:
+        return sum(1 for event in self.ledger.events
+                   if event.get("event") == "business_mutation_proposed")
+
+    def _mutation_dispatch_count(self) -> int:
+        return sum(1 for event in self.ledger.events
+                   if event.get("event") == "business_mutation_execution_started")
 
     def _render_answer_action(self) -> str:
         if not self._answer_mode or self._answer_action_receipt is None:

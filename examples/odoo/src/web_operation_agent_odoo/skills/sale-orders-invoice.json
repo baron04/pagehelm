@@ -1,40 +1,40 @@
 {
-  "schema_version": 1,
-  "skill_id": "odoo.sales.sale-orders-invoice",
-  "title": "Invoice an Odoo sales order",
-  "intent": "Create exactly one ordinary customer invoice for a confirmed sales order, after explicit confirmation.",
-  "triggers": [
-    "create invoice",
-    "invoice the order",
-    "invoice this order",
-    "bill the order",
-    "开票",
-    "开发票",
-    "为订单开票",
-    "生成发票",
-    "创建客户发票",
-    "create customer invoice"
-  ],
-  "instructions": [
-    "Call query_sale_orders first and read the order's invoice_status. Only an order with something still to invoice can be invoiced; anything else is a refusal to report, not a write to attempt.",
-    "Call invoice_sale_order with the exact order reference. The server re-checks invoice_status immediately before writing, shows the exact effect and targets for confirmation, and reads the created invoice back under the same user.",
-    "Odoo's own form offers two buttons both labelled Create Invoice, separated only by the condition under which each appears, and one of them proposes a percentage down payment. This tool is always the ordinary invoice: it pins the regular-invoice method. Never describe the result as a down payment.",
-    "The created invoice is a draft. Odoo assigns its number on posting, so report it as a draft without a number rather than quoting one.",
-    "Use query_customer_invoices when the user wants to see the invoice alongside the others.",
-    "After a successful result, open only the returned ui_path and observe the page before finishing.",
-    "If confirmation is denied or a write outcome is uncertain, stop; never retry the mutation."
-  ],
-  "tool_names": [
-    "query_sale_orders",
-    "query_customer_invoices",
-    "invoice_sale_order"
-  ],
-  "provenance": [
-    "src:odoo@18.0:addons/sale/wizard/sale_make_invoice_advance.py#sale.advance.payment.inv.create_invoices",
-    "src:odoo@18.0:addons/sale/models/sale_order.py#sale.order._create_invoices",
-    "src:odoo@18.0:addons/account/views/account_move_views.xml#account.action_move_out_invoice",
-    "src:odoo@18.0:addons/account/models/account_move.py#account.move",
-    "api:odoo@18.0:/jsonrpc#object.execute_kw"
-  ],
-  "read_only": false
+ "schema_version": 1,
+ "skill_id": "odoo.sales.sale-orders-invoice",
+ "title": "Invoice an Odoo sales order",
+ "intent": "Create exactly one ordinary customer invoice for a confirmed sales order, after explicit confirmation.",
+ "triggers": [
+  "create invoice",
+  "invoice the order",
+  "invoice this order",
+  "bill the order",
+  "开票",
+  "开发票",
+  "为订单开票",
+  "生成发票",
+  "创建客户发票",
+  "create customer invoice"
+ ],
+ "instructions": [
+  "Call query_sale_orders first and read the order's invoice_status; only an order with something still to invoice can be invoiced. When it cannot, still call invoice_sale_order: the server re-checks invoice_status and refuses before proposing anything, so nothing is written and the user is never asked to approve it, and the refusal it returns is the one to report. Do not answer with what the order query returned instead.",
+  "Call invoice_sale_order with the exact order reference. The server re-checks invoice_status immediately before writing, shows the exact effect and targets for confirmation, and reads the created invoice back under the same user.",
+  "Odoo's own form offers two buttons both labelled Create Invoice, separated only by the condition under which each appears, and one of them proposes a percentage down payment. This tool is always the ordinary invoice: it pins the regular-invoice method. Never describe the result as a down payment.",
+  "The created invoice is a draft. Odoo assigns its number on posting, so report it as a draft without a number rather than quoting one.",
+  "Use query_customer_invoices when the user wants to see the invoice alongside the others.",
+  "After a successful result, open only the returned ui_path and observe the page before finishing.",
+  "If confirmation is denied or a write outcome is uncertain, stop; never retry the mutation."
+ ],
+ "tool_names": [
+  "query_sale_orders",
+  "query_customer_invoices",
+  "invoice_sale_order"
+ ],
+ "provenance": [
+  "src:odoo@18.0:addons/sale/wizard/sale_make_invoice_advance.py#sale.advance.payment.inv.create_invoices",
+  "src:odoo@18.0:addons/sale/models/sale_order.py#sale.order._create_invoices",
+  "src:odoo@18.0:addons/account/views/account_move_views.xml#account.action_move_out_invoice",
+  "src:odoo@18.0:addons/account/models/account_move.py#account.move",
+  "api:odoo@18.0:/jsonrpc#object.execute_kw"
+ ],
+ "read_only": false
 }

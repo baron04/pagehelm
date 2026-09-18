@@ -251,12 +251,19 @@ def render_neutral_user_answer(context: AgentAnswerContext) -> str:
         return ("An operation for the same business object is still running or unresolved. "
                 "Nothing was submitted again; check the earlier operation first.")
     if context.agent.terminal_reason == "business_mutation_refused":
+        # Each rule the application can refuse by gets its own sentence. "A business rule
+        # refused this operation" is true and useless: the reader cannot tell whether to
+        # change the request, change the record, or stop.
         if re.search(r"[\u3400-\u9fff]", context.message.text):
             if context.agent.detail == "duplicate":
                 return "已存在同名或同邮箱记录，本次没有重复创建。"
+            if context.agent.detail == "nothing_to_invoice":
+                return "这张订单没有可开票的内容，本次没有执行任何更改。"
             return "业务规则不允许执行这项操作，本次没有提交任何更改。"
         if context.agent.detail == "duplicate":
             return "A record with the same name or email already exists. Nothing was created."
+        if context.agent.detail == "nothing_to_invoice":
+            return "That order has nothing left to invoice, so it was not executed."
         return "A business rule refused this operation. No change was submitted."
     if context.agent.terminal_reason == "permission_denied":
         projection = (context.business_result.query_answer
