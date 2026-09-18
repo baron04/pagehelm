@@ -262,5 +262,22 @@ class DesignTokenTests(unittest.TestCase):
             self.assertIn(f"--woa-{name}: {value};", text)
 
 
+class ASessionEndIsSaidNotCoded(unittest.TestCase):
+    """A closed session left "任务结束（delegated_authority_changed）" in the timeline (P7.5)."""
+
+    def test_every_reason_the_channel_closes_with_reads_as_a_sentence(self):
+        reasons = ("principal_revoked", "principal_expired", "principal_validation_failed",
+                   "session_expired", "browser_inactive", "native_bootstrap_replaced",
+                   "delegated_authority_changed", "identity_authority_mismatch",
+                   "host_stopped", "turn_capacity_exhausted", "session_closed",
+                   "runner_setup_failed", "")
+        for reason in reasons:
+            with self.subTest(reason=reason):
+                entry = project_event(_event("terminal", {"reason": reason}), at=0)
+                self.assertEqual(entry["kind"], "result")
+                self.assertIn("助手", entry["text"])
+                self.assertIsNone(re.search(r"[A-Za-z_]{3,}", entry["text"]))
+
+
 if __name__ == "__main__":
     unittest.main()

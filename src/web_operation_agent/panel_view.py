@@ -144,6 +144,29 @@ def describe_action(command: dict | None) -> str:
     return f"执行页面动作：{_clip(action, 40)}" if action else "执行页面动作"
 
 
+#: Why the assistant's session ended, as the person at the panel is told. The reason codes
+#: are the channel's own and were shown raw -- "任务结束（delegated_authority_changed）" -- which
+#: is the bare error code J6.03 rules out of a Chinese conversation.
+_SESSION_ENDED = {
+    "principal_revoked": "已退出登录，助手会话已结束",
+    "principal_expired": "登录凭证已过期，助手会话已结束",
+    "principal_validation_failed": "无法核验当前登录身份，助手会话已结束",
+    "session_expired": "助手会话已过期",
+    "browser_inactive": "长时间没有连接，助手会话已结束",
+    "native_bootstrap_replaced": "页面重新连接了助手，这个会话已结束",
+    "delegated_authority_changed": "账号的授权已变更，助手会话已结束",
+    "identity_authority_mismatch": "登录身份与授权不一致，助手会话已结束",
+    "host_stopped": "助手服务已停止",
+}
+
+
+def session_ended_message(reason: str) -> str:
+    """The line a closed session leaves in the timeline; never the raw reason code."""
+    if reason.endswith("_capacity_exhausted"):
+        return "助手会话达到容量上限，已结束"
+    return _SESSION_ENDED.get(reason, "助手会话已结束")
+
+
 def project_event(event: TaskEvent, *, at: int) -> dict | None:
     """Project one session event onto a panel timeline entry, or ``None`` if invisible.
 
@@ -167,9 +190,8 @@ def project_event(event: TaskEvent, *, at: int) -> dict | None:
         return {**base, "kind": "approval", "tone": "warning",
                 "text": text, "approval_id": str(payload.get("approval_id") or "")}
     if event.kind == "terminal":
-        reason = _clip(payload.get("reason"), 100)
         return {**base, "kind": "result", "tone": "neutral",
-                "text": f"任务结束（{reason}）" if reason else "任务结束"}
+                "text": session_ended_message(str(payload.get("reason") or ""))}
     if event.kind != "progress":
         return None
     state = str(payload.get("state") or "")
