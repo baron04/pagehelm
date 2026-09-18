@@ -25,8 +25,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 5500,
-          "input_digest": "547311a760a73b1a8838ec4f7688be99d50a1916d7d810d172ab8d26a3fd6117",
+          "input_bytes": 5729,
+          "input_digest": "2f14eec3bc76bcfd841204ab079e8f657839b9c43349a7e880f1218e407c0f2d",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -242,8 +242,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 8702,
-          "input_digest": "52073d8bd52e189e63ac7095d367874208be7375ebc2ad1da9011d284af1d35e",
+          "input_bytes": 8931,
+          "input_digest": "953c97997e8f5c019511e19f4a18a5670aa49160cfcb00c6d729d8c221fae916",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -289,8 +289,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 9503,
-          "input_digest": "fc6dfc361b70984b758004532489cffe8962187a9b5eb2f1214d09d301fcdfb2",
+          "input_bytes": 9732,
+          "input_digest": "a150262429c95eb2350a0400050f673eeec657c797335a668d49c84cd7fa1dbd",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -341,8 +341,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 10204,
-          "input_digest": "a7963ad2814efcf314ab3b547cf95b0e61d7012ebe83991956f34db8ba34cf42",
+          "input_bytes": 10433,
+          "input_digest": "65066adc91b62f17e7a5963d1bf38d5fb665c87645b2b808cdceab2591f23433",
           "message_count": 6,
           "roles": {
             "assistant": 2,
@@ -549,8 +549,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 7023,
-          "input_digest": "fdbb63745b6027d0078ab949fe3764193683a9a140ae5abd2b452d51218cd9dd",
+          "input_bytes": 7252,
+          "input_digest": "91bd8ad9247c84fdf57ef977c259217eb2dd1eacadd5a0d3a75b4002865dba4b",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -762,8 +762,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 5500,
-          "input_digest": "547311a760a73b1a8838ec4f7688be99d50a1916d7d810d172ab8d26a3fd6117",
+          "input_bytes": 5729,
+          "input_digest": "2f14eec3bc76bcfd841204ab079e8f657839b9c43349a7e880f1218e407c0f2d",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -833,8 +833,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6289,
-          "input_digest": "4f4a715aa849c29260b4d45e0e9b620f1ea2fff2fa80a622f7c9d5cf8834323b",
+          "input_bytes": 6518,
+          "input_digest": "e1d9ce95fa6418abf53523b6772bd62a053140b9e7c223a33e8dfcf1431a2ddc",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -1026,8 +1026,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6150,
-          "input_digest": "c6cabb9a5d803bc388516f1d8a222a53fe8e6f43650f8dd7de1a7e753e4a9cea",
+          "input_bytes": 6379,
+          "input_digest": "ff47c2a9c6cfbd4dbaafca7b2c326a9de7feae102731d84e216216ad5bae53bd",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -1105,8 +1105,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6707,
-          "input_digest": "33236902d1e2a35f9af9dea222406e1c8be52b817f2d150e9ece37ae984dcb5c",
+          "input_bytes": 6936,
+          "input_digest": "ce3d2ee0c76b88d0ee5d43db0e2fce5fba2ae8f189a52b3b5314b40e22b5eca4",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -1302,8 +1302,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6159,
-          "input_digest": "54796f043e9645485195e392baf44d7048b886bc9347c54e658771ff36880303",
+          "input_bytes": 6388,
+          "input_digest": "d8ed53acca5c1345a1f26bd8d6234ceebfee555161510071720da54f03bd00ca",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -1381,8 +1381,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6746,
-          "input_digest": "d9a45ee6f51ae03d55153dfc08c1cbc17105866bac9f39ccc7233963a64ee6d8",
+          "input_bytes": 6975,
+          "input_digest": "54338decb429d0900dc8628b80d1088982bfc8764fcea18011d7f0a4788406bc",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -1598,8 +1598,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 8098,
-          "input_digest": "02faf6606f03f9495faedda428932250c8424a99cb5efb318a5ff51361e9cc8e",
+          "input_bytes": 8327,
+          "input_digest": "2eb450a31d7edc906d19d6d655b580fd269a33961b1610dbbf535b1f39300bf5",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -1644,8 +1644,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 8899,
-          "input_digest": "6b657ca431659af1853010813d41858575a99dec9a82ea0f6f337e092f028cda",
+          "input_bytes": 9128,
+          "input_digest": "5d0a3241171ab7e1fffb774cbd521e66497ea38717349c99c21dd44ef90c8384",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -1695,8 +1695,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 9600,
-          "input_digest": "768d92d67322131fd1c181bf0dcce0371c2bbe04f0f1962e647681d8399ceb4a",
+          "input_bytes": 9829,
+          "input_digest": "3fbb4dced02a17569fadc07346189aa5a03f2530c3578dbad5177ac52b9183a1",
           "message_count": 6,
           "roles": {
             "assistant": 2,
@@ -1930,8 +1930,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 8098,
-          "input_digest": "02faf6606f03f9495faedda428932250c8424a99cb5efb318a5ff51361e9cc8e",
+          "input_bytes": 8327,
+          "input_digest": "2eb450a31d7edc906d19d6d655b580fd269a33961b1610dbbf535b1f39300bf5",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -1976,8 +1976,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 8899,
-          "input_digest": "6b657ca431659af1853010813d41858575a99dec9a82ea0f6f337e092f028cda",
+          "input_bytes": 9128,
+          "input_digest": "5d0a3241171ab7e1fffb774cbd521e66497ea38717349c99c21dd44ef90c8384",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -2029,8 +2029,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 9454,
-          "input_digest": "d9507c1d2766e3bc114d20aecb03403c3d9a02ff13f91acb186db9b04b223702",
+          "input_bytes": 9683,
+          "input_digest": "8545d89c07d67b58aedfa92e123590c67850a1cfede8640da6f101def9b2ac08",
           "message_count": 6,
           "roles": {
             "assistant": 2,
@@ -2102,8 +2102,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 10235,
-          "input_digest": "aa70bd7466cad9f9e5487ed6ec059c951c1a8311b68c393ce10d8c25ab920ebf",
+          "input_bytes": 10464,
+          "input_digest": "aca5bf59fc1dbae78598923785cc05e95206bbeb0159ae890d4169d81ec00ea9",
           "message_count": 8,
           "roles": {
             "assistant": 3,
@@ -2370,8 +2370,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 8122,
-          "input_digest": "a3c5eed6d7b4f0f87a105001498a4669d145ed538e4492ad74ae8f44a7e55361",
+          "input_bytes": 8351,
+          "input_digest": "1aacce8c58c89226ec623b2779817dd01b3ae0deb3b2ee0d8759f1543f21d115",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -2417,8 +2417,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 9178,
-          "input_digest": "353e5979598fe4e22bfe29a87b83c8de83ed939c1a2b060ea090958d0a716b6d",
+          "input_bytes": 9407,
+          "input_digest": "1355611286bcacfabf8558ff3a5ee2abd96835855a8352592e89e673275c402d",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -2542,8 +2542,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 10045,
-          "input_digest": "f4e25355388b289ba6d666fb76f30034d0431dfc9371497b7375b24f535d56e7",
+          "input_bytes": 10274,
+          "input_digest": "9851b447eb90dc73a92511e826e2f6dac9b4c97669bb14295e11486543279d64",
           "message_count": 6,
           "roles": {
             "assistant": 2,
@@ -2790,8 +2790,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 8122,
-          "input_digest": "a3c5eed6d7b4f0f87a105001498a4669d145ed538e4492ad74ae8f44a7e55361",
+          "input_bytes": 8351,
+          "input_digest": "1aacce8c58c89226ec623b2779817dd01b3ae0deb3b2ee0d8759f1543f21d115",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -2837,8 +2837,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 9178,
-          "input_digest": "353e5979598fe4e22bfe29a87b83c8de83ed939c1a2b060ea090958d0a716b6d",
+          "input_bytes": 9407,
+          "input_digest": "1355611286bcacfabf8558ff3a5ee2abd96835855a8352592e89e673275c402d",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -3081,8 +3081,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 8122,
-          "input_digest": "a3c5eed6d7b4f0f87a105001498a4669d145ed538e4492ad74ae8f44a7e55361",
+          "input_bytes": 8351,
+          "input_digest": "1aacce8c58c89226ec623b2779817dd01b3ae0deb3b2ee0d8759f1543f21d115",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -3128,8 +3128,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 9178,
-          "input_digest": "353e5979598fe4e22bfe29a87b83c8de83ed939c1a2b060ea090958d0a716b6d",
+          "input_bytes": 9407,
+          "input_digest": "1355611286bcacfabf8558ff3a5ee2abd96835855a8352592e89e673275c402d",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -3365,8 +3365,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 5443,
-          "input_digest": "e7c5fe72733b3725fcc1dcff6dc02240b2584ae6d699aabd9914bb6965fd6c12",
+          "input_bytes": 5672,
+          "input_digest": "37c6d7076fa4da0f1b5d3ee69c34bf79ef811789c35e2d9b83799387f315b7da",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -3543,8 +3543,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 5019,
-          "input_digest": "15e1952526792d767f79cc822c0bfe9ed9211f20011ba3c9246bdeecce16b50b",
+          "input_bytes": 5248,
+          "input_digest": "f3253364c5a478780db533695b563754d68b9307e708fb4bc6f8b52f214769bc",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -3623,8 +3623,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 5631,
-          "input_digest": "e42ae252931dbc3e33070ef9ea76ecba4af679a4306d9016e6dfe70b6655eb9b",
+          "input_bytes": 5860,
+          "input_digest": "1a0d0a7968fbfd7a55e30a05964cf1e90cd0d43f3e237cb3832fca03ba311722",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -3816,8 +3816,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 5500,
-          "input_digest": "547311a760a73b1a8838ec4f7688be99d50a1916d7d810d172ab8d26a3fd6117",
+          "input_bytes": 5729,
+          "input_digest": "2f14eec3bc76bcfd841204ab079e8f657839b9c43349a7e880f1218e407c0f2d",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -3887,8 +3887,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6289,
-          "input_digest": "4f4a715aa849c29260b4d45e0e9b620f1ea2fff2fa80a622f7c9d5cf8834323b",
+          "input_bytes": 6518,
+          "input_digest": "e1d9ce95fa6418abf53523b6772bd62a053140b9e7c223a33e8dfcf1431a2ddc",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -3949,8 +3949,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6736,
-          "input_digest": "41f6b9ba5fb52744be9752b6edaec914edf9e3bbc70cdd1cb305e162e71788de",
+          "input_bytes": 6965,
+          "input_digest": "69eda46d2a8f5613773340e4b901af881204489a97d4b26ea48b2224a2acac7e",
           "message_count": 6,
           "roles": {
             "assistant": 2,
@@ -4177,8 +4177,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 5500,
-          "input_digest": "547311a760a73b1a8838ec4f7688be99d50a1916d7d810d172ab8d26a3fd6117",
+          "input_bytes": 5729,
+          "input_digest": "2f14eec3bc76bcfd841204ab079e8f657839b9c43349a7e880f1218e407c0f2d",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -4249,8 +4249,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6137,
-          "input_digest": "870501c7a0e1008ada16a7ce57660726f51a2373441d3dc0c4c7040a71115b1c",
+          "input_bytes": 6366,
+          "input_digest": "6d04e342d0c729fcdbfa9b8ec4b0a846b1906d24f766964834c47465ae738b86",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -4451,8 +4451,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 5443,
-          "input_digest": "e7c5fe72733b3725fcc1dcff6dc02240b2584ae6d699aabd9914bb6965fd6c12",
+          "input_bytes": 5672,
+          "input_digest": "37c6d7076fa4da0f1b5d3ee69c34bf79ef811789c35e2d9b83799387f315b7da",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -4490,8 +4490,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 5807,
-          "input_digest": "53766813e75df30cd376cfcb9007122b09819e83542a1b18137c9c5043c3fc58",
+          "input_bytes": 6036,
+          "input_digest": "df48683e79dd4f5cd14e3a5f6864aa96b92c94fa57281ea23195fcd32cb0c7a9",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -4679,8 +4679,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 5499,
-          "input_digest": "15a5b21e188e0d1dca7825e64839fdda59d1dc5e4af434978373894685927c88",
+          "input_bytes": 5728,
+          "input_digest": "9e8d23dbfe3f4db53bff42657718deec437fae4e373a2d3dc47a5e63fb3d7289",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -4741,8 +4741,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6075,
-          "input_digest": "3dbaa7e879590c60ff81e327e713413c49cf9680d1c3102695466a32c3a8f506",
+          "input_bytes": 6304,
+          "input_digest": "4addf0710b069ee89d53afc9bdf6c9fa3b2f0c6a12e2d917d8158d6840441300",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -4805,8 +4805,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6547,
-          "input_digest": "016e6c2ecefccb2003f53e7378e58acc836f66b80c707a36601e5c7a7ce6e223",
+          "input_bytes": 6776,
+          "input_digest": "5aeb3ebdd1dbe01ae214e2fc4337a7665aa83d379e7cb8f51d0c6612a1542239",
           "message_count": 6,
           "roles": {
             "assistant": 2,
@@ -5030,8 +5030,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 5443,
-          "input_digest": "e7c5fe72733b3725fcc1dcff6dc02240b2584ae6d699aabd9914bb6965fd6c12",
+          "input_bytes": 5672,
+          "input_digest": "37c6d7076fa4da0f1b5d3ee69c34bf79ef811789c35e2d9b83799387f315b7da",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -5106,8 +5106,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 5443,
-          "input_digest": "e7c5fe72733b3725fcc1dcff6dc02240b2584ae6d699aabd9914bb6965fd6c12",
+          "input_bytes": 5672,
+          "input_digest": "37c6d7076fa4da0f1b5d3ee69c34bf79ef811789c35e2d9b83799387f315b7da",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -5166,8 +5166,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 5833,
-          "input_digest": "cde9b5088a524ebc2fc19393afa80c9eda9d8a76f5bca43d8484e14208ea531e",
+          "input_bytes": 6062,
+          "input_digest": "5f113c5225077760310c773816d83b78900c26c450eac04289c4bb32a87e639c",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -5361,8 +5361,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 5443,
-          "input_digest": "e7c5fe72733b3725fcc1dcff6dc02240b2584ae6d699aabd9914bb6965fd6c12",
+          "input_bytes": 5672,
+          "input_digest": "37c6d7076fa4da0f1b5d3ee69c34bf79ef811789c35e2d9b83799387f315b7da",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -5527,8 +5527,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 5019,
-          "input_digest": "15e1952526792d767f79cc822c0bfe9ed9211f20011ba3c9246bdeecce16b50b",
+          "input_bytes": 5248,
+          "input_digest": "f3253364c5a478780db533695b563754d68b9307e708fb4bc6f8b52f214769bc",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -5607,8 +5607,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 5631,
-          "input_digest": "e42ae252931dbc3e33070ef9ea76ecba4af679a4306d9016e6dfe70b6655eb9b",
+          "input_bytes": 5860,
+          "input_digest": "1a0d0a7968fbfd7a55e30a05964cf1e90cd0d43f3e237cb3832fca03ba311722",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -5861,8 +5861,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 7144,
-          "input_digest": "ffa88050f7f1c3511d112d76ac2a8573b4c4fba732c32238e661504472118c06",
+          "input_bytes": 7373,
+          "input_digest": "cca5541646d8715c058516bd2bb48a4880c8febe3273e9ce997004796d4c06fc",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -5949,8 +5949,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 8662,
-          "input_digest": "68c41334d32d0ed16fb8095994a7fdacea76963e652c170b4041d83b75e31b1d",
+          "input_bytes": 8891,
+          "input_digest": "5b5cdcb1560ec437efc1fd73e67e56669d90420b43564fcc191eae7c82d40c0f",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -6149,8 +6149,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 7023,
-          "input_digest": "fdbb63745b6027d0078ab949fe3764193683a9a140ae5abd2b452d51218cd9dd",
+          "input_bytes": 7252,
+          "input_digest": "91bd8ad9247c84fdf57ef977c259217eb2dd1eacadd5a0d3a75b4002865dba4b",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -6228,8 +6228,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 7848,
-          "input_digest": "ac3c713966215d5736d1193a4e5360d31287bfd3285049a52042dadbfb818662",
+          "input_bytes": 8077,
+          "input_digest": "af347fb83234ea647d0931698dbdbe0981bed1435ad0e15a07c5d4a900cfb398",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -6430,8 +6430,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 7023,
-          "input_digest": "fdbb63745b6027d0078ab949fe3764193683a9a140ae5abd2b452d51218cd9dd",
+          "input_bytes": 7252,
+          "input_digest": "91bd8ad9247c84fdf57ef977c259217eb2dd1eacadd5a0d3a75b4002865dba4b",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -6510,8 +6510,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 7906,
-          "input_digest": "d5a98f08512c5073ded90fe85eb1f363d82c72593b799f7946d6ae9cc6fc0191",
+          "input_bytes": 8135,
+          "input_digest": "f8c4c94b64fdd81c834870be905280cdd877c967b7f7773fcb643d8198cbb3fb",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -6729,8 +6729,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6412,
-          "input_digest": "43c57f51541155a3682c208c11d989eaab75b924511b388c1ac0e9d53eff7d96",
+          "input_bytes": 6641,
+          "input_digest": "060879908078d00fee59c2b0188708d7216dfe2b5d05079304a40b2d4f635c7b",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -6822,8 +6822,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 7194,
-          "input_digest": "38a37822fbb75e6b5d1f77474e2245c49bec687441c0de33a2b7b6115835100b",
+          "input_bytes": 7423,
+          "input_digest": "54985e200d9a94a7bca23670aa190aa2e64155064c545d6d4e84b56955c29458",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -7039,8 +7039,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6412,
-          "input_digest": "43c57f51541155a3682c208c11d989eaab75b924511b388c1ac0e9d53eff7d96",
+          "input_bytes": 6641,
+          "input_digest": "060879908078d00fee59c2b0188708d7216dfe2b5d05079304a40b2d4f635c7b",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -7132,8 +7132,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 7181,
-          "input_digest": "5a9933e8287904c90d9f25a401d7644b1f10d1be8c193548185be746239fe542",
+          "input_bytes": 7410,
+          "input_digest": "225f29d35ea78f5d3b9a5ef56c1b5d4dde236e0875f47dd9137a8cf37ad55277",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -7329,8 +7329,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 5443,
-          "input_digest": "e7c5fe72733b3725fcc1dcff6dc02240b2584ae6d699aabd9914bb6965fd6c12",
+          "input_bytes": 5672,
+          "input_digest": "37c6d7076fa4da0f1b5d3ee69c34bf79ef811789c35e2d9b83799387f315b7da",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -7389,8 +7389,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 5833,
-          "input_digest": "cde9b5088a524ebc2fc19393afa80c9eda9d8a76f5bca43d8484e14208ea531e",
+          "input_bytes": 6062,
+          "input_digest": "5f113c5225077760310c773816d83b78900c26c450eac04289c4bb32a87e639c",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -7609,8 +7609,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 5443,
-          "input_digest": "e7c5fe72733b3725fcc1dcff6dc02240b2584ae6d699aabd9914bb6965fd6c12",
+          "input_bytes": 5672,
+          "input_digest": "37c6d7076fa4da0f1b5d3ee69c34bf79ef811789c35e2d9b83799387f315b7da",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -7649,8 +7649,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 5777,
-          "input_digest": "5aa70689bc66489a420fc76018dfa3c4df075a2828e479bb7f49100c96f86886",
+          "input_bytes": 6006,
+          "input_digest": "c6c3a2e7d3a93117a803d938546a0abaa87eae98b4aba5e63c77714ba3016de5",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -8184,6 +8184,7 @@
                 "type": "boolean"
               },
               "why": {
+                "description": "the user reads this as your reply unless you already replied in plain text: write it to the user, in the user's language, as the reply itself rather than a note about what you did, and without tool or field names",
                 "type": "string"
               }
             },
@@ -8332,6 +8333,7 @@
                 "type": "boolean"
               },
               "why": {
+                "description": "the user reads this as your reply unless you already replied in plain text: write it to the user, in the user's language, as the reply itself rather than a note about what you did, and without tool or field names",
                 "type": "string"
               }
             },
@@ -8503,6 +8505,7 @@
                 "type": "boolean"
               },
               "why": {
+                "description": "the user reads this as your reply unless you already replied in plain text: write it to the user, in the user's language, as the reply itself rather than a note about what you did, and without tool or field names",
                 "type": "string"
               }
             },
@@ -8694,6 +8697,7 @@
                 "type": "boolean"
               },
               "why": {
+                "description": "the user reads this as your reply unless you already replied in plain text: write it to the user, in the user's language, as the reply itself rather than a note about what you did, and without tool or field names",
                 "type": "string"
               }
             },
@@ -8910,6 +8914,7 @@
                 "type": "boolean"
               },
               "why": {
+                "description": "the user reads this as your reply unless you already replied in plain text: write it to the user, in the user's language, as the reply itself rather than a note about what you did, and without tool or field names",
                 "type": "string"
               }
             },
@@ -9100,6 +9105,7 @@
                 "type": "boolean"
               },
               "why": {
+                "description": "the user reads this as your reply unless you already replied in plain text: write it to the user, in the user's language, as the reply itself rather than a note about what you did, and without tool or field names",
                 "type": "string"
               }
             },
@@ -9290,6 +9296,7 @@
                 "type": "boolean"
               },
               "why": {
+                "description": "the user reads this as your reply unless you already replied in plain text: write it to the user, in the user's language, as the reply itself rather than a note about what you did, and without tool or field names",
                 "type": "string"
               }
             },
@@ -9499,6 +9506,7 @@
                 "type": "boolean"
               },
               "why": {
+                "description": "the user reads this as your reply unless you already replied in plain text: write it to the user, in the user's language, as the reply itself rather than a note about what you did, and without tool or field names",
                 "type": "string"
               }
             },

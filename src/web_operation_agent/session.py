@@ -224,7 +224,11 @@ TOOL_SCHEMAS = [
     {"type": "function", "function": {
         "name": "finish", "description": "End the task. Use done=false if you cannot complete it.",
         "parameters": {"type": "object", "properties": {
-            "done": {"type": "boolean"}, "why": {"type": "string"}},
+            "done": {"type": "boolean"},
+            "why": {"type": "string", "description": (
+                "the user reads this as your reply unless you already replied in plain "
+                "text: write it to the user, in the user's language, as the reply itself "
+                "rather than a note about what you did, and without tool or field names")}},
             "required": ["done", "why"]}}},
 ]
 
@@ -1292,6 +1296,11 @@ class ServerAgentSession:
             return self._finish(result, t0, "control_plane_error", str(e))
         step = 0
         successful_business_tools = 0
+        #: A reply the model gave as plain content and was then asked to follow with a tool
+        #: call. When the next call is `finish(done=true)`, this is what the user reads: the
+        #: model's `why` at that point describes the reply ("told the user what I can do")
+        #: rather than being one, and showing it replaced a complete answer with a run report.
+        unanswered_reply = ""
         while True:
             if self._page_answer_digest and self._page_answer_digest != obs.content_digest:
                 self.evidence.discard_pages()
@@ -1422,10 +1431,13 @@ class ServerAgentSession:
                 # step budget still bounds it. Read-only business answers are the exception
                 # above because they are checked by the product verifier after this loop.
                 step += 1
+                unanswered_reply = said
                 messages += [{"role": "assistant", "content": reply.get("content") or ""},
                              {"role": "user", "content":
-                                 "Call one of the tools. If the task is complete or impossible, "
-                                 "call finish."}]
+                                 "Call one of the tools. If your reply above already answers "
+                                 "the user, call finish with done=true and the user will read "
+                                 "that reply. If the task is impossible, call finish with "
+                                 "done=false."}]
                 self.ledger.append("no_tool_call", step=step,
                                    said=(reply.get("content") or "")[:300])
                 continue
@@ -1460,6 +1472,7 @@ class ServerAgentSession:
             step += 1
             self.ledger.append("tool_call", step=step, tool=name,
                                args=_safe(args, self.session_handoffs))
+            kept_reply, unanswered_reply = (unanswered_reply if name == "finish" else ""), ""
 
             no_progress = self._track_progress(name, args, obs)
             if no_progress == "warn":
@@ -2323,7 +2336,12 @@ class ServerAgentSession:
 
             if name == "finish":
                 done = bool(args.get("done"))
-                result.agent_said = str(args.get("why") or "")[:self.max_agent_said_chars]
+                if done and kept_reply:
+                    result.agent_said = kept_reply[:self.max_agent_said_chars]
+                    self.ledger.append("plain_reply_kept", step=step,
+                                       why=str(args.get("why") or "")[:300])
+                else:
+                    result.agent_said = str(args.get("why") or "")[:self.max_agent_said_chars]
                 if done and self._should_challenge_completion():
                     # The agent believes it is finished, and the application refused the only
                     # write it attempted. Ending here would record a claim the control plane
