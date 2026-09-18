@@ -326,16 +326,25 @@ def render_neutral_user_answer(context: AgentAnswerContext) -> str:
             return notice
         prior_write_completed = bool(
             context.agent.business_control.get("mutation_completed", 0))
+        refused = _plain(context.agent.refused_operation or "")
         if re.search(r"[\u3400-\u9fff]", context.message.text):
             if prior_write_completed:
                 return ("本轮先前的操作已经完成，但后续操作因权限不足没有执行。"
                         "请先核对已完成的结果；如需继续，请联系管理员授予权限。")
+            if refused:
+                return (f"当前账号没有{refused}的权限，这项操作没有执行。"
+                        "同一个问题里其他可以读取的部分，可以单独再问一次；"
+                        "如确实需要这项权限，请联系管理员授予。")
             return ("当前账号没有执行这项操作的权限，这项操作没有执行。"
                     "如确实需要，请联系管理员授予权限。")
         if prior_write_completed:
             return ("An earlier action in this task completed, but the later operation was "
                     "not permitted and was not carried out. Review the completed result; "
                     "ask an administrator for access if you need to continue.")
+        if refused:
+            return (f"Your account is not permitted to {refused}, so that was not carried "
+                    "out. Ask separately for the part of the question it may read; ask an "
+                    "administrator for access if you need this one.")
         return ("Your account is not permitted to perform this operation, so that operation "
                 "was not carried out. Ask an administrator for access if you need it.")
     if context.agent.terminal_reason == "approval_failed":

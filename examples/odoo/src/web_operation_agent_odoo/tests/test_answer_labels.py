@@ -141,3 +141,83 @@ class TheLabelTableIsBounded(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ARefusalNamesWhatWasRefused(unittest.TestCase):
+    """"当前账号没有执行这项操作的权限" left the reader guessing which half of "the phone and
+    the orders" the account could not read (P7.5 CR-24)."""
+
+    def test_every_tool_the_adapter_ships_has_a_refusal_label(self):
+        from web_operation_agent_odoo.adapter import (CONFIRM_QUOTATION_TOOL,
+                                                      CREATE_CUSTOMER_TOOL, COLLECTIONS,
+                                                      INVOICE_SALE_ORDER_TOOL,
+                                                      PREPARE_CUSTOMER_FORM_TOOL)
+        for tool in ([collection.tool for collection in COLLECTIONS]
+                     + [CREATE_CUSTOMER_TOOL, CONFIRM_QUOTATION_TOOL,
+                        INVOICE_SALE_ORDER_TOOL, PREPARE_CUSTOMER_FORM_TOOL]):
+            with self.subTest(tool=tool):
+                self.assertIn(tool, ANSWER_LABELS_ZH)
+
+    def test_a_refused_read_is_named_in_the_answer(self):
+        from web_operation_agent.product import AgentAnswerContext, AgentTurnMessage, RunResult
+        from web_operation_agent.product import render_neutral_user_answer
+        from web_operation_agent.tests.test_product import _message
+        answer = render_neutral_user_answer(AgentAnswerContext(
+            message=AgentTurnMessage.from_wire({**_message(), "text": "它有哪些销售订单？"}),
+            agent=RunResult(run_id="run", task_ref="task", arm="U",
+                            terminal_reason="permission_denied",
+                            refused_operation="读取销售订单"),
+            business_result=None, max_chars=4_000))
+        self.assertIn("当前账号没有读取销售订单的权限", answer)
+        self.assertIn("可以单独再问一次", answer)
+
+
+class ASessionCarriesTheRefusedOperation(unittest.TestCase):
+    def test_an_application_refusal_names_the_read_it_refused(self):
+        from web_operation_agent.business import BusinessToolPermissionError
+
+        class Refusing:
+            def __init__(self, inner):
+                self._inner = inner
+
+            def __getattr__(self, name):
+                return getattr(self._inner, name)
+
+            def execute(self, name, args, context=None):
+                if name == "query_sale_orders":
+                    raise BusinessToolPermissionError(
+                        "Odoo's access rules do not permit the delegated user this operation",
+                        layer="application")
+                return self._inner.execute(name, args, context)
+
+        script = [("load_skill", {"skill_id": "odoo.sales.sale-orders-query"}),
+                  ("query_sale_orders", {"limit": 50})]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            adapter = OdooApplicationAdapter(base_url=BASE, api_key_path=_key_file(root))
+            adapter.business_tools._executor = Refusing(
+                _FakeOdoo({"sale.order": _quotations(QUOTATIONS)}))
+            now = int(time.time() * 1000)
+            principal = PrincipalContext(
+                schema_version=1, application_id="odoo", tenant_id="trial", workspace_id="7",
+                actor_id="42", delegation_id="p75-cr24", issued_at=now - 1_000,
+                expires_at=now + 300_000,
+                scopes=tuple(sorted(adapter.ports.identity.required_scopes)))
+            browser = _ProductRoutingBrowser()
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="cr24", prompt="它有哪些销售订单？",
+                              entry_path="/odoo/customers",
+                              supported_scope="Read current Odoo records."),
+                chat=_ProductRoutingChat(script), browser=browser, control=ReadOnlyControl(),
+                ledger=SessionLedger(root / "turn.jsonl", "cr24"),
+                business_tools=adapter.business_tools,
+                application_routes=adapter.ports.routes, principal=principal,
+                session_id="cr24-session", turn_id="cr24-turn",
+                disabled_actions=frozenset({"click", "fill", "select", "submit", "back"}))
+            session.entry_observation = browser.observe()
+            session.plan()
+            result = session.run()
+
+        self.assertEqual(result.terminal_reason, "permission_denied")
+        self.assertEqual(result.refused_operation, "读取销售订单")
+        self.assertIn("refused_operation", result.to_json())

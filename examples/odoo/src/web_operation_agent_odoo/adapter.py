@@ -228,6 +228,13 @@ ANSWER_LABELS_ZH = {
     # Selection values, keyed by field and value. `state` is shared by orders and invoices,
     # so its words fit both.
     "state=draft": "草稿", "state=sent": "已发送", "state=sale": "已确认", "state=cancel": "已取消",
+    # What a refusal calls each tool: "your account is not permitted to read sales orders"
+    # rather than "to perform this operation".
+    "query_sale_orders": "读取销售订单", "query_quotations": "读取报价单",
+    "query_customers": "读取客户", "query_products": "读取产品",
+    "query_customer_invoices": "读取客户发票", "create_customer": "创建客户",
+    "confirm_quotation": "确认报价单", "invoice_sale_order": "为销售订单开票",
+    "prepare_customer_form": "预填客户表单",
     "state=posted": "已过账", "invoice_status=to invoice": "待开票",
     "invoice_status=invoiced": "已开票", "invoice_status=upselling": "可追加销售",
     "invoice_status=no": "无需开票", "type=consu": "货物", "type=service": "服务",

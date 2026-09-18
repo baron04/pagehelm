@@ -598,10 +598,14 @@ class RunResult:
     #: The record a pre-dispatch business rule refused, for the sentence that reports it.
     #: None when nothing was refused, so a run without a refusal serialises as it always did.
     refusal_subject: str | None = None
+    #: What the application refused this actor, in the reader's language, when the adapter
+    #: names its tools. "Your account is not permitted to perform this operation" leaves the
+    #: reader guessing which half of "the phone and the orders" was refused.
+    refused_operation: str | None = None
 
     def to_json(self) -> dict:
         optional = {"verified_answer", "clarification", "provider_error_code",
-                    "refusal_subject", "navigation_control"}
+                    "refusal_subject", "refused_operation", "navigation_control"}
         value = {k: getattr(self, k) for k in self.__dataclass_fields__
                  if k not in optional or getattr(self, k) is not None}
         if self.clarification is not None:
@@ -3676,7 +3680,14 @@ class ServerAgentSession:
             approval_id=approval_id, error_code=exc.code, layer=exc.layer,
             required_scope=exc.required_scope, dispatched=dispatched,
             side_effect_possible=False, identity=identity)
+        result.refused_operation = self._operation_label(name) or None
         return self._finish(result, t0, "permission_denied", str(exc)[:500], steps=step)
+
+    def _operation_label(self, tool: str) -> str:
+        """What the adapter calls this tool for a reader, in the language of this message."""
+        tables = getattr(self.business_tools, "answer_labels", None) or {}
+        language = "zh" if re.search(r"[\u3400-\u9fff]", self.task.prompt) else "en"
+        return str((tables.get(language) or {}).get(tool, ""))[:80]
 
     def _finish(self, result: RunResult, t0: float, reason: str, detail: str = "",
                 steps: int = 0) -> RunResult:
