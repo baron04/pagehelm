@@ -29,7 +29,8 @@ from urllib.parse import urlencode, urljoin, urlsplit
 from .application import ApplicationRoutePort, SourceCapability
 from . import answer_protocol
 from . import page_answer
-from .answer_view import capability_gap_answer, render_payload, unavailable_answer
+from .answer_view import (capability_gap_answer, render_payload, unavailable_answer,
+                          withdrawn_answer)
 from .affordance import SourceAffordance, resolve_source_affordances
 from .browser import BrowserExecutor, TransportError, TurnCancelled
 from .business import (BUSINESS_SKILL_MATCHER_VERSION, BusinessMutationBlockedError,
@@ -126,6 +127,16 @@ CAPABILITY_TOOL = {"type": "function", "function": {
         "and a single capability_gap conclusion citing that reference. If it found something, "
         "load that Skill and use it. Call it before looking the record up. Never call it for a "
         "question you can answer by reading."),
+    "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}}
+
+#: Offered only on the turn that answers a question this session asked. The model recognises
+#: that the reply drops the request; the server says so, and says it only while it is true.
+WITHDRAW_TOOL = {"type": "function", "function": {
+    "name": "withdraw_request", "description": (
+        "Call this when the user's reply withdraws the pending request you asked about, for "
+        "example 'never mind', '算了', '不用了'. Nothing is done and the server tells the user "
+        "so. Do not call it when the reply picks a candidate, corrects the request, or asks for "
+        "something else."),
     "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}}
 
 AGENT_SYSTEM = """\
@@ -761,6 +772,7 @@ class ServerAgentSession:
             if (isinstance(prior, dict) and prior.get("status") == "needs_input"
                     and isinstance(prior.get("user"), str)):
                 continuation_prompt = prior["user"].strip()
+        self._answers_pending_question = bool(continuation_prompt)
         clarification_context_used = False
         self._business_control = {
             "approval_requested": 0,
@@ -2084,6 +2096,26 @@ class ServerAgentSession:
                              _tool_result(call, self._capability_check_feedback())]
                 continue
 
+            if name == "withdraw_request" and self._answers_pending_question:
+                proposals = self._mutation_proposal_count()
+                dispatches = self._mutation_dispatch_count()
+                if self.page_actions or proposals or dispatches:
+                    # The fixed sentence says nothing was done. After an action it would be
+                    # false, so the model has to say what it did instead.
+                    self.ledger.append("request_withdrawal_refused", step=step,
+                                       page_actions=self.page_actions,
+                                       mutation_proposals=proposals, dispatches=dispatches)
+                    messages += [_assistant_call(call), _tool_result(
+                        call, "WITHDRAWAL REFUSED: this turn has already acted, so it cannot "
+                              "report that nothing was done. Finish and say what was done.")]
+                    continue
+                result.agent_said = withdrawn_answer(self.task.prompt)
+                result.success_claim = "not_claimed"
+                self.ledger.append("request_withdrawn", step=step, page_actions=0,
+                                   mutation_proposals=0, dispatches=0)
+                return self._finish(result, t0, "agent_finished", result.agent_said,
+                                    steps=step)
+
             if name == "compute" and len(self.evidence):
                 try:
                     computed = answer_protocol.compute(
@@ -2468,6 +2500,8 @@ class ServerAgentSession:
             tools += [ASK_USER_TOOL]
         if self._capability_check_available():
             tools += [CAPABILITY_TOOL]
+        if self._answers_pending_question:
+            tools += [WITHDRAW_TOOL]
         if len(self.evidence):
             tools += [answer_protocol.COMPUTE_TOOL]
         tools += [SOURCE_TOOL, SOURCE_NAV_TOOL] if self.runtime_source else []

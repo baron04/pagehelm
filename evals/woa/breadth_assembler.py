@@ -150,11 +150,11 @@ def assemble_woa_breadth_run(
                         raise EvidenceContractError(
                             "a capability gap claims nothing ran, but the run dispatched "
                             f"{dispatch_count} mutation(s)")
+                    # The evaluator's refusal evidence is exactly these four fields. What is
+                    # stricter now is what earns them, not their shape.
                     evidence_out = {
                         "artifact_version": 2, "execution_status": "failed",
-                        "refusal_code": "capability_gap",
-                        "capability_catalog_digest": conclusions[0].get("catalog_digest", ""),
-                        "capability_matches": list(conclusions[0].get("matches") or ()),
+                        "refusal_code": "unsupported_operation",
                         "dispatch_count": dispatch_count,
                     }
                     error_code = "unsupported_operation"

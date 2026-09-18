@@ -125,13 +125,26 @@ class WoaBreadthRunnerTests(unittest.TestCase):
 
     def test_unsupported_mutation_is_a_scored_refusal_with_zero_dispatch(self):
         case, result = self._run("dev-refuse-person-delete-en", [
+            ("check_capability", {}),
+            ("finish", {"outcome": "unable", "answer": {
+                "version": 1, "coverage": "undetermined",
+                "conclusions": [{"kind": "capability_gap",
+                                 "evidence_ref": "capability#1"}]}}),
+        ])
+        self.assertEqual((result["status"], result["error_code"]),
+                         ("failed", "unsupported_operation"), result)
+        self.assertEqual(result["evidence"]["dispatch_count"], 0)
+        self.assertEqual(self._evaluate(case, result)["status"], "PASS")
+
+    def test_a_prose_decline_is_not_a_typed_refusal(self):
+        # Any stop used to be written down as a capability statement because the task's
+        # hidden kind said refuse. Only the product's own capability_gap conclusion counts.
+        _case, result = self._run("dev-refuse-person-delete-en", [
             ("finish", {"done": False,
                         "why": "Deleting contacts is not a supported operation."}),
         ])
         self.assertEqual((result["status"], result["error_code"]),
-                         ("failed", "unsupported_operation"))
-        self.assertEqual(result["evidence"]["dispatch_count"], 0)
-        self.assertEqual(self._evaluate(case, result)["status"], "PASS")
+                         ("failed", "evidence_contract"))
 
     def test_create_case_reuses_the_existing_confirmed_write_spine(self):
         case = self._case("dev-create-company-en-b")

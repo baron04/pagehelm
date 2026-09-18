@@ -95,9 +95,27 @@ expire at the next observation. They prove only that excerpt, never API data or 
 """
 
 
+_CITES = {"field_value": "a record field", "selection": "a query or a selection",
+          "aggregate": "a compute result, so call compute first",
+          "page_observation": "a page observation", "not_found": "a query",
+          "capability_gap": "the capability check"}
+_KIND_OF = {RecordEvidence: "a record field", QueryEvidence: "a query",
+            SelectionEvidence: "a selection", ComputationEvidence: "a compute result",
+            PageEvidence: "a page observation", CapabilityEvidence: "a capability check"}
+
+
 def _shape(value: object, allowed: set[str], required: set[str], where: str) -> dict:
-    if not isinstance(value, dict) or set(value) - allowed or required - set(value):
-        raise ConclusionRefused(f"invalid {where} fields")
+    # Name the fields. "invalid conclusion fields" alone was resubmitted unchanged until the
+    # repairs ran out: the model could not tell which of its fields was the problem.
+    if not isinstance(value, dict):
+        raise ConclusionRefused(f"{where} must be an object")
+    extra, missing = sorted(set(value) - allowed), sorted(required - set(value))
+    if extra or missing:
+        problems = ([f"remove {', '.join(repr(str(k)[:40]) for k in extra[:8])}"] if extra
+                    else []) + ([f"add {', '.join(missing)}"] if missing else [])
+        raise ConclusionRefused(
+            f"invalid {where} fields: {'; '.join(problems)}. A {where} takes only "
+            f"{', '.join(sorted(allowed))}")
     return value
 
 
@@ -138,7 +156,12 @@ def submit(turn: TurnEvidence, args: dict) -> dict | None:
         raise ConclusionRefused("answer conclusion count is outside the limit")
     conclusions = []
     for entry in entries:
-        _shape(entry, {"kind", "evidence_ref", "fields"}, {"kind", "evidence_ref"}, "conclusion")
+        try:
+            _shape(entry, {"kind", "evidence_ref", "fields"}, {"kind", "evidence_ref"},
+                   "conclusion")
+        except ConclusionRefused as exc:
+            raise ConclusionRefused(
+                f"{exc}; the server reads every value from the cited reference") from None
         ref = entry["evidence_ref"]
         if not isinstance(ref, str):
             raise ConclusionRefused("evidence_ref must be a string")
@@ -179,7 +202,10 @@ def submit(turn: TurnEvidence, args: dict) -> dict | None:
                 raise ConclusionRefused("this reference does not identify an evidence gap")
             conclusions.append(Undetermined(about, ref))
         else:
-            raise ConclusionRefused("conclusion kind does not match its evidence")
+            raise ConclusionRefused(
+                f"conclusion kind does not match its evidence: {kind} cites "
+                f"{_CITES.get(kind, 'nothing of that kind')}, and {ref} is "
+                f"{_KIND_OF.get(type(item), 'another kind of evidence')}")
     coverage = payload["coverage"]
     if args["outcome"] != "answered" and coverage == "complete":
         coverage = "partial"

@@ -88,6 +88,18 @@ def capability_gap_answer(user_text: str) -> str:
             "That operation is not supported in this session, so it was not executed.")
 
 
+def withdrawn_answer(user_text: str) -> str:
+    """The reply to "never mind" after this session asked the user a question.
+
+    Fixed here for the same reason as the capability gap. Left to the model, it was written
+    as ``finish``'s reason, which the model treats as a note about the user rather than a
+    reply to them, and the panel showed "the user said never mind and withdrew the request".
+    """
+    return ("好的，已取消，本次没有执行任何操作。"
+            if _language(user_text) == "zh" else
+            "OK, cancelled. Nothing was done.")
+
+
 def unavailable_answer(user_text: str) -> str:
     return ("目前掌握的信息还不足以可靠回答这个问题。可以缩小查询范围，或补充需要查询的对象。"
             if _language(user_text) == "zh" else
