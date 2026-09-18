@@ -237,11 +237,34 @@ def _plain(value: object) -> str:
     return re.sub(r"([\\`*_{}\[\]()<>#!|])", r"\\\1", text)
 
 
+#: What a turn that ended without an answer says, per status. In the reader's language:
+#: these were English only, so a Chinese conversation stopped with the Stop button, or a
+#: declined write, ended on "The requested action was cancelled."
+_TERMINAL_FALLBACK = {
+    AgentTurnStatus.FINISHED: ("这一轮已结束，但没有给出回答。",
+                               "The agent finished the turn without a user-facing answer."),
+    AgentTurnStatus.NEEDS_INPUT: ("需要更多信息才能继续。",
+                                  "The agent needs more information to continue."),
+    AgentTurnStatus.REFUSED: ("这个请求没能完成。", "The agent could not complete the request."),
+    AgentTurnStatus.CANCELLED: ("已取消。", "The requested action was cancelled."),
+    AgentTurnStatus.INDETERMINATE: (
+        "这次操作的结果不确定，没有自动重试。",
+        "The action outcome is uncertain. It was not retried automatically."),
+    AgentTurnStatus.FAILED: ("任务在完成前就结束了。",
+                             "The task ended before the agent could finish it."),
+}
+
+
+def _fallback(status: AgentTurnStatus, text: str) -> str:
+    chinese, english = _TERMINAL_FALLBACK[status]
+    return chinese if re.search(r"[\u3400-\u9fff]", text) else english
+
+
 def render_neutral_user_answer(context: AgentAnswerContext) -> str:
     """Prefer model prose and otherwise describe the terminal state without a success claim."""
     status = _status_for(context.agent.terminal_reason)
     if status is AgentTurnStatus.INDETERMINATE:
-        return "The action outcome is uncertain. It was not retried automatically."
+        return _fallback(status, context.message.text)
     if context.agent.terminal_reason == "provider_error":
         chinese = bool(re.search(r"[\u3400-\u9fff]", context.message.text))
         code = context.agent.provider_error_code or "provider_error"
@@ -353,15 +376,7 @@ def render_neutral_user_answer(context: AgentAnswerContext) -> str:
                                       for index, choice in enumerate(choices, 1))])
     if context.agent.agent_said.strip():
         return context.agent.agent_said.strip()
-    return {
-        AgentTurnStatus.FINISHED: "The agent finished the turn without a user-facing answer.",
-        AgentTurnStatus.NEEDS_INPUT: "The agent needs more information to continue.",
-        AgentTurnStatus.REFUSED: "The agent could not complete the request.",
-        AgentTurnStatus.CANCELLED: "The requested action was cancelled.",
-        AgentTurnStatus.INDETERMINATE: (
-            "The action outcome is uncertain. It was not retried automatically."),
-        AgentTurnStatus.FAILED: "The task ended before the agent could finish it.",
-    }[status]
+    return _fallback(status, context.message.text)
 
 
 @dataclass(frozen=True, slots=True)
