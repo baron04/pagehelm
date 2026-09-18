@@ -210,6 +210,22 @@ COLLECTIONS: tuple[_Collection, ...] = (
             "tool reads invoices only."),),
 )
 _BY_TOOL = {collection.tool: collection for collection in COLLECTIONS}
+#: What a Chinese answer calls the fields and scopes the read tools report. Keyed by the exact
+#: field names and scope strings in the evidence; see `BusinessToolRuntime`'s answer labels.
+ANSWER_LABELS_ZH = {
+    "name": "名称", "email": "邮箱", "phone": "电话", "mobile": "手机", "city": "城市",
+    "country_id": "国家", "vat": "税号", "partner_id": "客户", "state": "状态",
+    "amount_total": "含税总额", "currency_id": "币种",
+    "date_order": "订单确认时间／报价创建时间（UTC）", "invoice_status": "开票状态",
+    "validity_date": "报价有效期", "default_code": "内部编号", "list_price": "销售价格",
+    "type": "产品类型", "amount_residual": "未付金额", "invoice_date": "开票日期",
+    "invoice_date_due": "到期日", "invoice_origin": "来源单据",
+    "confirmed sales orders visible to the delegated user": "当前账号可见的已确认销售订单",
+    "customers visible to the delegated user": "当前账号可见的客户",
+    "saleable products visible to the delegated user": "当前账号可见的可售产品",
+    "open quotations, neither confirmed nor cancelled": "未确认、未取消的报价单",
+    "customer invoices visible to the delegated user": "当前账号可见的客户发票",
+}
 CREATE_CUSTOMER_TOOL = "create_customer"
 PREPARE_CUSTOMER_FORM_TOOL = "prepare_customer_form"
 CONFIRM_QUOTATION_TOOL = "confirm_quotation"
@@ -1532,7 +1548,8 @@ class OdooApplicationAdapter:
             data_classifier=data, postcondition_verifier=postconditions,
             route_validator=routes,
             route_skill_hints=((r"^/odoo/customers(?:/[^/?#]+)?$",
-                                "odoo.sales.customers-query"),))
+                                "odoo.sales.customers-query"),),
+            answer_labels={"zh": ANSWER_LABELS_ZH})
         self._executor = executor
         self.ports = ApplicationPorts(
             identity=_OdooIdentityPort(executor, frozenset(required_scopes.values())),

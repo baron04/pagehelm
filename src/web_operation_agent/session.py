@@ -1949,6 +1949,7 @@ class ServerAgentSession:
                                 # choose a conclusion; never guess which item proves absence.
                                 pass
                             else:
+                                verified = self._with_answer_labels(verified)
                                 result.verified_answer = verified
                                 result.agent_said = render_payload(
                                     verified, user_text=self.task.prompt,
@@ -2311,6 +2312,7 @@ class ServerAgentSession:
                         ". Correct the evidence reference or perform a supported read/compute; "
                         "otherwise finish with outcome=unable. " + self._render_answer_action())]
                     continue
+                verified = self._with_answer_labels(verified)
                 result.verified_answer = verified
                 if _is_capability_gap(verified):
                     # The claim is that nothing ran, so it is recorded with the two counts
@@ -3312,6 +3314,27 @@ class ServerAgentSession:
             # first implementation reported the application's own home page as a conflict.
             return ""
         return ""
+
+    def _with_answer_labels(self, verified: dict | None) -> dict | None:
+        """Attach what the application calls the fields and scopes this answer names.
+
+        Only the entries this answer uses travel with it, so the rendered text and the
+        record of it agree without carrying the adapter's whole vocabulary.
+        """
+        tables = getattr(self.business_tools, "answer_labels", None) or {}
+        if verified is None or not tables:
+            return verified
+        used: set[str] = set()
+        for item in verified.get("conclusions", ()):
+            used.update(value for key in ("field_name", "scope")
+                        if isinstance(value := item.get(key), str))
+            used.update(item.get("fields") or ())
+            for condition in (item.get("condition"), item.get("filter")):
+                used.update(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", str(condition or "")))
+        labels = {language: {key: value for key, value in table.items() if key in used}
+                  for language, table in tables.items()}
+        labels = {language: table for language, table in labels.items() if table}
+        return {**verified, "labels": labels} if labels else verified
 
     def _should_challenge_completion(self) -> bool:
         return (not self._challenged_false_success

@@ -77,6 +77,13 @@ class SeveralRecordsAreOneTable(unittest.TestCase):
         self.assertNotIn("| ---", text)
         self.assertIn("S00013", text)
 
+    def test_a_field_value_is_headed_by_its_records_name_when_the_read_had_it(self):
+        turn = _turn()
+        text = _render(turn, [{"kind": "field_value", "evidence_ref": "record#3"}],
+                       "S00013 多少钱？")
+        self.assertIn("total including taxes**（S00013）：900.00 USD", text)
+        self.assertNotIn("sale.order/13", text)
+
 
 class AFilterTheListStandsOnIsShown(unittest.TestCase):
     def test_a_computed_selection_names_its_filter_in_the_readers_notation(self):

@@ -48,6 +48,37 @@ def _answer_scope(turn: TurnEvidence, origin) -> str:
     return origin.scope
 
 
+def _record_label(turn: TurnEvidence, item: RecordEvidence) -> str:
+    """The record's own name from the same read, when that read fetched one.
+
+    A field value was headed by its record id ("res.partner/13"), an identity the reader
+    never sees in the application.
+    """
+    for ref in turn.ids():
+        other = turn.get(ref)
+        if (isinstance(other, RecordEvidence) and other.origin == item.origin
+                and other.record_id == item.record_id and other.field_name == "name"
+                and other.field_was_read and other.value):
+            return other.value
+    return ""
+
+
+def _computed_scope(turn: TurnEvidence, scope: str) -> tuple[str, str]:
+    """Split a computation's scope into the read it stands on and the filter applied to it.
+
+    The scope is the read's own scope, its query conditions, then any filter a compute chain
+    added. The first belongs in the answer; the query conditions are adapter syntax and stay
+    in the answer basis; the filter is part of what a total is a total of.
+    """
+    reads = [item for ref in turn.ids()
+             if isinstance(item := turn.get(ref), QueryEvidence)
+             and (scope == item.origin.scope or scope.startswith(item.origin.scope + "; "))]
+    if not reads:
+        return scope, ""
+    read = max(reads, key=lambda item: len(item.origin.scope))
+    return _answer_scope(turn, read.origin), scope[len(read.origin.scope):].lstrip("; ")
+
+
 @dataclass(frozen=True, slots=True)
 class FieldValue:
     """This record's field holds this, or was read and holds nothing."""
@@ -69,6 +100,7 @@ class FieldValue:
                 f"that read is of {item.field_name} of {item.record_id}, "
                 f"not {self.field_name} of {self.record_id}")
         return {"kind": self.kind, "record_id": item.record_id,
+                "record_label": _record_label(turn, item),
                 "field_name": item.field_name, "field_meaning": item.field_meaning,
                 "value": item.value, "empty": item.is_known_empty,
                 "unit": item.unit, "scope": _answer_scope(turn, item.origin),
@@ -141,10 +173,11 @@ class Aggregate:
 
     def verify(self, turn: TurnEvidence) -> dict:
         item = _one(turn, self.evidence_id, ComputationEvidence, "an aggregate")
+        scope, applied = _computed_scope(turn, item.origin.scope)
         return {"kind": self.kind, "operation": item.operation, "value": item.value,
                 "value_type": item.value_type, "unit": item.unit,
                 "covers_whole_scope": item.covers_whole_scope,
-                "scope": item.origin.scope, "source_kind": "computed"}
+                "scope": scope, "filter": applied, "source_kind": "computed"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,22 +226,24 @@ class Undetermined:
                 raise ConclusionRefused(
                     f"{item.field_name} of {item.record_id} was read; what it holds is "
                     "determined, so say what it holds")
-            gap = f"{item.field_name} of {item.record_id} was not read"
+            gap, gap_kind = f"{item.field_name} of {item.record_id} was not read", "field_not_read"
         elif isinstance(item, PageEvidence):
             if item.saw != "control_only":
                 raise ConclusionRefused(
                     "that observation carried a value, so it does not show a gap")
-            gap = f"the page showed {item.detail} and no value"
+            gap, gap_kind = f"the page showed {item.detail} and no value", "control_only"
         elif isinstance(item, QueryEvidence):
             if item.covers_whole_scope:
                 raise ConclusionRefused(
                     "that query covered its whole scope, so it is not a gap")
-            gap = f"the query covered only part of {item.origin.scope}"
+            gap, gap_kind = f"the query covered only part of {item.origin.scope}", "partial_read"
         else:
             raise ConclusionRefused(
                 "an undetermined must stand on a gap: a field not read, a page that showed "
                 "no value, or a query that covered only part of its scope")
-        return {"kind": self.kind, "about": self.about, "gap": gap,
+        return {"kind": self.kind, "about": self.about, "gap": gap, "gap_kind": gap_kind,
+                "field_name": getattr(item, "field_name", ""),
+                "detail": getattr(item, "detail", ""),
                 "scope": item.origin.scope, "source_kind": item.origin.kind}
 
 

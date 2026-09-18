@@ -23,6 +23,7 @@ _HAN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 
 _WORDS = {
     "zh": {
+        "lang": "zh",
         "undetermined": "无法确定",
         "not_found": "未找到",
         "not_found_scope": "仅指本次查询过、且当前账号有权访问的范围，不代表整个系统中不存在",
@@ -38,6 +39,7 @@ _WORDS = {
         "total": "合计",
     },
     "en": {
+        "lang": "en",
         "undetermined": "Could not determine",
         "not_found": "Not found",
         "not_found_scope": ("only within what this search covered and the current account can "
@@ -64,6 +66,20 @@ def _language(user_text: str) -> str:
 def _source_line(words: dict, item: dict) -> str:
     return {"page": words["source_page"], "typed": words["source_typed"],
             "computed": words["source_computed"]}[item["source_kind"]]
+
+
+def _named(words: dict, text: str) -> str:
+    """What the application calls this field or scope in the reader's language, if it said."""
+    return words.get("labels", {}).get(text, text)
+
+
+def _field_label(words: dict, name: str, meaning: str) -> str:
+    return words.get("labels", {}).get(name, meaning)
+
+
+def _basis(words: dict, item: dict) -> str:
+    return (f"> {_source_line(words, item)} · {words['scope']}："
+            f"{_literal(_named(words, item['scope']))}")
 
 
 def capability_gap_answer(user_text: str) -> str:
@@ -107,6 +123,7 @@ def render_payload(payload: dict, *, user_text: str, max_chars: int) -> str:
     data = dict(payload)
     presentation = data.pop("presentation", "brief")
     data.pop("sources", None)
+    labels = (data.pop("labels", None) or {}).get(_language(user_text), {})
     action = data.pop("action", None)
     action_text = ""
     if action is not None:
@@ -121,7 +138,8 @@ def render_payload(payload: dict, *, user_text: str, max_chars: int) -> str:
                 opened = "已打开页面" if _language(user_text) == "zh" else "Opened the page"
                 action_text += f"\n{opened}：{_literal(action['navigation_url'])}"
     return render(VerifiedAnswer(**data), user_text=user_text,
-                  max_chars=max_chars, presentation=presentation, action_text=action_text)
+                  max_chars=max_chars, presentation=presentation, action_text=action_text,
+                  labels=labels)
 
 
 def _literal(value: object) -> str:
@@ -157,13 +175,14 @@ def render_sources(payload: dict, *, user_text: str, max_chars: int) -> str:
 
 
 def render(answer: VerifiedAnswer, *, user_text: str, max_chars: int,
-           presentation: str = "brief", action_text: str = "") -> str:
+           presentation: str = "brief", action_text: str = "",
+           labels: dict[str, str] | None = None) -> str:
     """Lay out the conclusions, then the prose, then what the answer does not cover."""
     if not isinstance(answer, VerifiedAnswer):
         raise TypeError("render takes a VerifiedAnswer")
     if isinstance(max_chars, bool) or not isinstance(max_chars, int) or max_chars < 512:
         raise ValueError("answer max_chars must be at least 512")
-    words = _WORDS[_language(user_text)]
+    words = {**_WORDS[_language(user_text)], "labels": dict(labels or {})}
     lines: list[str] = [action_text, ""] if action_text else []
 
     items = answer.conclusions
@@ -219,7 +238,7 @@ def _selection_head(words: dict, item: dict) -> str:
     search for the first word of its name found six other customers and the answer said one
     existed.
     """
-    zh = words is _WORDS["zh"]
+    zh = words["lang"] == "zh"
     shown = item["matched"]
     total = item.get("total", shown)
     if item.get("count_exact", item["covers_whole_scope"]) and shown >= total:
@@ -234,7 +253,7 @@ def _selection_head(words: dict, item: dict) -> str:
         # A computed selection's condition is the model's own filter over what was read --
         # "date_order ge 2026-08-18" for "orders in the last month" -- and it is part of the
         # answer: the reader needs the dates the list stands on.
-        applied = _readable_condition(str(item.get("condition") or ""), zh=zh)
+        applied = _readable_condition(str(item.get("condition") or ""), words)
         if applied:
             count += f"（筛选：{applied}）" if zh else f" (filter: {applied})"
     looked_for = _literal(str(item.get("looked_for") or "").strip())
@@ -257,21 +276,23 @@ def _selection_head(words: dict, item: dict) -> str:
 _SYMBOLS = {"gt": ">", "ge": "≥", "lt": "<", "le": "≤", "eq": "=", "ne": "≠"}
 
 
-def _readable_condition(condition: str, *, zh: bool) -> str:
-    """A compute condition in the reader's notation: "amount_total gt 2000" as "amount_total
-    > 2000", "argmax(amount_total)" as the highest amount_total. Anything else as written."""
+def _readable_condition(condition: str, words: dict) -> str:
+    """A compute condition in the reader's notation: "amount_total gt 2000" as "含税总额 >
+    2000", "argmax(amount_total)" as the highest total. Anything else as written."""
+    zh = words["lang"] == "zh"
     parts = []
     for part in (piece.strip() for piece in condition.split(";")):
         if not part:
             continue
         if match := re.fullmatch(r"(\S+) (gt|ge|lt|le|eq|ne) (.+)", part):
-            part = f"{match[1]} {_SYMBOLS[match[2]]} {match[3]}"
+            part = f"{_named(words, match[1])} {_SYMBOLS[match[2]]} {match[3]}"
         elif match := re.fullmatch(r"(\S+) in (.+)", part):
-            part = f"{match[1]} {'属于' if zh else 'in'} {match[2]}"
+            part = f"{_named(words, match[1])} {'属于' if zh else 'in'} {match[2]}"
         elif match := re.fullmatch(r"(argmax|argmin)\((\S+)\)", part):
             highest = match[1] == "argmax"
-            part = (f"{match[2]} {'最大' if highest else '最小'}" if zh
-                    else f"{'highest' if highest else 'lowest'} {match[2]}")
+            field = _named(words, match[2])
+            part = (f"{field}最大" if highest else f"{field}最小") if zh else (
+                f"{'highest' if highest else 'lowest'} {field}")
         parts.append(_literal(part))
     return "；".join(parts) if zh else "; ".join(parts)
 
@@ -284,7 +305,7 @@ def _partial_reasons(words: dict, answer: VerifiedAnswer) -> list[str]:
     language. Shown as they were, a Chinese answer ended with "customer_rank > 0 covered only
     part of customers visible to the delegated user".
     """
-    zh = words is _WORDS["zh"]
+    zh = words["lang"] == "zh"
     reasons = []
     for item in answer.conclusions:
         kind = item["kind"]
@@ -321,7 +342,7 @@ def _field_table(words: dict, run: tuple[dict, ...]) -> list[str]:
     answer was unreadable. A record's own name identifies its row when it is among the
     fields; otherwise the record id has to.
     """
-    zh = words is _WORDS["zh"]
+    zh = words["lang"] == "zh"
     records = list(dict.fromkeys(item["record_id"] for item in run))
     fields = list(dict.fromkeys(item["field_name"] for item in run))
     meaning = {}
@@ -329,7 +350,8 @@ def _field_table(words: dict, run: tuple[dict, ...]) -> list[str]:
         meaning.setdefault(item["field_name"], item["field_meaning"])
     cells = {(item["record_id"], item["field_name"]): item for item in run}
     show_id = "name" not in fields
-    header = (["记录" if zh else "record"] if show_id else []) + [meaning[f] for f in fields]
+    header = (["记录" if zh else "record"] if show_id else []) + [
+        _field_label(words, f, meaning[f]) for f in fields]
     rows = ["| " + " | ".join(_literal(x) for x in header) + " |",
             "| " + " | ".join("---" for _ in header) + " |"]
     for record in records:
@@ -344,9 +366,25 @@ def _field_table(words: dict, run: tuple[dict, ...]) -> list[str]:
                 unit = f" {_literal(item['unit'])}" if item.get("unit") else ""
                 values.append(_literal(item["value"]) + unit)
         rows.append("| " + " | ".join(values) + " |")
-    sources = dict.fromkeys(f"> {_source_line(words, item)} · {words['scope']}："
-                            f"{_literal(item['scope'])}" for item in run)
+    sources = dict.fromkeys(_basis(words, item) for item in run)
     return [*rows, "", *sources]
+
+
+def _gap(words: dict, item: dict) -> str:
+    """Why something could not be determined, in the reader's language.
+
+    The verifier records the gap in its own terms ("phone of res.partner/13 was not read");
+    the reader gets the same fact without the record id.
+    """
+    zh = words["lang"] == "zh"
+    field = _literal(_field_label(words, item.get("field_name", ""), item.get("field_name", "")))
+    return {
+        "field_not_read": f"没有读取{field}" if zh else f"{field} was not read",
+        "control_only": (f"页面上只有“{_literal(item.get('detail', ''))}”，没有显示值" if zh
+                         else f"the page showed {_literal(item.get('detail', ''))} and no value"),
+        "partial_read": ("这次读取只覆盖了部分范围" if zh
+                         else "the read covered only part of the scope"),
+    }.get(item.get("gap_kind", ""), _literal(item["gap"]))
 
 
 def _one(words: dict, item: dict, *, presentation: str) -> list[str]:
@@ -357,47 +395,51 @@ def _one(words: dict, item: dict, *, presentation: str) -> list[str]:
         # would say the application answered a question it was never asked.
         return [words["capability_gap"]]
     if kind == "page_observation":
-        label = "页面显示" if words is _WORDS["zh"] else "The page shows"
+        label = "页面显示" if words["lang"] == "zh" else "The page shows"
         return [f"**{label}**（{_literal(item['detail'])}）：{_literal(item['value'])}",
                 f"> {_source_line(words, item)} · {_literal(item['page_route'])} · "
-                f"{_literal(item['scope'])}"]
+                f"{_literal(_named(words, item['scope']))}"]
     if kind == "field_value":
         shown = _literal(item["value"]) if not item["empty"] else words["empty"]
         unit = f" {_literal(item['unit'])}" if item.get("unit") else ""
-        return [f"**{_literal(item['field_meaning'])}**（{_literal(item['record_id'])}）：{shown}{unit}",
-                f"> {_source_line(words, item)} · {words['scope']}：{_literal(item['scope'])}"]
+        meaning = _field_label(words, item["field_name"], item["field_meaning"])
+        who = item.get("record_label") or item["record_id"]
+        return [f"**{_literal(meaning)}**（{_literal(who)}）：{shown}{unit}", _basis(words, item)]
     if kind == "selection":
         head = _selection_head(words, item)
         if item.get("fields"):
             rows = []
+            names = [_field_label(words, name, name) for name in item["fields"]]
             if presentation != "list":
-                rows += ["| " + " | ".join(_literal(x) for x in item["fields"]) + " |",
-                         "| " + " | ".join("---" for _ in item["fields"]) + " |"]
+                rows += ["| " + " | ".join(_literal(x) for x in names) + " |",
+                         "| " + " | ".join("---" for _ in names) + " |"]
             for values in item["rows"]:
                 cells = [(words["empty"] if x["value"] is None else _literal(x["value"])) +
                          (" " + _literal(x["unit"]) if x["unit"] else "") for x in values]
                 if presentation == "list":
                     rows.append("- " + "; ".join(f"{_literal(key)}: {value}"
-                                                for key, value in zip(item["fields"], cells)))
+                                                for key, value in zip(names, cells)))
                 else:
                     rows.append("| " + " | ".join(cells) + " |")
-            return [head, "", *rows, "",
-                    f"> {_source_line(words, item)} · {words['scope']}：{_literal(item['scope'])}"]
+            return [head, "", *rows, "", _basis(words, item)]
         rows = "".join(f"\n- {_literal(name)}" for name in item["members"])
-        return [head + rows,
-                f"> {_source_line(words, item)} · {words['scope']}：{_literal(item['scope'])}"]
+        return [head + rows, _basis(words, item)]
     if kind == "aggregate":
         operation = item["operation"].partition("(")[0]
-        chinese = words is _WORDS["zh"]
+        chinese = words["lang"] == "zh"
         labels = ({"count": "数量", "min": "最小值", "max": "最大值"} if chinese else
                   {"count": "Count", "min": "Minimum", "max": "Maximum"})
         label = (words["total"] if item["covers_whole_scope"] else words["subtotal"]
                  ) if operation == "sum" else labels.get(operation, _literal(item["operation"]))
         if operation != "sum" and not item["covers_whole_scope"]:
             label += "（仅限已读取范围）" if chinese else " (observed scope only)"
+        # A total of the USD orders is not a total of the orders: the filter a compute chain
+        # applied is part of what the number is, so it is said with it.
+        applied = _readable_condition(str(item.get("filter") or ""), words)
+        if applied:
+            label += f"（筛选：{applied}）" if chinese else f" (filter: {applied})"
         unit = f" {_literal(item['unit'])}" if item.get("unit") else ""
-        return [f"**{label}**：{_literal(item['value'])}{unit}",
-                f"> {_source_line(words, item)} · {words['scope']}：{_literal(item['scope'])}"]
+        return [f"**{label}**：{_literal(item['value'])}{unit}", _basis(words, item)]
     if kind == "not_found":
         # The normal answer names the thing that was absent. Executed filters and scope are
         # already available in the separate answer-basis disclosure; repeating adapter query
@@ -408,5 +450,5 @@ def _one(words: dict, item: dict, *, presentation: str) -> list[str]:
                 f"> {words['not_found_scope']}"]
     if kind == "undetermined":
         return [f"**{words['undetermined']}**：{_literal(item['about'])}",
-                f"> {words['gap']}：{_literal(item['gap'])}"]
+                f"> {words['gap']}：{_gap(words, item)}"]
     raise ValueError(f"no way to render a {kind!r} conclusion")  # pragma: no cover

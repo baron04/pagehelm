@@ -888,6 +888,30 @@ class BusinessSkillSelection:
         return tuple(skill.skill_id for skill in self.skills)
 
 
+def _answer_labels(tables: dict) -> dict[str, dict[str, str]]:
+    """What the application calls its fields and scopes in each reader language.
+
+    Evidence names a field and a scope the way the adapter's tools do -- `amount_total`,
+    "customers visible to the delegated user" -- because that is what the verifier checks
+    against. A Chinese answer that showed them as written had an English sentence and field
+    names in every source line. The table is keyed by those exact strings, per language, and
+    only renders; it never changes what an answer claims.
+    """
+    if not isinstance(tables, dict) or len(tables) > 8:
+        raise ValueError("answer labels must map at most eight languages to tables")
+    checked = {}
+    for language, table in tables.items():
+        if (not isinstance(language, str) or not re.fullmatch(r"[a-z]{2}(?:-[A-Z]{2})?", language)
+                or not isinstance(table, dict) or len(table) > 500):
+            raise ValueError("an answer label table is keyed by a language tag and bounded")
+        for key, value in table.items():
+            if not all(isinstance(text, str) and 0 < len(text.strip()) <= 200
+                       and not re.search(r"[\x00-\x1f\x7f]", text) for text in (key, value)):
+                raise ValueError("answer labels are short single-line text")
+        checked[language] = dict(table)
+    return checked
+
+
 class BusinessToolRuntime:
     """Validate a Skill catalog and dispatch only tools from loaded relevant Skills."""
 
@@ -899,7 +923,8 @@ class BusinessToolRuntime:
                  postcondition_verifier: BusinessPostconditionVerifier | None = None,
                  route_validator: BusinessRouteValidator | None = None,
                  route_skill_hints: tuple[tuple[str, str], ...] = (),
-                 max_pending_mutations: int = 1_000):
+                 max_pending_mutations: int = 1_000,
+                 answer_labels: dict[str, dict[str, str]] | None = None):
         skill_ids = [skill.skill_id for skill in skills]
         if len(skill_ids) != len(set(skill_ids)):
             raise ValueError("Business Skill IDs must be unique")
@@ -990,6 +1015,7 @@ class BusinessToolRuntime:
                 raise ValueError("route Skill hint pattern is invalid") from exc
         self._route_skill_hints = tuple(compiled_hints)
         self.application_id = application_id
+        self.answer_labels = _answer_labels(answer_labels or {})
         self._required_scopes = scopes
         self._mutation_journal = (mutation_journal
                                   if mutation_journal is not None
