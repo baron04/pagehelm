@@ -35,6 +35,8 @@ class PlaywrightRuntimeHost:
         self.timeout_s = timeout_s
         self.gateway = EmbeddedGateway(registry, sse_wait_s=0.1)
         self.errors: list[str] = []
+        self.page_switch_confirmations = 0
+        self.confirmation_failures: list[str] = []
         self._playwright = None
         self._browser = None
         self._context = None
@@ -92,6 +94,45 @@ class PlaywrightRuntimeHost:
     def observe_now(self):
         """The panel observes before every task; the runner uses ``submit_task`` instead."""
         raise NotImplementedError("the embedded runtime observes inside submitTask")
+
+    #: The panel's own card, read the way a person sees it: kind, or "" when none is up.
+    _CARD_KIND_JS = """() => {
+      const host = document.querySelector('#woa-assistant');
+      const root = host && host.shadowRoot;
+      const card = root && root.querySelector('section.woa-approval');
+      return card ? (card.dataset.kind || 'write') : '';
+    }"""
+    _CARD_GONE_JS = ("() => !document.querySelector('#woa-assistant').shadowRoot"
+                     ".querySelector('section.woa-approval')")
+
+    def answer_page_switch_confirmations(self, done, *, visible_wait_ms: int = 700) -> None:
+        """Press the page-switch card while the turn runs, as the person who asked would.
+
+        The product asks before it leaves the current page, so a case that opens a record
+        cannot complete unless someone answers (ruling D7; the Odoo apparatus answers the
+        same card the same way). A write card is never answered here: the live schedule runs
+        no write case, and a write decision belongs to a case's own oracle, not to the
+        apparatus. Runs on the thread that created the page while the turn executes on
+        another, and returns as soon as that turn is done.
+        """
+        while not done.wait(0.1):
+            try:
+                kind = self.page.evaluate(self._CARD_KIND_JS)
+            except Exception:
+                return
+            if kind != "navigation":
+                continue
+            try:
+                self.page.wait_for_timeout(visible_wait_ms)
+                self.page.locator("#woa-assistant").get_by_test_id(
+                    "woa-approve").click(timeout=10_000)
+                self.page.wait_for_function(self._CARD_GONE_JS, timeout=15_000)
+            except Exception as exc:
+                # The apparatus could not do what the person does. Recorded, not swallowed:
+                # the run then fails on the product's own terminal reason, and this says why.
+                self.confirmation_failures.append(type(exc).__name__)
+                return
+            self.page_switch_confirmations += 1
 
     def submit_task(self, text: str) -> str:
         self.page.evaluate(

@@ -451,6 +451,46 @@ class WoaRunnerScenarioTests(unittest.TestCase):
             "evaluator_task"})
 
 
+    def test_a_host_that_drives_a_browser_answers_the_page_switch_card_during_the_turn(self):
+        """The person's confirmation happens while the turn waits, not after it ended.
+
+        The live host owns its browser from the thread that created it, so it cannot answer
+        the product's page-switch card from inside a turn that occupies that same thread:
+        every live open case ended `navigation_not_confirmed` while the offline double,
+        which answers from its own polling thread, passed. The runner now runs the turn
+        beside the host and gives it the turn's lifetime to answer.
+        """
+        seen = []
+
+        class ConfirmingRuntime(SimulatedRuntime):
+            def answer_page_switch_confirmations(self, done, *, visible_wait_ms=0):
+                seen.append("asked")
+                done.wait(60)
+                seen.append("settled")
+
+        case = development_case("dev-open-en-1", self.companies)
+        target = next(company for company in self.companies
+                      if company["name"] in case["prompt"])
+
+        def factory(*, channel, grant, registry, origin, entry_path):
+            runtime = ConfirmingRuntime(
+                channel, grant, origin=origin, entry_path=entry_path,
+                page_model=self.page_model, storage_state=self.storage_state)
+            self.runtimes.append(runtime)
+            return runtime
+
+        result = run_case(
+            case=case, adapter=self.adapter,
+            client=ScriptedWoaChat(self._open_replies(target)),
+            config=WoaTwentyConfig(storage_state_path=self.state, wall_time_s=60),
+            ledger_path=self.root / "audit.jsonl", runtime_factory=factory,
+            page_sampler=self._sampler, run_id="woa-offline-run")
+
+        self.assertEqual(seen, ["asked", "settled"])
+        self.assertEqual(result["status"], "completed", result)
+        self.assertEqual(result["final_page"]["path"], company_ui_path(target))
+
+
 class WoaRunnerBoundaryTests(unittest.TestCase):
     def test_config_rejects_unsupported_routes_profiles_and_source_arm(self):
         with tempfile.TemporaryDirectory() as directory:

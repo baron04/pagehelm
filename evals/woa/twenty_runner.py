@@ -324,12 +324,36 @@ def _run_validated_case(
         # does the same directly so a typed boundary failure is preserved for classification
         # instead of being flattened into display text.
         message = channel.wait_for_message(timeout_s=config.wall_time_s)
+        # The turn runs on its own thread so this one can answer the product's page-switch
+        # card in the page, which is the person's part and belongs to the thread that owns
+        # the browser. A host that cannot answer simply waits for the turn.
+        settled = threading.Event()
+        outcome: dict[str, Any] = {}
+
+        def _run_turn() -> None:
+            try:
+                outcome["execution"] = executor.execute(message)
+            except AgentTurnError as exc:
+                outcome["boundary_error_code"] = exc.code.value
+            except BaseException as exc:  # re-raised below on this thread
+                outcome["raised"] = exc
+            finally:
+                settled.set()
+
+        turn = threading.Thread(target=_run_turn, name="woa-eval-turn", daemon=True)
+        turn.start()
         try:
-            execution = executor.execute(message)
-        except AgentTurnError as exc:
-            boundary_error_code = exc.code.value
+            confirm = getattr(runtime, "answer_page_switch_confirmations", None)
+            if confirm is not None:
+                confirm(settled)
+            settled.wait(timeout=config.wall_time_s + 60)
+            turn.join(timeout=30)
         finally:
             channel.complete_message(message["message_id"])
+        if "raised" in outcome:
+            raise outcome["raised"]
+        execution = outcome.get("execution")
+        boundary_error_code = outcome.get("boundary_error_code")
         sample_final_page = (
             selected["task_kind"] == "open"
             or (selected["task_kind"] == "create"
