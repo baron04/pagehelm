@@ -152,6 +152,7 @@ SCORABLE_TERMINAL_REASONS = frozenset({
     "planning_failed",        # the source arm could not produce a valid contract
     "approval_denied",        # the authenticated user declined the proposed effect
     "approval_expired",       # the visible confirmation elapsed before dispatch
+    "navigation_not_confirmed",  # the page switch was not confirmed before it expired
     "user_cancelled",         # the authenticated user stopped the active task
     "business_mutation_failed",  # a known-safe server write refusal was returned
     "business_mutation_blocked",  # an in-flight/unresolved business key refused dispatch
@@ -1059,6 +1060,10 @@ class ActionResultEnvelope:
         )
 
 
+#: The kinds of confirmation a panel can be asked for; see `ApprovalRequest.kind`.
+APPROVAL_KINDS = frozenset({"write", "navigation"})
+
+
 @dataclass(frozen=True)
 class ApprovalRequest:
     """User-visible description of one proposed effect; contains no hidden endpoint."""
@@ -1071,9 +1076,16 @@ class ApprovalRequest:
     principal_digest: str = ""
     turn_id: str = ""
     operation_id: str = ""
+    #: What the person is asked to confirm. ``write`` authorises one exact business change and
+    #: can be declined; ``navigation`` asks before the assistant leaves the current page, whose
+    #: unsaved input the application may save or discard, and offers only the confirmation --
+    #: the person who does not want it stops the task instead.
+    kind: str = "write"
 
     def __post_init__(self) -> None:
         _schema_version(self.schema_version, "ApprovalRequest")
+        _require(self.kind in APPROVAL_KINDS,
+                 f"kind must be one of {sorted(APPROVAL_KINDS)}")
         _str(self.approval_id, "approval_id")
         _str(self.effect, "effect")
         object.__setattr__(self, "targets", _string_sequence(self.targets, "targets"))
@@ -1094,13 +1106,14 @@ class ApprovalRequest:
                 "expires_at": self.expires_at,
                 "principal_digest": self.principal_digest,
                 "turn_id": self.turn_id,
-                "operation_id": self.operation_id}
+                "operation_id": self.operation_id,
+                "kind": self.kind}
 
     @staticmethod
     def from_json(d: dict) -> "ApprovalRequest":
         allowed = {"schema_version", "approval_id", "effect", "targets", "expires_at",
-                   "principal_digest", "turn_id", "operation_id"}
-        required = allowed - {"principal_digest", "turn_id", "operation_id"}
+                   "principal_digest", "turn_id", "operation_id", "kind"}
+        required = allowed - {"principal_digest", "turn_id", "operation_id", "kind"}
         d = _strict_object(d, "ApprovalRequest", allowed=allowed, required=required)
         _require(isinstance(d["targets"], list), "targets must be an array")
         return ApprovalRequest(schema_version=d["schema_version"],
@@ -1108,7 +1121,8 @@ class ApprovalRequest:
                                targets=d["targets"], expires_at=d["expires_at"],
                                principal_digest=d.get("principal_digest", ""),
                                turn_id=d.get("turn_id", ""),
-                               operation_id=d.get("operation_id", ""))
+                               operation_id=d.get("operation_id", ""),
+                               kind=d.get("kind", "write"))
 
     @property
     def content_digest(self) -> str:

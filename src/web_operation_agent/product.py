@@ -148,6 +148,11 @@ class AgentTurnConfig:
     #: still requires one exact read-only Skill match, a current typed route, and a fresh
     #: browser receipt at that route; this flag grants neither a route nor a mutation.
     deterministic_read_navigation: bool = False
+    #: Ask the person before the assistant leaves the current page, with one confirmation
+    #: and no decline (owner ruling D7). Leaving a page can discard what was typed there or
+    #: let the application save it on the way out, and loses the page's state. On by
+    #: default; a person who does not want the switch stops the task.
+    confirm_navigation: bool = True
     require_identity: bool = False
     deployment_profile: str = "production"
     max_user_answer_chars: int = 4_000
@@ -170,6 +175,7 @@ class AgentTurnConfig:
                 or not isinstance(self.allow_clarification, bool)
                 or not isinstance(self.allow_form_prefill, bool)
                 or not isinstance(self.deterministic_read_navigation, bool)
+                or not isinstance(self.confirm_navigation, bool)
                 or not isinstance(self.require_identity, bool)):
             raise ValueError("turn policy flags must be booleans")
         for name in ("step_budget", "wall_budget_s", "approval_ttl_s",
@@ -319,6 +325,11 @@ def render_neutral_user_answer(context: AgentAnswerContext) -> str:
             return "本次确认已过期，因此没有执行写入。请核对当前目标后重新提交。"
         return ("This confirmation expired, so no write was performed. Review the target "
                 "and submit it again.")
+    if context.agent.terminal_reason == "navigation_not_confirmed":
+        if re.search(r"[\u3400-\u9fff]", context.message.text):
+            return "页面切换没有得到确认，助手没有离开当前页面。需要时请再说一次。"
+        return ("The page switch was not confirmed, so the assistant stayed on the current "
+                "page. Ask again when you are ready.")
     if context.agent.terminal_reason == "no_progress":
         if re.search(r"[\u3400-\u9fff]", context.message.text):
             return "同一步骤没有带来新结果，我已停止重复操作。请补充目标信息后重试。"
@@ -643,6 +654,35 @@ class AgentTurnExecutor:
                     plan_digest=proposal.content_digest, decided_at=time.time(),
                     operation_context_digest=(context.binding_digest if context else ""))
 
+        def confirm_navigation(plan, *, context: OperationContext | None = None):
+            chinese = bool(re.search(r"[\u3400-\u9fff]", turn_message.text))
+            if plan.action == "back":
+                destination = "上一页" if chinese else "the previous page"
+            else:
+                parts = urlsplit(plan.url) if plan.url else None
+                destination = ((parts.path or "/") if parts is not None
+                               else ("另一个页面" if chinese else "another page"))
+            effect = ("离开当前页面，打开另一个页面" if chinese
+                      else "Leave the current page and open another one")
+            # The card goes to the browser, which refuses a credential-looking value; the
+            # request is shown as the person would recognise it, with any such value masked.
+            request = redact_sensitive_assignments(
+                redact_session_handoffs(turn_message.text))[:120]
+            targets = ((f"将打开：{destination}", f"你的请求：{request}")
+                       if chinese else
+                       (f"Opens: {destination}", f"Your request: {request}"))
+            try:
+                return approval_gate.decide_plan(
+                    plan, effect=effect, targets=targets,
+                    ttl_s=self.config.approval_ttl_s, context=context, kind="navigation")
+            except RemoteProtocolError as exc:
+                if exc.code != "approval_expired":
+                    raise
+                return ApprovalGrant(
+                    approval_id="", decision="expired",
+                    plan_digest=plan.content_digest, decided_at=time.time(),
+                    operation_context_digest=(context.binding_digest if context else ""))
+
         session = ServerAgentSession(
             task=task,
             chat=self.chat,
@@ -669,6 +709,8 @@ class AgentTurnExecutor:
             business_mutation_approval=(
                 approve_business_mutation
                 if self.config.allow_business_mutations else None),
+            navigation_confirmation=(
+                confirm_navigation if self.config.confirm_navigation else None),
             allow_clarification=self.config.allow_clarification,
             allow_form_prefill=self.config.allow_form_prefill,
             deterministic_read_navigation=(
@@ -728,7 +770,7 @@ class AgentTurnExecutor:
                             or agent.terminal_reason in {
                                 "approval_expired", "approval_failed",
                                 "business_mutation_blocked", "business_mutation_refused",
-                                "no_progress",
+                                "navigation_not_confirmed", "no_progress",
                                 "permission_denied"})
                         else self.answer_renderer(answer_context))
             if not isinstance(rendered, str) or not rendered.strip():
@@ -833,7 +875,8 @@ def _status_for(terminal_reason: str) -> AgentTurnStatus:
         return AgentTurnStatus.REFUSED
     if terminal_reason == "no_progress":
         return AgentTurnStatus.REFUSED
-    if terminal_reason in {"approval_denied", "approval_expired", "user_cancelled"}:
+    if terminal_reason in {"approval_denied", "approval_expired", "user_cancelled",
+                           "navigation_not_confirmed"}:
         return AgentTurnStatus.CANCELLED
     if terminal_reason == "indeterminate_write":
         return AgentTurnStatus.INDETERMINATE

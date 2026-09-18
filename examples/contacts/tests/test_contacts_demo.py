@@ -13,7 +13,7 @@ from examples.contacts.app import (DEMO_API_TOKEN, DEMO_SESSION_COOKIE,
                                    DEMO_SESSION_VALUE, MinimalContactsApplication)
 from examples.contacts.adapter import MinimalContactsAdapter
 from examples.contacts.demo import (DemoConfig, ScriptedDemoChat, WRITE_WALKTHROUGH,
-                                    run_demo)
+                                    _confirm_navigation_in_page, run_demo)
 from web_operation_agent.application import bind_application
 from web_operation_agent.business import (BusinessMutationIndeterminate,
                                           BusinessToolError)
@@ -187,6 +187,15 @@ class TheWriteWalkthroughInARealBrowser(unittest.TestCase):
             kinds = [row["event"] for row in events]
             self.assertEqual(kinds.count("business_mutation_proposed"), 1,
                              "one approval, asked for exactly once")
+            # Opening the new record leaves the page, so it is confirmed first: one card, one
+            # control, recorded apart from the write approval.
+            navigations = summary["navigation_confirmations"]
+            self.assertEqual(len(navigations), 1)
+            self.assertEqual(navigations[0]["decline_controls"], 0)
+            self.assertIn("/contacts/radia-perlman", navigations[0]["text"])
+            self.assertEqual(kinds.count("approval_requested"), 1)
+            self.assertEqual(kinds.count("navigation_confirmation_requested"), 1)
+            self.assertEqual(turn["status"], "finished")
             self.assertEqual(kinds.count("business_mutation_result"), 1)
             self.assertNotIn("business_mutation_indeterminate", kinds)
             written = next(row for row in events
@@ -368,6 +377,12 @@ class TheWriteWalkthroughInARealBrowser(unittest.TestCase):
                         self.assertEqual(application.post_requests, 1)
 
                         application.release_post.set()
+                        # The completed write opens the new record, and the page switch is
+                        # confirmed first, as the person on that page would.
+                        pages[0].locator(
+                            'section.woa-approval[data-kind="navigation"]').wait_for(
+                                state="visible", timeout=15_000)
+                        _confirm_navigation_in_page(pages[0])
                         completed = conversations[0].next_outcome(timeout_s=15).result
                         self.assertEqual(completed.terminal_reason, "agent_finished")
                         self.assertEqual(application.post_requests, 1)

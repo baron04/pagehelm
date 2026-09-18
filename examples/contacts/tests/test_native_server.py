@@ -38,6 +38,21 @@ def _chromium_launches() -> bool:
         return False
 
 
+def _confirm_page_switch(page, timeout_ms: int = 20_000) -> None:
+    """Confirm the page switch a task asks for, as the signed-in user would.
+
+    The assistant asks before it leaves the page, with one control and no decline; the
+    check below pins that the card offers nothing else.
+    """
+    card = page.locator('section.woa-approval[data-kind="navigation"]')
+    card.wait_for(state="visible", timeout=timeout_ms)
+    if card.locator('[data-testid="woa-deny"]').count():
+        raise AssertionError("a page-switch confirmation offered a decline")
+    # The card refuses a press it cannot prove was visible long enough to read.
+    page.wait_for_timeout(700)
+    card.locator('[data-testid="woa-approve"]').click()
+
+
 def _request(url: str, *, body: dict | None = None, cookie: str = "",
              origin: str = "") -> tuple[int, dict, list[str]]:
     headers = {}
@@ -472,6 +487,7 @@ class NativeContactsBrowserTests(unittest.TestCase):
                         page.evaluate(
                             "task => window.__WOA_TEST_RUNTIME__.submitTask(task)",
                             "Open Grace Hopper's contact record.")
+                        _confirm_page_switch(page)
                         recovered = session.runner.next_outcome(timeout_s=15)
                         self.assertEqual(
                             recovered.result.terminal_reason, "agent_finished")
@@ -511,6 +527,7 @@ class NativeContactsBrowserTests(unittest.TestCase):
                     page.evaluate(
                         "task => window.__WOA_RUNTIME_READY__.then(r => r.submitTask(task))",
                         "Open Grace Hopper's contact record.")
+                    _confirm_page_switch(page)
                     page.wait_for_url("**/contacts/grace-hopper", timeout=30_000)
                     page.get_by_text("Grace Hopper", exact=True).wait_for(timeout=10_000)
                     self.assertEqual(host.application.write_requests, 0)
@@ -558,6 +575,7 @@ class NativeContactsBrowserTests(unittest.TestCase):
                     page.evaluate(
                         "task => window.__WOA_RUNTIME_READY__.then(r => r.submitTask(task))",
                         "Open Grace Hopper's contact record.")
+                    _confirm_page_switch(page)
                     page.wait_for_url("**/contacts/grace-hopper", timeout=30_000)
                     self.assertEqual(host.server.session_count, 1)
                 finally:
@@ -727,6 +745,7 @@ class NativeContactsBrowserTests(unittest.TestCase):
                         "async () => { await window.__WOA_RUNTIME_READY__; return true; }")
                     self.assertEqual(host.server.session_count, 1)
                     chat.release.set()
+                    _confirm_page_switch(page)
                     outcome = session.runner.next_outcome(timeout_s=15)
                     events = [json.loads(line) for line in
                               next((Path(directory) / "runs").glob("*/audit.jsonl"))

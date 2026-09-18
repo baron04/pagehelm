@@ -235,6 +235,9 @@ class SimulatedRuntime:
         self._thread: threading.Thread | None = None
         self.errors: list[str] = []
         self.approval_requests: list[dict[str, Any]] = []
+        #: Page-switch confirmations, answered as the person at the page would and kept
+        #: apart from write approvals, which `approval_decision` answers.
+        self.navigation_confirmations: list[dict[str, Any]] = []
         self._last_event_id = ""
 
     @property
@@ -322,14 +325,17 @@ class SimulatedRuntime:
                     self._last_event_id = event.event_id
                     if event.kind != "approval_required":
                         continue
-                    self.approval_requests.append(json.loads(json.dumps(event.payload)))
-                    if self.approval_decision is not None:
-                        payload = event.payload
+                    payload = event.payload
+                    navigation = payload.get("kind") == "navigation"
+                    (self.navigation_confirmations if navigation
+                     else self.approval_requests).append(json.loads(json.dumps(payload)))
+                    decision = "approved" if navigation else self.approval_decision
+                    if decision is not None:
                         self.channel.accept_approval(ApprovalDecision(
                             schema_version=SCHEMA_VERSIONS["ApprovalDecision"],
                             session_id=self.channel.session_id,
                             approval_id=payload["approval_id"],
-                            decision=self.approval_decision,
+                            decision=decision,
                             principal_digest=payload.get("principal_digest", ""),
                             turn_id=payload.get("turn_id", ""),
                             operation_id=payload.get("operation_id", ""),

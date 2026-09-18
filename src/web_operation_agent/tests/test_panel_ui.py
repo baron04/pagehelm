@@ -360,6 +360,34 @@ class PanelUITests(_PanelBrowser):
         self.assertEqual(self.calls(page)[0][2], "denied")
         self.assertEqual(self.errors, [])
 
+    def test_a_page_switch_card_has_one_control_and_escape_does_not_decline(self):
+        """The assistant asks before it leaves the page. The card offers the confirmation
+        and nothing else: a person who does not want to leave stops the task."""
+        labels = panel_contract()["label_keys"]
+        page = self.open(_snapshot())
+        self.raise_approval(page, kind="navigation", effect="离开当前页面，打开另一个页面",
+                            targets=["将打开：/odoo/customers/13", "你的请求：打开 azur"])
+        card = page.locator(".woa-approval")
+        self.assertEqual(card.get_attribute("data-kind"), "navigation")
+        self.assertIn(labels["navigationTitle"], card.inner_text())
+        self.assertIn(labels["navigationHint"], card.inner_text())
+        self.assertIn("/odoo/customers/13", card.inner_text())
+        self.assertEqual(page.get_by_test_id("woa-deny").count(), 0)
+        self.assertEqual(page.get_by_test_id("woa-approve").inner_text(),
+                         labels["navigationConfirm"])
+        focused = page.evaluate(
+            "document.querySelector('#woa-assistant').shadowRoot"
+            ".activeElement.getAttribute('data-testid')")
+        self.assertEqual(focused, "woa-approve")
+        page.keyboard.press("Escape")
+        page.keyboard.press("Tab")
+        self.assertEqual(self.calls(page), [], "neither key may answer a page switch")
+        page.wait_for_timeout(700)
+        page.get_by_test_id("woa-approve").click()
+        self.assertEqual([(call[0], call[2]) for call in self.calls(page)],
+                         [("decide", "approved")])
+        self.assertEqual(self.errors, [])
+
     def test_the_approval_card_stays_usable_at_320_by_480(self):
         page = self.open(_snapshot(), width=320, height=480)
         self.raise_approval(page, effect="新建客户 Nordwind Handelsgesellschaft mbH & Co. KG",

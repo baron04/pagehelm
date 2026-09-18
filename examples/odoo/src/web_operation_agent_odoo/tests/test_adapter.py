@@ -392,6 +392,54 @@ class AdapterContract(unittest.TestCase):
         self.assertEqual(browser.actions, ["goto"])
         self.assertEqual(browser.url, BASE + "/odoo/customers/11")
 
+    def test_the_server_opened_record_is_confirmed_before_the_page_is_left(self):
+        """The one-decision open path navigates on the server's own authority; it asks the
+        person first like every other page switch, and does not leave without an answer."""
+        for decision, reason, actions in (("approved", "agent_finished", ["goto"]),
+                                          ("expired", "navigation_not_confirmed", [])):
+            with self.subTest(decision=decision), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                adapter = OdooApplicationAdapter(
+                    base_url=BASE, api_key_path=_key_file(root),
+                    allow_mutations=True, mutation_journal=MemoryMutationJournal())
+                adapter.business_tools._executor = _FakeOdoo({
+                    "res.partner": _customers([
+                        ("Acme Corporation", "acme@example.test"),
+                        ("Azure Interior", "azure@example.test"),
+                    ])})
+                asked = []
+
+                def person(plan, *, context=None, decision=decision):
+                    asked.append((plan.action, plan.url))
+                    return type("Grant", (), {"decision": decision,
+                                              "plan_digest": plan.content_digest})()
+
+                browser = _ProductRoutingBrowser()
+                session = ServerAgentSession(
+                    task=TaskSpec(
+                        task_ref="A02", prompt="打开 azur", entry_path="/odoo/customers",
+                        supported_scope=(
+                            "Read current Odoo records through the typed API. "
+                            "Do not submit page forms.")),
+                    chat=_ProductRoutingChat([
+                        ("query_customers", {"name_contains": "azur"})]),
+                    browser=browser, control=ReadOnlyControl(),
+                    ledger=SessionLedger(root / "a02.jsonl", "a02"),
+                    business_tools=adapter.business_tools,
+                    business_mutation_approval=lambda *_args, **_kwargs: None,
+                    navigation_confirmation=person,
+                    deterministic_read_navigation=True,
+                    application_routes=adapter.ports.routes,
+                )
+                session.entry_observation = browser.observe()
+                session.plan()
+
+                result = session.run()
+
+                self.assertEqual(asked, [("goto", "/odoo/customers/11")])
+                self.assertEqual(result.terminal_reason, reason)
+                self.assertEqual(browser.actions, actions)
+
     def test_real_product_requeries_an_ambiguous_customer_after_the_choice(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

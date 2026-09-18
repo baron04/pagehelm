@@ -162,8 +162,10 @@ def project_event(event: TaskEvent, *, at: int) -> dict | None:
         return {**base, "kind": "action", "tone": "active",
                 "text": describe_action(payload.get("command"))}
     if event.kind == "approval_required":
+        text = ("需要确认后才能打开页面" if payload.get("kind") == "navigation"
+                else "需要确认后才能继续")
         return {**base, "kind": "approval", "tone": "warning",
-                "text": "需要确认后才能继续", "approval_id": str(payload.get("approval_id") or "")}
+                "text": text, "approval_id": str(payload.get("approval_id") or "")}
     if event.kind == "terminal":
         reason = _clip(payload.get("reason"), 100)
         return {**base, "kind": "result", "tone": "neutral",

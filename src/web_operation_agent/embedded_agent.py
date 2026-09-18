@@ -78,10 +78,21 @@ class ApprovalGate:
         self.channel = channel
         self.ledger = ledger
 
+    #: Audit event names per confirmation kind. A page switch is recorded apart from a write
+    #: approval: every reader that counts approvals means writes, and a navigation counted
+    #: among them would read as a write the person approved.
+    _EVENTS = {"write": ("approval_requested", "approval_decided"),
+               "navigation": ("navigation_confirmation_requested",
+                              "navigation_confirmation_decided")}
+
     def decide_plan(self, plan, *, effect: str, targets: tuple[str, ...],
                     ttl_s: int = 120,
-                    context: OperationContext | None = None) -> ApprovalGrant:
+                    context: OperationContext | None = None,
+                    kind: str = "write") -> ApprovalGrant:
         """Return the authenticated decision without treating denial as an exception."""
+        if kind not in self._EVENTS:
+            raise ValueError("approval kind is invalid")
+        requested_event, decided_event = self._EVENTS[kind]
         if isinstance(ttl_s, bool) or not isinstance(ttl_s, int) or ttl_s < 1 or ttl_s > 600:
             raise ValueError("approval ttl_s must be an integer from 1 to 600")
         if (not isinstance(getattr(plan, "content_digest", None), str)
@@ -113,10 +124,11 @@ class ApprovalGate:
             principal_digest=(context.principal.binding_digest if context else ""),
             turn_id=(context.turn_id if context else ""),
             operation_id=(context.operation_id if context else ""),
+            kind=kind,
         )
         ensure_safe_browser_payload(request.to_json())
         self.ledger.append(
-            "approval_requested",
+            requested_event,
             approval_id=approval_id,
             effect=effect,
             targets=list(targets),
@@ -129,7 +141,7 @@ class ApprovalGate:
             approval_id, timeout_s=ttl_s)
         decided_at = time.time()
         self.ledger.append(
-            "approval_decided",
+            decided_event,
             approval_id=approval_id,
             decision=decision.decision,
             control_plan_digest=plan.content_digest,

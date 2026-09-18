@@ -1,6 +1,6 @@
 import {useEffect, useRef, useState} from 'react'
 import {ShieldAlert, Clock, TriangleAlert} from 'lucide-react'
-import type {ApprovalRequest, Labels, PanelLimits} from '../contract/panel'
+import {declinable, type ApprovalRequest, type Labels, type PanelLimits} from '../contract/panel'
 import {useVisibilityGate} from '../state/visibility'
 
 function remaining(expiresAt: number): string {
@@ -26,6 +26,9 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
   const confirm = useRef<HTMLButtonElement>(null)
   const [countdown, setCountdown] = useState(() => remaining(approval.expires_at))
   const [blocked, setBlocked] = useState(false)
+  // A navigation card asks before the assistant leaves the page and has one button: the
+  // person who does not want to leave stops the task, as with anything else in flight.
+  const canDecline = declinable(approval.kind)
   const gate = useVisibilityGate({
     minVisibleRatio: visibility.min_visible_ratio,
     minVisibleMs: visibility.min_visible_ms,
@@ -33,7 +36,7 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
 
   useEffect(() => {
     gate.attach(card.current)
-    cancel.current?.focus()
+    ;(canDecline ? cancel : confirm).current?.focus()
     return () => gate.attach(null)
     // A new approval re-arms the gate and takes focus; the same one must not.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -64,10 +67,15 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
   const onKeyDown = (event: React.KeyboardEvent) => {
     if (event.key === 'Escape') {
       event.preventDefault()
-      onDecide('denied')
+      if (canDecline) onDecide('denied')
       return
     }
     if (event.key !== 'Tab') return
+    if (!canDecline) {
+      event.preventDefault()
+      confirm.current?.focus()
+      return
+    }
     const root = card.current?.getRootNode() as ShadowRoot | Document | undefined
     const active = (root as ShadowRoot | undefined)?.activeElement ?? document.activeElement
     if (event.shiftKey && active === cancel.current) {
@@ -84,12 +92,13 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
 
   return (
     <section className="woa-approval" ref={card} role="alertdialog" aria-modal="false"
+             data-kind={approval.kind ?? 'write'}
              aria-labelledby={titleId} aria-describedby={effectId} onKeyDown={onKeyDown}>
       <span className="woa-approval__edge" aria-hidden="true" />
       <div className="woa-approval__inner">
         <h2 id={titleId}>
           <ShieldAlert size={15} strokeWidth={1.7} aria-hidden="true" />
-          {labels.approvalTitle}
+          {canDecline ? labels.approvalTitle : labels.navigationTitle}
           <span className="woa-approval__time" data-urgent={urgent ? 'true' : undefined}>
             <Clock size={11} strokeWidth={1.8} aria-hidden="true" />{countdown}
           </span>
@@ -111,12 +120,16 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
               <span>{labels.approvalObscured}</span>
             </p>
           )
-          : <p className="woa-approval__fine">{labels.approvalHint}</p>}
+          : <p className="woa-approval__fine">
+              {canDecline ? labels.approvalHint : labels.navigationHint}
+            </p>}
         <div className="woa-approval__actions">
-          <button type="button" className="woa-btn woa-btn--ghost" ref={cancel}
-                  data-testid="woa-deny" disabled={busy} onClick={answer('denied')}>
-            {labels.deny}
-          </button>
+          {canDecline && (
+            <button type="button" className="woa-btn woa-btn--ghost" ref={cancel}
+                    data-testid="woa-deny" disabled={busy} onClick={answer('denied')}>
+              {labels.deny}
+            </button>
+          )}
           <span className="woa-approval__spacer" />
           {/* A refusal explains itself and stays pressable: the next press succeeds once
               the card is genuinely visible. Disabling it here would leave a person with a
@@ -124,7 +137,7 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
           <button type="button" className="woa-btn woa-btn--primary" ref={confirm}
                   data-testid="woa-approve" disabled={busy}
                   onClick={answer('approved')}>
-            {labels.approve}
+            {canDecline ? labels.approve : labels.navigationConfirm}
           </button>
         </div>
       </div>

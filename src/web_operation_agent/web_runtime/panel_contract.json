@@ -87,6 +87,9 @@
     "approve": "确认执行",
     "approvalHint": "只会授权上述操作，且只能使用一次。页面变化后需要重新确认；取消将结束这一轮，不会执行任何写入。",
     "approvalObscured": "确认卡当前不完全可见，无法确认。请移开遮挡内容或把窗口拉大后重试。",
+    "navigationTitle": "打开页面前请确认",
+    "navigationConfirm": "打开",
+    "navigationHint": "助手要离开当前页面。页面上还没有保存的内容可能会被应用自动保存，也可能丢失。不想离开就点“停止”。",
     "retry": "重试",
     "dismiss": "关闭提示",
     "panelFailed": "助手界面出错了。刷新页面可以恢复，应用本身不受影响。",
@@ -185,5 +188,14 @@
   "approval_visibility": {
     "min_visible_ratio": 0.9,
     "min_visible_ms": 400
+  },
+  "approval_kinds": {
+    "comment": [
+      "What a confirmation card asks. A write authorises one exact change and can be",
+      "declined; a navigation asks before the assistant leaves the current page and has",
+      "only the confirmation -- a person who does not want it stops the task."
+    ],
+    "write": {"declinable": true},
+    "navigation": {"declinable": false}
   }
 }

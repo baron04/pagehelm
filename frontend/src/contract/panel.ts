@@ -50,6 +50,15 @@ export interface ApprovalRequest {
   principal_digest: string
   turn_id: string
   operation_id: string
+  /** `navigation` asks before the assistant leaves the page and offers no decline. */
+  kind?: ApprovalKind
+}
+
+export type ApprovalKind = Exclude<keyof typeof raw.approval_kinds, 'comment'>
+
+/** Whether a card of this kind offers a decline, as the contract states it. */
+export function declinable(kind: ApprovalKind | undefined): boolean {
+  return raw.approval_kinds[kind ?? 'write'].declinable
 }
 
 export interface TimelinePage {
