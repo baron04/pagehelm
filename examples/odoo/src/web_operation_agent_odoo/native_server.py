@@ -477,8 +477,28 @@ class OdooNativeHost:
                 event.database, event.actor_id, "application_logout")
         return {"revoked": count}
 
+    def _forget_closed_sessions(self) -> None:
+        """Drop the entries of sessions that have closed without a logout.
+
+        A tab closed without logging out is reaped by the server after its idle timeout, but
+        its entry here stayed until the actor logged out: `active_sessions` counted every such
+        tab, and maintenance, which prunes run ledgers only while no session is active, never
+        pruned them. The tab-to-actor record is kept, so a different actor later signing in
+        on that tab still revokes the previous one.
+        """
+        # Reading the count is what makes the server close sessions idle past the browser
+        # timeout; it reaps lazily.
+        self.server.session_count
+        with self._lock:
+            for key, active in list(self._sessions.items()):
+                try:
+                    active.session.channel.validate_live()
+                except Exception:
+                    self._sessions.pop(key, None)
+
     def operational_snapshot(self) -> dict:
         snapshot = self.telemetry.snapshot()
+        self._forget_closed_sessions()
         with self._lock:
             active_sessions = len(self._sessions)
         unresolved = len(self.mutation_journal.unresolved())
@@ -509,6 +529,7 @@ class OdooNativeHost:
                 self.config.state_dir / "conversation-state.sqlite3",
                 older_than_ms=cutoff, now_ms=now)
             self.telemetry.reap_stale_runs(max_age_s=900)
+            self._forget_closed_sessions()
             # An unresolved write can refer to a run ledger. Keep all ledgers while any
             # such row exists; this conservative rule avoids deleting reconciliation evidence.
             with self._lock:
