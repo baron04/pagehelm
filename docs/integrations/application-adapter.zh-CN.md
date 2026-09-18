@@ -38,6 +38,12 @@ Adapter 与 turn policy 默认都关闭写入。启用写入的 Adapter 在生�
 
 一次已确认的 dispatch 完成后，由后置条件端口决定 mutation 能否记录为 completed。缺少或未通过后置条件会得到 indeterminate 结果，系统不会自动重试。当前保守 reconciler 会把不确定写入留给人工处理；持久 reconciliation key、后台恢复和跨 session 在途业务键互斥属于后续可靠性工作。
 
+## 临时表单交接
+
+表单预填是一种可选的类型化工具结果，不是另一个应用端口，也不是通用的浏览器权限。Adapter 只有在校验过确切路由、语义字段标识、控件角色和取值之后，才能返回 `FormDraft`。结果内容必须原样包含这些绑定，路由也必须在该结果允许的路由之内。用 `AgentTurnConfig.allow_form_prefill=True` 启用；草稿存在的这一轮里，模型只会拿到一个无参数的 `prefill_form` 工具。
+
+服务端只消费一次草稿，从最新的页面观察中唯一地解析每个字段，填写或选择 Adapter 签发的值，在点击或提交之前停下。Adapter 由此断言：编辑这些字段本身不会保存任何东西。会写入的 onchange、边编辑边保存的表单、凭据字段、上传，以及任何编辑后可能持久化或触发外部效果的控件，都不能签发草稿，应走常规的确认写入路径。应用在离开页面时保存的表单（Odoo 18 就是这样）之所以可以用，只是因为助手离开任何页面之前都会先问，预填完成的回答也会告诉用户离开时内容可能被保存或丢弃。要在部署的应用上验证这一断言，包括运行结束后用 API 或数据库确认没有创建记录。
+
 ## 组合与资格验证
 
 先执行 `application = bind_application(adapter)`，再把该对象传给 `AgentTurnExecutor(application=application, ...)`，并使用它的 Descriptor 和路由端口配置 `LiveProductSession`。产品组合不应再单独传递原始 tool runtime。
