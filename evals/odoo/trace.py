@@ -33,6 +33,7 @@ WOA_TERMINALS = {
     "step_budget": "step_budget", "wall_clock_budget": "wall_clock_budget",
     "token_budget": "token_budget", "no_progress": "no_progress",
     "action_policy_budget": "policy_refused", "user_cancelled": "user_cancelled",
+    "navigation_not_confirmed": "navigation_not_confirmed",
 }
 #: Where each projected approval count is read from in the product's own run record.
 _APPROVAL_COUNTS = {"requested": "approval_requested", "granted": "approval_granted",

@@ -245,6 +245,7 @@ def run_case(name: str, case: dict, args, output_dir: Path) -> dict:
         mutation_journal_path=(output_dir / f"{name}-mutations.sqlite3"
                                if case.get("writes") else None),
         approve_in_page=bool(case.get("approve")),
+        confirm_navigation_in_page=True,
     ))
     turns = summary.get("turns") or []
     turn = turns[0] if turns else {}
@@ -268,6 +269,9 @@ def run_case(name: str, case: dict, args, output_dir: Path) -> dict:
         "reads": len(reads),
         "approval_requested": control.get("approval_requested", 0),
         "approval_granted": control.get("approval_granted", 0),
+        # Page switches the product asked about and the walkthrough confirmed. They are not
+        # write approvals and are counted apart from them.
+        "navigation_confirmations": turn.get("navigation_confirmations", 0),
         "mutations_completed": control.get("mutation_completed", 0),
         "mutations_indeterminate": control.get("mutation_indeterminate", 0),
         "readback_verified": all(

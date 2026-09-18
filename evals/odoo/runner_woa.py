@@ -3,7 +3,9 @@
 The runner does what a person does: signs in on Odoo's own login page, lets the addon mount
 the assistant, opens the panel from its launcher, types each message and presses Enter,
 reads the confirmation card and presses a button, and finally logs out through Odoo's user
-menu. It never injects a Runtime, never calls the Agent directly and never reads panel state
+menu. A card that asks before the assistant leaves the page is confirmed, as the person who
+asked for that page would; it is recorded apart from write approvals and never reaches the
+write oracle. It never injects a Runtime, never calls the Agent directly and never reads panel state
 from JavaScript objects: every answer it records is the text a person sees in the default,
 unexpanded view of the newest turn.
 
@@ -54,9 +56,12 @@ _APPROVAL_JS = """() => {
   const s = document.querySelector('#woa-assistant').shadowRoot;
   const card = s.querySelector('section.woa-approval');
   if (!card) return null;
-  return {effect: card.querySelector('.woa-approval__effect').innerText,
+  const effect = card.querySelector('.woa-approval__effect');
+  return {kind: card.dataset.kind || 'write', effect: effect ? effect.innerText : '',
           targets: Array.from(card.querySelectorAll('.woa-approval__targets li')).map(x => x.innerText)};
 }"""
+_CARD_GONE_JS = ("() => !document.querySelector('#woa-assistant').shadowRoot"
+                 ".querySelector('section.woa-approval')")
 _FEEDBACK_JS = """([before]) => {
   const s = document.querySelector('#woa-assistant').shadowRoot;
   return Boolean(s.querySelector('.woa-pending')) || s.querySelectorAll('li.woa-turn').length > before;
@@ -265,15 +270,23 @@ def run(runner_input: RunnerInput, config: WoaRunnerConfig, *,
                     break
                 seen = time.monotonic()
                 card = page.evaluate(_APPROVAL_JS)
+                if card.get("kind") == "navigation":
+                    # The product asks before it leaves the current page (P7.5 D7): a person who
+                    # asked for another page opens it. Not a write, so not the oracle's decision.
+                    page.wait_for_timeout(config.approval_visible_wait_ms)
+                    page.locator(_ROOT).get_by_test_id("woa-approve").click(timeout=10_000)
+                    page.wait_for_function(_CARD_GONE_JS, timeout=15_000)
+                    approval_wait += time.monotonic() - seen
+                    artifact["navigation_confirmations"].append({"turn": index, "card": card})
+                    checkpoint({"product_started": True, "turn": index, "navigation": True})
+                    continue
                 verdict = (approval_hook(card) if approval_hook is not None
                            else {"decision": "deny", "reasons": ["no_approval_expected"],
                                  "safety_events": []})
                 page.wait_for_timeout(config.approval_visible_wait_ms)
                 testid = "woa-approve" if verdict["decision"] == "approve" else "woa-deny"
                 page.locator(_ROOT).get_by_test_id(testid).click(timeout=10_000)
-                page.wait_for_function(
-                    "() => !document.querySelector('#woa-assistant').shadowRoot"
-                    ".querySelector('section.woa-approval')", timeout=15_000)
+                page.wait_for_function(_CARD_GONE_JS, timeout=15_000)
                 approval_wait += time.monotonic() - seen
                 artifact["approvals"].append({"turn": index, "card": card, "verdict": verdict})
                 checkpoint({"product_started": True, "turn": index, "approval": True})
@@ -346,7 +359,7 @@ def empty_artifact(runner_input: RunnerInput) -> dict[str, Any]:
         "product_started": False, "turns": [], "page_errors": [], "final": None,
         "logged_out": False, "browser_exit": None, "control_channel_error": None,
         "final_page_error": None, "teardown_error": None, "approvals": [],
-        "budget_exhausted": None,
+        "navigation_confirmations": [], "budget_exhausted": None,
     }
 
 

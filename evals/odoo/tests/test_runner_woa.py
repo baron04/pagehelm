@@ -158,3 +158,86 @@ class FaultStageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CardPage(Page):
+    """A turn that shows one confirmation card of ``kind`` before it settles."""
+
+    def __init__(self, kind):
+        super().__init__()
+        self.states = ["approval", "settled"]
+        self.card = {"kind": kind, "effect": "离开当前页面，打开另一个页面",
+                     "targets": ["将打开：/odoo/customers/13"]}
+
+    def wait_for_function(self, script, **kwargs):
+        handle = mock.MagicMock()
+        handle.json_value.return_value = (self.states.pop(0) if script == runner_woa._SETTLED_JS
+                                          else True)
+        return handle
+
+    def evaluate(self, script, *args):
+        if script == runner_woa._APPROVAL_JS:
+            return dict(self.card)
+        return super().evaluate(script, *args)
+
+    def wait_for_timeout(self, _ms):
+        pass
+
+
+@unittest.skipIf(importlib.util.find_spec("playwright") is None, "playwright is not installed")
+class NavigationCardTests(unittest.TestCase):
+    """The product asks before it leaves the page (P7.5 D7); the runner opens the page the task
+    asked for, and the write oracle never sees that card."""
+
+    def run_card(self, kind):
+        page = CardPage(kind)
+        context = mock.MagicMock()
+        context.new_page.return_value = page
+        browser = mock.MagicMock()
+        browser.new_context.return_value = context
+        playwright = mock.MagicMock()
+        playwright.chromium.launch.return_value = browser
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        config = WoaRunnerConfig(base_url="https://odoo.test", actors={},
+                                 evidence_dir=Path(directory.name), approval_visible_wait_ms=0)
+        hook = mock.MagicMock(return_value={"decision": "approve", "reasons": [],
+                                            "safety_events": []})
+        checkpoints = []
+        with mock.patch.object(runner_woa, "login"), \
+                mock.patch.object(runner_woa, "breadcrumb",
+                                  return_value={"path": "/odoo", "breadcrumb": "", "title": ""}), \
+                mock.patch.object(runner_woa, "settle_view", return_value=0), \
+                mock.patch.object(runner_woa, "logout", return_value=True):
+            artifact = runner_woa.run(
+                RunnerInput(task_id="t", actor="writer", locale="zh-CN", entry_path=None,
+                            messages=("打开 azur",)),
+                config, approval_hook=hook, checkpoint=checkpoints.append,
+                playwright=playwright)
+        return artifact, hook, page, checkpoints
+
+    def test_a_page_switch_card_is_confirmed_and_kept_apart_from_write_approvals(self):
+        artifact, hook, page, checkpoints = self.run_card("navigation")
+        hook.assert_not_called()
+        page.root.get_by_test_id.assert_called_once_with("woa-approve")
+        self.assertEqual(artifact["approvals"], [])
+        self.assertEqual([(item["turn"], item["card"]["kind"])
+                          for item in artifact["navigation_confirmations"]], [(0, "navigation")])
+        self.assertTrue(any(value.get("navigation") for value in checkpoints))
+        self.assertEqual(artifact["turns"][0]["answer_kind"], "plain")
+
+    def test_a_write_card_still_goes_to_the_oracle(self):
+        artifact, hook, page, _ = self.run_card("write")
+        hook.assert_called_once()
+        page.root.get_by_test_id.assert_called_once_with("woa-approve")
+        self.assertEqual(artifact["navigation_confirmations"], [])
+        self.assertEqual(len(artifact["approvals"]), 1)
+
+
+class NavigationTerminalTests(unittest.TestCase):
+    def test_an_unconfirmed_page_switch_is_its_own_scored_ending(self):
+        from evals.odoo import outcomes, trace
+        self.assertEqual(trace.WOA_TERMINALS["navigation_not_confirmed"],
+                         "navigation_not_confirmed")
+        self.assertIn("navigation_not_confirmed", outcomes.PRODUCT_TERMINALS)
+        self.assertNotEqual(trace.WOA_TERMINALS["navigation_not_confirmed"], "approval_expired")

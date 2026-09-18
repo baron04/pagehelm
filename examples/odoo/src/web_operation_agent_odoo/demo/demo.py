@@ -154,6 +154,9 @@ class OdooDemoConfig:
     #: decision must come from the page session that holds the lease (see SECURITY.md).
     #: Only ever with `scripted`, so the thing being approved is a fixed proposal.
     approve_in_page: bool = False
+    #: Confirm each page switch the panel asks about, as the person who asked for the page
+    #: would. Only with `scripted`: a person running the demo confirms it themselves.
+    confirm_navigation_in_page: bool = False
 
     def __post_init__(self) -> None:
         for name in ("api_key_path", "storage_state_path", "output_dir"):
@@ -172,6 +175,8 @@ class OdooDemoConfig:
         if self.approve_in_page and not (self.allow_mutations and self.scripted):
             raise ValueError(
                 "in-page approval only applies to a scripted mutation walkthrough")
+        if self.confirm_navigation_in_page and not self.scripted:
+            raise ValueError("in-page page-switch confirmation only applies to a scripted run")
         if self.scripted and self.tasks:
             raise ValueError("scripted mode runs one fixed walkthrough and takes no --task")
         if self.headless and not (self.tasks or self.scripted):
@@ -322,7 +327,11 @@ def _outcome_json(outcome) -> dict:
 #: The panel's own approve control. Playwright pierces the open shadow root, and its click
 #: is a real one: the card refuses an event a script synthesised, which is precisely the
 #: case this walkthrough must not be allowed to take.
-_APPROVE_CONTROL = '[data-testid="woa-approve"]'
+_APPROVE_CONTROL = 'section.woa-approval[data-kind="write"] [data-testid="woa-approve"]'
+#: A page-switch confirmation: the assistant asks before leaving the page. Its one control
+#: carries the same test id as a write approval, which is why the write control above is
+#: scoped to its own kind of card.
+_NAVIGATION_CARD = 'section.woa-approval[data-kind="navigation"]'
 
 
 def _capture(page, shots: Path, name: str) -> str:
@@ -345,8 +354,26 @@ def _capture(page, shots: Path, name: str) -> str:
         return ""
 
 
+def _confirm_navigation(page, navigations: list[str] | None) -> None:
+    """Confirm a page switch the panel is asking about, if it is asking and this run may."""
+    if navigations is None:
+        return
+    card = page.locator(_NAVIGATION_CARD)
+    try:
+        if not card.count():
+            return
+        text = card.inner_text()
+        page.wait_for_timeout(700)
+        card.locator('[data-testid="woa-approve"]').click()
+        card.wait_for(state="detached", timeout=10_000)
+    except Exception:
+        return
+    navigations.append(text)
+
+
 def _await_outcome(conversation: LiveConversationRunner, page, shots: Path, *,
-                   timeout_s: float, taken: list[str], turn: int):
+                   timeout_s: float, taken: list[str], turn: int,
+                   navigations: list[str] | None = None):
     """Wait for the turn, and photograph the approval card if one appears while waiting.
 
     The wait is the same one it replaces -- same total budget, same `TimeoutError` -- but
@@ -362,6 +389,7 @@ def _await_outcome(conversation: LiveConversationRunner, page, shots: Path, *,
             return conversation.next_outcome(timeout_s=min(0.5, remaining))
         except TimeoutError:
             pass
+        _confirm_navigation(page, navigations)
         name = f"turn-{turn}-approval"
         if f"{name}.png" not in taken and _approval_on_screen(page):
             shot = _capture(page, shots, name)
@@ -376,7 +404,7 @@ def _approval_on_screen(page) -> bool:
         return False
 
 
-def _approve_in_page(page, timeout_s: float) -> None:
+def _approve_in_page(page, timeout_s: float, navigations: list[str] | None = None) -> None:
     """Wait for the panel to ask, then click approve, as the person at the keyboard would.
 
     A scripted run still has to go through the real approval: the write path refuses a
@@ -384,7 +412,13 @@ def _approve_in_page(page, timeout_s: float) -> None:
     other way would qualify an apparatus the product does not ship.
     """
     control = page.locator(_APPROVE_CONTROL)
-    control.wait_for(state="visible", timeout=int(timeout_s * 1000))
+    deadline = time.monotonic() + timeout_s
+    while not control.is_visible():
+        # A page switch asked for on the way is confirmed; the write is what this waits for.
+        _confirm_navigation(page, navigations)
+        if time.monotonic() >= deadline:
+            raise TimeoutError("timed out waiting for the write approval card")
+        page.wait_for_timeout(100)
     # The card also refuses a press it cannot prove was visible long enough to read. That
     # dwell is the point, so the walkthrough waits it out rather than working around it.
     page.wait_for_timeout(700)
@@ -473,12 +507,16 @@ def _run_browser(config: OdooDemoConfig, live: LiveProductSession,
                         page.evaluate(
                             "task => window.__WOA_RUNTIME_READY__.then(runtime => "
                             "runtime.submitTask(task))", task)
+                        navigations = [] if config.confirm_navigation_in_page else None
                         if config.approve_in_page:
-                            _approve_in_page(page, config.turn_timeout_s)
+                            _approve_in_page(page, config.turn_timeout_s, navigations)
                         turn = len(records) + 1
                         record = _outcome_json(_await_outcome(
                             conversation, page, shots,
-                            timeout_s=config.turn_timeout_s, taken=taken, turn=turn))
+                            timeout_s=config.turn_timeout_s, taken=taken, turn=turn,
+                            navigations=navigations))
+                        if navigations is not None:
+                            record["navigation_confirmations"] = len(navigations)
                         shot = _capture(page, shots, f"turn-{turn}")
                         if shot:
                             taken.append(shot)

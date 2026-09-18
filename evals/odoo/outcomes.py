@@ -103,6 +103,9 @@ PRODUCT_TERMINALS = frozenset({
     "indeterminate_write", "model_call_budget", "token_budget", "context_length_exceeded",
     "input_size_budget", "step_budget", "wall_clock_budget", "provider_deadline",
     "user_cancelled", "invalid_tool_arguments", "no_progress", "page_action_budget",
+    # The product's own page-switch confirmation was not given in time. Its own ending, not an
+    # approval one: a write task's judgement must never read it as a write approval expiring.
+    "navigation_not_confirmed",
 })
 #: What each typed gateway record means for its attempt, keyed by the response status and error
 #: code, or by ``refused`` and the refusal reason. ``event`` is an apparatus fault whose evidence
