@@ -775,7 +775,8 @@ class OdooBusinessToolExecutor:
 
     def _evidence(self, collection: _Collection, pairs, *, name: str, observed_at: str,
                   matched: int, scanned, whole: bool, conditions: tuple[str, ...],
-                  looked_for: str = "", count_exact: bool = False) -> tuple:
+                  looked_for: str = "", count_exact: bool = False,
+                  exact_matches: int | None = None) -> tuple:
         """Turn what this read returned into evidence an answer can cite.
 
         The projection beside it stays a display view. This is the same read expressed so a
@@ -789,7 +790,7 @@ class OdooBusinessToolExecutor:
             evidence_id="query#1", origin=origin, collection=collection.tool.removeprefix("query_"),
             conditions=conditions,
             matched_count=matched, records_scanned=scanned, covers_whole_scope=whole,
-            looked_for=looked_for, count_exact=count_exact)]
+            looked_for=looked_for, count_exact=count_exact, exact_matches=exact_matches)]
         index = 0
         for row, _item in pairs:
             record_id = row.get("id")
@@ -948,6 +949,11 @@ class OdooBusinessToolExecutor:
             and business_text_key(str(visible[0].get(field, "")))
             == business_text_key(needle))
         unique_match = bool(folded and matched == 1)
+        # A name search matches parts of names; how many of the matches carry the whole name
+        # is what an answer needs before it may say that a record of that name exists.
+        exact_matches = (sum(1 for _row, item in pairs
+                             if business_text_key(str(item.get(field, "")))
+                             == business_text_key(needle)) if folded else None)
         selection_options = tuple(
             option for row, item in visible_pairs
             if (option := self._selection_option(collection, row, item)) is not None)
@@ -1014,7 +1020,8 @@ class OdooBusinessToolExecutor:
                                     # agreed, so the count is exact however few rows the
                                     # limit then let through.
                                     count_exact=source_complete,
-                                    conditions=conditions, looked_for=needle),
+                                    conditions=conditions, looked_for=needle,
+                                    exact_matches=exact_matches),
             selection_options=selection_options,
             navigation_target=(record_routes[0] if unique_match else ""),
             query_answer=StructuredQueryAnswer(

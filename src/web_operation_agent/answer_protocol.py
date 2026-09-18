@@ -74,7 +74,9 @@ ANSWER_INSTRUCTIONS = """
 When a tool returns ANSWER EVIDENCE, use its current server-issued references to answer.
 Call compute for filtering, counts, totals or extrema; it is a server calculation and does
 not require another page observation. To list records cite a query or selection with kind
-selection and its actual field names. To give one field cite its field_value reference.
+selection and its actual field names; after a compute filter, cite the selection it returned,
+not its records' field values one by one, so the answer shows the filter it stands on. To
+give one field of one record cite its field_value reference.
 Finish using the answer schema, not plain content or a raw result table. Only selection
 uses fields; omit fields for aggregate and field_value. A total normally needs only one
 aggregate conclusion; do not append a full table unless the user asked for the detail.

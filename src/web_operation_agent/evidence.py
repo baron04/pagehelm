@@ -156,6 +156,11 @@ class QueryEvidence:
     #: returned", this answers "is the count right", and a count needs only the second.
     #: False unless the adapter says otherwise, because a count it cannot vouch for is not one.
     count_exact: bool = False
+    #: How many of the matched records carry `looked_for` as their whole name, not as a part
+    #: of it. A search by name matches "Acme" inside "Acme Holdings", so matching records do
+    #: not establish that a record called "Acme" exists; this does. None when the adapter
+    #: cannot say, and then no answer may claim that such a record exists.
+    exact_matches: int | None = None
 
     def __post_init__(self) -> None:
         _require_id(self.evidence_id)
@@ -178,6 +183,11 @@ class QueryEvidence:
             raise TypeError("covers_whole_scope must be a boolean")
         object.__setattr__(self, "looked_for", _text(
             self.looked_for, "looked_for", allow_empty=True))
+        if self.exact_matches is not None:
+            _count(self.exact_matches, "exact_matches")
+            if not self.looked_for or self.exact_matches > self.matched_count:
+                raise ValueError("exact_matches needs looked_for and cannot exceed "
+                                 "matched_count")
 
     @property
     def found_nothing(self) -> bool:

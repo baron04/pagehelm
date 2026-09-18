@@ -114,12 +114,19 @@ class Selection:
                     raise ConclusionRefused(f"{member}.{field_name} was not read")
                 values.append({"value": record.value, "unit": record.unit})
             rows.append(values)
+        covers = item.covers_whole_scope and (
+            isinstance(item, SelectionEvidence) or len(members) == query.matched_count)
+        # How many records meet the condition, which is not how many are listed: a read
+        # limited to 20 rows of 72 matches lists 20, and "20 match" was the answer's headline.
+        # A computed selection counts what was read, so its total is its own size and is
+        # exact only when what was read was everything.
+        total, count_exact = ((len(members), covers) if isinstance(item, SelectionEvidence)
+                              else (query.matched_count, query.count_exact or covers))
         return {"kind": self.kind, "condition": condition,
-                "looked_for": query.looked_for,
+                "looked_for": query.looked_for, "exact_matches": query.exact_matches,
                 "members": members, "matched": len(members), "fields": self.fields,
-                "rows": rows,
-                "covers_whole_scope": (item.covers_whole_scope and (
-                    isinstance(item, SelectionEvidence) or len(members) == query.matched_count)),
+                "rows": rows, "total": total, "count_exact": count_exact,
+                "covers_whole_scope": covers,
                 "scope": _answer_scope(turn, query.origin),
                 "source_kind": item.origin.kind}
 

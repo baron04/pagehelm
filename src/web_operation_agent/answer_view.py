@@ -28,14 +28,12 @@ _WORDS = {
         "not_found_scope": "仅指本次查询过、且当前账号有权访问的范围，不代表整个系统中不存在",
         "capability_gap": "当前会话不支持这项操作，本次没有执行任何更改。",
         "partial": "已回答目前可以确认的部分",
-        "partial_why": "还无法确认",
         "gap": "缺口",
         "scope": "范围",
         "source_page": "来源：页面观察",
         "source_typed": "来源：应用的类型化读取",
         "source_computed": "来源：在本轮读到的数据上计算",
         "empty": "（该字段已读取，内容为空）",
-        "matched": "条符合",
         "subtotal": "小计（未覆盖全部范围）",
         "total": "合计",
     },
@@ -47,14 +45,12 @@ _WORDS = {
         "capability_gap": ("That operation is not supported in this session, "
                             "so it was not executed."),
         "partial": "Answered the part supported by current data",
-        "partial_why": "still not confirmed",
         "gap": "gap",
         "scope": "scope",
         "source_page": "source: page observation",
         "source_typed": "source: the application's typed read",
         "source_computed": "source: computed over what this turn read",
         "empty": "(read, and holds nothing)",
-        "matched": "matched",
         "subtotal": "subtotal (does not cover the whole scope)",
         "total": "total",
     },
@@ -170,9 +166,20 @@ def render(answer: VerifiedAnswer, *, user_text: str, max_chars: int,
     words = _WORDS[_language(user_text)]
     lines: list[str] = [action_text, ""] if action_text else []
 
-    for item in answer.conclusions:
-        lines.extend(_one(words, item, presentation=presentation))
+    items = answer.conclusions
+    index = 0
+    while index < len(items):
+        end = index
+        while end < len(items) and items[end]["kind"] == "field_value":
+            end += 1
+        if len({item["record_id"] for item in items[index:end]}) > 1:
+            lines.extend(_field_table(words, items[index:end]))
+            lines.append("")
+            index = end
+            continue
+        lines.extend(_one(words, items[index], presentation=presentation))
         lines.append("")
+        index += 1
 
     if answer.prose.strip():
         lines.append(answer.prose.strip())
@@ -181,8 +188,8 @@ def render(answer: VerifiedAnswer, *, user_text: str, max_chars: int,
     footer = []
     if answer.coverage != "complete":
         footer.append(f"> **{words['partial']}**")
-        for reason in answer.lowered_because:
-            footer.append(f"> - {words['partial_why']}: {_literal(reason)}")
+        for reason in _partial_reasons(words, answer):
+            footer.append(f"> - {reason}")
     text = "\n".join(lines + footer).strip()
     if len(text) <= max_chars:
         return text
@@ -199,6 +206,147 @@ def render(answer: VerifiedAnswer, *, user_text: str, max_chars: int,
             break
         kept.append(line)
     return "\n".join(kept).rstrip() + suffix
+
+
+def _selection_head(words: dict, item: dict) -> str:
+    """How many records meet the condition, how many are listed below, and -- for a search
+    by name -- whether a record of exactly that name is among them.
+
+    Not the condition itself: that is adapter query syntax ("customer_rank > 0"), and it stays
+    in the answer basis. Not the listed count presented as the matching count: a read limited
+    to 20 rows of 72 matches headlined "20 match". And not "a matching record exists" on the
+    strength of a search that matches parts of names: asked whether a customer existed, a
+    search for the first word of its name found six other customers and the answer said one
+    existed.
+    """
+    zh = words is _WORDS["zh"]
+    shown = item["matched"]
+    total = item.get("total", shown)
+    if item.get("count_exact", item["covers_whole_scope"]) and shown >= total:
+        count = f"共 {total} 条" if zh else f"{total} in total"
+    elif item.get("count_exact", False):
+        count = (f"共 {total} 条，下面列出其中 {shown} 条" if zh
+                 else f"{total} in total, {shown} listed below")
+    else:
+        count = (f"下面列出 {shown} 条，符合条件的总数未能确认" if zh
+                 else f"{shown} listed below; the total could not be confirmed")
+    if item.get("source_kind") == "computed":
+        # A computed selection's condition is the model's own filter over what was read --
+        # "date_order ge 2026-08-18" for "orders in the last month" -- and it is part of the
+        # answer: the reader needs the dates the list stands on.
+        applied = _readable_condition(str(item.get("condition") or ""), zh=zh)
+        if applied:
+            count += f"（筛选：{applied}）" if zh else f" (filter: {applied})"
+    looked_for = _literal(str(item.get("looked_for") or "").strip())
+    if not looked_for:
+        return f"**{count}**"
+    exact = item.get("exact_matches") or 0
+    if exact and exact == total:
+        return (f"**已存在匹配记录**：{looked_for}（{exact} 条）" if zh else
+                f"**{'Matching record' if exact == 1 else 'Matching records'} found**: "
+                f"{looked_for} ({exact})")
+    if exact:
+        return (f"**已存在匹配记录**：{looked_for}（{exact} 条）；与“{looked_for}”匹配的{count}"
+                if zh else
+                f"**{'Matching record' if exact == 1 else 'Matching records'} found**: "
+                f"{looked_for} ({exact}); records matching \"{looked_for}\": {count}")
+    return (f"**与“{looked_for}”匹配的记录**：{count}" if zh else
+            f"**Records matching \"{looked_for}\"**: {count}")
+
+
+_SYMBOLS = {"gt": ">", "ge": "≥", "lt": "<", "le": "≤", "eq": "=", "ne": "≠"}
+
+
+def _readable_condition(condition: str, *, zh: bool) -> str:
+    """A compute condition in the reader's notation: "amount_total gt 2000" as "amount_total
+    > 2000", "argmax(amount_total)" as the highest amount_total. Anything else as written."""
+    parts = []
+    for part in (piece.strip() for piece in condition.split(";")):
+        if not part:
+            continue
+        if match := re.fullmatch(r"(\S+) (gt|ge|lt|le|eq|ne) (.+)", part):
+            part = f"{match[1]} {_SYMBOLS[match[2]]} {match[3]}"
+        elif match := re.fullmatch(r"(\S+) in (.+)", part):
+            part = f"{match[1]} {'属于' if zh else 'in'} {match[2]}"
+        elif match := re.fullmatch(r"(argmax|argmin)\((\S+)\)", part):
+            highest = match[1] == "argmax"
+            part = (f"{match[2]} {'最大' if highest else '最小'}" if zh
+                    else f"{'highest' if highest else 'lowest'} {match[2]}")
+        parts.append(_literal(part))
+    return "；".join(parts) if zh else "; ".join(parts)
+
+
+def _partial_reasons(words: dict, answer: VerifiedAnswer) -> list[str]:
+    """What the answer does not cover, said to the reader.
+
+    `lowered_because` records the same facts for the ledger, in the terms the verifier
+    checks them in: adapter conditions and scope strings, in English whatever the reader's
+    language. Shown as they were, a Chinese answer ended with "customer_rank > 0 covered only
+    part of customers visible to the delegated user".
+    """
+    zh = words is _WORDS["zh"]
+    reasons = []
+    for item in answer.conclusions:
+        kind = item["kind"]
+        if kind == "undetermined":
+            reasons.append(f"{words['undetermined']}：{_literal(item['about'])}")
+        elif kind == "selection" and not item["covers_whole_scope"]:
+            rest = item.get("total", item["matched"]) - item["matched"]
+            if item.get("count_exact", False) and rest > 0:
+                reasons.append(
+                    f"其余 {rest} 条没有列出。可以加上条件缩小范围后再问，或到应用的列表页查看全部。"
+                    if zh else
+                    f"The other {rest} are not listed. Narrow the question, or open the list "
+                    "in the application to see them all.")
+            else:
+                reasons.append("列出的只是读取到的部分记录，可能还有其他记录符合条件。" if zh else
+                               "Only some of the records were read; others may match as well.")
+        elif kind == "aggregate" and not item["covers_whole_scope"]:
+            reasons.append("上面的计算只基于读取到的部分记录，不是整个范围的结果。" if zh else
+                           "The computation covers only the records that were read, not the "
+                           "whole scope.")
+        elif kind == "not_found" and not item["covers_whole_scope"]:
+            looked_for = _literal(item["looked_for"])
+            reasons.append(f"对“{looked_for}”的搜索只覆盖了部分范围。" if zh else
+                           f"The search for {looked_for} covered only part of the scope.")
+    return reasons or [_literal(reason) for reason in answer.lowered_because]
+
+
+def _field_table(words: dict, run: tuple[dict, ...]) -> list[str]:
+    """Field values of several records, one row per record.
+
+    Asked for last month's orders and their dates, the model cited each order's reference
+    and date as separate field values, and eight of them rendered as eight headed lines, each
+    with an internal id ("sale.order/13") and its own source line. The facts were right; the
+    answer was unreadable. A record's own name identifies its row when it is among the
+    fields; otherwise the record id has to.
+    """
+    zh = words is _WORDS["zh"]
+    records = list(dict.fromkeys(item["record_id"] for item in run))
+    fields = list(dict.fromkeys(item["field_name"] for item in run))
+    meaning = {}
+    for item in run:
+        meaning.setdefault(item["field_name"], item["field_meaning"])
+    cells = {(item["record_id"], item["field_name"]): item for item in run}
+    show_id = "name" not in fields
+    header = (["记录" if zh else "record"] if show_id else []) + [meaning[f] for f in fields]
+    rows = ["| " + " | ".join(_literal(x) for x in header) + " |",
+            "| " + " | ".join("---" for _ in header) + " |"]
+    for record in records:
+        values = [_literal(record)] if show_id else []
+        for field in fields:
+            item = cells.get((record, field))
+            if item is None:
+                values.append("—")
+            elif item["empty"]:
+                values.append(words["empty"])
+            else:
+                unit = f" {_literal(item['unit'])}" if item.get("unit") else ""
+                values.append(_literal(item["value"]) + unit)
+        rows.append("| " + " | ".join(values) + " |")
+    sources = dict.fromkeys(f"> {_source_line(words, item)} · {words['scope']}："
+                            f"{_literal(item['scope'])}" for item in run)
+    return [*rows, "", *sources]
 
 
 def _one(words: dict, item: dict, *, presentation: str) -> list[str]:
@@ -219,16 +367,7 @@ def _one(words: dict, item: dict, *, presentation: str) -> list[str]:
         return [f"**{_literal(item['field_meaning'])}**（{_literal(item['record_id'])}）：{shown}{unit}",
                 f"> {_source_line(words, item)} · {words['scope']}：{_literal(item['scope'])}"]
     if kind == "selection":
-        looked_for = str(item.get("looked_for") or "").strip()
-        if looked_for:
-            if words is _WORDS["zh"]:
-                head = f"**已存在匹配记录**：{_literal(looked_for)}（{item['matched']} 条）"
-            else:
-                noun = "record" if item["matched"] == 1 else "records"
-                head = (f"**Matching {noun} found**: {_literal(looked_for)} "
-                        f"({item['matched']})")
-        else:
-            head = f"**{_literal(item['condition'])}**：{item['matched']} {words['matched']}"
+        head = _selection_head(words, item)
         if item.get("fields"):
             rows = []
             if presentation != "list":

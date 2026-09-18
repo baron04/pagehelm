@@ -55,10 +55,11 @@ class AnswerWireContract(unittest.TestCase):
 
     def test_a_named_match_is_presented_as_an_existing_record_not_query_syntax(self):
         turn = _turn(scope="customers visible to the delegated user; state in draft,sent",
-                     looked_for="P73 Manual Acceptance")
+                     looked_for="P73 Manual Acceptance", records=(("res.partner/9", "1.00"),),
+                     exact_matches=1)
         answer = submit(turn, _draft("selection", "query#1"))
         text = render_payload(answer, user_text="检查这个客户是否存在", max_chars=2000)
-        self.assertIn("已存在匹配记录：P73 Manual Acceptance", text.replace("**", ""))
+        self.assertIn("已存在匹配记录：P73 Manual Acceptance（1 条）", text.replace("**", ""))
         self.assertNotIn("state in draft,sent", text)
         self.assertIn("state in draft,sent", answer["sources"][0]["scope"],
                       "the executed condition remains available in answer provenance")
