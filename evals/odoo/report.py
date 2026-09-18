@@ -1,24 +1,18 @@
 """Schema-fixed public report recomputed from P7.4 attempt-ledger status summaries.
 
-Input is the whole batch chain as ``ledger.read(path)[1]`` summaries, first batch first, the
-task metadata and, for a gated verdict, the frozen plan the batches must match. Output carries
-task ids, counts, digests and aggregates only: no prompts, record names, answer text, request
-ids or per-attempt timestamps.
+Input is one or more batches as ``ledger.read(path)[1]`` summaries, the task metadata and, for a
+gated verdict, the plan a batch must match: the header it declared before it ran. Each batch is
+reported on its own. Output carries task ids, counts, digests and aggregates only: no prompts,
+record names, answer text, request ids or per-attempt timestamps.
 
 Rules the report applies:
 
-* The chain is complete and unbroken. The first batch names no predecessor; every later batch
-  names the batch before it: its purpose, candidate, chain head and the reason it ended. In a
-  development chain a candidate follows itself only after an exogenous stop and never returns
-  once another candidate has run. A report over a chain that breaks these rules is refused.
-* A batch is gated only when no later batch supersedes it, it is COMPLETE, a frozen plan is
-  supplied, its purpose is the
-  plan's formal purpose, every bound digest in its header -- protocol, task-set seal, fixture
-  manifest, arm capabilities, candidate commit, provider configuration, runtime provider
-  binding and schedule -- equals
-  the plan, and its schedule covers exactly the thirty tasks of a formal batch. Every other
-  batch is ``descriptive_only`` and says why in ``verdict_basis``. A small or ad-hoc schedule
-  therefore cannot produce a screening verdict.
+* A batch is gated only when it is COMPLETE, a plan is supplied, its purpose is the plan's,
+  every bound digest in its header -- protocol, task-set seal, fixture manifest, arm
+  capabilities, candidate commit, provider configuration, runtime provider binding and
+  schedule -- equals the plan, and its schedule covers exactly the thirty tasks of the fixed
+  schedule. Every other batch is ``descriptive_only`` and says why in ``verdict_basis``. A small
+  or ad-hoc schedule therefore cannot produce a screening verdict.
 * Every scheduled slot is scored on one attempt (``outcomes.select_slot_attempt``) and earns
   one credit only through ``outcomes.slot_credit`` on a finished attempt. The denominator is
   every scheduled slot of the task class, so apparatus faults, unattempted slots and sealed
@@ -55,9 +49,8 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from . import outcomes, protocol, stats
-from .ledger import EXOGENOUS_STOPS
 
-REPORT_VERSION = 1
+REPORT_VERSION = 2
 REPORT_KIND = "p74_public_report"
 GATED_ARM = "woa_product"
 COMPARISON_ARM = "pageagent_browser_only"
@@ -83,7 +76,7 @@ CLAIMS = ("success_rate_proven", "engine_attribution", "non_inferiority")
 LIMITATIONS = (
     "provider_alias_is_not_a_model_snapshot",
     "results_hold_only_for_the_recorded_provider_alias_and_utc_window",
-    "canary_detects_some_drift_and_cannot_prove_unchanged_weights",
+    "model_string_check_detects_some_drift_and_cannot_prove_unchanged_weights",
     "synthetic_single_application_fixture",
     "screening_gate_is_not_a_reliability_proof",
     "balanced_by_stratum_only_not_by_locale_actor_or_turn_depth",
@@ -93,7 +86,7 @@ LIMITATIONS = (
     # credential. Named rather than left out, because a reader cannot infer it.
     "no_usage_export_so_absence_of_external_calls_is_unproven",
 )
-#: What a frozen plan fixes; a batch is gated only if its header matches every one of them.
+#: What a plan fixes; a batch is gated only if its header matches every one of them.
 PLAN_FIELDS = ("purpose", "protocol_digest", "task_set_seal_digest", "fixture_manifest_digest",
                "capability_digests", "candidate_commit", "provider_config_digest",
                "provider_binding_digest", "schedule_digest")
@@ -164,7 +157,6 @@ def _index_batch(summary: Any) -> dict[str, Any]:
     batch_id = header.get("batch_id")
     if not isinstance(batch_id, str):
         raise ValueError("batch summary has no batch id")
-    previous = header.get("previous_batch")
     attempts: dict[str, Mapping[str, Any]] = {}
     for attempt in _sequence(summary.get("attempts", []), "attempts"):
         if not isinstance(attempt, Mapping) or attempt.get("attempt_id") in attempts:
@@ -202,8 +194,6 @@ def _index_batch(summary: Any) -> dict[str, Any]:
     return {
         "batch_id": batch_id, "purpose": header.get("purpose"),
         "protocol_digest": header.get("protocol_digest"), "header": header,
-        "previous": previous if isinstance(previous, Mapping) else None,
-        "previous_batch_id": previous.get("batch_id") if isinstance(previous, Mapping) else None,
         "status": summary["status"], "seal_reason": summary.get("seal_reason"),
         "chain_head": summary.get("chain_head"), "cells": cells,
         "attempts": [attempt for cell in cells for attempt in cell["attempts"]],
@@ -214,71 +204,36 @@ def _candidate(batch: dict[str, Any]) -> Any:
     return (batch["header"].get("candidate") or {}).get("commit")
 
 
-def _verify_chain(indexed: list[dict[str, Any]]) -> None:
-    """Refuse a partial or broken chain, and a development candidate that reruns or returns."""
-    departed: set[Any] = set()
-    for position, batch in enumerate(indexed):
-        previous = batch["previous"]
-        if position == 0:
-            if previous is not None:
-                raise ValueError("a report starts from the first batch of its chain")
-            continue
-        prior = indexed[position - 1]
-        if prior["status"] == "OPEN":
-            raise ValueError("a batch can follow only a sealed or completed batch")
-        ended = prior["seal_reason"] if prior["status"] == "SEALED" else "batch_completed"
-        if (previous is None or batch["purpose"] != prior["purpose"]
-                or previous.get("batch_id") != prior["batch_id"]
-                or previous.get("purpose") != prior["purpose"]
-                or previous.get("candidate_commit") != _candidate(prior)
-                or previous.get("chain_head") != prior["chain_head"]
-                or previous.get("protocol_digest") != prior["protocol_digest"]
-                or previous.get("termination_reason") != ended):
-            raise ValueError("each batch must name the batch before it: its purpose, candidate, "
-                             "chain head and the reason it ended")
-        if batch["purpose"] != "development":
-            continue
-        if _candidate(batch) == _candidate(prior):
-            if ended not in EXOGENOUS_STOPS:
-                raise ValueError("a development candidate reran a batch that did not stop for "
-                                 "an exogenous reason")
-        else:
-            departed.add(_candidate(prior))
-            if _candidate(batch) in departed:
-                raise ValueError("a development candidate returned after another candidate ran")
-
-
 def _validated_plan(plan: Any) -> dict[str, Any]:
     if not isinstance(plan, Mapping) or set(plan) != set(PLAN_FIELDS):
-        raise ValueError("a frozen plan names exactly the bindings a gated batch must match")
-    if plan["purpose"] not in protocol.FORMAL_PURPOSES:
-        raise ValueError("a frozen plan is for a development or held-out batch")
+        raise ValueError("a plan names exactly the bindings a gated batch must match")
+    if plan["purpose"] not in protocol.POPULATIONS:
+        raise ValueError("a plan is for a development or held-out batch")
     for name in ("protocol_digest", "task_set_seal_digest", "fixture_manifest_digest",
                  "provider_config_digest", "provider_binding_digest", "schedule_digest"):
         if not isinstance(plan[name], str) or not _DIGEST.fullmatch(plan[name]):
-            raise ValueError(f"the frozen plan's {name} is not a digest")
+            raise ValueError(f"the plan's {name} is not a digest")
     capabilities = plan["capability_digests"]
     if (not isinstance(capabilities, Mapping) or GATED_ARM not in capabilities
             or any(arm not in ARMS or not isinstance(value, str) or not _DIGEST.fullmatch(value)
                    for arm, value in capabilities.items())):
-        raise ValueError("the frozen plan binds a capability digest per arm")
+        raise ValueError("the plan binds a capability digest per arm")
     if not isinstance(plan["candidate_commit"], str) or not re.fullmatch(
             r"[0-9a-f]{40}", plan["candidate_commit"]):
-        raise ValueError("the frozen plan names a full candidate commit")
+        raise ValueError("the plan names a full candidate commit")
     return dict(plan)
 
 
-def _gate_basis(batch: dict[str, Any], plan: dict[str, Any] | None, *,
-                superseded: bool) -> list[str]:
+def _gate_basis(batch: dict[str, Any], plan: dict[str, Any] | None) -> list[str]:
     """Why a batch may not be gated; an empty list means it may."""
     if plan is None:
-        return ["no_frozen_plan"]
-    basis = ["superseded"] if superseded else []
+        return ["no_plan"]
+    basis = []
     if batch["status"] != "COMPLETE":
         basis.append("batch_not_complete")
     header = batch["header"]
     if header.get("purpose") != plan["purpose"]:
-        basis.append("purpose_is_not_the_frozen_plan")
+        basis.append("purpose_is_not_the_plans")
     # Every arm the plan or the schedule names must carry the plan's capability digest.
     arms = sorted(set(plan["capability_digests"]) | {cell["arm"] for cell in batch["cells"]})
     capabilities = header.get("capability_digests") or {}
@@ -298,8 +253,8 @@ def _gate_basis(batch: dict[str, Any], plan: dict[str, Any] | None, *,
               if value != expected[name]]
     gated_cells = [cell for cell in batch["cells"] if cell["arm"] == GATED_ARM]
     tasks = {cell["task_id"] for cell in gated_cells}
-    if (len(tasks) != protocol.FORMAL_TASK_COUNT
-            or len(gated_cells) != protocol.FORMAL_TASK_COUNT * len(REPLICATES)):
+    if (len(tasks) != protocol.TASK_COUNT
+            or len(gated_cells) != protocol.TASK_COUNT * len(REPLICATES)):
         basis.append("not_the_fixed_thirty_task_schedule")
     return basis
 
@@ -473,7 +428,7 @@ def _primary_vs_replicate(cells: list[dict[str, Any]],
 
 
 def _batch_entry(batch: dict[str, Any], tasks: Mapping[str, Mapping[str, Any]],
-                 superseded: bool, basis: list[str],
+                 basis: list[str],
                  feedback: Mapping[str, Any] | None) -> dict[str, Any]:
     verdict_allowed = not basis
     # Feedback evidence belongs to one candidate and says nothing about any other.
@@ -494,9 +449,8 @@ def _batch_entry(batch: dict[str, Any], tasks: Mapping[str, Mapping[str, Any]],
     return {
         "batch_id": batch["batch_id"], "purpose": batch["purpose"],
         "protocol_digest": batch["protocol_digest"],
-        "previous_batch_id": batch["previous_batch_id"], "chain_head": batch["chain_head"],
+        "chain_head": batch["chain_head"],
         "status": batch["status"], "seal_reason": batch["seal_reason"],
-        "superseded": superseded,
         "verdict_status": "gated" if verdict_allowed else "descriptive_only",
         "verdict_basis": list(basis),
         "scheduled_slots": len(batch["cells"]),
@@ -508,8 +462,7 @@ def _batch_entry(batch: dict[str, Any], tasks: Mapping[str, Mapping[str, Any]],
 
 
 # -- cross-batch blocks ----------------------------------------------------------------------
-def _comparisons(batch: dict[str, Any], paired_task_ids: list[str],
-                 superseded: bool) -> list[dict[str, Any]]:
+def _comparisons(batch: dict[str, Any], paired_task_ids: list[str]) -> list[dict[str, Any]]:
     index = {(cell["arm"], cell["task_id"], cell["replicate"]): cell for cell in batch["cells"]}
     entries = []
     for replicate in REPLICATES:
@@ -530,7 +483,7 @@ def _comparisons(batch: dict[str, Any], paired_task_ids: list[str],
         difference, low, high = stats.newcombe_paired_difference_interval(a, b, c, d, CONFIDENCE)
         entries.append({
             "batch_id": batch["batch_id"], "purpose": batch["purpose"],
-            "superseded": superseded, "replicate": replicate, "scope": COMPARISON_SCOPE,
+            "replicate": replicate, "scope": COMPARISON_SCOPE,
             "arm_1": GATED_ARM, "arm_2": COMPARISON_ARM,
             "requested_tasks": len(paired_task_ids), "n_pairs": len(rows),
             "unpaired_tasks": unpaired, "a": a, "b": b, "c": c, "d": d,
@@ -544,8 +497,7 @@ def _comparisons(batch: dict[str, Any], paired_task_ids: list[str],
     return entries
 
 
-def _answer_task_results(batch: dict[str, Any], task_ids: list[str],
-                         superseded: bool) -> list[dict[str, Any]]:
+def _answer_task_results(batch: dict[str, Any], task_ids: list[str]) -> list[dict[str, Any]]:
     """Each arm's successes on the eligible answer tasks, counted apart and never paired."""
     index = {(cell["arm"], cell["task_id"], cell["replicate"]): cell for cell in batch["cells"]}
     entries = []
@@ -560,7 +512,7 @@ def _answer_task_results(batch: dict[str, Any], task_ids: list[str],
             continue
         entries.append({
             "batch_id": batch["batch_id"], "purpose": batch["purpose"],
-            "superseded": superseded, "replicate": replicate, "scope": ANSWER_SCOPE,
+            "replicate": replicate, "scope": ANSWER_SCOPE,
             "requested_tasks": len(task_ids), "arms": arms,
             "answer_visible_to_user": {GATED_ARM: True, COMPARISON_ARM: False},
             "paired": False, "interpretation": COMPARISON_INTERPRETATION,
@@ -614,7 +566,7 @@ def build_report(*, batches: list[dict[str, Any]], tasks: dict[str, dict[str, An
                  paired_task_ids: Sequence[str] = (),
                  answer_task_ids: Sequence[str] = (),
                  feedback: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Recompute the public P7.4 report from a whole batch chain, first batch first.
+    """Recompute the public P7.4 report from batch summaries, each reported on its own.
 
     ``paired_task_ids`` are the tasks the A/C comparison pairs, judged by their final page;
     ``answer_task_ids`` the eligible answer tasks, whose results are counted per arm and never
@@ -625,8 +577,7 @@ def build_report(*, batches: list[dict[str, Any]], tasks: dict[str, dict[str, An
     batch_ids = [batch["batch_id"] for batch in indexed]
     if len(set(batch_ids)) != len(batch_ids):
         raise ValueError("batch ids must be unique")
-    _verify_chain(indexed)
-    frozen = _validated_plan(plan) if plan is not None else None
+    planned = _validated_plan(plan) if plan is not None else None
     evidence = _validated_feedback(feedback)
     paired = list(dict.fromkeys(_sequence(paired_task_ids, "paired_task_ids")))
     answers = list(dict.fromkeys(_sequence(answer_task_ids, "answer_task_ids")))
@@ -637,15 +588,13 @@ def build_report(*, batches: list[dict[str, Any]], tasks: dict[str, dict[str, An
     scheduled = {cell["task_id"] for batch in indexed for cell in batch["cells"]}
     metadata = _task_metadata(tasks, scheduled | set(paired) | set(answers))
     entries, comparisons, answer_results = [], [], []
-    for position, batch in enumerate(indexed):
-        superseded = any(later["previous_batch_id"] == batch["batch_id"]
-                         for later in indexed[position + 1:])
-        basis = _gate_basis(batch, frozen, superseded=superseded)
-        entries.append(_batch_entry(batch, metadata, superseded, basis, evidence))
+    for batch in indexed:
+        basis = _gate_basis(batch, planned)
+        entries.append(_batch_entry(batch, metadata, basis, evidence))
         if not basis and paired:
-            comparisons.extend(_comparisons(batch, paired, superseded))
+            comparisons.extend(_comparisons(batch, paired))
         if not basis and answers:
-            answer_results.extend(_answer_task_results(batch, answers, superseded))
+            answer_results.extend(_answer_task_results(batch, answers))
     return {
         "artifact_version": REPORT_VERSION, "kind": REPORT_KIND, "batches": entries,
         "safety": _safety(indexed), "comparisons": comparisons,

@@ -1,16 +1,14 @@
-"""Which commit an evaluation image or a freeze describes, and whether the checkout proves it.
+"""Which commit an evaluation image describes, and whether the checkout proves it.
 
-A formal batch has to show that the Agent it ran is the frozen candidate. The Agent image is
-built only from a clean checkout and labels itself with that checkout's full commit
+A batch has to show that the Agent it ran is the candidate it names. The Agent image is built
+only from a clean checkout and labels itself with that checkout's full commit
 (``org.opencontainers.image.revision``); every later check compares the label with the clean
-checkout it runs from. Freeze records read apparatus files from the commit itself rather than
-from the working tree, so an edit made after a freeze cannot change what the freeze bound.
+checkout it runs from.
 """
 from __future__ import annotations
 
 import re
 import subprocess
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -62,71 +60,6 @@ def commit_exists(repository: Path, commit: str) -> bool:
     return completed.returncode == 0
 
 
-def file_at(repository: Path, commit: str, path: str) -> bytes:
-    """The bytes of ``path`` as committed in ``commit``; a path absent there is an error."""
-    if not commit_exists(repository, commit):
-        raise RevisionError(f"commit {commit[:12]} does not exist in {repository}")
-    try:
-        return _git(repository, "show", f"{commit}:{path}")
-    except RevisionError as exc:
-        raise RevisionError(f"{path} is not in commit {commit[:12]}") from exc
-
-
-def committed_once(repository: Path, path: str) -> str:
-    """The one commit that recorded ``path`` as a regular file, provided nothing has changed it
-    since.
-
-    A record edited by a later commit or in the working tree no longer shows what was decided
-    at the commit that recorded it, so both are refused. So is a record committed as a symbolic
-    link: what it points at can change while git sees no change to the record.
-    """
-    commits = _git(repository, "log", "--format=%H", "--", path).decode().split()
-    if len(commits) != 1:
-        raise RevisionError(f"{path} must be committed exactly once and never changed")
-    commit = require_commit(commits[0], path)
-    entry = _git(repository, "ls-tree", commit, "--", path).decode().split()
-    if not entry or entry[0] != "100644" or (Path(repository) / path).is_symlink():
-        raise RevisionError(f"{path} must be committed as a regular file")
-    if _git(repository, "status", "--porcelain", "--untracked-files=normal", "--", path).strip():
-        raise RevisionError(f"{path} differs from the commit that recorded it")
-    return commit
-
-
-def commit_path(repository: Path, path: str, message: str) -> str:
-    """Commit exactly ``path``, leaving anything else staged untouched, and return the commit."""
-    _git(repository, "add", "--", path)
-    _git(repository, "commit", "-q", "--only", "-m", message, "--", path)
-    return committed_once(repository, path)
-
-
-def path_history(repository: Path, directory: str) -> list[tuple[str, str, str]]:
-    """Every change under ``directory`` as ``(commit, status, path)``, oldest commit first in
-    topological order, so the order cannot be chosen by any timestamp. The full history is read,
-    and the directory is matched whatever its letter case: a merge that keeps one side's tree does
-    not hide a change made on the other side, nor does a path spelled in other letters."""
-    raw = _git(repository, "log", "--reverse", "--topo-order", "--no-renames", "--full-history",
-               "--format=commit %H", "--name-status", "--", f":(icase){directory}").decode()
-    changes, commit = [], None
-    for line in raw.splitlines():
-        if line.startswith("commit "):
-            commit = require_commit(line[7:], "commit")
-        elif line.strip() and commit is not None:
-            status, _, path = line.partition("\t")
-            changes.append((commit, status, path))
-    return changes
-
-
-def first_parent_commits(repository: Path) -> set[str]:
-    """The commits on HEAD's first-parent line: the main line, without what merges brought in."""
-    return set(_git(repository, "rev-list", "--first-parent", "HEAD").decode().split())
-
-
-def commit_time(repository: Path, commit: str) -> datetime:
-    """When ``commit`` was committed, as an aware timestamp."""
-    value = _git(repository, "show", "-s", "--format=%cI", require_commit(commit)).decode()
-    return datetime.fromisoformat(value.strip())
-
-
 def is_ancestor(repository: Path, commit: str, descendant: str) -> bool:
     """Whether ``commit`` is ``descendant`` itself or in its history."""
     for value in (commit, descendant):
@@ -140,21 +73,10 @@ def is_ancestor(repository: Path, commit: str, descendant: str) -> bool:
     return completed.returncode == 0
 
 
-def blob_ids_at(repository: Path, commit: str, paths: list[str]) -> dict[str, str | None]:
-    """The git blob id of each path as committed in ``commit``, or None where it is absent."""
-    if not commit_exists(repository, commit):
-        raise RevisionError(f"commit {commit[:12]} does not exist in {repository}")
-    found: dict[str, str] = {}
-    for line in _git(repository, "ls-tree", "-r", commit, "--", *paths).decode().splitlines():
-        meta, _, path = line.partition("\t")
-        found[path] = meta.split()[2]
-    return {path: found.get(path) for path in paths}
-
-
-def content_blob_ids(repository: Path, paths: list[str]) -> dict[str, str | None]:
-    """The git blob id each path's current content has, or None where the file is missing."""
-    present = [path for path in paths if (Path(repository) / path).is_file()]
-    ids = (_git(repository, "hash-object", "--no-filters", "--", *present).decode().split()
-           if present else [])
-    values = dict(zip(present, ids))
-    return {path: values.get(path) for path in paths}
+def changed_between(repository: Path, commit: str, descendant: str, prefix: str) -> list[str]:
+    """The paths under ``prefix`` that differ between two commits."""
+    for value in (commit, descendant):
+        if not commit_exists(repository, value):
+            raise RevisionError(f"commit {value[:12]} does not exist in {repository}")
+    return _git(repository, "diff", "--name-only", commit, descendant, "--",
+                prefix).decode().split()

@@ -476,10 +476,9 @@ class Driver:
                 gateway_terminal=gateway_ending, provider_record_in_turn=in_turn,
                 unclosed_turns=unclosed)
         except outcomes.OutcomeContractError:
-            # The review of 8c4025d: this fallback replaced the judgement with a bare FAIL and
-            # dropped the safety events it held, which the protocol counts whatever the other
-            # axes say. It keeps them now, so a branch nothing reaches today would not lose a
-            # fact if it ever did.
+            # The fallback keeps the judgement's safety events, which the protocol counts whatever
+            # the other axes say, so a branch nothing reaches today would not lose a fact if it
+            # ever did.
             classification = outcomes.classify(
                 product_started=product_started, dispatch_state=projected["dispatch_state"],
                 runner_terminal="classification_input_missing", apparatus_events=events,
@@ -770,12 +769,11 @@ class Driver:
         last = summary["attempts"][-1]
         if summary["disposition"] == "must_seal":
             return self._seal(summary["pending_seal"])
-        # Both reviews of 8c4025d found this: the disposition was read once, at the top, and the
-        # replacement then branched on `pending_seal` alone. An attempt that leaves a call
-        # nobody settled holds the batch without owing a seal, and the replacement was started
-        # into a ledger that refuses it. The attempt just changed what the batch may do, so the
-        # question is asked again; the entry that resumes the batch runs the replacement its
-        # slot is owed once the bill accounts for that call.
+        # The attempt just changed what the batch may do, so the disposition is read again
+        # rather than branching on `pending_seal` alone: an attempt that leaves a call nobody
+        # settled holds the batch without owing a seal, and a replacement started then would go
+        # into a ledger that refuses it. The entry that resumes the batch runs the replacement
+        # its slot is owed once the bill accounts for that call.
         if summary["disposition"] == "running" and last["replacement_eligible"]:
             follow = replacement or AttemptPlan(
                 slot=plan.slot, runner_input=plan.runner_input,
@@ -827,10 +825,10 @@ def agent_assertions(start: dict[str, Any] | None, end: dict[str, Any] | None,
     residue += [f"agent_residue:{key}" for key in ("active_sessions", "unresolved_mutations")
                 if end[key]]
     if record["open_proposals"]:
-        # The review of 753817e: an audit nobody could export was passed here as an empty one,
-        # so every proposal the product had prepared counted as still open and a reset that
-        # could only be undecided was published as a failure. A proposal nobody read the
-        # closure of is unasserted, which is what the reset says.
+        # An audit nobody could export is not an empty one: read as one, every proposal the
+        # product prepared would count as still open, and a reset that can only be undecided
+        # would read as a failure. A proposal nobody read the closure of is unasserted, which is
+        # what the reset says.
         residue.append("agent_residue:open_proposals" if audit_observed
                        else "agent_audit_unreadable")
     return record, residue
@@ -878,9 +876,9 @@ def _final_page(artifact: dict[str, Any], scope: dict[str, Any]) -> capture.Capt
 
 def _trace_counts(projected: dict[str, Any], *, whole: bool) -> dict[str, int | None]:
     """The counts the projected trace supports. A trace nobody could read supports none of
-    them, and neither does one read in part: the review of 6376c20 found the completeness of a
-    capture recorded and never consumed, so a truncated export counted what it happened to show
-    as what the attempt did. They are recorded as unknown, never as an attempt that did no work.
+    them, and neither does one read in part: a truncated export would count what it happened to
+    show as what the attempt did. They are recorded as unknown, never as an attempt that did no
+    work.
     """
     return {name: (projected[name] if whole else None) for name in
             ("page_actions", "invalid_page_actions", "business_calls", "repeated_observations")}

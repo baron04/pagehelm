@@ -59,10 +59,9 @@ class AgentAssertionTests(unittest.TestCase):
         self.assertEqual(_with_residue("PASS", residue), "FAIL")
 
     def test_an_audit_nobody_read_leaves_a_proposal_unasserted_not_open(self):
-        """The review of 753817e: an audit that could not be exported was passed here as an
-        empty one, so every proposal the product had prepared counted as still open and the
-        reset -- which could only be undecided -- was published as a failure. The published
-        reset axis counts INDETERMINATE and FAIL separately."""
+        """An audit that could not be exported is not an empty one: every proposal the product
+        prepared would count as still open, and the reset -- which can only be undecided -- would
+        read as a failure. The published reset axis counts INDETERMINATE and FAIL separately."""
         end = {**EMPTY, "prepared_proposals": ["p1"], "conversation_rows": 1}
         record, residue = agent_assertions(EMPTY, end, [], product_started=True,
                                            audit_observed=False)
@@ -114,8 +113,8 @@ class FinalTurnRequestTests(unittest.TestCase):
     def test_the_last_turn_made_the_requests_after_the_turn_before_it(self):
         self.assertEqual(final_turn_requests({0: 1, 1: 3}, 2), (1, 3))
         self.assertEqual(final_turn_requests({0: 2}, 1), (0, 2))
-        # The review of 8574cb0: a last turn that never reported ending has no provable span,
-        # whatever the attempt requested in all.
+        # A last turn that never reported ending has no provable span, whatever the attempt
+        # requested in all.
         self.assertIsNone(final_turn_requests({0: 1}, 2))
         self.assertIsNone(final_turn_requests({}, 1))
         # Nor has one whose preceding turn never reported ending.
@@ -188,8 +187,8 @@ class ScoredTerminalTests(unittest.TestCase):
             with self.subTest(ending=stopped_ending):
                 self.assertEqual(scored_terminal(stopped_ending, nothing, "turn_wall",
                                                  stopped=True), "wall_clock_budget")
-                # The reviews of 582e11c: a turn that ended by itself before the attempt ran out
-                # of time keeps its own ending, so the classification still sees it.
+                # A turn that ended by itself before the attempt ran out of time keeps its own
+                # ending, so the classification still sees it.
                 self.assertEqual(scored_terminal(stopped_ending, nothing, "attempt_automatic_wall"),
                                  stopped_ending)
         self.assertEqual(scored_terminal("terminal_nobody_mapped", nothing, "turn_wall",
@@ -202,8 +201,8 @@ if __name__ == "__main__":
 
 class TraceCountTests(unittest.TestCase):
     def test_a_trace_read_in_part_counts_nothing(self):
-        """The review of 6376c20: a capture's completeness was recorded and never read, so an
-        export that showed three of five turns counted three turns' work as the attempt's."""
+        """A capture's completeness is read: an export that showed three of five turns does not
+        count three turns' work as the attempt's."""
         projected = {"page_actions": 3, "invalid_page_actions": 0, "business_calls": 2,
                      "repeated_observations": 1}
         self.assertEqual(_trace_counts(projected, whole=True), projected)

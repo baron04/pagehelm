@@ -28,8 +28,8 @@ more.
 
 Every backend names what it answers from: a provider id, a normalized endpoint digest and a
 credential identity digest. Together with the requested alias and the request contract, that is
-the runtime provider binding a preflight, a batch header and every attempt must share, so a
-changed endpoint or key can never reuse an earlier preflight. No key text leaves the backend.
+the runtime provider binding a batch header and every attempt must share, so an open batch
+never resumes under a changed endpoint or key. No key text leaves the backend.
 """
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ from typing import Any
 
 from evals.twenty.evaluator import digest_json
 
-from . import canary, ledger
+from . import ledger
 
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
@@ -420,9 +420,16 @@ def _timed_out(exc: BaseException) -> bool:
             or isinstance(reason, (TimeoutError, socket.timeout)))
 
 
-#: One definition of what a model string is, shared with the preflight that records it: two
-#: normalisations of the same string were read as two models.
-_reported_model = canary.model_string
+def _reported_model(value: Any) -> str | None:
+    """A provider's model string as this apparatus compares it, or null if it is not one.
+
+    The definition lives in the product the apparatus measures, and this reads it rather than
+    restating it: a second definition here once recorded as good a padded answer the product
+    could not spend against.
+    """
+    from web_operation_agent.model import reported_model_string
+
+    return reported_model_string(value)
 
 
 def _response_contract(status: int, request_id: str, reported: str | None = None) -> BackendResult:

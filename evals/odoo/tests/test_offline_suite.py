@@ -1,9 +1,8 @@
 """The sharded runner accounts for every test it was asked to run.
 
-The review of 3e70e79: comparing only how many tests the shards reported would let a shard that
-skipped one and a shard that repeated another cancel out. What the runner refuses is checked
-here against made-up shard results, so the accounting is tested without running a suite inside a
-suite.
+Comparing only how many tests the shards reported would let a shard that skipped one and a shard
+that repeated another cancel out. What the runner refuses is checked here against made-up shard
+results, so the accounting is tested without running a suite inside a suite.
 """
 from __future__ import annotations
 
@@ -51,8 +50,8 @@ class AccountingTests(unittest.TestCase):
         self.assertEqual(self.outcome(ids, [(["a", "c"], []), (["b", "b"], [])]), 2)
 
     def test_a_skipped_test_is_refused_rather_than_counted_as_run(self):
-        """The review of 6376c20: unittest starts a skipped test and calls the run successful,
-        so a prerequisite nobody had would have been reported as a suite that passed."""
+        """unittest starts a skipped test and calls the run successful, so a skip is refused:
+        a prerequisite nobody had would otherwise be reported as a suite that passed."""
         ids = ["a", "b"]
         self.assertEqual(self.outcome(ids, [(["a"], []), (["b"], ["b"])]), 2)
 

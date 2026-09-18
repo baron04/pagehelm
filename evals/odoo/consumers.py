@@ -131,7 +131,7 @@ CONSUMERS: dict[str, tuple[Consumer, ...]] = {
                  "its calls have"),
         Consumer("evals/odoo/driver.py", "_cost",
                  "the attempt's cost, where a call with no answer is usage unavailable"),
-        Consumer("evals/odoo/formal.py", "unaccounted_calls",
+        Consumer("evals/odoo/batch.py", "owed",
                  "which calls the bill must account for before any later paid call"),
     ),
 }
@@ -140,10 +140,9 @@ CONSUMERS: dict[str, tuple[Consumer, ...]] = {
 #: yields an empty value reads the same to a static check whether it fills in a missing
 #: observation or states a fact, so each one is written down here and the check exempts these
 #: functions from that one rule only -- `or []` and `.get(name, [])` stay forbidden everywhere.
-#: Each entry names the expression it exempts, not the function around it. The review of 6376c20:
-#: one reason covered a whole function, so the three other substitutions written in it -- one of
-#: them the line that carried the previous round's blocking defect -- were exempted by a reason
-#: about none of them. An expression that is rewritten stops matching and must be justified again.
+#: Each entry names the expression it exempts, not the function around it: a reason that covered a
+#: whole function would also exempt every other substitution written in it, about none of which it
+#: says anything. An expression that is rewritten stops matching and must be justified again.
 DELIBERATE_SUBSTITUTIONS = (
     ("evals/odoo/evaluator.py", "_text", "'' if answer is None else str(answer)",
      "A turn the runner stopped, or one whose bridge never returned, shows no answer at all. "

@@ -1,12 +1,11 @@
 import json
 import os
-import shutil
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from evals.odoo import canary, gateway, ledger, outcomes
+from evals.odoo import gateway, ledger, outcomes
 from evals.odoo.outcomes import ApparatusEvent, Evaluation, classify
 
 DIGEST = "sha256:" + "a" * 64
@@ -31,17 +30,14 @@ def metrics(attempt_id, wall_ms=1200):
             "user_turns": 1}
 
 
-def header(slot_list, *, previous=None, protocol=DIGEST, purpose="development", seed="0" * 32,
-           **changes):
-    value = {"batch_id": "batch-001", "protocol_id": "p74-odoo-v1", "protocol_digest": protocol,
+def header(slot_list, *, protocol=DIGEST, purpose="development", seed="0" * 32, **changes):
+    value = {"batch_id": "batch-001", "protocol_id": "p74-odoo-v2", "protocol_digest": protocol,
              "schedule_digest": ledger.schedule_digest(slot_list), "purpose": purpose,
-             "provider_config_digest": DIGEST, "slots": slot_list, "previous_batch": previous,
+             "provider_config_digest": DIGEST, "slots": slot_list,
              "task_set_seal_digest": DIGEST,
              "fixture": {"manifest_digest": DIGEST, "baseline_guard_digest": OTHER},
              "capability_digests": {"pageagent_browser_only": DIGEST, "woa_product": DIGEST},
-             "candidate": CANDIDATE, "schedule_seed": seed, "provider_binding_digest": DIGEST,
-             "ledger_contract_digest": ledger.LEDGER_CONTRACT_DIGEST,
-             "preflight_model": None}
+             "candidate": CANDIDATE, "schedule_seed": seed, "provider_binding_digest": DIGEST}
     return {**value, **changes}
 
 
@@ -164,7 +160,7 @@ class LifecycleTests(unittest.TestCase):
         ledger.append(harness.path, "attempt_outcome", {
             "attempt_id": attempt, **PASS.as_record(), "evaluation_digest": None,
             "truth_digest": None})
-        # The review of 582e11c: a response after the outcome made the costed calls disagree.
+        # A response after the outcome would make the costed calls disagree.
         with self.assertRaisesRegex(ledger.LedgerError, "precede the attempt's outcome"):
             ledger.append(harness.path, "model_response_received", {
                 "attempt_id": attempt, "request_seq": 1, "status": "ok", "http_status": 200,
@@ -328,8 +324,8 @@ class AgentStateTests(unittest.TestCase):
 
 class MandatorySealTests(unittest.TestCase):
     def test_an_attempt_must_seal_for_the_most_serious_reason_it_names(self):
-        """The review of 3e70e79: the attempt chose one reason and the ledger saw only that one,
-        so the batch's reason followed whichever fault the driver recorded first."""
+        """The ledger sees every reason the attempt names, not only the one it chose, so the
+        batch's reason does not follow whichever fault the driver recorded first."""
         harness = LedgerHarness(self, slots(2))
         attempt = harness.start("s000")
         outcome = classify(product_started=True, dispatch_state="none",
@@ -356,9 +352,9 @@ class MandatorySealTests(unittest.TestCase):
                          ["request_contract_violation", "accounting_failure"])
 
     def test_a_call_whose_cost_is_unknown_holds_the_batch_until_the_bill_accounts_for_it(self):
-        """The reviews of 6376c20: the entry checked reconciliation once, before the batch, so a
-        call left unresolved in the fifth attempt did not stop the other fifty-five. The cost of
-        a paid call is unknown until the bill says, and a batch that owes one makes no more."""
+        """The cost of a paid call is unknown until the bill says, and a batch that owes one
+        makes no more: a call left unresolved in the fifth attempt stops the other fifty-five,
+        not only a check made once before the batch."""
         harness = LedgerHarness(self, slots(2))
         attempt = harness.start("s000")
         request = {"attempt_id": attempt, "request_seq": 1, "body_digest": DIGEST,
@@ -420,70 +416,49 @@ class MandatorySealTests(unittest.TestCase):
         self.assertEqual(summary["cost_unknown"], [f"{attempt}#1"])
 
     def test_a_seal_the_batch_was_told_to_take_joins_the_reasons_it_met(self):
-        """The review of 6376c20: a reason given to `batch_sealed` rather than met by an attempt
-        -- an operator's stop -- ended the batch without joining `seal_reasons`, so the summary
-        named a seal its own fact set did not hold."""
+        """A reason given to `batch_sealed` rather than met by an attempt -- an operator's stop
+        -- joins `seal_reasons`, so the summary never names a seal its own facts do not hold."""
         harness = LedgerHarness(self, slots(2))
         harness.finish(harness.start("s000"), PASS)
         summary = ledger.append(harness.path, "batch_sealed", {"reason": "operator_stop"})
         self.assertEqual((summary["seal_reason"], summary["seal_reasons"]),
                          ("operator_stop", ["operator_stop"]))
 
-    def test_a_model_the_preflight_never_saw_is_named_even_when_a_graver_reason_seals(self):
-        """The review of 83b6a87: the drift was compared after the attempt, by the entry, so a
-        batch already sealed for a safety event never recorded it at all. The ledger is told what
-        the preflight saw and marks the drift where the answer arrives, so the batch still seals
-        for the gravest reason and still names this one among those it met."""
-        harness = LedgerHarness(self, slots(2), preflight_model="qwen3.8-flash")
+    def test_a_second_model_string_is_named_even_when_a_graver_reason_seals(self):
+        """The ledger marks the drift where the answer arrives, so a batch that seals for a
+        graver reason still names this one among those it met."""
+        harness = LedgerHarness(self, slots(2))
         attempt = harness.start("s000")
-        harness.model_call(attempt, 1, model="alien-model")
+        harness.model_call(attempt, 1, model="scripted-model")
+        harness.model_call(attempt, 2, model="alien-model")
         graver = classify(product_started=True, dispatch_state="none",
                           runner_terminal="completed",
                           evaluation=Evaluation("FAIL", decisive=True,
                                                 safety_events=("unauthorized_dispatch",)))
-        summary = harness.finish(attempt, graver, calls=1)
+        summary = harness.finish(attempt, graver, calls=2)
         self.assertEqual(summary["pending_seal"], "critical_safety_event")
         self.assertEqual(summary["seal_reasons"],
                          ["critical_safety_event", "model_identity_changed"])
-        self.assertEqual(summary["preflight_model"], "qwen3.8-flash")
         # It seals for the gravest, and the drift is on the record either way.
         sealed = ledger.append(harness.path, "batch_sealed",
                                {"reason": "critical_safety_event"})
         self.assertEqual(sealed["seal_reason"], "critical_safety_event")
         self.assertIn("model_identity_changed", sealed["seal_reasons"])
 
-    def test_a_batch_no_preflight_precedes_takes_its_identity_from_its_own_first_answer(self):
+    def test_a_batch_takes_its_model_identity_from_its_own_first_answer(self):
         harness = LedgerHarness(self, slots(2))
         attempt = harness.start("s000")
         harness.model_call(attempt, 1, model="scripted-model")
         summary = ledger.read(harness.path)[1]
-        self.assertIsNone(summary["preflight_model"])
         self.assertEqual(summary["provider_model"], "scripted-model")
         self.assertEqual(summary["seal_reasons"], [])
 
-    def test_a_padded_model_string_is_the_same_model_to_the_preflight_and_the_ledger(self):
-        """The review of 7727fc6: the preflight kept what the provider sent and the gateway
-        recorded it stripped, so a provider padding its model string passed the preflight under
-        one spelling and was read as a drift from it on the first formal answer -- sealing a
-        batch that should have run on, and changing the attempts and cost the report publishes."""
-        harness = LedgerHarness(self, slots(2), preflight_model=canary.model_string(
-            " qwen3.8-flash "))
-        attempt = harness.start("s000")
-        harness.model_call(attempt, 1, model="qwen3.8-flash")
-        summary = ledger.read(harness.path)[1]
-        self.assertEqual(summary["preflight_model"], "qwen3.8-flash")
-        self.assertEqual(summary["seal_reasons"], [])
-        self.assertIsNone(summary["pending_seal"])
-        # The two sides of the comparison answer to one definition.
-        self.assertIs(gateway._reported_model, canary.model_string)
-
     def test_the_apparatus_and_the_product_it_measures_read_one_model_string(self):
-        """The review of d82230d: the apparatus had its own answer to what a model string is and
-        the product kept a second one, bounding the padded string rather than the string. A name
-        of the maximum length arrived padded: the preflight qualified it, the gateway recorded it
-        as good and spent against it, and the real client refused the same payload as
-        `provider_usage` -- turning an answer the apparatus had already accepted into a product
-        failure, and a gateway record the classification contract cannot explain.
+        """The apparatus and the product answer to one definition of a model string. With two,
+        one bounding the padded string rather than the string, a name of the maximum length
+        arriving padded would be recorded as good by the gateway and refused by the real client
+        as `provider_usage` -- an answer the apparatus accepted turned into a product failure,
+        and a gateway record the classification contract cannot explain.
 
         The rule is now written once, in the product; the apparatus reads it rather than
         restating it. The table walks the boundary in both directions through both callers, so
@@ -503,7 +478,7 @@ class MandatorySealTests(unittest.TestCase):
                           ("", None),
                           (None, None)):
             with self.subTest(raw=raw):
-                self.assertEqual(canary.model_string(raw), kept)
+                self.assertEqual(gateway._reported_model(raw), kept)
                 self.assertEqual(reported_model_string(raw), kept)
                 if isinstance(raw, str):
                     # The evaluator foundations may not import the product, so they require
@@ -545,8 +520,8 @@ class MandatorySealTests(unittest.TestCase):
                           "reasoning_tokens": 0}, "cost_cny": 0.0, "error_code": None})
 
     def test_a_batch_seals_for_the_most_serious_reason_it_met_not_the_first(self):
-        """The design review of 102c2f4: the reason a batch sealed for was whichever arrived
-        first, so the timing of a provider answer could outrank what the product did."""
+        """A batch seals for the most serious reason it met, not whichever arrived first, so the
+        timing of a provider answer cannot outrank what the product did."""
         harness = LedgerHarness(self, slots(2))
         attempt = harness.start("s000")
         harness.model_call(attempt, 1, model="first")
@@ -594,8 +569,8 @@ class MandatorySealTests(unittest.TestCase):
             other.start("s000")
 
     def test_a_call_settles_exactly_once_and_an_attempt_ends_only_when_all_of_them_have(self):
-        """The design review of 102c2f4: a call whose answer had not arrived was left for a
-        record the ledger would no longer take. Each one settles once, before the attempt ends."""
+        """A call whose answer has not arrived is not left for a record the ledger would no
+        longer take. Each one settles once, before the attempt ends."""
         harness = LedgerHarness(self, slots(2))
         attempt = harness.start("s000")
         for seq in (1, 2):
@@ -758,83 +733,7 @@ def link(*, purpose="development", protocol=DIGEST, candidate=CANDIDATE,
             "termination_reason": reason, "continuation_record": record}
 
 
-class BatchChainTests(unittest.TestCase):
-    def outcome(self, **header_changes):
-        with tempfile.TemporaryDirectory() as directory:
-            try:
-                ledger.create(Path(directory) / "batch.jsonl", header(slots(1), **header_changes))
-            except ledger.LedgerError:
-                return "refused"
-            return "allowed"
-
-    def test_a_new_development_candidate_follows_any_finished_batch(self):
-        for reason in ("batch_completed", "critical_safety_event", "reset_failed", "operator_stop",
-                       "model_identity_changed"):
-            with self.subTest(reason=reason):
-                self.assertEqual(self.outcome(previous=link(reason=reason),
-                                              candidate=NEW_CANDIDATE), "allowed")
-
-    def test_the_same_development_candidate_continues_only_after_an_exogenous_stop(self):
-        expected = {"batch_completed": "refused", "critical_safety_event": "refused",
-                    "operator_stop": "refused", "request_contract_violation": "refused",
-                    "model_identity_changed": "allowed", "replacement_cap_exceeded": "allowed",
-                    "provider_authentication_failed": "allowed", "accounting_failure": "allowed"}
-        for reason, outcome in expected.items():
-            with self.subTest(reason=reason):
-                record = OTHER if reason == "accounting_failure" else None
-                self.assertEqual(self.outcome(previous=link(reason=reason, record=record)),
-                                 outcome)
-        self.assertEqual(self.outcome(previous=link(), protocol=OTHER), "refused")
-
-    def test_an_unaccounted_call_is_followed_only_with_its_bill_reconciliation(self):
-        for candidate in (CANDIDATE, NEW_CANDIDATE):
-            with self.subTest(candidate=candidate["commit"][:1]):
-                self.assertEqual(self.outcome(previous=link(reason="accounting_failure"),
-                                              candidate=candidate), "refused")
-                self.assertEqual(self.outcome(previous=link(reason="accounting_failure",
-                                                            record=OTHER), candidate=candidate),
-                                 "allowed")
-        # No other ending carries a continuation record.
-        self.assertEqual(self.outcome(previous=link(reason="model_identity_changed",
-                                                    record=OTHER)), "refused")
-
-    def test_heldout_batches_keep_the_strict_protocol_rule(self):
-        heldout = {"purpose": "heldout", "candidate": NEW_CANDIDATE}
-        self.assertEqual(self.outcome(previous=link(purpose="heldout"), **heldout), "refused")
-        self.assertEqual(self.outcome(previous=link(purpose="heldout"), protocol=OTHER, **heldout),
-                         "allowed")
-        for reason in ("model_identity_changed", "replacement_cap_exceeded"):
-            with self.subTest(reason=reason):
-                self.assertEqual(self.outcome(previous=link(purpose="heldout", reason=reason),
-                                              **heldout), "allowed")
-
-    def test_a_heldout_restart_after_a_refused_credential_or_unaccounted_call_needs_its_audit(self):
-        heldout = {"purpose": "heldout", "candidate": NEW_CANDIDATE}
-        for reason in ("provider_authentication_failed", "accounting_failure"):
-            with self.subTest(reason=reason):
-                self.assertEqual(self.outcome(previous=link(purpose="heldout", reason=reason),
-                                              **heldout), "refused")
-                self.assertEqual(self.outcome(previous=link(purpose="heldout", reason=reason,
-                                                            record=OTHER), **heldout), "allowed")
-        # A new protocol version needs no audit after a refused credential, and a qualification
-        # batch starts again after any exogenous stop without one.
-        self.assertEqual(self.outcome(previous=link(purpose="heldout",
-                                                    reason="provider_authentication_failed"),
-                                      protocol=OTHER, **heldout), "allowed")
-        qualification = {"purpose": "apparatus_qualification", "seed": None,
-                         "candidate": NEW_CANDIDATE}
-        self.assertEqual(self.outcome(previous=link(purpose="apparatus_qualification",
-                                                    reason="provider_authentication_failed"),
-                                      **qualification), "allowed")
-
-    def test_a_link_names_its_purpose_candidate_and_ending(self):
-        partial = {key: value for key, value in link().items() if key != "candidate_commit"}
-        for label, previous in {"other_purpose": link(purpose="heldout"), "no_candidate": partial,
-                                "unknown_ending": link(reason="lunch_break")}.items():
-            with self.subTest(label=label):
-                self.assertEqual(self.outcome(previous=previous, candidate=NEW_CANDIDATE),
-                                 "refused")
-
+class CompletionTests(unittest.TestCase):
     def test_completion_needs_every_slot(self):
         harness = LedgerHarness(self, slots(2))
         harness.finish(harness.start("s000"), PASS)
@@ -842,123 +741,29 @@ class BatchChainTests(unittest.TestCase):
             ledger.append(harness.path, "batch_completed", {})
 
 
-class LedgerContractTests(unittest.TestCase):
-    def test_a_ledger_written_under_another_contract_is_refused_whole_and_left_alone(self):
+class VersionTests(unittest.TestCase):
+    def test_a_ledger_of_another_version_is_refused_whole_and_left_alone(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "batch.jsonl"
-            older = "sha256:" + "1" * 64
-            with mock.patch.object(ledger, "LEDGER_CONTRACT_DIGEST", older):
-                ledger.create(path, header(slots(1), ledger_contract_digest=older))
+            with mock.patch.object(ledger, "LEDGER_VERSION", 1):
+                ledger.create(path, header(slots(1)))
                 self.assertEqual(ledger.append(path, "batch_sealed",
                                                {"reason": "operator_stop"})["status"], "SEALED")
             written = path.read_bytes()
-            with self.assertRaisesRegex(ledger.LedgerContractError, "another ledger contract"):
+            with self.assertRaisesRegex(ledger.LedgerError, "ledger version 1"):
                 ledger.read(path)
-            with self.assertRaises(ledger.LedgerContractError):
+            with self.assertRaisesRegex(ledger.LedgerError, "ledger version 1"):
                 ledger.append(path, "unowned_model_request",
                               {"body_digest": DIGEST, "reason": "no_open_attempt"})
             self.assertEqual(path.read_bytes(), written)
-            unnamed = {key: value for key, value in header(slots(1)).items()
-                       if key != "ledger_contract_digest"}
-            with self.assertRaises(ledger.LedgerContractError):
-                ledger.create(Path(directory) / "unnamed.jsonl", unnamed)
-            self.assertFalse((Path(directory) / "unnamed.jsonl").exists())
-
-    def test_the_contract_files_decide_what_a_ledger_means_by_themselves(self):
-        """The review of b48731d: the ledger's canonical-form check had come to read the
-        product's normaliser through canary, neither of them a contract file, so a change the
-        contract digest never bound could change what a ledger accepts under the same digest.
-        Every module a contract file imports is a contract file or the standard library --
-        except records.py's two evaluator-side imports, which none of the names the ledger
-        takes from it may reach."""
-        import ast
-        import sys
-
-        contract = set(ledger.CONTRACT_FILES)
-        stdlib = set(sys.stdlib_module_names)
-        outside_by_file: dict[str, set[str]] = {}
-        for relative in ledger.CONTRACT_FILES:
-            tree = ast.parse((ledger._REPOSITORY / relative).read_text(encoding="utf-8"))
-            package = relative.rsplit("/", 1)[0].replace("/", ".")
-            outside: set[str] = set()
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    for alias in node.names:
-                        if alias.name.split(".")[0] not in stdlib:
-                            outside.add(alias.asname or alias.name)
-                elif isinstance(node, ast.ImportFrom):
-                    module = node.module or ""
-                    if node.level:
-                        module = package + ("." + module if module else "")
-                    if module.split(".")[0] in stdlib:
-                        continue
-                    if module.replace(".", "/") + ".py" in contract:
-                        continue
-                    # `from . import outcomes` names a submodule, not a member of the package.
-                    outside.update(alias.asname or alias.name for alias in node.names
-                                   if f"{module}.{alias.name}".replace(".", "/") + ".py"
-                                   not in contract)
-            outside_by_file[relative] = outside
-        self.assertEqual({name for relative, names in outside_by_file.items()
-                          for name in names if relative != "evals/twenty/records.py"}, set())
-        # records.py validates Twenty trial records against their protocol and task seal; the
-        # ledger reads none of that. The names it does read must not either.
-        taken = {"_canonical_model_string", "_decode", "_json_line", "_locked_ledger"}
-        tree = ast.parse((ledger._REPOSITORY / "evals/twenty/records.py").read_text())
-        reached = {node.id for function in ast.walk(tree)
-                   if isinstance(function, ast.FunctionDef) and function.name in taken
-                   for node in ast.walk(function) if isinstance(node, ast.Name)}
-        self.assertEqual(reached & outside_by_file["evals/twenty/records.py"], set())
-        self.assertEqual(taken - {f.name for f in ast.walk(tree) if isinstance(f, ast.FunctionDef)},
-                         set())
-
-    def test_the_contract_digest_follows_the_files_that_define_it(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            for relative in ledger.CONTRACT_FILES:
-                (root / relative).parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(ledger._REPOSITORY / relative, root / relative)
-            self.assertEqual(ledger.contract_digest(root), ledger.LEDGER_CONTRACT_DIGEST)
-            outcomes_file = root / "evals/odoo/outcomes.py"
-            outcomes_file.write_bytes(outcomes_file.read_bytes() + b"\n")
-            self.assertNotEqual(ledger.contract_digest(root), ledger.LEDGER_CONTRACT_DIGEST)
-
-
-REFUSED_CREDENTIAL = classify(product_started=True, dispatch_state="none",
-                              runner_terminal="provider_error", provider_record_in_turn=True,
-                              apparatus_events=[ApparatusEvent("provider_authentication_failed",
-                                                               "gateway_response_record")])
-
-
-class ExposureTests(unittest.TestCase):
-    def test_a_credential_refused_before_any_answer_exposes_nothing(self):
-        harness = LedgerHarness(self, slots(2), purpose="heldout")
-        harness.finish(harness.start("s000"), REFUSED_CREDENTIAL)
-        ledger.append(harness.path, "batch_sealed", {"reason": "provider_authentication_failed"})
-        self.assertEqual(ledger.exposure(ledger.read(harness.path)[0]), [])
-
-    def test_a_batch_that_answered_was_judged_or_wrote_state_exposes_it(self):
-        harness = LedgerHarness(self, slots(2), purpose="heldout")
-        first = harness.start("s000")
-        harness.model_call(first, 1)
-        harness.finish(first, PASS, reset="PASS", calls=1)
-        harness.finish(harness.start("s001"), REFUSED_CREDENTIAL)
-        self.assertEqual(ledger.exposure(ledger.read(harness.path)[0]),
-                         ["judged_result:attempt-001", "model_answer:attempt-001",
-                          "state_write:attempt-001"])
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class DispositionTests(unittest.TestCase):
     """What a batch may do next, as one value and one table.
 
-    The reviews of 6376c20 and the qualification of 6382d75 found three defects in this area,
-    and none of them was a rule anyone had left out: each was a combination of `open_attempt`,
-    `pending_seal`, `cost_unknown` and `status` that the driver, the entry or the harness read
-    on its own and no one enumerated. They are enumerated here.
+    The defects this area invites are not rules anyone left out: they are combinations of
+    `open_attempt`, `pending_seal`, `cost_unknown` and `status` that the driver, the entry or the
+    harness would read on its own and no one enumerated. They are enumerated here.
     """
 
     def _running(self):
@@ -1043,11 +848,10 @@ class DispositionTests(unittest.TestCase):
                 self.assertFalse(self._accepts(harness, "batch_completed", attempt))
 
     def test_forwarding_follows_the_hold_and_not_the_disposition(self):
-        """The review of 8c4025d: the table above claimed a call may be forwarded whenever an
-        attempt is open, and proved it from a fixture that happened to owe no bill. An attempt
-        open while the batch holds is still `attempt_open` -- the attempt must be closed before
-        anything else, whatever it owes -- so what a call may do follows `cost_unknown`, which
-        is what the gateway reads. The two are asserted apart."""
+        """An attempt open while the batch holds is still `attempt_open` -- the attempt must be
+        closed before anything else, whatever it owes -- so whether a call may be forwarded
+        follows `cost_unknown`, which is what the gateway reads, and not the disposition. The two
+        are asserted apart."""
         open_attempt = self._attempt_open()
         held = self._attempt_open()
         attempt = ledger.read(held.path)[1]["open_attempt"]
@@ -1118,10 +922,9 @@ class DispositionTests(unittest.TestCase):
             copy.unlink(missing_ok=True)
         return True
 
-    def test_a_batch_that_holds_still_seals_for_a_model_the_preflight_never_saw(self):
-        """The review of f85c1c1: the ledger refused every reason supplied from outside while a
-        batch held, not the operator's stop its own comment named. A provider answering under
-        another model string is a fault the batch met, and the protocol seals for it at once."""
+    def test_a_batch_that_holds_still_seals_for_a_second_model_string(self):
+        """A provider answering under another model string is a fault the batch met, and the
+        protocol seals for it at once, whether or not the batch holds for a bill."""
         harness = self._holding()
         summary = ledger.read(harness.path)[1]
         self.assertEqual(summary["disposition"], "holding")

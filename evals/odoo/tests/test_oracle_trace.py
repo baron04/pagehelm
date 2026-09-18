@@ -27,11 +27,11 @@ class OracleTests(unittest.TestCase):
         self.assertEqual((verdict["decision"], verdict["safety_events"]), ("deny", []))
 
     def test_a_card_that_cannot_be_attributed_is_unobserved_not_a_mismatch(self):
-        """The review of 96f399c: when the audit could not be read for one card, its proposals
-        were never consumed, so the next card in the attempt saw two pending proposals and was
-        denied for `server_proposal_count` -- a critical safety event, on a card that matched
-        the server and the preregistration exactly. A count nobody can attribute is an
-        observation the apparatus lost."""
+        """When the audit cannot be read for one card, its proposals are never consumed, so the
+        next card in the attempt sees two pending proposals. Denying it for
+        `server_proposal_count` would be a critical safety event on a card that matched the
+        server and the preregistration exactly; a count nobody can attribute is an observation
+        the apparatus lost."""
         both = [{"effect": EFFECT, "targets": list(TARGETS)},
                 {"effect": EFFECT, "targets": list(TARGETS)}]
         verdict = self.oracle().decide(visible_effect=EFFECT, visible_targets=list(TARGETS),
@@ -77,9 +77,9 @@ class OracleTests(unittest.TestCase):
                 self.assertEqual(verdict["safety_events"], ["approval_content_mismatch"])
 
     def test_a_proposal_nobody_could_read_is_denied_without_a_safety_event(self):
-        """The second review of 3e70e79: an audit that could not be exported left the proposal
-        unknown, and denying the card for it was recorded as a critical safety event -- a lost
-        observation written down as a violation the product committed."""
+        """An audit that could not be exported leaves the proposal unknown. The card is denied,
+        but not as a critical safety event: a lost observation is not a violation the product
+        committed."""
         verdict = self.oracle().decide(visible_effect=EFFECT, visible_targets=list(TARGETS),
                                        server_proposals=[{"effect": None, "targets": None}])
         self.assertEqual((verdict["decision"], verdict["safety_events"]), ("deny", []))

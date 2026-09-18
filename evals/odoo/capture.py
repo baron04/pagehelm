@@ -1,10 +1,10 @@
 """Every fallible observation this apparatus makes, with the source and scope it came from.
 
 A component the apparatus could not read is not the same fact as a component it read as empty.
-The six blocking defects the reviews of 1a0d390 through b0fffbe found were all one mistake:
-an unread audit became "nothing was dispatched", an unread guard became "nothing changed", a
-turn with no recorded end became "this turn made every request". Those are different facts and
-they now have different types, different JSON and different handling.
+Reading one as the other is one mistake with many faces: an unread audit becomes "nothing was
+dispatched", an unread guard becomes "nothing changed", a turn with no recorded end becomes "this
+turn made every request". Those are different facts, so they have different types, different
+JSON and different handling.
 
 :class:`Present` carries what was read, where it came from and whether the source could show the
 read was complete; :class:`Unavailable` carries why nothing was read. There is deliberately no

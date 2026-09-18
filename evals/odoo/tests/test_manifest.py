@@ -58,16 +58,14 @@ class VerifyManifestTests(unittest.TestCase):
                               GUARD),
             "another_population": (
                 recorded(), {**INPUTS, "population_digest": "sha256:" + "9" * 64}, GUARD),
-            # The reviews of 3e70e79 and 6376c20: first the seed program was missing from the
-            # inputs, then the deployment that builds and initialises the application. Every
-            # source is bound by content now, and each one alone makes the manifest stale.
+            # Every source is bound by content, and each one alone makes the manifest stale.
             **{f"another_{name}": (
                 recorded(), {**INPUTS, "fixture_sources": {**INPUTS["fixture_sources"],
                                                            name: "sha256:" + "f" * 64}}, GUARD)
                for name in manifest.FIXTURE_SOURCES},
             "cron_threads_it_was_not_frozen_with": (
                 recorded(), {**INPUTS, "odoo_conf_max_cron_threads": 2}, GUARD),
-            # The review of 6376c20: the whole file is mounted and one option was bound.
+            # The whole file is mounted, so every option is bound.
             "another_odoo_conf": (
                 recorded(), {**INPUTS, "odoo_conf_digest": "sha256:" + "e" * 64}, GUARD),
             "another_baseline": (recorded(), INPUTS, "sha256:" + "b" * 64),
@@ -78,9 +76,8 @@ class VerifyManifestTests(unittest.TestCase):
                 manifest.verify_manifest(record, inputs=inputs, baseline_guard_digest=guard)
 
     def test_every_source_provisioning_reads_is_bound(self):
-        """The review of 6376c20: the inputs bound only what someone had remembered to list, so
-        the deployment that builds and initialises the application changed the fixture without
-        making the manifest stale. Each source is checked here against the tree it names."""
+        """The inputs bind every source by content, the deployment that builds and initialises
+        the application included. Each source is checked here against the tree it names."""
         from pathlib import Path as _Path
         repository = _Path(__file__).resolve().parents[3]
         for relative in manifest.FIXTURE_SOURCES:
@@ -93,8 +90,8 @@ class VerifyManifestTests(unittest.TestCase):
         self.assertTrue(all(value.startswith("sha256:") for value in digests.values()))
 
     def test_the_bound_sources_are_the_closure_of_what_builds_the_fixture(self):
-        """A list of the parts someone remembered goes stale the moment an import is added, and
-        the reviews of 3e70e79 and 6376c20 each found it short by one. The closure is recomputed
+        """A list of the parts someone remembered goes stale the moment an import is added. The
+        closure is recomputed
         from the two programs that build the fixture: every module they reach, at any depth and
         from anywhere in the file, is bound or exempt by name."""
         from pathlib import Path as _Path
@@ -142,9 +139,9 @@ class VerifyManifestTests(unittest.TestCase):
         self.assertTrue(set(manifest.FIXTURE_EXEMPT) <= closure)
 
     def test_the_application_options_are_bound_and_the_credentials_are_not(self):
-        """The review of 6376c20: `odoo.conf` is mounted whole and only `max_cron_threads` was
-        bound. Every option that decides what the application does is bound now; the two that
-        say how to authenticate are not, so a fresh private root is not another fixture."""
+        """`odoo.conf` is mounted whole, so every option that decides what the application does
+        is bound; the two that say how to authenticate are not, so a fresh private root is not
+        another fixture."""
         conf = ("[options]\n"
                 "addons_path = /mnt/extra-addons\n"
                 "admin_passwd = one\n"
@@ -172,11 +169,10 @@ class VerifyManifestTests(unittest.TestCase):
         self.assertEqual(base, manifest._config_digest(conf + "# limit_time_real = 600\n"))
 
     def test_what_the_application_is_given_is_what_compose_mounts(self):
-        """The review of 8c4025d: the manifest bound one addon while Compose mounts the whole
-        directory that holds it, so a sibling addon -- an auto-installing one above all --
-        would reach the application's addons path and change what the database becomes, with
-        both bound digests unmoved. What is bound is read from the mount, so the two cannot
-        drift apart again."""
+        """Compose mounts the whole directory that holds the addon, so a sibling addon -- an
+        auto-installing one above all -- would reach the application's addons path and change
+        what the database becomes. What is bound is read from the mount, so the two cannot drift
+        apart."""
         from pathlib import Path as _Path
         repository = _Path(__file__).resolve().parents[3]
         compose = (repository / "deploy/odoo-single-node/docker-compose.yml").read_text(
@@ -192,7 +188,7 @@ class VerifyManifestTests(unittest.TestCase):
 
         # An addon beside the one this file used to name is another fixture.
         digest = manifest._tree_digest(source)
-        sibling = source / "_review_probe_addon"
+        sibling = source / "_sibling_probe_addon"
         sibling.mkdir()
         try:
             (sibling / "__manifest__.py").write_text("{'auto_install': True}\n")

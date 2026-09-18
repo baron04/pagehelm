@@ -59,10 +59,9 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(result.seal_reason, "classification_contract_drift")
 
     def test_drift_keeps_every_seal_reason_met_beside_it(self):
-        """The review of 6376c20: drift was the only reason that reached the summary, so a
-        refused credential or a safety event met in the same attempt was a fact the record no
-        longer held. The batch still seals by the fixed order: a safety event outranks drift,
-        drift outranks a provider fault."""
+        """Drift is not the only reason that reaches the summary: a refused credential or a
+        safety event met in the same attempt stays on the record. The batch seals by the fixed
+        order: a safety event outranks drift, drift outranks a provider fault."""
         beside = classify(product_started=True, dispatch_state="none", runner_terminal="alien",
                           apparatus_events=[ApparatusEvent("provider_authentication_failed",
                                                            "gateway_response_record")],
@@ -146,8 +145,8 @@ class ClassificationTests(unittest.TestCase):
 
 
 class FaultEvidenceTests(unittest.TestCase):
-    """The report's items 3 and 4: facts established before a fault survive it, and a fault
-    unrelated to the provider never explains an ending nobody mapped."""
+    """Facts established before a fault survive it, and a fault unrelated to the provider never
+    explains an ending nobody mapped."""
 
     def test_only_a_provider_record_explains_an_unmapped_terminal(self):
         for unrelated in (ApparatusEvent("evaluator_exception", "evaluator_process_exit"),
@@ -196,7 +195,7 @@ class FaultEvidenceTests(unittest.TestCase):
                                          runner_terminal=terminal, **kwargs).unclassified)
 
     def test_a_started_product_with_no_ending_is_drift_unless_the_runner_lost_sight_of_it(self):
-        # The report on 0114a25: a missing ending was accepted as a valid result.
+        # A missing ending is never a valid result.
         for label, events in {"nothing": [], "provider_fault": [event("provider_rate_limited")],
                               "evaluator": [event("evaluator_exception")]}.items():
             with self.subTest(label=label):
@@ -218,8 +217,8 @@ class FaultEvidenceTests(unittest.TestCase):
                                  ("NOT_EVALUABLE", False))
 
     def test_nothing_that_failed_after_every_turn_ended_explains_a_missing_ending(self):
-        # The reviews of 8574cb0 and 582e11c: a failed logout, screenshot or browser close after
-        # the run showed nothing about how the product ended, yet explained a missing ending.
+        # A failed logout, screenshot or browser close after the run shows nothing about how the
+        # product ended, so it explains no missing ending.
         for evidence in ("final_page_error", "guard_capture_error", "teardown_error",
                          "logout_failed"):
             with self.subTest(evidence=evidence):
@@ -250,8 +249,8 @@ class FaultEvidenceTests(unittest.TestCase):
                 self.assertTrue(outcomes.replacement_eligible(ended.as_record(), "NOT_REQUIRED"))
 
     def test_a_turn_that_did_not_stop_keeps_its_result_and_is_never_replaced(self):
-        # The review of 48cf127: a turn the runner could not stop was scored as a clean product
-        # result, though the product may still have been running.
+        # A turn the runner could not stop is not a clean product result: the product may still
+        # have been running.
         not_stopped = ApparatusEvent("turn_not_stopped", "stop_not_confirmed")
         self.assertNotIn("stop_not_confirmed", outcomes.TERMINAL_LOSS_EVIDENCE)
         self.assertNotIn("stop_not_confirmed", outcomes.REPLACEMENT_EVIDENCE)
@@ -269,8 +268,8 @@ class FaultEvidenceTests(unittest.TestCase):
         self.assertEqual((missing.product_outcome, missing.unclassified), ("FAIL", True))
 
     def test_a_provider_record_explains_the_generic_failure_only_within_its_turn(self):
-        # The review of 582e11c (R4): a record from an earlier turn explained the last turn's
-        # generic provider failure.
+        # A record from an earlier turn does not explain the last turn's generic provider
+        # failure.
         rate_limited = [event("provider_rate_limited")]
         outside = classify(product_started=True, dispatch_state="none",
                            runner_terminal="provider_error", apparatus_events=rate_limited)
@@ -287,7 +286,7 @@ class FaultEvidenceTests(unittest.TestCase):
                                  provider_record_in_turn=True).unclassified)
 
     def test_every_turn_before_the_last_needs_a_closed_ending(self):
-        # The review of 582e11c (R1, R2): only the last turn's ending was ever checked.
+        # Every turn's ending is checked, not only the last one's.
         facts = outcomes.gateway_facts(
             [gateway_response(2, "http_error", "provider_rate_limited"),
              gateway_response(4, "http_error", "provider_context_length")],
@@ -325,8 +324,8 @@ class FaultEvidenceTests(unittest.TestCase):
         result = classify(product_started=True, dispatch_state="acknowledged",
                           runner_terminal="provider_error", provider_record_in_turn=True,
                           apparatus_events=[event("provider_connection_lost")])
-        # The review of 8c4025d: every fault the attempt met stays on the record beside the one
-        # its apparatus_code reduces to.
+        # Every fault the attempt met stays on the record beside the one its apparatus_code
+        # reduces to.
         self.assertEqual(
             (result.product_outcome, result.basis),
             ("INDETERMINATE", ("write_before_apparatus_fault",
@@ -548,8 +547,9 @@ class SlotPolicyTests(unittest.TestCase):
 
 
 class SealPriorityTests(unittest.TestCase):
-    """The review of 3e70e79: the attempt's own seal reason was the first sealing fault recorded,
-    so the order two provider faults arrived in decided what the batch sealed for."""
+    """The attempt's own seal reason is its most serious sealing fault, not the first one
+    recorded, so the order two provider faults arrive in does not decide what the batch seals
+    for."""
 
     def classify(self, *codes):
         events = [ApparatusEvent(code, evidence) for code, evidence in codes]
@@ -590,8 +590,8 @@ if __name__ == "__main__":
 class EveryBranchKeepsTheJudgementTests(unittest.TestCase):
     """`outcome_axes_keep_every_fact` by enumeration rather than by example.
 
-    Two rounds of review found this item at REVISE, each time because one branch of `classify`
-    dropped one fact. The branches are enumerated here instead of sampled: what the judgement
+    A branch of `classify` that drops one fact is the defect this guards against. The branches
+    are enumerated here instead of sampled: what the judgement
     holds -- its safety events and whether its answer was undecidable -- must survive every one
     of them, because the report counts both.
     """

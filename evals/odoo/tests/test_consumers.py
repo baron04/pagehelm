@@ -20,14 +20,14 @@ REPOSITORY = Path(__file__).resolve().parents[3]
 #: may answer nothing; ``.get(name, [])`` and ``value or []`` are answers invented for it. Null
 #: is not among them: it is how this apparatus writes "nobody read it", so producing it is the
 #: rule rather than the mistake.
-#: The review of 8c4025d: the empty tuple was not among them, so `value if read else ()` passed
-#: the rule that `value if read else []` fails.
+#: The empty tuple is among them, so `value if read else ()` fails the rule as
+#: `value if read else []` does.
 _EMPTY = (ast.List, ast.Dict, ast.Set, ast.Tuple)
 _EMPTY_CONSTANTS = ([], {}, (), 0, 0.0, "", False)
 
 
-#: The builders of the same empty values. The review of 6376c20: the check read the literals and
-#: not the calls that produce them, so ``list()`` passed where ``[]`` did not.
+#: The builders of the same empty values: the check reads the calls that produce them as well as
+#: the literals, so ``list()`` fails where ``[]`` does.
 _EMPTY_BUILDERS = frozenset({"list", "dict", "set", "tuple", "str", "frozenset"})
 
 
@@ -149,11 +149,11 @@ class RegistryTests(unittest.TestCase):
                 self.assertIn(consumer.function, functions, (source, consumer))
 
     def test_the_registry_covers_every_module_that_reaches_the_algebra(self):
-        """The review of 6376c20: the modules scanned were derived from the registry itself, so
-        a module reading the algebra was scanned only once someone had already listed it. They
-        are found in the tree now, under whatever name each module imports the algebra by, and
-        the registry must already cover them. It covers more besides: a module that reads what
-        a capture holds without naming the algebra is a consumer too, and is listed by hand."""
+        """The modules scanned are found in the tree, not derived from the registry itself, so a
+        module reading the algebra is scanned before anyone has listed it, under whatever name it
+        imports the algebra by, and the registry must already cover it. It covers more besides:
+        a module that reads what a capture holds without naming the algebra is a consumer too,
+        and is listed by hand."""
         unlisted = sorted(set(_capture_readers()) - set(consumers.REGISTERED_MODULES))
         self.assertEqual(unlisted, [], "a module reaches the algebra and the registry omits it")
 
@@ -193,8 +193,8 @@ class RegistryTests(unittest.TestCase):
                 self.assertIn(expression, written)
 
     def test_no_consumer_fills_a_missing_observation_in(self):
-        """The review of 3e70e79: the check read `or []` and `.get(name, [])` but not the
-        conditional form of the same substitution, which is how one of them was written."""
+        """The check reads the conditional form of the substitution as well as `or []` and
+        `.get(name, [])`."""
         # The allowlist exempts one written expression from the conditional rule only; the
         # other two rules apply to every registered consumer.
         allowed = {(module, function, expression) for module, function, expression, _reason
@@ -227,8 +227,8 @@ class RegistryTests(unittest.TestCase):
                             _is_empty(child.args[1]),
                             f"{consumer.module}:{consumer.function} reads a missing value as an "
                             f"empty one at line {child.lineno}")
-                    # The review of 6376c20 named this form too: the attribute a record lacks
-                    # is the observation nobody made, and a default answers for it.
+                    # The same substitution: the attribute a record lacks is the observation
+                    # nobody made, and a default answers for it.
                     if (isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
                             and child.func.id == "getattr" and len(child.args) == 3
                             and not _from_task_parameters(child.args[0])):

@@ -41,11 +41,11 @@ def _file_digest(path: Path) -> str:
 #: The Odoo modules the fixture is built with. A fixture with others is a different fixture.
 INSTALLED_MODULES = ("account", "sale_management", "woa_runtime")
 #: Everything that decides what the fixture becomes, by content rather than by a list of the
-#: parts someone remembered. The review of 6376c20 found the list short by the deployment that
-#: builds and initialises the application; a longer list of remembered parts is still a closure
-#: nobody proved, so the list is now the import closure of the two programs that build the
-#: fixture, and :mod:`evals.odoo.tests.test_manifest` recomputes that closure and refuses a
-#: module the list does not name.
+#: parts someone remembered: a remembered list once left out the deployment that builds and
+#: initialises the application, and a longer one is still a closure nobody proved. So the list is
+#: the import closure of the two programs that build the fixture, and
+#: :mod:`evals.odoo.tests.test_manifest` recomputes that closure and refuses a module the list
+#: does not name.
 #:
 #: The population generator is the one module the closure holds and this list leaves out: what it
 #: produced is bound by its own digest, so a generator that produces the same population leaves
@@ -83,9 +83,9 @@ CONFIG_CREDENTIALS = frozenset({"admin_passwd", "db_password"})
 def _config_digest(text: str) -> str:
     """The digest of every ``odoo.conf`` option that decides what the application does.
 
-    The review of 6376c20 found one option bound -- ``max_cron_threads`` -- while the whole file
-    is mounted: the addons path, the worker count, the database filter and the time limits all
-    decide the application a trial runs against, and none of them made the manifest stale.
+    The whole file is mounted, so every option is bound, not one or two: the addons path, the
+    worker count, the database filter and the time limits all decide the application a trial
+    runs against, and a change to any of them makes the manifest stale.
     """
     options = []
     for line in text.splitlines():
@@ -146,10 +146,10 @@ ADDONS_MOUNT = "/mnt/extra-addons"
 def addons_source() -> Path:
     """The host directory the base Compose mounts as the application's addons path.
 
-    The review of 8c4025d: the manifest bound one addon, ``woa_runtime``, while Compose mounts
-    the directory that holds it. A sibling addon -- an auto-installing one above all -- would
-    reach the application's addons path and change what the database becomes, leaving both
-    bound digests identical. The mount decides what is bound, so the two cannot drift again.
+    Compose mounts the directory that holds ``woa_runtime``, not the addon alone. A sibling
+    addon -- an auto-installing one above all -- would reach the application's addons path and
+    change what the database becomes, so the whole mounted directory is bound. The mount decides
+    what is bound, so the two cannot drift.
     """
     found = set()
     for line in BASE_COMPOSE.read_text(encoding="utf-8").splitlines():
@@ -186,7 +186,7 @@ def fixture_manifest(stack: Stack, *, population: dict[str, Any], seed_truth: di
         # What makes this fixture, and what a later batch or rebuild checks it by.
         "fixture_inputs": inputs, "fixture_inputs_digest": digest_json(inputs),
         # The candidate that happened to be running when the fixture was taken. It is recorded
-        # so a reviewer can follow it, and it is not part of what the manifest binds: the batch
+        # so a reader can follow it, and it is not part of what the manifest binds: the batch
         # header binds the candidate its own attempts ran.
         "taken_with_candidate": stack.candidate(),
         "image_ids": images,

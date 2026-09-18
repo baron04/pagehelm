@@ -160,12 +160,10 @@ class GatewayTests(unittest.TestCase):
                          [1, 2048])
 
     def test_a_request_this_ledger_would_not_record_is_refused_before_the_lease(self):
-        """The review of 96f399c: this gateway accepted any string as a tool choice and any
-        option value the policy file carried, while the ledger accepts a bounded name and
-        refuses null, dict and list. The lease is taken before the dispatch is recorded, so a
-        request the gateway forwarded and the ledger then refused left a lease nothing could
-        settle and an attempt that could never end -- the hazard that broke a338d60, reached
-        from the other side."""
+        """The gateway accepts exactly the tool choices and option values the ledger accepts: a
+        bounded name, and not null, dict or list. The lease is taken before the dispatch is
+        recorded, so a request the gateway forwarded and the ledger then refused would leave a
+        lease nothing could settle and an attempt that could never end."""
         self.gateway.open_attempt("attempt-001", TOKEN)
         self.backend.install("attempt-001", completion)
         status, payload = self.post(self.body(tool_choice="REQUIRED"))
@@ -231,8 +229,8 @@ class GatewayTests(unittest.TestCase):
                                  "model_request_refused"])
 
     def test_an_attempt_closes_only_once_the_calls_it_made_have_settled(self):
-        # The design review of 102c2f4: the attempt closed on the gateway while a call was still
-        # being answered, and the driver read its records in that window.
+        # The attempt must not close on the gateway while a call is still being answered, or the
+        # driver would read its records in that window.
         entered, release = threading.Event(), threading.Event()
 
         def slow(body, index):
@@ -261,8 +259,8 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(summary["pending_seal"], "unowned_model_request")
 
     def test_a_call_that_outlives_the_provider_deadline_settles_as_unresolved(self):
-        """The design review of 102c2f4: a lease expires with the request it belongs to, not on
-        a timeout of the apparatus's own, and the call settles exactly once."""
+        """A lease expires with the request it belongs to, not on a timeout of the apparatus's
+        own, and the call settles exactly once."""
         entered, release = threading.Event(), threading.Event()
 
         def slow(body, index):
@@ -305,9 +303,9 @@ class GatewayTests(unittest.TestCase):
             ledger.append(self.path, kind, body)
 
     def test_an_answer_that_could_not_be_accounted_still_closes_the_gateway_when_it_is_late(self):
-        # The review of 48cf127: an accounting failure was lost with the attempt that closed
-        # before its answer arrived. The call is now written down as unresolved before that, and
-        # the bill reconciliation reads it there.
+        # An accounting failure is not lost with an attempt that closed before its answer
+        # arrived: the call is written down as unresolved before that, and the bill
+        # reconciliation reads it there.
         self.gateway.open_attempt("attempt-001", TOKEN)
         self.backend.install("attempt-001", completion)
         self.assertEqual(self.post(self.body())[0], 200)

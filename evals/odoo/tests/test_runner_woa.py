@@ -65,8 +65,7 @@ class Page:
 
 @unittest.skipIf(importlib.util.find_spec("playwright") is None, "playwright is not installed")
 class FaultStageTests(unittest.TestCase):
-    """The reviews of 582e11c: a fault after every turn had ended was recorded as losing sight of
-    the product while it ran."""
+    """A fault after every turn has ended is not losing sight of the product while it ran."""
 
     def run_with(self, fail=None, *, crash=False, logged_out=True, messages=1):
         page = Page(fail, crash)

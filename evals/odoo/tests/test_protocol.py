@@ -16,15 +16,23 @@ class ScheduleTests(unittest.TestCase):
         self.eligible = {"woa_product": self.ids,
                          "pageagent_browser_only": protocol.pageagent_eligibility(self.task_set)}
 
-    def test_schedule_seeds_are_derived_per_purpose_from_a_freeze_commit(self):
-        seed = protocol.derive_schedule_seed("a" * 40)
-        self.assertEqual(seed, protocol.derive_schedule_seed("a" * 40, purpose="heldout"))
-        self.assertNotEqual(seed, protocol.derive_schedule_seed("b" * 40))
-        self.assertNotEqual(seed, protocol.derive_schedule_seed("a" * 40, purpose="development"))
-        for commit, purpose in (("abc123", "heldout"), ("A" * 40, "heldout"),
-                                ("a" * 40, "apparatus_qualification")):
-            with self.subTest(commit=commit, purpose=purpose), self.assertRaises(ValueError):
-                protocol.derive_schedule_seed(commit, purpose=purpose)
+    def test_schedule_seeds_are_derived_per_population_from_the_candidate(self):
+        seal = "sha256:" + "0" * 64
+        seed = protocol.schedule_seed("development", seal_digest=seal, commit="a" * 40)
+        self.assertEqual(seed, protocol.schedule_seed("development", seal_digest="other",
+                                                      commit="a" * 40))
+        self.assertNotEqual(seed, protocol.schedule_seed("development", seal_digest=seal,
+                                                         commit="b" * 40))
+        heldout = protocol.schedule_seed("heldout", seal_digest=seal, commit="a" * 40)
+        self.assertNotEqual(seed, heldout)
+        # The held-out seed also follows the seal committed before any result was seen.
+        self.assertNotEqual(heldout, protocol.schedule_seed(
+            "heldout", seal_digest="sha256:" + "1" * 64, commit="a" * 40))
+        for commit, population in (("abc123", "heldout"), ("A" * 40, "heldout"),
+                                   ("a" * 40, "apparatus_qualification")):
+            with self.subTest(commit=commit, population=population), \
+                    self.assertRaises(ValueError):
+                protocol.schedule_seed(population, seal_digest=seal, commit=commit)
 
     def test_the_comparison_pairs_only_eligible_tasks_judged_by_their_final_page(self):
         def task(task_id, shape, **params):
@@ -43,7 +51,7 @@ class ScheduleTests(unittest.TestCase):
                          protocol.pageagent_eligibility(self.task_set))
 
     def test_schedule_is_deterministic_and_never_pools_observations(self):
-        seed = protocol.derive_schedule_seed("c" * 40)
+        seed = protocol.schedule_seed("heldout", seal_digest="s", commit="c" * 40)
         slots = protocol.build_schedule(self.ids, eligible=self.eligible, seed=seed)
         self.assertEqual(slots, protocol.build_schedule(self.ids, eligible=self.eligible,
                                                         seed=seed))
@@ -54,24 +62,25 @@ class ScheduleTests(unittest.TestCase):
         self.assertEqual(len({(slot["task_id"], slot["replicate"]) for slot in woa}), 60)
         self.assertEqual(len({slot["slot_id"] for slot in slots}), len(slots))
 
-    def test_formal_schedules_fix_thirty_tasks_observed_twice(self):
-        seed = protocol.derive_schedule_seed("d" * 40, purpose="development")
-        development = protocol.formal_schedule("development", self.ids, seed=seed)
+    def test_fixed_schedules_run_thirty_tasks_observed_twice(self):
+        seed = protocol.schedule_seed("development", seal_digest="s", commit="d" * 40)
+        development = protocol.fixed_schedule("development", self.ids, seed=seed)
         self.assertEqual(len(development), 60)
         self.assertEqual({slot["arm"] for slot in development}, {"woa_product"})
-        heldout = protocol.formal_schedule(
+        heldout = protocol.fixed_schedule(
             "heldout", self.ids, seed=seed,
             pageagent_eligible=self.eligible["pageagent_browser_only"])
         self.assertEqual(len(heldout), 60 + 2 * len(self.eligible["pageagent_browser_only"]))
         cases = {
             "twenty_nine_tasks": ("development", self.ids[:29], seed, ()),
             "pageagent_in_development": ("development", self.ids, seed, ["d01"]),
-            "unformal_purpose": ("apparatus_qualification", self.ids, seed, ()),
+            "qualification": ("apparatus_qualification", self.ids, seed, ()),
             "chosen_seed": ("development", self.ids, "lucky", ()),
         }
-        for label, (purpose, ids, value, eligible) in cases.items():
+        for label, (population, ids, value, eligible) in cases.items():
             with self.subTest(label=label), self.assertRaises(ValueError):
-                protocol.formal_schedule(purpose, ids, seed=value, pageagent_eligible=eligible)
+                protocol.fixed_schedule(population, ids, seed=value,
+                                        pageagent_eligible=eligible)
 
     def test_pageagent_only_on_single_turn_read_tasks(self):
         eligible = set(self.eligible["pageagent_browser_only"])
@@ -98,7 +107,6 @@ class ScheduleTests(unittest.TestCase):
 class DocumentTests(unittest.TestCase):
     def test_b_is_recorded_as_excluded_and_capabilities_are_per_arm(self):
         document = protocol.document()
-        self.assertEqual(document["stage"], "draft")
         self.assertNotIn("pageagent_skill_api", document["arms"])
         self.assertEqual(document["excluded_arms"]["pageagent_skill_api"]["status"],
                          "excluded_before_build")
@@ -124,23 +132,18 @@ class DocumentTests(unittest.TestCase):
         from evals.odoo import ledger, outcomes
         document = protocol.document()
         self.assertEqual(set(document["stop_policy"]["seal_reasons"]), ledger._SEAL_REASONS)
-        self.assertEqual(set(document["stop_policy"]["exogenous_stops"]), ledger.EXOGENOUS_STOPS)
-        self.assertEqual(set(document["stop_policy"]["heldout_same_protocol_restart_after"]),
-                         ledger.HELDOUT_RESTART_REASONS)
-        # The ledger would take an audited held-out restart; the formal entry offers none, so
-        # the protocol names no audited restart and says the held-out set retires instead.
-        self.assertNotIn("heldout_audited_restart_after", document["stop_policy"])
-        self.assertIn("retires", document["stop_policy"]["heldout_after_other_seals"])
-        self.assertEqual(document["batch_chain"]["previous_batch"][-1], "continuation_record")
+        self.assertEqual(set(document["stop_policy"]["heldout_continues_after"]),
+                         protocol.HELDOUT_CONTINUES_AFTER)
+        self.assertLessEqual(protocol.HELDOUT_CONTINUES_AFTER, ledger._SEAL_REASONS)
         self.assertEqual(len(document["gateway_outcomes"]), len(outcomes.GATEWAY_OUTCOMES))
         self.assertTrue(set(outcomes.SEALING_APPARATUS_CODES).isdisjoint(
             document["replacement_policy"]["eligible_apparatus_codes"]))
 
 
 class ImplementationBindingTests(unittest.TestCase):
-    def test_document_names_runners_evaluator_reset_and_batch_chain(self):
+    def test_document_names_runners_evaluator_reset_and_batch_entry(self):
         document = protocol.document()
-        for key in ("runners", "evaluator", "reset", "batch_chain", "replacement_policy",
+        for key in ("runners", "evaluator", "reset", "batch", "replacement_policy",
                     "stop_policy", "approval_oracle", "statistics"):
             self.assertIn(key, document)
         named = {path for paths in protocol.APPARATUS_MODULES.values() for path in paths}

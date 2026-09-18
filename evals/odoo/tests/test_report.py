@@ -18,7 +18,7 @@ REFUSALS = TASK_IDS[25:]
 TASKS = {task: {"class": "refusal_or_limitation" if task in REFUSALS else "normal",
                 "stratum": "sales", "read_only": task in READ_ONLY or task in REFUSALS}
          for task in TASK_IDS}
-SEED = protocol.derive_schedule_seed("e" * 40, purpose="development")
+SEED = protocol.schedule_seed("development", seal_digest=DIGEST, commit="e" * 40)
 CAPABILITIES = {PAGEAGENT: DIGEST, WOA: DIGEST}
 FEEDBACK = {"candidate_commit": CANDIDATE["commit"], "submit_within_300ms": True,
             "cancel_within_300ms": True, "qualification_digest": DIGEST}
@@ -37,8 +37,8 @@ UNSAFE = classify(product_started=True, dispatch_state="acknowledged",
                                         safety_events=("duplicate_write",)))
 
 
-def formal_slots(purpose="development", eligible=()):
-    return protocol.formal_schedule(purpose, TASK_IDS, seed=SEED, pageagent_eligible=eligible)
+def fixed_slots(population="development", eligible=()):
+    return protocol.fixed_schedule(population, TASK_IDS, seed=SEED, pageagent_eligible=eligible)
 
 
 def small_slots(task_ids=("t01", "t02", "t26")):
@@ -57,8 +57,8 @@ def plan_for(slot_list, *, purpose="development", protocol_digest=DIGEST, **chan
 class Batch:
     """A real attempt ledger in a temporary directory."""
 
-    def __init__(self, test, slot_list, *, batch_id="batch-001", previous=None,
-                 protocol_digest=DIGEST, purpose="development", candidate=CANDIDATE):
+    def __init__(self, test, slot_list, *, batch_id="batch-001", protocol_digest=DIGEST,
+                 purpose="development", candidate=CANDIDATE):
         directory = tempfile.TemporaryDirectory()
         test.addCleanup(directory.cleanup)
         self.path = Path(directory.name) / "attempts.jsonl"
@@ -66,7 +66,7 @@ class Batch:
         self.by_cell = {(item["arm"], item["task_id"], item["replicate"]): item["slot_id"]
                         for item in slot_list}
         self.counter = 0
-        ledger.create(self.path, header(slot_list, previous=previous, protocol=protocol_digest,
+        ledger.create(self.path, header(slot_list, protocol=protocol_digest,
                                         purpose=purpose, seed=SEED, batch_id=batch_id,
                                         candidate=candidate))
 
@@ -143,23 +143,13 @@ class Batch:
         return ledger.read(self.path)[1]
 
 
-def follows(summary, *, reason=None):
-    """How a later development batch names the finished batch ``summary``."""
-    return {"batch_id": summary["batch"]["batch_id"], "purpose": "development",
-            "protocol_digest": summary["batch"]["protocol_digest"],
-            "candidate_commit": summary["batch"]["candidate"]["commit"],
-            "chain_head": summary["chain_head"],
-            "termination_reason": reason or summary["seal_reason"] or "batch_completed",
-            "continuation_record": None}
-
-
 def cell(value, arm=WOA, replicate="primary", batch=0):
     return value["batches"][batch]["arms"][arm]["replicates"][replicate]
 
 
 class GateTests(unittest.TestCase):
     def test_primary_passes_and_replicate_fails_without_pooling(self):
-        slot_list = formal_slots()
+        slot_list = fixed_slots()
         batch = Batch(self, slot_list)
         batch.run_all(lambda item: (FAIL if item["replicate"] == "replicate"
                                     and item["task_id"] in ("t01", "t02", "t03") else PASS, {}))
@@ -187,13 +177,13 @@ class GateTests(unittest.TestCase):
         json.loads(json.dumps(value))
         self.assertEqual(report.verify_report(value)["status"], "READY")
 
-    def test_a_small_unfrozen_or_mismatched_batch_is_never_gated(self):
+    def test_a_small_unplanned_or_mismatched_batch_is_never_gated(self):
         small = small_slots()
         batch = Batch(self, small)
         batch.run_all()
         summary = batch.complete()
         cases = {
-            "no_frozen_plan": (None, ["no_frozen_plan"]),
+            "no_plan": (None, ["no_plan"]),
             "small_schedule": (plan_for(small), ["not_the_fixed_thirty_task_schedule"]),
         }
         for label, (plan, basis) in cases.items():
@@ -204,15 +194,15 @@ class GateTests(unittest.TestCase):
                                  ("descriptive_only", basis))
                 self.assertIsNone(entry["arms"][WOA]["replicates"]["primary"]["normal"][
                     "gate_verdict"])
-        slot_list = formal_slots()
-        formal = Batch(self, slot_list)
-        formal.run_all()
-        complete = formal.complete()
+        slot_list = fixed_slots()
+        fixed = Batch(self, slot_list)
+        fixed.run_all()
+        complete = fixed.complete()
         other_candidate = plan_for(slot_list, candidate_commit="f" * 40)
         entry = report.build_report(batches=[complete], tasks=TASKS,
                                     plan=other_candidate)["batches"][0]
         self.assertEqual(entry["verdict_basis"], ["binding_mismatch:candidate_commit"])
-        other_schedule = plan_for(formal_slots(eligible=()), schedule_digest=OTHER)
+        other_schedule = plan_for(fixed_slots(eligible=()), schedule_digest=OTHER)
         entry = report.build_report(batches=[complete], tasks=TASKS,
                                     plan=other_schedule)["batches"][0]
         self.assertEqual(entry["verdict_basis"], ["binding_mismatch:schedule_digest"])
@@ -221,7 +211,7 @@ class GateTests(unittest.TestCase):
                                 plan=plan_for(slot_list, purpose="apparatus_qualification"))
 
     def test_replacement_that_decides_the_verdict_is_not_robust(self):
-        slot_list = formal_slots()
+        slot_list = fixed_slots()
         batch = Batch(self, slot_list)
         failures = {("t24", "primary"), ("t25", "primary")}
         for slot_id, item in batch.slots.items():
@@ -247,24 +237,22 @@ class GateTests(unittest.TestCase):
                           block["cost"]["total_cost_cny"]), (2, 0.05, 0.05))
 
     def test_sealed_batch_is_descriptive_but_its_safety_event_fails_the_gate(self):
-        slot_list = formal_slots()
+        slot_list = fixed_slots()
         first = Batch(self, slot_list)
         first.run(next(iter(first.slots)), UNSAFE, reset="PASS")
         sealed = first.seal("critical_safety_event")
-        # The product was fixed: a new candidate continues the development chain.
-        second = Batch(self, slot_list, batch_id="batch-002", candidate=NEW_CANDIDATE,
-                       previous=follows(sealed))
+        # The product was fixed: a new candidate runs its own batch.
+        second = Batch(self, slot_list, batch_id="batch-002", candidate=NEW_CANDIDATE)
         second.run_all()
         value = report.build_report(batches=[sealed, second.complete()], tasks=TASKS,
                                     plan=plan_for(slot_list,
                                                   candidate_commit=NEW_CANDIDATE["commit"]))
 
         old, new = value["batches"]
-        self.assertEqual((old["status"], old["seal_reason"], old["superseded"],
-                          old["verdict_status"]),
-                         ("SEALED", "critical_safety_event", True, "descriptive_only"))
+        self.assertEqual((old["status"], old["seal_reason"], old["verdict_status"]),
+                         ("SEALED", "critical_safety_event", "descriptive_only"))
         self.assertIn("batch_not_complete", old["verdict_basis"])
-        self.assertEqual((new["superseded"], new["verdict_status"]), (False, "gated"))
+        self.assertEqual(new["verdict_status"], "gated")
         old_normal = cell(value)["normal"]
         self.assertEqual((old_normal["successes"], old_normal["n"], old_normal["threshold"],
                           old_normal["gate_verdict"], old_normal["robust"]),
@@ -281,58 +269,6 @@ class GateTests(unittest.TestCase):
         self.assertTrue(report.verify_report(value)["safety_gate_failed"])
 
 
-class ChainTests(unittest.TestCase):
-    def test_a_partial_or_broken_chain_is_refused(self):
-        small = small_slots()
-        first = Batch(self, small)
-        first.run_all()
-        completed = first.complete()
-        broken = Batch(self, small, batch_id="batch-002", candidate=NEW_CANDIDATE,
-                       previous={**follows(completed), "chain_head": OTHER})
-        with self.assertRaises(ValueError):
-            report.build_report(batches=[completed, broken.summary()], tasks=TASKS)
-        linked = Batch(self, small, batch_id="batch-002", candidate=NEW_CANDIDATE,
-                       previous=follows(completed))
-        report.build_report(batches=[completed, linked.summary()], tasks=TASKS)
-        with self.assertRaises(ValueError):
-            report.build_report(batches=[linked.summary()], tasks=TASKS)
-
-    def test_a_development_candidate_never_returns_after_another_ran(self):
-        small = small_slots(("t01",))
-
-        def run(candidate, batch_id="batch-001", previous=None):
-            batch = Batch(self, small, batch_id=batch_id, candidate=candidate, previous=previous)
-            batch.run_all()
-            return batch.complete()
-
-        one = run(CANDIDATE)
-        two = run(NEW_CANDIDATE, "batch-002", follows(one))
-        # The ledger sees only the batch right before it, so the report checks the whole chain.
-        three = run(CANDIDATE, "batch-003", follows(two))
-        report.build_report(batches=[one, two], tasks=TASKS)
-        with self.assertRaisesRegex(ValueError, "returned"):
-            report.build_report(batches=[one, two, three], tasks=TASKS)
-
-    def test_only_the_newest_development_batch_can_be_gated(self):
-        slot_list = formal_slots()
-        first = Batch(self, slot_list)
-        first.run_all()
-        one = first.complete()
-        second = Batch(self, slot_list, batch_id="batch-002", candidate=NEW_CANDIDATE,
-                       previous=follows(one))
-        second.run_all()
-        two = second.complete()
-        value = report.build_report(batches=[one, two], tasks=TASKS, plan=plan_for(
-            slot_list, candidate_commit=NEW_CANDIDATE["commit"]))
-        old, new = value["batches"]
-        self.assertEqual((old["superseded"], old["verdict_status"], new["verdict_status"]),
-                         (True, "descriptive_only", "gated"))
-        # A plan naming the earlier candidate still cannot gate the batch that was superseded.
-        value = report.build_report(batches=[one, two], tasks=TASKS, plan=plan_for(slot_list))
-        self.assertEqual([entry["verdict_basis"] for entry in value["batches"]],
-                         [["superseded"], ["binding_mismatch:candidate_commit"]])
-
-
 class CostAndLatencyTests(unittest.TestCase):
     def test_unknown_usage_makes_total_cost_null(self):
         batch = Batch(self, small_slots(("t01",)))
@@ -345,7 +281,7 @@ class CostAndLatencyTests(unittest.TestCase):
         self.assertEqual(cell(value, replicate="replicate")["cost"]["total_cost_cny"], 0.0)
 
     def test_small_latency_sample_reports_maximum_without_a_gate(self):
-        slot_list = formal_slots()
+        slot_list = fixed_slots()
         batch = Batch(self, slot_list)
 
         def choose(item):
@@ -370,9 +306,8 @@ class CostAndLatencyTests(unittest.TestCase):
         self.assertEqual(cell(value, replicate="replicate")["latency"]["reason"], "not_gated")
 
     def test_an_attempt_whose_times_a_dead_driver_never_took_is_in_no_time_sample(self):
-        # The review of 582e11c: a recovered attempt's times were written as 0 ms and entered the
-        # latency sample of a valid read-only attempt.
-        slot_list = formal_slots()
+        # A recovered attempt's times are unknown, not 0 ms, and enter no latency sample.
+        slot_list = fixed_slots()
         batch = Batch(self, slot_list)
         recovered = READ_ONLY[0]
         batch.run_all(lambda item: (PASS, {"wall_ms": None, "approval_ms": None,
@@ -387,7 +322,7 @@ class CostAndLatencyTests(unittest.TestCase):
         self.assertEqual(cell(value)["latency"]["reason"], "insufficient_sample")
 
     def test_twenty_samples_use_the_nearest_rank_p95(self):
-        slot_list = formal_slots()
+        slot_list = fixed_slots()
         batch = Batch(self, slot_list)
         walls = dict(zip(READ_ONLY, [1000 * index for index in range(1, 20)] + [99000]))
         batch.run_all(lambda item: (PASS, {"wall_ms": walls.get(item["task_id"], 1200)}))
@@ -402,7 +337,7 @@ class CostAndLatencyTests(unittest.TestCase):
         self.assertEqual(latency["feedback"], FEEDBACK)
 
     def test_the_experience_gate_needs_both_feedback_checks_of_the_batch_candidate(self):
-        slot_list = formal_slots()
+        slot_list = fixed_slots()
         batch = Batch(self, slot_list)
         batch.run_all(lambda item: (PASS, {"wall_ms": 1000}))
         summary = batch.complete()
@@ -428,7 +363,7 @@ class CostAndLatencyTests(unittest.TestCase):
 
 class ComparisonTests(unittest.TestCase):
     def test_all_concordant_pairs_keep_a_nondegenerate_interval(self):
-        slot_list = formal_slots("heldout", eligible=("t01", "t02", "t03"))
+        slot_list = fixed_slots("heldout", eligible=("t01", "t02", "t03"))
         batch = Batch(self, slot_list, purpose="heldout")
         batch.run_all()
         value = report.build_report(batches=[batch.complete()], tasks=TASKS,
@@ -454,7 +389,7 @@ class ComparisonTests(unittest.TestCase):
         """Owner ruling of 2026-09-18: the arms' answer channels stay as they are, so the A/C
         comparison pairs only tasks judged by their final page. On an answer task PageAgent's
         answer is done text the page never shows; each arm's result is counted apart."""
-        slot_list = formal_slots("heldout", eligible=("t01", "t02", "t03"))
+        slot_list = fixed_slots("heldout", eligible=("t01", "t02", "t03"))
         batch = Batch(self, slot_list, purpose="heldout")
         batch.run_all()
         summary = batch.complete()
@@ -484,7 +419,7 @@ class ComparisonTests(unittest.TestCase):
                                 paired_task_ids=("t01",), answer_task_ids=("t01",))
 
     def test_an_ungated_batch_yields_no_comparison(self):
-        slot_list = formal_slots("heldout", eligible=("t01", "t02", "t03"))
+        slot_list = fixed_slots("heldout", eligible=("t01", "t02", "t03"))
         batch = Batch(self, slot_list, purpose="heldout")
         batch.run_all()
         value = report.build_report(batches=[batch.complete()], tasks=TASKS,

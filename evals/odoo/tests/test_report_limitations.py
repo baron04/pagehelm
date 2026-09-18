@@ -57,7 +57,7 @@ class TaskSetCompositionTests(unittest.TestCase):
     def test_the_set_is_balanced_by_stratum_and_by_nothing_else(self):
         from collections import Counter
         from evals.odoo import protocol
-        self.assertEqual(len(self.tasks), protocol.FORMAL_TASK_COUNT)
+        self.assertEqual(len(self.tasks), protocol.TASK_COUNT)
         strata = Counter(task["stratum"] for task in self.tasks)
         self.assertEqual(len(set(strata.values())), 1, strata)
         for field in ("locale", "actor"):
@@ -82,11 +82,11 @@ class TaskSetCompositionTests(unittest.TestCase):
     def test_each_task_is_observed_exactly_twice(self):
         from evals.odoo import protocol
         seed = "0" * 32
-        slots = protocol.formal_schedule(
+        slots = protocol.fixed_schedule(
             "development", [task["task_id"] for task in self.tasks], seed=seed)
         from collections import Counter
         per_task = Counter(slot["task_id"] for slot in slots)
         self.assertEqual(set(per_task.values()), {2}, per_task)
-        self.assertEqual(len(slots), 2 * protocol.FORMAL_TASK_COUNT)
+        self.assertEqual(len(slots), 2 * protocol.TASK_COUNT)
         self.assertIn("two_observations_per_task_support_no_per_task_or_per_action_rate",
                       report.LIMITATIONS)
