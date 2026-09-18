@@ -10,6 +10,10 @@ Application Adapter 把一个第一方 Web 应用接入通用服务端 Agent。A
 
 `BusinessToolRuntime` 通过固定 JSON schema 暴露当前应用数据。凭据和任意 HTTP 构造应保留在应用 executor 内。Skill 说明何时及如何调用工具，但不能证明当前记录存在。返回的每条路由必须原样出现在结果内容中，并在 Agent 使用前通过 Adapter 路由端口校验。
 
+读工具的 `QueryEvidence` 决定回答能对返回的行说什么。`matched_count` 填范围内符合条件的记录数；只有应用确实数全了，才设 `count_exact=True`，这样一个只返回 20 行、共 72 条的列表会写"共 72 条，下面列出其中 20 条"。按名称搜索时，`looked_for` 填搜索的文字，`exact_matches` 填名称完全一致的条数，应用无法判断时留 `None`。只有完全一致的匹配才能让回答说"已存在该名称的记录"。
+
+证据用工具自己的字段名和范围说明，核验器也按这些原文核对。要在读者的语言里显示它们，给 `BusinessToolRuntime` 传 `answer_labels={"zh": {...}}`，键是证据里字段名和范围说明的原文；订单状态这类编码取值用 `字段=取值` 作键。标签只改变回答怎么显示，不改变回答断言的内容；回答依据保留原文。
+
 运行时使用的所有应用 URL 形状都归路由端口所有。普通 Adapter 只声明 typed tool 路径，并为空源码合同返回空路由身份。需要源码能力的集成可以额外声明带 `scope`、`route` 命名组的合同路由模式，以及明确的应用入口模式。通用 Agent 只调用端口识别路由、发现入口页 scope 和校验观察到的 handoff 链接，不解析具体框架的 URL 约定。应用特有的 session handoff 查询参数名应写入 `session_handoff_query_keys`，并传给 `LiveProductSession(sensitive_query_keys=...)`，使内嵌 Runtime 在 DOM 内容离开浏览器前删除这些值。
 
 ## PageController 与静态 Runtime
