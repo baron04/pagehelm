@@ -82,37 +82,62 @@ def _trigger_matches(trigger: str, task: str, *, max_gap_tokens: int = 3) -> boo
 _STATIVE_MARKERS = frozenset({"已", "被", "未", "没", "待", "不", "别"})
 #: Two-character forms of the same markers: 已经, 没有, 不要, 不用.
 _STATIVE_PAIRS = frozenset({("已", "经"), ("没", "有"), ("不", "要"), ("不", "用")})
+#: Aspect markers after or inside the verb: "开票了吗" (has it been invoiced), "开过票"
+#: (was it ever). Neither is how anyone asks for the action to happen.
+_ASPECT_MARKERS = frozenset({"了", "过"})
+_QUESTION_MARKERS = frozenset({"吗", "么", "没"})
+#: What makes "确认" mean "check" rather than "confirm": whether something holds ("是否"), or a
+#: question about an attribute of the object ("确认报价单 S00007 的金额是多少").
+_CHECK_QUESTION = re.compile(r"(?:谁|哪|几|吗|多少|什么)")
+#: A clause ends at sentence punctuation or at "然后"; the checks above stay inside one, so
+#: "确认报价单 S00007，然后告诉我它的金额是多少" is still a request followed by a question.
+_CLAUSE_BREAK = re.compile(r"[，,。；;！!？?\n]|然后")
 
 
 def trigger_requests_action(trigger: str, task: str, *, max_gap_tokens: int = 3) -> bool:
     """Whether `trigger` occurs in `task` as something asked for, not as a description.
 
-    The same match as `_trigger_matches`, tried at every start, and a start is discarded when
-    the token before it -- or the two before it, for 已经, 没有, 不要 and 不用 -- mark the verb as
-    a state or deny it. Selection keeps the plain matcher: a question about confirmed or
-    unconfirmed orders still loads the order Skills. Only the claim that the user asked for a
-    change is narrowed.
+    The same match as `_trigger_matches`, tried at every start in every clause, and a start
+    is discarded when the words around it say the sentence is about a state rather than a
+    request: a marker before the verb (已, 未, 没有, 不要 ...), an aspect marker inside or after
+    it in a question (开过票, 开票了吗), or a check of a fact about the object (是否, 的 ... 是多少).
+    Selection keeps the plain matcher: a question about confirmed or unconfirmed orders still
+    loads the order Skills. Only the claim that the user asked for a change is narrowed.
     """
     wanted = _trigger_tokens(trigger)
-    available = _trigger_tokens(task)
-    if not wanted or not available:
-        return False
+    return bool(wanted) and any(
+        _clause_requests(wanted, _trigger_tokens(clause), max_gap_tokens)
+        for clause in _CLAUSE_BREAK.split(task))
+
+
+def _clause_requests(wanted: tuple[str, ...], available: tuple[str, ...],
+                     max_gap_tokens: int) -> bool:
     for start, token in enumerate(available):
         if token != wanted[0]:
             continue
         before = available[max(0, start - 2):start]
         if before and (before[-1] in _STATIVE_MARKERS or tuple(before) in _STATIVE_PAIRS):
             continue
-        cursor, matched = start, True
+        positions, matched = [start], True
         for next_token in wanted[1:]:
-            upper = min(len(available), cursor + max_gap_tokens + 2)
+            upper = min(len(available), positions[-1] + max_gap_tokens + 2)
             try:
-                cursor = available.index(next_token, cursor + 1, upper)
+                positions.append(available.index(next_token, positions[-1] + 1, upper))
             except ValueError:
                 matched = False
                 break
-        if matched:
-            return True
+        if not matched:
+            continue
+        gap = {available[i] for i in range(start, positions[-1] + 1) if i not in positions}
+        after = available[positions[-1] + 1:]
+        tail = "".join(after)
+        if (gap & _ASPECT_MARKERS
+                or (after[:1] and after[0] in _ASPECT_MARKERS
+                    and set(after[1:]) & _QUESTION_MARKERS)
+                or "是否" in tail
+                or ("的" in tail and _CHECK_QUESTION.search(tail[tail.index("的"):]))):
+            continue
+        return True
     return False
 
 
