@@ -104,10 +104,11 @@ def _inherit_running_settings(env: dict[str, str]) -> dict[str, str]:
         if not container or "\n" in container:
             return env
         image = _run(["docker", "inspect", "--format", "{{.Config.Image}}",
-                      container]).decode().strip()
+                      container], env=env).decode().strip()
         mounts = _run([
             "docker", "inspect", "--format",
-            "{{range .Mounts}}{{.Source}}|{{.Destination}}\n{{end}}", container]).decode()
+            "{{range .Mounts}}{{.Source}}|{{.Destination}}\n{{end}}", container],
+            env=env).decode()
     except OperationsError:
         return env
     repository, _, revision = image.rpartition(":")

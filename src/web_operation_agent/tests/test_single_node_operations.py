@@ -286,8 +286,11 @@ class SingleNodeOperationsTests(unittest.TestCase):
             environments.append(env)
             return b"odoo-container-id" if args[:2] == ("ps", "-q") else b""
 
-        def run(args, **_kwargs):
+        def run(args, *, env, input_bytes=None, timeout=900):
+            # The real signature: a stub that accepted anything hid a call this command
+            # makes without the environment it has to pass.
             calls.append(("run", tuple(args)))
+            self.assertIn("WOA_PROJECT_NAME", env)
             if "{{.Config.Image}}" in args:
                 return b"woa-p75-odoo-app:4a3ee83\n"
             if ".Mounts" in str(args):
