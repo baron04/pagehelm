@@ -141,6 +141,8 @@ Agent 网关仍只监听 loopback。部署时可以为它配置一个独立的�
 
 [Odoo 单机部署](deploy/odoo-single-node/README.zh-CN.md) 是第一套面向私有试用的普通浏览器组合。固定摘要的 Docker 镜像在一台 Linux 主机运行 Odoo 18、PostgreSQL、Agent 和独立同源 HTTPS 网关。Odoo 用自身登录会话解析并签名身份；Agent 将其与该用户独立登记的 API key 及收窄工具 scope 对齐。SQLite session、mutation 与 conversation 状态、分阶段备份恢复、逐 actor 有界容量、保留策略、OTLP/HTTP telemetry 和无业务内容告警都有可执行运维路径。仓库中的资格记录会区分自动合同证据、单机观测和仍需人工或被环境阻塞的检查，不构成生产或跨主机声明。
 
+它从仓库检出运行，不随框架一起安装。核心 distribution 不带任何应用、也不带 demo，正因如此它的 wheel 才能声明自己两者都没有。
+
 显式的 `--scripted` 模式只执行一次固定的零费用装置演示：加载 Skill、查询当前 API、打开 API 授权的精确路由、观察新页面并结束。它不衡量模型能力。去掉 `--scripted` 并配置 OpenAI-compatible provider 后，同一个应用会改用真实模型决策并保持浏览器可交互。
 
 ### 资格门禁
@@ -204,6 +206,8 @@ python -m web_operation_agent_odoo.demo --scripted --headless \
 
 根目录 [`demo.sh`](examples/twenty/demo.sh) 会启动 [`examples/twenty/src/web_operation_agent_twenty/demo`](examples/twenty/src/web_operation_agent_twenty/demo/README.md) 中的公开装配。先运行 `./demo.sh --check`，可以在不打开浏览器、不调用模型的情况下诊断配置、运行时、Twenty 健康状态和浏览器/OAuth 身份。Demo 要求已有一个只包含合成数据的 Twenty 实例，并显式提供浏览器登录状态、委托 OAuth 状态、同源 PageController 模块、审计输出和费用账本的本地路径；这些 `WOA_*` 值可以放在经安全解析的模型环境文件中。这个进程不读取数据库真值、不复位应用，也不会把 Agent 结束当成确定性的业务验收。可由全新 clone 一键部署的公开 Twenty 环境仍属于发布前工作。
 
+本机持久恢复、共享请求配额、保留策略与 mutation 核对见[持久化运维指南](docs/integrations/durable-operations.zh-CN.md)。
+
 ## 独立 Odoo 产品评估
 
 [`evals/odoo`](evals/odoo/README.md) 是 Odoo 参考集成作为产品接受评估时使用的装置。它通过普通 Odoo 登录、助手面板和带持久 journal 的单机部署，在预先声明的合成 Odoo 18 工作流上测量一个固定的 Web Operation Agent 组合。官方 PageAgent 只作探索性对照，而且只在单轮只读和导航任务上对照。带有本项目 Skill 与 typed tool 的 PageAgent 臂在建设之前就被排除：PageAgentCore 在构造时固定工具集，而产品根据用户请求选择本轮最初的 Skill 目录，两者若要从同一份目录出发，必须由一个读取 prompt 的 harness 代为预选。因此这项评估不做引擎归因，也不做非劣效结论。
@@ -223,8 +227,6 @@ Gate 4 breadth 开发目录新增 30 个唯一的中英文提示模板，覆盖 
 Evaluator 还包含一套严格的配对实验预注册校验器，用于在运行前绑定 PageAgent、Skill/API 与 SourceProvider 对比所需的工件和实现摘要、等信息量实验臂、provider 参数、预算、任务资格、源码排除、确定性平衡顺序和 fail-fast 停止规则。当前尚未冻结正式运行协议，也没有形成比较结果。
 
 私有的 append-only batch ledger 会让所有 runner 使用同一种 trial schema，并强制执行冻结顺序。它通过摘要链检测删改和重排，拒绝重复或时间重叠的 trial，不会把未知 provider 费用写成零，还会检测同一 pair 的模型漂移，并在装置无效或观察到安全事件时停止。官方 PageAgentCore 与 PageController v1.12.4 已通过 npm lock 和 integrity 固定，其轻量 bridge 已完成可复现构建以及无模型调用的真实 Chromium DOM/custom-tool 资格检查。两个引擎现在共用同一套证据合同、同一个 typed failure 分类器和同一个协议绑定 trial projector：只读 PageAgent runner 与只读 Web Operation Agent runner 都绑定真实浏览器/API 身份，并拒绝无法确定性验收的答案或页面证据。统一的串行 schedule driver 按冻结顺序完成状态采集、任务实例化、执行、判定、投影与追加，内部没有任何引擎特例；固定 schema 的报告只从已验证账本重算公开计数，并拒绝把小批次表述成对比结论。两个 runner 都曾在本地 Twenty 2.39.0 fixture 上用真实 Chromium、委托 API、数据库状态采集和独立 evaluator 通过无模型 live 资格验证。该结论记录的是一次在已准备环境上的运行，不是任何 checkout 自带的属性：live 门禁通过 `scripts/qualify.sh` 重跑，缺少该环境时它会报告 `BLOCKED`。冻结的正式协议、provider 快照策略和源码 allowlist 仍未完成；这些资格用例不构成成功率或对比结论。
-
-本机持久恢复、共享请求配额、保留策略与 mutation 核对见[持久化运维指南](docs/integrations/durable-operations.zh-CN.md)。
 
 **两个引擎到底在哪里被分开了。** 上面这些对照测的是成功率，而它们都饱和了——47 对配对、零不一致——因为它们出的每道题，从页面和从 typed 工具都做得出来。[`evals/woa/pilot_structural.py`](evals/woa/README.md) 问的是四个跟「做对得更多」无关的问题，评分只用两类数字：应用自己的状态，和每条臂自己的持久记录。无模型跑法下三项把臂分开了：只有 typed 那条臂报得出集合的真实规模（240），那个数来自游标分页页面从不发起的第二次计数调用；确认丢失之后，只有带 journal 的臂留下一条记录加一行指名该记录的持久未决行，而页面写入路径留下重复记录、磁盘上什么都没有；页面上真有一个删除控件，只有产品这条臂在派发前拒绝了它。每一项都有反向验证——放开页面点击、让工具数自己的列表而不是问应用、或者去掉持久 journal——对应维度就不再能把臂分开。
 
