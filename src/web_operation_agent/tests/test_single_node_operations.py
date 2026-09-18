@@ -197,6 +197,39 @@ class SingleNodeOperationsTests(unittest.TestCase):
         self.assertLess(encoded.index(".woa-restore-stage"), first_trial_cutover)
         self.assertFalse(result["execution_authority_restored"])
 
+    def test_restore_scratch_directories_are_neither_archived_nor_extracted(self):
+        """A restore that stops part-way leaves `.woa-restore-stage` in the Odoo volume on
+        purpose. Archived by the next backup, it came back as a second stage inside the first
+        and the cutover `mv` refused to overwrite it, with Agent and Odoo stopped. Runs the
+        real `tar` with the exclusions both commands use: once on a volume holding scratch
+        directories, once on a bundle taken before the exclusions existed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            volume = root / "volume"
+            for relative in ("filestore/woa_trial/ab/record", "addons/18.0/module",
+                             ".woa-restore-stage/filestore/stale",
+                             ".woa-restore-previous/sessions/old"):
+                (volume / relative).parent.mkdir(parents=True, exist_ok=True)
+                (volume / relative).write_text(relative)
+
+            def tar(*args):
+                subprocess.run(["bash", "-c", "tar " + " ".join(args)], check=True,
+                               capture_output=True, timeout=60)
+
+            fixed = root / "fixed.tar.gz"
+            tar("-C", str(volume), OPS._SCRATCH_EXCLUDES, "-czf", str(fixed), ".")
+            earlier = root / "earlier.tar.gz"
+            tar("-C", str(volume), "-czf", str(earlier), ".")
+            for bundle in (fixed, earlier):
+                with self.subTest(bundle=bundle.name):
+                    stage = root / ("stage-" + bundle.name)
+                    stage.mkdir()
+                    tar("-C", str(stage), OPS._SCRATCH_EXCLUDES, "-xzf", str(bundle))
+                    extracted = sorted(path.relative_to(stage).as_posix()
+                                       for path in stage.rglob("*") if path.is_file())
+                    self.assertEqual(extracted, ["addons/18.0/module",
+                                                 "filestore/woa_trial/ab/record"])
+
     def test_the_core_restores_the_agent_state_the_deployment_backup_writes(self):
         """The deployment keeps the run ledgers in `agent-state/`, beside the core bundle, and
         the core restore refuses any file its manifest does not declare. The tests above

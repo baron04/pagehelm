@@ -248,7 +248,8 @@ def backup(*, project: str, destination: str | Path) -> dict:
             env, "run", "--rm", "--no-deps", "--entrypoint", "bash",
             "-v", f"{temporary}:/backup", "odoo", "-lc",
             "tar -C /var/lib/odoo --exclude='./sessions' "
-            "--exclude='./sessions/**' -czf /backup/odoo-data.tar.gz . && "
+            "--exclude='./sessions/**' " + _SCRATCH_EXCLUDES
+            + " -czf /backup/odoo-data.tar.gz . && "
             f"chown {owner} /backup/odoo-data.tar.gz")
         created = int(time.time() * 1000)
         manifest = _manifest(temporary, project=project, created_at_ms=created)
@@ -270,6 +271,16 @@ def backup(*, project: str, destination: str | Path) -> dict:
     finally:
         if stopped:
             _compose(env, "up", "-d", "odoo", "agent", timeout=1200)
+
+
+#: The directories `restore` stages into and keeps the previous state in. A restore that
+#: fails part-way leaves them in the data volume on purpose, and a backup taken afterwards
+#: used to archive them: restoring that bundle then extracted a second `.woa-restore-stage`
+#: inside the first, and the cutover `mv` refused to overwrite it with Agent and Odoo
+#: stopped. Neither is ever archived, and neither is extracted from a bundle taken before.
+_SCRATCH_EXCLUDES = " ".join(
+    f"--exclude='./{name}' --exclude='./{name}/**'"
+    for name in (".woa-restore-stage", ".woa-restore-previous"))
 
 
 def _core_restore_script(backup: str, state: str) -> str:
@@ -328,8 +339,8 @@ def restore(*, project: str, bundle: str | Path) -> dict:
             "-v", f"{root}:/backup:ro", "odoo", "-lc",
             "rm -rf /var/lib/odoo/.woa-restore-stage && "
             "mkdir -p /var/lib/odoo/.woa-restore-stage && "
-            "tar -C /var/lib/odoo/.woa-restore-stage "
-            "-xzf /backup/odoo-data.tar.gz && "
+            "tar -C /var/lib/odoo/.woa-restore-stage " + _SCRATCH_EXCLUDES
+            + " -xzf /backup/odoo-data.tar.gz && "
             "rm -rf /var/lib/odoo/.woa-restore-stage/sessions")
         # Core restore validates SQLite again and explicitly strips execution authority.
         _compose(
