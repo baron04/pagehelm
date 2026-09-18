@@ -775,7 +775,7 @@ class OdooBusinessToolExecutor:
 
     def _evidence(self, collection: _Collection, pairs, *, name: str, observed_at: str,
                   matched: int, scanned, whole: bool, conditions: tuple[str, ...],
-                  looked_for: str = "") -> tuple:
+                  looked_for: str = "", count_exact: bool = False) -> tuple:
         """Turn what this read returned into evidence an answer can cite.
 
         The projection beside it stays a display view. This is the same read expressed so a
@@ -789,7 +789,7 @@ class OdooBusinessToolExecutor:
             evidence_id="query#1", origin=origin, collection=collection.tool.removeprefix("query_"),
             conditions=conditions,
             matched_count=matched, records_scanned=scanned, covers_whole_scope=whole,
-            looked_for=looked_for)]
+            looked_for=looked_for, count_exact=count_exact)]
         index = 0
         for row, _item in pairs:
             record_id = row.get("id")
@@ -1010,6 +1010,10 @@ class OdooBusinessToolExecutor:
                                     observed_at=observed_at, matched=matched,
                                     scanned=scan["records_scanned"],
                                     whole=source_complete and not result_truncated,
+                                    # The scan read every matching record and search_count
+                                    # agreed, so the count is exact however few rows the
+                                    # limit then let through.
+                                    count_exact=source_complete,
                                     conditions=conditions, looked_for=needle),
             selection_options=selection_options,
             navigation_target=(record_routes[0] if unique_match else ""),
@@ -1103,7 +1107,7 @@ class OdooBusinessToolExecutor:
             raise BusinessMutationRefusedError(
                 f"sales order {reference} has invoice status {status or 'unknown'}; only "
                 "an order with something still to invoice can be invoiced",
-                reason="nothing_to_invoice")
+                reason="nothing_to_invoice", subject=self._label(order, "name") or reference)
         return order
 
     def prepare_mutation(self, name: str, args: dict, *,

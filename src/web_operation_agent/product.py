@@ -225,6 +225,12 @@ class AgentAnswerContext:
     max_chars: int
 
 
+def _plain(value: object) -> str:
+    """An application value placed in a fixed sentence: one line, no markup it did not write."""
+    text = " ".join(str(value or "").split())[:120]
+    return re.sub(r"([\\`*_{}\[\]()<>#!|])", r"\\\1", text)
+
+
 def render_neutral_user_answer(context: AgentAnswerContext) -> str:
     """Prefer model prose and otherwise describe the terminal state without a success claim."""
     status = _status_for(context.agent.terminal_reason)
@@ -258,12 +264,17 @@ def render_neutral_user_answer(context: AgentAnswerContext) -> str:
             if context.agent.detail == "duplicate":
                 return "已存在同名或同邮箱记录，本次没有重复创建。"
             if context.agent.detail == "nothing_to_invoice":
-                return "这张订单没有可开票的内容，本次没有执行任何更改。"
+                subject = _plain(context.agent.refusal_subject)
+                return (f"销售订单 {subject} 没有可开票的内容，本次没有执行任何更改。" if subject
+                        else "这张订单没有可开票的内容，本次没有执行任何更改。")
             return "业务规则不允许执行这项操作，本次没有提交任何更改。"
         if context.agent.detail == "duplicate":
             return "A record with the same name or email already exists. Nothing was created."
         if context.agent.detail == "nothing_to_invoice":
-            return "That order has nothing left to invoice, so it was not executed."
+            subject = _plain(context.agent.refusal_subject)
+            return (f"Sales order {subject} has nothing left to invoice, so it was not executed."
+                    if subject else
+                    "That order has nothing left to invoice, so it was not executed.")
         return "A business rule refused this operation. No change was submitted."
     if context.agent.terminal_reason == "permission_denied":
         projection = (context.business_result.query_answer

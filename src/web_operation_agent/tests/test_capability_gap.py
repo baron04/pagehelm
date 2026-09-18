@@ -143,14 +143,17 @@ class CapabilityResolutionFollowsTheCatalog(unittest.TestCase):
             self.assertEqual(runtime.resolve_capability("删除客户 X", allow_mutations=True),
                              ("fixture.customers-delete",))
 
-    def test_the_non_typed_surfaces_are_part_of_the_search(self):
+    def test_a_page_surface_that_can_make_the_change_is_part_of_the_search(self):
+        """The session passes only surfaces that perform a change themselves -- enabled page
+        writes. A form handoff is not one: the user submits it, and it answered every goal
+        alike, which in the deployment that enables it made every gap impossible."""
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             runtime = self._runtime(root, ())
             self.assertEqual(
                 runtime.resolve_capability("删除客户 X", allow_mutations=True,
-                                           extra=("form_handoff",)),
-                ("form_handoff",))
+                                           extra=("page:submit",)),
+                ("page:submit",))
 
     def test_an_unknown_effect_is_refused(self):
         with TemporaryDirectory() as tmp:
@@ -264,10 +267,23 @@ class ACountOfAPartialReadIsRefused(unittest.TestCase):
         item = self._count(self._query(covers_whole_scope=True, matched=239))
         self.assertEqual((item.value, item.covers_whole_scope), ("239", True))
 
-    def test_a_count_over_a_partial_read_is_refused_and_names_the_remedy(self):
+    def test_a_count_whose_scan_did_not_finish_is_refused_without_an_impossible_remedy(self):
         with self.assertRaises(ComputationRefused) as caught:
             self._count(self._query(covers_whole_scope=False, matched=239))
         message = str(caught.exception)
-        self.assertIn("covered only part", message)
-        self.assertIn("drop any limit", message)
+        self.assertIn("did not finish", message)
+        # The earlier text sent the model to "drop any limit" over a tool that caps its rows
+        # anyway; it looped, and one answer went from 12 seconds to 86.
+        self.assertNotIn("limit", message)
         self.assertNotIn("239", message)
+
+    def test_an_exact_count_over_a_capped_read_is_answered(self):
+        """d06: twenty rows came back, the application counted 239, and 239 is the answer."""
+        query = QueryEvidence(
+            evidence_id="q#1",
+            origin=Origin(kind="typed", reference="query_customers", observed_at="1.0",
+                          scope="customers visible to the delegated user"),
+            collection="customers", conditions=(), matched_count=239, records_scanned=239,
+            covers_whole_scope=False, count_exact=True)
+        item = self._count(query)
+        self.assertEqual((item.value, item.covers_whole_scope), ("239", True))

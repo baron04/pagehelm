@@ -202,18 +202,23 @@ def run(turn: TurnEvidence, request: ComputationRequest, *,
         # early is not that claim about anything. A sum may honestly be a subtotal -- the
         # renderer has a word for it -- but "239, of an unknown total" answers no question
         # the user asked, and labelling it "within what was read" made it look answered.
-        # Refused rather than caveated, because the remedy is cheap: read the whole scope.
-        if not whole:
+        #
+        # Exactness is about the count, not the rows. An adapter that counted every matching
+        # record and returned twenty of them knows the count exactly; one whose scan stopped
+        # early does not, and asking the model to "read the whole scope" is no remedy when
+        # the tool itself caps its rows -- that loop took a 12-second answer to 86 seconds.
+        exact = whole or (isinstance(dataset, QueryEvidence) and not records
+                          and dataset.count_exact)
+        if not exact:
             raise ComputationRefused(
-                f"this read covered only part of {scope}, so counting it cannot say how many "
-                "there are; read the whole scope -- drop any limit -- and count that, or "
-                "state what the read covered instead of giving a number")
+                f"the read of {scope} did not finish, so how many there are is not known; "
+                "say what the read covered instead of giving a number")
         return turn_record(turn, ComputationEvidence(
             evidence_id=evidence_id, origin=origin, operation="count()",
             inputs=request.over,
             value=str(len({item.record_id for item in records}) if records else expected),
             value_type="count",
-            covers_whole_scope=whole))
+            covers_whole_scope=True))
 
     if request.operation == "filter":
         if not records and expected:

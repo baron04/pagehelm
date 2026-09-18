@@ -35,7 +35,8 @@ from .browser import BrowserExecutor, TransportError, TurnCancelled
 from .business import (BUSINESS_SKILL_MATCHER_VERSION, BusinessMutationBlockedError,
                        BusinessMutationIndeterminate, BusinessMutationRefusedError,
                        BusinessSkillSelection, BusinessToolError, BusinessToolPermissionError,
-                       BusinessToolResult, FormDraft, BusinessToolRuntime)
+                       BusinessToolResult, FormDraft, BusinessToolRuntime,
+                       trigger_requests_action)
 from .contract import (ContractPlanner, EvidenceBundle, PlanningFailed, SourceRetriever,
                        _segment_from_template, expand_terms)
 from .controlplane import ControlPlaneClient, ControlPlaneError
@@ -111,17 +112,21 @@ def _is_capability_gap(verified: dict | None) -> bool:
             and isinstance(conclusions[0], dict)
             and conclusions[0].get("kind") == "capability_gap")
 
-CAPABILITY_GAP_SYSTEM = """\
-A capability check searched every capability installed for this actor -- not only the Skills \
-selected for this task -- and matched nothing. Its result is recorded as {ref}.
-* If the user asked you to change data, finish with outcome=unable and a single \
-capability_gap conclusion citing {ref}. Do not look the record up first, do not answer with \
-a related query, and do not substitute a different change.
-* This overrides walking the user to the record: with no capability, do not `goto` it and \
-do not offer to have it done by hand on that page. Having no tool is not the same as finding \
-nothing, and a record you looked up is not an answer to a change you cannot make.
-* This says nothing about reading. A question you can answer by reading, you still answer.
-"""
+#: The model decides whether the user asked for a change; the server decides whether this
+#: session can make it. A search run for every turn would find no write capability behind
+#: every read-only question -- a read matches no write Skill -- so the decline would be offered
+#: to every hard question, where it does not belong. Called on the model's judgement, it
+#: costs one call on the turns that need it and nothing on the rest.
+CAPABILITY_TOOL = {"type": "function", "function": {
+    "name": "check_capability", "description": (
+        "Call this when the user asked you to change data -- create, change, delete, send, "
+        "post, confirm, invoice -- and none of your tools performs that change. The server "
+        "searches every capability installed for this actor, not only the Skills selected for "
+        "this task, and returns a reference. If it found nothing, finish with outcome=unable "
+        "and a single capability_gap conclusion citing that reference. If it found something, "
+        "load that Skill and use it. Call it before looking the record up. Never call it for a "
+        "question you can answer by reading."),
+    "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}}
 
 AGENT_SYSTEM = """\
 You operate a web application through a browser you drive one action at a time. You cannot \
@@ -549,9 +554,13 @@ class RunResult:
     #: exception prose remain outside the product result.
     provider_error_code: str | None = None
     detail: str = ""
+    #: The record a pre-dispatch business rule refused, for the sentence that reports it.
+    #: None when nothing was refused, so a run without a refusal serialises as it always did.
+    refusal_subject: str | None = None
 
     def to_json(self) -> dict:
-        optional = {"verified_answer", "clarification", "provider_error_code"}
+        optional = {"verified_answer", "clarification", "provider_error_code",
+                    "refusal_subject"}
         value = {k: getattr(self, k) for k in self.__dataclass_fields__
                  if k not in optional or getattr(self, k) is not None}
         if self.clarification is not None:
@@ -846,8 +855,12 @@ class ServerAgentSession:
         # A matched mutation Skill is stronger evidence than a mutation candidate exposed
         # only by fallback or noun-only widening.  Keep that distinction so a duplicate
         # preflight cannot be presented as the answer to an explicit create request.
+        # Selection still loads a Skill whose trigger appears anywhere; the claim that the user
+        # asked for a change is narrower. "已确认销售订单" names orders by their state, and treating
+        # it as a request to confirm one refused every read-only answer to the question.
         self._explicit_mutation_intent = any(
             not skill.read_only and skill.skill_id in selection.trigger_matches
+            and any(trigger_requests_action(trigger, task.prompt) for trigger in skill.triggers)
             for skill in selection.skills)
         self._loaded_business_skill_ids: set[str] = set()
         self._auto_loaded_business_skill_ids: set[str] = set()
@@ -881,6 +894,7 @@ class ServerAgentSession:
         # answer alike and arrive through different doors with different trust roots.
         self.evidence = TurnEvidence()
         self._evidence_feedback = ""
+        self._capability_ref = ""
         self._clarification_choices: dict[str, dict] = {}
         self._clarification_feedback = ""
         self._answer_repairs = 0
@@ -1163,12 +1177,6 @@ class ServerAgentSession:
             system += "\n" + CAPABILITY_SYSTEM
         if self.scope_first_policy:
             system += "\n" + SCOPE_FIRST_SYSTEM
-        capability_ref = self._register_capability_evidence()
-        if capability_ref and not self.evidence.get(capability_ref).matches:
-            # Only when the search came back empty. A turn that has the capability reaches it
-            # through the Skills it already loaded, and telling every read-only turn how to
-            # decline is both noise and an invitation.
-            system += "\n" + CAPABILITY_GAP_SYSTEM.format(ref=capability_ref)
         messages = [{"role": "system", "content": system},
                     {"role": "user", "content": self._opening(obs)}]
         self._sync_plan_message(messages)
@@ -1506,6 +1514,7 @@ class ServerAgentSession:
                             error_code=exc.code, reason=exc.reason,
                             detail=detail, dispatched=False, side_effect_possible=False,
                             identity=operation_identity)
+                        result.refusal_subject = exc.subject or None
                         return self._finish(
                             result, t0, "business_mutation_refused", exc.reason, steps=step)
                     except BusinessToolError as exc:
@@ -2070,6 +2079,11 @@ class ServerAgentSession:
                 source_route_read_only = True
                 name, args = "goto", {"url": url}
 
+            if name == "check_capability" and self._capability_check_available():
+                messages += [_assistant_call(call),
+                             _tool_result(call, self._capability_check_feedback())]
+                continue
+
             if name == "compute" and len(self.evidence):
                 try:
                     computed = answer_protocol.compute(
@@ -2452,6 +2466,8 @@ class ServerAgentSession:
                      else tool for tool in tools]
         if self.allow_clarification:
             tools += [ASK_USER_TOOL]
+        if self._capability_check_available():
+            tools += [CAPABILITY_TOOL]
         if len(self.evidence):
             tools += [answer_protocol.COMPUTE_TOOL]
         tools += [SOURCE_TOOL, SOURCE_NAV_TOOL] if self.runtime_source else []
@@ -3285,16 +3301,17 @@ class ServerAgentSession:
         catalog plus the non-typed surfaces this deployment actually enables, because a gap
         is a statement about the whole executable surface.
         """
-        if self.business_tools is None or self.principal is None:
+        if not self._capability_check_available():
             return ""
-        # Only the surfaces that can make a change. Navigation and observation are not
-        # capabilities to change anything, and counting `goto` here would mean a deployment
-        # with any page action enabled could never report a capability gap at all.
-        extra = []
-        if self.allow_form_prefill:
-            extra.append("form_handoff")
+        if self._capability_ref:
+            return self._capability_ref
+        # Only the surfaces that can make the change themselves. Page actions that write can,
+        # so while they are enabled no gap may be claimed: the session might do it through the
+        # page. A form handoff cannot -- it prepares a form and the user submits it, or does
+        # not -- and it answers every goal alike, so counting it made every search non-empty
+        # and the gap impossible in the one deployment that enables it.
         writing_actions = {"fill", "select", "submit", "click"} - set(self.disabled_actions)
-        extra += [f"page:{name}" for name in sorted(writing_actions & BROWSER_ACTIONS)]
+        extra = [f"page:{name}" for name in sorted(writing_actions & BROWSER_ACTIONS)]
         try:
             matches = self.business_tools.resolve_capability(
                 self.task.prompt,
@@ -3318,10 +3335,35 @@ class ServerAgentSession:
             goal=self.task.prompt[:500],
             matches=tuple(matches))
         self.evidence.record(item)
+        self._capability_ref = item.evidence_id
         self.ledger.append("capability_check", goal_chars=len(self.task.prompt),
                            catalog_digest=item.catalog_digest,
                            matches=list(item.matches))
         return item.evidence_id
+
+    def _capability_check_available(self) -> bool:
+        return (self.business_tools is not None and self.principal is not None
+                and not self._capability_question)
+
+    def _capability_check_feedback(self) -> str:
+        ref = self._register_capability_evidence()
+        if not ref:
+            return ("CAPABILITY CHECK UNAVAILABLE: no search could run, so no capability gap "
+                    "can be claimed.")
+        # The structured finish is what can carry the conclusion, and until now it opened only
+        # after a business read -- the one thing a turn declining a change must not do first.
+        self._answer_mode = True
+        held = self.evidence.get(ref)
+        if held.matches:
+            return (f"CAPABILITY CHECK {ref}: this session can perform it with "
+                    + ", ".join(held.matches) + ". Load that Skill and use it; a "
+                    "capability_gap citing this check is refused.")
+        return (f"CAPABILITY CHECK {ref}: nothing installed for this actor performs the change "
+                "the user asked for. Finish now with outcome=unable and answer "
+                '{"version": 1, "coverage": "undetermined", "conclusions": '
+                f'[{{"kind": "capability_gap", "evidence_ref": "{ref}"}}]}}. '
+                "Do not look the record up, do not goto it, do not answer with a related query, "
+                "and do not substitute a different change.")
 
     def _active_capability_digest(self) -> str:
         """A digest of the business tools this turn could actually call.

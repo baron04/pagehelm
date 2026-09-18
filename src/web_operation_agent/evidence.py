@@ -150,11 +150,22 @@ class QueryEvidence:
     #: Literal record name/reference supplied by a point lookup. Broad reads leave this
     #: empty. It keeps user-facing not-found text separate from adapter query syntax.
     looked_for: str = ""
+    #: Whether `matched_count` is the exact number of matching records in scope, even when
+    #: fewer rows came back. Returning twenty rows of 239 does not make 239 uncertain when
+    #: the application counted them all; `covers_whole_scope` answers "were all rows
+    #: returned", this answers "is the count right", and a count needs only the second.
+    #: False unless the adapter says otherwise, because a count it cannot vouch for is not one.
+    count_exact: bool = False
 
     def __post_init__(self) -> None:
         _require_id(self.evidence_id)
         _require_origin(self.origin)
         object.__setattr__(self, "collection", _text(self.collection, "collection"))
+        if not isinstance(self.count_exact, bool):
+            raise TypeError("count_exact must be a boolean")
+        if self.covers_whole_scope and not self.count_exact:
+            # Every row came back, so the count is every row: the two cannot disagree.
+            object.__setattr__(self, "count_exact", True)
         if not isinstance(self.conditions, tuple):
             raise TypeError("conditions must be a tuple")
         object.__setattr__(self, "conditions", tuple(

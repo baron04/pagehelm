@@ -72,6 +72,45 @@ def _trigger_matches(trigger: str, task: str, *, max_gap_tokens: int = 3) -> boo
     return True
 
 
+#: Han aspect and passive markers that turn the verb after them into a description of state.
+#: English carries the same distinction in the word itself -- "confirmed orders" never matches
+#: a "confirm order" trigger -- but "已确认销售订单" (orders that are already confirmed) matches
+#: "确认订单" once the matcher allows a gap, and a question about confirmed orders became a
+#: request to confirm one.
+_STATIVE_MARKERS = frozenset({"已", "被"})
+
+
+def trigger_requests_action(trigger: str, task: str, *, max_gap_tokens: int = 3) -> bool:
+    """Whether `trigger` occurs in `task` as something asked for, not as a description.
+
+    The same match as `_trigger_matches`, tried at every start, and a start is discarded when
+    the token before it -- or the one before that, for 已经 -- marks the verb as already done
+    or done to something. Selection keeps the plain matcher: a question about confirmed orders
+    still loads the order Skills. Only the claim that the user asked for a change is narrowed.
+    """
+    wanted = _trigger_tokens(trigger)
+    available = _trigger_tokens(task)
+    if not wanted or not available:
+        return False
+    for start, token in enumerate(available):
+        if token != wanted[0]:
+            continue
+        before = available[max(0, start - 2):start]
+        if before and (before[-1] in _STATIVE_MARKERS or tuple(before) == ("已", "经")):
+            continue
+        cursor, matched = start, True
+        for next_token in wanted[1:]:
+            upper = min(len(available), cursor + max_gap_tokens + 2)
+            try:
+                cursor = available.index(next_token, cursor + 1, upper)
+            except ValueError:
+                matched = False
+                break
+        if matched:
+            return True
+    return False
+
+
 #: Scripts whose letters are visually interchangeable with Latin ones. A name mixing Latin
 #: with either is a homograph, not a language: "Аcme" with a Cyrillic А renders exactly like
 #: "Acme". Han, Kana and Hangul mix with Latin in ordinary company names and are not listed.
@@ -219,12 +258,18 @@ class BusinessMutationRefusedError(BusinessToolError):
 
     code = "business_mutation_refused"
 
-    def __init__(self, message: str, *, reason: str):
+    def __init__(self, message: str, *, reason: str, subject: str = ""):
         super().__init__(message)
         if (not isinstance(reason, str) or not reason.strip()
                 or len(reason) > 100):
             raise ValueError("business mutation refusal reason is invalid")
+        if not isinstance(subject, str) or len(subject) > 200:
+            raise ValueError("business mutation refusal subject is invalid")
         self.reason = reason.strip()
+        #: The record the rule refused, when there is one. "This order has nothing to invoice"
+        #: does not tell a reader which order, and a reader who asked about one order needs to
+        #: see that order named in the answer to know the refusal is about what they asked.
+        self.subject = subject.strip()
 
 
 class BusinessMutationIndeterminate(RuntimeError):
