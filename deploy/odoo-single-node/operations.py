@@ -85,6 +85,45 @@ def _compose(env: dict[str, str], *args: str, timeout: int = 900) -> bytes:
          "-f", str(COMPOSE), *args], env=env, timeout=timeout)
 
 
+#: What this deployment already decided, and what every later operation must keep using.
+#: Compose resolves the file against the caller's environment, so an operator who runs a
+#: backup or a restore from a shell that does not export these gets the file's defaults:
+#: another image for the one-off containers this command starts, and another private
+#: directory to mount. They are read from the running deployment instead of guessed.
+_DEPLOYMENT_SETTINGS = ("WOA_ODOO_IMAGE", "WOA_BUILD_REVISION", "WOA_PRIVATE_DIR")
+
+
+def _inherit_running_settings(env: dict[str, str]) -> dict[str, str]:
+    """Fill the deployment settings the caller did not export from its own containers."""
+    if all(env.get(name) for name in _DEPLOYMENT_SETTINGS):
+        return env
+    # Best effort: a command that needs the deployment fails on its own service check, with
+    # a better message than this one could give.
+    try:
+        container = _compose(env, "ps", "-q", "odoo").decode().strip()
+        if not container or "\n" in container:
+            return env
+        image = _run(["docker", "inspect", "--format", "{{.Config.Image}}",
+                      container]).decode().strip()
+        mounts = _run([
+            "docker", "inspect", "--format",
+            "{{range .Mounts}}{{.Source}}|{{.Destination}}\n{{end}}", container]).decode()
+    except OperationsError:
+        return env
+    repository, _, revision = image.rpartition(":")
+    private = ""
+    for line in mounts.splitlines():
+        source, _, destination = line.partition("|")
+        if destination.strip() == "/run/woa-input/session-secret":
+            private = str(Path(source.strip()).parent)
+    inherited = {"WOA_ODOO_IMAGE": repository, "WOA_BUILD_REVISION": revision,
+                 "WOA_PRIVATE_DIR": private}
+    for name in _DEPLOYMENT_SETTINGS:
+        if not env.get(name) and inherited[name]:
+            env[name] = inherited[name]
+    return env
+
+
 def _assert_project_services(env: dict[str, str], *services: str) -> None:
     """Refuse destructive work unless Compose and Docker agree on every target."""
     project = env["WOA_PROJECT_NAME"]
@@ -208,7 +247,7 @@ def verify(bundle: str | Path, *, expected_project: str | None = None) -> dict:
 
 
 def backup(*, project: str, destination: str | Path) -> dict:
-    env = _environment(project)
+    env = _inherit_running_settings(_environment(project))
     _assert_project_services(env, "agent", "odoo", "db")
     target = Path(destination).expanduser().resolve()
     if target.exists() or target.is_symlink():
@@ -270,7 +309,7 @@ def backup(*, project: str, destination: str | Path) -> dict:
         raise
     finally:
         if stopped:
-            _compose(env, "up", "-d", "odoo", "agent", timeout=1200)
+            _compose(env, "start", "odoo", "agent", timeout=1200)
 
 
 #: The directories `restore` stages into and keeps the previous state in. A restore that
@@ -302,7 +341,7 @@ def _core_restore_script(backup: str, state: str) -> str:
 
 
 def restore(*, project: str, bundle: str | Path) -> dict:
-    env = _environment(project)
+    env = _inherit_running_settings(_environment(project))
     root = Path(bundle).expanduser().resolve()
     manifest = verify(root, expected_project=project)
     _assert_project_services(env, "agent", "odoo", "db")
@@ -378,7 +417,7 @@ def restore(*, project: str, bundle: str | Path) -> dict:
                 f"find {state_dir}/.woa-restore-stage -mindepth 1 -maxdepth 1 "
                 f"-exec mv -t {state_dir} {{}} + && "
                 f"rmdir {state_dir}/.woa-restore-stage")
-        _compose(env, "up", "-d", "odoo", "agent", timeout=1200)
+        _compose(env, "start", "odoo", "agent", timeout=1200)
         _assert_project_services(env, "agent", "odoo", "db")
         _compose(env, "exec", "-T", "db", "dropdb", "--if-exists", "-U", "odoo",
                  previous_database)

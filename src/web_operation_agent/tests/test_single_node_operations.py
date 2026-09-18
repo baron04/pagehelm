@@ -34,6 +34,10 @@ assert REGISTER_SPEC is not None and REGISTER_SPEC.loader is not None
 REGISTER_SPEC.loader.exec_module(REGISTER)
 
 
+#: What a deployment decided once and every later operation has to keep using.
+DEPLOYMENT_SETTINGS = ("WOA_ODOO_IMAGE", "WOA_BUILD_REVISION", "WOA_PRIVATE_DIR")
+
+
 class SingleNodeOperationsTests(unittest.TestCase):
     def test_gateway_is_independent_and_agent_mounts_only_required_secrets(self):
         compose = COMPOSEFILE.read_text(encoding="utf-8")
@@ -268,6 +272,54 @@ class SingleNodeOperationsTests(unittest.TestCase):
             self.assertFalse((state / ".woa-restore-bundle").exists())
             self.assertTrue((agent_state / "agent-ledgers.tar.gz").is_file(),
                             "the bundle is mounted read-only; the script must not move it")
+
+    def test_an_operation_keeps_the_deployment_it_found(self):
+        """A restore run from a shell without the deployment settings brought the services
+        back with the compose file's defaults: mutations off, another public origin, another
+        image. The assistant then refused every delegated write (P7.5 CR-21)."""
+        calls = []
+
+        environments = []
+
+        def compose(env, *args, **_kwargs):
+            calls.append(("compose", args))
+            environments.append(env)
+            return b"odoo-container-id" if args[:2] == ("ps", "-q") else b""
+
+        def run(args, **_kwargs):
+            calls.append(("run", tuple(args)))
+            if "{{.Config.Image}}" in args:
+                return b"woa-p75-odoo-app:4a3ee83\n"
+            if ".Mounts" in str(args):
+                return (b"/deployment/.private/odoo-single-node/session-secret|"
+                        b"/run/woa-input/session-secret\n")
+            return b""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp) / "bundle"
+            bundle.mkdir()
+            manifest = self._bundle(bundle)
+            with patch.dict(os.environ, {}, clear=False), \
+                    patch.object(OPS, "verify", return_value=manifest), \
+                    patch.object(OPS, "_assert_project_services"), \
+                    patch.object(OPS, "_unresolved_mutations", return_value=0), \
+                    patch.object(OPS, "_live_unresolved_mutations", return_value=0), \
+                    patch.object(OPS, "backup"), \
+                    patch.object(OPS, "_compose", side_effect=compose), \
+                    patch.object(OPS, "_run", side_effect=run):
+                for name in DEPLOYMENT_SETTINGS:
+                    os.environ.pop(name, None)
+                OPS.restore(project="woa-test-stack", bundle=bundle)
+
+        composed = [args for kind, args in calls if kind == "compose"]
+        self.assertIn(("start", "odoo", "agent"), [args[:3] for args in composed],
+                      "the services this command stopped come back as they were")
+        self.assertNotIn("up", [args[0] for args in composed])
+        self.assertEqual(
+            {name: environments[-1].get(name) for name in DEPLOYMENT_SETTINGS},
+            {"WOA_ODOO_IMAGE": "woa-p75-odoo-app", "WOA_BUILD_REVISION": "4a3ee83",
+             "WOA_PRIVATE_DIR": "/deployment/.private/odoo-single-node"},
+            "the one-off containers use this deployment's own image and private directory")
 
     def test_tamper_extra_file_and_wrong_project_are_refused(self):
         with tempfile.TemporaryDirectory() as tmp:

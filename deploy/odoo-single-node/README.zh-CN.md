@@ -97,7 +97,7 @@ deploy/odoo-single-node/operations.py --project "$WOA_PROJECT_NAME" backup --des
 deploy/odoo-single-node/operations.py --project "$WOA_PROJECT_NAME" verify .private/odoo-backups/2026-09-14
 ```
 
-恢复会破坏显式指定的隔离 Compose 项目，因此必须重复输入同一个项目名。恢复前先核对备份时点之后已经派发的业务写入：旧 journal 只是证据，绝不能触发重放。命令会拒绝备份或当前部署中的未决 mutation，先创建并验证恢复前安全备份，再把数据库、附件和 Agent 状态恢复到 staging 命名空间，全部可读后才执行短切换。失败时 Agent 与 Odoo 保持停止，并返回安全备份路径。恢复后的状态不含执行权限，也不会调用模型或工具。
+恢复会破坏显式指定的隔离 Compose 项目，因此必须重复输入同一个项目名。恢复前先核对备份时点之后已经派发的业务写入：旧 journal 只是证据，绝不能触发重放。命令会拒绝备份或当前部署中的未决 mutation，先创建并验证恢复前安全备份，再把数据库、附件和 Agent 状态恢复到 staging 命名空间，全部可读后才执行短切换。失败时 Agent 与 Odoo 保持停止，并返回安全备份路径。恢复后的状态不含执行权限，也不会调用模型或工具。备份与恢复只重新启动它们停掉的那些服务，自己需要的一次性容器所用的镜像和私有目录从运行中的部署读取，因此在只导出了项目名的 shell 里执行，也不会把部署按本文件的默认值重建。
 
 ```bash
 deploy/odoo-single-node/operations.py --project "$WOA_PROJECT_NAME" restore .private/odoo-backups/2026-09-14 --confirm-project "$WOA_PROJECT_NAME"
