@@ -128,7 +128,10 @@ class DefaultPageAnswerPath(unittest.TestCase):
         ])
         self.assertEqual(result.status, AgentTurnStatus.FINISHED)
         self.assertEqual(len(chat.messages), 5)
-        self.assertIn("epoch 4", result.user_answer)
+        # The answer stands on the second observation. Its epoch is provenance: it is in the
+        # verified conclusion, not in the sentence the reader gets.
+        self.assertIn("epoch 4", result.agent.verified_answer["conclusions"][0]["scope"])
+        self.assertNotIn("epoch", result.user_answer)
 
     def test_a_failed_refresh_does_not_reuse_the_previous_value(self):
         class Fails(_PageBrowser):

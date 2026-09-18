@@ -225,6 +225,13 @@ ANSWER_LABELS_ZH = {
     "saleable products visible to the delegated user": "当前账号可见的可售产品",
     "open quotations, neither confirmed nor cancelled": "未确认、未取消的报价单",
     "customer invoices visible to the delegated user": "当前账号可见的客户发票",
+    # Selection values, keyed by field and value. `state` is shared by orders and invoices,
+    # so its words fit both.
+    "state=draft": "草稿", "state=sent": "已发送", "state=sale": "已确认", "state=cancel": "已取消",
+    "state=posted": "已过账", "invoice_status=to invoice": "待开票",
+    "invoice_status=invoiced": "已开票", "invoice_status=upselling": "可追加销售",
+    "invoice_status=no": "无需开票", "type=consu": "货物", "type=service": "服务",
+    "type=combo": "组合",
 }
 CREATE_CUSTOMER_TOOL = "create_customer"
 PREPARE_CUSTOMER_FORM_TOOL = "prepare_customer_form"

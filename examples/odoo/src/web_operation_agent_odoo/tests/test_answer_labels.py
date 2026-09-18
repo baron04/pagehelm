@@ -73,6 +73,8 @@ class AChineseAnswerSpeaksChinese(unittest.TestCase):
         text = result.agent_said
         self.assertEqual(result.terminal_reason, "agent_finished")
         self.assertIn("| 名称 | 含税总额 | 状态 |", text)
+        self.assertIn("| S00006 | 504.00 USD | 已发送 |", text)
+        self.assertIn("| S00002 | 502.00 USD | 草稿 |", text)
         self.assertIn("范围：未确认、未取消的报价单", text)
         for english in ("open quotations", "amount\\_total", "| name |"):
             self.assertNotIn(english, text)
@@ -80,8 +82,16 @@ class AChineseAnswerSpeaksChinese(unittest.TestCase):
     def test_the_answer_carries_only_the_labels_it_used(self):
         result, _ = _answer("当前有哪些未确认报价单？", _LIST)
         labels = result.verified_answer["labels"]["zh"]
-        self.assertEqual(set(labels), {"name", "amount_total", "state",
-                                       "open quotations, neither confirmed nor cancelled"})
+        self.assertEqual({key for key in labels if "=" not in key},
+                         {"name", "amount_total", "state",
+                          "open quotations, neither confirmed nor cancelled"})
+        self.assertEqual({key.partition("=")[0] for key in labels if "=" in key}, {"state"})
+
+    def test_a_value_is_labelled_only_in_its_own_field(self):
+        from web_operation_agent.answer_view import _value_label
+        words = {"labels": {"state=sale": "已确认"}}
+        self.assertEqual(_value_label(words, "state", "sale"), "已确认")
+        self.assertEqual(_value_label(words, "name", "sale"), "sale")
 
     def test_an_english_question_keeps_the_applications_own_words(self):
         result, _ = _answer("Which quotations are open?",
@@ -104,7 +114,7 @@ class AChineseAnswerSpeaksChinese(unittest.TestCase):
         text = result.agent_said.replace("**", "")
         self.assertEqual([row.get("detail") for row in rows
                           if row.get("event") == "answer_contract_refused"], [])
-        self.assertIn("合计（筛选：状态 = sent）：504.00 USD", text)
+        self.assertIn("合计（筛选：状态 = 已发送）：504.00 USD", text)
         self.assertIn("范围：未确认、未取消的报价单", text)
         for internal in ("state in", "draft", "open quotations"):
             self.assertNotIn(internal, text)

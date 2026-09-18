@@ -35,6 +35,7 @@ _WORDS = {
         "source_typed": "来源：应用的类型化读取",
         "source_computed": "来源：在本轮读到的数据上计算",
         "empty": "（该字段已读取，内容为空）",
+        "page_scope": "只代表当时页面上显示的内容，不代表完整数据",
         "subtotal": "小计（未覆盖全部范围）",
         "total": "合计",
     },
@@ -53,6 +54,7 @@ _WORDS = {
         "source_typed": "source: the application's typed read",
         "source_computed": "source: computed over what this turn read",
         "empty": "(read, and holds nothing)",
+        "page_scope": "only what the page showed at that moment; not a complete collection",
         "subtotal": "subtotal (does not cover the whole scope)",
         "total": "total",
     },
@@ -75,6 +77,15 @@ def _named(words: dict, text: str) -> str:
 
 def _field_label(words: dict, name: str, meaning: str) -> str:
     return words.get("labels", {}).get(name, meaning)
+
+
+def _value_label(words: dict, field: str, value: str) -> str:
+    """A coded value -- a state such as "sent" -- as the application names it for the reader.
+
+    Keyed by field and value together, so a customer who happens to be called "Sale" is
+    never translated as an order state.
+    """
+    return words.get("labels", {}).get(f"{field}={value}", value)
 
 
 def _basis(words: dict, item: dict) -> str:
@@ -285,7 +296,8 @@ def _readable_condition(condition: str, words: dict) -> str:
         if not part:
             continue
         if match := re.fullmatch(r"(\S+) (gt|ge|lt|le|eq|ne) (.+)", part):
-            part = f"{_named(words, match[1])} {_SYMBOLS[match[2]]} {match[3]}"
+            part = (f"{_named(words, match[1])} {_SYMBOLS[match[2]]} "
+                    f"{_value_label(words, match[1], match[3])}")
         elif match := re.fullmatch(r"(\S+) in (.+)", part):
             part = f"{_named(words, match[1])} {'属于' if zh else 'in'} {match[2]}"
         elif match := re.fullmatch(r"(argmax|argmin)\((\S+)\)", part):
@@ -364,7 +376,7 @@ def _field_table(words: dict, run: tuple[dict, ...]) -> list[str]:
                 values.append(words["empty"])
             else:
                 unit = f" {_literal(item['unit'])}" if item.get("unit") else ""
-                values.append(_literal(item["value"]) + unit)
+                values.append(_literal(_value_label(words, field, item["value"])) + unit)
         rows.append("| " + " | ".join(values) + " |")
     sources = dict.fromkeys(_basis(words, item) for item in run)
     return [*rows, "", *sources]
@@ -396,11 +408,15 @@ def _one(words: dict, item: dict, *, presentation: str) -> list[str]:
         return [words["capability_gap"]]
     if kind == "page_observation":
         label = "页面显示" if words["lang"] == "zh" else "The page shows"
+        # The scope of a page fact is always the same claim -- this page, at that moment --
+        # and its own text carries an observation epoch the reader has no use for; that text
+        # stays in the answer basis.
         return [f"**{label}**（{_literal(item['detail'])}）：{_literal(item['value'])}",
                 f"> {_source_line(words, item)} · {_literal(item['page_route'])} · "
-                f"{_literal(_named(words, item['scope']))}"]
+                f"{words['page_scope']}"]
     if kind == "field_value":
-        shown = _literal(item["value"]) if not item["empty"] else words["empty"]
+        shown = (_literal(_value_label(words, item["field_name"], item["value"]))
+                 if not item["empty"] else words["empty"])
         unit = f" {_literal(item['unit'])}" if item.get("unit") else ""
         meaning = _field_label(words, item["field_name"], item["field_meaning"])
         who = item.get("record_label") or item["record_id"]
@@ -414,8 +430,10 @@ def _one(words: dict, item: dict, *, presentation: str) -> list[str]:
                 rows += ["| " + " | ".join(_literal(x) for x in names) + " |",
                          "| " + " | ".join("---" for _ in names) + " |"]
             for values in item["rows"]:
-                cells = [(words["empty"] if x["value"] is None else _literal(x["value"])) +
-                         (" " + _literal(x["unit"]) if x["unit"] else "") for x in values]
+                cells = [(words["empty"] if x["value"] is None
+                          else _literal(_value_label(words, field, x["value"]))) +
+                         (" " + _literal(x["unit"]) if x["unit"] else "")
+                         for field, x in zip(item["fields"], values)]
                 if presentation == "list":
                     rows.append("- " + "; ".join(f"{_literal(key)}: {value}"
                                                 for key, value in zip(names, cells)))

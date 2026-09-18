@@ -99,5 +99,20 @@ class AFilterTheListStandsOnIsShown(unittest.TestCase):
                          "the adapter's own query conditions stay in the answer basis")
 
 
+class APageFactSaysWhatItCovers(unittest.TestCase):
+    def test_the_scope_of_a_page_fact_is_a_sentence_not_an_epoch(self):
+        from web_operation_agent.evidence import PageEvidence
+        turn = TurnEvidence()
+        turn.record(PageEvidence(
+            evidence_id="page#1",
+            origin=Origin(kind="page", reference="observation#3", observed_at=AT,
+                          scope="observed page only, epoch 3; not an API or complete collection"),
+            page_route="/odoo/customers/13", saw="value", detail="电话", value="+1 510 555 0102"))
+        text = _render(turn, [{"kind": "page_observation", "evidence_ref": "page#1"}],
+                       "页面上 Azure Interior 的电话是多少？")
+        self.assertIn("只代表当时页面上显示的内容，不代表完整数据", text)
+        self.assertNotIn("epoch", text)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3331,7 +3331,9 @@ class ServerAgentSession:
             used.update(item.get("fields") or ())
             for condition in (item.get("condition"), item.get("filter")):
                 used.update(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", str(condition or "")))
-        labels = {language: {key: value for key, value in table.items() if key in used}
+        # A value label ("state=sent") travels with the field it belongs to.
+        labels = {language: {key: value for key, value in table.items()
+                             if key in used or key.partition("=")[0] in used}
                   for language, table in tables.items()}
         labels = {language: table for language, table in labels.items() if table}
         return {**verified, "labels": labels} if labels else verified
