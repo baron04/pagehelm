@@ -20,7 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from evals.pageagent.host import PageAgentProviderContract, PageAgentProviderProxy
+from evals.pageagent.host import (PageAgentHostError, PageAgentProviderContract,
+                                  PageAgentProviderProxy)
 
 from .runner_woa import (ActorCredential, RunnerPreStartError, breadcrumb, login, logout,
                          record_fault)
@@ -57,6 +58,27 @@ def empty_artifact(runner_input: RunnerInput) -> dict[str, Any]:
         "control_channel_error": None, "final_page_error": None, "teardown_error": None,
         "document_replaced": False, "turns": [],
     }
+
+
+def record_proxy_failure(artifact: dict[str, Any], exc: BaseException, *,
+                         last_error_code: str | None) -> None:
+    """Record a provider call the proxy failed, by where the failure came from.
+
+    A failed provider call or one of the run's own limits is the run's ending. The proxy or the
+    bridge failing on its own is not: the host lost the run, which is a control-channel fault the
+    attempt is replaced for. It used to be recorded as a failed provider call, which no gateway
+    record could explain, so it was scored as classification drift and sealed the batch.
+    """
+    origin = exc.origin if isinstance(exc, PageAgentHostError) else "host"
+    code = exc.code if isinstance(exc, PageAgentHostError) else "host_exception"
+    if origin != "host":
+        if code == "provider_call":
+            code = last_error_code or code
+        artifact["host_errors"].append(("provider", str(code)))
+        return
+    artifact["host_errors"].append(("host", str(code)))
+    if artifact["control_channel_error"] is None and artifact["browser_exit"] is None:
+        record_fault(artifact, "run", f"provider_proxy_{code}")
 
 
 def run(runner_input: RunnerInput, config: PageAgentRunnerConfig, *, client: Any,
@@ -98,10 +120,9 @@ def run(runner_input: RunnerInput, config: PageAgentRunnerConfig, *, client: Any
             try:
                 return proxy.handle(payload)
             except Exception as exc:
-                code = getattr(exc, "code", "host_exception")
-                if code == "provider_call":
-                    code = proxy.transport_report().get("last_error_code") or code
-                artifact["host_errors"].append(("provider", str(code)))
+                record_proxy_failure(artifact, exc,
+                                     last_error_code=proxy.transport_report().get(
+                                         "last_error_code"))
                 raise
 
         try:

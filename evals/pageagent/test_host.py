@@ -175,6 +175,29 @@ class ProviderProxyTests(unittest.TestCase):
         self.assertEqual(report["last_error_code"], "provider_transport")
         self.assertEqual(report["accounting"]["model_calls"], 1)
 
+    def test_only_a_typed_client_failure_is_the_providers(self):
+        """A failure the completion client typed is the gateway's to explain. Anything else on
+        that path is the host failing on its own, and says so, rather than passing for a failed
+        provider call that no gateway record could explain."""
+        typed = type("Typed", (RuntimeError,), {"code": "provider_rate_limited"})
+        for error, code, origin in ((typed("x"), "provider_call", "provider"),
+                                    (RuntimeError("boom"), "host_fault", "host")):
+            with self.subTest(origin=origin):
+                proxy = self._proxy(_Client(error=error))
+                with self.assertRaises(PageAgentHostError) as caught:
+                    proxy.handle(_payload())
+                self.assertEqual((caught.exception.code, caught.exception.origin), (code, origin))
+        budget = self._proxy(_Client())
+        budget.handle(_payload())
+        budget.handle(_payload())
+        with self.assertRaises(PageAgentHostError) as caught:
+            budget.handle(_payload())
+        self.assertEqual((caught.exception.code, caught.exception.origin),
+                         ("model_call_budget", "limit"))
+        with self.assertRaises(PageAgentHostError) as caught:
+            self._proxy(_Client()).handle({"bad": "payload"})
+        self.assertEqual(caught.exception.origin, "host")
+
     def test_response_requires_a_provider_model_snapshot(self):
         client = _Client()
 

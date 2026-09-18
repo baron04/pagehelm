@@ -82,8 +82,23 @@ def prepare_inputs(stack: Stack, private: Path) -> None:
         _private_write(seed, (secrets.token_hex(16) + "\n").encode())
 
 
-def seed_database(stack: Stack, private: Path, population: dict[str, Any]) -> dict[str, Any]:
-    population_file = private / "development-population.json"
+POPULATIONS = ("development", "heldout")
+
+
+def population_seed(private: Path, population: str) -> str:
+    """The split's private seed. The held-out seed is escrowed and never made here: a missing one
+    is a lost held-out set, and a fresh seed would be a different set under the same seal."""
+    if population not in POPULATIONS:
+        raise StackError("a fixture holds the development or the held-out population")
+    path = private / "seeds" / f"{population}.seed"
+    if not path.exists():
+        raise StackError(f"the {population} seed is missing; restore it from the escrow")
+    return path.read_text().strip()
+
+
+def seed_database(stack: Stack, private: Path, population: dict[str, Any],
+                  name: str = "development") -> dict[str, Any]:
+    population_file = private / f"{name}-population.json"
     _private_write(population_file, (json.dumps(population, ensure_ascii=False, indent=2,
                                                 sort_keys=True) + "\n").encode())
     seeded = private / "seeded"
@@ -160,7 +175,8 @@ def _wait_login(stack: Stack, timeout_s: float = 300) -> None:
     raise StackError("the Odoo login page did not become reachable")
 
 
-def reuse_fixture(private: Path, *, build: bool = True) -> dict[str, Any]:
+def reuse_fixture(private: Path, *, build: bool = True,
+                  population_name: str = "development") -> dict[str, Any]:
     """Bring the stack up on a rebuilt Agent image and keep the fixture that is already there.
 
     Seeding, the baseline snapshot, the stability proof and the manifest describe the fixture,
@@ -182,8 +198,7 @@ def reuse_fixture(private: Path, *, build: bool = True) -> dict[str, Any]:
     _wait_login(stack)
     timings["stack_up"] = round(time.monotonic() - started, 1)
     recovery = json.loads((private / "recovery" / "recovery.json").read_text())
-    population = population_module.generate(
-        (private / "seeds" / "development.seed").read_text().strip())
+    population = population_module.generate(population_seed(private, population_name))
     target = private / "qualification" / "fixture-manifest.json"
     record = manifest.verify_manifest(
         json.loads(target.read_text()),
@@ -197,7 +212,7 @@ def reuse_fixture(private: Path, *, build: bool = True) -> dict[str, Any]:
             "the fixture is not the recorded baseline any more; provision --destroy-first")
     return {
         "kind": "p74_provision_record", "fixture_id": fixture.FIXTURE_ID, "reused_fixture": True,
-        "population_digest": digest_json(population),
+        "population": population_name, "population_digest": digest_json(population),
         "baseline_guard_digest": recovery["baseline_digest"],
         "candidate": stack.verify_candidate(),
         "stability_status": record["stability_proof"]["status"],
@@ -206,7 +221,15 @@ def reuse_fixture(private: Path, *, build: bool = True) -> dict[str, Any]:
 
 
 def provision(private: Path, *, destroy_first: bool, stability_interval_s: float,
-              build: bool = True) -> dict[str, Any]:
+              build: bool = True, population_name: str = "development") -> dict[str, Any]:
+    """Build the fixture from empty volumes, seeded with one split's population.
+
+    The stack holds one population at a time: provisioning the held-out one replaces the
+    development fixture, its keys, baseline and manifest, and a development batch after it needs
+    the development population provisioned again. The manifest names the population it was
+    taken with, so neither split's entry can run on the other's fixture.
+    """
+    seed = population_seed(private, population_name)
     stack = Stack(private_dir=private)
     timings: dict[str, float] = {}
     started = time.monotonic()
@@ -226,9 +249,8 @@ def provision(private: Path, *, destroy_first: bool, stability_interval_s: float
     stack.compose("up", "-d", "db", timeout=600)
     stack.compose("--profile", "setup", "run", "--rm", "odoo-init", timeout=1800)
     mark("database_initialized")
-    seed = (private / "seeds" / "development.seed").read_text().strip()
     population = population_module.generate(seed)
-    truth = seed_database(stack, private, population)
+    truth = seed_database(stack, private, population, population_name)
     mark("population_seeded")
     stack.compose("up", "-d", timeout=900)
     _wait_login(stack)
@@ -258,7 +280,7 @@ def provision(private: Path, *, destroy_first: bool, stability_interval_s: float
     identities = {key: value for key, value in truth.items() if key != "frozen_crons"}
     return {
         "kind": "p74_provision_record", "fixture_id": fixture.FIXTURE_ID,
-        "population_digest": digest_json(population),
+        "population": population_name, "population_digest": digest_json(population),
         "seed_identity_digest": digest_json(identities),
         "actor_projection_digest": recovery["actor_projection_digest"],
         "frozen_crons": len(truth["frozen_crons"]),
@@ -277,14 +299,19 @@ def main(argv: list[str] | None = None) -> int:
                              "provisioned, provided it is still the one the manifest describes")
     parser.add_argument("--stability-interval", type=float, default=300)
     parser.add_argument("--no-build", action="store_true")
+    parser.add_argument("--population", choices=POPULATIONS, default="development",
+                        help="the split the fixture is seeded with; heldout replaces the "
+                             "development fixture")
     parser.add_argument("--record")
     args = parser.parse_args(argv)
     if args.reuse_fixture and args.destroy_first:
         parser.error("--reuse-fixture keeps the fixture; --destroy-first replaces it")
-    result = (reuse_fixture(Path(args.private_dir), build=not args.no_build)
+    result = (reuse_fixture(Path(args.private_dir), build=not args.no_build,
+                            population_name=args.population)
               if args.reuse_fixture else
               provision(Path(args.private_dir), destroy_first=args.destroy_first,
-                        stability_interval_s=args.stability_interval, build=not args.no_build))
+                        stability_interval_s=args.stability_interval, build=not args.no_build,
+                        population_name=args.population))
     if args.record:
         _private_write(Path(args.record), (json.dumps(result, indent=2, sort_keys=True)
                                            + "\n").encode())

@@ -156,13 +156,14 @@ CASES = {
         "replies": (
             ("load_skill", {"skill_id": "odoo.sales.sale-orders-invoice"}),
             ("invoice_sale_order", {"reference": "S00006"}),
-            ("finish", {"done": False,
-                        "why": "S00006 has nothing left to invoice."}),
         ),
         "expect_path": "/odoo/customers",
         "expect_page_text": (),
         "writes": True,
         "expect_refusal": True,
+        # The adapter's typed refusal ends the turn itself; the model is not asked to
+        # restate it, so no answer of its own can soften it.
+        "expect_terminal": "business_mutation_refused",
         "expect_no_approval": True,
     },
     "multi_step_write_confirm": {
@@ -252,8 +253,8 @@ def run_case(name: str, case: dict, args, output_dir: Path) -> dict:
     control = turn.get("business_control") or {}
     audit = summary.get("audit_projection") or []
     reads = [row for row in audit if row.get("event") == "business_tool_result"]
-    expected_terminal = ("agent_refused" if case.get("expect_refusal")
-                         else "agent_finished")
+    expected_terminal = case.get("expect_terminal") or (
+        "agent_refused" if case.get("expect_refusal") else "agent_finished")
     return {
         "case": name,
         "task_kind": name,

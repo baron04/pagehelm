@@ -190,13 +190,66 @@ class BackendResult:
     error_code: str | None
 
 
+#: How long past its deadline an upstream request is still waited for. The client's own timeout
+#: fires on a socket read, so the call ends a moment after the deadline, never before it.
+UPSTREAM_SETTLE_MARGIN_S = 30.0
+LATE_ANSWERS_SUFFIX = ".late-answers"
+
+
+def late_answers_path(ledger_path: str | Path) -> Path:
+    """Where the answers that arrived after their calls were settled as unresolved are kept."""
+    return Path(ledger_path).with_suffix(LATE_ANSWERS_SUFFIX)
+
+
+def append_late_answer(ledger_path: str | Path, record: dict[str, Any]) -> None:
+    """Add one late answer beside the ledger, flushed to disk before the gateway goes on."""
+    path = late_answers_path(ledger_path)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(descriptor, "ab") as handle:
+        handle.write(json.dumps(record, sort_keys=True, separators=(",", ":")).encode() + b"\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def priced_late_answers(ledger_path: str | Path) -> dict[str, dict[str, Any]]:
+    """Late answers that priced their call, by the name the ledger gives an unresolved call.
+
+    Only an answer that carries usage and a cost counts; a timeout or an error that arrived late
+    says nothing about what the provider charged. A line that cannot be read is skipped: this
+    file only ever relieves a debt, so what it does not show stays owed.
+    """
+    path = late_answers_path(ledger_path)
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    priced: dict[str, dict[str, Any]] = {}
+    for line in lines:
+        try:
+            record = json.loads(line)
+            name = f"{record['attempt_id']}#{int(record['request_seq'])}"
+            cost = record["cost_cny"]
+        except (ValueError, KeyError, TypeError):
+            continue
+        if (isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0
+                and isinstance(record.get("usage"), dict)):
+            priced.setdefault(name, record)
+    return priced
+
+
 class Backend:
     """What sits behind the gateway: a scripted responder or an upstream provider."""
 
-    #: The frozen deadline of one forwarded request. It is also how long an attempt waits for a
-    #: call to settle before writing it down as unresolved: the lease a dispatch takes out
-    #: expires with the request it belongs to, never on a timeout of the apparatus's own.
+    #: The frozen deadline of one forwarded request. With ``settle_margin_s`` it is how long an
+    #: attempt waits for a call to settle before writing it down as unresolved: the lease a
+    #: dispatch takes out expires with the request it belongs to, never on a timeout of the
+    #: apparatus's own.
     request_deadline_s: float = 180.0
+    #: How long after that deadline the request's own ending still arrives. An upstream call
+    #: that times out reports it a moment after its deadline, so a lease that expired exactly at
+    #: the deadline turned every timeout into a call nobody heard back about -- cost unknown,
+    #: batch held for a bill -- although the gateway learned how it ended moments later.
+    settle_margin_s: float = 0.0
 
     def complete(self, body: dict[str, Any], *, attempt_id: str, call_index: int) -> BackendResult:
         raise NotImplementedError
@@ -413,6 +466,7 @@ class UpstreamBackend(Backend):
         self.provider = provider
         self.timeout_s = float(timeout_s)
         self.request_deadline_s = self.timeout_s
+        self.settle_margin_s = UPSTREAM_SETTLE_MARGIN_S
         # The evaluation's budgets are the gateway's; this meter only accounts.
         self.meter = SpendMeter(ledger=spend_ledger, batch_id=batch_id,
                                 run_input_token_abort=10 ** 12,
@@ -532,6 +586,8 @@ class ProviderGateway:
         self._cost_unknown = False
         #: Provider answers that arrived after their call had already been settled as unresolved.
         self.late_responses = 0
+        #: Late answers that could not be written beside the ledger. Their calls stay owed.
+        self.late_answer_write_failures = 0
         gateway = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -705,7 +761,8 @@ class ProviderGateway:
                 handler._reply(REFUSAL_STATUS.get(refusal, 400), {"error": {"code": refusal}})
                 return
             binding.calls += 1
-            binding.leases[sequence] = time.monotonic() + self.backend.request_deadline_s
+            binding.leases[sequence] = (time.monotonic() + self.backend.request_deadline_s
+                                        + self.backend.settle_margin_s)
             attempt_id, call_index = binding.attempt_id, binding.calls
             ledger.append(self.ledger_path, "model_request_dispatched", {
                 "attempt_id": attempt_id, "request_seq": sequence, "body_digest": body_digest,
@@ -748,10 +805,20 @@ class ProviderGateway:
     def _record_locked(self, attempt_id: str, sequence: int, result: BackendResult) -> None:
         binding = self._binding
         if binding is None or binding.attempt_id != attempt_id or sequence not in binding.leases:
-            # The call outlived the provider's own deadline and was settled as unresolved when
-            # its attempt closed. It settles once: this answer does not rewrite the product
-            # ledger, and the bill reconciliation clears the call the unresolved record names.
+            # The call outlived its lease and was settled as unresolved when its attempt closed.
+            # It settles once: this answer does not rewrite the attempt ledger. It is written
+            # beside it, where the formal entry reads it: an answer that carries its usage has
+            # priced the call, and no bill is needed to say what it cost.
             self.late_responses += 1
+            record = {"attempt_id": attempt_id, "request_seq": sequence,
+                      "status": result.status, "http_status": result.http_status,
+                      "provider_request_id": result.provider_request_id,
+                      "response_model": result.response_model, "usage": result.usage,
+                      "cost_cny": result.cost_cny, "error_code": result.error_code}
+            try:
+                append_late_answer(self.ledger_path, record)
+            except OSError:
+                self.late_answer_write_failures += 1
             return
         binding.leases.pop(sequence, None)
         if result.status == "accounting_error":

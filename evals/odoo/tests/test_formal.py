@@ -525,7 +525,7 @@ class LifecycleTests(FormalFixture):
         record, _ = formal.committed_record(
             self.workbench, formal.batch_record_path("p74b-development-001", "chain-head"))
         self.assertEqual(record["seal_reason"], "operator_stop")
-        with self.assertRaisesRegex(formal.FormalError, "no development batch is open"):
+        with self.assertRaisesRegex(formal.FormalError, "no development or held-out batch"):
             formal.stop_development(self.paths)
 
     def test_a_batch_that_owes_a_seal_is_stopped_for_that_seal(self):

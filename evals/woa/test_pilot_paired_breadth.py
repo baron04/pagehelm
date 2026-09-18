@@ -60,7 +60,9 @@ class PairedBreadthPilotTests(unittest.TestCase):
             pageagent = scripted_pageagent_actions(case, records)
             self.assertTrue(woa and pageagent, kind)
             if kind == "refuse":
-                self.assertEqual(woa, [("finish", {"done": False, "why": woa[0][1]["why"]})])
+                self.assertEqual([name for name, _ in woa], ["check_capability", "finish"])
+                self.assertEqual(woa[-1][1]["answer"]["conclusions"][0]["kind"],
+                                 "capability_gap")
                 self.assertFalse(pageagent[-1]["done"]["success"])
             else:
                 self.assertEqual(woa[0][0], "load_skill")

@@ -191,7 +191,8 @@ class DevelopmentRehearsal(FormalFixture):
                    "previous_batch": {**formal.link_to(first_summary), "purpose": "heldout"}}
         with self.assertRaises(ledger.LedgerError):
             ledger.create(self.root / "heldout.jsonl", heldout)
-        self.assertEqual(formal.status(self.paths)["heldout"], formal.HELDOUT_UNAVAILABLE)
+        self.assertEqual(formal.status(self.paths)["heldout"], {"state": "NOT_STARTED"})
+        self.assertIn("third freeze", formal.status(self.paths)["checks"]["freezes"])
         self.assertEqual(untouchable(), self.before)
 
     def test_a_batch_is_announced_with_the_full_manifest_it_binds(self):

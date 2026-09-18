@@ -37,6 +37,13 @@ class ClosureProbeTests(unittest.TestCase):
         self.assertTrue(qualify._contract_probe()["fails_closed"])
         self.assertTrue(qualify._provider_identity_probe(self.probe)["follows"])
 
+    def test_the_p74c_probes_hold_without_a_stack(self):
+        heldout = qualify._heldout_entry_probe(self.probe)
+        self.assertTrue(heldout["refuses"], heldout)
+        self.assertTrue(qualify._host_fault_probe()["replaceable"])
+        late = qualify._late_answer_probe(self.probe)
+        self.assertTrue(late["prices_only_with_usage"], late)
+
     def test_a_ledger_of_another_contract_is_refused_whole_by_the_ledger_and_the_chain(self):
         result = qualify._ledger_contract_probe(self.probe, self.sample)
         self.assertTrue(result["holds"], result)

@@ -100,9 +100,18 @@ def project_woa(events: Sequence[dict[str, Any]]) -> dict[str, Any]:
     proposals: list[dict[str, Any]] = []
     dispatch = "none"
     last_observation: dict[str, str] = {}
+    # Approvals are counted only from each run's own record. A run the audit shows working but
+    # never closing -- an Agent or driver that died mid-run -- leaves the approvals unknown:
+    # counting it as none would turn a dispatch nobody saw approved into one nobody approved.
+    runs_seen: set[str] = set()
+    runs_recorded: set[str] = set()
     for event in events:
         kind = event.get("event")
         run_id = _text(event, "run_id")
+        if run_id is not None:
+            runs_seen.add(run_id)
+            if kind == "run_finished":
+                runs_recorded.add(run_id)
         if kind == "observation":
             digest = _text(event, "digest")
             # Only two observations that both name the same run and the same page repeat; one
@@ -144,6 +153,8 @@ def project_woa(events: Sequence[dict[str, Any]]) -> dict[str, Any]:
             turns.append({"terminal_reason": reason,
                           "terminal": WOA_TERMINALS.get(reason, reason),
                           "steps_used": _count(event, "steps_used")})
+    if runs_seen - runs_recorded:
+        approvals = None
     return {
         "turns": turns,
         "terminal": turns[-1]["terminal"] if turns else None,
@@ -188,12 +199,15 @@ def project_pageagent(bridge: dict[str, Any] | None, *, host_errors: Sequence[tu
     elif bridge.get("status") == "completed":
         terminal = "completed" if bridge.get("success_claim") else "agent_unable"
     else:
-        codes = [code for _host, code in host_errors]
-        # A run that failed after its host recorded a failed provider call ended on that call;
-        # without such a record, its bare status stays unmapped.
+        codes = [code for host, code in host_errors if host == "provider"]
+        # A run that failed after its host recorded a failed provider call ended on that call.
+        # One whose host failed on its own lost its ending with it: nothing names how the run
+        # would have ended, and the control-channel fault the runner recorded says why. Without
+        # either record, its bare status stays unmapped.
         terminal = ("model_call_budget" if "model_call_budget" in codes else
                     "provider_deadline" if "provider_deadline" in codes else
-                    "provider_error" if any(host == "provider" for host, _code in host_errors)
+                    "provider_error" if codes else
+                    None if any(host == "host" for host, _code in host_errors)
                     else str(bridge.get("status") or "unknown"))
     return {
         "turns": [{"terminal_reason": terminal, "terminal": terminal,

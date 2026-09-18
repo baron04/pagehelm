@@ -194,6 +194,56 @@ class TraceTests(unittest.TestCase):
             failed, host_errors=[("provider", "provider_deadline")])["terminal"],
             "provider_deadline")
         self.assertEqual(trace.project_pageagent(failed)["terminal"], "error")
+        # A run whose host failed on its own lost its ending with it: none is named, and the
+        # control-channel fault the runner recorded says why. A provider failure still decides.
+        self.assertIsNone(trace.project_pageagent(
+            failed, host_errors=[("host", "host_fault")])["terminal"])
+        self.assertEqual(trace.project_pageagent(
+            failed, host_errors=[("host", "host_fault"),
+                                 ("provider", "provider_rate_limited")])["terminal"],
+            "provider_error")
+
+    def test_a_proxy_failure_of_the_hosts_own_is_a_control_channel_fault(self):
+        """The runner and the classifier together: a host fault ends as a replaceable apparatus
+        fault. It used to be recorded as a failed provider call, which no gateway record could
+        explain, and a single proxy hiccup sealed the whole batch as classification drift."""
+        from evals.odoo import outcomes, runner_pageagent
+        from evals.odoo.tasks import RunnerInput
+        from evals.pageagent.host import PageAgentHostError
+
+        def artifact():
+            return runner_pageagent.empty_artifact(RunnerInput(
+                task_id="t", actor="writer", locale="en-US", entry_path=None,
+                messages=("open it",)))
+
+        typed = artifact()
+        runner_pageagent.record_proxy_failure(
+            typed, PageAgentHostError("provider_call", origin="provider"),
+            last_error_code="provider_rate_limited")
+        self.assertEqual((typed["host_errors"], typed["control_channel_error"]),
+                         ([("provider", "provider_rate_limited")], None))
+        for failure in (PageAgentHostError("host_fault"), KeyError("bridge")):
+            with self.subTest(failure=type(failure).__name__):
+                lost = artifact()
+                runner_pageagent.record_proxy_failure(lost, failure, last_error_code=None)
+                self.assertEqual(lost["host_errors"][0][0], "host")
+                self.assertTrue(lost["control_channel_error"]["type"].startswith(
+                    "provider_proxy_"))
+                ending = trace.project_pageagent({"status": "error"},
+                                                 host_errors=lost["host_errors"])["terminal"]
+                classified = outcomes.classify(
+                    product_started=True, dispatch_state="none", runner_terminal=ending,
+                    apparatus_events=[outcomes.ApparatusEvent(
+                        "browser_or_control_channel_crash", "control_channel_error")])
+                self.assertEqual((classified.apparatus_code, classified.unclassified,
+                                  classified.seal_reason, classified.replacement_evidence),
+                                 ("browser_or_control_channel_crash", False, None,
+                                  ("control_channel_error",)))
+        # What the same run became before: an unexplained provider ending, which is drift.
+        before = outcomes.classify(
+            product_started=True, dispatch_state="none", runner_terminal="provider_error",
+            apparatus_events=[])
+        self.assertEqual(before.apparatus_code, outcomes.CONTRACT_DRIFT)
 
 
 class LeakCheckTests(unittest.TestCase):

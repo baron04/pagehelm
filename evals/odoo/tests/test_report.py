@@ -450,6 +450,39 @@ class ComparisonTests(unittest.TestCase):
                          ("exploratory_product_combination_difference", False, False))
         self.assertIsNone(cell(value, arm=PAGEAGENT)["normal"]["gate_verdict"])
 
+    def test_answer_tasks_are_counted_per_arm_and_never_paired(self):
+        """Owner ruling of 2026-09-18: the arms' answer channels stay as they are, so the A/C
+        comparison pairs only tasks judged by their final page. On an answer task PageAgent's
+        answer is done text the page never shows; each arm's result is counted apart."""
+        slot_list = formal_slots("heldout", eligible=("t01", "t02", "t03"))
+        batch = Batch(self, slot_list, purpose="heldout")
+        batch.run_all()
+        summary = batch.complete()
+        value = report.build_report(batches=[summary], tasks=TASKS,
+                                    plan=plan_for(slot_list, purpose="heldout"),
+                                    paired_task_ids=("t01",), answer_task_ids=("t02", "t03"))
+        self.assertEqual({item["scope"] for item in value["comparisons"]}, {"final_page"})
+        self.assertEqual([item["n_pairs"] for item in value["comparisons"]], [1, 1])
+        answers = value["answer_task_results"]
+        self.assertEqual([item["replicate"] for item in answers], ["primary", "replicate"])
+        self.assertEqual({arm: block["n"] for arm, block in answers[0]["arms"].items()},
+                         {WOA: 2, PAGEAGENT: 2})
+        self.assertEqual((answers[0]["paired"], answers[0]["answer_visible_to_user"]),
+                         (False, {WOA: True, PAGEAGENT: False}))
+        self.assertNotIn("difference", answers[0])
+        report.verify_report(value)
+        paired = copy.deepcopy(value)
+        paired["answer_task_results"][0]["difference"] = 0.0
+        with self.assertRaisesRegex(ValueError, "never paired"):
+            report.verify_report(paired)
+        unscoped = copy.deepcopy(value)
+        unscoped["comparisons"][0]["scope"] = "answer_channels_differ"
+        with self.assertRaisesRegex(ValueError, "final page"):
+            report.verify_report(unscoped)
+        with self.assertRaisesRegex(ValueError, "either paired"):
+            report.build_report(batches=[summary], tasks=TASKS,
+                                paired_task_ids=("t01",), answer_task_ids=("t01",))
+
     def test_an_ungated_batch_yields_no_comparison(self):
         slot_list = formal_slots("heldout", eligible=("t01", "t02", "t03"))
         batch = Batch(self, slot_list, purpose="heldout")

@@ -36,6 +36,10 @@ CONSUMERS: dict[str, tuple[Consumer, ...]] = {
                  "the attempt's times, and which apparatus fault the run met"),
         Consumer("evals/odoo/driver.py", "_final_page",
                  "whether a final page was captured at all, or why it was not"),
+        Consumer("evals/odoo/driver.py", "Driver._judge_persisted",
+                 "the turns a dead driver wrote down as its runner read them, each checked "
+                 "against the digest its checkpoint bound; the approvals it never wrote are "
+                 "unavailable, never an empty list"),
         Consumer("evals/odoo/trace.py", "project_pageagent",
                  "the browser-only arm's trace, whose counts exist only if its bridge reported "
                  "them"),
@@ -49,6 +53,9 @@ CONSUMERS: dict[str, tuple[Consumer, ...]] = {
     ),
     "final_page": (
         Consumer("evals/odoo/driver.py", "_final_page", "the capture the evaluator reads"),
+        Consumer("evals/odoo/driver.py", "Driver._judge_persisted",
+                 "none: the page a dead driver's run ended on was never read, and a recovered "
+                 "judgement is given it as unavailable"),
         Consumer("evals/odoo/evaluator.py", "_page_path",
                  "the path the run left behind, or nothing where no page was observed"),
         Consumer("evals/odoo/evaluator.py", "_on_page",
@@ -65,6 +72,9 @@ CONSUMERS: dict[str, tuple[Consumer, ...]] = {
                  "fixture must be restored because nobody read them"),
         Consumer("evals/odoo/driver.py", "Driver.recover_open_attempt",
                  "the same for an attempt a dead driver left open"),
+        Consumer("evals/odoo/driver.py", "Driver._judge_persisted",
+                 "the trace a recovered judgement reads; an audit nobody could export reaches "
+                 "it as unavailable"),
         Consumer("evals/odoo/driver.py", "agent_assertions",
                  "which proposals the audit closes, so residue is not read from silence"),
         Consumer("evals/odoo/oracle.py", "ApprovalOracle.decide",
@@ -92,6 +102,12 @@ CONSUMERS: dict[str, tuple[Consumer, ...]] = {
                  "nobody could read it"),
         Consumer("evals/odoo/driver.py", "Driver._reset",
                  "whether a verified restore is required"),
+        Consumer("evals/odoo/driver.py", "Driver.recover_open_attempt",
+                 "what a dead driver's run changed, read once before the restore; it decides "
+                 "the reset's basis and is what a recovered judgement reads"),
+        Consumer("evals/odoo/driver.py", "Driver._judge_persisted",
+                 "the changes a recovered judgement reads, unavailable where the guard could "
+                 "not be read"),
         Consumer("evals/odoo/evaluator.py", "_no_changes",
                  "whether a read-only task changed the fixture"),
         Consumer("evals/odoo/evaluator.py", "_judge_write",

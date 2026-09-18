@@ -72,7 +72,7 @@ class AttemptPlan:
     provider_faults: dict[int, str] | None = None
     provider_models: dict[int, str] | None = None
     #: Qualification-only apparatus fault injection: evaluator_exit, browser_crash,
-    #: baseline_drift, identity_before_start.
+    #: baseline_drift, identity_before_start, kill_after_product_start, kill_after_turn_settled.
     inject: frozenset[str] = field(default_factory=frozenset)
     replacement_of: str | None = None
 
@@ -216,6 +216,24 @@ class Driver:
                     # whose count stays below the first faulty request ended before the fault.
                     requests, _, refusals = self._gateway_records(attempt_id)
                     settled[int(value["turn"])] = len(requests) + len(refusals)
+                if "record" in value:
+                    # The turn the runner just read, written down before the run goes on and bound
+                    # into the ledger by its digest, so a driver killed later still has it.
+                    turn = int(value["turn"])
+                    name = f"turn-{turn}"
+                    digest = self._write(evidence, f"{name}.json", {
+                        "turn": value["record"], "settled": bool(value.get("settled")),
+                        "requests_at_settle": settled.get(turn),
+                        "expected_turns": len(plan.runner_input.messages)})
+                    self._append("attempt_checkpoint", {
+                        "attempt_id": attempt_id, "product_started": True,
+                        "dispatch_state": "none", "evidence": {name: digest}})
+                    if "kill_after_turn_settled" in plan.inject and value.get("settled"):
+                        # Qualification-only: the driver dies once a turn it read is written
+                        # down, so recovery can be shown to judge what that turn showed.
+                        os.kill(os.getpid(), signal.SIGKILL)
+                    return
+                if value.get("settled"):
                     return
                 checkpoints.append(value)
                 self._append("attempt_checkpoint", {
@@ -523,6 +541,95 @@ class Driver:
                 "basis": [*residue, *result["basis"]],
                 "guard_digest": result.get("guard_digest"), "agent": record}
 
+    def _persisted_turns(self, attempt_id: str, records: list[dict[str, Any]]
+                         ) -> tuple[list[dict[str, Any]], dict[int, int], int | None]:
+        """The turns a dead driver wrote down as its runner read them, in order.
+
+        Each is checked against the digest its checkpoint bound in the ledger; the first one
+        missing or changed ends the list, since a later turn read without it would be judged out
+        of place. Also returns, per turn that ended, how many model requests had been made by
+        then, and how many turns the task has.
+        """
+        bound: dict[str, str] = {}
+        for entry in records:
+            if entry["kind"] == "attempt_checkpoint":
+                bound.update(entry["body"]["evidence"])
+        directory = self.config.evidence_root / attempt_id
+        turns: list[dict[str, Any]] = []
+        settled: dict[int, int] = {}
+        expected = None
+        while (name := f"turn-{len(turns)}") in bound:
+            try:
+                value = json.loads((directory / f"{name}.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                break
+            if digest_json(value) != bound[name]:
+                break
+            if value["settled"] and value["requests_at_settle"] is not None:
+                settled[len(turns)] = int(value["requests_at_settle"])
+            turns.append(value["turn"])
+            expected = value["expected_turns"]
+        return turns, settled, expected
+
+    def _judge_persisted(self, started: dict[str, Any], records: list[dict[str, Any]], *,
+                         projected: dict[str, Any], audit_read: capture.Capture,
+                         changes_read: capture.Capture, facts: outcomes.GatewayFacts
+                         ) -> tuple[outcomes.Evaluation | None, dict[str, Any] | None,
+                                    dict[str, Any] | None]:
+        """Judge what a dead driver's attempt left: the turns written down as they were read,
+        the product's audit and the fixture as it stands.
+
+        The page the run ended on and the approval decisions were never written, so a failure
+        resting on either does not count. The run was cut where the process died: a failure on a
+        turn that ended before the first fault stands, as it does after any cut, and a pass does
+        not. Without a turn or the truth read before the product started there is nothing to
+        judge.
+        """
+        attempt_id, arm = started["attempt_id"], started["arm"]
+        turns, settled, expected = self._persisted_turns(attempt_id, records)
+        directory = self.config.evidence_root / attempt_id
+        try:
+            truth = json.loads((directory / "evaluator-truth.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None, None, None
+        if not turns:
+            return None, None, truth
+        # The scope the evaluator job was written with: the judgement refuses any other.
+        scope = {"attempt_id": attempt_id, "run_id": started["run_id"], "arm": arm}
+        trace_read = (capture.Present(projected, "agent_audit", scope, complete=False)
+                      if audit_read.available
+                      else capture.Unavailable("runner_process_exit", "agent_audit", scope))
+        guard_read = (capture.Present(changes_read.value, "fixture_guard", scope)
+                      if changes_read.available
+                      else capture.Unavailable("guard_capture_error", "fixture_guard", scope))
+        self._write(directory, "observation.json", {
+            "arm": arm, "expected_turns": expected,
+            "turns": capture.as_record(capture.Present(turns, "runner_artifact", scope,
+                                                       complete=len(turns) == expected)),
+            "final": capture.as_record(capture.Unavailable("runner_process_exit", "final_page",
+                                                           scope)),
+            "trace": capture.as_record(trace_read),
+            "approvals": capture.as_record(capture.Unavailable("runner_process_exit",
+                                                               "runner_artifact", scope)),
+            "guard_changes": capture.as_record(guard_read)})
+        judgement = self._evaluator("judge", directory)
+        if not judgement.available:
+            return None, None, truth
+        judged = judgement.value
+        lost = {"final", "approvals"} | {name for name, read in (("trace", trace_read),
+                                                                  ("guard_changes", guard_read))
+                                          if not read.available}
+        earlier = turns_before_fault(settled, facts.first_event_seq)
+        before_cut = [failure for failure in judged["failures"]
+                      if not set(failure["on"]) & lost
+                      and failure["turn"] is not None and failure["turn"] < earlier]
+        decisive = (judged["status"] == "FAIL" and bool(judged["decisive"])
+                    and bool(judged["safety_events"] or before_cut))
+        return (outcomes.Evaluation(
+            status=judged["status"], decisive=decisive, reasons=tuple(judged["reasons"]),
+            safety_events=tuple(judged["safety_events"]),
+            extraction_ambiguous=bool(judged["extraction_ambiguous"])), judged, truth)
+
     def recover_open_attempt(self) -> dict[str, Any] | None:
         """Close an attempt a previous driver process started and never finished.
 
@@ -570,22 +677,36 @@ class Driver:
                                      product_started=product_started,
                                      audit_observed=audit_read.available)
         dispatch = projected["dispatch_state"]
+        # What the fixture shows now, before any restore: it is both what the judgement below
+        # reads and what decides the reset's basis.
+        changes_read = capture.read(
+            "fixture_guard", scope,
+            lambda: fixture.differences(self.baseline_guard, self.guard.capture()),
+            errors=(StackError,))
+        evaluation, judged, truth = None, None, None
+        if "attempt_outcome" not in present and product_started:
+            evaluation, judged, truth = self._judge_persisted(
+                started, records, projected=projected, audit_read=audit_read,
+                changes_read=changes_read, facts=facts)
         classification = outcomes.classify(
             product_started=product_started, dispatch_state=dispatch, runner_terminal=None,
             apparatus_events=[outcomes.ApparatusEvent("browser_or_control_channel_crash",
                                                       "runner_process_exit"), *facts.events],
+            evaluation=evaluation,
             request_contract_violation=facts.request_contract_violation)
         if "attempt_outcome" not in present:
             self._append("attempt_outcome", {
                 "attempt_id": attempt_id, **classification.as_record(),
-                "evaluation_digest": None, "truth_digest": None})
+                "evaluation_digest": digest_json(judged) if judged else None,
+                "truth_digest": digest_json(truth) if truth else None})
         if "reset_outcome" not in present:
             record, residue = agent if agent is not None else (None, [])
             # An attempt whose driver died is put back by a verified restore, whatever the guard
             # shows. The guard watches a fixed set of tables, the audit may no longer be
             # readable, and the task's own reset profile is not known here: none of that adds up
             # to an attempt that needed no reset.
-            changes = fixture.differences(self.baseline_guard, self.guard.capture())
+            changes = (changes_read.value if changes_read.available
+                       else fixture.differences(self.baseline_guard, self.guard.capture()))
             result = fixture.restore(self.config.stack, self.guard, self.config.recovery_dir,
                                      actor_projection=self._projection)
             basis = [("interrupted_attempt_changed_fixture" if changes

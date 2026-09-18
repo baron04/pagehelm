@@ -33,6 +33,18 @@ SPLIT_VERIFICATION = TASKSETS / "p74-odoo-split-v1.json"
 ACTORS = ("writer", "reader", "other")
 
 
+POPULATIONS = ("development", "heldout")
+
+
+def heldout_task_set_path(private_dir: Path) -> Path:
+    """The held-out task set, kept only in the private directory and its escrow."""
+    return private_dir / "heldout" / "p74-odoo-heldout-v1.json"
+
+
+def seal_path(population: str) -> Path:
+    return {"development": DEVELOPMENT_SEAL, "heldout": HELDOUT_SEAL}[population]
+
+
 @dataclass
 class Context:
     stack: Stack
@@ -43,6 +55,8 @@ class Context:
     actors: dict[str, ActorCredential]
     bundle: Path
     root: Path
+    #: Which split this context runs: its seed, task set and seal.
+    population_name: str = "development"
 
     @property
     def private_dir(self) -> Path:
@@ -56,22 +70,32 @@ class Context:
                                  seed_ids=self.seed_ids)
 
 
-def load_context(root: Path | None = None, *, private_dir: Path = PRIVATE) -> Context:
-    """The development population, task set and actors; ``root`` holds this run's ledgers."""
-    seed = (private_dir / "seeds" / "development.seed").read_text().strip()
+def load_context(root: Path | None = None, *, private_dir: Path = PRIVATE,
+                 population: str = "development") -> Context:
+    """One split's population, task set and actors; ``root`` holds this run's ledgers.
+
+    The fixture holds one population at a time. A context of the other split still loads, and
+    every binding checked against the running stack -- the manifest, the seeded identities --
+    refuses it.
+    """
+    if population not in POPULATIONS:
+        raise ValueError("a context runs the development or the held-out split")
+    seed = (private_dir / "seeds" / f"{population}.seed").read_text().strip()
+    task_set = (DEVELOPMENT_TASK_SET if population == "development"
+                else heldout_task_set_path(private_dir))
     root = root or private_dir / "qualification"
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     return Context(
         stack=Stack(private_dir=private_dir),
         population=population_module.generate(seed),
         seed_ids=json.loads((private_dir / "seeded" / "truth.json").read_text()),
-        task_set=json.loads(DEVELOPMENT_TASK_SET.read_text()),
+        task_set=json.loads(task_set.read_text()),
         keys={role: private_dir / "keys" / f"{role}.api-key.json" for role in ACTORS},
         actors={role: ActorCredential(f"p74-{role}@example.test",
                                       private_dir / "stack" / f"{role}-login-password")
                 for role in ACTORS},
         bundle=REPOSITORY / ".artifacts/evals/pageagent/pageagent-baseline.js",
-        root=root)
+        root=root, population_name=population)
 
 
 def fixture_manifest_path(private_dir: Path) -> Path:
@@ -91,7 +115,7 @@ def protocol_budgets(**overrides: Any) -> GatewayBudgets:
 
 
 def batch_bindings(ctx: Context) -> dict[str, Any]:
-    """What a development-population batch header binds, each fact verified first.
+    """What a batch header binds, each fact verified first, for the context's split.
 
     The candidate is the running Agent image built from this clean checkout; the fixture
     manifest must describe the fixture in front of us, on the recorded baseline; the task set
@@ -104,7 +128,7 @@ def batch_bindings(ctx: Context) -> dict[str, Any]:
         json.loads(fixture_manifest_path(ctx.private_dir).read_text()),
         inputs=manifest.fixture_inputs(ctx.stack, population=ctx.population),
         baseline_guard_digest=recovery["baseline_digest"])
-    seal = json.loads(DEVELOPMENT_SEAL.read_text())
+    seal = json.loads(seal_path(ctx.population_name).read_text())
     tasks.verify_seal(ctx.task_set, seal, population=ctx.population)
     return {"task_set_seal_digest": seal["seal_digest"],
             "fixture": manifest.batch_fixture(record),

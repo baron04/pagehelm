@@ -17,12 +17,22 @@ _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 _SAFE_MODEL = re.compile(r"[^\x00-\x1f\x7f]{1,120}\Z")
 
 
+#: Where a host failure came from. ``provider`` is a failed call the completion client typed --
+#: the gateway recorded it and can explain it. ``limit`` is one of the run's own limits, a
+#: scorable ending. ``host`` is this proxy or the bridge failing on its own: nothing the provider
+#: did, and nothing the gateway can explain.
+ORIGINS = ("provider", "limit", "host")
+
+
 class PageAgentHostError(RuntimeError):
     """A content-free baseline-host failure safe to cross the page binding."""
 
-    def __init__(self, code: str):
+    def __init__(self, code: str, *, origin: str = "host"):
+        if origin not in ORIGINS:
+            raise ValueError("origin is invalid")
         super().__init__(code)
         self.code = code
+        self.origin = origin
 
 
 def _number(value: Any, name: str, minimum: float, maximum: float) -> float:
@@ -139,7 +149,7 @@ class PageAgentProviderProxy:
     def _remaining(self) -> float:
         remaining = self._deadline - self._clock()
         if remaining <= 0:
-            raise PageAgentHostError("provider_deadline")
+            raise PageAgentHostError("provider_deadline", origin="limit")
         return remaining
 
     def handle(self, payload: Any) -> dict[str, Any]:
@@ -166,7 +176,7 @@ class PageAgentProviderProxy:
         self.contract.validate_body(body)
         with self._lock:
             if self._attempts >= self.contract.max_model_calls:
-                raise PageAgentHostError("model_call_budget")
+                raise PageAgentHostError("model_call_budget", origin="limit")
             self._attempts += 1
         try:
             response = self.client.request_completion(
@@ -194,11 +204,17 @@ class PageAgentProviderProxy:
             self._last_error_code = exc.code
             raise
         except Exception as exc:
-            code = getattr(exc, "code", "provider_call")
-            self._last_error_code = (
-                code if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", code)
-                else "provider_call")
-            raise PageAgentHostError("provider_call") from None
+            # Only a failure the completion client typed is the provider's: the gateway recorded
+            # it and can explain the run's ending. Any other exception on this path is the host's
+            # own fault. It used to be reported as a failed provider call too, which no gateway
+            # record could explain, so one proxy hiccup was scored as classification drift and
+            # sealed the batch.
+            code = getattr(exc, "code", None)
+            if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", code):
+                self._last_error_code = code
+                raise PageAgentHostError("provider_call", origin="provider") from None
+            self._last_error_code = "host_fault"
+            raise PageAgentHostError("host_fault") from None
         with self._lock:
             self._completed += 1
         return {"status": 200, "body": response_body}

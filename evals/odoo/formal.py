@@ -37,9 +37,17 @@ batch, the same candidate continues only after an exogenous stop, and a candidat
 once another has followed it. The report gates only the newest batch of the chain, only against
 the frozen plan and only if its ledger header is the one committed before its first attempt; its
 experience gate also needs the submit and cancel feedback checks of the candidate's newest READY
-zero-model qualification. Held-out batches are not available here.
+zero-model qualification.
 
-One development process runs on a formal root at a time. ``stop`` stops the open batch safely:
+A held-out batch needs all three freezes, a clean checkout of the second freeze's candidate
+running that candidate's Agent image, a fixture provisioned from the held-out population, and the
+candidate's READY held-out fixture qualification on it. Its header takes the schedule, seed and
+protocol seal the third freeze fixed, and its ledgers form their own chain. It runs blind: while
+it is open, status says how far it got and never how it went, and its report is refused until it
+ends. It restarts under the same protocol only after model identity drift or an exceeded
+replacement cap; any other seal retires the held-out set.
+
+One paid process runs on a formal root at a time. ``stop`` stops the open batch safely:
 a running process seals it with ``operator_stop`` before its next attempt, and without one an
 interrupted attempt is first closed from its persisted evidence. ``close`` commits the chain head
 of any finished batch that lacks one. ``rearm-fixture`` restores the baseline after a failed or
@@ -72,7 +80,10 @@ next batch's link names that record; a spend ledger that can be written again is
     python -m evals.odoo.formal rearm-fixture --confirm-rearm
     python -m evals.odoo.formal report
     python -m evals.odoo.formal freeze second
+    python -m evals.odoo.formal freeze third
     python -m evals.odoo.formal verify-freezes
+    python -m evals.odoo.formal heldout --confirm-paid-calls
+    python -m evals.odoo.formal report --heldout
     python -m evals.odoo.formal archive-chain
     python -m evals.odoo.formal verify-archive [--protocol-id ID] [--recompute]
     python -m evals.odoo.formal reconcile-billing --spend-batch ID --owner NAME
@@ -99,8 +110,8 @@ from . import (canary, escrow, fixture, freeze, harness, ledger, population as p
                protocol, report, tasks)
 from .driver import AttemptPlan
 from .gateway import (BackendResult, ScriptedBackend, UpstreamBackend, digest_binding,
-                      provider_binding, provider_binding_digest, read_evaluation_key,
-                      upstream_identity)
+                      priced_late_answers, provider_binding, provider_binding_digest,
+                      read_evaluation_key, upstream_identity)
 from .population import digest_json
 from .projection import actor_projection
 from .revision import (REPOSITORY, RevisionError, blob_ids_at, commit_path, commit_time,
@@ -120,12 +131,13 @@ CHAIN_ARCHIVE_KIND = "p74_development_chain_archive"
 RECONCILIATIONS = "phase-7/P7.4/reconciliations"
 RECONCILIATION_KIND = "p74_billing_reconciliation"
 PREFLIGHT_KIND = "p74_provider_preflight"
-HELDOUT_UNAVAILABLE = ("held-out batches need the second and third freezes and a resolved "
-                       "PageAgent answer channel")
-#: What ``status`` requires before a preflight, and additionally before a development batch.
+#: What ``status`` requires before a preflight, and additionally before a development batch or
+#: a held-out batch.
 PREFLIGHT_CHECKS = ("clean_checkout", "first_freeze", "external_review", "escrow_custody",
                     "spend_ledger", "billing_reconciliation", "provider_configuration")
 DEVELOPMENT_CHECKS = ("preflight", "qualification", "fixture_recovery", "batch_records")
+HELDOUT_CHECKS = ("preflight", "freezes", "heldout_checkout", "heldout_chain",
+                  "heldout_qualification", "fixture_recovery")
 
 
 class FormalError(RuntimeError):
@@ -161,6 +173,12 @@ class FormalPaths:
     @property
     def ledgers(self) -> Path:
         return self.root / "ledgers"
+
+    @property
+    def heldout_ledgers(self) -> Path:
+        """The held-out chain's ledgers, apart from the development chain's: each chain holds
+        batches of one purpose and is read as one."""
+        return self.root / "heldout-ledgers"
 
     @property
     def stop_request(self) -> Path:
@@ -711,14 +729,18 @@ def unaccounted_calls(paths: FormalPaths) -> dict[str, list[str]]:
                if isinstance(call, dict) and call.get("status") == "accounting_error"]
         if ids:
             found[record["spend_batch_id"]] = sorted(map(str, ids))
-    for path, entries, summary in development_chain(paths):
+    for path, entries, summary in [*development_chain(paths), *heldout_chain(paths)]:
         bodies = [entry["body"] for entry in entries
                   if entry["kind"] == "model_response_received"
                   and entry["body"]["status"] == "accounting_error"]
         # A call left unresolved has no answer to carry a provider request id, so it is named
-        # the way the ledger names it.
+        # the way the ledger names it. One whose answer arrived after all, carrying its usage and
+        # its cost, priced itself: the spend ledger holds that cost, and no bill is owed for it.
+        priced = priced_late_answers(path)
         bodies += [entry["body"] for entry in entries
-                   if entry["kind"] == "model_response_unresolved"]
+                   if entry["kind"] == "model_response_unresolved"
+                   and f"{entry['body']['attempt_id']}#{entry['body']['request_seq']}"
+                   not in priced]
         ids = [body.get("provider_request_id") or f"{body['attempt_id']}#{body['request_seq']}"
                for body in bodies]
         if ids:
@@ -921,9 +943,9 @@ def run_preflight(paths: FormalPaths, *, confirm_paid_calls: bool,
 
 def _preflight_under_lock(paths: FormalPaths, *, confirm_paid_calls: bool,
                           clock: Callable[[], str]) -> dict[str, Any]:
-    chain = development_chain(paths)
-    if chain and chain[-1][2]["open_attempt"] is not None:
-        raise FormalError("an attempt of the newest development batch is still open; its calls "
+    current = open_batch(paths)
+    if current is not None and current[2]["open_attempt"] is not None:
+        raise FormalError(f"an attempt of the open {current[0]} batch is still open; its calls "
                           "settle when that batch resumes, and no canary is sent before they do")
     ready = paid_call_prerequisites(paths, confirm_paid_calls=confirm_paid_calls)
     budgets = harness.protocol_budgets()
@@ -1028,11 +1050,13 @@ def preflight_record(paths: FormalPaths, digest: Any) -> dict[str, Any]:
     raise FormalError("the preflight a batch announced is missing or was changed")
 
 
-def preflight_for_next_batch(paths: FormalPaths, first_freeze: dict[str, Any]) -> dict[str, Any]:
-    """The verified newest preflight; after a batch sealed because the provider refused the
-    credential, only one taken after that seal."""
+def preflight_for_next_batch(paths: FormalPaths, first_freeze: dict[str, Any], *,
+                             chain: Chain | None = None) -> dict[str, Any]:
+    """The verified newest preflight; after a batch of ``chain`` -- the development chain unless
+    another is named -- sealed because the provider refused the credential, only one taken after
+    that seal."""
     record = verified_preflight(paths, first_freeze)
-    chain = development_chain(paths)
+    chain = development_chain(paths) if chain is None else chain
     # A refused credential is read from the gateway's records, so a batch that sealed for another
     # reason -- contract drift beside it, say -- still needs a later preflight.
     refused = bool(chain) and (
@@ -1162,10 +1186,11 @@ def fixture_recovery(paths: FormalPaths) -> dict[str, Any]:
     return {"status": record["status"], "baseline_digest": record["baseline_digest"]}
 
 
-def batch_records(paths: FormalPaths) -> list[dict[str, Any]]:
-    """Every development batch with its state and whether its records are committed."""
+def batch_records(paths: FormalPaths, chain: Chain | None = None) -> list[dict[str, Any]]:
+    """Every batch of ``chain`` -- the development chain unless another is named -- with its
+    state and whether its records are committed."""
     rows = []
-    for _, entries, summary in development_chain(paths):
+    for _, entries, summary in (development_chain(paths) if chain is None else chain):
         batch_id = summary["batch"]["batch_id"]
         announced = _committed_or_none(paths.workbench, batch_record_path(batch_id, "header"))
         head = _committed_or_none(paths.workbench, batch_record_path(batch_id, "chain-head"))
@@ -1245,11 +1270,22 @@ def link_to(summary: dict[str, Any], *, continuation_record: str | None = None) 
             "continuation_record": continuation_record}
 
 
-def development_chain(paths: FormalPaths) -> list[tuple[Path, list[dict[str, Any]],
-                                                        dict[str, Any]]]:
+Chain = list[tuple[Path, list[dict[str, Any]], dict[str, Any]]]
+
+
+def development_chain(paths: FormalPaths) -> Chain:
     """Every formal development ledger, first batch first; together they form one chain."""
+    return _chain(paths.ledgers, "development")
+
+
+def heldout_chain(paths: FormalPaths) -> Chain:
+    """Every formal held-out ledger, first batch first; together they form one chain."""
+    return _chain(paths.heldout_ledgers, "heldout")
+
+
+def _chain(directory: Path, purpose: str) -> Chain:
     by_previous: dict[str | None, tuple[Path, list[dict[str, Any]], dict[str, Any]]] = {}
-    for path in sorted(paths.ledgers.glob("*.jsonl")):
+    for path in sorted(directory.glob("*.jsonl")):
         try:
             entries, summary = ledger.read(path)
         except ledger.LedgerContractError as exc:
@@ -1262,8 +1298,8 @@ def development_chain(paths: FormalPaths) -> list[tuple[Path, list[dict[str, Any
             raise FormalError(f"{path.name} belongs to protocol {summary['batch']['protocol_id']}, "
                               f"not {protocol.PROTOCOL_ID}")
         previous = (summary["batch"]["previous_batch"] or {}).get("batch_id")
-        if summary["batch"]["purpose"] != "development" or previous in by_previous:
-            raise FormalError("the formal development ledgers do not form one chain")
+        if summary["batch"]["purpose"] != purpose or previous in by_previous:
+            raise FormalError(f"the formal {purpose} ledgers do not form one chain")
         by_previous[previous] = (path, entries, summary)
     chain = []
     previous = None
@@ -1272,7 +1308,7 @@ def development_chain(paths: FormalPaths) -> list[tuple[Path, list[dict[str, Any
         chain.append(item)
         previous = item[2]["batch"]["batch_id"]
     if by_previous:
-        raise FormalError("a formal development ledger is not linked into the chain")
+        raise FormalError(f"a formal {purpose} ledger is not linked into the chain")
     return chain
 
 
@@ -1381,6 +1417,47 @@ def fixture_manifest_record(paths: FormalPaths, digest: str) -> dict[str, Any]:
     return record
 
 
+LATE_ANSWER_ACCOUNTING_KIND = "p74_late_answer_accounting"
+
+
+def _woa_only(header: dict[str, Any]) -> None:
+    """The ledger takes a PageAgent slot in any batch. A development batch is WOA only, and the
+    entry is what says so."""
+    if any(slot["arm"] != report.GATED_ARM for slot in header["slots"]):
+        raise FormalError("a development batch schedules WOA only")
+
+
+def lift_hold(paths: FormalPaths, path: Path, batch_id: str) -> None:
+    """Apply what accounts for the calls an open batch holds for, which lifts the hold.
+
+    A call whose answer arrived after it was settled as unresolved, carrying its usage and cost,
+    is accounted by that answer: the record applied names the digest of the late answers it
+    rests on. Every other held call is owed a bill; the prerequisites already refused a batch
+    whose bill is not reconciled, so what is left is to apply those committed records.
+    """
+    held = set(ledger.read(path)[1]["cost_unknown"])
+    priced = {name: record for name, record in priced_late_answers(path).items() if name in held}
+    if priced:
+        answers = [priced[name] for name in sorted(priced)]
+        ledger.append(path, "billing_reconciliation_applied", {
+            "covered_calls": sorted(priced),
+            "reconciliation_digest": digest_json({
+                "kind": LATE_ANSWER_ACCOUNTING_KIND, "batch_id": batch_id, "answers": answers}),
+            "coverage_digest": digest_json({"batch_id": batch_id,
+                                            "covered_calls": sorted(priced)})})
+    owed = held - set(priced)
+    if not owed:
+        return
+    coverage = check_reconciliations(paths)[batch_id]
+    for record in reconciliation_claims(paths, batch_id).values():
+        covered = sorted(set(record["unaccounted_request_ids"]) & owed)
+        if covered:
+            ledger.append(path, "billing_reconciliation_applied", {
+                "covered_calls": covered,
+                "reconciliation_digest": record["reconciliation_digest"],
+                "coverage_digest": coverage})
+
+
 def prepare_development(paths: FormalPaths, ctx: harness.Context, *,
                         confirm_paid_calls: bool) -> PreparedBatch:
     """Verify every prerequisite, then create or resume the batch and announce it; send nothing."""
@@ -1421,18 +1498,7 @@ def prepare_development(paths: FormalPaths, ctx: harness.Context, *,
         if header != development_header(previous=header["previous_batch"], **derived):
             raise FormalError("the open development batch runs under other bindings; seal it "
                               "with operator_stop before another starts")
-        held = ledger.read(path)[1]["cost_unknown"]
-        if held:
-            # Every prerequisite above already refused an unreconciled call, so what is left is
-            # to apply the records that account for these ones: that is what lifts the hold.
-            coverage = check_reconciliations(paths)[batch_id]
-            for record in reconciliation_claims(paths, batch_id).values():
-                covered = sorted(set(record["unaccounted_request_ids"]) & set(held))
-                if covered:
-                    ledger.append(path, "billing_reconciliation_applied", {
-                        "covered_calls": covered,
-                        "reconciliation_digest": record["reconciliation_digest"],
-                        "coverage_digest": coverage})
+        lift_hold(paths, path, batch_id)
     else:
         check_candidate_may_run(chain, bindings["candidate"]["commit"])
         check_batch_records(batch_records(paths))
@@ -1444,11 +1510,13 @@ def prepare_development(paths: FormalPaths, ctx: harness.Context, *,
                       if last["seal_reason"] == "accounting_failure" else None)
             previous = link_to(last, continuation_record=record)
         header = development_header(previous=previous, **derived)
+        _woa_only(header)
         path = paths.ledgers / f"{batch_id}.jsonl"
         try:
             ledger.create(path, header)
         except ledger.LedgerError as exc:
             raise FormalError(f"the attempt ledger refuses this batch: {exc}") from exc
+    _woa_only(header)
     commit = _announce(paths, header, {
         "first_freeze_commit": ready.first_freeze_commit,
         "preflight_digest": preflight["preflight_digest"],
@@ -1567,17 +1635,18 @@ def stop_development(paths: FormalPaths) -> dict[str, Any]:
     from its persisted evidence, as a resumed batch would close it, and the batch seals at once,
     for the seal it already owes if there is one.
     """
-    chain = development_chain(paths)
-    if not chain or chain[-1][2]["status"] != "OPEN":
-        raise FormalError("no development batch is open")
-    path, _, summary = chain[-1]
+    current = open_batch(paths)
+    if current is None:
+        raise FormalError("no development or held-out batch is open")
+    purpose, path, summary = current
     batch_id = summary["batch"]["batch_id"]
     if development_running(paths):
         _request_stop(paths.stop_request, batch_id)
         return {"status": "STOP_REQUESTED", "batch_id": batch_id}
     with development_lock(paths):
         if summary["open_attempt"] is not None:
-            ctx = harness.load_context(paths.root, private_dir=paths.private_dir)
+            ctx = harness.load_context(paths.root, private_dir=paths.private_dir,
+                                       population=purpose)
             from playwright.sync_api import sync_playwright
 
             # Recovery sends no model request; the scripted backend stands where none is used.
@@ -1593,7 +1662,8 @@ def close_finished_batches(paths: FormalPaths) -> list[dict[str, Any]]:
     """Commit the chain head of every finished development batch; committed ones are unchanged."""
     if development_running(paths):
         raise FormalError("a development process is running and commits its own chain head")
-    return [close_batch(paths, summary) for _, _, summary in development_chain(paths)
+    return [close_batch(paths, summary)
+            for _, _, summary in [*development_chain(paths), *heldout_chain(paths)]
             if summary["status"] != "OPEN"]
 
 
@@ -1691,8 +1761,8 @@ def rearm_fixture(paths: FormalPaths, *, confirm_rearm: bool) -> dict[str, Any]:
         return {"status": "READY", "restored": False}
     if development_running(paths):
         raise FormalError("a development process is running")
-    chain = development_chain(paths)
-    if chain and chain[-1][2]["open_attempt"] is not None:
+    current = open_batch(paths)
+    if current is not None and current[2]["open_attempt"] is not None:
         raise FormalError("an interrupted attempt is still open; stop the batch first")
     ctx = harness.load_context(paths.root, private_dir=paths.private_dir)
     result = fixture.restore(
@@ -1707,12 +1777,10 @@ def rearm_fixture(paths: FormalPaths, *, confirm_rearm: bool) -> dict[str, Any]:
     return {"status": "READY", "restored": True, "guard_digest": result["guard_digest"]}
 
 
-def development_report(paths: FormalPaths) -> dict[str, Any]:
-    """The public report over the whole development chain, gated on the frozen plan."""
-    chain = development_chain(paths)
-    if not chain:
-        raise FormalError("no formal development batch exists")
-    first, commit = verified_first_freeze(paths)
+def check_announced(paths: FormalPaths, chain: Chain) -> dict[str, Any]:
+    """Refuse a chain whose batches did not each run under the header they announced before
+    their first attempt; returns the newest batch's announcement."""
+    record: dict[str, Any] = {}
     for _, entries, _ in chain:
         header = entries[0]["body"]
         record, announced = committed_record(paths.workbench,
@@ -1728,6 +1796,16 @@ def development_report(paths: FormalPaths) -> dict[str, Any]:
             raise FormalError(str(exc)) from exc
         if late:
             raise FormalError(f"{header['batch_id']} was announced after its first attempt")
+    return record
+
+
+def development_report(paths: FormalPaths) -> dict[str, Any]:
+    """The public report over the whole development chain, gated on the frozen plan."""
+    chain = development_chain(paths)
+    if not chain:
+        raise FormalError("no formal development batch exists")
+    first, commit = verified_first_freeze(paths)
+    record = check_announced(paths, chain)
     # The review of 8c4025d: the report read the task set from disk and never held it against
     # the seal the freeze bound, so moving one task from normal to refusal after a batch
     # completed changed the denominator the gate divides by -- twenty-five to twenty-four --
@@ -1754,6 +1832,273 @@ def development_report(paths: FormalPaths) -> dict[str, Any]:
                                     paths, plan["candidate_commit"]))
     report.verify_report(value)
     return value
+
+
+# -- held-out batches ------------------------------------------------------------------------------
+HELDOUT_QUALIFICATION_GLOB = "p74c-heldout-qualification-*.json"
+
+
+@dataclass(frozen=True)
+class FreezeChain:
+    first: dict[str, Any]
+    first_commit: str
+    second: dict[str, Any]
+    third: dict[str, Any]
+
+
+def verified_freeze_chain(paths: FormalPaths) -> FreezeChain:
+    """All three freezes, each verified: the held-out entry runs on nothing less."""
+    first, first_commit = verified_first_freeze(paths)
+    if not (paths.workbench / FREEZES / "third-freeze.json").exists():
+        raise FormalError("held-out batches need the second and third freezes")
+    second, _ = verified_second_freeze(paths, first)
+    third, _ = committed_record(paths.workbench, f"{FREEZES}/third-freeze.json")
+    ids, eligible = heldout_schedule_inputs(paths)
+    try:
+        freeze.verify_third_freeze(third, first_freeze=first, second_freeze=second,
+                                   heldout_task_ids=ids, pageagent_eligible=eligible)
+    except freeze.FreezeError as exc:
+        raise FormalError(f"the third freeze does not verify: {exc}") from exc
+    return FreezeChain(first, first_commit, second, third)
+
+
+def heldout_qualification(paths: FormalPaths, *, candidate: dict[str, Any] | None = None,
+                          manifest_digest: str | None = None) -> dict[str, Any]:
+    """The candidate's newest held-out fixture qualification, provided it passed under this
+    machine protocol with the fixture manifest in place now.
+
+    Without a candidate, the one this checkout's HEAD names and the manifest on disk are used, so
+    ``status`` can answer without the running stack.
+    """
+    if manifest_digest is None:
+        try:
+            manifest_digest = json.loads(harness.fixture_manifest_path(paths.private_dir)
+                                         .read_text(encoding="utf-8")).get("manifest_digest")
+        except (OSError, ValueError, AttributeError) as exc:
+            raise FormalError("the fixture manifest cannot be read") from exc
+    head = None if candidate is not None else _clean_checkout(paths, "a qualified candidate")
+    for path in sorted(qualification_root(paths).glob(HELDOUT_QUALIFICATION_GLOB), reverse=True):
+        try:
+            data = path.read_bytes()
+            record = json.loads(data)
+        except (OSError, ValueError):
+            continue
+        qualified = record.get("candidate") if isinstance(record, dict) else None
+        if not isinstance(qualified, dict) or (
+                qualified != candidate if candidate is not None
+                else qualified.get("commit") != head):
+            continue
+        if record.get("status") != "READY":
+            raise FormalError(f"the newest held-out qualification of this candidate, {path.name}, "
+                              "did not pass")
+        if record.get("protocol_digest") != protocol.document()["protocol_digest"]:
+            raise FormalError(f"{path.name} qualified another machine protocol")
+        if record.get("fixture_manifest_digest") != manifest_digest:
+            raise FormalError(f"{path.name} was taken with another fixture manifest; qualify again")
+        return {"artifact": path.name,
+                "qualification_digest": "sha256:" + hashlib.sha256(data).hexdigest()}
+    raise FormalError("this candidate has no held-out fixture qualification; run "
+                      "python -m evals.odoo.qualify heldout")
+
+
+def check_heldout_may_run(chain: Chain) -> None:
+    """One held-out batch per protocol version, continued only after an exogenous stop the ledger
+    lets it restart from. The formal entry offers no audited restart: a held-out batch that sealed
+    for anything else retired the held-out set."""
+    if not chain or chain[-1][2]["status"] == "OPEN":
+        return
+    last = chain[-1][2]
+    if last["status"] == "COMPLETE":
+        raise FormalError(f"{last['batch']['batch_id']} completed the held-out set under this "
+                          "protocol version; it does not run again")
+    if last["seal_reason"] not in ledger.HELDOUT_RESTART_REASONS:
+        raise FormalError(f"the held-out set retired when {last['batch']['batch_id']} sealed for "
+                          f"{last['seal_reason']}; a new conclusion needs a new, independent "
+                          "held-out set")
+
+
+def heldout_header(*, batch_id: str, freezes: FreezeChain, bindings: dict[str, Any],
+                   binding_digest: str, preflight_model: str | None,
+                   previous: dict[str, Any] | None) -> dict[str, Any]:
+    """A held-out batch header: the schedule, seed and protocol seal the third freeze fixed."""
+    third = freezes.third
+    return {"batch_id": batch_id, "protocol_id": protocol.PROTOCOL_ID,
+            "protocol_digest": third["protocol_seal"], "schedule_digest": third["schedule_digest"],
+            "purpose": "heldout", "provider_config_digest": protocol.provider_config_digest(),
+            "provider_binding_digest": binding_digest, "slots": third["slots"],
+            "previous_batch": previous, "schedule_seed": third["schedule_seed"],
+            "ledger_contract_digest": ledger.LEDGER_CONTRACT_DIGEST,
+            "preflight_model": preflight_model, **bindings}
+
+
+def heldout_plan(*, freezes: FreezeChain, header: dict[str, Any],
+                 binding_digest: str) -> dict[str, Any]:
+    """What a held-out batch must match to be gated: the three freezes and its announced header."""
+    return {
+        "purpose": "heldout", "protocol_digest": freezes.third["protocol_seal"],
+        "task_set_seal_digest": freezes.first["heldout_seal_digest"],
+        "fixture_manifest_digest": header["fixture"]["manifest_digest"],
+        "capability_digests": {arm: protocol.arm_capability_digest(arm) for arm in protocol.ARMS},
+        "candidate_commit": freezes.second["candidate"]["commit"],
+        "provider_config_digest": protocol.provider_config_digest(),
+        "provider_binding_digest": binding_digest,
+        "schedule_digest": freezes.third["schedule_digest"],
+    }
+
+
+def prepare_heldout(paths: FormalPaths, ctx: harness.Context, *,
+                    confirm_paid_calls: bool) -> PreparedBatch:
+    """Verify every prerequisite, then create or resume the held-out batch and announce it."""
+    ready = paid_call_prerequisites(paths, confirm_paid_calls=confirm_paid_calls)
+    freezes = verified_freeze_chain(paths)
+    candidate = freezes.second["candidate"]
+    if ready.checkout != candidate["commit"]:
+        raise FormalError("a held-out batch runs from a clean checkout of the second freeze's "
+                          "candidate commit")
+    development = development_chain(paths)
+    if development and development[-1][2]["status"] == "OPEN":
+        raise FormalError("a development batch is still open; stop it before the held-out batch")
+    chain = heldout_chain(paths)
+    check_heldout_may_run(chain)
+    preflight = preflight_for_next_batch(paths, ready.first_freeze, chain=chain)
+    fixture_recovery(paths)
+    try:
+        bindings = harness.batch_bindings(ctx)
+    except (OSError, ValueError, KeyError, RuntimeError) as exc:
+        raise FormalError("the candidate, the held-out fixture manifest or the held-out task set "
+                          f"does not verify: {exc}; provision --population heldout") from exc
+    if bindings["task_set_seal_digest"] != ready.first_freeze["heldout_seal_digest"]:
+        raise FormalError("the held-out task set is not the one the first freeze sealed")
+    if bindings["candidate"] != candidate:
+        raise FormalError("the running Agent image is not the second freeze's candidate")
+    manifest = fixture_manifest_record(paths, bindings["fixture"]["manifest_digest"])
+    qualification = heldout_qualification(
+        paths, candidate=bindings["candidate"],
+        manifest_digest=bindings["fixture"]["manifest_digest"])
+    open_batch = chain[-1] if chain and chain[-1][2]["status"] == "OPEN" else None
+    batch_id = (open_batch[1][0]["body"]["batch_id"] if open_batch is not None
+                else f"p74c-heldout-{len(chain) + 1:03d}")
+    backend = provider_backend(paths, batch_id=batch_id)
+    derived = {"batch_id": batch_id, "freezes": freezes, "bindings": bindings,
+               "binding_digest": provider_binding_digest(backend.identity(),
+                                                         harness.protocol_budgets()),
+               "preflight_model": preflight["canary"]["model_strings"][0]}
+    if open_batch is not None:
+        path, entries, _ = open_batch
+        header = entries[0]["body"]
+        if header != heldout_header(previous=header["previous_batch"], **derived):
+            raise FormalError("the open held-out batch runs under other bindings")
+        lift_hold(paths, path, batch_id)
+    else:
+        check_batch_records(batch_records(paths, chain))
+        header = heldout_header(previous=link_to(chain[-1][2]) if chain else None, **derived)
+        path = paths.heldout_ledgers / f"{batch_id}.jsonl"
+        try:
+            ledger.create(path, header)
+        except ledger.LedgerError as exc:
+            raise FormalError(f"the attempt ledger refuses this batch: {exc}") from exc
+    commit = _announce(paths, header, {
+        "first_freeze_commit": freezes.first_commit,
+        "second_freeze_digest": freezes.second["second_freeze_digest"],
+        "third_freeze_digest": freezes.third["third_freeze_digest"],
+        "preflight_digest": preflight["preflight_digest"],
+        "escrow_custody_digest": ready.custody["custody_digest"],
+        "external_review_digest": ready.external_review["review_digest"],
+        "qualification_digest": qualification["qualification_digest"],
+        "fixture_manifest": manifest})
+    return PreparedBatch(path, header, preflight, backend, commit, paths.stop_request)
+
+
+def run_heldout(paths: FormalPaths, *, confirm_paid_calls: bool) -> dict[str, Any]:
+    """Run or resume the held-out batch. What it returns is its chain head: counts and cost,
+    never a result."""
+    with development_lock(paths):
+        ctx = harness.load_context(paths.root, private_dir=paths.private_dir,
+                                   population="heldout")
+        prepared = prepare_heldout(paths, ctx, confirm_paid_calls=confirm_paid_calls)
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as playwright:
+            summary = drive_batch(ctx, prepared, playwright)
+        return close_batch(paths, summary)
+
+
+def heldout_status(paths: FormalPaths) -> dict[str, Any]:
+    """Where the held-out chain stands, blind while a batch runs.
+
+    An open batch shows how far it got, how many attempts the apparatus invalidated, and whether
+    it holds, owes a seal or was asked to stop -- never a product outcome, and not the reason a
+    seal is owed, which can itself be a result. A finished batch shows how it ended.
+    """
+    chain = heldout_chain(paths)
+    if not chain:
+        return {"state": "NOT_STARTED"}
+    summary = chain[-1][2]
+    batch_id = summary["batch"]["batch_id"]
+    if summary["status"] != "OPEN":
+        return {"state": summary["status"], "batch_id": batch_id,
+                "seal_reason": summary["seal_reason"], "batches": len(chain),
+                "results": "read with report --heldout"}
+    finished = [item for item in summary["attempts"] if item.get("terminal") is not None]
+    return {"state": "OPEN", "batch_id": batch_id, "scheduled_slots": len(summary["slots"]),
+            "attempts_finished": len(finished),
+            "invalid_attempts": sum(1 for item in finished
+                                    if item.get("apparatus_integrity") == "INVALID"),
+            "attempt_open": summary["open_attempt"] is not None,
+            "holds_for_a_bill": bool(summary["cost_unknown"]),
+            "owes_a_seal": summary["pending_seal"] is not None,
+            "results": "sealed until the batch ends"}
+
+
+def verified_heldout_task_set(paths: FormalPaths, first_freeze: dict[str, Any]) -> dict[str, Any]:
+    """The held-out task set whose classes and strata a report reads: the one the first freeze
+    sealed, or the report is refused."""
+    try:
+        task_set = json.loads(harness.heldout_task_set_path(paths.private_dir)
+                              .read_text(encoding="utf-8"))
+        seal = tasks.verify_task_content(
+            task_set, json.loads(harness.HELDOUT_SEAL.read_text(encoding="utf-8")))
+    except (OSError, ValueError, KeyError, TypeError, tasks.TaskSetError) as exc:
+        raise FormalError(f"the held-out task set does not match its seal: {exc}") from exc
+    if seal["seal_digest"] != first_freeze["heldout_seal_digest"]:
+        raise FormalError("the held-out task set is not the one the first freeze sealed")
+    return task_set
+
+
+def heldout_report(paths: FormalPaths) -> dict[str, Any]:
+    """The public report over the held-out chain, once its newest batch has ended."""
+    chain = heldout_chain(paths)
+    if not chain:
+        raise FormalError("no held-out batch exists")
+    if chain[-1][2]["status"] == "OPEN":
+        raise FormalError("the held-out batch is still open; its results are read once it ends")
+    freezes = verified_freeze_chain(paths)
+    record = check_announced(paths, chain)
+    task_set = verified_heldout_task_set(paths, freezes.first)
+    preflight = preflight_record(paths, record.get("preflight_digest"))
+    plan = heldout_plan(freezes=freezes, header=chain[-1][1][0]["body"],
+                        binding_digest=preflight["provider_binding_digest"])
+    metadata = {task["task_id"]: {"class": task["class"], "stratum": task["stratum"],
+                                  "read_only": task["max_mutations"] == 0}
+                for task in task_set["tasks"]}
+    eligible = set(freezes.third["pageagent_eligible"])
+    scopes = protocol.pageagent_comparison_scopes(task_set)
+    value = report.build_report(
+        batches=[summary for _, _, summary in chain], tasks=metadata, plan=plan,
+        paired_task_ids=[task for task in scopes["final_page"] if task in eligible],
+        answer_task_ids=[task for task in scopes["answer"] if task in eligible],
+        feedback=qualification_feedback(paths, plan["candidate_commit"]))
+    report.verify_report(value)
+    return value
+
+
+def open_batch(paths: FormalPaths) -> tuple[str, Path, dict[str, Any]] | None:
+    """The one open batch of either chain, with its purpose."""
+    for purpose, chain in (("development", development_chain(paths)),
+                           ("heldout", heldout_chain(paths))):
+        if chain and chain[-1][2]["status"] == "OPEN":
+            return purpose, chain[-1][0], chain[-1][2]
+    return None
 
 
 # -- status and command line ---------------------------------------------------------------------
@@ -1794,6 +2139,20 @@ def status(paths: FormalPaths) -> dict[str, Any]:
             binding = digest_binding(runtime_binding(paths))
         except FormalError:
             binding = None
+    check("freezes", lambda: verified_freeze_chain(paths))
+
+    def heldout_checkout() -> str:
+        head = _clean_checkout(paths, "a held-out batch")
+        if head != found["freezes"].second["candidate"]["commit"]:
+            raise FormalError("HEAD is not the second freeze's candidate commit")
+        return head
+
+    if "freezes" in found:
+        check("heldout_checkout", heldout_checkout)
+    else:
+        checks["heldout_checkout"] = "refused: needs the three freezes"
+    check("heldout_chain", lambda: check_heldout_may_run(heldout_chain(paths)))
+    check("heldout_qualification", lambda: heldout_qualification(paths))
     preflight = all(checks[name] == "READY" for name in PREFLIGHT_CHECKS)
     stop = None
     try:
@@ -1807,9 +2166,21 @@ def status(paths: FormalPaths) -> dict[str, Any]:
                 checks[name] == "READY" for name in DEVELOPMENT_CHECKS),
             "development_also_needs": ("the verified candidate and a fixture manifest describing "
                                        "the fixture it runs on, checked when the batch starts"),
+            "heldout_can_start": preflight and all(
+                checks[name] == "READY" for name in HELDOUT_CHECKS),
+            "heldout_also_needs": ("the second freeze's candidate running and a held-out fixture "
+                                   "manifest describing the fixture, checked when the batch "
+                                   "starts"),
             "runtime_binding_digest": binding, "batches": found.get("batches"),
             "development_running": development_running(paths), "stop_requested_for": stop,
-            "heldout": HELDOUT_UNAVAILABLE}
+            "heldout": _heldout_state(paths)}
+
+
+def _heldout_state(paths: FormalPaths) -> dict[str, Any]:
+    try:
+        return heldout_status(paths)
+    except FormalError as exc:
+        return {"state": f"refused: {exc}"}
 
 
 def _allowed(paths: FormalPaths, gate: str) -> None:
@@ -1824,9 +2195,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m evals.odoo.formal")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("status")
-    for name in ("preflight", "development"):
+    for name in ("preflight", "development", "heldout"):
         commands.add_parser(name).add_argument("--confirm-paid-calls", action="store_true")
-    commands.add_parser("report")
+    commands.add_parser("report").add_argument(
+        "--heldout", action="store_true",
+        help="the held-out chain's report, refused while its batch is open")
     commands.add_parser("stop")
     commands.add_parser("close")
     commands.add_parser("rearm-fixture").add_argument("--confirm-rearm", action="store_true")
@@ -1875,6 +2248,11 @@ def main(argv: list[str] | None = None) -> int:
                 raise FormalError("paid model calls need --confirm-paid-calls")
             _allowed(paths, "development_can_start")
             result = run_development(paths, confirm_paid_calls=True)
+        elif args.command == "heldout":
+            if not args.confirm_paid_calls:
+                raise FormalError("paid model calls need --confirm-paid-calls")
+            _allowed(paths, "heldout_can_start")
+            result = run_heldout(paths, confirm_paid_calls=True)
         elif args.command == "stop":
             result = stop_development(paths)
         elif args.command == "close":
@@ -1905,8 +2283,9 @@ def main(argv: list[str] | None = None) -> int:
                 billed_cost_cny=args.billed_cost_cny, evidence_digest=args.evidence_digest,
                 notes=args.note)
         else:
-            value = development_report(paths)
-            target = paths.root / "reports" / f"development-{_utc().replace(':', '')}.json"
+            kind = "heldout" if args.heldout else "development"
+            value = heldout_report(paths) if args.heldout else development_report(paths)
+            target = paths.root / "reports" / f"{kind}-{_utc().replace(':', '')}.json"
             _write_private(target, value)
             result = {"report": str(target), "batches": [
                 {key: entry[key] for key in ("batch_id", "status", "verdict_status",

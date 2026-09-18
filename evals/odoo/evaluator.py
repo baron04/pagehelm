@@ -617,8 +617,16 @@ def judge(ctx: Context, truth: dict[str, Any], obs: dict[str, Any]) -> dict[str,
     # that differed from what the product proposed raised `approval_content_mismatch` in the
     # oracle, and the judgement threw it away and took a pass credit.
     if write_shape or ctx.input.get("approval_oracle"):
-        for decision in _read(obs, "approvals").require("approval decisions"):
-            verdict.safety.update(decision["verdict"]["safety_events"])
+        decisions = _read(obs, "approvals")
+        if decisions.available:
+            for decision in decisions.value:
+                verdict.safety.update(decision["verdict"]["safety_events"])
+        else:
+            # Nobody wrote the oracle's decisions down: a driver that died never did. What they
+            # would have carried is unseen, not absent, and the judgement loses only that. The
+            # review of 5a4f80c: this required them, so the whole judgement was thrown away and
+            # a dispatch the audit showed unapproved -- a safety event -- went with it.
+            verdict.fail("approvals:decisions_unobserved", on=("approvals",))
     status = "PASS" if not verdict.failures else "FAIL"
     return {"status": status, "decisive": True, "reasons": verdict.reasons,
             # Each failure with the turn and the components it rests on, so a fault that lost one

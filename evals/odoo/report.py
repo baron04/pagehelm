@@ -40,7 +40,11 @@ Rules the report applies:
   The one-sided upper bound is taken on attempts with at least one event, so it stays a
   binomial proportion even if one attempt records several events.
 * Paired comparisons are exploratory differences between product combinations, computed per
-  gated batch and replicate. They carry no engine attribution or non-inferiority claim.
+  gated batch and replicate, and only on tasks judged by their final page: there both arms
+  reach the evaluator through the page. On answer tasks the arms' answers come through
+  different channels -- WOA's is what the panel shows, PageAgent's is done text the page never
+  shows -- so each arm's result is counted apart and nothing is paired. Neither carries an
+  engine attribution or a non-inferiority claim.
 * Unknown usage or a missing cost record makes ``total_cost_cny`` null, never zero.
 """
 from __future__ import annotations
@@ -95,7 +99,13 @@ PLAN_FIELDS = ("purpose", "protocol_digest", "task_set_seal_digest", "fixture_ma
                "provider_binding_digest", "schedule_digest")
 
 _REPORT_FIELDS = frozenset({"artifact_version", "kind", "batches", "safety", "comparisons",
-                            "claims", "limitations"})
+                            "answer_task_results", "claims", "limitations"})
+#: The A/C comparison pairs only tasks judged by their final page: there both arms reach the
+#: evaluator through the page. On answer tasks WOA's answer is what the panel shows and
+#: PageAgent's is done text the page never shows, so each arm is counted apart and nothing is
+#: paired.
+COMPARISON_SCOPE = "final_page"
+ANSWER_SCOPE = "answer_channels_differ"
 _LEDGER_KIND = "p74_attempt_ledger_status"
 _STATUSES = frozenset({"OPEN", "SEALED", "COMPLETE"})
 _MISSING = "MISSING"
@@ -520,7 +530,7 @@ def _comparisons(batch: dict[str, Any], paired_task_ids: list[str],
         difference, low, high = stats.newcombe_paired_difference_interval(a, b, c, d, CONFIDENCE)
         entries.append({
             "batch_id": batch["batch_id"], "purpose": batch["purpose"],
-            "superseded": superseded, "replicate": replicate,
+            "superseded": superseded, "replicate": replicate, "scope": COMPARISON_SCOPE,
             "arm_1": GATED_ARM, "arm_2": COMPARISON_ARM,
             "requested_tasks": len(paired_task_ids), "n_pairs": len(rows),
             "unpaired_tasks": unpaired, "a": a, "b": b, "c": c, "d": d,
@@ -530,6 +540,30 @@ def _comparisons(batch: dict[str, Any], paired_task_ids: list[str],
             "exact_mcnemar_p": round(stats.exact_mcnemar_p(b, c), 6),
             "interpretation": COMPARISON_INTERPRETATION,
             "causal_engine_attribution": False, "non_inferiority_claim": False,
+        })
+    return entries
+
+
+def _answer_task_results(batch: dict[str, Any], task_ids: list[str],
+                         superseded: bool) -> list[dict[str, Any]]:
+    """Each arm's successes on the eligible answer tasks, counted apart and never paired."""
+    index = {(cell["arm"], cell["task_id"], cell["replicate"]): cell for cell in batch["cells"]}
+    entries = []
+    for replicate in REPLICATES:
+        arms = {}
+        for arm in ARMS:
+            cells = [index[(arm, task_id, replicate)] for task_id in task_ids
+                     if (arm, task_id, replicate) in index]
+            arms[arm] = stats.proportion_summary(sum(cell["credit"] for cell in cells),
+                                                 len(cells), CONFIDENCE)
+        if not any(block["n"] for block in arms.values()):
+            continue
+        entries.append({
+            "batch_id": batch["batch_id"], "purpose": batch["purpose"],
+            "superseded": superseded, "replicate": replicate, "scope": ANSWER_SCOPE,
+            "requested_tasks": len(task_ids), "arms": arms,
+            "answer_visible_to_user": {GATED_ARM: True, COMPARISON_ARM: False},
+            "paired": False, "interpretation": COMPARISON_INTERPRETATION,
         })
     return entries
 
@@ -578,10 +612,13 @@ def _validated_feedback(feedback: Any) -> dict[str, Any] | None:
 def build_report(*, batches: list[dict[str, Any]], tasks: dict[str, dict[str, Any]],
                  plan: dict[str, Any] | None = None,
                  paired_task_ids: Sequence[str] = (),
+                 answer_task_ids: Sequence[str] = (),
                  feedback: dict[str, Any] | None = None) -> dict[str, Any]:
     """Recompute the public P7.4 report from a whole batch chain, first batch first.
 
-    ``feedback`` is the submit and cancel feedback evidence of a candidate's zero-model
+    ``paired_task_ids`` are the tasks the A/C comparison pairs, judged by their final page;
+    ``answer_task_ids`` the eligible answer tasks, whose results are counted per arm and never
+    paired. ``feedback`` is the submit and cancel feedback evidence of a candidate's zero-model
     qualification; without it for a batch's candidate, that batch's experience gate is not met.
     """
     indexed = [_index_batch(summary) for summary in _sequence(batches, "batches")]
@@ -592,11 +629,14 @@ def build_report(*, batches: list[dict[str, Any]], tasks: dict[str, dict[str, An
     frozen = _validated_plan(plan) if plan is not None else None
     evidence = _validated_feedback(feedback)
     paired = list(dict.fromkeys(_sequence(paired_task_ids, "paired_task_ids")))
-    if any(not isinstance(task_id, str) for task_id in paired):
-        raise ValueError("paired task ids must be strings")
+    answers = list(dict.fromkeys(_sequence(answer_task_ids, "answer_task_ids")))
+    if any(not isinstance(task_id, str) for task_id in [*paired, *answers]):
+        raise ValueError("paired and answer task ids must be strings")
+    if set(paired) & set(answers):
+        raise ValueError("a task is either paired on its final page or counted as an answer task")
     scheduled = {cell["task_id"] for batch in indexed for cell in batch["cells"]}
-    metadata = _task_metadata(tasks, scheduled | set(paired))
-    entries, comparisons = [], []
+    metadata = _task_metadata(tasks, scheduled | set(paired) | set(answers))
+    entries, comparisons, answer_results = [], [], []
     for position, batch in enumerate(indexed):
         superseded = any(later["previous_batch_id"] == batch["batch_id"]
                          for later in indexed[position + 1:])
@@ -604,9 +644,12 @@ def build_report(*, batches: list[dict[str, Any]], tasks: dict[str, dict[str, An
         entries.append(_batch_entry(batch, metadata, superseded, basis, evidence))
         if not basis and paired:
             comparisons.extend(_comparisons(batch, paired, superseded))
+        if not basis and answers:
+            answer_results.extend(_answer_task_results(batch, answers, superseded))
     return {
         "artifact_version": REPORT_VERSION, "kind": REPORT_KIND, "batches": entries,
         "safety": _safety(indexed), "comparisons": comparisons,
+        "answer_task_results": answer_results,
         "claims": dict.fromkeys(CLAIMS, False), "limitations": list(LIMITATIONS),
     }
 
@@ -654,8 +697,19 @@ def verify_report(value: Any) -> dict[str, Any]:
             or item.get("interpretation") != COMPARISON_INTERPRETATION
             or item.get("causal_engine_attribution") is not False
             or item.get("non_inferiority_claim") is not False
+            or item.get("scope") != COMPARISON_SCOPE
             for item in comparisons):
-        raise ValueError("public report comparisons must stay exploratory")
+        raise ValueError("public report comparisons must stay exploratory and pair only tasks "
+                         "judged by their final page")
+    answers = value["answer_task_results"]
+    if not isinstance(answers, list) or any(
+            not isinstance(item, Mapping) or item.get("scope") != ANSWER_SCOPE
+            or item.get("paired") is not False
+            or item.get("answer_visible_to_user") != {GATED_ARM: True, COMPARISON_ARM: False}
+            or {"difference", "newcombe_low", "newcombe_high", "exact_mcnemar_p"} & set(item)
+            for item in answers):
+        raise ValueError("answer-task results are counted per arm, never paired, and say that "
+                         "PageAgent's answer is not shown to the user")
     return {"artifact_version": REPORT_VERSION, "kind": "p74_public_report_verification",
             "status": "READY", "batches": len(value["batches"]),
             "comparisons": len(comparisons),

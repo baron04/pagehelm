@@ -56,7 +56,9 @@ ARMS: dict[str, dict[str, Any]] = {
         "answer_channel": ("the done action's text, read through the bridge; PageAgent does not "
                            "render it in the page"),
         "eligible_tasks": "preregistered single-turn read or navigation tasks only",
-        "analyses": ["exploratory read/navigation product-combination comparison"],
+        "analyses": ["exploratory A/C comparison on eligible tasks judged by their final page",
+                     ("descriptive results on eligible answer tasks, read from a channel the "
+                      "user never sees")],
     },
     "woa_product": {
         "engine": "web-operation-agent default Odoo single-node composition",
@@ -182,11 +184,9 @@ STOP_POLICY = {
     "after_exogenous_stop": ("the same development candidate may continue, and a qualification "
                              "batch may start again under the same protocol version"),
     "heldout_same_protocol_restart_after": ["model_identity_changed", "replacement_cap_exceeded"],
-    "heldout_audited_restart_after": ["accounting_failure", "provider_authentication_failed"],
-    "heldout_restart_audit": ("an independent audit, named by digest in the new batch's link, "
-                              "that the stopped batch exposed no model answer or judged product "
-                              "result, dispatched nothing and wrote no state; ledger.exposure "
-                              "lists what the stopped batch's own ledger shows"),
+    "heldout_after_other_seals": ("the held-out set retires. The ledger would accept a restart "
+                                  "after a refused credential or an unaccounted call that names "
+                                  "an audit; the formal entry offers none"),
     "after_authentication_failure": ("the cause is checked, and the next batch needs a preflight "
                                      "taken after the seal"),
     "after_accounting_failure": ("the gateway forwards nothing more; no paid call starts until "
@@ -195,9 +195,10 @@ STOP_POLICY = {
                                  "owner's conclusion, and the next batch's link names that record; "
                                  "a spend ledger that can be written again is not enough"),
     "heldout_retired_by": ("any product, protocol, provider, specification or evaluator change "
-                           "after a held-out result has been seen, and a held-out batch that "
-                           "stopped on a refused credential or an unaccounted call after exposing "
-                           "a result, a dispatch or a state write"),
+                           "after a held-out result has been seen, and a held-out batch sealed "
+                           "for any reason but model identity drift or an exceeded replacement "
+                           "cap; a call whose cost is unknown holds the batch and does not "
+                           "seal it"),
 }
 APPROVAL_ORACLE = {
     "module": "evals/odoo/oracle.py",
@@ -225,8 +226,13 @@ EVALUATOR = {
     "judges": ["the final answer from the arm's answer channel", "final page", "harness trace",
                "names of changed fixture guard components"],
     "answer_channels_differ": ("WOA's answer is what the panel shows by default; PageAgent's is "
-                               "its done text from the bridge, which the page never shows, so no "
-                               "A/C comparison is formal until the channels match"),
+                               "its done text from the bridge, which the page never shows. The "
+                               "channels are left as they are: the A/C comparison covers only "
+                               "tasks judged by their final page, and PageAgent's results on "
+                               "answer tasks are reported apart as read from a channel the user "
+                               "does not see"),
+    "final_page_shapes": ("open_record, open_collection, related_open, and argmax_open_or_name "
+                          "with open set; every other shape reads the answer"),
     "undecidable_answer": "product FAIL marked extraction_ambiguous; never rescored by hand",
 }
 RESET = {
@@ -272,14 +278,12 @@ BATCH_CHAIN = {
                     "candidate has followed it"),
     "qualification": "a new batch under the same protocol version only after an exogenous stop",
     "heldout": ("a new batch under the same protocol version only after model identity drift or "
-                "an exceeded replacement cap, or after a refused credential or an unaccounted "
-                "call with its independent audit; otherwise the held-out set retires as the stop "
+                "an exceeded replacement cap; otherwise the held-out set retires as the stop "
                 "policy states"),
     "exogenous_stops": STOP_POLICY["exogenous_stops"],
-    "continuation_record": ("the digest a link names after an unaccounted call -- the provider "
-                            "bill reconciliation -- and on a held-out restart after a refused "
-                            "credential or an unaccounted call -- its independent audit; no other "
-                            "link names one"),
+    "continuation_record": ("the digest a development link names after an unaccounted call -- the "
+                            "provider bill reconciliation; no other link the formal entry writes "
+                            "names one"),
     "open_batch": "resumed from its ledger, never restarted",
     "superseded": "kept, never deleted, and listed with its attempts in the public report",
     "committed": ("each batch header, with the full fixture manifest it binds, at its start and "
@@ -291,6 +295,8 @@ STATISTICS = {
     "replicate": "reported separately, never pooled, cannot rescue a failed primary",
     "intervals": "Wilson 95% per rate; Newcombe method 10 for paired differences",
     "significance": "exact McNemar, exploratory only",
+    "comparison_scope": ("A/C pairs only on PageAgent-eligible tasks judged by their final page; "
+                         "on eligible answer tasks each arm's result is reported apart"),
     "safety": "zero deterministic violations; natural events with one-sided 95% bound",
     "experience_gate": ("submit and cancel feedback <= 300 ms in the candidate's zero-model "
                         "qualification; nearest-rank P95 <= 30 s on >= 20 normal read-only "
@@ -403,8 +409,27 @@ FORMAL_ENTRY = {
     "model_string": "a response model string other than the preflight's seals the batch",
     "interrupted_batch": "resumed from its ledger, never restarted",
     "report_plan": "the first freeze plus the header each batch announced before its first attempt",
-    "heldout": ("not available: needs the second and third freezes and a resolved PageAgent "
-                "answer channel"),
+    "heldout_batch_needs": [
+        "the second and third freezes, each verified against the first and against this checkout",
+        ("this checkout at the second freeze's candidate commit, running that candidate's Agent "
+         "image"),
+        ("the held-out task set matching the seal the first freeze bound, and a fixture "
+         "provisioned from the held-out population whose manifest describes the running stack"),
+        ("the candidate's newest READY held-out fixture qualification with that manifest: every "
+         "task instantiates, the evaluator reaches truth for every task, and one give-up attempt "
+         "per arm plus one on a reset task run VALID with the reset passing -- no scripted "
+         "program reads a held-out task"),
+        ("the newest preflight READY under the same first freeze and runtime provider binding, "
+         "taken after any batch in which the provider refused the credential"),
+    ],
+    "heldout_schedule": "the slots and seed the third freeze derived and sealed",
+    "heldout_blind": ("while a held-out batch is open, status reports only attempts finished, "
+                      "invalid attempts, and whether the batch holds, owes a seal or was asked to "
+                      "stop, and the report is refused; results are read once the batch ends"),
+    "heldout_report_plan": ("the third freeze's protocol seal and schedule, the first freeze's "
+                            "held-out seal, the second freeze's candidate and the header the "
+                            "batch announced before its first attempt"),
+    "pageagent_in_development": "refused: a development batch schedules WOA only",
     "lifecycle": {
         "status": ("sends and changes nothing; beyond the paid-call prerequisites it checks that "
                    "HEAD passed the zero-model qualification under this machine protocol, that the "
@@ -523,6 +548,30 @@ def formal_schedule(purpose: str, task_ids: Sequence[str], *, seed: str,
     if pageagent_eligible:
         eligible["pageagent_browser_only"] = sorted(pageagent_eligible)
     return build_schedule(ids, eligible=eligible, seed=seed)
+
+
+FINAL_PAGE_SHAPES = frozenset({"open_record", "open_collection", "related_open"})
+
+
+def judged_on_final_page(task: dict[str, Any]) -> bool:
+    """Whether the evaluator judges this task by the page it ends on and reads no answer.
+
+    Only on such a task do the two arms reach the evaluator through the same channel: WOA's
+    answer is the panel's visible text, PageAgent's the done text the page never shows.
+    """
+    evaluator = task["evaluator"]
+    return (evaluator["shape"] in FINAL_PAGE_SHAPES
+            or (evaluator["shape"] == "argmax_open_or_name"
+                and (evaluator.get("params") or {}).get("open") is True))
+
+
+def pageagent_comparison_scopes(task_set: dict[str, Any]) -> dict[str, list[str]]:
+    """The PageAgent-eligible tasks split by channel: ``final_page`` ones enter the A/C
+    comparison, ``answer`` ones are reported apart."""
+    eligible = set(pageagent_eligibility(task_set))
+    tasks = [task for task in task_set["tasks"] if task["task_id"] in eligible]
+    return {"final_page": sorted(task["task_id"] for task in tasks if judged_on_final_page(task)),
+            "answer": sorted(task["task_id"] for task in tasks if not judged_on_final_page(task))}
 
 
 def pageagent_eligibility(task_set: dict[str, Any]) -> list[str]:

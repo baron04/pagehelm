@@ -291,6 +291,8 @@ def run(runner_input: RunnerInput, config: WoaRunnerConfig, *,
                     "first_feedback_ms": feedback_ms, **stopped,
                     "automatic_ms": int(automatic * 1000),
                     "approval_wait_ms": int(approval_wait * 1000)})
+                checkpoint({"product_started": True, "turn": index,
+                            "record": dict(artifact["turns"][-1])})
                 break
             answer = page.evaluate(_ANSWER_JS)
             turn = {
@@ -302,8 +304,11 @@ def run(runner_input: RunnerInput, config: WoaRunnerConfig, *,
             }
             # The visible answer is the turn's result. It is recorded, and the turn counts as ended,
             # before waiting on the page, so a later fault cannot lose what the user already saw.
+            # The driver writes it down at once: this artifact reaches the evidence only when the
+            # run returns, and a driver killed before then would lose every answer it had read.
             artifact["turns"].append(turn)
-            checkpoint({"product_started": True, "turn": index, "settled": True})
+            checkpoint({"product_started": True, "turn": index, "settled": True,
+                        "record": dict(turn)})
             if index == len(runner_input.messages) - 1:
                 # The last message's turn has ended and no further one will be sent: waiting on
                 # the page is already reading the final view, not running the product.

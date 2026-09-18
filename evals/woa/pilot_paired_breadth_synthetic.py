@@ -87,8 +87,12 @@ def scripted_woa_replies(case: Mapping[str, Any],
         return [("load_skill", {"skill_id": skill}), (tool, {"limit": 50}),
                 ("goto", {"url": f"/objects/{entity}"}),
                 ("finish", {"done": True, "why": "The collection is open."})]
-    return [("finish", {"done": False,
-                        "why": "That operation is not supported in this assistant."})]
+    # The product's own refusal: the capability search finds nothing, and the typed gap is the
+    # whole answer. A prose decline is not a refusal the breadth evidence records.
+    return [("check_capability", {}),
+            ("finish", {"outcome": "unable", "answer": {
+                "version": 1, "coverage": "undetermined",
+                "conclusions": [{"kind": "capability_gap", "evidence_ref": "capability#1"}]}})]
 
 
 def scripted_pageagent_actions(case: Mapping[str, Any],

@@ -304,13 +304,21 @@ def _child_env() -> dict[str, str]:
                                             "."))}
 
 
-def child_attempt(ctx: Context, path: Path, index: int) -> int:
-    """Start one scheduled attempt in this process and die once its product has started."""
+#: A driver killed once its first turn was read and written down: the recovered attempt is judged
+#: from that turn, and this one's answer lacks a field, so the product's failure stands.
+SETTLED_SPECS = [SlotSpec("d01", "woa_product", "FAIL", variant="missing_field"),
+                 SlotSpec("d02", "woa_product", "PASS")]
+
+
+def child_attempt(ctx: Context, path: Path, index: int, probe: str = "interrupted") -> int:
+    """Start one scheduled attempt in this process and die where ``probe`` says: once its
+    product has started, or once its first turn was read and written down."""
     from playwright.sync_api import sync_playwright
 
+    specs, inject = ((INTERRUPTED_SPECS, "kill_after_product_start") if probe == "interrupted"
+                     else (SETTLED_SPECS, "kill_after_turn_settled"))
     slots = ledger.read(path)[1]["slots"]
-    spec = dataclasses.replace(INTERRUPTED_SPECS[index],
-                               inject=frozenset({"kill_after_product_start"}))
+    spec = dataclasses.replace(specs[index], inject=frozenset({inject}))
     with sync_playwright() as playwright, open_driver(ctx, path, playwright) as driver:
         driver.run_attempt(_plan(ctx, spec, _slot_fields(slots[index])))
     return 0
@@ -336,6 +344,33 @@ def interrupted_probe(ctx: Context, playwright: Any) -> dict[str, Any]:
         if not ledger.read(path)[1]["pending_seal"]:
             driver.run_slot(_plan(ctx, INTERRUPTED_SPECS[1], _slot_fields(slots[1])))
     record = batch_record(path, finish_batch(path), INTERRUPTED_SPECS)
+    record["child_exit_status"] = child.returncode
+    return record
+
+
+def settled_turn_probe(ctx: Context, playwright: Any) -> dict[str, Any]:
+    """A driver killed after its first turn was read: recovery judges the turn it wrote down.
+
+    Protocol section 7 named this as a limitation to fix before the held-out set: the visible
+    answer reached the evidence only when the runner returned, so a killed driver lost every
+    answer it had read and the attempt was replaced whatever it showed.
+    """
+    path = create_batch(ctx, "p74c-settled-turn", SETTLED_SPECS)
+    child = subprocess.run([sys.executable, "-m", "evals.odoo.qualify", "child-attempt",
+                            str(path), "0", "--probe", "settled"], cwd=REPOSITORY,
+                           env=_child_env(), capture_output=True, timeout=900)
+    ctx.stack.compose("stop", "provider-relay", timeout=120)
+    with open_driver(ctx, path, playwright) as driver:
+        recovered = driver.recover_open_attempt()
+        slots = ledger.read(path)[1]["slots"]
+        interrupted = recovered["attempts"][-1] if recovered else None
+        if interrupted is not None and interrupted["replacement_eligible"]:
+            plan = _plan(ctx, SETTLED_SPECS[0], _slot_fields(slots[0]))
+            plan.replacement_of = interrupted["attempt_id"]
+            driver.run_attempt(plan)
+        if not ledger.read(path)[1]["pending_seal"]:
+            driver.run_slot(_plan(ctx, SETTLED_SPECS[1], _slot_fields(slots[1])))
+    record = batch_record(path, finish_batch(path), SETTLED_SPECS)
     record["child_exit_status"] = child.returncode
     return record
 
@@ -813,7 +848,9 @@ CLOSURE_CHECKS =("gateway_contract_fails_closed", "upstream_path_accounts_every_
                   "freezes_refuse_unreviewed_or_arbitrary_records", "escrow_verifies_and_restores",
                   "custody_refuses_a_single_failure_domain",
                   "formal_entry_refuses_without_prerequisites", "spend_ledgers_untouched",
-                  "ledger_contract_isolates_versions", "qualification_binds_manifest_and_image")
+                  "ledger_contract_isolates_versions", "qualification_binds_manifest_and_image",
+                  "heldout_entry_refuses_without_the_freezes",
+                  "pageagent_host_fault_is_replaceable", "late_answer_prices_only_with_usage")
 
 
 class LoopbackProvider:
@@ -1187,6 +1224,83 @@ def _formal_entry_probe(probe: Path) -> dict[str, Any]:
                         and state["checks"]["external_review"].startswith("refused"))}
 
 
+def _heldout_entry_probe(probe: Path) -> dict[str, Any]:
+    """The held-out entry refuses without the second and third freezes, and its report refuses
+    while no held-out batch has ended; asked of a rehearsal workbench, like the formal entry."""
+    empty = rehearsal_paths(probe / "heldout-entry")
+    state = formal.status(empty)
+    refused = _refused(lambda: formal.run_heldout(empty, confirm_paid_calls=True),
+                       formal.FormalError)
+    unreported = _refused(lambda: formal.heldout_report(empty), formal.FormalError)
+    return {"checks": {name: state["checks"][name] for name in formal.HELDOUT_CHECKS},
+            "entry_refused": refused, "report_refused": unreported,
+            "refuses": (refused and unreported and state["heldout_can_start"] is False
+                        and state["checks"]["freezes"].startswith("refused")
+                        and state["heldout"] == {"state": "NOT_STARTED"})}
+
+
+def _host_fault_probe() -> dict[str, Any]:
+    """A PageAgent proxy failure of the host's own is a replaceable control-channel fault; a
+    typed provider failure still ends the run on the provider."""
+    from evals.pageagent.host import PageAgentHostError
+
+    from . import outcomes, runner_pageagent, trace
+    from .tasks import RunnerInput
+
+    def artifact() -> dict[str, Any]:
+        return runner_pageagent.empty_artifact(RunnerInput(
+            task_id="p74c-probe", actor="writer", locale="en-US", entry_path=None,
+            messages=("probe",)))
+
+    lost, typed = artifact(), artifact()
+    runner_pageagent.record_proxy_failure(lost, PageAgentHostError("host_fault"),
+                                          last_error_code=None)
+    runner_pageagent.record_proxy_failure(
+        typed, PageAgentHostError("provider_call", origin="provider"),
+        last_error_code="provider_rate_limited")
+    ending = trace.project_pageagent({"status": "error"}, host_errors=lost["host_errors"])
+    classified = outcomes.classify(
+        product_started=True, dispatch_state="none", runner_terminal=ending["terminal"],
+        apparatus_events=[outcomes.ApparatusEvent("browser_or_control_channel_crash",
+                                                  "control_channel_error")])
+    provider_ending = trace.project_pageagent({"status": "error"},
+                                              host_errors=typed["host_errors"])["terminal"]
+    return {"host_terminal": ending["terminal"], "apparatus_code": classified.apparatus_code,
+            "provider_terminal": provider_ending,
+            "replaceable": (lost["control_channel_error"] is not None
+                            and classified.apparatus_code == "browser_or_control_channel_crash"
+                            and not classified.unclassified and classified.seal_reason is None
+                            and typed["control_channel_error"] is None
+                            and provider_ending == "provider_error")}
+
+
+def _late_answer_probe(probe: Path) -> dict[str, Any]:
+    """A lease outlasts its request's own deadline, and an answer after it prices its call only
+    when it carries usage and a cost."""
+    from . import gateway
+
+    key = probe / "late-answer.key"
+    key.write_text(secrets.token_urlsafe(32) + "\n")
+    os.chmod(key, 0o600)
+    backend = UpstreamBackend(base_url="http://127.0.0.1:9/v1", key_file=key,
+                              requested_model=protocol.REQUESTED_MODEL_ALIAS,
+                              spend_ledger=probe / "late-answer-spend.jsonl",
+                              batch_id="p74c-late-answer-probe")
+    path = probe / "late-answers.jsonl"
+    base = {"http_status": 200, "provider_request_id": "r", "response_model": "m",
+            "error_code": None}
+    gateway.append_late_answer(path, {**base, "attempt_id": "attempt-001", "request_seq": 1,
+                                      "status": "ok", "usage": {"input_tokens": 1},
+                                      "cost_cny": 0.0001})
+    gateway.append_late_answer(path, {**base, "attempt_id": "attempt-002", "request_seq": 1,
+                                      "status": "transport_error", "usage": None,
+                                      "cost_cny": None, "error_code": "provider_deadline"})
+    priced = sorted(gateway.priced_late_answers(path))
+    return {"settle_margin_s": backend.settle_margin_s, "priced": priced,
+            "prices_only_with_usage": (backend.settle_margin_s > 0
+                                       and priced == ["attempt-001#1"])}
+
+
 def _ledger_contract_probe(probe: Path, sample: dict[str, Any]) -> dict[str, Any]:
     """A ledger written under another contract is refused whole, by the ledger and by the chain,
     and left as it was written."""
@@ -1280,7 +1394,15 @@ def closure_checks(ctx: Context, batches: dict[str, Any], *, candidate: dict[str
     entry = _formal_entry_probe(probe)
     contract_versions = _ledger_contract_probe(probe, headers["samples"])
     boundary = _qualification_binding_probe(probe, candidate)
+    heldout = _heldout_entry_probe(probe)
+    host = _host_fault_probe()
+    late = _late_answer_probe(probe)
     return {
+        "heldout_entry": heldout,
+        "heldout_entry_refuses_without_the_freezes": heldout["refuses"],
+        "pageagent_host_fault": host,
+        "pageagent_host_fault_is_replaceable": host["replaceable"],
+        "late_answers": late, "late_answer_prices_only_with_usage": late["prices_only_with_usage"],
         "ledger_contract": contract_versions,
         "ledger_contract_isolates_versions": contract_versions["holds"],
         "qualification_binding": boundary,
@@ -1391,6 +1513,7 @@ def run(ctx: Context) -> dict[str, Any]:
                      inject=frozenset({"extra_side_effect"})),
             SlotSpec("d02", W, "NOT_RUN")], playwright)
         batches["interrupted"] = interrupted_probe(ctx, playwright)
+        batches["settled_turn"] = settled_turn_probe(ctx, playwright)
         batches["faults_provider"] = run_batch(ctx, "p74a-faults-provider", [
             SlotSpec("d01", W, "REPLACED_PASS", faults={1: "http_503"}),
             SlotSpec("d02", W, "CAP_SEAL", faults={2: "connection_lost"})], playwright)
@@ -1501,6 +1624,129 @@ def run(ctx: Context) -> dict[str, Any]:
     return {**result, "artifact": str(target.relative_to(REPOSITORY))}
 
 
+# -- the held-out fixture ----------------------------------------------------------------------------
+
+HELDOUT_KIND = "p74c_heldout_fixture_qualification"
+
+
+def _giveup_plan(ctx: Context, task_id: str, arm: str, slot: dict[str, Any]) -> AttemptPlan:
+    """An attempt whose scripted model gives up at once. It reads nothing of the task: the
+    held-out fixture is qualified without any program written for a held-out task."""
+    runner, evaluator = ctx.inputs(task_id)
+    policy = (S.WoaProgram({}).policy() if arm == "woa_product"
+              else S.PageAgentProgram(()).policy())
+    return AttemptPlan(slot=slot, runner_input=runner, evaluator_input=evaluator, policy=policy)
+
+
+def _truth_reached(ctx: Context, task_id: str, directory: Path) -> bool:
+    """Whether the evaluator process reaches expected truth for one task on this fixture. What
+    it computed stays in the private directory; only whether it did is recorded."""
+    _, evaluator = ctx.inputs(task_id)
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    (directory / "evaluator-job.json").write_text(json.dumps({
+        "evaluator_input": dataclasses.asdict(evaluator),
+        "scope": {"attempt_id": "truth", "run_id": "truth", "arm": "woa_product"},
+        "rpc_url": ctx.stack.rpc_url,
+        "actor_key_files": {role: str(path) for role, path in ctx.keys.items()}}))
+    env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+    env["PYTHONPATH"] = str(REPOSITORY)
+    completed = subprocess.run(
+        [sys.executable, "-m", "evals.odoo.evaluator", "truth",
+         "--job", str(directory / "evaluator-job.json"),
+         "--output", str(directory / "evaluator-truth.json")],
+        cwd=REPOSITORY, env=env, capture_output=True, timeout=300, check=False)
+    return completed.returncode == 0 and (directory / "evaluator-truth.json").exists()
+
+
+def heldout_run(ctx: Context) -> dict[str, Any]:
+    """The candidate's zero-model qualification on the held-out fixture.
+
+    What it asks needs no knowledge of any held-out task: the task set matches its seal, the
+    running fixture is the held-out population at its baseline, every task instantiates, the
+    evaluator reaches truth for every one, and give-up attempts on both arms and on one task
+    that needs a reset run with the apparatus intact and the reset passing. Only counts, the
+    task ids it picked and digests are recorded; a scripted give-up says nothing about the
+    product.
+    """
+    from playwright.sync_api import sync_playwright
+
+    started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    spend_before = spend_ledger_fingerprints()
+    candidate = ctx.stack.verify_candidate()
+    bindings = batch_bindings(ctx)
+    manifest = json.loads(fixture_manifest_path(ctx.private_dir).read_text())
+    recovery = fixture.recovery_record(ctx.private_dir / "recovery")
+    seal = json.loads(harness.HELDOUT_SEAL.read_text())
+    ids = sorted(task["task_id"] for task in ctx.task_set["tasks"])
+    instantiated = 0
+    for task_id in ids:
+        ctx.inputs(task_id)
+        instantiated += 1
+    truth_root = ctx.root / "heldout-truth" / started.replace("-", "").replace(":", "")
+    reached = sum(_truth_reached(ctx, task_id, truth_root / task_id) for task_id in ids)
+    eligible = protocol.pageagent_eligibility(ctx.task_set)
+    first = (eligible or ids)[0]
+    reset_task = next((task["task_id"] for task in sorted(ctx.task_set["tasks"],
+                                                          key=lambda item: item["task_id"])
+                       if task["reset_profile"] != "none"), None)
+    picks = [(first, "woa_product")]
+    if eligible:
+        picks.append((first, "pageagent_browser_only"))
+    if reset_task is not None:
+        picks.append((reset_task, "woa_product"))
+    specs = [SlotSpec(task_id, arm, "GIVE_UP") for task_id, arm in picks]
+    path = create_batch(ctx, "p74c-heldout-fixture", specs)
+    with sync_playwright() as playwright, open_driver(ctx, path, playwright) as driver:
+        for spec, slot in zip(specs, ledger.read(path)[1]["slots"]):
+            fields = _slot_fields(slot)
+            summary = driver.run_slot(_giveup_plan(ctx, spec.task_id, spec.arm, fields),
+                                      replacement=_giveup_plan(ctx, spec.task_id, spec.arm,
+                                                               fields))
+            if summary["status"] != "OPEN":
+                break
+    summary = finish_batch(path)
+    attempts = summary["attempts"]
+    checks = {
+        "heldout_task_set_sealed": bindings["task_set_seal_digest"] == seal["seal_digest"],
+        "fixture_is_the_heldout_population": (manifest["population_seed_commitment"]
+                                              == seal["population_seed_commitment"]),
+        "fixture_stable": manifest["stability_proof"]["status"] == "READY",
+        "fixture_at_its_baseline": (recovery["status"] == "READY"
+                                    and bindings["fixture"]["baseline_guard_digest"]
+                                    == recovery["baseline_digest"]),
+        "every_task_instantiates": instantiated == len(ids) == protocol.FORMAL_TASK_COUNT,
+        "evaluator_reaches_every_truth": reached == len(ids),
+        "give_up_batch_complete": summary["status"] == "COMPLETE",
+        "reset_task_present": reset_task is not None,
+        "give_up_attempts_valid": bool(attempts) and all(
+            item["apparatus_integrity"] == "VALID" and not item["unclassified"]
+            and item["reset_outcome"] in {"NOT_REQUIRED", "PASS"} and not item["safety_events"]
+            for item in attempts),
+        "reset_ran_on_the_heldout_baseline": any(
+            item["task_id"] == reset_task and item["reset_outcome"] == "PASS"
+            for item in attempts),
+        "scripted_model_only": summary["provider_model"] in {None, SCRIPTED_MODEL},
+        "spend_ledgers_untouched": spend_ledger_fingerprints() == spend_before,
+    }
+    result = {
+        "artifact_version": 1, "kind": HELDOUT_KIND, "started_at": started,
+        "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "external_model_calls": 0, "candidate": candidate,
+        "fixture_manifest_digest": manifest["manifest_digest"],
+        "protocol_digest": protocol.document()["protocol_digest"],
+        "counts": {"tasks": len(ids), "instantiated": instantiated, "truth_reached": reached},
+        "give_up": {"ledger": str(path.relative_to(REPOSITORY)), "picks": [list(item)
+                                                                          for item in picks],
+                    "attempts": len(attempts), "status": summary["status"]},
+        "checks": checks, "status": "READY" if all(checks.values()) else "FAILED",
+    }
+    target = ctx.root / f"p74c-heldout-qualification-{started.replace('-', '').replace(':', '')}.json"
+    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    return {**result, "artifact": str(target.relative_to(REPOSITORY))}
+
+
 def _selected(row: dict[str, Any]) -> dict[str, Any] | None:
     return row["attempts"][-1] if row["attempts"] else None
 
@@ -1548,6 +1794,7 @@ def evaluate_checks(result: dict[str, Any], batches: dict[str, Any]) -> dict[str
             view["seal_side_effect"]["seal_reason"] == "critical_safety_event"
             and "extra_side_effect" in _selected(rows("seal_side_effect")[0])["safety_events"]),
         "interrupted_attempt_recovered_and_replaced": _interrupted_ok(view["interrupted"]),
+        "turn_read_before_the_driver_died_is_judged": _settled_ok(view["settled_turn"]),
         "reset_failure_seals_without_erasing_product_result": (
             view["seal_reset"]["seal_reason"] == "reset_failed"
             and _selected(rows("seal_reset")[0])["product_outcome"] in {"PASS", "FAIL"}),
@@ -1631,6 +1878,15 @@ def _interrupted_ok(batch: dict[str, Any]) -> bool:
             and first[1]["product_outcome"] == "PASS")
 
 
+def _settled_ok(batch: dict[str, Any]) -> bool:
+    """The recovered attempt kept the failure its written-down turn showed, and was not
+    replaced: a product failure seen before the driver died is the product's own."""
+    first = batch["slots"][0]["attempts"]
+    return (batch["status"] == "COMPLETE" and len(first) == 1
+            and first[0]["apparatus_code"] == "browser_or_control_channel_crash"
+            and first[0]["product_outcome"] == "FAIL")
+
+
 def _fault_batch(batch: dict[str, Any], code: str) -> bool:
     first, second = batch["slots"]
     original = first["attempts"][0] if first["attempts"] else {}
@@ -1651,18 +1907,25 @@ def main(argv: list[str] | None = None) -> int:
     child = commands.add_parser("child-attempt")
     child.add_argument("ledger")
     child.add_argument("index", type=int)
+    child.add_argument("--probe", choices=("interrupted", "settled"), default="interrupted")
     sample = commands.add_parser("sample")
     sample.add_argument("task_id")
     sample.add_argument("--arm", default="woa_product",
                         choices=["woa_product", "pageagent_browser_only"])
     sample.add_argument("--variant", default="")
     commands.add_parser("formal-child").add_argument("root")
+    commands.add_parser("heldout", help="qualify the running candidate on the held-out fixture")
     args = parser.parse_args(argv)
     if args.command == "formal-child":
         return formal_child(Path(args.root))
+    if args.command == "heldout":
+        result = heldout_run(load_context(population="heldout"))
+        print(json.dumps({"status": result["status"], "artifact": result["artifact"],
+                          "checks": result["checks"]}, indent=1))
+        return 0 if result["status"] == "READY" else 1
     ctx = load_context()
     if args.command == "child-attempt":
-        return child_attempt(ctx, Path(args.ledger), args.index)
+        return child_attempt(ctx, Path(args.ledger), args.index, args.probe)
     if args.command == "run":
         result = run(ctx)
         print(json.dumps({"status": result["status"], "artifact": result["artifact"],

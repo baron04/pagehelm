@@ -26,6 +26,22 @@ class ScheduleTests(unittest.TestCase):
             with self.subTest(commit=commit, purpose=purpose), self.assertRaises(ValueError):
                 protocol.derive_schedule_seed(commit, purpose=purpose)
 
+    def test_the_comparison_pairs_only_eligible_tasks_judged_by_their_final_page(self):
+        def task(task_id, shape, **params):
+            return {"task_id": task_id, "messages": ["m"], "max_mutations": 0,
+                    "approval_oracle": None, "class": "normal", "stratum": "lookup_navigation",
+                    "actor": "writer", "evaluator": {"shape": shape, "params": params}}
+
+        task_set = {"tasks": [task("a", "open_record"), task("b", "field_values"),
+                              task("c", "argmax_open_or_name", open=True),
+                              task("d", "argmax_open_or_name", open=False),
+                              {**task("e", "open_collection"), "messages": ["m", "n"]}]}
+        self.assertEqual(protocol.pageagent_comparison_scopes(task_set),
+                         {"final_page": ["a", "c"], "answer": ["b", "d"]})
+        scopes = protocol.pageagent_comparison_scopes(self.task_set)
+        self.assertEqual(sorted(scopes["final_page"] + scopes["answer"]),
+                         protocol.pageagent_eligibility(self.task_set))
+
     def test_schedule_is_deterministic_and_never_pools_observations(self):
         seed = protocol.derive_schedule_seed("c" * 40)
         slots = protocol.build_schedule(self.ids, eligible=self.eligible, seed=seed)
@@ -111,8 +127,10 @@ class DocumentTests(unittest.TestCase):
         self.assertEqual(set(document["stop_policy"]["exogenous_stops"]), ledger.EXOGENOUS_STOPS)
         self.assertEqual(set(document["stop_policy"]["heldout_same_protocol_restart_after"]),
                          ledger.HELDOUT_RESTART_REASONS)
-        self.assertEqual(set(document["stop_policy"]["heldout_audited_restart_after"]),
-                         ledger.HELDOUT_AUDITED_RESTART_REASONS)
+        # The ledger would take an audited held-out restart; the formal entry offers none, so
+        # the protocol names no audited restart and says the held-out set retires instead.
+        self.assertNotIn("heldout_audited_restart_after", document["stop_policy"])
+        self.assertIn("retires", document["stop_policy"]["heldout_after_other_seals"])
         self.assertEqual(document["batch_chain"]["previous_batch"][-1], "continuation_record")
         self.assertEqual(len(document["gateway_outcomes"]), len(outcomes.GATEWAY_OUTCOMES))
         self.assertTrue(set(outcomes.SEALING_APPARATUS_CODES).isdisjoint(

@@ -45,7 +45,13 @@ def _replies(case: dict[str, Any], baseline: dict[str, Any]) -> list[tuple]:
     task = case["evaluator_task"]
     kind = task["kind"]
     if kind == "refuse":
-        return [("finish", {"done": False, "why": "This mutation is not supported."})]
+        # The product's own path: the capability search finds nothing, and the typed gap is
+        # the whole answer. A prose decline is not a refusal the breadth evidence records.
+        return [("check_capability", {}),
+                ("finish", {"outcome": "unable", "answer": {
+                    "version": 1, "coverage": "undetermined",
+                    "conclusions": [{"kind": "capability_gap",
+                                     "evidence_ref": "capability#1"}]}})]
     entity = task["entity"]
     tool, skill = _TOOLS[entity], _SKILLS[entity]
     if kind in {"enumerate", "filter"}:
