@@ -56,8 +56,10 @@ FINISH_ANSWER_TOOL = {"type": "function", "function": {
 COMPUTE_TOOL = {"type": "function", "function": {
     "name": "compute", "description": (
         "Compute over one current query or a previous selection. The server resolves "
-        "the actual records. count needs no field; filter supports numeric comparisons "
-        "or exact text eq/ne/in; argmin/argmax return all tied records. No page action."),
+        "the actual records. count needs no field; filter supports numeric and ISO date "
+        "comparisons (2026-08-18 covers that whole day) or exact text eq/ne/in; min/max and "
+        "argmin/argmax also order dates, which do not sum; argmin/argmax return all tied "
+        "records. No page action."),
     "parameters": {"type": "object", "additionalProperties": False,
                    "properties": {
                        "operation": {"type": "string", "enum": [

@@ -789,6 +789,10 @@ class OdooBusinessToolExecutor:
         return value[1].strip()
 
     _NUMERIC_FIELDS = {"amount_total": "money", "list_price": "money", "amount_residual": "money"}
+    #: Dates and timestamps Odoo returns in ISO-8601. Typed so a question about a period can
+    #: be answered by the server's own comparison instead of the model sorting text by eye.
+    _MOMENT_FIELDS = {"date_order": "datetime", "invoice_date": "date",
+                      "invoice_date_due": "date", "validity_date": "date"}
     _FIELD_MEANINGS = {
         "date_order": "order confirmation time / quotation creation time (UTC)",
         "invoice_date": "invoice calendar date", "invoice_date_due": "invoice due date",
@@ -822,7 +826,8 @@ class OdooBusinessToolExecutor:
                 # and a row number would be an identity this invented.
                 continue
             for field_name in collection.fields:
-                value_type = self._NUMERIC_FIELDS.get(field_name, "text")
+                value_type = self._NUMERIC_FIELDS.get(
+                    field_name, self._MOMENT_FIELDS.get(field_name, "text"))
                 raw = row.get(field_name)
                 index += 1
                 items.append(RecordEvidence(

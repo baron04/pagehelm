@@ -39,6 +39,11 @@ OPERATIONS = ("read", "filter", "count", "sum", "min", "max", "argmin", "argmax"
 COMPARISONS = ("gt", "ge", "lt", "le", "eq", "ne", "in")
 
 _NUMERIC = ("money", "quantity", "number")
+#: Values that order but do not add. An ISO-8601 date or timestamp orders by its own text, so
+#: a comparison needs no calendar: the shape is checked, and a value is compared on the
+#: precision the operand states, so "on or before 2026-08-18" covers that whole day.
+_ORDERED_TEXT = ("date", "datetime")
+_ISO_MOMENT = re.compile(r"\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?")
 
 
 class ComputationRefused(ValueError):
@@ -232,6 +237,12 @@ def run(turn: TurnEvidence, request: ComputationRequest, *,
             members=kept,
             covers_whole_scope=whole))
 
+    kinds = {item.value_type for item in records}
+    if records and kinds <= set(_ORDERED_TEXT):
+        # Dates order and do not add: earliest, latest and the record holding either are
+        # answerable; a total of them is not a quantity of anything.
+        return _extreme_moment(turn, request, records, origin, dataset,
+                               evidence_id=evidence_id, whole=whole)
     values = [_decimal(item.value or "", where=f"{item.record_id}.{item.field_name}")
               for item in records]
     if not values:
@@ -265,9 +276,51 @@ def run(turn: TurnEvidence, request: ComputationRequest, *,
         value_type=records[0].value_type, unit=unit, covers_whole_scope=whole))
 
 
+def _moment(value: str, *, where: str) -> str:
+    """An ISO-8601 date or timestamp, refused when it is anything else."""
+    text = value.strip()
+    if not _ISO_MOMENT.fullmatch(text):
+        raise ComputationRefused(
+            f"{where} is not an ISO-8601 date or timestamp (2026-08-18 or "
+            "2026-08-18 12:00:00)")
+    return text.replace("T", " ")
+
+
+def _extreme_moment(turn: TurnEvidence, request: ComputationRequest, records, origin,
+                    dataset, *, evidence_id: str, whole: bool):
+    if request.operation not in ("min", "max", "argmin", "argmax"):
+        raise ComputationRefused(
+            f"{request.field_name} holds dates, which order but do not add; ask for the "
+            "earliest or the latest")
+    moments = [_moment(item.value or "", where=f"{item.record_id}.{item.field_name}")
+               for item in records]
+    extreme = min(moments) if request.operation in ("min", "argmin") else max(moments)
+    condition = (dataset.condition + "; " + request.describe()
+                 if isinstance(dataset, SelectionEvidence) else request.describe())
+    if request.operation in ("argmin", "argmax"):
+        return turn_record(turn, SelectionEvidence(
+            evidence_id=evidence_id, origin=origin, operation=request.operation,
+            inputs=request.over, condition=condition,
+            members=tuple(item.record_id for item, moment in zip(records, moments)
+                          if moment == extreme),
+            covers_whole_scope=whole))
+    return turn_record(turn, ComputationEvidence(
+        evidence_id=evidence_id, origin=origin, operation=request.describe(),
+        inputs=request.over, value=extreme, value_type=records[0].value_type,
+        covers_whole_scope=whole))
+
+
 def _matches(item: RecordEvidence, request: ComputationRequest) -> bool:
     if item.value is None:
         raise ComputationRefused("an empty value cannot be compared to a nonempty operand")
+    if item.value_type in _ORDERED_TEXT:
+        if request.comparison == "in":
+            raise ComputationRefused("in currently supports text and enum fields only")
+        operand = _moment(request.threshold, where="the value compared against")
+        # Compared at the operand's own precision: a date operand covers the whole day of a
+        # timestamp value, which is what "orders on or before that date" means.
+        value = _moment(item.value, where=item.field_name)[:len(operand)]
+        return _compare_text(value, request.comparison, operand)
     if item.value_type in _NUMERIC:
         if request.comparison == "in":
             raise ComputationRefused("in currently supports text and enum fields only")
@@ -282,6 +335,11 @@ def _matches(item: RecordEvidence, request: ComputationRequest) -> bool:
 
 
 def _compare(left: Decimal, comparison: str, right: Decimal) -> bool:
+    return {"gt": left > right, "ge": left >= right, "lt": left < right,
+            "le": left <= right, "eq": left == right, "ne": left != right}[comparison]
+
+
+def _compare_text(left: str, comparison: str, right: str) -> bool:
     return {"gt": left > right, "ge": left >= right, "lt": left < right,
             "le": left <= right, "eq": left == right, "ne": left != right}[comparison]
 
