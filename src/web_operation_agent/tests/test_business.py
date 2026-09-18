@@ -524,6 +524,156 @@ class BusinessRuntimeValidation(unittest.TestCase):
             event = session.ledger.of_kind("clarification_requested")[-1]
             self.assertEqual(event["deterministic"], "complete_navigation_query")
 
+    def test_complete_navigation_query_beyond_the_choice_limit_goes_back_to_the_model(self):
+        """A complete read with more matches than one question can offer must not end the turn.
+
+        The server choice is only a shortcut for a set it can show whole. Nine matches cannot
+        be one ask_user question, so the model decides how to narrow the request.
+        """
+        names = [f"A{index}" for index in range(1, 10)]
+
+        class ManyExecutor(_Executor):
+            @staticmethod
+            def execute(name, args, *, context=None):
+                origin = Origin(kind="typed", reference="fixture", observed_at="now",
+                                scope="current workspace")
+                return BusinessToolResult(
+                    content={"companies": [{"name": item} for item in names]},
+                    audit={"application": "fixture", "operation": name,
+                           "source_complete": True},
+                    query_answer=StructuredQueryAnswer(
+                        collection="companies", fields=("name",),
+                        records=tuple((item,) for item in names),
+                        source="fixture API", scope="current workspace",
+                        observed_at="now", source_complete=True,
+                        result_truncated=False, matched_count=len(names),
+                        source_total=len(names), records_scanned=len(names)),
+                    evidence=(
+                        QueryEvidence(
+                            evidence_id="query#1", origin=origin, collection="companies",
+                            conditions=("name contains A",), matched_count=len(names),
+                            records_scanned=len(names), covers_whole_scope=True,
+                            looked_for="name contains A"),
+                        *(RecordEvidence(
+                            evidence_id=f"record#{index}", origin=origin,
+                            record_id=f"company/{index}", field_name="name",
+                            field_meaning="company name", field_was_read=True,
+                            value=item, value_type="text")
+                          for index, item in enumerate(names, 1)),
+                    ),
+                    selection_options=tuple(
+                        BusinessSelectionOption(f"company/{index}", item)
+                        for index, item in enumerate(names, 1)),
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = _skill(root / "query.json")
+            runtime = BusinessToolRuntime(
+                (skill,), ManyExecutor(),
+                route_skill_hints=((r"^/companies$", skill.skill_id),))
+            chat = _Chat([
+                ("query_companies", {}),
+                ("ask_user", {"question": "请说明公司名称。", "response_kind": "free_text",
+                              "choice_ids": []}),
+            ])
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="打开 A", entry_path="/companies",
+                              supported_scope="Read and open current companies."),
+                chat=chat, browser=_Browser(), control=ReadOnlyControl(),
+                ledger=SessionLedger(root / "session.jsonl", "many-navigation"),
+                business_tools=runtime, deterministic_read_navigation=True,
+                allow_clarification=True,
+            )
+            session.entry_observation = _observation(1)
+            session.plan()
+
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "needs_input")
+            self.assertEqual(result.clarification["response_kind"], "free_text")
+            self.assertEqual(len(chat.messages), 2, "the model must see the complete read")
+            self.assertEqual(
+                session.ledger.of_kind("clarification_candidates_ready")[-1]["count"],
+                len(names))
+            self.assertFalse(session.ledger.of_kind("turn_execution_failed"))
+            self.assertNotIn(
+                "deterministic", session.ledger.of_kind("clarification_requested")[-1])
+
+    def test_a_complete_read_that_looked_for_nothing_is_not_a_choice_question(self):
+        """Several records are an ambiguity only when the person's own words matched them.
+
+        "打开金额最高的销售订单" names a rule, not a record. The read it drives carries no
+        name, so every order matches, and the server answered with a list of all five and
+        asked which one to open -- the choice the person had already made. A read that
+        looked for nothing goes back to the model, which can compute the one it names.
+        """
+        rows = (("Acme", "1000.00"), ("Azure", "287.50"))
+
+        class WholeCollectionExecutor(_Executor):
+            @staticmethod
+            def execute(name, args, *, context=None):
+                origin = Origin(kind="typed", reference="fixture", observed_at="now",
+                                scope="current workspace")
+                return BusinessToolResult(
+                    content={"companies": [{"name": item, "total": total}
+                                           for item, total in rows]},
+                    audit={"application": "fixture", "operation": name,
+                           "source_complete": True},
+                    query_answer=StructuredQueryAnswer(
+                        collection="companies", fields=("name", "total"),
+                        records=rows, source="fixture API", scope="current workspace",
+                        observed_at="now", source_complete=True, result_truncated=False,
+                        matched_count=len(rows), source_total=len(rows),
+                        records_scanned=len(rows)),
+                    evidence=(
+                        QueryEvidence(
+                            evidence_id="query#1", origin=origin, collection="companies",
+                            conditions=("no filter",), matched_count=len(rows),
+                            records_scanned=len(rows), covers_whole_scope=True),
+                        *(RecordEvidence(
+                            evidence_id=f"record#{index}", origin=origin,
+                            record_id=f"company/{index}", field_name="name",
+                            field_meaning="company name", field_was_read=True,
+                            value=item, value_type="text")
+                          for index, (item, _total) in enumerate(rows, 1)),
+                    ),
+                    selection_options=tuple(
+                        BusinessSelectionOption(f"company/{index}", f"{item} — {total}")
+                        for index, (item, total) in enumerate(rows, 1)),
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = _skill(root / "query.json")
+            runtime = BusinessToolRuntime(
+                (skill,), WholeCollectionExecutor(),
+                route_skill_hints=((r"^/companies$", skill.skill_id),))
+            chat = _Chat([
+                ("query_companies", {}),
+                ("ask_user", {"question": "按哪个口径算最高？", "response_kind": "free_text",
+                              "choice_ids": []}),
+            ])
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="打开金额最高的公司",
+                              entry_path="/companies",
+                              supported_scope="Read and open current companies."),
+                chat=chat, browser=_Browser(), control=ReadOnlyControl(),
+                ledger=SessionLedger(root / "session.jsonl", "unnamed-navigation"),
+                business_tools=runtime, deterministic_read_navigation=True,
+                allow_clarification=True,
+            )
+            session.entry_observation = _observation(1)
+            session.plan()
+
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "needs_input")
+            self.assertEqual(len(chat.messages), 2, "the model must see the complete read")
+            self.assertNotIn(
+                "deterministic", session.ledger.of_kind("clarification_requested")[-1])
+            self.assertNotIn("请选择要打开的记录", result.agent_said)
+
     def test_server_policy_text_cannot_manufacture_a_skill_match(self):
         """Route the person's words; keep the server's policy out of intent matching.
 

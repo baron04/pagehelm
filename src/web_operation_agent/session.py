@@ -232,6 +232,11 @@ TOOL_SCHEMAS = [
             "required": ["done", "why"]}}},
 ]
 
+#: One question offers at most this many choices. The tool schema, the check that reads a
+#: model's ask_user, and the server's own shortcut all read the limit here: they disagreed,
+#: and a complete read of nine records ended the turn with an error instead of a question.
+CLARIFICATION_CHOICE_LIMIT = 8
+
 ASK_USER_TOOL = {"type": "function", "function": {
     "name": "ask_user",
     "description": (
@@ -243,7 +248,7 @@ ASK_USER_TOOL = {"type": "function", "function": {
                        "question": {"type": "string", "minLength": 1, "maxLength": 500},
                        "response_kind": {"type": "string", "enum": [
                            "free_text", "single_choice"]},
-                       "choice_ids": {"type": "array", "maxItems": 8,
+                       "choice_ids": {"type": "array", "maxItems": CLARIFICATION_CHOICE_LIMIT,
                                       "items": {"type": "string", "minLength": 1,
                                                 "maxLength": 100}}},
                    "required": ["question", "response_kind", "choice_ids"]}}}
@@ -1964,9 +1969,18 @@ class ServerAgentSession:
                                 return self._finish(
                                     result, t0, "agent_finished", result.agent_said,
                                     steps=step)
-                        if (self.allow_clarification and self._navigation_only
+                        # Several records answer the person's own identifying words only
+                        # when the read carried them. A read that named nothing returns the
+                        # collection, and "which one did you mean" is then a question they
+                        # did not ask: "打开金额最高的销售订单" was answered with a list of
+                        # every order. That request stays with the model, which can compute
+                        # the one it names.
+                        identified = any(getattr(item, "looked_for", "")
+                                         for item in tool_result.evidence or ())
+                        if (self.allow_clarification and self._navigation_only and identified
                                 and projection.complete
-                                and projection.matched_count > 1
+                                and 1 < projection.matched_count
+                                <= CLARIFICATION_CHOICE_LIMIT
                                 and len(self._clarification_choices)
                                 == projection.matched_count
                                 and all(skill.read_only
@@ -1977,6 +1991,8 @@ class ServerAgentSession:
                             # records without adding judgment. Keep this transition in the
                             # server contract; the reply still grants no route authority and
                             # the next turn must read the application again before opening.
+                            # A set larger than one question can offer stays with the model,
+                            # which asks the person to narrow it in its own words.
                             question = (
                                 "找到多个匹配项，请选择要打开的记录："
                                 if re.search(r"[\u3400-\u9fff]", self.task.prompt)
@@ -2668,7 +2684,7 @@ class ServerAgentSession:
             raise ValueError("question must be 1-500 visible characters")
         if kind not in {"free_text", "single_choice"}:
             raise ValueError("response_kind must be free_text or single_choice")
-        if (not isinstance(choice_ids, list) or len(choice_ids) > 8
+        if (not isinstance(choice_ids, list) or len(choice_ids) > CLARIFICATION_CHOICE_LIMIT
                 or any(not isinstance(item, str) or item not in self._clarification_choices
                        for item in choice_ids)
                 or len(set(choice_ids)) != len(choice_ids)):
