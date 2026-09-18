@@ -4,11 +4,18 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
+
+from web_operation_agent.durable import SQLiteSessionStore
+from web_operation_agent.mutation import SQLiteMutationJournal
+from web_operation_agent.operations import (OperationalStateError, create_state_backup,
+                                            restore_state_backup)
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -189,6 +196,45 @@ class SingleNodeOperationsTests(unittest.TestCase):
         self.assertLess(encoded.index("SELECT 1"), first_trial_cutover)
         self.assertLess(encoded.index(".woa-restore-stage"), first_trial_cutover)
         self.assertFalse(result["execution_authority_restored"])
+
+    def test_the_core_restores_the_agent_state_the_deployment_backup_writes(self):
+        """The deployment keeps the run ledgers in `agent-state/`, beside the core bundle, and
+        the core restore refuses any file its manifest does not declare. The tests above
+        replace every container command with a mock, so none of them ever handed the core
+        what the deployment writes: every deployment backup taken since the ledgers were
+        added refused to restore and left Agent and Odoo stopped. This runs the real
+        script against a real core bundle laid out the way `backup` lays it out."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            live = root / "live"
+            SQLiteSessionStore(live / "session-store.sqlite3")
+            SQLiteMutationJournal(live / "mutation-journal.sqlite3")
+            agent_state = root / "backup" / "agent-state"
+            create_state_backup({
+                "session-store": live / "session-store.sqlite3",
+                "mutation-journal": live / "mutation-journal.sqlite3",
+            }, agent_state, now_ms=1234)
+            (agent_state / "agent-ledgers.tar.gz").write_bytes(b"ledgers")
+            with self.assertRaisesRegex(OperationalStateError, "undeclared"):
+                restore_state_backup(agent_state, root / "direct", writer_isolated=True)
+
+            state = root / "state"
+            state.mkdir()
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            (bin_dir / "python").symlink_to(sys.executable)
+            completed = subprocess.run(
+                ["bash", "-c", OPS._core_restore_script(str(root / "backup"), str(state))],
+                env={**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+                     "PYTHONPATH": str(ROOT / "src")},
+                capture_output=True, text=True, timeout=120, check=False)
+
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            self.assertTrue((state / ".woa-restore-stage/session-store.sqlite3").is_file())
+            self.assertTrue((state / ".woa-restore-stage/mutation-journal.sqlite3").is_file())
+            self.assertFalse((state / ".woa-restore-bundle").exists())
+            self.assertTrue((agent_state / "agent-ledgers.tar.gz").is_file(),
+                            "the bundle is mounted read-only; the script must not move it")
 
     def test_tamper_extra_file_and_wrong_project_are_refused(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -272,6 +272,24 @@ def backup(*, project: str, destination: str | Path) -> dict:
             _compose(env, "up", "-d", "odoo", "agent", timeout=1200)
 
 
+def _core_restore_script(backup: str, state: str) -> str:
+    """Restore the core's own state bundle into ``{state}/.woa-restore-stage``.
+
+    The deployment bundle keeps the run ledgers, ``agent-ledgers.tar.gz``, inside the
+    ``agent-state`` directory, beside the core bundle. The core restore refuses any file its
+    own manifest does not declare, so it is handed a copy of that directory without the
+    ledgers; they are extracted separately afterwards.
+    """
+    stage, core = f"{state}/.woa-restore-stage", f"{state}/.woa-restore-bundle"
+    return (
+        f"rm -rf {stage} {core} && mkdir -p {core} && "
+        f"find {backup}/agent-state -maxdepth 1 -type f ! -name agent-ledgers.tar.gz "
+        f"-exec cp -p {{}} {core}/ \\; && "
+        f"python -m web_operation_agent.operations restore {core} "
+        f"--destination {stage} --writer-isolated && "
+        f"rm -rf {core}")
+
+
 def restore(*, project: str, bundle: str | Path) -> dict:
     env = _environment(project)
     root = Path(bundle).expanduser().resolve()
@@ -317,10 +335,7 @@ def restore(*, project: str, bundle: str | Path) -> dict:
         _compose(
             env, "run", "--rm", "--no-deps", "--entrypoint", "bash",
             "-v", f"{root}:/backup:ro", "agent", "-lc",
-            "rm -rf /var/lib/woa/.woa-restore-stage && "
-            "python -m web_operation_agent.operations restore "
-            "/backup/agent-state --destination /var/lib/woa/.woa-restore-stage "
-            "--writer-isolated && "
+            _core_restore_script("/backup", "/var/lib/woa") + " && "
             "mkdir -p /var/lib/woa/.woa-restore-stage/runs && "
             "tar -C /var/lib/woa/.woa-restore-stage --skip-old-files "
             "-xzf /backup/agent-state/agent-ledgers.tar.gz && "
