@@ -72,21 +72,26 @@ def _trigger_matches(trigger: str, task: str, *, max_gap_tokens: int = 3) -> boo
     return True
 
 
-#: Han aspect and passive markers that turn the verb after them into a description of state.
-#: English carries the same distinction in the word itself -- "confirmed orders" never matches
-#: a "confirm order" trigger -- but "已确认销售订单" (orders that are already confirmed) matches
-#: "确认订单" once the matcher allows a gap, and a question about confirmed orders became a
-#: request to confirm one.
-_STATIVE_MARKERS = frozenset({"已", "被"})
+#: Han markers that turn the verb after them into a description of state, or deny it. English
+#: carries the distinction in the word itself -- "confirmed orders" or "unconfirmed quotations"
+#: never match a "confirm order" trigger -- but "已确认销售订单" (orders already confirmed)
+#: matches "确认订单" once the matcher allows a gap, and so does "未确认报价单" (quotations not
+#: yet confirmed): a question about either became a request to confirm one, and every
+#: read-only answer to it was refused. Done (已), done to (被), not yet (未), not (没), pending
+#: (待), and 不/别, which ask for the action *not* to happen.
+_STATIVE_MARKERS = frozenset({"已", "被", "未", "没", "待", "不", "别"})
+#: Two-character forms of the same markers: 已经, 没有, 不要, 不用.
+_STATIVE_PAIRS = frozenset({("已", "经"), ("没", "有"), ("不", "要"), ("不", "用")})
 
 
 def trigger_requests_action(trigger: str, task: str, *, max_gap_tokens: int = 3) -> bool:
     """Whether `trigger` occurs in `task` as something asked for, not as a description.
 
     The same match as `_trigger_matches`, tried at every start, and a start is discarded when
-    the token before it -- or the one before that, for 已经 -- marks the verb as already done
-    or done to something. Selection keeps the plain matcher: a question about confirmed orders
-    still loads the order Skills. Only the claim that the user asked for a change is narrowed.
+    the token before it -- or the two before it, for 已经, 没有, 不要 and 不用 -- mark the verb as
+    a state or deny it. Selection keeps the plain matcher: a question about confirmed or
+    unconfirmed orders still loads the order Skills. Only the claim that the user asked for a
+    change is narrowed.
     """
     wanted = _trigger_tokens(trigger)
     available = _trigger_tokens(task)
@@ -96,7 +101,7 @@ def trigger_requests_action(trigger: str, task: str, *, max_gap_tokens: int = 3)
         if token != wanted[0]:
             continue
         before = available[max(0, start - 2):start]
-        if before and (before[-1] in _STATIVE_MARKERS or tuple(before) == ("已", "经")):
+        if before and (before[-1] in _STATIVE_MARKERS or tuple(before) in _STATIVE_PAIRS):
             continue
         cursor, matched = start, True
         for next_token in wanted[1:]:
