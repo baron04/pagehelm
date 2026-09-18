@@ -912,7 +912,11 @@ class OdooBusinessToolExecutor:
         elif collection.tool == "query_products":
             fields = ("name", "code", "price")
         else:
-            fields = ("reference", "customer", "total", "state")
+            # Not the state: it is Odoo's own code word ("sale"), and a Chinese question
+            # got a list of choices reading "S00001 — Azure Interior — 287.50 — sale"
+            # while the same value in an answer reads 已确认. The reference already
+            # identifies the record, which is all a choice has to do.
+            fields = ("reference", "customer", "total")
         values = [str(item.get(field) or "").strip() for field in fields]
         values = [value for value in values if value]
         if not values:

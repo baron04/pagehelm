@@ -722,6 +722,22 @@ class TypedReads(unittest.TestCase):
         self.assertEqual(result.allowed_routes, ("/odoo/customers",))
         self.assertEqual(result.navigation_target, "")
 
+    def test_an_order_choice_is_identified_without_odoo_s_own_state_word(self):
+        """A choice a Chinese reader sees carries no coded value (P7.5 CR-30).
+
+        The options for orders read "S00001 — Azure Interior — 287.50 — sale", while the
+        same state in an answer reads 已确认. The reference identifies the record on its
+        own, so the label stops at what identifies it.
+        """
+        executor = _FakeOdoo({"sale.order": _orders(2)})
+        result = executor.execute("query_sale_orders", {"limit": 10})
+
+        labels = [item.label for item in result.selection_options]
+        self.assertEqual(labels, ["S00001 — Acme — 101.00", "S00002 — Acme — 102.00"])
+        for state in ("sale", "draft", "sent", "cancel"):
+            for label in labels:
+                self.assertNotIn(state, label)
+
     def test_a_fuzzy_single_match_can_open_the_only_current_record(self):
         executor = _FakeOdoo({"res.partner": _customers(
             [("Acme Corporation", "a@example.test")])})
