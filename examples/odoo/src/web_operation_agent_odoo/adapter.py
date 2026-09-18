@@ -1245,9 +1245,14 @@ class OdooBusinessToolExecutor:
                 f"the Odoo invoicing wizard left {len(created)} new invoices on the order",
                 phase="readback", record_id=str(record_id))
         invoice_id = created[0]
-        rows = self.call("account.move", "read", [[invoice_id]],
-                         {"fields": ["name", "state", "move_type", "amount_total",
-                                     "partner_id", "invoice_origin"]})
+        try:
+            rows = self.call("account.move", "read", [[invoice_id]],
+                             {"fields": ["name", "state", "move_type", "amount_total",
+                                         "partner_id", "invoice_origin"]})
+        except BusinessToolError as exc:
+            raise BusinessMutationIndeterminate(
+                "the Odoo invoice was created but same-user readback failed",
+                phase="readback", record_id=str(invoice_id)) from exc
         if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
             raise BusinessMutationIndeterminate(
                 "the Odoo invoice was created but same-user readback was malformed",

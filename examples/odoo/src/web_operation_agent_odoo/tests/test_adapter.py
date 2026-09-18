@@ -943,6 +943,26 @@ class TheOrderLifecycleWrites(unittest.TestCase):
             executor.execute_mutation("invoice_sale_order", {"reference": "S00007"})
         self.assertIn("2 new invoices", str(raised.exception))
 
+    def test_an_invoice_that_exists_but_cannot_be_read_back_is_indeterminate(self):
+        """Once the order lists the new invoice, the write has landed. A plain tool error from
+        the last read would be journalled as a failed write with no side effect, and the user
+        told nothing was invoiced while a draft invoice sits on the order."""
+        executor = self._Lifecycle(
+            orders=_invoiceable_orders([("S00007", "to invoice")]))
+        original = executor.call
+
+        def unreadable_invoice(model, method, args, kwargs=None, *, mutation=False):
+            if model == "account.move" and method == "read":
+                raise BusinessToolUnavailableError("the Odoo API is unreachable")
+            return original(model, method, args, kwargs, mutation=mutation)
+
+        executor.call = unreadable_invoice
+        with self.assertRaises(BusinessMutationIndeterminate) as raised:
+            executor.execute_mutation("invoice_sale_order", {"reference": "S00007"})
+        self.assertEqual(raised.exception.phase, "readback")
+        self.assertEqual(raised.exception.record_id, "50")
+        self.assertEqual(executor.invoiced, [50])
+
     def test_a_read_only_adapter_has_neither_order_write(self):
         executor = _FakeOdoo({"sale.order": _orders(1)})
         for tool in ("confirm_quotation", "invoice_sale_order"):
