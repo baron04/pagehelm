@@ -23,7 +23,7 @@ from web_operation_agent.page_controller import (PINNED_PAGE_CONTROLLER,
 
 
 _ROOT = Path(__file__).resolve().parents[3]
-_EMBEDDED = Path(__file__).resolve().parents[1] / "web_runtime" / "embedded.js"
+_EMBEDDED = Path(__file__).resolve().parents[1] / "web_runtime" / "assistant.js"
 
 
 class ThePinIsWellFormed(unittest.TestCase):
@@ -53,7 +53,7 @@ class NobodyRestatesTheVersionWithoutBeingChecked(unittest.TestCase):
 
     def test_the_shipped_runtime_reports_the_pinned_build(self):
         found = re.search(r"const RUNTIME_NAME = ['\"]([^'\"]+)['\"]", _EMBEDDED.read_text())
-        self.assertIsNotNone(found, "embedded.js no longer declares a RUNTIME_NAME")
+        self.assertIsNotNone(found, "assistant.js no longer declares a RUNTIME_NAME")
         self.assertEqual(found.group(1), runtime_name())
 
     def test_the_third_party_notice_states_the_pinned_version(self):

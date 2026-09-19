@@ -57,8 +57,8 @@ those exact artifacts.
 | --- | ---: | --- | --- | --- |
 | `@page-agent/page-controller` | 1.12.4 | MIT | [alibaba/page-agent](https://github.com/alibaba/page-agent) | Supplied by the application deployment at an absolute HTTP(S) module URL; not tracked in this repository and not included in the wheel |
 
-`src/web_operation_agent/web_runtime/embedded.js` dynamically imports
-`PageController` and `getElementByIndex` from that module. It does not embed
+The assistant Runtime (`assistant.js`, built from `frontend/src/runtime/`) dynamically
+imports `PageController` and `getElementByIndex` from that module. It does not embed
 the PageController implementation, and the shipping package does not import the
 `page-agent` planner package.
 

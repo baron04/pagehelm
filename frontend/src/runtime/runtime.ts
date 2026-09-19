@@ -13,7 +13,7 @@
  * Method names prefixed with `_` are this class's internal steps. Several are also the
  * seams the conformance tests reach through, so they stay methods on the instance.
  */
-import {detach, later, listen, sleep, type Cancel} from './contain'
+import {contained, detach, later, listen, sleep, soon, type Cancel} from './contain'
 import {
   executeCommand, mayNavigate, navigationExpectation, waitForNavigation,
   type CommandOutcome, type NavigationExpectation,
@@ -44,6 +44,15 @@ const CAPABILITIES = [
   'page.goto', 'page.back', 'page.wait',
 ]
 
+/**
+ * How long the server may stay unreachable before this session counts as lost. Across
+ * origins, a session the server no longer has looks exactly like an outage: its CORS answer
+ * goes with it, so the browser reports a network failure instead of `unknown_session`, and a
+ * Runtime that only ever retried would say "reconnecting" forever. Past this, it stops and
+ * its supervisor asks the application for a new session, whose answer is always readable.
+ */
+export const LOST_AFTER_MS = 30_000
+
 /** Used where a Runtime was assembled without its constructor -- in conformance tests. */
 const defaultRedactor = createRedactor()
 
@@ -67,7 +76,14 @@ export class EmbeddedWebRuntime {
   runtimeInstanceId = ''
   leaseId = ''
   stored!: SessionState
-  stopped = false
+  /**
+   * Why this Runtime stopped, once it has: a terminal panel state from the server's table,
+   * `ended` for a session that is over, or `suspended` for a page restored from the
+   * back-forward cache. Whoever supervises the Runtime decides from this what comes next.
+   */
+  endState = ''
+  private stoppedFlag = false
+  private stopListeners: Set<() => void> | undefined
   currentObservation: ObservationEnvelope | null = null
   observationFingerprints = new Map<string, string>()
   observedUrl = ''
@@ -118,13 +134,10 @@ export class EmbeddedWebRuntime {
       listen('pageshow', window, 'pageshow', (event: PageTransitionEvent) => {
         if (!event?.persisted || this.stopped) return
         // A back-forward cache restore resumes a heap whose lease the intervening document
-        // may have retired. Rebuild in the same document; reloading could resubmit a POST.
-        // The restart is this Runtime's own, so the page is released for it whatever the
-        // latch holds.
-        const restartConfig = this.config
+        // may have retired. This Runtime cannot vouch for it, so it stops; whoever supervises
+        // it starts the next one in the same document -- reloading could resubmit a POST.
+        this.endState = 'suspended'
         this.stop()
-        window.__WOA_EMBEDDED_RUNTIME_STARTED__ = false
-        queueMicrotask(() => { detach('bfcache restart', startEmbeddedRuntime(restartConfig)) })
       }),
       listen('online', window, 'online', () => {
         this.panelHost?.setConnection({online: true})
@@ -135,6 +148,27 @@ export class EmbeddedWebRuntime {
         this.panelHost?.raise('offline', {retryable: false})
       }),
     ]
+  }
+
+  // -- stopping, as others observe it -----------------------------------------------------
+
+  /** Once true, never false again for a live Runtime; tests reset it on bare instances. */
+  get stopped(): boolean { return Boolean(this.stoppedFlag) }
+
+  set stopped(value: boolean) {
+    const was = Boolean(this.stoppedFlag)
+    this.stoppedFlag = value
+    if (!value || was) return
+    // Told after the current task: the Runtime finishes stopping before anyone reacts.
+    for (const listener of [...(this.stopListeners ?? [])]) soon('stop listener', listener)
+  }
+
+  /** Hear once when this Runtime stops, for whatever reason. */
+  onStopped(listener: () => void): Cancel {
+    const listeners = (this.stopListeners ??= new Set())
+    listeners.add(listener)
+    if (this.stopped) soon('stop listener', listener)
+    return () => { listeners.delete(listener) }
   }
 
   // -- the pieces, reachable even on an instance assembled without its constructor ---------
@@ -175,6 +209,7 @@ export class EmbeddedWebRuntime {
     const failure = error as {code?: unknown; status?: unknown} | null | undefined
     const verdict = classifyTransportError(failure, this.panelConfiguration)
     if (verdict.terminal) {
+      this.endState = verdict.state
       this.stopped = true
       this.eventAbortController?.abort()
       this._panelState(verdict.state)
@@ -319,8 +354,18 @@ export class EmbeddedWebRuntime {
     this.cancelExpiry = later('session expiry', delay, () => this._expire(code))
   }
 
+  /** Whether the server has been unreachable since `since` for long enough to give up here. */
+  _lost(since: number): boolean {
+    if (!since || Date.now() - since < LOST_AFTER_MS) return false
+    this.endState = 'lost'
+    this.stopped = true
+    this.eventAbortController?.abort()
+    return true
+  }
+
   _expire(code: string): void {
     if (this.stopped) return
+    this.endState = 'ended'
     this.stopped = true
     this.eventAbortController?.abort()
     this._panelState('ended')
@@ -374,7 +419,11 @@ export class EmbeddedWebRuntime {
     this.eventAbortController?.abort()
     this.eventAbortController = null
     for (const stop of this.stopListening?.splice(0) ?? []) stop()
-    this.controller?.dispose()
+    // Stopping twice -- once by the Runtime, once by its supervisor tearing it down -- must
+    // not dispose PageController twice.
+    const controller = this.controller
+    this.controller = null
+    controller?.dispose()
     if (removePanel) {
       this.panelHandle?.destroy()
       this.panelHandle = null
@@ -518,17 +567,21 @@ export class EmbeddedWebRuntime {
 
   async _eventLoop(): Promise<void> {
     let backoff = 0
+    let failingSince = 0
     while (!this.stopped) {
       const abortController = new AbortController()
       this.eventAbortController = abortController
       try {
         const stream = await this.client.events(this.stored.lastEventId, abortController.signal)
         backoff = 0
+        failingSince = 0
         this.panelHost?.clearNotice()
         await this._readEventStream(stream)
       } catch (error) {
         if (this.stopped) return
         if (this._raise(error, 'reconnecting').terminal) return
+        failingSince ||= Date.now()
+        if (this._lost(failingSince)) return
         backoff = backoffAfter(backoff)
         await sleep(backoff)
       } finally {
@@ -586,6 +639,7 @@ export class EmbeddedWebRuntime {
         this._panelState('ended')
         // The terminal cursor is durable once this returns. A closed server session has no
         // future events, and another GET would only turn the final UI into a reconnect loop.
+        this.endState = 'ended'
         this.stopped = true
         return
       case 'approval_required': {
@@ -884,12 +938,14 @@ export class EmbeddedWebRuntime {
 
   async _retryCachedResult(): Promise<boolean> {
     let backoff = 0
+    const failingSince = Date.now()
     while (!this.stopped && this.stored.cachedResult) {
       try {
         await this._sendResult(this.stored.cachedResult)
         return true
       } catch (error) {
         if (this._raise(error, 'reconnecting').terminal) return false
+        if (this._lost(failingSince)) return false
         await sleep(backoff)
         backoff = backoffAfter(backoff)
       }
@@ -902,6 +958,7 @@ export class EmbeddedWebRuntime {
     // The cached result can describe the document that just navigated away. Refresh the
     // selector map and server observation before consuming another action here.
     let backoff = 0
+    const failingSince = Date.now()
     while (!this.stopped) {
       try {
         const observation = await this.observe(this.stored.inFlight?.action_id || '')
@@ -911,6 +968,7 @@ export class EmbeddedWebRuntime {
         return
       } catch (error) {
         if (this._raise(error, 'reconnecting').terminal) return
+        if (this._lost(failingSince)) return
         await sleep(backoff)
         backoff = backoffAfter(backoff)
       }
@@ -922,7 +980,9 @@ export class EmbeddedWebRuntime {
  * Start the one Runtime this page may have, or return `null` if a live one already exists.
  *
  * The page-wide latch holds the Runtime that owns it, so the Runtime can release exactly
- * its own claim when it is stopped for good.
+ * its own claim when it is stopped for good. A start that fails takes its panel with it:
+ * saying why is the standing entry's job (`boot.ts`), and a panel left behind would be a
+ * second assistant root the next attempt cannot see.
  */
 export async function startEmbeddedRuntime(config: RuntimeConfig): Promise<EmbeddedWebRuntime | null> {
   if (window.__WOA_EMBEDDED_RUNTIME_STARTED__) return null
@@ -931,12 +991,8 @@ export async function startEmbeddedRuntime(config: RuntimeConfig): Promise<Embed
   try {
     return await runtime.start()
   } catch (error) {
-    runtime.stop({removePanel: false})
-    runtime._panelState('error')
-    runtime.panelHost?.raise(String((error as {code?: unknown})?.code || 'connect_failed'),
-      {retryable: true})
+    contained('failed start', () => runtime.stop())()
     runtime._releasePage()
     throw error
   }
 }
-

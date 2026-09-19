@@ -1069,7 +1069,7 @@ class GatewayTests(unittest.TestCase):
                                       hello(sid).to_json(), token="wrong")[0], 401)
         self.assertEqual(self.request("POST", f"/v1/sessions/{sid}/hello",
                                       hello(sid).to_json(), origin="http://evil.test")[0], 403)
-        status, headers, body = self.request("GET", "/v1/runtime/embedded.js")
+        status, headers, body = self.request("GET", "/v1/runtime/assistant.js")
         self.assertEqual(status, 200)
         self.assertEqual(headers["Access-Control-Allow-Origin"], "*")
         self.assertIn(b"class EmbeddedWebRuntime", body)
@@ -1090,7 +1090,19 @@ class GatewayTests(unittest.TestCase):
         # Path traversal out of the panel directory is refused by the manifest, not by
         # string surgery on the request path.
         self.assertEqual(
-            self.request("GET", "/v1/runtime/panel/../../embedded.js")[0], 404)
+            self.request("GET", "/v1/runtime/panel/../../assistant.js")[0], 404)
+
+    def test_an_unbuilt_runtime_is_named_rather_than_answered_with_an_error(self):
+        """`assistant.js` is a build artifact, like the panel, and is missing the same way."""
+        from pathlib import Path
+
+        from web_operation_agent import embedded_gateway
+        missing = Path("/nonexistent/assistant.js")
+        with mock.patch.dict(embedded_gateway.RUNTIME_MODULES,
+                             {"/v1/runtime/assistant.js": missing}):
+            status, _, body = self.request("GET", "/v1/runtime/assistant.js")
+        self.assertEqual(status, 404)
+        self.assertEqual(json.loads(body)["code"], "runtime_unavailable")
 
     def test_liveness_and_default_readiness_are_content_free(self):
         status, _, body = self.request("GET", "/healthz")
@@ -1160,8 +1172,11 @@ class GatewayTests(unittest.TestCase):
             self.grant, page_controller_module=ORIGIN + "/page-controller.js")
         self.assertIn(self.gateway.runtime_url, source)
         self.assertIn(self.grant.session_id, source)
-        self.assertIn("startEmbeddedRuntime", source)
-        self.assertIn("__WOA_RUNTIME_READY__", source)
+        # The harness hands the page a whole session and loads the same `assistant.js` a
+        # production page includes, so both are booted by the same supervisor.
+        self.assertIn("window.__WOA_EMBED_CONFIG__ =", source)
+        self.assertIn("__WOA_ASSISTANT__", source)
+        self.assertNotIn("startEmbeddedRuntime", source)
         self.assertIn("location.origin", source)
         self.assertIn(ORIGIN, source)
         self.assertNotIn("ControlPlan", source)
@@ -1183,11 +1198,11 @@ class GatewayTests(unittest.TestCase):
             self.assertEqual(config["endpoint"], "https://app.example/assistant")
             self.assertEqual(
                 gateway.runtime_url,
-                "https://app.example/assistant/v1/runtime/embedded.js")
+                "https://app.example/assistant/v1/runtime/assistant.js")
             source = gateway.bootstrap_script(
                 grant,
                 page_controller_module="https://app.example/woa/page-controller.js")
-            self.assertIn("https://app.example/assistant/v1/runtime/embedded.js", source)
+            self.assertIn("https://app.example/assistant/v1/runtime/assistant.js", source)
             self.assertNotIn(gateway.base_url, source)
 
     def test_non_loopback_bind_requires_an_explicit_private_network_boundary(self):

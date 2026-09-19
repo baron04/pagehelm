@@ -386,7 +386,8 @@ class LiveProductSessionTests(unittest.TestCase):
             self.assertFalse(status.failed)
             self.assertNotIn(live.grant.client_token, repr(status))
             self.assertIn(live.grant.client_token, source)
-            self.assertIn("startEmbeddedRuntime", source)
+            self.assertIn(live.gateway.runtime_url, source)
+            self.assertIn("window.__WOA_EMBED_CONFIG__ =", source)
             self.assertIn('"sensitiveQueryKeys":["handoffkey"]', source)
         finally:
             live.close()

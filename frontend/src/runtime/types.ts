@@ -5,6 +5,7 @@
  * whatever the code happened to read, and a value that could be `null` was read as though
  * it never was. Naming them here is what lets the compiler refuse that.
  */
+import type {Supervisor} from './boot'
 
 /** What `EmbeddedGateway.bootstrap_config` hands the page. */
 export interface RuntimeConfig {
@@ -141,5 +142,7 @@ declare global {
     __WOA_EMBEDDED_RUNTIME_STARTED__?: unknown
     __WOA_EMBED_CONFIG__?: RuntimeConfig
     __WOA_RUNTIME_READY__?: Promise<unknown>
+    /** The page's supervisor (`boot.ts`): one per page, whatever loaded the script twice. */
+    __WOA_ASSISTANT__?: Supervisor
   }
 }

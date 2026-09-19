@@ -21,22 +21,15 @@ from web_operation_agent.session import LabApparatus, ServerAgentSession, TaskSp
 from web_operation_agent.tests.test_session import _Chat, _Control
 
 
-RUNTIME = Path(__file__).resolve().parents[1] / "web_runtime" / "embedded.js"
-PANEL_HOST = RUNTIME  # the Runtime module exports the panel host too
+RUNTIME = Path(__file__).resolve().parents[1] / "web_runtime" / "assistant.js"
 PANEL_ROOT = Path(__file__).resolve().parents[1] / "web_runtime" / "panel"
 _PAGE_CONTROLLER_PATH = os.environ.get("WOA_PAGE_CONTROLLER_MODULE", "")
 PAGE_CONTROLLER = Path(_PAGE_CONTROLLER_PATH).expanduser() if _PAGE_CONTROLLER_PATH else None
 
 
 def _runtime_source_b64() -> str:
-    host_url = "data:text/javascript;base64," + base64.b64encode(PANEL_HOST.read_bytes()).decode()
-    source = RUNTIME.read_text(encoding="utf-8")
-    source = source.replace("./panel_host.js", host_url)
-    return base64.b64encode(source.encode()).decode()
-
-
-def _panel_host_source_b64() -> str:
-    return base64.b64encode(PANEL_HOST.read_bytes()).decode()
+    """`assistant.js` as a data URL body: one self-contained module, panel host included."""
+    return base64.b64encode(RUNTIME.read_bytes()).decode()
 
 
 def _panel_configuration_js() -> str:
@@ -236,8 +229,11 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                 page.locator(".woa-launcher").click()
                 page.locator(".woa-window").wait_for(timeout=3000)
 
-                # A real, full document navigation: new document, new Runtime, new panel.
+                # A real, full document navigation: new document, new Runtime, new panel. The
+                # panel's open state is not carried across documents (owner, P7.5), so the new
+                # page shows the launcher; the timeline is behind it, replayed from the server.
                 page.goto(app.origin + "/page2?source=navigation", wait_until="domcontentloaded")
+                page.locator(".woa-launcher").click(timeout=8000)
                 page.locator(".woa-window").wait_for(timeout=8000)
                 replayed = page.locator(".woa-thread")
                 replayed.get_by_text("列出所有待开票的销售订单").wait_for(timeout=8000)
@@ -323,7 +319,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         was in none of them, so an expired credential looked like a network fault and
         retried forever -- which is what the `embedded.js` 401/404/409 carry-over names.
         """
-        host = _panel_host_source_b64()
+        host = _runtime_source_b64()
         script = f"""
           const mod = await import('data:text/javascript;base64,{host}');
           const configuration = {_panel_configuration_js()};
@@ -372,7 +368,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         The echo exists because submitting needs a fresh observation first and can fail.
         It stops existing the moment the session's own `message_accepted` arrives.
         """
-        host = _panel_host_source_b64()
+        host = _runtime_source_b64()
         script = f"""
           const mod = await import('data:text/javascript;base64,{host}');
           const configuration = {_panel_configuration_js()};
@@ -398,7 +394,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the panel host")
     def test_panel_host_merges_by_event_id_and_holds_a_render_budget(self):
         """The panel's timeline is the server's projection, merged idempotently."""
-        host = _panel_host_source_b64()
+        host = _runtime_source_b64()
         script = f"""
           const mod = await import('data:text/javascript;base64,{host}');
           const configuration = {_panel_configuration_js()};
@@ -1320,14 +1316,9 @@ class EmbeddedRuntimeTests(unittest.TestCase):
           window.removeEventListener = (type, handler) => {
             if (type === 'pageshow') pageShowHandlers.delete(handler);
           };
-          const originalRestartStart = mod.EmbeddedWebRuntime.prototype.start;
-          let restartedRuntime = null;
-          let restartCount = 0;
-          mod.EmbeddedWebRuntime.prototype.start = async function () {
-            restartedRuntime = this;
-            restartCount += 1;
-            return this;
-          };
+          // A page restored from the back-forward cache: the Runtime cannot vouch for the
+          // lease it held, so it stops and says why; its supervisor (boot.ts) starts the next
+          // one. Restarting itself as well had two owners racing for the page latch.
           const bfcacheRuntime = new mod.EmbeddedWebRuntime({
             endpoint:'https://gateway.test', sessionId:'bfcache-test',
             sessionGeneration:'generation-bfcache', clientToken:'token', panel:false,
@@ -1341,20 +1332,20 @@ class EmbeddedRuntimeTests(unittest.TestCase):
             clientId:bfcacheRuntime.stored.clientId, epoch:7, lastEventId:'e00000007',
             inFlight:null, cachedResult:null,
           }));
-          window.__WOA_EMBEDDED_RUNTIME_STARTED__ = true;
+          window.__WOA_EMBEDDED_RUNTIME_STARTED__ = bfcacheRuntime;
+          let stopNotices = 0;
+          bfcacheRuntime.onStopped(() => { stopNotices += 1; });
           const oldPageShowHandler = [...pageShowHandlers][0];
           oldPageShowHandler({persisted:false});
           oldPageShowHandler({persisted:true});
           oldPageShowHandler({persisted:true});
           await new Promise(resolve => setTimeout(resolve, 0));
           const bfcacheRecovery = {
-            restartCount, oldStopped:bfcacheRuntime.stopped,
+            stopNotices, oldStopped:bfcacheRuntime.stopped, endState:bfcacheRuntime.endState,
             oldListenerRemoved:!pageShowHandlers.has(oldPageShowHandler),
             listenerCount:pageShowHandlers.size, abortCount, disposeCount,
-            freshStoredEpoch:restartedRuntime?.stored?.epoch,
-            freshRuntimeId:restartedRuntime?.runtimeInstanceId !== bfcacheRuntime.runtimeInstanceId,
+            pageReleased:!window.__WOA_EMBEDDED_RUNTIME_STARTED__,
           };
-          mod.EmbeddedWebRuntime.prototype.start = originalRestartStart;
 
           process.stdout.write(JSON.stringify({tokenProof, submitChecks, submitEvidence,
             clickChecks,
@@ -1419,14 +1410,14 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                       result["invalidResult"]["receipt"]["error_detail"])
         self.assertFalse(result["invalidResult"]["receipt"]["navigated"])
         self.assertEqual(result["bfcacheRecovery"], {
-            "restartCount": 1,
+            "stopNotices": 1,
             "oldStopped": True,
+            "endState": "suspended",
             "oldListenerRemoved": True,
-            "listenerCount": 1,
+            "listenerCount": 0,
             "abortCount": 1,
             "disposeCount": 1,
-            "freshStoredEpoch": 7,
-            "freshRuntimeId": True,
+            "pageReleased": True,
         })
 
     def test_runtime_has_no_server_brain_or_arbitrary_javascript_surface(self):

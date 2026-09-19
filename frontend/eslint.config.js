@@ -46,6 +46,7 @@ export default [
       'no-restricted-globals': ['error',
         {name: 'setTimeout', message: "use later() from './contain'"},
         {name: 'setInterval', message: "use every() from './contain'"},
+        {name: 'queueMicrotask', message: "use soon() from './contain'"},
       ],
       'no-restricted-syntax': ['error',
         {selector: "CallExpression[callee.property.name='addEventListener']",

@@ -1,6 +1,6 @@
 """The pinned PageController build, and the check that a deployment really serves it.
 
-`web_runtime/embedded.js` imports PageController from an absolute module URL that the
+The Runtime (`web_runtime/assistant.js`) imports PageController from an absolute module URL that the
 application deployment supplies. That is the right boundary -- the asset belongs to the
 application's origin, not to this wheel -- but it leaves one thing unsaid: the URL does not
 attest which build answered it. A deployment can serve a different version, a patched file,

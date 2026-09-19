@@ -3,7 +3,7 @@
     "The exact PageController build this Runtime is qualified against, pinned by version and",
     "by the digest of every file a deployment has to serve.",
     "",
-    "`web_runtime/embedded.js` imports PageController from an absolute module URL the",
+    "The Runtime (`web_runtime/assistant.js`) imports PageController from an absolute module URL the",
     "application deployment supplies. Nothing in that URL says which build answered it, so",
     "until this file existed the project's only statement about the version was prose -- and",
     "that prose was wrong: THIRD_PARTY.md and the Runtime name both said 1.12.2 while every",

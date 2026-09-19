@@ -39,7 +39,8 @@ export function detach(where: string, promise: PromiseLike<unknown>): void {
 export type Cancel = () => void
 
 // This is the one module the containment rule (`eslint.config.js`) exempts: everywhere
-// else in this directory, a raw setTimeout/setInterval/addEventListener is an ESLint error.
+// else in this directory, a raw setTimeout/setInterval/queueMicrotask/addEventListener is
+// an ESLint error.
 
 export function later(where: string, ms: number, fn: () => unknown): Cancel {
   const id = setTimeout(contained(where, fn), Math.min(Math.max(0, ms), 2_147_483_647))
@@ -59,6 +60,11 @@ export function listen<E extends Event>(
   const handler = contained(where, fn as (event: Event) => unknown)
   target.addEventListener(type, handler, options)
   return () => target.removeEventListener(type, handler, options)
+}
+
+/** Run `fn` once the current task is done, contained like every other callback. */
+export function soon(where: string, fn: () => unknown): void {
+  queueMicrotask(contained(where, fn))
 }
 
 export function sleep(ms: number): Promise<void> {

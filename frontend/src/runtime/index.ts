@@ -1,12 +1,16 @@
 /**
- * The embedded Runtime, as one module the host page imports.
+ * `assistant.js`: the one script a host page includes to have the assistant.
+ *
+ * Loading it boots the assistant the page asked for (`boot.ts`), declared either by the
+ * script tag's own `data-woa-bootstrap` endpoint or by a configuration a harness placed in
+ * `window.__WOA_EMBED_CONFIG__`. It also exports the Runtime, for conformance tests.
  *
  * `runtimeInternals` is the pure half of the Runtime, exported for conformance tests. It
  * keeps the one piece of state the original module had at top level -- the sensitive query
  * keys -- in a redactor that `configureSensitiveQueryKeys` replaces; each Runtime has its
  * own and never reads this one.
  */
-import {detach} from './contain'
+import {autoBoot} from './boot'
 import {formGetUrl, navigationWal, recoveryProvesNavigation, urlDigest, type NativeForm} from './navigation'
 import {
   actionElementFingerprint, elementsFrom, hydrateFormFacts, hydrateLinkFacts,
@@ -14,11 +18,11 @@ import {
 } from './pageModel'
 import {createRedactor, type Redactor} from './redaction'
 import {safeErrorDetail} from './results'
-import {startEmbeddedRuntime} from './runtime'
 import type {ActionCommand, ElementRef, JsonObject} from './types'
 
 export {EmbeddedWebRuntime, startEmbeddedRuntime} from './runtime'
 export {PanelHost, backoffAfter, classifyTransportError} from './panelHost'
+export {Supervisor, autoBoot} from './boot'
 
 let internal: Redactor = createRedactor()
 
@@ -43,6 +47,4 @@ export const runtimeInternals = Object.freeze({
   configureSensitiveQueryKeys: (value: unknown) => { internal = createRedactor(value) },
 })
 
-if (typeof window !== 'undefined' && window.__WOA_EMBED_CONFIG__) {
-  detach('embedded runtime', startEmbeddedRuntime(window.__WOA_EMBED_CONFIG__))
-}
+if (typeof window !== 'undefined' && typeof document !== 'undefined') autoBoot()
