@@ -1,7 +1,10 @@
 # Can the application side be an HTTP contract? A measurement, not a design
 
-**Status: measured on 2026-09-11 against two real integrations. No implementation is
-proposed or started; Tier 2 is Phase 7 work at the earliest.**
+**Status: measured on 2026-09-11 and re-derived on 2026-09-19 against two real
+integrations. No implementation is proposed or started; Tier 2 is Phase 7 work at the
+earliest.** The Odoo executor has since grown by more than half (313 → 695 code lines) as
+typed reads gained filters, record ids and the reader's time zone; the numbers below are the
+2026-09-19 ones, and the verdict did not change.
 
 The question is narrow. Today an application integrates by writing a Python adapter in this
 process (Tier 3). That means a team whose application is TypeScript, Java or Ruby must
@@ -31,11 +34,11 @@ docstrings are excluded from every total.
 
 | | Twenty (baseline) | Odoo (main application) |
 |---|---|---|
-| executor class, code lines | **571** | **313** |
-| safety methods | `_get_collection` 96, `_assert_no_duplicate` 25, `_get_companies` 2 | `_scan` 24, `_assert_no_duplicate` 10 |
-| **safety total** | **123 (22%)** | **34 (11%)** |
-| transport methods | `_authorized_metadata_json` 38, `_authorized_json` 23, `_authorized_mutation_json` 23 | `_rpc` 30, `_authenticate` 13, `call` 5 |
-| **transport total** | **84 (15%)** | **48 (15%)** |
+| executor class, code lines | **549** | **695** |
+| safety methods | `_get_collection` 95, `_assert_no_duplicate` 24, `_get_companies` 1 | `_scan` 30, `_assert_no_duplicate` 10 |
+| **safety total** | **120 (22%)** | **40 (6%)** |
+| transport methods | `_authorized_metadata_json` 37, `_authorized_json` 25, `_authorized_mutation_json` 24 | `_rpc` 42, `_authenticate` 12, `call` 4, `time_zone` 16 | 
+| **transport total** | **86 (16%)** | **74 (11%)** |
 
 **Count B — by line.** A code line counts as safety when it mentions a completeness,
 duplicate-check or readback identifier (`source_complete`, `result_truncated`,
@@ -47,11 +50,14 @@ constants, `_assert_no_duplicate`, `business_text_key`, `readback`, `Indetermina
 
 | | Twenty | Odoo |
 |---|---|---|
-| code lines | 571 | 313 |
-| **safety-of-calling lines** | **127 (22%)** | **51 (16%)** |
+| code lines | 577 | 752 |
+| **safety-of-calling lines** | **127 (22%)** | **95 (13%)** |
 
-**Answer: 22% and 16%.** The roadmap's pass band for "the split is real and stable" was
-15–20%; both applications land in or immediately above it, and transport is 15% in both.
+**Answer: 22% and 13%.** The roadmap's pass band for "the split is real and stable" was
+15–20%; Twenty lands just above it and Odoo just below, and transport is 11–16%. Odoo's share
+fell because everything that grew since the first measurement — date filters in the reader's
+own zone, record-id lookups, answer labels — is application semantics, not safety: the safety
+line count itself nearly doubled (51 → 95) while the class doubled around it.
 
 ### Why the two differ, and why the difference is the interesting part
 
@@ -84,8 +90,8 @@ guarded is not a guarantee.
 | Paging the collection to its end | ~70 | ~14 | Only the application knows its own pagination style; the framework only needs the answer |
 | Deciding `source_complete` / `records_scanned` / `incomplete_reason` | ~20 | ~8 | Same: an assertion about the application's own read, made by the application |
 | The duplicate pre-check | 25 | 10 | It is a query against the application's own uniqueness semantics |
-| Transport, auth refresh, retries of *reads* | 84 | 48 | Entirely the application's business |
-| **Total movable** | **~199 of 571 (35%)** | **~80 of 313 (26%)** | |
+| Transport, auth refresh, retries of *reads*, and asking the application who the user is | 86 | 74 | Entirely the application's business |
+| **Total movable** | **~201 of 549 (37%)** | **~106 of 695 (15%)** | |
 
 ### Must stay on the framework side (the application is not the trusted party for these)
 
@@ -112,9 +118,9 @@ that is true for reads and **not yet true for writes**. Seven gaps, concretely:
 
 | # | Gap | Today | What an HTTP contract needs |
 |---|---|---|---|
-| 1 | **The proposal has no wire shape.** `effect` and `targets` — the exact text a user approves — live on `BusinessMutationSpec`, a separate Python object that never becomes a `BusinessToolResult`. | `business.py:339` | A `POST /tools/<name>/propose` response: `{args, reconcile_key, effect, targets[]}` |
-| 2 | **The indeterminate outcome is an exception.** `BusinessMutationIndeterminate(phase, record_id)` cannot cross a JSON boundary as a raised type. | `business.py:161` | A terminal response body: `{"outcome": "indeterminate", "phase": "acknowledgement\|readback", "record_id": "…"}` — **with a non-2xx status that is explicitly not retryable** |
-| 3 | **The error taxonomy is Python classes.** `Request` / `Identity` / `Authentication` / `Unavailable` / `Contract` / generic decide whether a failure scores against the engine or invalidates a measurement. | `business.py:125-159` | A fixed `{"error": {"kind": …}}` enum plus a status mapping; six kinds, closed set |
+| 1 | **The proposal has no wire shape.** `effect` and `targets` — the exact text a user approves — live on `BusinessMutationSpec`, a separate Python object that never becomes a `BusinessToolResult`. | `business.py:703` | A `POST /tools/<name>/propose` response: `{args, reconcile_key, effect, targets[]}` |
+| 2 | **The indeterminate outcome is an exception.** `BusinessMutationIndeterminate(phase, record_id)` cannot cross a JSON boundary as a raised type. | `business.py:305` | A terminal response body: `{"outcome": "indeterminate", "phase": "acknowledgement\|readback", "record_id": "…"}` — **with a non-2xx status that is explicitly not retryable** |
+| 3 | **The error taxonomy is Python classes.** `Request` / `Identity` / `Authentication` / `Unavailable` / `Contract` / generic decide whether a failure scores against the engine or invalidates a measurement. | `business.py:200-310` | A fixed `{"error": {"kind": …}}` enum plus a status mapping; six kinds, closed set |
 | 4 | **Delegated identity has no wire shape.** `resolve_delegated_identity()` returns an `IdentityAssertion` built in-process. | `adapter.py` per application | `GET /identity` → `{tenant_id, workspace_id, actor_id, expires_at}`, identifiers only, never a credential |
 | 5 | **Reconciliation has no wire shape.** `MutationReconciliation(outcome, requires_human, reason)` exists as a dataclass but is not part of any result. | `application.py:408` | `POST /tools/<name>/reconcile` → the same three fields |
 | 6 | **The postcondition assertion is adapter-side configuration.** `ResultPostconditionVerifier` is handed dotted paths such as `content.readback_verified`. | `application.py:368` | Either travels in a capability document, or `readback_verified` becomes a fixed top-level field of the result — the second is better: fewer ways to be wrong |
@@ -158,7 +164,9 @@ the adapter wiring, not the Skills.
 Count A attributes whole methods and is reproducible from `ast` alone. Count B marks a line
 as safety when it mentions one of the identifiers listed in §1; the identifier list is the
 rule, so a reader who disagrees with an inclusion can re-run with it removed and see the
-effect. The two counts agree for Twenty (123 vs 127) and differ for Odoo (34 vs 51) because
-Odoo does more of its completeness bookkeeping inline in `execute` rather than in `_scan`.
-The larger of the two is quoted throughout, since it is the one that is less flattering to
-the conclusion.
+effect. The two counts agree for Twenty (120 vs 127) and differ for Odoo (40 vs 95) because Odoo
+does most of its completeness bookkeeping inline in `execute` rather than in `_scan`. The
+larger of the two is quoted throughout, since it is the one that is less flattering to the
+conclusion. Both counts are re-derivable with the command at the top of this file; the
+numbers here were taken on 2026-09-19, and a reader who finds them stale should re-run it
+rather than trust them.

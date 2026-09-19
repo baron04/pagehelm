@@ -30,7 +30,9 @@ Runtime 只会在顶层 document 且 `location.origin` 与 session grant 一致�
 
 身份端口要求认证时，设置 `AgentTurnConfig.require_identity=True`。`AgentTurnExecutor(application=...)` 会在启动浏览器传输或模型前校验 principal 和准确应用 Origin。随后每个 typed tool 都会收到 `OperationContext`，其中绑定 principal、session、turn、operation、deadline 和所需 scope。未认证的合成示例必须显式声明 `AnonymousIdentityPort`。
 
-principal 上只放应用实际授予该 actor 的 scope，而不是 catalog 声明的全部 scope。principal 缺少所需 scope 的 typed tool 会在调用应用之前以 `BusinessToolPermissionError`（`layer="tool_authorization"`）拒绝。应用自己的授权拒绝——HTTP 403、访问规则异常——同样映射为 `BusinessToolPermissionError`；被拒绝或已过期的凭据仍然是 `BusinessToolAuthenticationError`。对于写入，只有应用能保证被拒绝的调用没有产生业务变更时才能使用 `BusinessToolPermissionError`；仍可能部分完成或结果未知时必须使用 `BusinessMutationIndeterminate`。前者是授权结果，产品向用户报告为 `permission_denied`，evaluator 计分；后者是装置故障。被拒绝的读取或写入直接结束本轮，不会交还 Agent，以免它寻找达成同一效果的页面路径。scope 检查只约束 typed tool；应用自己的页面向 actor 展示什么，由应用自己的权限决定。每次读取也要限定在该 actor 的范围内，并在证据来源中写明：完整查询没有找到，只能证明在这个范围内不存在。
+应用若保存用户时区，在执行器上实现 `time_zone()` 并通过 `AgentTurnConfig.time_zone` 传给 turn。这样"今天""本月"按用户自己的日子算，报出的时间也与应用界面一致；没有时区时本轮不提时钟，模型会退回 UTC 时间戳。
+
+principal 上只放应用实际授予该 actor 的 scope，而不是 catalog 声明的全部 scope。principal 缺少所需 scope 的 typed tool 会在调用应用之前以 `BusinessToolPermissionError`（`layer="tool_authorization"`）拒绝。应用自己的授权拒绝——HTTP 403、访问规则异常——同样映射为 `BusinessToolPermissionError`；被拒绝或已过期的凭据仍然是 `BusinessToolAuthenticationError`。对于写入，只有应用能保证被拒绝的调用没有产生业务变更时才能使用 `BusinessToolPermissionError`；仍可能部分完成或结果未知时必须使用 `BusinessMutationIndeterminate`。前者是授权结果，产品向用户报告为 `permission_denied`，evaluator 计分；后者是装置故障。被拒绝的写入直接结束本轮。被拒绝的读取会交还 Agent：它只能用已经读到的事实作答，并且必须说明哪一部分没能完成；同一次拒绝会在本轮内关闭页面作为事实来源，因此它无法改从屏幕上取走被拒的记录。scope 检查只约束 typed tool；应用自己的页面向 actor 展示什么，由应用自己的权限决定。每次读取也要限定在该 actor 的范围内，并在证据来源中写明：完整查询没有找到，只能证明在这个范围内不存在。
 
 ## 写入与验证
 
