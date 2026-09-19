@@ -712,28 +712,41 @@ export class EmbeddedWebRuntime {
 
   async _startConnectedRuntime() {
     await this._hello()
+    // The panel goes up as soon as the server has told us what it says, before the steps
+    // below. Mounting it after them is why one failed startup step -- a stale cached
+    // result, an observation the server would not take, a recovery that threw -- left the
+    // page with no assistant at all and nothing to explain the absence. A panel that
+    // cannot connect can still say so; no panel says nothing.
+    await this._mountPanel()
     // A definite result cached before a reload must reach the server before a newer page
     // observation.  Otherwise the older observation carried by that result would correctly be
     // rejected as stale, leaving the server unable to tell whether the action ran.
     let resultDeferred = false
-    if (this.stored.cachedResult) {
-      try { await this._sendResult(this.stored.cachedResult) } catch {
-        resultDeferred = true
-      }
-    }
-    if (!resultDeferred) {
-      const observation = await this.observe(this.stored.inFlight?.action_id || '')
-      await this._post('/observations', observation)
-      if (!this.stored.cachedResult) {
-        try { await this._recoverAfterNavigation(observation) } catch (error) {
-          // _recoverAfterNavigation writes the outbox before POST.  A transport failure after
-          // that write is recoverable here; errors before a result exists remain startup errors.
-          if (!this.stored.cachedResult) throw error
+    try {
+      if (this.stored.cachedResult) {
+        try { await this._sendResult(this.stored.cachedResult) } catch {
           resultDeferred = true
         }
       }
+      if (!resultDeferred) {
+        const observation = await this.observe(this.stored.inFlight?.action_id || '')
+        await this._post('/observations', observation)
+        if (!this.stored.cachedResult) {
+          try { await this._recoverAfterNavigation(observation) } catch (error) {
+            // _recoverAfterNavigation writes the outbox before POST.  A transport failure after
+            // that write is recoverable here; errors before a result exists remain startup errors.
+            if (!this.stored.cachedResult) throw error
+            resultDeferred = true
+          }
+        }
+      }
+    } catch (error) {
+      // The startup step failed with the panel already on screen, so the person is told
+      // which way it failed -- session gone, taken over, or a transport fault worth
+      // retrying -- instead of being left with an assistant that is simply not there.
+      this._raise(error, 'submit_failed')
+      throw error
     }
-    await this._mountPanel()
     this.panelHost?.setConnection({
       busy: this.stored.taskInFlight,
       stopping: this.stored.cancellationPending,

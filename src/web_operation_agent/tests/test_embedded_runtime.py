@@ -572,6 +572,59 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         self.assertIn("success", result["statuses"])
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
+    def test_a_failed_startup_step_leaves_a_panel_that_says_so(self):
+        """CR-43: the panel is mounted before the steps that can fail, not after them.
+
+        The user reported "AI 助手入口看不到了" several times with a different cause each
+        time. They shared one shape: startup threw somewhere between the hello and the
+        panel, and because the panel was mounted last, the page ended up with no assistant
+        at all -- no entry, no reason, nothing to press. A panel that cannot connect can
+        still say so.
+        """
+        source = _runtime_source_b64()
+        script = f"""
+          const mod = await import('data:text/javascript;base64,{source}');
+          globalThis.location = {{href:'https://app.test/home'}};
+          const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
+          runtime.stopped = false;
+          runtime.stored = {{taskInFlight:false}};
+          runtime._save = () => {{}};
+          runtime.panelConfiguration = {_panel_configuration_js()};
+          const order = [];
+          const states = [];
+          const notices = [];
+          runtime._hello = async () => {{ order.push('hello'); }};
+          runtime._mountPanel = async () => {{
+            order.push('mount');
+            runtime.panelHost = {{
+              setConnection(patch) {{ if ('state' in patch) states.push(patch.state); }},
+              raise(code) {{ notices.push(code); }},
+              snapshot() {{ return {{pendingApproval: null}}; }},
+            }};
+          }};
+          runtime.observe = async () => {{
+            order.push('observe');
+            const error = new Error('the server no longer has this session');
+            error.status = 404;
+            throw error;
+          }};
+          let threw = false;
+          try {{ await runtime._startConnectedRuntime(); }} catch {{ threw = true; }}
+          process.stdout.write(JSON.stringify({{order, states, notices, threw,
+            mounted: Boolean(runtime.panelHost)}}));
+        """
+        proc = subprocess.run(["node", "--input-type=module", "-e", script],
+                              text=True, capture_output=True, timeout=10, check=True)
+        result = json.loads(proc.stdout)
+        self.assertEqual(result["order"], ["hello", "mount", "observe"])
+        self.assertTrue(result["mounted"], "the panel must exist once the server has spoken")
+        self.assertTrue(result["threw"], "the caller still learns that startup failed")
+        # And it is the panel that says which way: a session the server no longer has is
+        # over, so the panel ends rather than spinning on a connection that will not come.
+        self.assertEqual(result["states"], ["ended"])
+        self.assertEqual(result["notices"], ["not_found"])
+
+    @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_product_turn_terminal_states_release_the_panel(self):
         """Each terminal status maps through the server's table, not a copy of it here."""
         source = _runtime_source_b64()
