@@ -969,7 +969,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
         self.assertIn("已回答目前可以确认的部分", answer)
         self.assertIn("后续读取因权限不足没有执行", answer)
 
-    def test_a_later_refused_read_projects_the_earlier_query_without_model_recovery(self):
+    def test_a_later_refused_read_keeps_the_earlier_query_for_the_reader(self):
         class OneReadThenRefusal(_Executor):
             calls = 0
 
@@ -996,7 +996,11 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 ("load_skill", {"skill_id": skill.skill_id}),
                 ("query_companies", {}),
                 ("query_companies", {}),
-                ("goto", {"url": "/object/company/acme"}),
+                # The refusal comes back to the model (owner ruling D13). This adapter
+                # reports no answer evidence, so there is nothing for a typed answer to
+                # cite, and prose cannot stand in for it: the turn ends on the refusal and
+                # the reader still gets what was read before it.
+                ("finish", {"done": True, "why": "Listed the companies."}),
             ])
             executor = AgentTurnExecutor(
                 channel=_Channel(),
@@ -1016,7 +1020,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
             self.assertEqual(execution.terminal_reason, "permission_denied")
             self.assertIn("Acme", execution.user_answer)
             self.assertIn("已回答目前可以确认的部分", execution.user_answer)
-            self.assertEqual(len(chat.messages), 3, "the refusal is not returned to the model")
+            self.assertEqual(len(chat.messages), 4, "the refusal is returned once")
             events = [json.loads(line) for line in
                       (root / "session.jsonl").read_text().splitlines()]
             rendered = next(item for item in events

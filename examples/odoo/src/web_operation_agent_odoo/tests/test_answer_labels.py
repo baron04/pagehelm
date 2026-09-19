@@ -190,8 +190,11 @@ class ASessionCarriesTheRefusedOperation(unittest.TestCase):
                         layer="application")
                 return self._inner.execute(name, args, context)
 
+        # The refusal is handed back (D13); with nothing read there is nothing to answer
+        # from, so the turn ends on the refusal and still names the operation.
         script = [("load_skill", {"skill_id": "odoo.sales.sale-orders-query"}),
-                  ("query_sale_orders", {"limit": 50})]
+                  ("query_sale_orders", {"limit": 50}),
+                  ("finish", {"done": False, "why": "no permission"})]
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             adapter = OdooApplicationAdapter(base_url=BASE, api_key_path=_key_file(root))

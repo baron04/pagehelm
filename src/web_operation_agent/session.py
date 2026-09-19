@@ -959,6 +959,11 @@ class ServerAgentSession:
         self._evidence_feedback = ""
         self._capability_ref = ""
         self._clarification_choices: dict[str, dict] = {}
+        #: Reads this account's authority refused in this turn, in the reader's words. Their
+        #: presence closes the page as a source of facts and keeps the answer from claiming
+        #: complete coverage.
+        self._refused_reads: list[str] = []
+        self._refused_detail = ""
         self._clarification_feedback = ""
         self._answer_repairs = 0
         self._answer_mode = False
@@ -1409,6 +1414,14 @@ class ServerAgentSession:
                     self._answer_repairs += 1
                     self.ledger.append("answer_contract_refused", step=step,
                                        reason="plain_content", repair=self._answer_repairs)
+                    if self._refused_reads and not len(self.evidence):
+                        # An authorization refusal and nothing read: there is no answer to
+                        # repair, and what the person has to hear is which operation their
+                        # account was refused. Repairing here would spend model calls to
+                        # reach the same end.
+                        result.agent_said = unavailable_answer(self.task.prompt)
+                        return self._finish(result, t0, "permission_denied",
+                                            self._refused_detail, steps=step)
                     if self._answer_repairs > answer_protocol.MAX_ANSWER_REPAIRS:
                         result.agent_said = unavailable_answer(self.task.prompt)
                         return self._finish(result, t0, "agent_refused", result.agent_said,
@@ -2083,13 +2096,42 @@ class ServerAgentSession:
                             "the fresh page did not verify that target. Replan from the "
                             "current page.\n\n" + self._render(obs, receipt, note, write))
                 except BusinessToolPermissionError as exc:
-                    # A read is refused for the same reason a write is, and ends the same
-                    # way: handed back, the model could read the same facts off the page and
-                    # step around the scope that refused it.
-                    return self._permission_denied(
-                        result, t0, step, name, exc,
-                        dispatched=exc.layer == "application",
-                        identity=operation_identity, event="business_tool_permission_denied")
+                    # The account's own authority refused this read. The turn goes on with
+                    # what it already read -- ending it threw away the half of the question
+                    # this account may see -- but the refusal closes the page as a source of
+                    # facts, because handing the refusal back with the page still readable is
+                    # how a refused scope gets read off the screen instead (owner ruling
+                    # D13). From here every answer must be typed and evidence-backed, page
+                    # evidence is discarded and refused, and the answer says what was not
+                    # read whether or not the model chooses to.
+                    label = self._operation_label(name)
+                    detail = str(exc)[:500]
+                    self.ledger.append(
+                        "business_tool_permission_denied", step=step, tool=name,
+                        error_code=exc.code, layer=exc.layer,
+                        required_scope=exc.required_scope,
+                        dispatched=exc.layer == "application", turn_continued=True,
+                        side_effect_possible=False, identity=operation_identity)
+                    if label not in self._refused_reads:
+                        # An adapter with no name for it in this language still records the
+                        # refusal, so the answer cannot read as a whole answer.
+                        self._refused_reads.append(label)
+                    self._refused_detail = detail
+                    result.refused_operation = label or result.refused_operation
+                    self._answer_mode = True
+                    self.evidence.discard_pages()
+                    self._page_answer_digest = ""
+                    self._form_draft = None
+                    self._latest_business_routes = set()
+                    self._clarification_choices = {}
+                    self._clarification_feedback = ""
+                    feedback = (
+                        "BUSINESS TOOL REFUSED BY AUTHORIZATION: " + detail +
+                        " This account may not perform that read, and no other route to the "
+                        "same facts is open in this turn: page content is no longer accepted "
+                        "as evidence. Answer only from the typed reads you already have, and "
+                        "state what you could not read as an undetermined conclusion. If you "
+                        "have read nothing, finish with outcome=unable.")
                 except BusinessToolError as exc:
                     self.latest_business_tool_result = None
                     self._form_draft = None
@@ -2314,6 +2356,13 @@ class ServerAgentSession:
                         verified["action"] = self._answer_action_receipt
                     else:
                         verified = answer_protocol.submit(self.evidence, args)
+                    if self._refused_reads and any(
+                            item["kind"] == "page_observation"
+                            for item in verified["conclusions"]):
+                        raise ValueError(
+                            "a page fact cannot answer this turn: an authorization refusal "
+                            "closed the page as a source. Use the typed reads you have, or "
+                            "finish with outcome=unable")
                 except (ValueError, TypeError, EvidenceUnknown) as exc:
                     self._answer_repairs += 1
                     # The message, not only the class. A run recorded three refusals as
@@ -2323,6 +2372,14 @@ class ServerAgentSession:
                     self.ledger.append("answer_contract_refused", step=step,
                                        reason=type(exc).__name__, detail=str(exc)[:500],
                                        repair=self._answer_repairs)
+                    if self._refused_reads and not len(self.evidence):
+                        # An authorization refusal and nothing read: there is no answer to
+                        # repair, and what the person has to hear is which operation their
+                        # account was refused. Repairing here would spend model calls to
+                        # reach the same end.
+                        result.agent_said = unavailable_answer(self.task.prompt)
+                        return self._finish(result, t0, "permission_denied",
+                                            self._refused_detail, steps=step)
                     if self._answer_repairs > answer_protocol.MAX_ANSWER_REPAIRS:
                         result.agent_said = unavailable_answer(self.task.prompt)
                         return self._finish(result, t0, "agent_refused", result.agent_said,
@@ -2332,7 +2389,7 @@ class ServerAgentSession:
                         ". Correct the evidence reference or perform a supported read/compute; "
                         "otherwise finish with outcome=unable. " + self._render_answer_action())]
                     continue
-                verified = self._with_answer_labels(verified)
+                verified = self._with_refused_reads(self._with_answer_labels(verified))
                 result.verified_answer = verified
                 if _is_capability_gap(verified):
                     # The claim is that nothing ran, so it is recorded with the two counts
@@ -2412,6 +2469,12 @@ class ServerAgentSession:
                         call, "observe accepts only an optional boolean answer_evidence.")]
                     continue
                 collect_page_answer = args.get("answer_evidence", False)
+                if collect_page_answer and self._refused_reads:
+                    messages += [_assistant_call(call), _tool_result(
+                        call, "PAGE EVIDENCE REFUSED: an authorization refusal in this turn "
+                        "closed the page as a source of facts. Answer from the typed reads "
+                        "you already have, or finish with outcome=unable.")]
+                    continue
                 if collect_page_answer:
                     self._answer_mode = True
                     self.evidence.discard_pages()
@@ -3699,6 +3762,23 @@ class ServerAgentSession:
         result.refused_operation = self._operation_label(name) or None
         return self._finish(result, t0, "permission_denied", str(exc)[:500], steps=step)
 
+    def _with_refused_reads(self, verified: dict | None) -> dict | None:
+        """State in the answer what this account was not allowed to read.
+
+        The model is asked to declare the gap. Whether it does is not something the reader
+        should have to depend on, so the server states it as well, and an answer that is
+        missing a refused read never stays "complete".
+        """
+        if not verified or not self._refused_reads:
+            return verified
+        verified["coverage"] = ("undetermined" if verified["coverage"] == "undetermined"
+                                else "partial")
+        verified["lowered_because"] = tuple(verified.get("lowered_because") or ()) + tuple(
+            f"{label or 'a read'}: refused by this account's authority"
+            for label in self._refused_reads)
+        verified["refused_reads"] = tuple(self._refused_reads)
+        return verified
+
     def _operation_label(self, tool: str) -> str:
         """What the adapter calls this tool for a reader, in the language of this message."""
         tables = getattr(self.business_tools, "answer_labels", None) or {}
@@ -3707,6 +3787,12 @@ class ServerAgentSession:
 
     def _finish(self, result: RunResult, t0: float, reason: str, detail: str = "",
                 steps: int = 0) -> RunResult:
+        if reason == "agent_refused" and self._refused_reads and not result.verified_answer:
+            # A refused read that left the turn with nothing to answer from. There is no
+            # typed answer to carry the gap -- an answer needs at least one conclusion, and a
+            # conclusion needs evidence -- so the turn ends the way it did before this
+            # continued past the refusal, saying which operation this account was refused.
+            reason, detail = "permission_denied", self._refused_detail or detail
         try:
             result.control = self._refresh_control()
         except ControlPlaneError as e:

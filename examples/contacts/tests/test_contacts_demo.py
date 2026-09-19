@@ -752,13 +752,23 @@ class TheApplicationsOwnAuthorityInARealBrowser(unittest.TestCase):
                                               events=events),
                          (None, "permission_denied"))
 
-    def test_a_refused_read_ends_the_turn_at_either_layer_and_reveals_no_record(self):
+    def test_a_refused_read_is_handed_back_and_reveals_no_record(self):
+        """The refusal continues the turn, and no refused record reaches any surface (D13).
+
+        The turn used to end here, which also threw away whatever this account may see. It
+        now goes on: what the refusal takes away is the page as a source of facts, not the
+        turn. The model may still move around the application -- a principal narrower than
+        the application does not make the application's own pages secret -- but nothing it
+        was refused can become an answer, and an actor the application refuses outright
+        reaches nothing at all.
+        """
         from evals.twenty.outcomes import classify_woa_outcome
 
         script = (
             ("load_skill", {"skill_id": "minimal.contacts.query"}),
             ("list_contacts", {}),
-            # Never asked for: the same records off the page would step around the refusal.
+            # The model tries the page next. It may go there, and what it sees there cannot
+            # become a fact in the answer.
             ("goto", {"url": "/contacts/grace-hopper"}),
             ("finish", {"outcome": "acted"}),
         )
@@ -774,23 +784,32 @@ class TheApplicationsOwnAuthorityInARealBrowser(unittest.TestCase):
                                           actor=actor, forged_scopes=scopes)
                 events = _audit_events(directory)
                 turn = summary["turns"][0]
-                self.assertEqual(turn["status"], "refused")
-                self.assertEqual(turn["terminal_reason"], "permission_denied")
-                self.assertIn("not permitted", turn["answer"])
-                self.assertEqual(summary["panel"]["live"]["state"], "refused")
-                self.assertEqual(chat.calls, 2, "nothing was asked of the model afterwards")
-                self.assertEqual(turn["page_actions"], 0)
-                self.assertFalse(any(event["event"] == "action_receipt"
-                                     and event.get("tool") == "goto" for event in events))
+                self.assertEqual(chat.calls, 4, "the refusal comes back to the model")
+                if layer == "application":
+                    # This actor is refused every read, its pages included, so the turn has
+                    # nothing to answer from and ends on the refusal, as it did before.
+                    self.assertEqual(turn["terminal_reason"], "permission_denied")
+                    self.assertIn("not permitted", turn["answer"])
+                    self.assertEqual(turn["page_actions"], 0)
+                else:
+                    # The principal is narrower than the application, which still shows this
+                    # person its own pages. The turn reports what it did and states the part
+                    # it was refused; no refused record is in it.
+                    self.assertEqual(turn["terminal_reason"], "agent_finished")
+                    self.assertIn("does not have permission", turn["answer"])
+                self.assertNotIn("Grace Hopper", turn["answer"])
                 self.assertNotIn("business_tool_result", [e["event"] for e in events])
+                self.assertEqual([e["event"] for e in events].count(
+                    "page_answer_evidence"), 0, "the page is not a source after a refusal")
                 denied = next(event for event in events
                               if event["event"] == "business_tool_permission_denied")
                 self.assertEqual(denied["layer"], layer)
                 self.assertEqual(denied["dispatched"], dispatched)
                 self.assertFalse(denied["side_effect_possible"])
-                self.assertEqual(classify_woa_outcome(terminal_reason="permission_denied",
-                                                      events=events),
-                                 (None, "permission_denied"))
+                self.assertTrue(denied["turn_continued"])
+                self.assertEqual(classify_woa_outcome(terminal_reason=turn["terminal_reason"],
+                                                      events=events)[0], None,
+                                 "a refused read is product behaviour, not an apparatus fault")
                 if layer == "application":
                     # The application refuses this actor every read, its pages included, so
                     # no record may reach anything. (A principal merely narrower than the

@@ -148,9 +148,10 @@ def render_payload(payload: dict, *, user_text: str, max_chars: int) -> str:
             if action.get("navigation_url"):
                 opened = "已打开页面" if _language(user_text) == "zh" else "Opened the page"
                 action_text += f"\n{opened}：{_literal(action['navigation_url'])}"
+    refused_reads = tuple(data.pop("refused_reads", ()) or ())
     return render(VerifiedAnswer(**data), user_text=user_text,
                   max_chars=max_chars, presentation=presentation, action_text=action_text,
-                  labels=labels)
+                  labels=labels, refused_reads=refused_reads)
 
 
 def _literal(value: object) -> str:
@@ -187,7 +188,8 @@ def render_sources(payload: dict, *, user_text: str, max_chars: int) -> str:
 
 def render(answer: VerifiedAnswer, *, user_text: str, max_chars: int,
            presentation: str = "brief", action_text: str = "",
-           labels: dict[str, str] | None = None) -> str:
+           labels: dict[str, str] | None = None,
+           refused_reads: tuple[str, ...] = ()) -> str:
     """Lay out the conclusions, then the prose, then what the answer does not cover."""
     if not isinstance(answer, VerifiedAnswer):
         raise TypeError("render takes a VerifiedAnswer")
@@ -218,7 +220,7 @@ def render(answer: VerifiedAnswer, *, user_text: str, max_chars: int,
     footer = []
     if answer.coverage != "complete":
         footer.append(f"> **{words['partial']}**")
-        for reason in _partial_reasons(words, answer):
+        for reason in _partial_reasons(words, answer, refused_reads):
             footer.append(f"> - {reason}")
     text = "\n".join(lines + footer).strip()
     if len(text) <= max_chars:
@@ -309,7 +311,8 @@ def _readable_condition(condition: str, words: dict) -> str:
     return "；".join(parts) if zh else "; ".join(parts)
 
 
-def _partial_reasons(words: dict, answer: VerifiedAnswer) -> list[str]:
+def _partial_reasons(words: dict, answer: VerifiedAnswer,
+                     refused_reads: tuple[str, ...] = ()) -> list[str]:
     """What the answer does not cover, said to the reader.
 
     `lowered_because` records the same facts for the ledger, in the terms the verifier
@@ -319,6 +322,18 @@ def _partial_reasons(words: dict, answer: VerifiedAnswer) -> list[str]:
     """
     zh = words["lang"] == "zh"
     reasons = []
+    for label in refused_reads:
+        # Said by the server, not by the model: an answer missing the part this account may
+        # not see reads like a whole answer. An application that does not name its operations
+        # in the reader's language still gets a sentence, without an internal tool name in it.
+        if label:
+            reasons.append(f"当前账号没有{_literal(label)}的权限，这一部分没有完成。" if zh else
+                           f"This account does not have permission for {_literal(label)}; "
+                           "that part was not done.")
+        else:
+            reasons.append("这个问题里有一部分当前账号没有权限，没有完成。" if zh else
+                           "Part of this question was not done: this account does not have "
+                           "permission for it.")
     for item in answer.conclusions:
         kind = item["kind"]
         if kind == "undetermined":

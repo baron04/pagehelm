@@ -1461,7 +1461,14 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertEqual(
                 json.loads(intent.reconciliation_json)["phase"], "dispatch")
 
-    def test_a_refused_read_ends_the_turn_at_either_layer_and_never_reaches_the_page(self):
+    def test_a_refused_read_is_handed_back_and_never_opens_the_page_as_its_source(self):
+        """The refusal reaches the model; what it may answer from does not grow (D13).
+
+        Ending the turn threw away the part of a question this account may see. The refusal
+        now comes back, and with nothing read the turn still ends on it -- what must not
+        happen, at either layer, is the same facts being taken off the page instead.
+        """
+
         class RefusingReads(_Executor):
             @staticmethod
             def execute(*_args, **_kwargs):
@@ -1480,9 +1487,9 @@ class BusinessReActTransition(unittest.TestCase):
                 chat = _Chat([
                     ("load_skill", {"skill_id": skill.skill_id}),
                     ("query_companies", {}),
-                    # Never asked for: the same facts off the page would step around the
-                    # scope that just refused them.
-                    ("goto", {"url": "/object/company"}),
+                    # The page is where the same facts would be, and the turn ends before
+                    # the model can put them in an answer.
+                    ("finish", {"done": True, "why": "Read the companies."}),
                 ])
                 session = self._principal_bound_session(
                     tmp, runtime, chat, _operation_context(scopes=scopes),
@@ -1491,12 +1498,13 @@ class BusinessReActTransition(unittest.TestCase):
                 result = session.run()
 
                 self.assertEqual(result.terminal_reason, "permission_denied")
-                self.assertEqual(len(chat.messages), 2, "the model is not asked again")
+                self.assertEqual(len(chat.messages), 3, "the refusal is handed back once")
                 self.assertEqual(browser.actions, [])
                 ledger = session.ledger
                 self.assertEqual(ledger.of_kind("business_tool_rejected"), [])
                 self.assertEqual(ledger.of_kind("business_tool_result"), [])
                 event = ledger.of_kind("business_tool_permission_denied")[-1]
+                self.assertTrue(event["turn_continued"])
                 self.assertEqual(event["layer"], layer)
                 self.assertEqual(event["dispatched"], dispatched)
                 self.assertFalse(event["side_effect_possible"])
