@@ -1155,6 +1155,14 @@ export class EmbeddedWebRuntime {
         this._save()
         this.panelHost?.setConnection({busy: false, stopping: false})
         this.panelHost?.clearOptimisticOnce(turnId)
+        // A confirmation whose turn is over can never be answered. Leaving it up is how a
+        // person ends up pressing a dead button with the composer locked behind it.
+        const stale = this.panelHost?.snapshot().pendingApproval
+        if (stale && (!stale.turn_id || stale.turn_id === turnId)) {
+          delete this.stored.approvals[stale.approval_id]
+          this._save()
+          this.panelHost.setPendingApproval(null)
+        }
       }
       // The panel state each progress state maps to is the server's table, not a second
       // copy of it here; an unmapped state means the contract moved and must be noticed.
@@ -1192,15 +1200,29 @@ export class EmbeddedWebRuntime {
   async _postApproval(request, decision) {
     this.stored.approvals[request.approval_id] = decision
     this._save()
-    await this._post('/approvals', {
-      schema_version: WIRE_VERSION,
-      session_id: this.sessionId,
-      approval_id: request.approval_id,
-      decision,
-      principal_digest: String(request.principal_digest || ''),
-      turn_id: String(request.turn_id || ''),
-      operation_id: String(request.operation_id || ''),
-    })
+    try {
+      await this._post('/approvals', {
+        schema_version: WIRE_VERSION,
+        session_id: this.sessionId,
+        approval_id: request.approval_id,
+        decision,
+        principal_digest: String(request.principal_digest || ''),
+        turn_id: String(request.turn_id || ''),
+        operation_id: String(request.operation_id || ''),
+      })
+    } catch (error) {
+      const verdict = classifyTransportError(error, this.panelConfiguration)
+      if (!verdict.approvalClosed) throw error
+      // Nothing can be answered here any more. Forget the decision -- replaying it after a
+      // reload fails the same way and leaves the panel holding a card nobody can answer --
+      // take the card down, and say what happened.
+      delete this.stored.approvals[request.approval_id]
+      this._save()
+      this.panelHost?.setPendingApproval(null)
+      this.panelHost?.raise(verdict.code, {retryable: false})
+      this._panelState('idle')
+      return
+    }
     this.panelHost?.setPendingApproval(null)
     this._panelState(decision === 'approved' ? 'acting' : 'cancelled')
   }

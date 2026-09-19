@@ -23,8 +23,19 @@ const RETRY_CEILING_MS = 4000
  * The codes and their panel states come from the server's own configuration, so this
  * cannot drift from `panel_contract.json` the way two hand-written tables would.
  */
+//: A confirmation the server will not take an answer for any more: it expired, it was
+//: already answered, or another one replaced it. The decision endpoint reports these as 409,
+//: which the rules below would read as "another page took over this session" -- so the
+//: runtime stopped, the card stayed on screen with dead buttons, the composer stayed locked,
+//: and a reload replayed the same doomed decision and never mounted the panel (P7.5 CR-38).
+const APPROVAL_CLOSED = new Set([
+  'approval_expired', 'approval_not_pending', 'unknown_approval', 'approval_conflict'])
+
 export function classifyTransportError(error, configuration) {
   const code = String(error?.code || '')
+  if (APPROVAL_CLOSED.has(code)) {
+    return {terminal: false, code, state: 'idle', retryable: false, approvalClosed: true}
+  }
   const status = Number(error?.status || 0)
   const terminalCodes = configuration?.terminal_error_codes || []
   const byCode = configuration?.terminal_panel_state_by_code || {}

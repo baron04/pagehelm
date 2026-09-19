@@ -197,9 +197,13 @@ def _decide_in_page(page, config: DemoConfig) -> dict:
         page.evaluate("() => window.__WOA_RUNTIME_READY__.then(runtime => runtime.cancelTask())")
         return visible
     if config.approval_decision == "expired":
-        page.wait_for_timeout((config.approval_ttl_s * 1000) + 250)
-    else:
-        page.wait_for_timeout(700)
+        # Past the deadline the card stops offering a control, because the server would
+        # refuse the answer anyway. Nobody presses anything here: the walkthrough records
+        # that there was nothing left to press, and the turn ends on its own.
+        page.wait_for_timeout((config.approval_ttl_s * 1000) + 1_200)
+        visible["controls_after_expiry"] = page.locator(_APPROVE_CONTROL).count()
+        return visible
+    page.wait_for_timeout(700)
     if config.approval_decision == "denied":
         page.locator(_DENY_CONTROL).click()
     else:

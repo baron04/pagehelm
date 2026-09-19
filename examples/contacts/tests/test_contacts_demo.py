@@ -245,6 +245,9 @@ class TheWriteWalkthroughInARealBrowser(unittest.TestCase):
         self.assertEqual(summary["turns"][0]["terminal_reason"], "approval_expired")
         self.assertIn("expired", summary["turns"][0]["answer"])
         self.assertEqual(summary["mutation_journal"][0]["state"], "prepared")
+        # Nothing was pressed: past the deadline the card offers no control at all, which is
+        # what keeps a person out of the dead-end this used to leave them in (P7.5 CR-38).
+        self.assertEqual(summary["approvals"][0]["controls_after_expiry"], 0)
 
     def test_browser_replay_of_the_same_approval_is_idempotent(self):
         with tempfile.TemporaryDirectory() as directory:

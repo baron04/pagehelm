@@ -449,6 +449,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
           const offered = [];
           runtime.panelHost = {{
             setConnection() {{}}, clearOptimisticOnce() {{}},
+            snapshot() {{ return {{pendingApproval: null}}; }},
             setPendingApproval(request) {{ offered.push(request ? request.approval_id : null); }},
           }};
           const posts = [];
@@ -530,6 +531,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
           runtime.panelHost = {{
             setConnection(patch) {{ if ('state' in patch) statuses.push(patch.state); }},
             setOptimistic() {{}}, failOptimistic() {{}}, clearOptimisticOnce() {{}}, raise() {{}},
+            snapshot() {{ return {{pendingApproval: null}}; }}, setPendingApproval() {{}},
           }};
           const sent = [];
           let epoch = 0;
@@ -592,6 +594,10 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                 if ('state' in patch) status = patch.state;
               }},
               clearOptimisticOnce() {{ cleared = true; }},
+              // The real host answers both; a double that did not hid a call the runtime
+              // makes when a turn ends.
+              snapshot() {{ return {{pendingApproval: null}}; }},
+              setPendingApproval() {{}},
             }};
             await runtime._handleEvent({{kind:'progress', payload:{{state, message:'done'}}}});
             rows.push({{state, status, busy, cleared,
@@ -637,6 +643,8 @@ class EmbeddedRuntimeTests(unittest.TestCase):
             }},
             clearOptimisticOnce() {{}},
             raise() {{}},
+            snapshot() {{ return {{pendingApproval: null}}; }},
+            setPendingApproval() {{}},
           }};
           const posts = [];
           runtime._post = async (path, body) => {{ posts.push({{path, body}}); }};
