@@ -357,17 +357,19 @@ else
 fi
 
 page_controller_module="${ROOT}/evals/pageagent/node_modules/@page-agent/page-controller/dist/lib/page-controller.js"
+runtime_blocked() {
+  local gate
+  for gate in "embedded Runtime Chromium qualification" "assistant lifecycle faults (I1, I2)"; do
+    record "${gate}" BLOCKED "$1"
+    [[ "${require_browser}" == "1" ]] && failed+=("${gate}")
+  done
+}
 if [[ "${pageagent_ready}" != "1" ]]; then
-  record "embedded Runtime Chromium qualification" BLOCKED \
-    "the pinned PageController dependency was not qualified"
-  [[ "${require_browser}" == "1" ]] && failed+=("embedded Runtime Chromium qualification")
+  runtime_blocked "the pinned PageController dependency was not qualified"
 elif [[ ! -f "${page_controller_module}" ]]; then
-  record "embedded Runtime Chromium qualification" BLOCKED \
-    "PageController module is absent: ${page_controller_module}"
-  [[ "${require_browser}" == "1" ]] && failed+=("embedded Runtime Chromium qualification")
+  runtime_blocked "PageController module is absent: ${page_controller_module}"
 elif [[ "${chromium_ready}" != "1" ]]; then
-  record "embedded Runtime Chromium qualification" BLOCKED "Chromium is unavailable"
-  [[ "${require_browser}" == "1" ]] && failed+=("embedded Runtime Chromium qualification")
+  runtime_blocked "Chromium is unavailable"
 else
   run_gate "embedded Runtime Chromium qualification" 1 \
     env WOA_PAGE_CONTROLLER_MODULE="${page_controller_module}" "${PYTHON}" -m unittest \
@@ -375,6 +377,11 @@ else
     web_operation_agent.tests.test_embedded_runtime.EmbeddedRuntimeTests.test_same_origin_iframe_form_navigation_is_observed_without_top_level_change \
     web_operation_agent.tests.test_embedded_runtime.EmbeddedRuntimeTests.test_real_confirmation_card_posts_authenticated_user_decision \
     web_operation_agent.tests.test_embedded_runtime.EmbeddedRuntimeTests.test_the_timeline_survives_a_full_page_navigation
+  # D21's two invariants under injected faults: the host page never hears the assistant fail
+  # (I1), and the assistant is never silently absent (I2).
+  run_gate "assistant lifecycle faults (I1, I2)" 1 \
+    env WOA_PAGE_CONTROLLER_MODULE="${page_controller_module}" "${PYTHON}" -m unittest \
+    web_operation_agent.tests.test_assistant_lifecycle
 fi
 
 # ---------------------------------------------------------------- live gate
