@@ -22,6 +22,9 @@ PAGE = """<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>host</title></head>
 <body><main>host application</main>
 <script>
+  window.__woaHostErrors = []
+  window.addEventListener('error', e => window.__woaHostErrors.push(String(e.message)))
+  window.addEventListener('unhandledrejection', e => window.__woaHostErrors.push(String(e.reason)))
   window.__woaCalls = []
   window.__woaBootstrapStatus = %s
   window.fetch = async (url, options) => {
@@ -42,7 +45,13 @@ PAGE = """<!doctype html>
 </body></html>
 """
 
-RUNTIME = """export async function startEmbeddedRuntime() {
+RUNTIME = """// Mirrors the real `startEmbeddedRuntime` contract, not a convenient one: one live Runtime
+// per page, `null` while another holds the page, and a stopped Runtime releases it. The
+// earlier stand-in returned a fresh Runtime every time, so the loader's reconnection was
+// tested against a contract the product does not have -- and passed while the page it
+// ran in filled with error dialogs.
+export async function startEmbeddedRuntime() {
+  if (window.__WOA_EMBEDDED_RUNTIME_STARTED__) return null
   const host = document.createElement('div')
   host.id = 'woa-assistant'
   host.dataset.instance = String((window.__woaRuntimes = (window.__woaRuntimes || 0) + 1))
@@ -52,8 +61,17 @@ RUNTIME = """export async function startEmbeddedRuntime() {
     canRenewSession: () => true,
     renewSession() {},
     panelHost: {snapshot: () => ({connection: {state: window.__woaEndState || 'ready'}})},
-    stop() { host.remove() },
+    stop() {
+      host.remove()
+      // `__woaStaleLatch` models the defect the product had until P7.5: a Runtime that
+      // keeps the page claimed after it stops, so the next start answers `null`. The
+      // loader must survive that without a sound, whatever the product does.
+      if (!window.__woaStaleLatch && window.__WOA_EMBEDDED_RUNTIME_STARTED__ === runtime) {
+        window.__WOA_EMBEDDED_RUNTIME_STARTED__ = false
+      }
+    },
   }
+  window.__WOA_EMBEDDED_RUNTIME_STARTED__ = runtime
   window.__woaRuntime = runtime
   return runtime
 }
@@ -177,6 +195,31 @@ class TheEntryIsThereEvenWhenTheAssistantIsNot(unittest.TestCase):
         # The panel stays exactly as the Runtime left it: it is the one that says why.
         self.assertEqual(page.locator("#woa-assistant").get_attribute("data-instance"), first)
         self.assertEqual(self.errors, [])
+
+    def test_nothing_the_loader_does_reaches_the_host_pages_error_handler(self):
+        """P7.5 J5.05: an Odoo "Oops!" dialog every two seconds until the page was black.
+
+        The agent restarted, the loader reconnected, the product's one-Runtime-per-page
+        latch answered `null`, and the loader watched `null`: a TypeError thrown in a timer
+        every tick, straight into Odoo's global error handler. Whatever goes wrong in here,
+        the host page must not hear about it. This runs the loader against a Runtime that
+        never releases the page and requires the host's error channels to stay silent.
+        """
+        page = self._open(200)
+        page.locator("#woa-assistant").wait_for(state="attached", timeout=8000)
+        first = page.locator("#woa-assistant").get_attribute("data-instance")
+        page.evaluate("""() => {
+            window.__woaStaleLatch = true
+            window.__woaRuntime.stopped = true
+        }""")
+        page.wait_for_timeout(7000)  # three watch periods
+        self.assertEqual(page.evaluate("() => window.__woaHostErrors"), [])
+        self.assertEqual(self.errors, [])
+        # And the person gets their assistant back: the loader frees the page it had
+        # claimed rather than leaving it to a Runtime that never will.
+        self.assertEqual(page.locator("#woa-assistant").count(), 1)
+        self.assertNotEqual(page.locator("#woa-assistant").get_attribute("data-instance"),
+                            first)
 
     def test_a_startup_that_works_adds_no_entry_of_its_own(self):
         page = self._open(200)

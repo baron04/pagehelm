@@ -4,6 +4,28 @@
   if (window.top !== window || window.__WOA_NATIVE_BOOTSTRAP_STARTED__) return;
   window.__WOA_NATIVE_BOOTSTRAP_STARTED__ = true;
 
+  // This file runs inside Odoo's own JavaScript. Anything it lets escape -- an exception
+  // thrown in a timer, a promise nobody awaited that rejects -- lands in Odoo's global
+  // error handler, which opens its "Oops!" dialog over the person's work. A timer that
+  // threw every two seconds stacked those dialogs until the page was black. So every
+  // callback this file hands to the browser goes through `contained`: a failure is written
+  // to the console for whoever has to diagnose it, and goes no further.
+  const report = (where, error) => {
+    try { console.warn(`[woa] ${where}:`, error); } catch { /* nothing left to do */ }
+  };
+  const contained = (where, fn) => (...args) => {
+    try {
+      const result = fn(...args);
+      if (result && typeof result.then === "function") {
+        result.then(undefined, (error) => report(where, error));
+      }
+      return result;
+    } catch (error) {
+      report(where, error);
+      return undefined;
+    }
+  };
+
   let runtimeInstanceId;
   try {
     runtimeInstanceId = sessionStorage.getItem("woa.runtime.instance.v1");
@@ -42,7 +64,7 @@
   const scheduleRenewal = (runtime, payload, delay = null) => {
     clearTimeout(renewalTimer);
     const wait = delay ?? Math.max(1000, Number(payload.renew_at || 0) - Date.now());
-    renewalTimer = setTimeout(async () => {
+    renewalTimer = setTimeout(contained("renewal", async () => {
       if (runtime.stopped) return;
       if (!runtime.canRenewSession()) {
         scheduleRenewal(runtime, payload, 5000);
@@ -58,7 +80,7 @@
         // error handler or turn an assistant outage into a host-application popup.
         if (!runtime.stopped) scheduleRenewal(runtime, payload, 5000);
       }
-    }, Math.min(wait, 2_147_483_647));
+    }), Math.min(wait, 2_147_483_647));
   };
 
   // The assistant that cannot start still has to be visible. Every earlier way startup
@@ -134,14 +156,17 @@
     const again = document.createElement("button");
     again.type = "button";
     again.textContent = "重试";
-    again.addEventListener("click", () => { again.disabled = true; retry(); });
+    again.addEventListener("click", contained("retry", () => {
+      again.disabled = true;
+      retry();
+    }));
     note.append(reasonLine, again);
     const badge = document.createElement("button");
     badge.type = "button";
     badge.className = "badge";
     badge.textContent = "助手";
     badge.setAttribute("aria-label", "助手暂时不可用");
-    badge.addEventListener("click", () => { note.hidden = !note.hidden; });
+    badge.addEventListener("click", contained("entry", () => { note.hidden = !note.hidden; }));
     entry.append(note, badge);
     shadow.appendChild(entry);
     (document.body || document.documentElement).appendChild(host);
@@ -166,8 +191,10 @@
   //: because "会话已结束，请刷新页面" asks the person to repair something they did not break.
   const watchRuntime = (runtime) => {
     clearInterval(watchTimer);
-    watchTimer = setInterval(() => {
+    watchTimer = setInterval(contained("watch", () => {
       if (!runtime.stopped) return;
+      // Stop watching before doing anything else, so that whatever happens next happens
+      // once. The watcher that crashed here kept running and crashed again every tick.
       clearInterval(watchTimer);
       let state = "";
       try {
@@ -176,42 +203,68 @@
         state = "";
       }
       if (state === "replaced") return;
-      try { runtime.stop(); } catch { /* the panel is going away either way */ }
+      try { runtime.stop(); } catch (error) { report("stop", error); }
+      // The page was claimed by the Runtime this loader started and has just stopped, so
+      // the loader frees it before starting the next -- as the Runtime itself does after a
+      // back-forward cache restore. A Runtime that kept the claim after stopping is how
+      // the next start came back `null`.
+      if (window.__WOA_EMBEDDED_RUNTIME_STARTED__ === runtime
+          || window.__WOA_EMBEDDED_RUNTIME_STARTED__ === true) {
+        window.__WOA_EMBEDDED_RUNTIME_STARTED__ = false;
+      }
       attempt = 0;
-      void start();
-    }, WATCH_MS);
+      void restart();
+    }), WATCH_MS);
   };
   let settle;
   const ready = new Promise(resolve => { settle = resolve; });
   let attempt = 0;
   let pending = 0;
 
+  const failed = (error) => {
+    const reason = String(error?.message || error).match(/\((\d{3})\)/)?.[1] || "";
+    window.__WOA_RUNTIME_ERROR__ = String(error?.message || error);
+    try {
+      showUnavailable(reason, () => { attempt = 0; void restart(); });
+    } catch (entryError) {
+      report("entry", entryError);
+    }
+    if (attempt < RETRY_MS.length) {
+      pending = setTimeout(() => { void restart(); }, RETRY_MS[attempt]);
+      attempt += 1;
+    } else if (unavailable) {
+      unavailable.again.disabled = false;
+    }
+    return null;
+  };
+
   const start = async () => {
     clearTimeout(pending);
+    let payload;
+    let runtime;
     try {
-      const payload = await bootstrap();
+      payload = await bootstrap();
       const module = await import(payload.runtime_module);
-      const runtime = await module.startEmbeddedRuntime(payload.config);
-      clearUnavailable();
-      scheduleRenewal(runtime, payload);
-      watchRuntime(runtime);
-      window.__WOA_RUNTIME_ERROR__ = "";
-      settle(runtime);
-      return runtime;
+      runtime = await module.startEmbeddedRuntime(payload.config);
     } catch (error) {
-      const reason = String(error?.message || error).match(/\((\d{3})\)/)?.[1] || "";
-      window.__WOA_RUNTIME_ERROR__ = String(error?.message || error);
-      showUnavailable(reason, () => { attempt = 0; void start(); });
-      if (attempt < RETRY_MS.length) {
-        pending = setTimeout(() => { void start(); }, RETRY_MS[attempt]);
-        attempt += 1;
-      } else if (unavailable) {
-        unavailable.again.disabled = false;
-      }
-      return null;
+      return failed(error);
     }
+    if (!runtime) {
+      // No Runtime came back. It is not one to watch or renew -- treating it as one is what
+      // read `null.stopped` every two seconds -- and it is not a reason to show nothing
+      // either: the person gets the standing entry and the retries, as for any start that
+      // did not produce an assistant.
+      return failed(new Error("the assistant runtime did not start"));
+    }
+    clearUnavailable();
+    scheduleRenewal(runtime, payload);
+    watchRuntime(runtime);
+    window.__WOA_RUNTIME_ERROR__ = "";
+    settle(runtime);
+    return runtime;
   };
-  void start();
+  const restart = contained("start", start);
+  void restart();
   // The public Promise resolves with the Runtime whenever startup succeeds -- including a
   // later retry -- and is never rejected, so an assistant outage cannot reach Odoo's own
   // global error handler as a popup.

@@ -882,11 +882,20 @@ export class EmbeddedWebRuntime {
     if (removePanel) {
       this.panelHandle?.destroy()
       this.panelHandle = null
-    this.panelConfiguration = null
-    this.panelCursor = ''
-    this._expiryTimer = 0
+      this.panelConfiguration = null
+      this.panelCursor = ''
+      this._expiryTimer = 0
       this.panelContainer?.remove()
       this.panelContainer = null
+      // Stopped for good, panel and all: the page is free for the next Runtime.
+      this._releasePage()
+    }
+  }
+
+  /** Give up this Runtime's claim on the page, and only its own. */
+  _releasePage() {
+    if (typeof window !== 'undefined' && window.__WOA_EMBEDDED_RUNTIME_STARTED__ === this) {
+      window.__WOA_EMBEDDED_RUNTIME_STARTED__ = false
     }
   }
 
@@ -1641,15 +1650,23 @@ export class EmbeddedWebRuntime {
   }
 }
 
+/**
+ * Start the one Runtime this page may have, or return `null` if a live one already exists.
+ *
+ * The page-wide latch holds the Runtime that owns it, not a bare flag, so that the Runtime
+ * can release exactly its own claim when it is stopped for good (see `stop`). A bare flag
+ * was released only when *starting* failed: a Runtime whose session later ended kept the
+ * page claimed forever, and the loader's reconnection got `null` back and watched it.
+ */
 export async function startEmbeddedRuntime(config) {
   if (window.__WOA_EMBEDDED_RUNTIME_STARTED__) return null
-  window.__WOA_EMBEDDED_RUNTIME_STARTED__ = true
   const runtime = new EmbeddedWebRuntime(config)
+  window.__WOA_EMBEDDED_RUNTIME_STARTED__ = runtime
   try { return await runtime.start() } catch (error) {
     runtime.stop({removePanel: false})
     runtime._panelState('error')
     runtime.panelHost?.raise(error?.code || 'connect_failed', {retryable: true})
-    window.__WOA_EMBEDDED_RUNTIME_STARTED__ = false
+    runtime._releasePage()
     throw error
   }
 }

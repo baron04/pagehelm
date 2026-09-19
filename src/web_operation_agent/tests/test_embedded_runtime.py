@@ -625,6 +625,45 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         self.assertEqual(result["notices"], ["not_found"])
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
+    def test_a_runtime_that_stops_for_good_frees_the_page_and_only_its_own_claim(self):
+        """P7.5 J5.05: a stopped Runtime kept the page claimed, so the next start got `null`.
+
+        The claim was released only when *starting* failed. After an agent restart ended a
+        running session, the page stayed claimed by a Runtime that would never run again,
+        and the loader's reconnection was handed `null` -- which it then watched, throwing
+        into Odoo's error handler every two seconds.
+        """
+        source = _runtime_source_b64()
+        script = f"""
+          globalThis.window = {{}};
+          const mod = await import('data:text/javascript;base64,{source}');
+          const make = () => {{
+            const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
+            runtime.stopped = false;
+            return runtime;
+          }};
+          const first = make();
+          const other = make();
+          window.__WOA_EMBEDDED_RUNTIME_STARTED__ = first;
+          other.stop();
+          const keptByOther = window.__WOA_EMBEDDED_RUNTIME_STARTED__ === first;
+          first.stop({{removePanel: false}});
+          const keptWhilePanelStays = window.__WOA_EMBEDDED_RUNTIME_STARTED__ === first;
+          first.stop();
+          process.stdout.write(JSON.stringify({{keptByOther, keptWhilePanelStays,
+            released: window.__WOA_EMBEDDED_RUNTIME_STARTED__ === false}}));
+        """
+        proc = subprocess.run(["node", "--input-type=module", "-e", script],
+                              text=True, capture_output=True, timeout=10, check=True)
+        result = json.loads(proc.stdout)
+        # Another Runtime stopping does not free a claim that is not its own.
+        self.assertTrue(result["keptByOther"])
+        # A Runtime that keeps its panel up is still the page's Runtime.
+        self.assertTrue(result["keptWhilePanelStays"])
+        # Stopped for good, it gives the page back.
+        self.assertTrue(result["released"])
+
+    @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_product_turn_terminal_states_release_the_panel(self):
         """Each terminal status maps through the server's table, not a copy of it here."""
         source = _runtime_source_b64()
