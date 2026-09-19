@@ -115,6 +115,46 @@ def _clip(value: Any, limit: int) -> str:
     return text[:limit]
 
 
+#: Page commands already reach the timeline as `action` events; a second line for the same
+#: dispatch would say everything twice.
+_PAGE_TOOLS = frozenset({
+    "goto", "back", "click", "fill", "select", "submit", "wait_for", "observe",
+    "prefill_form", "finish", "ask_user"})
+
+
+def describe_step(facts: dict) -> str:
+    """User-visible prose for one thing the turn is doing, between its page actions.
+
+    A turn that reads business data spends most of its wall clock inside model calls and
+    typed reads, neither of which dispatches a page command.  The panel therefore stood on
+    `正在理解目标` for as long as that took -- the product was working and said nothing.
+    The session reports *facts* (a stage, a tool name, a count); the sentence is written
+    here, with the rest of the panel's prose.
+    """
+    stage = str(facts.get("stage") or "")
+    if stage == "thinking":
+        step = int(facts.get("step") or 0)
+        return f"正在思考（第 {step} 步）" if step > 1 else "正在思考"
+    if stage == "tool":
+        tool = str(facts.get("tool") or "")
+        if tool in _PAGE_TOOLS:
+            return ""
+        if tool == "load_skill":
+            return "正在选择操作方式"
+        if tool == "compute":
+            return "正在计算"
+        if facts.get("mutation"):
+            return "正在准备这次更改"
+        return "正在读取业务数据"
+    if stage == "read_done":
+        count = int(facts.get("count") or 0)
+        scope = _clip(facts.get("scope"), 60)
+        return f"已读取 {count} 条：{scope}" if scope else f"已读取 {count} 条"
+    if stage == "write_done":
+        return "更改已执行，正在核对结果"
+    return ""
+
+
 def describe_action(command: dict | None) -> str:
     """User-visible prose for one dispatched browser command.
 

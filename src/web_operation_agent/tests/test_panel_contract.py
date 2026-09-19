@@ -98,7 +98,7 @@ class PanelContractTests(unittest.TestCase):
         mapped = set(panel_contract()["progress_states"])
         published = {status.value for status in AgentTurnStatus} | {
             "waiting_for_runtime", "session_recovered", "message_accepted",
-            "new_conversation", "agent_started", "approval_recorded", "cancelling",
+            "new_conversation", "agent_started", "step", "approval_recorded", "cancelling",
             "task_failed",
         }
         self.assertEqual(mapped, published)

@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 from .application import BoundApplication, SourceCapability
 from .answering import render_structured_query_answer
 from .answer_view import render_payload, render_sources
-from .panel_view import panel_limits
+from .panel_view import describe_step, panel_limits
 from .browser import TransportError
 from .business import BusinessToolResult, BusinessToolRuntime
 from .conversation import ConversationState
@@ -535,6 +535,19 @@ class AgentTurnExecutor:
             raise TypeError("conversation_state must be a ConversationState or None")
         self.conversation_state = conversation_state or ConversationState()
 
+    def _publish_step(self, facts: dict, turn_id: str) -> None:
+        """Put one step of the running turn on the timeline, or nothing if it has no line.
+
+        Page commands already publish an `action` event of their own, so `describe_step`
+        returns an empty string for those and this publishes nothing rather than saying
+        the same dispatch twice.
+        """
+        text = describe_step(facts)
+        if not text:
+            return
+        self.channel.publish("progress", {"state": "step", "message": text},
+                             turn_id=turn_id)
+
     def run_once(self, message: dict | None = None) -> AgentTurnExecution:
         if message is None:
             raise AgentTurnError(
@@ -756,6 +769,10 @@ class AgentTurnExecutor:
             turn_id=(turn_message.message_id if principal is not None else ""),
             time_zone=self.config.time_zone,
             conversation_context=self.conversation_state.model_context(),
+            # What the turn is doing, as it does it. Between two page actions the product
+            # can spend half a minute inside model calls and typed reads, and the panel
+            # used to stand on `正在理解目标` for all of it.
+            progress=lambda facts: self._publish_step(facts, turn_message.message_id),
         )
         session.adopt_entry(current.observation)
         try:

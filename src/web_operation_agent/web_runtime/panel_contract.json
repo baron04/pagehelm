@@ -34,6 +34,7 @@
     "message_accepted": {"panel_state": "queued", "tone": "neutral", "terminal": false},
     "new_conversation": {"panel_state": "ready", "tone": "neutral", "terminal": false},
     "agent_started": {"panel_state": "acting", "tone": "active", "terminal": false},
+    "step": {"panel_state": "acting", "tone": "active", "terminal": false},
     "approval_recorded": {"panel_state": "acting", "tone": "neutral", "terminal": false},
     "cancelling": {"panel_state": "stopping", "tone": "warning", "terminal": false},
     "needs_input": {"panel_state": "needs_input", "tone": "warning", "terminal": true},

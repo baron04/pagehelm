@@ -689,7 +689,8 @@ class ServerAgentSession:
                  principal: PrincipalContext | None = None,
                  session_id: str = "", turn_id: str = "",
                  time_zone: str = "",
-                 conversation_context: dict | None = None):
+                 conversation_context: dict | None = None,
+                 progress: Callable[[dict], None] | None = None):
         if source is not None and not isinstance(source, SourceCapability):
             raise TypeError("source must be a SourceCapability or None")
         if not isinstance(lab, LabApparatus):
@@ -733,6 +734,8 @@ class ServerAgentSession:
                 or not isinstance(max_agent_said_chars, int)
                 or not 1 <= max_agent_said_chars <= 20_000):
             raise ValueError("max_agent_said_chars must be between 1 and 20000")
+        if progress is not None and not callable(progress):
+            raise ValueError("progress must be callable or None")
         if cancelled is not None and not callable(cancelled):
             raise ValueError("cancelled must be callable or None")
         if not isinstance(allow_form_prefill, bool):
@@ -807,6 +810,9 @@ class ServerAgentSession:
         self._task_skill_ids = {skill.skill_id for skill in self._task_skills}
         self.allow_application_entry = bool(allow_application_entry)
         self.business_tools = business_tools
+        #: Where the turn reports what it is doing, between page actions. None in every
+        #: apparatus that has no panel; the run does not depend on anyone listening.
+        self._progress = progress
         self.business_mutation_approval = business_mutation_approval
         if navigation_confirmation is not None and not callable(navigation_confirmation):
             raise TypeError("navigation_confirmation must be callable or None")
@@ -1364,6 +1370,7 @@ class ServerAgentSession:
             if elapsed >= self.wall_budget_s:
                 return self._finish(result, t0, "wall_clock_budget",
                                     f"exceeded {self.wall_budget_s}s", steps=step)
+            self._step_note(stage="thinking", step=step + 1)
             try:
                 reply = self.chat.complete_cancellable(
                     messages, self.tool_schemas(), self.run_id,
@@ -1521,6 +1528,10 @@ class ServerAgentSession:
             step += 1
             self.ledger.append("tool_call", step=step, tool=name,
                                args=_safe(args, self.session_handoffs))
+            self._step_note(stage="tool", tool=name, step=step, mutation=bool(
+                self.business_tools is not None
+                and name in self.business_tools.tool_names
+                and self.business_tools.is_mutation(name)))
             kept_reply, unanswered_reply = (unanswered_reply if name == "finish" else ""), ""
 
             no_progress = self._track_progress(name, args, obs)
@@ -1873,6 +1884,7 @@ class ServerAgentSession:
                     self._collect_evidence(tool_result, step=step)
                     self._latest_business_query_page_actions = (
                         self.page_actions if tool_result.query_answer is not None else None)
+                    self._step_note(stage="write_done")
                     successful_business_tools += 1
                     feedback = ("BUSINESS MUTATION RESULT (approved, executed once, "
                                 "current runtime fact):\n" + tool_result.render())
@@ -1955,6 +1967,11 @@ class ServerAgentSession:
                     recorded_evidence = self._collect_evidence(tool_result, step=step)
                     self._latest_business_query_page_actions = (
                         self.page_actions if tool_result.query_answer is not None else None)
+                    if tool_result.query_answer is not None:
+                        self._step_note(
+                            stage="read_done",
+                            count=tool_result.query_answer.matched_count,
+                            scope=self._scope_label(tool_result.query_answer.scope))
                     successful_business_tools += 1
                     feedback = ("BUSINESS TOOL RESULT (current runtime fact):\n"
                                 + tool_result.render())
@@ -2830,6 +2847,24 @@ class ServerAgentSession:
             **({"deterministic": deterministic} if deterministic else {}),
         )
         return self._finish(result, t0, "needs_input", result.agent_said, steps=step)
+
+    def _step_note(self, **facts) -> None:
+        """Report one thing this turn is doing, for whoever is watching it happen.
+
+        Facts only: the sentence a person reads is written by the panel view, and a
+        listener that raises is a broken panel, not a broken turn.
+        """
+        if self._progress is None:
+            return
+        try:
+            self._progress(facts)
+        except Exception as exc:  # noqa: BLE001 -- see the docstring
+            self.ledger.append("progress_publish_failed", error_type=type(exc).__name__)
+
+    def _scope_label(self, scope: str) -> str:
+        """The reader's own words for a read's scope, from the adapter's answer labels."""
+        tables = getattr(self.business_tools, "answer_labels", None) or {}
+        return str((tables.get("zh") or {}).get(scope) or "")
 
     def _track_progress(self, name: str, args: object,
                         observation: PageObservation) -> str:

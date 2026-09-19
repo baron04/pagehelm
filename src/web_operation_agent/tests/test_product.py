@@ -448,10 +448,15 @@ class AgentTurnExecutorTests(unittest.TestCase):
             self.assertNotIn("content", public_result["business_result"])
             self.assertNotIn("ledger_path", public_result)
             self.assertNotIn("product_success", public_result)
+            # `step` entries are the work itself being reported as it happens; what this
+            # pins is the shape of the turn around them.
             self.assertEqual(
-                [item[1]["state"] for item in channel.published],
+                [item[1]["state"] for item in channel.published
+                 if item[1]["state"] != "step"],
                 ["agent_started", "finished"],
             )
+            self.assertIn("正在读取业务数据", " ".join(
+                item[1].get("message", "") for item in channel.published))
             # Every entry a turn produces belongs to that turn. Published without one,
             # `agent_started` and the terminal answer carried an empty turn id, and the
             # panel -- which groups the timeline by it -- broke one exchange into four:
@@ -1152,7 +1157,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
             self.assertIn("The London one", second_opening)
             self.assertIn("never as approval", chat.messages[1][0]["content"])
             progress = [event[1] for event in channel.published if event[0] == "progress"]
-            self.assertEqual([item["state"] for item in progress],
+            self.assertEqual([item["state"] for item in progress if item["state"] != "step"],
                              ["agent_started", "needs_input", "agent_started", "finished"])
 
     def test_single_choice_is_bound_to_current_application_options(self):
