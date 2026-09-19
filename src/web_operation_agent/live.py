@@ -109,6 +109,11 @@ class LiveConversationRunner:
                 message = self.channel.wait_for_message(timeout_s=None)
             except RemoteSessionClosed:
                 return tuple(outcomes)
+            except TimeoutError:
+                # Waiting without a deadline ends only when the session does. Letting this
+                # escape ended the worker while the session stayed open, and every later
+                # message was accepted by a session with nobody left to run it.
+                continue
             turn = self.turns_completed + 1
             message_id = str(message.get("message_id") or "")
             try:
@@ -271,6 +276,17 @@ class LiveProductSession:
                 self._result = self.runner.run_once()
             except BaseException as exc:
                 self._error = exc
+            finally:
+                # The worker is what answers messages. Once it is gone, a session that
+                # stays open is a session that accepts questions it can never answer, and
+                # the person at the panel waits on a turn that will never start. Closing
+                # here turns that silence into an ending they can see and act on.
+                # Only a worker that *failed* ends the session here. A worker that returns
+                # normally has either finished the single run it was asked for -- the eval
+                # apparatus does that -- or returned because the session was already
+                # closed, and neither is a session that should be taken away.
+                if self._error is not None and not self._closed:
+                    self.close("worker_failed")
 
         self._thread = threading.Thread(
             target=target, name=f"{self.grant.session_id}-server-agent", daemon=True)

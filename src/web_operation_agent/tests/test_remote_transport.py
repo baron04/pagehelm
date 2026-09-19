@@ -254,6 +254,70 @@ class ChannelTests(unittest.TestCase):
             with self.assertRaises(RemoteSessionClosed):
                 channel.validate_live()
 
+    def test_a_waiting_worker_survives_a_session_that_outlives_its_own_wait(self):
+        """P7.5 CR-44: the parked worker must not end when the session gets longer.
+
+        The user submitted a question after an idle stretch and nothing happened at all --
+        the panel showed the question and stayed on it. The turn worker had parked here
+        waiting for the next message, with the session's remaining lifetime as its timeout.
+        A renewal then extended that lifetime, the old timeout fired anyway, `TimeoutError`
+        ended the worker thread, and the session went on accepting messages with nobody
+        left to run them.
+        """
+        now = int(time.time() * 1000)
+        initial = principal(now)
+        registry = RemoteSessionRegistry()
+        grant, channel = registry.create(
+            allowed_origins=[ORIGIN], session_id="outlived-wait", principal=initial)
+        lease = channel.accept_hello(hello(
+            grant.session_id, application_id="twenty",
+            principal_digest=initial.binding_digest))["lease_id"]
+        # The worker parks while the session has a short life left in front of it.
+        channel.expires_at = int(time.time() * 1000) + 300
+        taken: list = []
+        worker = threading.Thread(
+            target=lambda: taken.append(channel.wait_for_message(timeout_s=None)),
+            daemon=True)
+        worker.start()
+        time.sleep(0.1)
+        # The renewal the loader makes on the person's behalf: the session now lives well
+        # past the point this wait was told to end at.
+        channel.renew_principal(dataclasses.replace(
+            initial, issued_at=now, expires_at=now + 600_000))
+        time.sleep(0.4)  # past the lifetime the wait began with
+        self.assertTrue(worker.is_alive(), "the worker ended while its session lived on")
+        channel.accept_message({"message_id": "late-1", "text": "P75 的电话是什么",
+                                "page_url": ORIGIN + "/start"}, lease_id=lease)
+        worker.join(timeout=5)
+        self.assertEqual([message["message_id"] for message in taken], ["late-1"])
+
+    def test_stopping_a_message_no_turn_has_started_ends_it_there_and_then(self):
+        """P7.5 CR-44: the stop control has to end something that never began.
+
+        With the worker gone, the person pressed stop. The session recorded `cancelling`
+        and waited for the turn to wind down -- but no turn had picked the message up, so
+        the terminal event never came and the panel sat on "正在停止" with its composer
+        locked. A queued message is cancelled by removing it, not by asking it to stop.
+        """
+        registry = RemoteSessionRegistry()
+        grant, channel = registry.create(
+            allowed_origins=[ORIGIN], session_id="stop-before-start")
+        lease = channel.accept_hello(hello(grant.session_id))["lease_id"]
+        channel.accept_message({"message_id": "queued-1", "text": "P75 的电话是什么",
+                                "page_url": ORIGIN + "/start"}, lease_id=lease)
+        channel.accept_cancellation(CancellationRequest(
+            schema_version=SCHEMA_VERSIONS["CancellationRequest"],
+            session_id=grant.session_id, message_id="queued-1"), lease_id=lease)
+        states = [event.payload.get("state") for event in
+                  channel.events_after("", lease_id=lease, wait_s=0)
+                  if event.kind == "progress"]
+        self.assertEqual(states[-1], "cancelled")
+        self.assertTrue(channel.message_cancelled("queued-1"))
+        # And it is gone: no worker picks it up later and answers a question the person
+        # already stopped.
+        with self.assertRaises(TimeoutError):
+            channel.wait_for_message(timeout_s=0.2)
+
     def test_message_queue_applies_backpressure_without_losing_the_first_message(self):
         registry = RemoteSessionRegistry(limits=RemoteSessionLimits(
             max_messages=2, max_queued_messages=1))

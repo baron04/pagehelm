@@ -24,7 +24,7 @@ from .durable import SQLiteSessionStore, DurableStateError, principal_scope
 from .browser import TransportError, TurnCancelled
 from .identity import PrincipalContext, PrincipalError, PrincipalRevokedError
 from .panel_view import (collapse_timeline, panel_contract, panel_limits,
-                         project_event, project_history_record)
+                         progress_message, project_event, project_history_record)
 from .privacy import (SESSION_HANDOFF_QUERY_KEYS, SENSITIVE_CREDENTIAL_NAME,
                       has_unredacted_sensitive_assignment,
                       has_unredacted_session_handoff,
@@ -744,11 +744,33 @@ class RemoteSessionChannel:
                         operation_id=self._approvals[approval_id].operation_id,
                     )
                     self._pending_approval_id = ""
-                self._append_event("progress", {
-                    "state": "cancelling",
-                    "message": "Stopping this task safely.",
-                    "message_id": request.message_id,
-                }, turn_id=request.message_id)
+                queued = next((held for held in self._messages
+                               if held["message_id"] == request.message_id), None)
+                if queued is not None:
+                    # Nothing has started, so nothing has to wind down: the message leaves
+                    # the queue here and the turn ends now. Publishing only `cancelling`
+                    # for a message no turn had picked up left the panel stopping forever,
+                    # because the terminal event it was waiting for could only come from a
+                    # turn that was never going to run.
+                    self._messages.remove(queued)
+                    self._completed_message_ids.add(request.message_id)
+                    if self._durable_store is not None:
+                        try:
+                            self._durable_store.transition(
+                                self._owner, request.message_id, "completed")
+                        except (DurableStateError, sqlite3.Error, OSError):
+                            self._closed = True
+                            self._heartbeat_stop.set()
+                    self._append_event("progress", {
+                        "state": "cancelled",
+                        "message": progress_message("cancelled"),
+                        "message_id": request.message_id,
+                    }, turn_id=request.message_id)
+                else:
+                    self._append_event("progress", {
+                        "state": "cancelling",
+                        "message_id": request.message_id,
+                    }, turn_id=request.message_id)
                 self._condition.notify_all()
             return {"accepted": True, "duplicate": duplicate}
 
@@ -1128,26 +1150,39 @@ class RemoteSessionChannel:
             raise TimeoutError(f"timed out waiting for result of {action_id}")
 
     def wait_for_message(self, *, timeout_s: float | None = None) -> dict:
+        """Wait for the next message this session should run.
+
+        With no timeout this means *until the session ends*, which is longer than the
+        lifetime the session had when the wait began: a renewal extends that lifetime while
+        the caller is parked here. Returning `TimeoutError` at the old expiry ended the
+        worker thread of a session that was still perfectly alive, and the session went on
+        accepting messages nobody would ever run -- the person saw their question arrive
+        and then nothing at all, for as long as they were willing to wait.
+        """
+        deadline = None if timeout_s is None else time.monotonic() + timeout_s
         with self._condition:
-            remaining_lifetime = self._remaining_lifetime_s()
-            effective_timeout = (remaining_lifetime if timeout_s is None
-                                 else min(timeout_s, remaining_lifetime))
-            ready = self._condition.wait_for(
-                lambda: self._closed or (bool(self._messages)
-                                         and not self._active_message_id),
-                timeout=effective_timeout,
-            )
-            if self._messages and not self._active_message_id:
+            while True:
+                remaining_lifetime = self._remaining_lifetime_s()
+                effective_timeout = (
+                    remaining_lifetime if deadline is None
+                    else min(max(0.0, deadline - time.monotonic()), remaining_lifetime))
+                self._condition.wait_for(
+                    lambda: self._closed or (bool(self._messages)
+                                             and not self._active_message_id),
+                    timeout=effective_timeout,
+                )
+                if self._messages and not self._active_message_id:
+                    self._ensure_open()
+                    message = _copy_json(self._messages.popleft())
+                    if self._durable_store is not None:
+                        self._durable_store.transition(
+                            self._owner, message["message_id"], "running")
+                    self._active_message_id = message["message_id"]
+                    return message
+                # Raises if the session really is over; otherwise it outlived this wait.
                 self._ensure_open()
-                message = _copy_json(self._messages.popleft())
-                if self._durable_store is not None:
-                    self._durable_store.transition(self._owner, message["message_id"], "running")
-                self._active_message_id = message["message_id"]
-                return message
-            self._ensure_open()
-            if not ready:
-                raise TimeoutError("timed out waiting for a user message")
-            raise TimeoutError("timed out waiting for a user message")
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise TimeoutError("timed out waiting for a user message")
 
     def wait_for_approval(self, approval_id: str, *, timeout_s: float) -> ApprovalDecision:
         with self._condition:

@@ -197,6 +197,7 @@ _SESSION_ENDED = {
     "delegated_authority_changed": "账号的授权已变更，助手会话已结束",
     "identity_authority_mismatch": "登录身份与授权不一致，助手会话已结束",
     "host_stopped": "助手服务已停止",
+    "worker_failed": "助手服务出错，这个会话已结束，请重新开始",
 }
 
 

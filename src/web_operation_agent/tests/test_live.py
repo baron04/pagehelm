@@ -405,6 +405,35 @@ class LiveProductSessionTests(unittest.TestCase):
         finally:
             live.close()
 
+    def test_a_worker_that_dies_takes_its_session_with_it(self):
+        """P7.5 CR-44: a session with no worker must not go on accepting questions.
+
+        The worker is the only thing that answers a message. When it ended -- here because
+        it raised, in the field because a wait timed out -- the session stayed open, the
+        panel stayed connected, and every question the person submitted was accepted by a
+        session with nobody left to run it. They saw their question and then nothing.
+        """
+        live = LiveProductSession(
+            allowed_origin=ORIGIN,
+            page_controller_module=ORIGIN + "/page-controller.js",
+            runner_factory=lambda _channel: _Runner(error=ValueError("broken runner")),
+        )
+        try:
+            live.start()
+            with self.assertRaises(RuntimeError):
+                live.wait(2)
+            for _ in range(50):
+                try:
+                    live.channel.validate_live()
+                except RemoteSessionClosed:
+                    break
+                time.sleep(0.02)
+            with self.assertRaises(RemoteSessionClosed):
+                live.channel.validate_live()
+            self.assertFalse(live.readiness_snapshot()["ready"])
+        finally:
+            live.close()
+
     def test_shared_server_hosts_and_revokes_independent_sessions(self):
         server = LiveProductServer(max_sessions=2, sse_wait_s=.01)
         try:
