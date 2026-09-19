@@ -1130,6 +1130,56 @@ class ServerAgentSession:
             deadline_ms=self._turn_deadline_ms,
         )
 
+    def _confirm_form_handoff(self, draft: FormDraft, step: int) -> tuple[str, str]:
+        """Ask before typing into a form the application saves by itself.
+
+        Owner ruling: a form the application commits on leaving the page may still be
+        prepared for the person -- it is the shape of change they finish themselves -- and
+        what makes that safe is being asked first, in the same card a write uses. So this
+        goes through the same visible confirmation, and refusing it types nothing.
+        """
+        if self.business_mutation_approval is None:
+            self.ledger.append(
+                "form_handoff_approval_unavailable", step=step, draft=draft.redacted(),
+                dispatched=False, side_effect_possible=False)
+            return ("approval_unavailable",
+                    "preparing this form requires an authenticated user decision")
+        self.ledger.append("form_handoff_proposed", step=step, draft=draft.redacted(),
+                           effect=draft.effect, targets=list(draft.targets),
+                           dispatched=False, side_effect_possible=False)
+        if self._cancel_requested():
+            return "user_cancelled", "the user stopped this task before the confirmation"
+        context = self._operation_context(step, "form_handoff")
+        try:
+            grant = (self.business_mutation_approval(draft)
+                     if context is None
+                     else self.business_mutation_approval(draft, context=context))
+        except Exception as exc:
+            self.ledger.append(
+                "form_handoff_approval_failed", step=step, draft=draft.redacted(),
+                error_type=type(exc).__name__, dispatched=False,
+                side_effect_possible=False)
+            return "approval_failed", "the confirmation for this form was unavailable"
+        if self._cancel_requested():
+            return ("user_cancelled",
+                    "the user stopped this task while the confirmation was pending")
+        decision = getattr(grant, "decision", "")
+        if decision == "expired":
+            self.ledger.append("form_handoff_approval_expired", step=step,
+                               draft=draft.redacted(), dispatched=False,
+                               side_effect_possible=False)
+            return "approval_expired", "the confirmation expired before anything was typed"
+        if (decision != "approved"
+                or getattr(grant, "plan_digest", "") != draft.content_digest):
+            self.ledger.append("form_handoff_denied", step=step, draft=draft.redacted(),
+                               decision=str(decision)[:40], dispatched=False,
+                               side_effect_possible=False)
+            return "approval_denied", "the user declined preparing this form"
+        self.ledger.append("form_handoff_approved", step=step, draft=draft.redacted(),
+                           approval_id=str(getattr(grant, "approval_id", ""))[:200],
+                           dispatched=False, side_effect_possible=False)
+        return "", ""
+
     def _navigation_confirmed(self, step: int, obs: PageObservation, *, action: str,
                               url: str = "") -> tuple[str, str]:
         """Ask the person before the assistant leaves the current page (owner ruling D7).
@@ -1646,6 +1696,10 @@ class ServerAgentSession:
                     messages += [_assistant_call(call), _tool_result(
                         call, "No current application-issued form draft is available.")]
                     continue
+                if draft.needs_confirmation:
+                    reason, detail = self._confirm_form_handoff(draft, step)
+                    if reason:
+                        return self._finish(result, t0, reason, detail, steps=step)
                 prefilled, reason, detail = self._apply_form_draft(draft, obs, step)
                 if prefilled is not None:
                     obs = prefilled
@@ -1657,13 +1711,25 @@ class ServerAgentSession:
                     return self._finish(result, t0, reason,
                                         result.agent_said + (f" {detail}" if detail else ""),
                                         steps=step)
-                result.agent_said = (
-                    "表单已预填，尚未提交。请检查或修改后由你继续。"
-                    "离开这个页面时，应用可能会自动保存或丢弃这些内容。"
-                    if re.search(r"[\u3400-\u9fff]", self.task.prompt)
-                    else "The form is prefilled and has not been submitted. Review or edit it, "
-                         "then continue yourself. Leaving this page may let the application "
-                         "save or discard it.")
+                chinese = bool(re.search(r"[\u3400-\u9fff]", self.task.prompt))
+                if draft.needs_confirmation:
+                    # This one the application commits by itself once the page is left, so
+                    # the sentence says that plainly rather than "may save or discard".
+                    result.agent_said = (
+                        "已按你的确认填好，尚未保存。请在页面上核对后自己保存；"
+                        "离开这个页面时，应用会保存这些改动。"
+                        if chinese
+                        else "Filled as you confirmed and not saved yet. Check it on the page "
+                             "and save it yourself; leaving this page lets the application "
+                             "save these changes.")
+                else:
+                    result.agent_said = (
+                        "表单已预填，尚未提交。请检查或修改后由你继续。"
+                        "离开这个页面时，应用可能会自动保存或丢弃这些内容。"
+                        if chinese
+                        else "The form is prefilled and has not been submitted. Review or edit "
+                             "it, then continue yourself. Leaving this page may let the "
+                             "application save or discard it.")
                 self.ledger.append(
                     "form_prefill_completed", step=step,
                     draft_digest=draft.content_digest,

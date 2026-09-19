@@ -50,6 +50,7 @@ from web_operation_agent.business import (BusinessMutationIndeterminate,
                                           BusinessToolPermissionError,
                                           BusinessToolRequestError, BusinessToolResult,
                                           BusinessToolRuntime, FormDraft, FormDraftField,
+                                          APPLICATION_SAVES_ON_LEAVE,
                                           BusinessToolUnavailableError,
                                           business_text_key, normalize_business_text)
 from web_operation_agent.identity import (IdentityAssertion, OperationContext,
@@ -77,8 +78,8 @@ _SESSION_COOKIE = "session_id"
 _READ_SKILLS = ("sale-orders-query.json", "customers-query.json", "customers-draft.json",
                 "products-query.json", "quotations-query.json",
                 "customer-invoices-query.json")
-_WRITE_SKILLS = ("customers-create.json", "sale-orders-confirm.json",
-                 "sale-orders-invoice.json")
+_WRITE_SKILLS = ("customers-create.json", "customers-edit.json",
+                 "sale-orders-confirm.json", "sale-orders-invoice.json")
 
 
 def _validated_origin(value: str, *, allow_private_http: bool = False) -> str:
@@ -243,6 +244,7 @@ ANSWER_LABELS_ZH = {
 }
 CREATE_CUSTOMER_TOOL = "create_customer"
 PREPARE_CUSTOMER_FORM_TOOL = "prepare_customer_form"
+PREPARE_CUSTOMER_EDIT_TOOL = "prepare_customer_edit_form"
 CONFIRM_QUOTATION_TOOL = "confirm_quotation"
 INVOICE_SALE_ORDER_TOOL = "invoice_sale_order"
 MUTATION_TOOLS = (CREATE_CUSTOMER_TOOL, CONFIRM_QUOTATION_TOOL, INVOICE_SALE_ORDER_TOOL)
@@ -374,6 +376,48 @@ PREPARE_CUSTOMER_FORM_SCHEMA = {
                               "name@example.com.")},
             },
             "required": ["name", "email"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+#: Which fields of an existing customer this deployment will stage on the record's own
+#: form. The person saves it; the assistant only types. Anything outside this list is not
+#: reachable through the assistant at all.
+EDITABLE_CUSTOMER_FIELDS = {
+    "name": ("客户名称", "combobox"),
+    "phone": ("电话", "textbox"),
+    "email": ("邮箱", "textbox"),
+}
+
+PREPARE_CUSTOMER_EDIT_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": PREPARE_CUSTOMER_EDIT_TOOL,
+        "description": (
+            "Prepare an edit to one existing Odoo customer on that customer's own form, "
+            "without saving it. Supply the exact record_id from a customer this turn read "
+            "and only the fields the user asked to change. The user confirms the change "
+            "before anything is typed and saves it themselves; Odoo saves the form when "
+            "the page is left. After this returns, call prefill_form with no arguments."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "record_id": {
+                    "type": "integer", "minimum": 1,
+                    "description": ("Exact res.partner id from a customer this turn read; "
+                                    "not a display name.")},
+                "name": {"type": "string", "minLength": 1, "maxLength": 200,
+                         "description": "New exact customer name supplied by the user."},
+                "phone": {"type": "string", "minLength": 1, "maxLength": 64,
+                          "description": "New exact phone supplied by the user."},
+                "email": {"type": "string", "format": "email",
+                          "minLength": 3, "maxLength": 254,
+                          "description": "New complete email supplied by the user."},
+            },
+            "required": ["record_id"],
             "additionalProperties": False,
         },
     },
@@ -618,12 +662,15 @@ class OdooBusinessToolExecutor:
         writes = (CREATE_CUSTOMER_SCHEMA, CONFIRM_QUOTATION_SCHEMA,
                   INVOICE_SALE_ORDER_SCHEMA)
         return reads + (PREPARE_CUSTOMER_FORM_SCHEMA,) + (
-            writes if self.allow_mutations else ())
+            (PREPARE_CUSTOMER_EDIT_SCHEMA,) + writes if self.allow_mutations else ())
 
     def tool_effects(self) -> dict[str, str]:
         effects = {collection.tool: "read" for collection in COLLECTIONS}
         effects[PREPARE_CUSTOMER_FORM_TOOL] = "read"
         if self.allow_mutations:
+            # Preparing an edit reads the record and types into the page; the application,
+            # not this tool, does the writing -- but it may only be offered where writes are.
+            effects[PREPARE_CUSTOMER_EDIT_TOOL] = "read"
             effects.update({tool: "write" for tool in MUTATION_TOOLS})
         return effects
 
@@ -1026,6 +1073,8 @@ class OdooBusinessToolExecutor:
                 allowed_routes=(route,),
                 form_draft=draft,
             )
+        if name == PREPARE_CUSTOMER_EDIT_TOOL:
+            return self._prepare_customer_edit(args, context)
         collection = _BY_TOOL.get(name)
         if collection is None:
             raise BusinessToolRequestError("unknown Odoo business tool")
@@ -1159,19 +1208,107 @@ class OdooBusinessToolExecutor:
         )
 
     # -- customer creation ---------------------------------------------------------------
+    def _prepare_customer_edit(self, args: dict,
+                               context: OperationContext | None) -> BusinessToolResult:
+        """Stage an edit to one existing customer on that customer's own form.
+
+        Nothing is written here and nothing is typed here: this reads the record under the
+        delegated identity -- which is also the permission check -- and issues the draft the
+        server will show as a confirmation and then fill. Odoo saves an open record form
+        when the page is left, so the draft says so and the person is asked first.
+        """
+        if not isinstance(args, dict) or not args:
+            raise BusinessToolRequestError(
+                f"{PREPARE_CUSTOMER_EDIT_TOOL} requires a record_id and at least one field")
+        unknown = set(args) - ({"record_id"} | set(EDITABLE_CUSTOMER_FIELDS))
+        if unknown:
+            raise BusinessToolRequestError(
+                "this deployment can prepare only "
+                + "、".join(sorted(EDITABLE_CUSTOMER_FIELDS)) + " on a customer")
+        record_id = args.get("record_id")
+        if isinstance(record_id, bool) or not isinstance(record_id, int) or record_id < 1:
+            raise BusinessToolRequestError("record_id must be an exact positive id")
+        changes: dict[str, str] = {}
+        for field in EDITABLE_CUSTOMER_FIELDS:
+            if field not in args:
+                continue
+            if field == "email":
+                value = self._normalize_email(args.get("email"))
+            else:
+                value = normalize_business_text(
+                    args.get(field), field=f"customer {field}",
+                    maximum=200 if field == "name" else 64)
+            changes[field] = value
+        if not changes:
+            raise BusinessToolRequestError(
+                "name it with at least one field to change")
+        rows, _total, _scan = self._scan(_CUSTOMERS, [["id", "=", record_id]])
+        if len(rows) != 1:
+            raise BusinessToolRequestError(
+                "that customer is not one this account can read")
+        row = rows[0]
+        # Nothing to prepare is worth saying rather than staging a change that changes
+        # nothing and asking the person to confirm it.
+        same = [field for field, value in changes.items()
+                if self._label(row, field) == value]
+        if len(same) == len(changes):
+            raise BusinessMutationRefusedError(
+                "the customer already holds these values", reason="unchanged")
+        route = f"/odoo/customers/{record_id}"
+        label = self._label(row, "name") or f"res.partner/{record_id}"
+        fields = tuple(
+            FormDraftField(field, EDITABLE_CUSTOMER_FIELDS[field][0], value,
+                           EDITABLE_CUSTOMER_FIELDS[field][1])
+            for field, value in changes.items())
+        targets = tuple(
+            f"res.partner · {label} · {EDITABLE_CUSTOMER_FIELDS[field][0]}："
+            f"{self._label(row, field) or '（空）'} → {value}"
+            for field, value in changes.items())
+        draft = FormDraft(
+            route=route, fields=fields, persistence=APPLICATION_SAVES_ON_LEAVE,
+            effect=(f"在 Odoo 中为客户 {label} 填好 {len(changes)} 个字段的新值（由你保存；"
+                    "离开该页面时 Odoo 会保存）")[:300],
+            targets=targets)
+        observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        return BusinessToolResult(
+            content={
+                "form_ui_path": route,
+                "form_fields": [item.to_json() for item in draft.fields],
+                "persistence": draft.persistence,
+                "submission": "user_only",
+                "record_id": record_id,
+                "current_values": {field: self._label(row, field) for field in changes},
+                "observed_at": observed_at,
+            },
+            audit={
+                "application": APPLICATION_ID,
+                "operation": PREPARE_CUSTOMER_EDIT_TOOL,
+                "record_id": record_id,
+                "field_count": len(draft.fields),
+                "persistence": draft.persistence,
+                "observed_at": observed_at,
+                **self._identity_audit(context),
+            },
+            allowed_routes=(route,),
+            form_draft=draft,
+        )
+
     @staticmethod
-    def _normalize_customer(args: dict) -> dict:
-        if not isinstance(args, dict) or set(args) != {"name", "email"}:
-            raise BusinessToolRequestError("create_customer requires only name and email")
-        name = normalize_business_text(args.get("name"), field="customer name", maximum=200)
-        email = args.get("email")
-        if not isinstance(email, str):
+    def _normalize_email(value: object) -> str:
+        if not isinstance(value, str):
             raise BusinessToolRequestError("customer email must be a string")
-        email = unicodedata.normalize("NFKC", email).strip().casefold()
+        email = unicodedata.normalize("NFKC", value).strip().casefold()
         if not _EMAIL.fullmatch(email):
             raise BusinessToolRequestError(
                 "customer email must be a complete address such as name@example.com")
-        return {"name": name, "email": email}
+        return email
+
+    @classmethod
+    def _normalize_customer(cls, args: dict) -> dict:
+        if not isinstance(args, dict) or set(args) != {"name", "email"}:
+            raise BusinessToolRequestError("create_customer requires only name and email")
+        name = normalize_business_text(args.get("name"), field="customer name", maximum=200)
+        return {"name": name, "email": cls._normalize_email(args.get("email"))}
 
     def _assert_no_duplicate(self, name: str, email: str) -> None:
         rows, total, scan = self._scan(_CUSTOMERS)
@@ -1618,6 +1755,9 @@ class OdooApplicationAdapter:
                            "query_customer_invoices": "invoices:read"}
         required_scopes[PREPARE_CUSTOMER_FORM_TOOL] = "customers:read"
         if allow_mutations:
+            # It stages a change to an existing customer, so it needs the same scope a
+            # write does, even though the application is what commits it.
+            required_scopes[PREPARE_CUSTOMER_EDIT_TOOL] = "customers:write"
             required_scopes[CREATE_CUSTOMER_TOOL] = "customers:write"
             required_scopes[CONFIRM_QUOTATION_TOOL] = "sale_orders:write"
             required_scopes[INVOICE_SALE_ORDER_TOOL] = "invoices:write"
@@ -1629,6 +1769,9 @@ class OdooApplicationAdapter:
             PREPARE_CUSTOMER_FORM_TOOL,
             ("business.customer", "application.route", "business.form_draft")))
         if allow_mutations:
+            declarations.append((
+                PREPARE_CUSTOMER_EDIT_TOOL,
+                ("business.customer", "application.route", "business.form_draft")))
             declarations += [
                 (CREATE_CUSTOMER_TOOL,
                  ("business.customer", "business.identifier", "application.route",

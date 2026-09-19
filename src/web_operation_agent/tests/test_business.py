@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 from web_operation_agent.answering import StructuredQueryAnswer
 from web_operation_agent.business import (
+    APPLICATION_SAVES_ON_LEAVE,
     BusinessMutationBlockedError, BusinessMutationIndeterminate,
     BusinessMutationRefusedError, BusinessMutationSpec,
     BusinessSelectionOption,
@@ -433,6 +434,114 @@ class FormPrefillProductPath(unittest.TestCase):
                              ["goto", "fill", "observe", "fill", "fill"])
             self.assertEqual(len(ledger.of_kind("form_prefill_completed")), 1)
             self.assertNotIn("submit", browser.actions)
+
+
+class AFormTheApplicationSavesIsConfirmedFirst(unittest.TestCase):
+    """Owner ruling (P7.5): prepare it, but ask first, in the card a write uses.
+
+    Odoo commits an open record form when the page is left, so filling one stages a change
+    to data that already exists. The person is shown what it would become before anything
+    is typed, and a declined confirmation types nothing at all.
+    """
+
+    class Executor:
+        @staticmethod
+        def tool_schemas():
+            return ({"type": "function", "function": {
+                "name": "prepare_company_edit", "description": "Stage a change.",
+                "parameters": {"type": "object", "properties": {}, "required": [],
+                               "additionalProperties": False}}},)
+
+        @staticmethod
+        def tool_effects():
+            return {"prepare_company_edit": "read"}
+
+        @staticmethod
+        def execute(name, args, *, context=None):
+            draft = FormDraft(
+                route="/object/company/7",
+                fields=(FormDraftField("phone", "Phone", "+1 512 555 0199"),),
+                persistence=APPLICATION_SAVES_ON_LEAVE,
+                effect="Fill one new phone on NovaForge for you to save",
+                targets=("company · NovaForge · phone: +1 512 555 0142 → +1 512 555 0199",))
+            return BusinessToolResult(
+                content={"form_ui_path": draft.route,
+                         "fields": [item.to_json() for item in draft.fields]},
+                audit={"operation": name, "field_count": 1},
+                allowed_routes=(draft.route,), form_draft=draft)
+
+    class Browser(_Browser):
+        def execute(self, action, args=None, expect_navigation=False):
+            receipt = super().execute(action, args, expect_navigation)
+            receipt.observation.elements = [
+                ElementRef("e1", "textbox", "Phone", "input",
+                           receipt.observation.epoch, {"field": "phone"})]
+            return receipt
+
+    def _run(self, decision):
+        asked = []
+
+        def approval(plan, *, context=None):
+            asked.append({"effect": plan.effect, "targets": list(plan.targets)})
+            return SimpleNamespace(
+                decision=decision, plan_digest=plan.content_digest,
+                approval_id="approval-1", operation_context_digest="")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "edit-skill.json"
+            path.write_text(json.dumps({
+                "schema_version": 1, "skill_id": "fixture.companies-edit",
+                "title": "Edit company", "intent": "Prepare a change to one company.",
+                "triggers": ["edit company"],
+                "instructions": ["Call prepare_company_edit, then prefill_form."],
+                "tool_names": ["prepare_company_edit"],
+                "provenance": ["api:fixture@v1:/companies#edit"],
+                "read_only": False,
+            }))
+            skill = BusinessSkill.load(path)
+            chat = _Chat([
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("prepare_company_edit", {}),
+                ("prefill_form", {}),
+                ("finish", {"done": True, "why": "must not be called"}),
+            ])
+            browser = self.Browser()
+            ledger = SessionLedger(Path(tmp) / "session.jsonl", "form-edit")
+            session = ServerAgentSession(
+                task=TaskSpec("T", "change the company phone, do not save"),
+                chat=chat, browser=browser, control=ReadOnlyControl(), ledger=ledger,
+                business_tools=BusinessToolRuntime((skill,), self.Executor()),
+                business_mutation_approval=approval,
+                disabled_actions={"click", "fill", "select", "submit"},
+                allow_form_prefill=True, step_budget=5, wall_budget_s=30)
+            session.entry_observation = browser.observe()
+            session.plan()
+            return session.run(), browser, ledger, asked
+
+    def test_the_confirmation_names_the_change_and_only_then_is_it_typed(self):
+        result, browser, ledger, asked = self._run("approved")
+
+        self.assertEqual(result.terminal_reason, "agent_finished")
+        self.assertEqual(len(asked), 1)
+        self.assertIn("NovaForge", asked[0]["targets"][0])
+        self.assertIn("+1 512 555 0142 → +1 512 555 0199", asked[0]["targets"][0])
+        self.assertEqual(browser.actions, ["goto", "fill"])
+        self.assertIn("saved", result.agent_said.lower())
+        self.assertEqual(len(ledger.of_kind("form_handoff_approved")), 1)
+
+    def test_a_declined_confirmation_types_nothing(self):
+        result, browser, ledger, asked = self._run("denied")
+
+        self.assertEqual(result.terminal_reason, "approval_denied")
+        self.assertEqual(len(asked), 1)
+        self.assertNotIn("fill", browser.actions)
+        self.assertEqual(len(ledger.of_kind("form_handoff_denied")), 1)
+
+    def test_a_confirmation_that_expired_types_nothing(self):
+        result, browser, _ledger, _asked = self._run("expired")
+
+        self.assertEqual(result.terminal_reason, "approval_expired")
+        self.assertNotIn("fill", browser.actions)
 
 
 class SkillCitations(unittest.TestCase):

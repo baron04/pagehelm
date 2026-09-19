@@ -27,6 +27,7 @@ SKILL_SOURCES: dict[str, tuple[str, tuple[str, ...]]] = {
     "odoo.sales.customer-invoices-query": ("odoo/customer-invoices", ()),
     "odoo.sales.customers-create": ("odoo/customers", ("res.partner.create",)),
     "odoo.sales.customers-draft": ("odoo/customers", ()),
+    "odoo.sales.customers-edit": ("odoo/customers", ()),
     "odoo.sales.customers-query": ("odoo/customers", ()),
     "odoo.sales.products-query": ("odoo/products", ()),
     "odoo.sales.quotations-query": ("odoo/sales", ()),

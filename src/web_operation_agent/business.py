@@ -506,18 +506,35 @@ class FormDraftField:
                 "value": self.value, "control": self.control}
 
 
+#: A form the application leaves alone until its own submit control is used.
+TRANSIENT_UNTIL_SUBMIT = "transient_until_submit"
+#: A form the application itself commits when the page is left -- Odoo 18 does this to an
+#: open record form. Filling one is a change to an existing record in all but the last
+#: click, so it goes behind the same visible confirmation as a write (owner ruling: the
+#: confirmation is what makes it safe, and refusing the whole form handoff over it would
+#: take away the one shape of change the person completes themselves).
+APPLICATION_SAVES_ON_LEAVE = "application_saves_on_leave"
+FORM_PERSISTENCE = (TRANSIENT_UNTIL_SUBMIT, APPLICATION_SAVES_ON_LEAVE)
+
+
 @dataclass(frozen=True, slots=True)
 class FormDraft:
-    """A one-turn, non-persisting form preparation issued by an application adapter.
+    """A one-turn form preparation issued by an application adapter.
 
-    ``transient_until_submit`` is deliberately the only persistence contract. An adapter
-    must not issue this value for an autosaving form; such a draft is a write and belongs
-    behind the ordinary mutation proposal and approval path.
+    The server fills exactly the fields the adapter names and never submits. Two
+    persistence contracts exist, and they differ in what the person is asked first: a form
+    that stays transient until submission is filled straight away, while one the
+    application saves on leaving carries the effect and targets of the change it stages and
+    is shown as a confirmation before anything is typed.
     """
 
     route: str
     fields: tuple[FormDraftField, ...]
-    persistence: str = "transient_until_submit"
+    persistence: str = TRANSIENT_UNTIL_SUBMIT
+    #: For a draft the application may save: what the person is agreeing to, in their own
+    #: words, and the records it names. Written by the adapter, never by the model.
+    effect: str = ""
+    targets: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         parsed = urlsplit(self.route) if isinstance(self.route, str) else None
@@ -527,18 +544,42 @@ class FormDraft:
                 and not re.search(r"[\\\x00-\x20\x7f]", self.route)
                 and ".." not in parsed.path.split("/")):
             raise ValueError("form draft route must be a safe relative path")
-        if self.persistence != "transient_until_submit":
-            raise ValueError("form draft must remain transient until user submission")
+        if self.persistence not in FORM_PERSISTENCE:
+            raise ValueError("form draft persistence is not one this server knows")
         if (not isinstance(self.fields, tuple) or not 1 <= len(self.fields) <= 20
                 or any(not isinstance(item, FormDraftField) for item in self.fields)
                 or len({item.field for item in self.fields}) != len(self.fields)):
             raise ValueError("form draft must contain 1-20 unique fields")
+        if self.persistence == APPLICATION_SAVES_ON_LEAVE:
+            # Without these the confirmation could not say what is being staged, and a
+            # confirmation that cannot name its effect is not one.
+            if (not isinstance(self.effect, str) or not self.effect.strip()
+                    or len(self.effect) > 300):
+                raise ValueError("a saving form draft must carry a 1-300 character effect")
+            if (not isinstance(self.targets, tuple) or not 1 <= len(self.targets) <= 24
+                    or any(not isinstance(item, str) or not item.strip()
+                           or len(item) > 300 for item in self.targets)):
+                raise ValueError("a saving form draft must name 1-24 targets")
+        elif self.effect or self.targets:
+            raise ValueError("a transient form draft states no effect or targets")
+
+    @property
+    def needs_confirmation(self) -> bool:
+        return self.persistence == APPLICATION_SAVES_ON_LEAVE
+
+    def redacted(self) -> dict:
+        """What the audit ledger keeps: the shape of the handoff, never the typed values."""
+        return {"route": self.route, "persistence": self.persistence,
+                "fields": [item.field for item in self.fields],
+                "effect": self.effect, "targets": list(self.targets)}
 
     def to_json(self) -> dict:
         return {"route": self.route,
                 "fields": [item.to_json() for item in self.fields],
                 "persistence": self.persistence,
-                "submission": "user_only"}
+                "submission": "user_only",
+                **({"effect": self.effect, "targets": list(self.targets)}
+                   if self.persistence == APPLICATION_SAVES_ON_LEAVE else {})}
 
     @property
     def content_digest(self) -> str:
