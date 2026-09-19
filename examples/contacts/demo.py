@@ -360,6 +360,15 @@ def _run_browser(config: DemoConfig, live: LiveProductSession,
                                 return original(url, options);
                               };
                             }""")
+                        # The server yields a turn's outcome as soon as it records it;
+                        # the Runtime learns of it over its own stream a moment later.
+                        # Submitting the next task on the server's word alone raced that
+                        # moment and the Runtime refused: "another task is still running".
+                        page.wait_for_function(
+                            "async () => { const runtime = await "
+                            "window.__WOA_RUNTIME_READY__; return "
+                            "!runtime.stored.taskInFlight && !runtime.stored.inFlight }",
+                            timeout=30_000)
                         page.evaluate(
                             "task => window.__WOA_RUNTIME_READY__.then(runtime => "
                             "runtime.submitTask(task))", task)
