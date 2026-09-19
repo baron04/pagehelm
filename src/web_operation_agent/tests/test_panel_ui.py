@@ -414,6 +414,30 @@ class PanelUITests(_PanelBrowser):
         self.assertGreater(deny["y"], approve["y"])
         self.assertEqual(self.errors, [])
 
+    def test_an_expired_confirmation_stops_offering_buttons_and_frees_the_composer(self):
+        """Past the deadline the server takes no answer, so the card must not ask for one.
+
+        It did: the countdown reached 0:00 and the card sat there looking answerable, with
+        the composer locked behind it. Pressing it made the runtime treat the 409 as "another
+        page took this session over", stop, and -- after a reload, which replayed the same
+        doomed decision -- never mount the panel at all (P7.5 CR-38).
+        """
+        page = self.open(_snapshot())
+        self.raise_approval(page)
+        composer = page.locator("textarea")
+        self.assertTrue(composer.is_disabled(), "a live confirmation blocks the composer")
+
+        page.evaluate("request => window.__setSnapshot({pendingApproval: request})",
+                      {**self.PENDING, "expires_at": 0})
+        page.wait_for_timeout(1200)
+
+        self.assertEqual(page.locator("[data-testid=woa-approve]").count(), 0)
+        self.assertEqual(page.locator("[data-testid=woa-deny]").count(), 0)
+        self.assertTrue(page.locator(".woa-approval").is_visible(),
+                        "what was asked stays readable")
+        self.assertIn("已超时", page.locator(".woa-approval__blocked[data-expired]").inner_text())
+        self.assertFalse(composer.is_disabled(), "the person can type again")
+
     def test_an_approval_that_is_not_visible_refuses_and_says_why(self):
         page = self.open(_snapshot())
         self.raise_approval(page, effect="为 S00007 开票", targets=["sale.order · S00007"])
@@ -1122,8 +1146,19 @@ class PanelU07Tests(_PanelBrowser):
                       && bar.right <= outer.right - right + 0.5
                       && bar.bottom <= outer.bottom - bottom + 0.5}
           }
+          const scrollers = [...root.querySelectorAll('*')].filter(node => {
+            const style = getComputedStyle(node)
+            // A text field scrolls its own value; what this counts is content panes.
+            if (node.tagName === 'TEXTAREA' || node.tagName === 'INPUT') return false
+            const scrolls = /(auto|scroll)/.test(style.overflowY)
+            return scrolls && node.scrollHeight - node.clientHeight > 4
+          }).map(node => node.className || node.tagName)
+          const threadNode = root.querySelector('.woa-thread')
           return {window: rect('.woa-window'), field: rect('.woa-field'), edge,
-                  thread, card: rect('.woa-approval'),
+                  thread, card: rect('.woa-approval'), scrollers,
+                  actions: rect('.woa-approval__actions'),
+                  card_in_thread: Boolean(cardNode && threadNode
+                                          && threadNode.contains(cardNode)),
                   heading: heading ? heading.getBoundingClientRect().toJSON() : null,
                   heading_hit}
         }""")
@@ -1133,15 +1168,20 @@ class PanelU07Tests(_PanelBrowser):
         card = facts["card"]
         if card is None:
             return
-        self.assertLessEqual(facts["thread"]["bottom"], card["top"] + 0.5,
-                             f"the thread runs under the confirmation at {where}: {facts}")
-        self.assertLessEqual(card["bottom"], facts["field"]["top"] + 0.5,
-                             f"the confirmation runs under the composer at {where}: {facts}")
-        heading = facts["heading"]
-        self.assertGreaterEqual(heading["top"], card["top"] - 0.5,
-                                f"the confirmation's heading is scrolled away at {where}")
-        self.assertTrue(facts["heading_hit"],
-                        f"the confirmation's heading is covered at {where}: {facts}")
+        # The confirmation lives in the conversation, so the one thing that scrolls is the
+        # conversation: the card used to be stacked under it, taking up to 62% of the window
+        # and leaving the thread a sliver with a scrollbar of its own (owner, P7.5).
+        self.assertTrue(facts["card_in_thread"],
+                        f"the confirmation is not in the conversation at {where}: {facts}")
+        self.assertLessEqual(facts["thread"]["bottom"], facts["field"]["top"] + 0.5,
+                             f"the conversation runs under the composer at {where}: {facts}")
+        self.assertEqual(facts["scrollers"], ["woa-thread"],
+                         f"the conversation is not the only thing that scrolls at {where}: {facts}")
+        actions = facts["actions"]
+        self.assertGreaterEqual(actions["top"], facts["thread"]["top"] - 0.5,
+                                f"the answers are scrolled above the conversation at {where}: {facts}")
+        self.assertLessEqual(actions["bottom"], facts["thread"]["bottom"] + 0.5,
+                             f"the answers are below the conversation at {where}: {facts}")
         edge = facts["edge"]
         self.assertGreaterEqual(min(edge["left"], edge["right"], edge["bottom"]), 1,
                                 f"the confirmation has no edge at {where}: {edge}")

@@ -521,8 +521,11 @@ button:disabled { cursor: not-allowed; }
 /* ─────────────────────────────────────────────── approval */
 .woa-approval {
   position: relative;
-  flex: none;
-  margin: 0 13px 11px;
+  /* In the conversation, not stacked on top of it: the card used to take up to 62% of the
+     window and squeeze the thread into a sliver with a scrollbar of its own, so a person
+     answering a confirmation could no longer read what led to it. One box scrolls now, and
+     the card is the last thing in it. */
+  margin: 6px 0 4px;
   border-radius: 10px;
   background: var(--woa-surface-raised);
   /* A real border, not an inset shadow: an inset shadow is painted beneath the card's
@@ -532,8 +535,7 @@ button:disabled { cursor: not-allowed; }
   border-top-width: 0;
   box-shadow: var(--woa-shadow-2);
   overflow: hidden;
-  max-height: 62%;
-  overflow-y: auto;
+  min-height: 180px;
   animation: woa-rise var(--woa-motion-base) var(--woa-motion-easing);
 }
 @keyframes woa-rise {

@@ -59,9 +59,23 @@ export function PanelWindow({host, allowedOrigins}: {
   }, [])
 
   const pending = snapshot.pendingApproval
+  // A card past its deadline still shows what was asked, and blocks nothing: the runtime
+  // takes it down when the turn ends, and until then the person can type again.
+  const [approvalLive, setApprovalLive] = useState(true)
+  useEffect(() => {
+    if (!pending) {
+      setApprovalLive(true)
+      return
+    }
+    const tick = () => setApprovalLive(pending.expires_at > Date.now())
+    tick()
+    const timer = window.setInterval(tick, 1000)
+    return () => window.clearInterval(timer)
+  }, [pending])
+  const blocking = pending !== null && approvalLive
   // A pending confirmation outranks whatever the connection is doing: it is the only
   // thing on screen that needs an answer.
-  const state = pending ? 'awaiting_confirmation' : snapshot.connection.state
+  const state = blocking ? 'awaiting_confirmation' : snapshot.connection.state
   const closed = CLOSED_STATES.has(snapshot.connection.state) || snapshot.closed
 
   // A confirmation is a question that blocks a write. Leaving it behind a collapsed
@@ -100,9 +114,9 @@ export function PanelWindow({host, allowedOrigins}: {
 
   const placeholder = useMemo(() => {
     if (closed) return labels.composerClosed
-    if (pending) return labels.composerBlockedByApproval
+    if (blocking) return labels.composerBlockedByApproval
     return labels.placeholder
-  }, [closed, pending, labels])
+  }, [closed, blocking, labels])
 
   if (!open) {
     return (
@@ -151,15 +165,14 @@ export function PanelWindow({host, allowedOrigins}: {
 
       <Thread snapshot={snapshot} labels={labels} limits={limits}
               allowedOrigins={allowedOrigins}
-              onLoadOlder={loadOlder} onRetry={retrySubmit}>
+              onLoadOlder={loadOlder} onRetry={retrySubmit}
+              footer={pending && (
+                <ApprovalCard approval={pending} labels={labels} limits={limits}
+                              visibility={visibility} busy={deciding}
+                              onDecide={decide} onRefused={() => undefined} />
+              )}>
         <EmptyState labels={labels} onPick={setDraft} />
       </Thread>
-
-      {pending && (
-        <ApprovalCard approval={pending} labels={labels} limits={limits}
-                      visibility={visibility} busy={deciding}
-                      onDecide={decide} onRefused={() => undefined} />
-      )}
 
       {(snapshot.notice ?? panelFailure) && (
         <InlineError notice={(snapshot.notice ?? panelFailure)!} configuration={host.configuration}
@@ -169,7 +182,7 @@ export function PanelWindow({host, allowedOrigins}: {
 
       <Composer labels={labels} limits={limits}
                 busy={snapshot.connection.busy} stopping={snapshot.connection.stopping}
-                disabled={closed || pending !== null}
+                disabled={closed || blocking}
                 placeholder={placeholder} draft={draft} onDraft={setDraft}
                 onSubmit={submit} onCancel={cancel} />
     </section>

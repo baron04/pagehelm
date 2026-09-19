@@ -190,6 +190,9 @@ export interface ThreadProps {
   onLoadOlder: () => void
   onRetry: () => void
   children?: React.ReactNode
+  /** Rendered as the last thing in the conversation: a confirmation belongs where the
+      work it is about is, and inside the one box that scrolls. */
+  footer?: React.ReactNode
   /** Shown when the newest thing in the thread is a boundary and nothing has followed it. */
 }
 
@@ -356,6 +359,7 @@ export function Thread(props: ThreadProps): React.JSX.Element {
             )}
         </div>
       )}
+      {props.footer}
       <div ref={bottom} aria-hidden="true" />
       </div>
     </div>

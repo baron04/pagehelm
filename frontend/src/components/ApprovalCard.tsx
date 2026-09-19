@@ -25,6 +25,7 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
   const cancel = useRef<HTMLButtonElement>(null)
   const confirm = useRef<HTMLButtonElement>(null)
   const [countdown, setCountdown] = useState(() => remaining(approval.expires_at))
+  const [expired, setExpired] = useState(() => approval.expires_at <= Date.now())
   const [blocked, setBlocked] = useState(false)
   // A navigation card asks before the assistant leaves the page and has one button: the
   // person who does not want to leave stops the task, as with anything else in flight.
@@ -36,6 +37,10 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
 
   useEffect(() => {
     gate.attach(card.current)
+    // The conversation follows its own tail, which can leave the top of a tall card above
+    // the fold -- unreadable, and below the ratio the visibility gate asks for. Bring the
+    // whole card into view if it fits, the least amount that does it.
+    card.current?.scrollIntoView({block: 'nearest'})
     ;(canDecline ? cancel : confirm).current?.focus()
     return () => gate.attach(null)
     // A new approval re-arms the gate and takes focus; the same one must not.
@@ -45,7 +50,12 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
   useEffect(() => {
     // Expiry is in the protocol. It used to pass silently and the card would simply
     // vanish; showing the time left is the difference between a timeout and a mystery.
-    const timer = window.setInterval(() => setCountdown(remaining(approval.expires_at)), 1000)
+    const tick = () => {
+      setCountdown(remaining(approval.expires_at))
+      setExpired(approval.expires_at <= Date.now())
+    }
+    tick()
+    const timer = window.setInterval(tick, 1000)
     return () => window.clearInterval(timer)
   }, [approval.expires_at])
 
@@ -113,7 +123,14 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
             <li key={`${index}-${target}`}>{target.slice(0, limits.target_max_chars)}</li>
           ))}
         </ul>
-        {blocked
+        {expired
+          ? (
+            <p className="woa-approval__blocked" data-expired="true">
+              <TriangleAlert size={14} strokeWidth={1.7} aria-hidden="true" />
+              <span>{labels.approvalExpired}</span>
+            </p>
+          )
+          : blocked
           ? (
             <p className="woa-approval__blocked">
               <TriangleAlert size={14} strokeWidth={1.7} aria-hidden="true" />
@@ -123,7 +140,9 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
           : <p className="woa-approval__fine">
               {canDecline ? labels.approvalHint : labels.navigationHint}
             </p>}
-        <div className="woa-approval__actions">
+        {/* Past the deadline the server takes no answer, so the card offers none: a button
+            that cannot work is worse than no button, and the composer comes back instead. */}
+        {!expired && <div className="woa-approval__actions">
           {canDecline && (
             <button type="button" className="woa-btn woa-btn--ghost" ref={cancel}
                     data-testid="woa-deny" disabled={busy} onClick={answer('denied')}>
@@ -139,7 +158,7 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
                   onClick={answer('approved')}>
             {canDecline ? labels.approve : labels.navigationConfirm}
           </button>
-        </div>
+        </div>}
       </div>
     </section>
   )

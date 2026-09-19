@@ -31,10 +31,23 @@ export function useVisibilityGate(options: {
     const created = new IntersectionObserver(records => {
       const record = records.at(-1)
       if (!record) return
-      const visible = record.isIntersecting && record.intersectionRatio >= minVisibleRatio
+      // Against the card, or against the window when the card is the taller of the two.
+      // A confirmation now sits in the conversation and has no height cap, so a long one
+      // can be taller than the window it is in: asking for 90% of the card would make it
+      // unapprovable, and asking for nothing would let a sliver of it count. What has to
+      // be true either way is that the part of the screen it occupies is really showing
+      // it -- so the ratio is measured against whichever is smaller.
+      const box = record.boundingClientRect
+      const view = record.rootBounds
+      const shown = record.intersectionRect.width * record.intersectionRect.height
+      const coverable = view
+        ? box.width * Math.min(box.height, view.height)
+        : box.width * box.height
+      const ratio = coverable > 0 ? shown / coverable : 0
+      const visible = record.isIntersecting && ratio >= minVisibleRatio
       if (visible && !visibleSince.current) visibleSince.current = performance.now()
       if (!visible) visibleSince.current = 0
-    }, {threshold: [0, minVisibleRatio, 1]})
+    }, {threshold: [0, 0.25, 0.5, 0.75, minVisibleRatio, 1]})
     created.observe(node)
     observer.current = created
   }, [minVisibleRatio])
