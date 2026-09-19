@@ -26,6 +26,44 @@ from web_operation_agent_odoo.tests.test_adapter import (
     _quotations)
 
 
+class EveryPartOfTheQuestionHasSomethingToReadIt(unittest.TestCase):
+    """A question about two things gets a Skill for each (P7.5 CR-33).
+
+    Triggers named entities only, so "Azure Interior 的电话是多少？它有哪些销售订单？" matched
+    the sales-order Skill and nothing else: a trigger did match, so the empty fallback never
+    ran, and the half about the phone had no tool that could read it -- for any account.
+    """
+
+    def _select(self, task: str):
+        with tempfile.TemporaryDirectory() as tmp:
+            adapter = OdooApplicationAdapter(
+                base_url=BASE, api_key_path=_key_file(Path(tmp)))
+            return adapter.business_tools.select(task, allow_mutations=False)
+
+    def _candidates(self, task: str) -> set[str]:
+        return set(self._select(task).candidate_ids)
+
+    def test_a_two_part_question_offers_a_read_for_each_part(self):
+        self.assertEqual(
+            self._candidates("Azure Interior 的电话是多少？它有哪些销售订单？"),
+            {"odoo.sales.sale-orders-query", "odoo.sales.customers-query"})
+
+    def test_a_customer_field_names_the_customer_read_without_the_fallback(self):
+        """Matched by its own trigger, not by the empty fallback.
+
+        These questions reach the customer read either way today, because nothing else
+        matches them and the fallback then offers every read-only Skill. That stops being
+        true as soon as another Skill's trigger appears in the same sentence, which is
+        exactly the two-part case above.
+        """
+        for task in ("Azure Interior 的电话是多少？", "这家公司的邮箱是什么？",
+                     "Acme 的税号是多少？", "What is Acme's phone number?"):
+            with self.subTest(task=task):
+                selection = self._select(task)
+                self.assertIn("odoo.sales.customers-query", selection.trigger_matches)
+                self.assertFalse(selection.fallback_used)
+
+
 class AStateIsNotARequest(unittest.TestCase):
     def test_state_words_before_the_verb_describe_records(self):
         for task in ("当前有哪些未确认报价单？列出单号与金额。",

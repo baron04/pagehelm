@@ -10,7 +10,16 @@
   "clients",
   "partner",
   "客户",
-  "顾客"
+  "顾客",
+  "phone",
+  "mobile",
+  "email",
+  "vat",
+  "tax id",
+  "电话",
+  "手机",
+  "邮箱",
+  "税号"
  ],
  "instructions": [
   "Call query_customers to obtain current Odoo data; do not answer from this Skill or from page text.",
