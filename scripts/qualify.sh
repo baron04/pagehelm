@@ -155,7 +155,8 @@ elif [[ ! -d "${ROOT}/frontend/node_modules" ]]; then
   [[ "${require_browser}" == "1" ]] && failed+=("assistant panel build")
 elif ( cd "${ROOT}/frontend" && npm run lint && npm test && npm run build \
        && npm run build-storybook ) \
-     && "${PYTHON}" scripts/build_panel.py --skip-build; then
+     && "${PYTHON}" scripts/build_panel.py --skip-build \
+     && "${PYTHON}" scripts/build_runtime.py --skip-build; then
   record "assistant panel build" PASS ""
   panel_ready=1
 else

@@ -52,7 +52,7 @@ class NobodyRestatesTheVersionWithoutBeingChecked(unittest.TestCase):
         self.assertEqual(runtime_name(), f"woa-embedded/page-controller-{pinned_version()}")
 
     def test_the_shipped_runtime_reports_the_pinned_build(self):
-        found = re.search(r"const RUNTIME_NAME = '([^']+)'", _EMBEDDED.read_text())
+        found = re.search(r"const RUNTIME_NAME = ['\"]([^'\"]+)['\"]", _EMBEDDED.read_text())
         self.assertIsNotNone(found, "embedded.js no longer declares a RUNTIME_NAME")
         self.assertEqual(found.group(1), runtime_name())
 

@@ -33,9 +33,9 @@ WEB_RUNTIME = Path(__file__).resolve().parent / "web_runtime"
 RUNTIME_PATH = WEB_RUNTIME / "embedded.js"
 # The Runtime is split across modules; an explicit map keeps the directory from becoming
 # a served tree by accident.
+# The Runtime bundles its own panel-host module; one path, one file.
 RUNTIME_MODULES = {
     "/v1/runtime/embedded.js": RUNTIME_PATH,
-    "/v1/runtime/panel_host.js": WEB_RUNTIME / "panel_host.js",
 }
 PANEL_ROOT = WEB_RUNTIME / "panel"
 PANEL_PREFIX = "/v1/runtime/panel/"

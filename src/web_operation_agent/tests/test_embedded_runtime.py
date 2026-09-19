@@ -22,7 +22,7 @@ from web_operation_agent.tests.test_session import _Chat, _Control
 
 
 RUNTIME = Path(__file__).resolve().parents[1] / "web_runtime" / "embedded.js"
-PANEL_HOST = Path(__file__).resolve().parents[1] / "web_runtime" / "panel_host.js"
+PANEL_HOST = RUNTIME  # the Runtime module exports the panel host too
 PANEL_ROOT = Path(__file__).resolve().parents[1] / "web_runtime" / "panel"
 _PAGE_CONTROLLER_PATH = os.environ.get("WOA_PAGE_CONTROLLER_MODULE", "")
 PAGE_CONTROLLER = Path(_PAGE_CONTROLLER_PATH).expanduser() if _PAGE_CONTROLLER_PATH else None
