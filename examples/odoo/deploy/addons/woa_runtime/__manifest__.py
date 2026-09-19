@@ -1,11 +1,13 @@
 {
     "name": "WOA Runtime assets",
-    "version": "1.0",
+    "version": "1.1",
     "category": "Hidden",
-    "summary": "Serve the pinned PageController same-origin for the agent Runtime.",
+    "summary": "Put the assistant on signed-in pages and serve PageController same-origin.",
     "description": (
-        "The embedded Runtime imports PageController as a module from the application's "
-        "own origin. This addon is the smallest thing that puts it there.\n\n"
+        "Three things, and nothing else: a script tag that puts the assistant on every "
+        "signed-in backend page, `/woa/session-assertion` that states who is signed in, "
+        "and PageController served from the application's own origin, which the Runtime "
+        "imports as a module.\n\n"
         "It serves files it does not contain: `python -m web_operation_agent_odoo.deploy "
         "provision` fetches them from the pinned npm release, checks every digest against "
         "`web_operation_agent/policies/page_controller.json`, and writes them into "
@@ -13,11 +15,8 @@
         "nothing, and a deployment cannot quietly serve a different build."
     ),
     "depends": ["web"],
-    "assets": {
-        "web.assets_backend": [
-            "woa_runtime/static/src/loader.js",
-        ],
-    },
+    # One script tag on the signed-in backend page; the assistant itself is the agent's.
+    "data": ["views/assistant_entry.xml"],
     "installable": True,
     "auto_install": False,
     "license": "MIT",

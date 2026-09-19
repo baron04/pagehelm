@@ -90,35 +90,20 @@ def _json_bytes(value: object) -> bytes:
             + "\n").encode("utf-8")
 
 
-_ASSISTANT_LOADER = b"""
-(() => {
-  if (window.top !== window || window.__WOA_NATIVE_BOOTSTRAP_STARTED__) return;
-  window.__WOA_NATIVE_BOOTSTRAP_STARTED__ = true;
-  let instanceId;
-  try {
-    instanceId = sessionStorage.getItem('woa.runtime.instance.v1');
-    if (!instanceId) {
-      instanceId = crypto.randomUUID().replaceAll('-', '');
-      sessionStorage.setItem('woa.runtime.instance.v1', instanceId);
-    }
-  } catch {
-    instanceId = crypto.randomUUID().replaceAll('-', '');
-  }
-  window.__WOA_RUNTIME_READY__ = fetch('/woa/bootstrap', {
-    method: 'POST', credentials: 'same-origin', cache: 'no-store',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({runtime_instance_id: instanceId}),
-  }).then(response => {
-    if (!response.ok) throw new Error(`assistant bootstrap failed (${response.status})`);
-    return response.json();
-  }).then(payload => import(payload.runtime_module).then(
-    module => module.startEmbeddedRuntime(payload.config)));
-})();
-"""
+def _assistant_tag(script_url: str | None) -> str:
+    """The one tag a host page needs: `assistant.js`, told where this application's bootstrap is.
+
+    The script obtains, renews and reconnects sessions itself from `/woa/bootstrap`, which
+    turns the signed-in page session into an agent session; nothing here carries a credential.
+    """
+    if script_url is None:
+        return ""
+    return (f'<script type="module" src="{html.escape(script_url, quote=True)}" '
+            'data-woa-bootstrap="/woa/bootstrap"></script>')
 
 
 def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
-          assistant_enabled: bool = False) -> bytes:
+          assistant_script: str | None = None) -> bytes:
     contacts = json.dumps(source_contacts, ensure_ascii=False).replace("</", "<\\/")
     title = html.escape(workspace.title())
     return f"""<!doctype html>
@@ -200,7 +185,7 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
     }});
     render();
   </script>
-  {('<script src="/woa/loader.js"></script>' if assistant_enabled else '')}
+  {_assistant_tag(assistant_script)}
 </body>
 </html>
 """.encode("utf-8")
@@ -261,6 +246,7 @@ class MinimalContactsApplication:
         self._lock = threading.Lock()
         self._assistant_bootstrap: Callable[[DemoActor, str], dict] | None = None
         self._assistant_revoke: Callable[[DemoActor], None] | None = None
+        self._assistant_script: str | None = None
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -445,10 +431,6 @@ class MinimalContactsApplication:
                             "source": source, "permissions": list(actor.permissions),
                         }), "application/json")
                     return
-                if path == "/woa/loader.js" and owner._assistant_bootstrap is not None:
-                    self._reply(200, _ASSISTANT_LOADER,
-                                "text/javascript; charset=utf-8")
-                    return
                 if path.startswith("/demo/login/"):
                     actor_id = urllib.parse.unquote(path.removeprefix("/demo/login/"))
                     actor = ACTORS_BY_ID.get(actor_id)
@@ -511,7 +493,7 @@ class MinimalContactsApplication:
                         records = [dict(item) for item in owner.workspaces[actor.workspace]]
                     self._reply(200, _html(
                         records, actor.workspace,
-                        assistant_enabled=owner._assistant_bootstrap is not None),
+                        assistant_script=owner._assistant_script),
                                 "text/html; charset=utf-8")
                 elif path == "/":
                     self._redirect("/contacts")
@@ -534,15 +516,22 @@ class MinimalContactsApplication:
         return self
 
     def install_assistant(self, *, bootstrap: Callable[[DemoActor, str], dict],
-                          revoke: Callable[[DemoActor], None]) -> None:
-        """Install server-side hooks; the browser can never supply an actor or token."""
+                          revoke: Callable[[DemoActor], None], script_url: str) -> None:
+        """Install server-side hooks; the browser can never supply an actor or token.
+
+        `script_url` is where the agent serves `assistant.js`; every signed-in page includes it.
+        """
         if not callable(bootstrap) or not callable(revoke):
             raise TypeError("assistant bootstrap and revoke hooks must be callable")
+        parsed = urllib.parse.urlsplit(script_url if isinstance(script_url, str) else "")
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("script_url must be an absolute http(s) URL")
         with self._lock:
             if self._assistant_bootstrap is not None:
                 raise RuntimeError("assistant hooks are already installed")
             self._assistant_bootstrap = bootstrap
             self._assistant_revoke = revoke
+            self._assistant_script = script_url
 
     def close(self) -> None:
         if self._thread is None:

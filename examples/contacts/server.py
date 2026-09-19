@@ -104,7 +104,8 @@ class NativeContactsHost:
         self._lock = threading.RLock()
         self._closed = False
         self.application.install_assistant(
-            bootstrap=self._bootstrap, revoke=self._revoke_actor)
+            bootstrap=self._bootstrap, revoke=self._revoke_actor,
+            script_url=self.server.gateway.runtime_url)
 
     @property
     def origin(self) -> str:
@@ -204,7 +205,6 @@ class NativeContactsHost:
     def _browser_bootstrap(self, session: LiveProductSession) -> dict:
         return {
             "schema_version": 1,
-            "runtime_module": self.server.gateway.runtime_url,
             "config": self.server.gateway.bootstrap_config(
                 session.grant,
                 page_controller_module=session.page_controller_module,

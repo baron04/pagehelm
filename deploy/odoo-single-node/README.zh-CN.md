@@ -117,6 +117,12 @@ docker compose -f deploy/odoo-single-node/docker-compose.yml up -d --no-deps --f
 docker compose -f deploy/odoo-single-node/docker-compose.yml exec -T agent python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8766/readyz').read().decode())"
 ```
 
+助手的浏览器端代码（`assistant.js` 与面板）由 Agent 提供，升级它只需重建 Agent，不重启 Odoo。某次发布改动了 `woa_runtime` 插件本身（清单版本号变化）时，还要再执行一次初始化步骤，它会在现有数据库里升级该插件：
+
+```bash
+docker compose -f deploy/odoo-single-node/docker-compose.yml --profile setup run --rm odoo-init
+```
+
 若候选版本在数据迁移前资格验证失败，把保存的镜像摘要重新标为 `latest`，重建 Agent，再执行 readiness 和一条只读浏览器旅程。每个部署都应记录镜像摘要、检查项和审计状态检查结果；没有实际执行的回滚命令只是操作流程，不是验证证据。
 
 ## 试用限制

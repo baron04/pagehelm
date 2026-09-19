@@ -117,6 +117,12 @@ docker compose -f deploy/odoo-single-node/docker-compose.yml up -d --no-deps --f
 docker compose -f deploy/odoo-single-node/docker-compose.yml exec -T agent python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8766/readyz').read().decode())"
 ```
 
+The assistant's browser code (`assistant.js` and the panel) is served by the Agent, so recreating the Agent is the whole upgrade for it; Odoo is not restarted. When a release changes the `woa_runtime` addon itself (its manifest version), also rerun the setup step, which upgrades the addon in the existing database:
+
+```bash
+docker compose -f deploy/odoo-single-node/docker-compose.yml --profile setup run --rm odoo-init
+```
+
 If qualification fails before a data migration, retag the saved digest as `latest`, recreate Agent, and rerun readiness plus a read-only browser journey. Record the image digest, checks, and resulting audit-state inspection for that deployment; an unexecuted rollback command is only a procedure, not evidence.
 
 ## Pilot limitations

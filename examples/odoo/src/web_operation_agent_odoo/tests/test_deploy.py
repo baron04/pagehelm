@@ -46,8 +46,6 @@ class NothingThirdPartyIsCommitted(unittest.TestCase):
                          if path.name != ".gitignore")
         for name in tracked:
             with self.subTest(name=name):
-                if name == "loader.js":
-                    continue  # first-party authenticated bootstrap, declared in the manifest
                 self.assertIn(name, PINNED_PAGE_CONTROLLER["served_files"],
                               "an unpinned file is being served from the addon")
         self.assertTrue((deploy.SERVED_ASSETS / ".gitignore").is_file(),
@@ -65,16 +63,28 @@ class NothingThirdPartyIsCommitted(unittest.TestCase):
         self.assertNotIn('"8069:8069"', compose)
 
     def test_the_addon_bootstraps_only_from_an_authenticated_server_assertion(self):
+        """The addon adds one tag; starting, renewing and reconnecting are `assistant.js`'s.
+
+        It used to compile its own loader into Odoo's asset bundle: a second copy of the
+        start-up logic, deployed with Odoo rather than with the agent, and changed only by
+        restarting Odoo (P7.5 J5.05, D21).
+        """
+        import ast
+        import xml.etree.ElementTree as ElementTree
         addon = deploy.DEPLOY_ROOT / "addons" / "woa_runtime"
-        manifest = (addon / "__manifest__.py").read_text()
-        loader = (addon / "static" / "src" / "loader.js").read_text()
+        manifest = ast.literal_eval((addon / "__manifest__.py").read_text())
         controller = (addon / "controllers" / "session.py").read_text()
-        self.assertIn("web.assets_backend", manifest)
-        self.assertIn("/woa/session-assertion", loader)
-        self.assertIn("/assistant/bootstrap", loader)
-        self.assertIn("runtime.renewSession", loader)
-        self.assertIn("ready.catch(() => {})", loader)
-        self.assertNotIn("actor_id", loader)
+        self.assertNotIn("assets", manifest)
+        self.assertEqual(manifest["data"], ["views/assistant_entry.xml"])
+        template = ElementTree.parse(addon / "views" / "assistant_entry.xml").find("template")
+        self.assertEqual(template.get("inherit_id"), "web.webclient_bootstrap")
+        script = template.find("xpath/script")
+        self.assertEqual(script.attrib, {
+            "type": "module",
+            "src": "/assistant/v1/runtime/assistant.js",
+            "data-woa-identity": "/woa/session-assertion",
+            "data-woa-bootstrap": "/assistant/bootstrap",
+        })
         self.assertIn('auth="user"', controller)
         self.assertIn("request.session.uid", controller)
         self.assertIn("WOA_SESSION_SECRET_FILE", controller)

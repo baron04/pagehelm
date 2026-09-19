@@ -14,6 +14,12 @@ if [[ "$(psql -h db -U odoo -d postgres -tAc \
   setpriv --reuid=100 --regid=101 --init-groups \
     odoo --config=/run/woa-private/odoo.conf --database="$database" \
     --init=sale_management,account,woa_runtime --without-demo=all --stop-after-init
+else
+  # The addon ships with the product. An existing database gets it upgraded here, or a
+  # changed template or controller in a new release would never reach the page.
+  setpriv --reuid=100 --regid=101 --init-groups \
+    odoo --config=/run/woa-private/odoo.conf --database="$database" \
+    --update=woa_runtime --stop-after-init
 fi
 
 setpriv --reuid=100 --regid=101 --init-groups \

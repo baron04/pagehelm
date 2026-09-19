@@ -462,7 +462,6 @@ class OdooNativeHost:
         renew_at = max(now_ms + 1, session.grant.expires_at - renewal_lead_ms)
         return {
             "schema_version": 1,
-            "runtime_module": self.server.gateway.runtime_url,
             "renew_at": renew_at,
             "config": self.server.gateway.bootstrap_config(
                 session.grant,
