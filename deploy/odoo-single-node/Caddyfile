@@ -40,6 +40,15 @@ https://{$WOA_HOSTNAME:localhost}:8443 {
 		}
 	}
 
+	# Odoo runs multi-process here, so its bus lives in a separate gevent process on 8072
+	# and only that one can upgrade a WebSocket. Sending it to 8069 like everything else is
+	# why Odoo's own "Real-time connection lost..." indicator sat in the corner of every
+	# acceptance session: the assistant's gateway was breaking the application's realtime.
+	@bus path /websocket /longpolling/*
+	handle @bus {
+		reverse_proxy odoo:8072
+	}
+
 	handle {
 		reverse_proxy odoo:8069
 	}
