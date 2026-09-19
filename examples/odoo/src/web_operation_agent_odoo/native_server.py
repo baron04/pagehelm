@@ -370,8 +370,19 @@ class OdooNativeHost:
                     previous.session.close("native_bootstrap_replaced")
                     self._sessions.pop(key, None)
                 else:
-                    self._renew_active(
-                        previous, principal, delegation, allow_mutations)
+                    try:
+                        self._renew_active(
+                            previous, principal, delegation, allow_mutations)
+                    except RemoteProtocolError as exc:
+                        # The session is mid-turn or holding a confirmation, so its
+                        # authority cannot be swapped underneath it. That is not a reason
+                        # to refuse the page: it is the same page coming back, its current
+                        # assertion is still live, and refusing left it unable to start at
+                        # all -- while the confirmation it was refused over could only be
+                        # answered from the panel it was refused. It reconnects to its own
+                        # session and renews when the turn is done.
+                        if not str(exc.code).startswith("session_busy_"):
+                            raise
                     return self._browser_bootstrap(previous.session)
 
             bound = bind_application(adapter)

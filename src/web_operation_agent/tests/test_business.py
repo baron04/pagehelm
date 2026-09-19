@@ -373,6 +373,68 @@ class FormPrefillProductPath(unittest.TestCase):
             self.assertEqual(len(ledger.of_kind("form_prefill_completed")), 1)
 
 
+    def test_a_form_that_finished_rendering_mid_fill_is_aimed_at_again(self):
+        """P7.5 J2.12: the application settles its own form while we are aiming at it.
+
+        The runtime refused the first `fill` as stale -- correctly: nothing was typed into
+        a page that had moved on. The prefill treated that as a refusal and told the person
+        the form could not be filled, on a page whose fields were plainly there.
+        """
+        class Racing(self.Browser):
+            """Refuses the first fill the way the runtime does, then behaves."""
+
+            def __init__(self):
+                super().__init__()
+                self.refused = 0
+
+            def execute(self, action, args=None, expect_navigation=False):
+                receipt = super().execute(action, args, expect_navigation)
+                if action == "fill" and self.refused == 0:
+                    self.refused += 1
+                    receipt.ok = False
+                    receipt.error_code = "stale_observation"
+                return receipt
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "draft-skill.json"
+            path.write_text(json.dumps({
+                "schema_version": 1, "skill_id": "fixture.companies-draft",
+                "title": "Draft company", "intent": "Prefill a company form.",
+                "triggers": ["prefill company"],
+                "instructions": ["Call prepare_company_form, then prefill_form."],
+                "tool_names": ["prepare_company_form"],
+                "provenance": ["api:fixture@v1:/companies#draft"],
+                "read_only": True,
+            }))
+            skill = BusinessSkill.load(path)
+            chat = _Chat([
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("prepare_company_form", {}),
+                ("prefill_form", {}),
+                ("finish", {"done": True, "why": "must not be called"}),
+            ])
+            browser = Racing()
+            ledger = SessionLedger(Path(tmp) / "session.jsonl", "form-prefill-race")
+            session = ServerAgentSession(
+                task=TaskSpec("T", "prefill company, do not submit"),
+                chat=chat, browser=browser, control=ReadOnlyControl(), ledger=ledger,
+                business_tools=BusinessToolRuntime((skill,), self.Executor()),
+                disabled_actions={"click", "fill", "select", "submit"},
+                allow_form_prefill=True, step_budget=5, wall_budget_s=30)
+            session.entry_observation = browser.observe()
+            session.plan()
+
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "agent_finished")
+            self.assertIn("has not been submitted", result.agent_said)
+            # It looked again rather than giving up, and both fields were filled.
+            self.assertEqual(browser.actions,
+                             ["goto", "fill", "observe", "fill", "fill"])
+            self.assertEqual(len(ledger.of_kind("form_prefill_completed")), 1)
+            self.assertNotIn("submit", browser.actions)
+
+
 class SkillCitations(unittest.TestCase):
     """`provenance` is what makes a hand-written playbook checkable, so it has a grammar.
 

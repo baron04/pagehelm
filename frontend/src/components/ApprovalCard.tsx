@@ -109,8 +109,12 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
         <h2 id={titleId}>
           <ShieldAlert size={15} strokeWidth={1.7} aria-hidden="true" />
           {canDecline ? labels.approvalTitle : labels.navigationTitle}
+          {/* Named, because a bare mm:ss next to a running assistant reads as how long
+              it has been working. This is how long the confirmation can still be
+              answered; after it, nothing is executed and the request is made again. */}
           <span className="woa-approval__time" data-urgent={urgent ? 'true' : undefined}>
-            <Clock size={11} strokeWidth={1.8} aria-hidden="true" />{countdown}
+            <Clock size={11} strokeWidth={1.8} aria-hidden="true" />
+            {labels.approvalValidFor} {countdown}
           </span>
         </h2>
         <p className="woa-approval__label">{labels.approvalEffect}</p>

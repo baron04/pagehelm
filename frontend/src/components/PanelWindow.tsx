@@ -3,7 +3,7 @@ import {Plus, X} from 'lucide-react'
 import {toneOf} from '../contract/panel'
 import type {HostNotice, PanelHost} from '../bridge/host'
 import {useHostSnapshot} from '../state/useHost'
-import {loadOpen, saveOpen, useWindowGeometry, type Handle} from '../state/geometry'
+import {loadOpen, useWindowGeometry, type Handle} from '../state/geometry'
 import {ApprovalCard} from './ApprovalCard'
 import {Composer} from './Composer'
 import {EmptyState} from './EmptyState'
@@ -53,10 +53,7 @@ export function PanelWindow({host, allowedOrigins}: {
   const retrySubmit = useCallback(() => call(() => host.retrySubmit()), [call, host])
   const cancel = useCallback(() => call(() => host.cancel()), [call, host])
   const reload = useCallback(() => call(() => host.reload()), [call, host])
-  const setOpen = useCallback((value: boolean) => {
-    setOpenState(value)
-    saveOpen(value)
-  }, [])
+  const setOpen = useCallback((value: boolean) => setOpenState(value), [])
 
   const pending = snapshot.pendingApproval
   // A card past its deadline still shows what was asked, and blocks nothing: the runtime

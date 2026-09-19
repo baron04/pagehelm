@@ -303,14 +303,31 @@ class OrdinaryBrowserHostContract(unittest.TestCase):
                     schema_version=1, event="bootstrap", database="trial",
                     company_id="7", actor_id="42", runtime_instance_id="a" * 32,
                     issued_at=now + 2, expires_at=now + 30_002, nonce="f" * 32)
+                # A session mid-turn, or holding a confirmation, cannot have its authority
+                # swapped underneath it -- but this is the same page coming back, and
+                # refusing it left the person with no panel at all and no way to answer the
+                # very confirmation the refusal was about. It reconnects to its own session
+                # and keeps the assertion it already has.
                 with patch.object(host, "_renew_active", side_effect=RemoteProtocolError(
                         "principal renewal requires an idle session",
                         code="session_busy_turn", status=409)):
                     busy_status, busy = self._post(
                         host.bootstrap_server.base_url + "/bootstrap",
                         sign_session_event(busy_event, SECRET))
-                self.assertEqual((busy_status, busy),
-                                 (409, {"error": "session_busy_turn", "retryable": True}))
+                self.assertEqual(busy_status, 200)
+                self.assertEqual(busy["config"]["clientToken"],
+                                 payload["config"]["clientToken"])
+                # Any other protocol failure is still a refusal: only busy is survivable.
+                other_event = OdooSessionEvent(
+                    schema_version=1, event="bootstrap", database="trial",
+                    company_id="7", actor_id="42", runtime_instance_id="a" * 32,
+                    issued_at=now + 3, expires_at=now + 30_003, nonce="9" * 32)
+                with patch.object(host, "_renew_active", side_effect=RemoteProtocolError(
+                        "nope", code="principal_mismatch", status=409)):
+                    other_status, _other = self._post(
+                        host.bootstrap_server.base_url + "/bootstrap",
+                        sign_session_event(other_event, SECRET))
+                self.assertEqual(other_status, 503)
 
                 revoke = OdooSessionEvent(
                     schema_version=1, event="revoke", database="trial",

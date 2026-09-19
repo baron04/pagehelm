@@ -28,29 +28,17 @@ export interface Geometry {
   height: number
 }
 
-const OPEN_KEY = 'woa.panel.open.v1'
-
 /**
- * Whether the panel was open.
+ * A page that loads starts with the panel closed.
  *
- * In document mode a full page navigation destroys and rebuilds everything, and a panel
- * that closed itself on every navigation would undo what F8a is for: the timeline comes
- * back, so the window it lives in has to come back with it.
+ * It used to reopen wherever it had been left, so that a page the assistant itself
+ * navigated came back with its panel. The cost fell on every other load: a person who
+ * refreshed their own page got the assistant reopened over their work, having asked for
+ * nothing. What actually needs attention says so on its own -- the launcher carries the
+ * working and awaiting states, and a confirmation opens the window by itself.
  */
 export function loadOpen(): boolean {
-  try {
-    return window.localStorage.getItem(OPEN_KEY) === 'true'
-  } catch {
-    return false
-  }
-}
-
-export function saveOpen(open: boolean): void {
-  try {
-    window.localStorage.setItem(OPEN_KEY, open ? 'true' : 'false')
-  } catch {
-    // A viewer who blocks site data simply starts collapsed each time.
-  }
+  return false
 }
 
 function viewport(): {width: number; height: number} {

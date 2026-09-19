@@ -3239,6 +3239,9 @@ class ServerAgentSession:
         action still yields a fresh observation before the next field is resolved.
         """
         current = observation
+        #: The error code the last dispatched command came back with, so the caller can
+        #: tell "the page moved while we were aiming" from a real refusal.
+        last_code = ""
         actions: list[tuple[str, dict, str]] = []
         if not self._observation_is_at_route(current, draft.route):
             actions.append(("goto", {"url": draft.route}, ""))
@@ -3248,6 +3251,8 @@ class ServerAgentSession:
             if self._cancel_requested():
                 return before, "user_cancelled", "the user stopped before form preparation"
             prior_epoch = before.epoch
+            nonlocal last_code
+            last_code = ""
             try:
                 self._browser_attempts += 1
                 receipt = self.browser.execute(action, args)
@@ -3274,6 +3279,7 @@ class ServerAgentSession:
             terminal, detail = self._settle_write(write)
             if terminal:
                 return receipt.observation or before, terminal, detail
+            last_code = str(receipt.error_code or "")
             if (not receipt.ok or receipt.observation is None
                     or receipt.observation.epoch <= prior_epoch):
                 return (receipt.observation or before, "agent_refused",
@@ -3324,12 +3330,32 @@ class ServerAgentSession:
                 return current, "agent_refused", (
                     f"the current form did not expose one exact {binding.field} field")
             action = "select" if binding.control == "select" else "fill"
-            current, reason, detail = dispatch(
-                action,
-                {"ref": matches[0].ref, "epoch": current.epoch, "value": binding.value},
-                binding.field, current)
-            if reason:
-                return current, reason, detail
+            # The application finishes rendering its own form while we are aiming at it, so
+            # the first fill can be refused as stale -- which is the runtime doing its job:
+            # nothing was typed. Look again and aim at the field the fresh page has. This is
+            # what left an issued draft reported as "表单未能完整预填" on a page where the
+            # fields were plainly there.
+            for attempt in range(3):
+                current, reason, detail = dispatch(
+                    action,
+                    {"ref": matches[0].ref, "epoch": current.epoch, "value": binding.value},
+                    binding.field, current)
+                if not reason:
+                    break
+                if last_code != "stale_observation" or attempt == 2:
+                    return current, reason, detail
+                current, reason, detail = dispatch("observe", {}, "", current)
+                if reason:
+                    return current, reason, detail
+                matches = [element for element in current.elements
+                           if element.role == binding.control
+                           and element.attrs.get("field") == binding.field]
+                if len(matches) != 1:
+                    self.ledger.append(
+                        "form_prefill_field_refused", step=step, field=binding.field,
+                        matches=len(matches), dispatched=False, side_effect_possible=False)
+                    return current, "agent_refused", (
+                        f"the current form did not expose one exact {binding.field} field")
         return current, "", ""
 
     def lookup_source(self, query: str, obs: PageObservation) -> EvidenceBundle:

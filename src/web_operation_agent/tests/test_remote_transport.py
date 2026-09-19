@@ -533,6 +533,34 @@ class ChannelTests(unittest.TestCase):
             with self.assertRaisesRegex(RemoteProtocolError, "expired"):
                 channel.accept_approval(decision, lease_id=lease)
 
+    def test_an_expired_confirmation_stops_being_offered_to_the_panel(self):
+        """P7.5 J3.05: the card came back after the deadline and could only be refused.
+
+        The waiting turn gave up at the deadline, but the session went on naming that
+        approval as the pending one. Every later projection of the timeline handed the
+        panel the same card -- so it reappeared after a reload, the composer stayed
+        blocked behind it, and answering it said the confirmation was no longer valid.
+        """
+        now = int(time.time() * 1000)
+        registry = RemoteSessionRegistry()
+        grant, channel = registry.create(
+            allowed_origins=[ORIGIN], session_id="expired-card-session")
+        lease = channel.accept_hello(hello(grant.session_id))["lease_id"]
+        with mock.patch("web_operation_agent.remote._now_ms", return_value=now):
+            channel.request_approval(
+                ApprovalRequest(1, "late-card", "Change a record", ("Record 1",), now + 40))
+            self.assertEqual(
+                channel.panel_timeline(lease_id=lease)["pending_approval"]["approval_id"],
+                "late-card")
+        with mock.patch("web_operation_agent.remote._now_ms", return_value=now + 100):
+            with self.assertRaisesRegex(RemoteProtocolError, "expired"):
+                channel.wait_for_approval("late-card", timeout_s=0.2)
+        self.assertIsNone(channel.panel_timeline(lease_id=lease)["pending_approval"])
+        # And a second request can be raised, because the session is no longer holding one.
+        channel.request_approval(
+            ApprovalRequest(1, "next-card", "Change another", ("Record 2",),
+                            int(time.time() * 1000) + 5_000))
+
     def test_approval_card_cannot_carry_a_credential(self):
         request = ApprovalRequest(
             1, "approval-secret", "Open callback",

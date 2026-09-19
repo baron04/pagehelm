@@ -820,6 +820,12 @@ class RemoteSessionChannel:
                 self._completed_message_ids.add(message_id)
             if self._active_message_id == message_id:
                 self._active_message_id = ""
+            # A confirmation belongs to the turn that raised it. Once that turn is over
+            # there is nothing left for an answer to reach, so the session stops offering
+            # it rather than leaving a card the panel can only be refused for.
+            pending = self._approvals.get(self._pending_approval_id)
+            if pending is not None and message_id and pending.turn_id == message_id:
+                self._pending_approval_id = ""
             self._condition.notify_all()
 
     def accept_approval(self, decision: ApprovalDecision, *, lease_id: str) -> dict:
@@ -970,7 +976,12 @@ class RemoteSessionChannel:
             "pending_approval": None,
         }
         if self._pending_approval_id:
-            payload["pending_approval"] = self._approvals[self._pending_approval_id].to_json()
+            pending = self._approvals[self._pending_approval_id]
+            # A card whose deadline has passed is not something to ask the person for. The
+            # turn that raised it is on its way to ending; the panel is told what happened
+            # by that ending, not by a control it cannot use.
+            if pending.expires_at > _now_ms():
+                payload["pending_approval"] = pending.to_json()
         return payload
 
     # -- server -> browser ----------------------------------------------------------
@@ -1203,6 +1214,13 @@ class RemoteSessionChannel:
                 return _copy_wire(decision)
             self._ensure_open()
             if request.expires_at <= _now_ms():
+                # Nobody can answer it any more, so the session stops offering it. Leaving
+                # it pending meant every later projection of the timeline handed the panel
+                # a card that could only be refused -- it came back after a reload, and
+                # answering it said the confirmation was no longer valid.
+                if self._pending_approval_id == approval_id:
+                    self._pending_approval_id = ""
+                    self._condition.notify_all()
                 raise RemoteProtocolError(
                     "approval request expired while awaiting a decision",
                     code="approval_expired",

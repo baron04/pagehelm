@@ -96,10 +96,25 @@
                      color: inherit }
     }`;
 
+  //: What a failed start means, in the words of the person reading it. The status code
+  //: stays at the end for whoever has to report it, but it is not the message: "409" tells
+  //: nobody anything, and it was the first thing they saw.
+  const PLAIN = {
+    401: "登录状态已变化，请重新登录后再使用助手",
+    403: "当前账号未获授权使用助手",
+    404: "助手服务未就绪",
+    409: "助手正忙，正在重新连接",
+    429: "助手已达并发上限，稍后会自动重试",
+  };
+  const sentence = (reason) => {
+    const plain = PLAIN[Number(reason)] || "助手暂时不可用，正在重试";
+    return Number(reason) ? `${plain}（${reason}）。` : `${plain}。`;
+  };
+
   let unavailable = null;
   const showUnavailable = (reason, retry) => {
     if (unavailable) {
-      unavailable.reason.textContent = `助手暂时不可用（${reason}）。`;
+      unavailable.reason.textContent = sentence(reason);
       return;
     }
     const host = document.createElement("div");
@@ -115,7 +130,7 @@
     note.className = "note";
     note.hidden = true;
     const reasonLine = document.createElement("p");
-    reasonLine.textContent = `助手暂时不可用（${reason}）。`;
+    reasonLine.textContent = sentence(reason);
     const again = document.createElement("button");
     again.type = "button";
     again.textContent = "重试";
@@ -184,8 +199,7 @@
       settle(runtime);
       return runtime;
     } catch (error) {
-      const reason = String(error?.message || error).match(/\((\d{3})\)/)?.[1]
-        || "无法连接";
+      const reason = String(error?.message || error).match(/\((\d{3})\)/)?.[1] || "";
       window.__WOA_RUNTIME_ERROR__ = String(error?.message || error);
       showUnavailable(reason, () => { attempt = 0; void start(); });
       if (attempt < RETRY_MS.length) {
