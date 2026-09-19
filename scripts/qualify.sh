@@ -32,6 +32,19 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 
+# What is being qualified, said first and last. A result is evidence for one commit in one
+# checkout; a run recorded against the wrong one qualified nothing (P7.5: four evening runs
+# were made in a worktree left on an old branch and recorded against main).
+tested_commit="$(git -C "${ROOT}" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
+tested_branch="$(git -C "${ROOT}" symbolic-ref --quiet --short HEAD 2>/dev/null || echo detached)"
+if [[ -n "$(git -C "${ROOT}" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
+  tested_tree="modified"
+else
+  tested_tree="clean"
+fi
+tested_what="commit ${tested_commit} (${tested_branch}), tracked files ${tested_tree}, checkout ${ROOT}"
+printf 'Qualifying %s\n' "${tested_what}"
+
 if [[ -z "${PYTHON:-}" ]]; then
   if [[ -x "${ROOT}/.venv/bin/python" ]]; then PYTHON="${ROOT}/.venv/bin/python"; else PYTHON="python3"; fi
 fi
@@ -547,6 +560,7 @@ fi
 
 # ---------------------------------------------------------------- summary
 printf '\n\033[1m── qualification summary ──\033[0m\n'
+printf '  %s\n' "${tested_what}"
 for row in "${results[@]}"; do
   IFS='|' read -r name status note <<<"${row}"
   printf '  %-10s %s%s\n' "${status}" "${name}" "${note:+  (${note})}"
