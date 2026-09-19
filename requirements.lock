@@ -6,7 +6,7 @@
 #     python -m pip install --require-hashes -r requirements.lock
 #
 # Each requirement carries an artifact hash for every platform this is generated
-# for -- this machine, glibc x86_64 and glibc aarch64, all CPython 3.12. pip picks
+# for -- this machine, glibc x86_64 and glibc aarch64, on CPython 3.12, CPython 3.13. pip picks
 # the one matching the machine it runs on. A lock resolved only where it was
 # written pins that machine's wheels and refuses to install anywhere else, with no
 # message that says why.
@@ -15,10 +15,13 @@
 # stops being true, a new name appears here.
 
 # MIT AND PSF-2.0 (required by examples/odoo, examples/ofbiz, examples/twenty, web-operation-agent)
-greenlet==3.5.5 \
-    --hash=sha256:49520f0c95a48b42cf55414b8e8479beb274ea70431afc33e3f79903c71f4380 \
-    --hash=sha256:147b25a42e5ca5be3d42356e8f608b37af715a1c196e9bf9d1627f3341adfe1d \
-    --hash=sha256:55272212cbc5f43d1d723725ab931f1939969b7e9523882ca58b55061769d053
+greenlet==3.5.6 \
+    --hash=sha256:a5876d0a60355af98d535c47f6cd6eb0f8a432396dab26845d380b92f8412422 \
+    --hash=sha256:f96f0e30b5a95c7631b12bfe214cbc90ec8fe8cfa36920596c10514a65743519 \
+    --hash=sha256:975736b002ed080d124cf81a79cb7e05cb26d6b3f5c7a7b651c0fcce70353aa1 \
+    --hash=sha256:f98e8215e172f567ce80eeaed9107fb4d32b6c44f26983d9b8334658136a205a \
+    --hash=sha256:e85880b538e59a59f55117b81f208a6660ad5ac328aad9305f812d9b8bc67a0f \
+    --hash=sha256:c75116c9de79949de23006e2d9b35ee82874c594fcf5c0311b439acaa14b8441
 # Apache-2.0 (required by examples/odoo, examples/ofbiz, examples/twenty, web-operation-agent)
 playwright==1.52.0 \
     --hash=sha256:0797c0479cbdc99607412a3c486a3a2ec9ddc77ac461259fd2878c975bcbb94a \

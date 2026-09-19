@@ -4,7 +4,7 @@
 
 ## 前提与边界
 
-需要当前版本的 Docker Engine 与 Compose v2、Python 3.12、Node.js 和干净 checkout。所有命令由同一个非 root 部署账号在 `umask 077` 下执行，该账号应拥有 checkout、私有输入目录和备份目标。使用有持久 Docker volume 的私有 Linux 主机，只允许运维人员访问 shell 和 Docker。公开端口默认只绑定 loopback；允许远程客户端之前，应放到组织控制的入口之后。内置 Caddy CA 只适合在受控试用中把根证书安装到托管客户端；正式域名应改用组织证书。
+需要当前版本的 Docker Engine 与 Compose v2、Python 3.12 或 3.13、Node.js 和干净 checkout。所有命令由同一个非 root 部署账号在 `umask 077` 下执行，该账号应拥有 checkout、私有输入目录和备份目标。使用有持久 Docker volume 的私有 Linux 主机，只允许运维人员访问 shell 和 Docker。公开端口默认只绑定 loopback；允许远程客户端之前，应放到组织控制的入口之后。内置 Caddy CA 只适合在受控试用中把根证书安装到托管客户端；正式域名应改用组织证书。
 
 部署为每个用户使用一把独立的 Odoo API key。应用自身的访问规则是最终权限来源，delegation manifest 只会进一步缩小 typed 工具 scope。任务进行中或存在待确认操作时不会续期；配置的 key 路径、scope 或 mutation grant 发生变化也会拒绝续期。登记、替换或删除 delegation 后必须重启 Agent，登记命令会明确返回该要求。在 Odoo 撤销 key 并让用户退出登录会关闭已签发的浏览器 capability，并写入持久 actor 撤销水位。
 

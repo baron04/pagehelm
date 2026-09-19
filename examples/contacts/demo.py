@@ -26,6 +26,7 @@ from typing import Any
 from examples.contacts.adapter import MinimalContactsAdapter
 from examples.contacts.app import (ACTORS_BY_ID, DEMO_SESSION_COOKIE,
                                    MinimalContactsApplication)
+from web_operation_agent import python_is_supported, supported_python_text
 from web_operation_agent.application import bind_application
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.identity import bind_matching_identity
@@ -424,8 +425,8 @@ def workspace_digest(records) -> str:
 
 
 def run_demo(config: DemoConfig) -> dict:
-    if sys.version_info[:2] != (3, 12):
-        raise RuntimeError("the minimal demo requires Python 3.12")
+    if not python_is_supported():
+        raise RuntimeError(f"the minimal demo requires Python {supported_python_text()}")
     run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
     run_dir = config.output_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=False, mode=0o700)

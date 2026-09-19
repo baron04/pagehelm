@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from web_operation_agent import python_is_supported, supported_python_text
 from web_operation_agent.application import bind_application
 from web_operation_agent.egress import ProviderEgressPolicy
 from web_operation_agent.embedded_agent import ReadOnlyControl
@@ -575,8 +576,8 @@ def _run_browser(config: OdooDemoConfig, live: LiveProductSession,
 
 def run_demo(config: OdooDemoConfig, *,
              turn_boundary_hook: Callable[[int, dict], None] | None = None) -> dict:
-    if sys.version_info[:2] != (3, 12):
-        raise RuntimeError("the Odoo demo requires Python 3.12")
+    if not python_is_supported():
+        raise RuntimeError(f"the Odoo demo requires Python {supported_python_text()}")
     run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
     run_dir = config.output_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=False, mode=0o700)

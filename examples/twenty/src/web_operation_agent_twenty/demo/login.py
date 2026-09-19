@@ -11,6 +11,7 @@ import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from web_operation_agent import python_is_supported, supported_python_text
 from web_operation_agent_twenty.demo import demo
 from web_operation_agent_twenty.adapter import TwentyPageSessionIdentityResolver, _validated_origin
 
@@ -77,8 +78,8 @@ def run(
         argv: Sequence[str] | None = None,
         environ: Mapping[str, str] | None = None) -> dict[str, object]:
     namespace = build_parser(environ).parse_args(argv)
-    if sys.version_info[:2] != (3, 12):
-        raise RuntimeError("the Twenty demo requires Python 3.12")
+    if not python_is_supported():
+        raise RuntimeError(f"the Twenty demo requires Python {supported_python_text()}")
     origin = _validated_origin(namespace.base_url)
     destination = Path(namespace.storage_state).expanduser().resolve()
     executable = (

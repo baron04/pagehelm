@@ -92,7 +92,7 @@ For mutation-enabled composition, `AgentTurnConfig.deployment_profile` defaults 
 
 Requirements:
 
-- Python 3.12
+- Python 3.12 or 3.13
 - a POSIX shell
 - Node.js to execute all embedded-runtime tests
 - network access during the first dependency installation
@@ -100,7 +100,7 @@ Requirements:
 From an existing checkout:
 
 ```bash
-python3.12 -m venv .venv
+python3 -m venv .venv    # Python 3.12 or 3.13
 . .venv/bin/activate
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 python -m pip install --editable .
 python -m pip install --no-deps --editable examples/ofbiz

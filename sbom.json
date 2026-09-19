@@ -5,7 +5,7 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "49520f0c95a48b42cf55414b8e8479beb274ea70431afc33e3f79903c71f4380"
+          "content": "a5876d0a60355af98d535c47f6cd6eb0f8a432396dab26845d380b92f8412422"
         }
       ],
       "licenses": [
@@ -32,9 +32,9 @@
           "value": "true"
         }
       ],
-      "purl": "pkg:pypi/greenlet@3.5.5",
+      "purl": "pkg:pypi/greenlet@3.5.6",
       "type": "library",
-      "version": "3.5.5"
+      "version": "3.5.6"
     },
     {
       "hashes": [

@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from web_operation_agent import python_is_supported, supported_python_text
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.identity import PrincipalContext
 from web_operation_agent.live import LiveConversationRunner, LiveProductSession, LiveTurnOutcome
@@ -714,8 +715,8 @@ def run(config: TwentyDemoConfig, *, environ: Mapping[str, str] | None = None) -
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         config = parse_config(argv)
-        if sys.version_info[:2] != (3, 12):
-            raise RuntimeError("the Twenty demo requires Python 3.12")
+        if not python_is_supported():
+            raise RuntimeError(f"the Twenty demo requires Python {supported_python_text()}")
         run(config)
     except KeyboardInterrupt:
         return 130

@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from web_operation_agent import python_is_supported, supported_python_text
 from web_operation_agent_twenty.demo import demo
 
 
@@ -112,8 +113,9 @@ def inspect_local(
         "missing: " + ", ".join(missing),
     )]
     checks.append(Check(
-        "python_runtime", sys.version_info[:2] == (3, 12),
-        f"running Python {sys.version_info.major}.{sys.version_info.minor}; required 3.12",
+        "python_runtime", python_is_supported(),
+        f"running Python {sys.version_info.major}.{sys.version_info.minor}; "
+        f"required {supported_python_text()}",
     ))
 
     for field, label in _FILE_FIELDS:

@@ -32,6 +32,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from web_operation_agent import SUPPORTED_PYTHON  # noqa: E402  (after the path is set)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCK_FILE = ROOT / "requirements.lock"
@@ -179,6 +182,14 @@ def _local_index() -> Path:
 #: explanation, and "a reviewer can run it" was false for every reviewer not on a Mac.
 #: pip picks the artifact matching the machine it runs on, so a requirement carrying every
 #: target's hash is portable without being ambiguous.
+#: Every interpreter the distributions accept. greenlet is a C extension, so it ships one
+#: wheel per interpreter: a lock with only cp312 hashes refuses to install on 3.13 with no
+#: message that says why, which is the same failure the platform targets below fixed.
+INTERPRETERS = tuple(
+    (f"{major}.{minor}", f"cp{major}{minor}")
+    for major, minor in ((SUPPORTED_PYTHON[0][0], minor)
+                         for minor in range(SUPPORTED_PYTHON[0][1], SUPPORTED_PYTHON[1][1])))
+
 TARGETS = (
     # The machine this is generated on contributes its own resolution.
     (),
@@ -201,8 +212,12 @@ def resolve_for_targets(project: str, *, find_links: Path | None = None) -> list
     if not components:
         return components
     pinned = [f"{item['name']}=={item['version']}" for item in components]
-    for flags in TARGETS[1:]:
-        for name, digest in _hashes_for(pinned, flags, find_links=find_links).items():
+    passes = [(flags, interpreter) for flags in TARGETS for interpreter in INTERPRETERS]
+    # The local resolution already covers this machine on the interpreter running this.
+    passes = passes[1:] if len(INTERPRETERS) == 1 else passes
+    for flags, interpreter in passes:
+        for name, digest in _hashes_for(pinned, flags, interpreter,
+                                        find_links=find_links).items():
             for item in components:
                 if item["name"].casefold() == name:
                     item.setdefault("extra_sha256", [])
@@ -211,19 +226,22 @@ def resolve_for_targets(project: str, *, find_links: Path | None = None) -> list
     return components
 
 
-def _hashes_for(pinned: list[str], flags: tuple, *, find_links: Path | None) -> dict:
-    """Download each pinned version for one target and hash what came back."""
+def _hashes_for(pinned: list[str], flags: tuple, interpreter: tuple[str, str], *,
+                find_links: Path | None) -> dict:
+    """Download each pinned version for one target and interpreter, and hash what came back."""
     links = ["--find-links", str(find_links)] if find_links else []
+    version, abi = interpreter
     with tempfile.TemporaryDirectory() as directory:
         try:
             subprocess.run(
                 [sys.executable, "-m", "pip", "download", "--only-binary=:all:", "--no-deps",
-                 "--quiet", *flags, "--python-version", "3.12", "--implementation", "cp",
-                 "--abi", "cp312", *links, "-d", directory, *pinned],
+                 "--quiet", *flags, "--python-version", version, "--implementation", "cp",
+                 "--abi", abi, *links, "-d", directory, *pinned],
                 check=True, capture_output=True, timeout=900)
         except subprocess.CalledProcessError as exc:
             raise SystemExit(
-                "a locked version has no artifact for " + " ".join(flags) + ":\n"
+                f"a locked version has no artifact for Python {version} "
+                + " ".join(flags) + ":\n"
                 + (exc.stderr or b"").decode()[-600:]) from None
         found = {}
         for path in sorted(Path(directory).glob("*")):
@@ -266,7 +284,9 @@ def render_lock(inventory: dict) -> str:
         "#     python -m pip install --require-hashes -r requirements.lock",
         "#",
         "# Each requirement carries an artifact hash for every platform this is generated",
-        "# for -- this machine, glibc x86_64 and glibc aarch64, all CPython 3.12. pip picks",
+        "# for -- this machine, glibc x86_64 and glibc aarch64, on "
+        + ", ".join(f"CPython {version}" for version, _abi in INTERPRETERS)
+        + ". pip picks",
         "# the one matching the machine it runs on. A lock resolved only where it was",
         "# written pins that machine's wheels and refuses to install anywhere else, with no",
         "# message that says why.",

@@ -7,7 +7,7 @@ name = "web-operation-agent"
 dynamic = ["version"]
 description = "A server-side web operation agent with a thin browser runtime"
 readme = "README.md"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.12,<3.14"
 license = "MIT"
 license-files = ["LICENSE"]
 classifiers = [
@@ -15,6 +15,7 @@ classifiers = [
   "Operating System :: POSIX",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
   # The browser contract is qualified on Playwright 1.52.0. Keep installations

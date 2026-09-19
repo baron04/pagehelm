@@ -92,7 +92,7 @@ PageController、身份、静态 Runtime、typed-tool 与验证合同见[应用�
 
 要求：
 
-- Python 3.12
+- Python 3.12 或 3.13
 - POSIX shell
 - Node.js，用于执行全部页面 Runtime 测试
 - 首次安装依赖时可访问网络
@@ -100,7 +100,7 @@ PageController、身份、静态 Runtime、typed-tool 与验证合同见[应用�
 在已有 checkout 中运行：
 
 ```bash
-python3.12 -m venv .venv
+python3 -m venv .venv    # Python 3.12 或 3.13
 . .venv/bin/activate
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 python -m pip install --editable .
 python -m pip install --no-deps --editable examples/ofbiz
