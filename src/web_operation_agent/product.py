@@ -155,6 +155,11 @@ class AgentTurnConfig:
     confirm_navigation: bool = True
     require_identity: bool = False
     deployment_profile: str = "production"
+    #: Where the person is, as an IANA zone name, so "today" and "this month" mean their
+    #: days. Empty leaves the turn on UTC and says so. An application that knows its user's
+    #: zone (Odoo keeps one per user) should pass that one, so answers agree with what the
+    #: application itself shows.
+    time_zone: str = ""
     max_user_answer_chars: int = 4_000
     #: What this deployment's compiled source lets the turn do, as one value handed over by
     #: the application distribution. It is a capability rather than a set of flags because
@@ -749,6 +754,7 @@ class AgentTurnExecutor:
             principal=principal,
             session_id=(self.channel.session_id if principal is not None else ""),
             turn_id=(turn_message.message_id if principal is not None else ""),
+            time_zone=self.config.time_zone,
             conversation_context=self.conversation_state.model_context(),
         )
         session.adopt_entry(current.observation)

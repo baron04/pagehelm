@@ -8,6 +8,7 @@ qualification is a separate, opt-in gate.
 import json
 import re
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -150,7 +151,7 @@ def _matches(row: dict, domain: list) -> bool:
 class _FakeOdoo(OdooBusinessToolExecutor):
     """Answers `call` from an in-memory table; records every call it was asked to make."""
 
-    def __init__(self, tables, *, allow_mutations=False, uid=7):
+    def __init__(self, tables, *, allow_mutations=False, uid=7, tz=""):
         self.tables = tables
         self.allow_mutations = allow_mutations
         self.timeout_s = 5
@@ -159,6 +160,10 @@ class _FakeOdoo(OdooBusinessToolExecutor):
         self.mutation_calls = []
         self.created = []
         self._uid = uid
+        # The real executor holds both; a double without them hid the zone lookup entirely.
+        self._time_zone = None
+        self._lock = threading.Lock()
+        self.tz = tz
         self.keys = type("K", (), {"database": "woa", "login": "grower",
                                    "api_key": "0123456789abcdef0123"})()
 
@@ -167,6 +172,9 @@ class _FakeOdoo(OdooBusinessToolExecutor):
 
     def call(self, model, method, args, kwargs=None, *, mutation=False):
         self.calls.append((model, method, args, dict(kwargs or {})))
+        if (model == "res.users" and method == "read"
+                and list((kwargs or {}).get("fields") or ()) == ["tz"]):
+            return [{"id": self._uid, "tz": self.tz}]
         if mutation:
             self.mutation_calls.append((model, method))
         rows = self.tables.get(model, [])

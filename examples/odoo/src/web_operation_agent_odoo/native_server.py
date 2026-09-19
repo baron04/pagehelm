@@ -412,6 +412,9 @@ class OdooNativeHost:
                         allow_form_prefill=True,
                         deployment_profile="production",
                         source=adapter.source_capability(),
+                        # The signed-in Odoo user's own zone, so "today" is their day and
+                        # every time the assistant reports matches what Odoo shows them.
+                        time_zone=adapter.business_tools.time_zone(),
                         max_user_answer_chars=8_000,
                     ),
                     chat=chat, application=bound, control=ReadOnlyControl(),

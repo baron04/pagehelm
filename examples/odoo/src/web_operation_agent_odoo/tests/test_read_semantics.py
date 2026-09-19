@@ -102,7 +102,9 @@ class ApplicationReadMeaning(unittest.TestCase):
         self.assertIn("S00042", render_payload(answer, user_text="谁的报价？", max_chars=4000))
         self.assertTrue(any("S00042" in condition for condition in result.content["conditions"]))
 
-    def test_date_range_is_half_open_in_utc_and_shared_by_count_and_read(self):
+    def test_date_range_is_half_open_and_shared_by_count_and_read(self):
+        """Boundaries are the signed-in user's days; with no zone configured they are UTC,
+        which is what Odoo itself shows such a user (P7.5 CR-18)."""
         rows = _orders(4)
         dates = ["2026-08-31 23:59:59", "2026-09-01 00:00:00",
                  "2026-09-30 23:59:59", "2026-10-01 00:00:00"]
@@ -116,7 +118,9 @@ class ApplicationReadMeaning(unittest.TestCase):
         domains = [call[2][0] for call in executor.calls if call[1].startswith("search")]
         self.assertTrue(all(domain == domains[0] for domain in domains))
         turn = evidence(result)
-        self.assertIn("UTC", field(turn, "date_order").field_meaning)
+        # The meaning no longer claims UTC: the value is in the reader's own zone, as every
+        # Odoo screen shows it, and saying UTC there was wrong for everyone who has one.
+        self.assertNotIn("UTC", field(turn, "date_order").field_meaning)
         total = compute(turn, {"operation": "sum", "dataset_ref": "call1-query#1", "field": "amount_total"},
                         result_ref="computed#1", observed_at="now")
         self.assertIn("2026-10-01", total.origin.scope)
