@@ -507,7 +507,9 @@ class PanelUITests(_PanelBrowser):
             "window.__setSnapshot({notice:{code:'runtime_replaced',retryable:false}})")
         self.assertEqual(notice.get_attribute("data-terminal"), "true")
         self.assertEqual(notice.locator(".woa-inline-error__retry").count(), 0)
-        self.assertIn("接管", notice.inner_text())
+        # It names where the assistant went, because this is the one ending the page
+        # does not reconnect from: the person continues in the other page.
+        self.assertIn("另一个页面", notice.inner_text())
         self.assertEqual(self.errors, [])
 
     def test_a_failure_with_no_guidance_of_its_own_is_not_called_a_lost_connection(self):

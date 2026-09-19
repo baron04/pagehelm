@@ -75,7 +75,11 @@ class OdooNativeConfig:
     principal_lifetime_s: int = 900
     max_sessions: int = 10
     max_sessions_per_actor: int = 3
-    browser_idle_timeout_s: int = 90
+    #: How long a session survives with no word from its browser. It guards against
+    #: sessions whose page is gone, not against a person reading something else: a
+    #: backgrounded tab has its timers throttled, and at 90s that alone was enough to have
+    #: the assistant taken away from someone who had merely looked at another window.
+    browser_idle_timeout_s: int = 900
     max_active_requests: int = 3
     max_active_requests_per_actor: int = 2
     session_lease_ms: int = 5_000

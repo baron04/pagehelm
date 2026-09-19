@@ -45,8 +45,17 @@ PAGE = """<!doctype html>
 RUNTIME = """export async function startEmbeddedRuntime() {
   const host = document.createElement('div')
   host.id = 'woa-assistant'
+  host.dataset.instance = String((window.__woaRuntimes = (window.__woaRuntimes || 0) + 1))
   document.body.appendChild(host)
-  return {stopped: false, canRenewSession: () => true, renewSession() {}}
+  const runtime = {
+    stopped: false,
+    canRenewSession: () => true,
+    renewSession() {},
+    panelHost: {snapshot: () => ({connection: {state: window.__woaEndState || 'ready'}})},
+    stop() { host.remove() },
+  }
+  window.__woaRuntime = runtime
+  return runtime
 }
 """
 
@@ -135,6 +144,38 @@ class TheEntryIsThereEvenWhenTheAssistantIsNot(unittest.TestCase):
         page.locator("#woa-assistant-unavailable .note button").click()
         page.locator("#woa-assistant").wait_for(state="attached", timeout=8000)
         self.assertEqual(page.locator("#woa-assistant-unavailable").count(), 0)
+        self.assertEqual(self.errors, [])
+
+    def test_a_session_that_ends_under_the_page_is_reconnected_without_asking(self):
+        """P7.5 CR-45: "会话已结束，请刷新页面重新连接" asks the person to repair our problem.
+
+        A session ends because it expired, because the agent restarted, or because the tab
+        was quiet long enough to be reaped. None of those is something the person did, and
+        all of them are undone by asking for a new session -- which is what this does.
+        """
+        page = self._open(200)
+        page.locator("#woa-assistant").wait_for(state="attached", timeout=8000)
+        first = page.locator("#woa-assistant").get_attribute("data-instance")
+        page.evaluate("() => { window.__woaRuntime.stopped = true }")
+        page.wait_for_function(
+            "first => document.querySelector('#woa-assistant')?.dataset.instance !== first",
+            arg=first, timeout=15_000)
+        self.assertEqual(page.locator("#woa-assistant").count(), 1)
+        self.assertEqual(page.locator("#woa-assistant-unavailable").count(), 0)
+        self.assertEqual(self.errors, [])
+
+    def test_a_session_another_page_took_over_is_left_to_that_page(self):
+        """The one ending that must not reconnect: two pages would take it in turns."""
+        page = self._open(200)
+        page.locator("#woa-assistant").wait_for(state="attached", timeout=8000)
+        first = page.locator("#woa-assistant").get_attribute("data-instance")
+        page.evaluate("""() => {
+            window.__woaEndState = 'replaced'
+            window.__woaRuntime.stopped = true
+        }""")
+        page.wait_for_timeout(5000)
+        # The panel stays exactly as the Runtime left it: it is the one that says why.
+        self.assertEqual(page.locator("#woa-assistant").get_attribute("data-instance"), first)
         self.assertEqual(self.errors, [])
 
     def test_a_startup_that_works_adds_no_entry_of_its_own(self):

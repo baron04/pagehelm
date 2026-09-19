@@ -140,6 +140,32 @@
   //: A short, bounded ladder: a restarted agent is back within seconds, and past this the
   //: person decides when to try again rather than the page retrying forever.
   const RETRY_MS = [1000, 3000, 8000];
+  //: How often we look at a running Runtime to see whether its session has ended under it.
+  const WATCH_MS = 2000;
+
+  let watchTimer = 0;
+  //: A session ends for reasons the page can simply undo -- it expired, the agent
+  //: restarted, the browser was quiet long enough to be reaped -- and for one it must
+  //: not: the assistant is now open in another page, and reconnecting here would have the
+  //: two pages taking it from each other in turn. Everything else reconnects on its own,
+  //: because "会话已结束，请刷新页面" asks the person to repair something they did not break.
+  const watchRuntime = (runtime) => {
+    clearInterval(watchTimer);
+    watchTimer = setInterval(() => {
+      if (!runtime.stopped) return;
+      clearInterval(watchTimer);
+      let state = "";
+      try {
+        state = runtime.panelHost?.snapshot?.().connection?.state || "";
+      } catch {
+        state = "";
+      }
+      if (state === "replaced") return;
+      try { runtime.stop(); } catch { /* the panel is going away either way */ }
+      attempt = 0;
+      void start();
+    }, WATCH_MS);
+  };
   let settle;
   const ready = new Promise(resolve => { settle = resolve; });
   let attempt = 0;
@@ -153,6 +179,7 @@
       const runtime = await module.startEmbeddedRuntime(payload.config);
       clearUnavailable();
       scheduleRenewal(runtime, payload);
+      watchRuntime(runtime);
       window.__WOA_RUNTIME_ERROR__ = "";
       settle(runtime);
       return runtime;
