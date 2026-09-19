@@ -563,7 +563,7 @@ class PanelUITests(_PanelBrowser):
         self.assertFalse(details.evaluate("node => node.open"))
         self.assertEqual(self.errors, [])
 
-    def test_a_turn_that_only_ran_offers_no_expander_and_a_turn_that_acted_does(self):
+    def test_a_turn_that_only_ran_shows_its_time_and_a_turn_that_acted_shows_its_steps(self):
         page = self.open(_snapshot(entries=[
             _entry("e1", "goal", "列出所有待开票的销售订单"),
             _entry("e2", "progress", "正在理解目标"),
@@ -586,10 +586,8 @@ class PanelUITests(_PanelBrowser):
            text:'打开页面：/odoo/customers/10'},
           {id:'f4',sequence:4,turn_id:'t2',at:1757000003000,kind:'result',tone:'neutral',
            text:'已打开。',panel_state:'success'}]})""")
-        summary = page.locator(".woa-work__summary")
-        summary.wait_for()
-        self.assertEqual(summary.get_attribute("aria-expanded"), "false")
-        summary.click()
+        # A turn that did something shows what it did, without being asked to.
+        page.locator(".woa-step").first.wait_for()
         self.assertEqual(page.locator(".woa-step").count(), 2)
         self.assertEqual(self.errors, [])
 
@@ -610,14 +608,67 @@ class PanelUITests(_PanelBrowser):
             ]))
         page.locator(".woa-launcher").click()
         page.locator(".woa-step").first.wait_for()
-        # Every step is on screen, in the order it happened, with nothing to expand.
+        # Every step is on screen, in the order it happened, with nothing to go and open.
         self.assertEqual([line.strip() for line in
                           page.locator(".woa-step__text").all_inner_texts()],
                          ["正在思考", "正在读取业务数据", "已读取 3 条：客户"])
-        self.assertEqual(page.locator(".woa-work__summary").count(), 0)
-        # The live line carries the spinner and the clock; the settled ones do not.
-        self.assertEqual(page.locator(".woa-step[data-now]").count(), 1)
-        self.assertEqual(page.locator(".woa-step[data-now] .woa-spinner").count(), 1)
+        # Only the newest node is running; the ones before it completed.
+        self.assertEqual(page.locator(".woa-step[data-status='running']").count(), 1)
+        self.assertEqual(
+            page.locator(".woa-step[data-status='running'] .woa-spinner").count(), 1)
+        self.assertEqual(page.locator(".woa-step[data-status='done']").count(), 2)
+        self.assertEqual(self.errors, [])
+
+    def test_a_settled_turn_keeps_its_timeline_and_opens_a_node_onto_the_call(self):
+        """P7.5: the record of how an answer was produced outlives the answer.
+
+        Folding the steps away once the turn landed took the answer's only checkable part
+        with it: which call produced the numbers, with what arguments, and what came back.
+        """
+        page = self.open(_snapshot(entries=[
+            _entry("e1", "goal", "未确认报价单里已发送的合计多少钱？", at=1_757_000_000_000),
+            _entry("e2", "progress", "正在读取业务数据", tone="active",
+                   at=1_757_000_002_000,
+                   step={"stage": "tool", "tool": "query_quotations", "arguments": "limit=50"}),
+            _entry("e3", "progress", "已读取 3 条：未确认、未取消的报价单", tone="active",
+                   at=1_757_000_005_000,
+                   step={"stage": "read_done", "tool": "query_quotations",
+                         "result": "3 条 · 未确认、未取消的报价单"}),
+            _entry("e4", "result", "合计：504.00 USD", panel_state="success",
+                   at=1_757_000_006_000),
+        ]))
+        page.locator(".woa-launcher").click()
+        page.locator(".woa-step").first.wait_for()
+        self.assertEqual(page.locator(".woa-step").count(), 2)
+        self.assertEqual(page.locator(".woa-step[data-status='done']").count(), 2)
+        # Each node says how long that step took, and the first one took three seconds.
+        self.assertEqual(page.locator(".woa-step__elapsed").first.inner_text(), "3s")
+        # Opening a node shows what was called and with what -- the panel invents none of
+        # it; every field is projected and bounded by the server.
+        page.locator(".woa-step__line").first.click()
+        detail = page.locator(".woa-step__detail").first
+        detail.wait_for()
+        self.assertIn("query_quotations", detail.inner_text())
+        self.assertIn("limit=50", detail.inner_text())
+        self.assertEqual(self.errors, [])
+
+    def test_a_turn_that_ended_badly_marks_the_step_it_ended_on(self):
+        page = self.open(_snapshot(entries=[
+            _entry("e1", "goal", "把这张报价单确认掉", at=1_757_000_000_000),
+            _entry("e2", "progress", "正在读取业务数据", tone="active",
+                   at=1_757_000_001_000, step={"stage": "tool", "tool": "query_quotations"}),
+            _entry("e3", "progress", "正在准备这次更改", tone="active",
+                   at=1_757_000_003_000, step={"stage": "tool", "tool": "confirm_quotation"}),
+            _entry("e4", "result", "你的账号没有执行这项操作的权限。", panel_state="refused",
+                   at=1_757_000_004_000),
+        ]))
+        page.locator(".woa-launcher").click()
+        page.locator(".woa-step").first.wait_for()
+        self.assertEqual(page.locator(".woa-step[data-status='failed']").count(), 1)
+        self.assertEqual(
+            page.locator(".woa-step[data-status='failed'] .woa-step__text").inner_text(),
+            "正在准备这次更改")
+        self.assertEqual(page.locator(".woa-step[data-status='done']").count(), 1)
         self.assertEqual(self.errors, [])
 
     def test_elapsed_time_rolls_over_without_showing_sixty_seconds(self):
@@ -629,8 +680,8 @@ class PanelUITests(_PanelBrowser):
                    at=1_757_000_119_600),
         ]))
         page.locator(".woa-launcher").click()
-        elapsed_text = page.locator(".woa-work__elapsed").inner_text()
-        self.assertEqual(elapsed_text, "2m 0s")
+        elapsed_text = page.locator(".woa-took").inner_text()
+        self.assertIn("2m 0s", elapsed_text)
         self.assertNotIn("60s", elapsed_text)
         self.assertEqual(self.errors, [])
 
@@ -1398,17 +1449,19 @@ class PanelU07Tests(_PanelBrowser):
     def test_no_focus_ring_is_cut_off_by_a_container_that_clips(self):
         """A ring drawn outside its control vanishes wherever an ancestor clips.
 
-        The work-process summary sits in a box with `overflow: hidden`, and keyboard focus
-        on it showed a stray line beneath it rather than a ring around it.
+        A timeline node opens onto what was called, so it is a control a keyboard reaches;
+        drawing its ring outside itself put a stray line under the node instead of a ring
+        around it wherever an ancestor clipped.
         """
         page = self.open(_snapshot(entries=[
             _entry("e1", "goal", "列出所有待开票的销售订单，带金额"),
-            _entry("e2", "action", "query_sale_orders · 扫完 12 / 12 条", tone="active"),
+            _entry("e2", "progress", "正在读取业务数据", tone="active",
+                   step={"stage": "tool", "tool": "query_sale_orders", "arguments": "limit=50"}),
             _entry("e3", "result", "3 张销售订单待开票。", authored="server",
                    panel_state="success"),
         ]))
         page.locator(".woa-launcher").click()
-        page.locator(".woa-work__summary").wait_for()
+        page.locator(".woa-step__line").wait_for()
         # Real Tab presses: only keyboard focus draws the ring a keyboard user sees.
         ring_js = """() => {
           const root = document.querySelector('#woa-assistant').shadowRoot
@@ -1441,9 +1494,9 @@ class PanelU07Tests(_PanelBrowser):
                 seen[ring["name"]] = ring["clipped_by"]
         # Otherwise an empty result could mean nothing was ever focused.
         self.assertGreaterEqual(len(seen), 3, seen)
-        self.assertTrue(any("woa-work__summary" in name for name in seen), seen)
+        self.assertTrue(any("woa-step__line" in name for name in seen), seen)
         self.assertEqual({name: by for name, by in seen.items() if by}, {}, seen)
-        summary_style = page.locator(".woa-work__summary").evaluate("""node => {
+        summary_style = page.locator(".woa-step__line").evaluate("""node => {
           node.focus()
           const style = getComputedStyle(node)
           return {outline: style.outlineStyle, shadow: style.boxShadow}

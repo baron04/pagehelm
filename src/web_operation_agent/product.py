@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 from .application import BoundApplication, SourceCapability
 from .answering import render_structured_query_answer
 from .answer_view import render_payload, render_sources
-from .panel_view import describe_step, panel_limits
+from .panel_view import describe_step, panel_limits, step_facts
 from .browser import TransportError
 from .business import BusinessToolResult, BusinessToolRuntime
 from .conversation import ConversationState
@@ -545,8 +545,10 @@ class AgentTurnExecutor:
         text = describe_step(facts)
         if not text:
             return
-        self.channel.publish("progress", {"state": "step", "message": text},
-                             turn_id=turn_id)
+        self.channel.publish(
+            "progress",
+            {"state": "step", "message": text, "step": step_facts(facts)},
+            turn_id=turn_id)
 
     def run_once(self, message: dict | None = None) -> AgentTurnExecution:
         if message is None:

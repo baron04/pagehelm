@@ -327,47 +327,96 @@ button:disabled { cursor: not-allowed; }
 @keyframes woa-sheen { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
 
 /* ─────────────────────────────────────────────── work process */
+/* ── the work timeline ──────────────────────────────────────────────────────
+   One node per thing the turn did, in the order it happened, with a rail down the left
+   so the steps read as one run rather than a list of unrelated lines. It stays after the
+   answer: it is where a reader checks which call produced the numbers above. */
 .woa-work {
-  border-radius: 9px;
-  background: var(--woa-surface);
-  box-shadow: inset 0 0 0 1px var(--woa-line);
-  overflow: hidden;
+  margin-block: 2px;
 }
-/* While the turn runs its steps are part of the conversation, not a box beside it: no
-   surface, no border, so the answer continues the same column they were arriving in. */
-.woa-work[data-running] {
-  background: none;
-  box-shadow: none;
-}
-.woa-work[data-running] > .woa-work__steps {
-  border-top: none;
+.woa-work__steps {
+  list-style: none;
+  margin: 0;
   padding: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
 }
-.woa-work__summary {
-  width: 100%;
-  display: flex; align-items: center; gap: 7px;
-  padding: 7px 9px;
+/* One continuous rail behind the marks, from the first to the last, so the steps read as
+   one run. Drawn once rather than per node: a per-node segment between two short rows is
+   a few pixels long and reads as a speck. */
+.woa-work__steps::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: 7px;
+  inset-block: 12px;
+  inline-size: 1px;
+  background: var(--woa-line);
+}
+.woa-step {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  column-gap: 8px;
+  align-items: start;
   font-size: 12px;
   color: var(--woa-ink-muted);
-  text-align: left;
+  position: relative;
 }
-.woa-work__summary:hover { color: var(--woa-ink); }
-/* Keep keyboard focus visible without the saturated browser outline that reads as an
-   error border around the whole work card. */
-.woa-work__summary:focus-visible {
+.woa-step__mark {
+  inline-size: 16px; block-size: 16px;
+  display: flex; align-items: center; justify-content: center;
+  margin-block-start: 4px;
+  color: var(--woa-ink-faint);
+  /* The mark sits on the rail, so it carries the panel's own background to punch a hole
+     in it rather than having the line run through the icon. */
+  background: var(--woa-bg);
+  position: relative;
+}
+.woa-step[data-status='done'] .woa-step__mark { color: var(--woa-success); }
+.woa-step[data-status='failed'] .woa-step__mark { color: var(--woa-danger); }
+.woa-step[data-status='waiting'] .woa-step__mark { color: var(--woa-warning); }
+.woa-step[data-status='running'] { color: var(--woa-ink); }
+.woa-step__line {
+  display: flex; align-items: baseline; gap: 8px;
+  inline-size: 100%;
+  padding-block: 5px;
+  text-align: start;
+  color: inherit;
+  min-width: 0;
+}
+button.woa-step__line { cursor: pointer; }
+button.woa-step__line:hover { color: var(--woa-ink); }
+button.woa-step__line:focus-visible {
   outline: none;
   box-shadow: inset 0 0 0 1px var(--woa-line-strong);
+  border-radius: 6px;
 }
-.woa-took {
-  margin: 0;
-  font-size: 11.5px;
+.woa-step__text { min-width: 0; overflow-wrap: anywhere; }
+.woa-step__elapsed {
+  margin-inline-start: auto;
+  font-size: 11px;
   color: var(--woa-ink-faint);
   font-variant-numeric: tabular-nums;
+  flex: none;
 }
-.woa-work__label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.woa-work__chevron { flex: none; color: var(--woa-ink-faint); }
-.woa-work__elapsed {
-  margin-left: auto;
+.woa-step__detail {
+  grid-column: 2;
+  margin: 2px 0 6px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: var(--woa-surface);
+  box-shadow: inset 0 0 0 1px var(--woa-line);
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 8px;
+  row-gap: 3px;
+  font-size: 11.5px;
+}
+.woa-step__detail dt { color: var(--woa-ink-faint); }
+.woa-step__detail dd { margin: 0; overflow-wrap: anywhere; }
+.woa-step__detail code { font-size: 11px; }
+.woa-took {
+  margin: 2px 0 0 24px;
   font-size: 11.5px;
   color: var(--woa-ink-faint);
   font-variant-numeric: tabular-nums;
@@ -379,29 +428,12 @@ button:disabled { cursor: not-allowed; }
   border: 1.6px solid var(--woa-line-strong);
   border-top-color: var(--woa-accent);
   /* A calm pace: a spinner this small turning faster than once a second reads as urgency. */
-  animation: woa-spin 1.2s linear infinite;
+  animation: woa-spin 1.1s linear infinite;
 }
-@keyframes woa-spin { to { transform: rotate(360deg); } }
-
-.woa-work__steps {
-  list-style: none; margin: 0;
-  padding: 5px 9px 7px;
-  border-top: 1px solid var(--woa-line);
-  display: flex; flex-direction: column; gap: 1px;
+@media (prefers-reduced-motion: reduce) {
+  .woa-spinner { animation-duration: 3s; }
 }
-.woa-step {
-  display: grid;
-  grid-template-columns: 13px 1fr auto;
-  gap: 8px;
-  align-items: start;
-  padding: 3px 0;
-  font-size: 12px;
-  color: var(--woa-ink-muted);
-}
-.woa-step svg { margin-top: 2.5px; color: var(--woa-ink-faint); }
-.woa-step__text { min-width: 0; overflow-wrap: anywhere; }
-.woa-step[data-now] { color: var(--woa-ink); }
-.woa-step[data-now] svg { color: var(--woa-accent); }
+@keyframes woa-spin { to { transform: rotate(360deg) } }
 
 /* ─────────────────────────────────────────────── answer */
 .woa-answer-sources {

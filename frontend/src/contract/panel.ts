@@ -39,6 +39,15 @@ export interface TimelineEntry {
   authored?: 'model' | 'server'
   replayed?: boolean
   source_details?: string
+  step?: StepFacts
+}
+
+/** What one timeline node can show beyond its sentence; the server bounds every field. */
+export interface StepFacts {
+  stage?: string
+  tool?: string
+  arguments?: string
+  result?: string
 }
 
 export interface ApprovalRequest {

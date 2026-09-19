@@ -122,6 +122,42 @@ _PAGE_TOOLS = frozenset({
     "prefill_form", "finish", "ask_user"})
 
 
+#: What a step node may carry beyond its sentence, so the panel can show the reader what
+#: the assistant actually called and what came back without the panel inventing any of it.
+_STEP_DETAIL_CHARS = 200
+
+
+def step_facts(facts: dict) -> dict:
+    """The public, bounded projection of one step, for the panel's timeline node.
+
+    Only what a reader can check: which tool ran, the arguments it ran with, and what came
+    back. Everything is clipped and redacted here rather than in the panel, which has no
+    business deciding what is safe to show.
+    """
+    stage = str(facts.get("stage") or "")
+    node: dict = {"stage": stage}
+    tool = str(facts.get("tool") or "")
+    if tool:
+        node["tool"] = _clip(tool, 60)
+    arguments = facts.get("arguments")
+    if isinstance(arguments, dict) and arguments:
+        pairs = []
+        for name in sorted(arguments)[:4]:
+            value = arguments[name]
+            if isinstance(value, (dict, list, tuple)):
+                continue
+            pairs.append(f"{_clip(name, 40)}={_clip(value, 60)}")
+        if pairs:
+            node["arguments"] = _clip(" · ".join(pairs), _STEP_DETAIL_CHARS)
+    if stage == "read_done":
+        count = int(facts.get("count") or 0)
+        scope = _clip(facts.get("scope"), 80)
+        node["result"] = f"{count} 条" + (f" · {scope}" if scope else "")
+    if stage == "write_done":
+        node["result"] = "已执行，正在核对"
+    return node
+
+
 def describe_step(facts: dict) -> str:
     """User-visible prose for one thing the turn is doing, between its page actions.
 
@@ -253,9 +289,12 @@ def project_event(event: TaskEvent, *, at: int) -> dict | None:
             or progress_message(state))
     if not text:
         text = "正在执行" if not mapping["terminal"] else "任务结束"
+    node = payload.get("step")
     return {**base, "kind": "result" if mapping["terminal"] else "progress",
             "tone": mapping["tone"], "text": text,
-            "panel_state": mapping["panel_state"], **_source_details(payload, state, limits)}
+            "panel_state": mapping["panel_state"],
+            **({"step": node} if state == "step" and isinstance(node, dict) and node else {}),
+            **_source_details(payload, state, limits)}
 
 
 def _source_details(payload: dict, state: str, limits: dict) -> dict:

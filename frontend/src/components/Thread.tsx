@@ -1,7 +1,6 @@
 import {memo, useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import {
-  AlertTriangle, ArrowDown, ChevronDown, ChevronRight, CircleAlert, CircleCheck, CircleDot,
-  ExternalLink, MousePointerClick, Search, ShieldQuestion,
+  AlertTriangle, ArrowDown, CircleAlert, CircleCheck, CircleX, ShieldQuestion,
 } from 'lucide-react'
 import type {Labels, PanelLimits, TimelineEntry} from '../contract/panel'
 import type {PanelSnapshot} from '../bridge/host'
@@ -15,17 +14,24 @@ const JUMP_REVEAL_DISTANCE = 160
 /** How long after a gesture a scroll still counts as that person's own doing. */
 const GESTURE_WINDOW_MS = 700
 
-const STEP_ICONS: Record<string, typeof CircleDot> = {
-  goto: ExternalLink, click: MousePointerClick, query: Search, observe: CircleDot,
+/** Longer than this is a clock disagreeing with itself, not something that took that long. */
+const IMPLAUSIBLE_S = 24 * 60 * 60
+
+function spell(seconds: number): string {
+  return seconds < 60 ? `${seconds}s`
+    : `${Math.floor(seconds / 60)}m ${seconds % 60}s`
 }
 
-function stepIcon(text: string): typeof CircleDot {
-  if (text.startsWith('打开页面')) return STEP_ICONS.goto!
-  if (text.startsWith('点击') || text.startsWith('填写') || text.startsWith('提交')) {
-    return STEP_ICONS.click!
-  }
-  if (text.includes('query_') || text.includes('扫')) return STEP_ICONS.query!
-  return STEP_ICONS.observe!
+/** How long one node took, in the same whole seconds the turn clock uses.
+ *
+ * Entry times come from the server and `now` from this browser, so a machine whose clock
+ * disagrees can produce a difference that is not a duration at all. Showing nothing beats
+ * showing `546884m 15s`.
+ */
+function took(fromAt: number, toAt: number): string {
+  const seconds = Math.round((toAt - fromAt) / 1000)
+  if (!fromAt || !toAt || toAt < fromAt || seconds < 1 || seconds > IMPLAUSIBLE_S) return ''
+  return spell(seconds)
 }
 
 /** How long the turn took, from the goal the server accepted to the outcome it recorded. */
@@ -41,8 +47,7 @@ function elapsed(turn: Turn, now: number): string {
   // Round once, then split that same integer into minutes and seconds. Splitting the raw
   // duration first lets 119.6 seconds become the impossible-looking `1m 60s`.
   const seconds = Math.round((to - from) / 1000)
-  return seconds < 60 ? `${seconds}s`
-    : `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+  return seconds > IMPLAUSIBLE_S ? '' : spell(seconds)
 }
 
 /** A clock that only ticks while something is running, and stops dead when it is not. */
@@ -51,7 +56,7 @@ function useClock(running: boolean): number {
   useEffect(() => {
     if (!running) return
     setNow(Date.now())
-    const timer = window.setInterval(() => setNow(Date.now()), 100)
+    const timer = window.setInterval(() => setNow(Date.now()), 500)
     return () => window.clearInterval(timer)
   }, [running])
   return now
@@ -84,67 +89,99 @@ function group(entries: TimelineEntry[], busy: boolean): Turn[] {
   return turns
 }
 
+/** What a node's marker says happened at that point, which is all it is allowed to say. */
+type NodeStatus = 'running' | 'done' | 'failed' | 'waiting'
+
+const FAILED_STATES = new Set(['refused', 'error', 'indeterminate', 'cancelled'])
+
+function statusOf(turn: Turn, index: number): NodeStatus {
+  const step = turn.steps[index]!
+  if (step.kind === 'approval') {
+    // A confirmation node is only "waiting" while it is the newest thing that happened.
+    return turn.running && index === turn.steps.length - 1 ? 'waiting' : 'done'
+  }
+  if (turn.running) return index === turn.steps.length - 1 ? 'running' : 'done'
+  // A turn that ended badly ended at its last step: that is the one that gets the mark,
+  // and the steps before it really did complete.
+  const ended = turn.outcome?.panel_state ?? ''
+  return (FAILED_STATES.has(ended) && index === turn.steps.length - 1) ? 'failed' : 'done'
+}
+
+function NodeMark({status}: {status: NodeStatus}): React.JSX.Element {
+  if (status === 'running') return <span className="woa-spinner" aria-hidden="true" />
+  if (status === 'waiting') {
+    return <ShieldQuestion size={14} strokeWidth={1.8} aria-hidden="true" />
+  }
+  if (status === 'failed') return <CircleX size={14} strokeWidth={1.8} aria-hidden="true" />
+  return <CircleCheck size={14} strokeWidth={1.8} aria-hidden="true" />
+}
+
+/** One node of the timeline: what happened, how long it took, and -- opened -- with what. */
+function StepNode({step, status, duration, labels}: {
+  step: TimelineEntry
+  status: NodeStatus
+  duration: string
+  labels: Labels
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const facts = step.step
+  const detail = facts && (facts.tool || facts.arguments || facts.result)
+  const line = (
+    <>
+      <span className="woa-step__text">{step.text}</span>
+      {duration && <span className="woa-step__elapsed">{duration}</span>}
+    </>
+  )
+  return (
+    <li className="woa-step" data-status={status} data-open={open ? 'true' : undefined}>
+      <span className="woa-step__mark" aria-hidden="true"><NodeMark status={status} /></span>
+      {detail
+        ? (
+          <button type="button" className="woa-step__line" aria-expanded={open}
+                  onClick={() => setOpen(!open)}>{line}</button>
+        )
+        : <span className="woa-step__line">{line}</span>}
+      {open && detail && (
+        <dl className="woa-step__detail">
+          {facts?.tool && (<><dt>{labels.stepTool}</dt><dd><code>{facts.tool}</code></dd></>)}
+          {facts?.arguments && (<><dt>{labels.stepArguments}</dt><dd>{facts.arguments}</dd></>)}
+          {facts?.result && (<><dt>{labels.stepResult}</dt><dd>{facts.result}</dd></>)}
+        </dl>
+      )}
+    </li>
+  )
+}
+
 const WorkProcess = memo(function WorkProcess({turn, labels}: {
   turn: Turn
   labels: Labels
 }): React.JSX.Element {
-  // Folded once it lands -- and whatever the reader last chose wins.
-  const [override, setOverride] = useState<boolean | null>(null)
-  const took = elapsed(turn, useClock(turn.running))
-  const approvals = turn.steps.filter(step => step.kind === 'approval').length
-  // What the agent *did*: a page action, a confirmation, a read. A settled turn whose only
-  // entries are the server saying it had started has nothing a list can add, so it gets no
-  // expander and no card -- just how long it took.
-  const concrete = turn.steps.filter(step => step.kind !== 'progress')
-  // While the turn runs, its steps *are* the conversation: they arrive in the flow, one
-  // under the other, and the answer continues that same flow underneath them. Once it
-  // lands they fold into one line, so the question and its answer stay adjacent. The old
-  // shape -- a summary header above a folded box, then the answer -- read as two separate
-  // things stacked, and while running it said the same sentence twice.
-  const open = override ?? turn.running
-
-  if (!turn.running && concrete.length === 0) {
-    return (
-      <p className="woa-took">{labels.elapsedPrefix} {took}</p>
-    )
+  const now = useClock(turn.running)
+  const total = elapsed(turn, now)
+  // A turn whose only entry is the server saying it had started -- an old session replayed
+  // from before steps were reported -- has nothing a list can add, so it gets no list, just
+  // how long it took. Everything else keeps its steps, including after the answer lands.
+  const bare = turn.steps.length <= 1 && !turn.steps.some(step => step.step)
+  if (!turn.running && bare) {
+    return <p className="woa-took">{labels.elapsedPrefix} {total}</p>
   }
-
-  const steps = open && (
-    <ol className="woa-work__steps">
-      {turn.steps.map((step, index) => {
-        const current = turn.running && index === turn.steps.length - 1
-        const Icon = step.kind === 'approval' ? ShieldQuestion : stepIcon(step.text)
-        return (
-          <li className="woa-step" key={step.id} data-now={current ? 'true' : undefined}>
-            {current
-              ? <span className="woa-spinner" aria-hidden="true" />
-              : <Icon size={13} strokeWidth={1.7} aria-hidden="true" />}
-            <span className="woa-step__text">{step.text}</span>
-            {current && <span className="woa-work__elapsed">{took}</span>}
-          </li>
-        )
-      })}
-    </ol>
-  )
-
-  if (turn.running) {
-    return <div className="woa-work" data-running="true" data-open="true">{steps}</div>
-  }
+  // The record stays after the answer. It is the only place a reader can see which tool
+  // produced the numbers above, so hiding it once the answer lands would take away the
+  // thing that makes the answer checkable.
   return (
-    <div className="woa-work" data-open={open ? 'true' : 'false'}>
-      <button type="button" className="woa-work__summary" aria-expanded={open}
-              onClick={() => setOverride(!open)}>
-        {open
-          ? <ChevronDown className="woa-work__chevron" size={13} strokeWidth={1.7} aria-hidden="true" />
-          : <ChevronRight className="woa-work__chevron" size={13} strokeWidth={1.7} aria-hidden="true" />}
-        <span className="woa-work__label">{[
-          labels.workProcess,
-          `${turn.steps.length} ${labels.stepCount}`,
-          approvals ? `${approvals} ${labels.approvalCount}` : '',
-        ].filter(Boolean).join(' · ')}</span>
-        <span className="woa-work__elapsed">{took}</span>
-      </button>
-      {steps}
+    <div className="woa-work" data-running={turn.running ? 'true' : undefined}>
+      <ol className="woa-work__steps">
+        {turn.steps.map((step, index) => {
+          const next = turn.steps[index + 1]
+          const until = next ? next.at
+            : (turn.outcome?.at ?? (turn.running ? now : step.at))
+          return (
+            <StepNode key={step.id} step={step} status={statusOf(turn, index)}
+                      duration={took(step.at, until)} labels={labels} />
+          )
+        })}
+      </ol>
+      {total && <p className="woa-took">{labels.elapsedPrefix} {total}</p>}
     </div>
   )
 })

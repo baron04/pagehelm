@@ -1528,10 +1528,13 @@ class ServerAgentSession:
             step += 1
             self.ledger.append("tool_call", step=step, tool=name,
                                args=_safe(args, self.session_handoffs))
-            self._step_note(stage="tool", tool=name, step=step, mutation=bool(
-                self.business_tools is not None
-                and name in self.business_tools.tool_names
-                and self.business_tools.is_mutation(name)))
+            self._step_note(
+                stage="tool", tool=name, step=step,
+                arguments=_safe(args, self.session_handoffs) if isinstance(args, dict) else {},
+                mutation=bool(
+                    self.business_tools is not None
+                    and name in self.business_tools.tool_names
+                    and self.business_tools.is_mutation(name)))
             kept_reply, unanswered_reply = (unanswered_reply if name == "finish" else ""), ""
 
             no_progress = self._track_progress(name, args, obs)
@@ -1884,7 +1887,7 @@ class ServerAgentSession:
                     self._collect_evidence(tool_result, step=step)
                     self._latest_business_query_page_actions = (
                         self.page_actions if tool_result.query_answer is not None else None)
-                    self._step_note(stage="write_done")
+                    self._step_note(stage="write_done", tool=name)
                     successful_business_tools += 1
                     feedback = ("BUSINESS MUTATION RESULT (approved, executed once, "
                                 "current runtime fact):\n" + tool_result.render())
@@ -1969,7 +1972,7 @@ class ServerAgentSession:
                         self.page_actions if tool_result.query_answer is not None else None)
                     if tool_result.query_answer is not None:
                         self._step_note(
-                            stage="read_done",
+                            stage="read_done", tool=name,
                             count=tool_result.query_answer.matched_count,
                             scope=self._scope_label(tool_result.query_answer.scope))
                     successful_business_tools += 1

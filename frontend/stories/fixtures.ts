@@ -90,7 +90,18 @@ export const APPROVAL = {
 
 export const WORKED_TURN: TimelineEntry[] = [
   entry('e1', 'goal', '把 Acme Corporation 的报价单 S00002 确认成销售订单'),
-  entry('e2', 'action', '重新检查当前页面', {tone: 'active'}),
-  entry('e3', 'action', '打开页面：/odoo/sales', {tone: 'active'}),
-  entry('e4', 'action', 'query_quotations · 扫完 12 / 12 条', {tone: 'active'}),
+  entry('e2', 'progress', '正在思考', {tone: 'active', at: 1_757_000_000_000,
+                                       step: {stage: 'thinking'}}),
+  entry('e3', 'progress', '正在选择操作方式', {
+    tone: 'active', at: 1_757_000_002_000,
+    step: {stage: 'tool', tool: 'load_skill',
+           arguments: 'skill_id=odoo.sales.sale-orders-confirm'}}),
+  entry('e4', 'action', '打开页面：/odoo/sales', {tone: 'active', at: 1_757_000_004_000}),
+  entry('e5', 'progress', '正在读取业务数据', {
+    tone: 'active', at: 1_757_000_005_000,
+    step: {stage: 'tool', tool: 'query_quotations', arguments: 'limit=50'}}),
+  entry('e6', 'progress', '已读取 12 条：未确认、未取消的报价单', {
+    tone: 'active', at: 1_757_000_008_000,
+    step: {stage: 'read_done', tool: 'query_quotations',
+           result: '12 条 · 未确认、未取消的报价单'}}),
 ]
