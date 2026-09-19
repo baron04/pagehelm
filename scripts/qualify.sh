@@ -94,6 +94,32 @@ run_gate "core distribution boundary" 1 "${PYTHON}" scripts/check_core_boundary.
 # the index and is a deliberate release step, `scripts/lock_and_sbom.py --write`.
 run_gate "dependency lock, SBOM and licence notice" 1 \
   "${PYTHON}" scripts/lock_and_sbom.py --check
+# ---------------------------------------------------------------- frontend gate
+# First among the suites that need it: the panel and `assistant.js` are build artifacts,
+# and the product suite's Runtime conformance tests read `assistant.js`. Built after them,
+# those tests would read whatever an earlier build left behind, or nothing at all.
+# The assistant panel is built here, not committed. Like the PageAgent bundle, a checkout
+# without the toolchain is BLOCKED with the prerequisite named; it never reuses an unverified
+# build and never reports the panel path as passed.
+printf '\n\033[1m── assistant panel ──\033[0m\n'
+panel_ready=0
+if ! command -v npm >/dev/null 2>&1; then
+  record "assistant panel build" BLOCKED "npm is unavailable"
+  [[ "${require_browser}" == "1" ]] && failed+=("assistant panel build")
+elif [[ ! -d "${ROOT}/frontend/node_modules" ]]; then
+  record "assistant panel build" BLOCKED "run npm ci in frontend"
+  [[ "${require_browser}" == "1" ]] && failed+=("assistant panel build")
+elif ( cd "${ROOT}/frontend" && npm run lint && npm test && npm run build \
+       && npm run build-storybook ) \
+     && "${PYTHON}" scripts/build_panel.py --skip-build \
+     && "${PYTHON}" scripts/build_runtime.py --skip-build; then
+  record "assistant panel build" PASS ""
+  panel_ready=1
+else
+  record "assistant panel build" FAIL "lint, unit tests, bundle or Storybook failed"
+  failed+=("assistant panel build")
+fi
+
 run_gate "product suite" 1 "${PYTHON}" src/web_operation_agent/tests/run_all.py
 run_gate "ordinary-browser host (offline)" 1 "${PYTHON}" -m unittest \
   examples.contacts.tests.test_native_server.NativeContactsHostTests
@@ -152,29 +178,6 @@ elif ( cd "${ROOT}/evals/pageagent" && npm test && npm run build ); then
 else
   record "PageAgent deterministic bundle" FAIL "deterministic build failed"
   failed+=("PageAgent deterministic bundle")
-fi
-
-# ---------------------------------------------------------------- frontend gate
-# The assistant panel is built here, not committed. Like the PageAgent bundle, a checkout
-# without the toolchain is BLOCKED with the prerequisite named; it never reuses an unverified
-# build and never reports the panel path as passed.
-printf '\n\033[1m── assistant panel ──\033[0m\n'
-panel_ready=0
-if ! command -v npm >/dev/null 2>&1; then
-  record "assistant panel build" BLOCKED "npm is unavailable"
-  [[ "${require_browser}" == "1" ]] && failed+=("assistant panel build")
-elif [[ ! -d "${ROOT}/frontend/node_modules" ]]; then
-  record "assistant panel build" BLOCKED "run npm ci in frontend"
-  [[ "${require_browser}" == "1" ]] && failed+=("assistant panel build")
-elif ( cd "${ROOT}/frontend" && npm run lint && npm test && npm run build \
-       && npm run build-storybook ) \
-     && "${PYTHON}" scripts/build_panel.py --skip-build \
-     && "${PYTHON}" scripts/build_runtime.py --skip-build; then
-  record "assistant panel build" PASS ""
-  panel_ready=1
-else
-  record "assistant panel build" FAIL "lint, unit tests, bundle or Storybook failed"
-  failed+=("assistant panel build")
 fi
 
 # ---------------------------------------------------------------- packaging gate

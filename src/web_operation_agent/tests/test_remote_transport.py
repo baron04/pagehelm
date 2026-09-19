@@ -1069,14 +1069,17 @@ class GatewayTests(unittest.TestCase):
                                       hello(sid).to_json(), token="wrong")[0], 401)
         self.assertEqual(self.request("POST", f"/v1/sessions/{sid}/hello",
                                       hello(sid).to_json(), origin="http://evil.test")[0], 403)
+        # `assistant.js` and the panel are build artifacts; where one is absent the gateway
+        # names the prerequisite instead of serving whatever happens to be in the directory.
         status, headers, body = self.request("GET", "/v1/runtime/assistant.js")
-        self.assertEqual(status, 200)
-        self.assertEqual(headers["Access-Control-Allow-Origin"], "*")
-        self.assertIn(b"class EmbeddedWebRuntime", body)
-        self.assertNotIn(b"OPENAI_API_KEY", body)
-        self.assertNotIn(b"ControlPlan", body)
-        # The built panel is a generated artifact. Where it is absent the gateway names the
-        # prerequisite instead of serving whatever happens to be in the directory.
+        if status == 200:
+            self.assertEqual(headers["Access-Control-Allow-Origin"], "*")
+            self.assertIn(b"class EmbeddedWebRuntime", body)
+            self.assertNotIn(b"OPENAI_API_KEY", body)
+            self.assertNotIn(b"ControlPlan", body)
+        else:
+            self.assertEqual(status, 404)
+            self.assertIn(b"runtime_unavailable", body)
         status, headers, body = self.request("GET", "/v1/runtime/panel/panel.js")
         if status == 200:
             self.assertEqual(headers["Access-Control-Allow-Origin"], "*")

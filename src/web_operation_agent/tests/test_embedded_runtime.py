@@ -27,9 +27,17 @@ _PAGE_CONTROLLER_PATH = os.environ.get("WOA_PAGE_CONTROLLER_MODULE", "")
 PAGE_CONTROLLER = Path(_PAGE_CONTROLLER_PATH).expanduser() if _PAGE_CONTROLLER_PATH else None
 
 
+def _runtime_bytes() -> bytes:
+    """`assistant.js` as built. Like the panel, it is a build artifact: a checkout that has
+    not built it skips with the prerequisite named, rather than failing on a missing file."""
+    if not RUNTIME.is_file():
+        raise unittest.SkipTest("assistant.js is not built; run scripts/build_runtime.py")
+    return RUNTIME.read_bytes()
+
+
 def _runtime_source_b64() -> str:
     """`assistant.js` as a data URL body: one self-contained module, panel host included."""
-    return base64.b64encode(RUNTIME.read_bytes()).decode()
+    return base64.b64encode(_runtime_bytes()).decode()
 
 
 def _panel_configuration_js() -> str:
@@ -1421,7 +1429,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         })
 
     def test_runtime_has_no_server_brain_or_arbitrary_javascript_surface(self):
-        source = RUNTIME.read_text()
+        source = _runtime_bytes().decode("utf-8")
         self.assertIn("PageController", source)
         self.assertIn("highlightLabelOpacity: 0", source)
         self.assertIn("playwright-highlight-container", source)
