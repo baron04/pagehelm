@@ -333,6 +333,16 @@ button:disabled { cursor: not-allowed; }
   box-shadow: inset 0 0 0 1px var(--woa-line);
   overflow: hidden;
 }
+/* While the turn runs its steps are part of the conversation, not a box beside it: no
+   surface, no border, so the answer continues the same column they were arriving in. */
+.woa-work[data-running] {
+  background: none;
+  box-shadow: none;
+}
+.woa-work[data-running] > .woa-work__steps {
+  border-top: none;
+  padding: 0;
+}
 .woa-work__summary {
   width: 100%;
   display: flex; align-items: center; gap: 7px;
@@ -381,7 +391,7 @@ button:disabled { cursor: not-allowed; }
 }
 .woa-step {
   display: grid;
-  grid-template-columns: 13px 1fr;
+  grid-template-columns: 13px 1fr auto;
   gap: 8px;
   align-items: start;
   padding: 3px 0;

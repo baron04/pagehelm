@@ -88,26 +88,20 @@ const WorkProcess = memo(function WorkProcess({turn, labels}: {
   turn: Turn
   labels: Labels
 }): React.JSX.Element {
-  // Open while it runs, folded once it lands -- and whatever the reader last chose wins.
+  // Folded once it lands -- and whatever the reader last chose wins.
   const [override, setOverride] = useState<boolean | null>(null)
   const took = elapsed(turn, useClock(turn.running))
   const approvals = turn.steps.filter(step => step.kind === 'approval').length
-  // What the agent *did*: a page action, a confirmation. A turn whose only entries are
-  // the server saying it had started has nothing a list can add, so it gets no expander
-  // and no card -- just how long it took. An affordance that opens onto one generic line
-  // is worse than no affordance.
+  // What the agent *did*: a page action, a confirmation, a read. A settled turn whose only
+  // entries are the server saying it had started has nothing a list can add, so it gets no
+  // expander and no card -- just how long it took.
   const concrete = turn.steps.filter(step => step.kind !== 'progress')
-  const open = override ?? (turn.running && concrete.length > 1)
-  const summary = turn.running
-    // Running, the summary line *is* the live status. Repeating "工作过程 · 第 1 步" above a
-    // list holding that one step said the same thing twice and neither time said what it
-    // was doing.
-    ? (turn.steps.at(-1)?.text ?? labels.statusActing)
-    : [
-      labels.workProcess,
-      `${turn.steps.length} ${labels.stepCount}`,
-      approvals ? `${approvals} ${labels.approvalCount}` : '',
-    ].filter(Boolean).join(' · ')
+  // While the turn runs, its steps *are* the conversation: they arrive in the flow, one
+  // under the other, and the answer continues that same flow underneath them. Once it
+  // lands they fold into one line, so the question and its answer stay adjacent. The old
+  // shape -- a summary header above a folded box, then the answer -- read as two separate
+  // things stacked, and while running it said the same sentence twice.
+  const open = override ?? turn.running
 
   if (!turn.running && concrete.length === 0) {
     return (
@@ -115,32 +109,42 @@ const WorkProcess = memo(function WorkProcess({turn, labels}: {
     )
   }
 
+  const steps = open && (
+    <ol className="woa-work__steps">
+      {turn.steps.map((step, index) => {
+        const current = turn.running && index === turn.steps.length - 1
+        const Icon = step.kind === 'approval' ? ShieldQuestion : stepIcon(step.text)
+        return (
+          <li className="woa-step" key={step.id} data-now={current ? 'true' : undefined}>
+            {current
+              ? <span className="woa-spinner" aria-hidden="true" />
+              : <Icon size={13} strokeWidth={1.7} aria-hidden="true" />}
+            <span className="woa-step__text">{step.text}</span>
+            {current && <span className="woa-work__elapsed">{took}</span>}
+          </li>
+        )
+      })}
+    </ol>
+  )
+
+  if (turn.running) {
+    return <div className="woa-work" data-running="true" data-open="true">{steps}</div>
+  }
   return (
     <div className="woa-work" data-open={open ? 'true' : 'false'}>
       <button type="button" className="woa-work__summary" aria-expanded={open}
               onClick={() => setOverride(!open)}>
-        {turn.running
-          ? <span className="woa-spinner" aria-hidden="true" />
-          : (open
-            ? <ChevronDown className="woa-work__chevron" size={13} strokeWidth={1.7} aria-hidden="true" />
-            : <ChevronRight className="woa-work__chevron" size={13} strokeWidth={1.7} aria-hidden="true" />)}
-        <span className="woa-work__label">{summary}</span>
+        {open
+          ? <ChevronDown className="woa-work__chevron" size={13} strokeWidth={1.7} aria-hidden="true" />
+          : <ChevronRight className="woa-work__chevron" size={13} strokeWidth={1.7} aria-hidden="true" />}
+        <span className="woa-work__label">{[
+          labels.workProcess,
+          `${turn.steps.length} ${labels.stepCount}`,
+          approvals ? `${approvals} ${labels.approvalCount}` : '',
+        ].filter(Boolean).join(' · ')}</span>
         <span className="woa-work__elapsed">{took}</span>
       </button>
-      {open && (
-        <ol className="woa-work__steps">
-          {turn.steps.map((step, index) => {
-            const Icon = step.kind === 'approval' ? ShieldQuestion : stepIcon(step.text)
-            const current = turn.running && index === turn.steps.length - 1
-            return (
-              <li className="woa-step" key={step.id} data-now={current ? 'true' : undefined}>
-                <Icon size={13} strokeWidth={1.7} aria-hidden="true" />
-                <span className="woa-step__text">{step.text}</span>
-              </li>
-            )
-          })}
-        </ol>
-      )}
+      {steps}
     </div>
   )
 })

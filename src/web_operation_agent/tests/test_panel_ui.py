@@ -591,6 +591,33 @@ class PanelUITests(_PanelBrowser):
         self.assertEqual(page.locator(".woa-step").count(), 2)
         self.assertEqual(self.errors, [])
 
+    def test_a_running_turn_shows_its_steps_in_the_flow_rather_than_behind_a_control(self):
+        """What it is doing is the conversation while it runs, not a box to go open.
+
+        A read-only question spends most of its wall clock inside model calls and typed
+        reads. The panel held one line -- 正在理解目标 -- for all of it, behind a summary
+        that repeated that same line, and the person could not tell working from stuck.
+        """
+        page = self.open(_snapshot(
+            connection={"state": "acting", "busy": True, "stopping": False, "online": True},
+            entries=[
+                _entry("e1", "goal", "检查名为 Acme 的客户是否存在"),
+                _entry("e2", "progress", "正在思考", tone="active"),
+                _entry("e3", "progress", "正在读取业务数据", tone="active"),
+                _entry("e4", "progress", "已读取 3 条：客户", tone="active"),
+            ]))
+        page.locator(".woa-launcher").click()
+        page.locator(".woa-step").first.wait_for()
+        # Every step is on screen, in the order it happened, with nothing to expand.
+        self.assertEqual([line.strip() for line in
+                          page.locator(".woa-step__text").all_inner_texts()],
+                         ["正在思考", "正在读取业务数据", "已读取 3 条：客户"])
+        self.assertEqual(page.locator(".woa-work__summary").count(), 0)
+        # The live line carries the spinner and the clock; the settled ones do not.
+        self.assertEqual(page.locator(".woa-step[data-now]").count(), 1)
+        self.assertEqual(page.locator(".woa-step[data-now] .woa-spinner").count(), 1)
+        self.assertEqual(self.errors, [])
+
     def test_elapsed_time_rolls_over_without_showing_sixty_seconds(self):
         page = self.open(_snapshot(entries=[
             _entry("e1", "goal", "打开客户", at=1_757_000_000_000),
