@@ -949,6 +949,7 @@ class BusinessToolRuntime:
                  route_validator: BusinessRouteValidator | None = None,
                  route_skill_hints: tuple[tuple[str, str], ...] = (),
                  max_pending_mutations: int = 1_000,
+                 withheld_skills: tuple[BusinessSkill, ...] = (),
                  answer_labels: dict[str, dict[str, str]] | None = None):
         skill_ids = [skill.skill_id for skill in skills]
         if len(skill_ids) != len(set(skill_ids)):
@@ -1009,6 +1010,11 @@ class BusinessToolRuntime:
         self._schemas = schemas
         self._effects = dict(effects)
         self._executor = executor
+        #: Capabilities this application installs and this session may not use -- an adapter
+        #: that builds its catalog per grant (Odoo drops the write Skills for a reader) would
+        #: otherwise make a capability gap say "this deployment cannot", when the truth is
+        #: "you were not granted it". Searched for wording only; nothing here is loadable.
+        self._withheld_skills = tuple(withheld_skills)
         if data_classifier is not None:
             if (not callable(getattr(data_classifier, "classify", None))
                     or getattr(data_classifier, "tool_names", None) != frozenset(schemas)):
@@ -1144,6 +1150,22 @@ class BusinessToolRuntime:
         return {"schema_version": 1, "skills": skills, "tools": tools,
                 "route_skill_hints": route_hints}
 
+    def time_zone(self) -> str:
+        """The zone the application says its signed-in user is in, as an IANA name.
+
+        The host passes it to the turn so relative dates mean the person's days. An adapter
+        that does not know one answers "", and the turn then says nothing about the clock
+        rather than claiming UTC is where they are.
+        """
+        reader = getattr(self._executor, "time_zone", None)
+        if not callable(reader):
+            return ""
+        try:
+            zone = reader()
+        except Exception:  # an adapter fault must not stop the turn before it starts
+            return ""
+        return zone if isinstance(zone, str) and len(zone) <= 64 else ""
+
     @property
     def catalog_sha256(self) -> str:
         encoded = json.dumps(
@@ -1194,6 +1216,24 @@ class BusinessToolRuntime:
                 found.append(skill.skill_id)
         found += [name for name in extra
                   if isinstance(name, str) and name.strip() and name not in found]
+        return tuple(dict.fromkeys(found))
+
+    def withheld_capability(self, goal: str) -> tuple[str, ...]:
+        """Installed capabilities that match this goal and this session may not use.
+
+        Same matching as `resolve_capability`, over the Skills the adapter declared as
+        withheld from this grant. Empty when the application genuinely has nothing for the
+        goal, which is the distinction the refusal sentence turns on.
+        """
+        folded = str(goal or "").casefold()
+        if not folded.strip():
+            raise ValueError("a capability search needs the goal it searched for")
+        found: list[str] = []
+        for skill in sorted(self._withheld_skills, key=lambda item: item.skill_id):
+            if (any(_trigger_matches(trigger, folded) for trigger in skill.triggers)
+                    or any(name.replace("_", " ") in folded or name in folded
+                           for name in skill.tool_names)):
+                found.append(skill.skill_id)
         return tuple(dict.fromkeys(found))
 
     def relevant(self, task: str, limit: int = 3) -> tuple[BusinessSkill, ...]:

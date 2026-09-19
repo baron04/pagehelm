@@ -27,7 +27,8 @@ from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.identity import OperationContext, PrincipalContext
 from web_operation_agent.mutation import MemoryMutationJournal, MutationJournalError
 from web_operation_agent.schemas import ActionReceipt, ElementRef, PageObservation
-from web_operation_agent.session import ServerAgentSession, TaskSpec
+from web_operation_agent.session import (CAPABILITY_GAP_TERMINAL,
+                                        ServerAgentSession, TaskSpec)
 from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
 
 
@@ -1358,6 +1359,49 @@ class BusinessReActTransition(unittest.TestCase):
         session.entry_observation = _observation(1)
         session.plan()
         return session
+
+    def test_a_capability_this_account_was_not_granted_says_so(self):
+        """A gap the account caused reads differently from one the deployment caused (CR-14).
+
+        A reader asking for a change got "当前会话不支持这项操作" -- which reads as though a
+        different session would support it, so the person reopens the assistant instead of
+        asking whoever grants permissions. The catalog holds the capability; this delegation
+        may not use it, and the sentence now says that.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _write_skill(Path(tmp) / "write-skill.json")
+            runtime = BusinessToolRuntime((skill,), _MutationExecutor(),
+                                          application_id="fixture")
+            chat = _Chat([
+                ("check_capability", {}),
+                ("finish", {"outcome": "unable", "answer": {
+                    "version": 1, "coverage": "undetermined", "conclusions": [
+                        {"kind": "capability_gap", "evidence_ref": "capability#1"}]}}),
+            ])
+            # No approval path and no page actions that could make the change: this is what
+            # a reader's delegation looks like from inside the session.
+            context = _operation_context(scopes=("companies:read",))
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="Create company Acme.",
+                              supported_scope="Read current companies."),
+                chat=chat, browser=_Browser(), control=ReadOnlyControl(),
+                ledger=SessionLedger(Path(tmp) / "session.jsonl", "capability-withheld"),
+                step_budget=5, wall_budget_s=30, run_id="capability-withheld",
+                business_tools=runtime, business_mutation_approval=None,
+                principal=context.principal, session_id=context.session_id,
+                turn_id=context.turn_id,
+                disabled_actions=frozenset({"click", "fill", "select", "submit", "back"}))
+            session.entry_observation = _observation(1)
+            session.plan()
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, CAPABILITY_GAP_TERMINAL)
+            self.assertIn("does not have permission", result.agent_said)
+            self.assertIn("Ask an administrator", result.agent_said)
+            self.assertNotIn("this session", result.agent_said)
+            event = session.ledger.of_kind("capability_check")[-1]
+            self.assertEqual(event["matches"], [])
+            self.assertEqual(event["withheld"], [skill.skill_id])
 
     def test_a_tool_authorization_refusal_ends_the_turn_before_a_proposal_or_page_route(self):
         with tempfile.TemporaryDirectory() as tmp:

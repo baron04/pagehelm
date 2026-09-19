@@ -23,13 +23,14 @@ import re
 import threading
 import time
 import unicodedata
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time as time_of_day, timezone
 from decimal import Decimal
 from importlib import resources
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from web_operation_agent.answering import StructuredQueryAnswer
 from web_operation_agent.application import (APPLICATION_ADAPTER_VERSION,
@@ -216,7 +217,7 @@ ANSWER_LABELS_ZH = {
     "name": "名称", "email": "邮箱", "phone": "电话", "mobile": "手机", "city": "城市",
     "country_id": "国家", "vat": "税号", "partner_id": "客户", "state": "状态",
     "amount_total": "含税总额", "currency_id": "币种",
-    "date_order": "订单确认时间／报价创建时间（UTC）", "invoice_status": "开票状态",
+    "date_order": "订单确认时间／报价创建时间", "invoice_status": "开票状态",
     "validity_date": "报价有效期", "default_code": "内部编号", "list_price": "销售价格",
     "type": "产品类型", "amount_residual": "未付金额", "invoice_date": "开票日期",
     "invoice_date_due": "到期日", "invoice_origin": "来源单据",
@@ -277,8 +278,9 @@ def _query_schema(collection: _Collection, description: str) -> dict:
             filters[parameter] = {
                 "type": "string", "format": "date",
                 "description": (f"Optional {boundary} YYYY-MM-DD bound on {date_field}. "
-                                + ("Order datetimes use UTC midnight boundaries; date_order is "
-                                   "creation time for quotations, confirmation time for orders."
+                                + ("Day boundaries are the signed-in user's own time zone; "
+                                   "date_order is creation time for quotations, confirmation "
+                                   "time for orders."
                                    if date_field == "date_order" else
                                    "Invoice dates are calendar dates, not posting dates."))}
     return {
@@ -568,6 +570,30 @@ class OdooPageSessionIdentityResolver:
             issued_at=issued_at, expires_at=issued_at + lifetime_s * 1000)
 
 
+#: Odoo stores these as naive UTC datetimes and renders them in the user's zone.
+_UTC_DATETIME_FIELDS = frozenset({"date_order"})
+
+
+def _in_zone(value: str, zone: str) -> str:
+    """One stored UTC datetime, as the application's own screens would show it."""
+    if not zone:
+        return value
+    try:
+        moment = datetime.strptime(value[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return value
+    local = moment.replace(tzinfo=timezone.utc).astimezone(ZoneInfo(zone))
+    return local.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _utc_boundary(day: date, zone: str) -> str:
+    """The person's midnight, as the UTC datetime Odoo compares against."""
+    if not zone:
+        return f"{day.isoformat()} 00:00:00"
+    local = datetime.combine(day, time_of_day(), ZoneInfo(zone))
+    return local.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
 # ------------------------------------------------------------------------------- executor
 
 class OdooBusinessToolExecutor:
@@ -583,6 +609,7 @@ class OdooBusinessToolExecutor:
         self.timeout_s = timeout_s
         self.allow_mutations = allow_mutations
         self._uid: int | None = None
+        self._time_zone: str | None = None
         self._lock = threading.Lock()
 
     # -- tool catalog -------------------------------------------------------------------
@@ -663,6 +690,31 @@ class OdooBusinessToolExecutor:
             self._uid = uid
         return uid
 
+    def time_zone(self) -> str:
+        """The signed-in user's own time zone, as Odoo holds it.
+
+        Odoo stores datetimes in UTC and every one of its own screens shows them in this
+        zone, so an assistant that reports UTC disagrees with the page the person is looking
+        at, and "today" means a different day for the first hours of theirs (P7.5 CR-18). A
+        user without a zone is UTC in Odoo too, so that is what this answers.
+        """
+        with self._lock:
+            if self._time_zone is not None:
+                return self._time_zone
+        zone = ""
+        try:
+            rows = self.call("res.users", "read", [[self._authenticate()]], {"fields": ["tz"]})
+            if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+                value = rows[0].get("tz")
+                if isinstance(value, str) and len(value) <= 64:
+                    ZoneInfo(value)
+                    zone = value
+        except (BusinessToolError, ZoneInfoNotFoundError, ValueError, KeyError, TypeError):
+            zone = ""
+        with self._lock:
+            self._time_zone = zone
+        return zone
+
     def call(self, model: str, method: str, args: list, kwargs: dict | None = None,
              *, mutation: bool = False):
         uid = self._authenticate()
@@ -699,8 +751,7 @@ class OdooBusinessToolExecutor:
                 "identity": context.audit_projection()}
 
     # -- reads --------------------------------------------------------------------------
-    @staticmethod
-    def _read_args(name: str, args: dict) -> tuple[str, int, list]:
+    def _read_args(self, name: str, args: dict) -> tuple[str, int, list]:
         unknown = set(args) - set(QUERY_SCHEMAS[name]["function"]["parameters"]["properties"])
         if unknown:
             raise BusinessToolRequestError(f"{name} received unknown arguments")
@@ -734,10 +785,21 @@ class OdooBusinessToolExecutor:
                 dates[key] = date.fromisoformat(value)
             except ValueError:
                 raise BusinessToolRequestError(f"{key} must be a valid YYYY-MM-DD date") from None
-            field = "date_order" if _BY_TOOL[name].model == "sale.order" else "invoice_date"
-            domain.append([field, operator, value + (" 00:00:00" if field == "date_order" else "")])
         if len(dates) == 2 and dates["date_from"] >= dates["date_until"]:
             raise BusinessToolRequestError("date_from must precede the exclusive date_until")
+        # Only now, with every argument accepted, may this reach the application: asking it
+        # for the user's zone is a call, and a refused argument must make none.
+        field = "date_order" if _BY_TOOL[name].model == "sale.order" else "invoice_date"
+        for key, operator in (("date_from", ">="), ("date_until", "<")):
+            if key not in dates:
+                continue
+            if field == "date_order":
+                # A day boundary is the person's midnight, not the server's: orders "from
+                # the 15th" in Shanghai must not include the one placed at 16:30 UTC on the
+                # 14th, which is 00:30 on the 15th where they are.
+                domain.append([field, operator, _utc_boundary(dates[key], self.time_zone())])
+            else:
+                domain.append([field, operator, dates[key].isoformat()])
         return needle.strip(), limit, domain
 
     def _scan(self, collection: _Collection, extra_domain: list | None = None
@@ -779,9 +841,10 @@ class OdooBusinessToolExecutor:
             "incomplete_reason": "" if complete else "page_budget_exhausted",
         }
 
-    @staticmethod
-    def _label(row: dict, field: str) -> str:
+    def _label(self, row: dict, field: str) -> str:
         value = row.get(field)
+        if field in _UTC_DATETIME_FIELDS and isinstance(value, str) and value:
+            return _in_zone(value, self.time_zone())
         if isinstance(value, list) and len(value) == 2:
             value = value[1]
         if value is False or value is None:
@@ -812,7 +875,7 @@ class OdooBusinessToolExecutor:
     _MOMENT_FIELDS = {"date_order": "datetime", "invoice_date": "date",
                       "invoice_date_due": "date", "validity_date": "date"}
     _FIELD_MEANINGS = {
-        "date_order": "order confirmation time / quotation creation time (UTC)",
+        "date_order": "order confirmation time / quotation creation time",
         "invoice_date": "invoice calendar date", "invoice_date_due": "invoice due date",
         "validity_date": "quotation expiry date", "amount_total": "total including taxes",
         "amount_residual": "invoice amount due", "list_price": "catalog sales price",
@@ -1540,8 +1603,14 @@ class OdooApplicationAdapter:
             timeout_s=timeout_s, allow_mutations=allow_mutations,
             allow_private_http=allow_private_http)
         skills = [_packaged_skill(name) for name in _READ_SKILLS]
+        withheld: list[BusinessSkill] = []
         if allow_mutations:
             skills += [_packaged_skill(name) for name in _WRITE_SKILLS]
+        else:
+            # Installed here, not granted to this actor. The catalog this session can run
+            # omits them; a refusal that did not know about them would tell the person the
+            # deployment cannot do what it does every day (P7.5 CR-37).
+            withheld = [_packaged_skill(name) for name in _WRITE_SKILLS]
         required_scopes = {"query_sale_orders": "sale_orders:read",
                            "query_customers": "customers:read",
                            "query_products": "products:read",
@@ -1587,6 +1656,7 @@ class OdooApplicationAdapter:
             route_validator=routes,
             route_skill_hints=((r"^/odoo/customers(?:/[^/?#]+)?$",
                                 "odoo.sales.customers-query"),),
+            withheld_skills=tuple(withheld),
             answer_labels={"zh": ANSWER_LABELS_ZH})
         self._executor = executor
         self.ports = ApplicationPorts(

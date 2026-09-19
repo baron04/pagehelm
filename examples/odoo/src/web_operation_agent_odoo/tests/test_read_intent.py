@@ -155,3 +155,37 @@ class TheUnconfirmedQuotationsQuestionIsAnswered(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AReaderHearsWhichKindOfNoItIs(unittest.TestCase):
+    """The catalog a reader can run omits the write Skills, and a refusal must not read as
+    "this deployment cannot" when the truth is "you were not granted it" (P7.5 CR-37).
+
+    The adapter builds its catalog per grant, so for a reader the create Skill is not in it
+    at all -- the capability search that decides the sentence would have found nothing to
+    withhold, and every refusal would have blamed the deployment.
+    """
+
+    def _runtime(self, *, allow_mutations: bool):
+        with tempfile.TemporaryDirectory() as tmp:
+            adapter = OdooApplicationAdapter(
+                base_url=BASE, api_key_path=_key_file(Path(tmp)),
+                allow_mutations=allow_mutations,
+                mutation_journal=MemoryMutationJournal() if allow_mutations else None)
+            return adapter.business_tools
+
+    def test_a_reader_asking_to_create_is_told_it_is_their_permission(self):
+        runtime = self._runtime(allow_mutations=False)
+        self.assertEqual(runtime.resolve_capability("创建客户 Ivydell Works", allow_mutations=False), ())
+        self.assertEqual(runtime.withheld_capability("创建客户 Ivydell Works"),
+                         ("odoo.sales.customers-create",))
+
+    def test_a_capability_nobody_installed_is_withheld_by_nobody(self):
+        runtime = self._runtime(allow_mutations=False)
+        self.assertEqual(runtime.withheld_capability("删除客户 Ivydell Works"), ())
+
+    def test_a_writer_withholds_nothing(self):
+        runtime = self._runtime(allow_mutations=True)
+        self.assertEqual(runtime.withheld_capability("创建客户 Ivydell Works"), ())
+        self.assertEqual(runtime.resolve_capability("创建客户 Ivydell Works", allow_mutations=True),
+                         ("odoo.sales.customers-create",))

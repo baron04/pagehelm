@@ -215,19 +215,43 @@ class TheConclusionStandsOnAnEmptySearch(unittest.TestCase):
             turn.capture((_capability(()),), namespace="call1")
 
 
-class TheSentenceIsFixedAndIsAboutThisSession(unittest.TestCase):
-    def test_chinese_and_english(self):
+class TheSentenceSaysWhichKindOfGapItIs(unittest.TestCase):
+    """Two gaps, two sentences, and neither sends the reader back to the assistant.
+
+    Both used to read "当前会话不支持这项操作" -- which a person reads as "another session
+    would", so they open a new one and meet the same wall. A capability nobody installed and
+    one nobody granted this account are different problems with different people to ask
+    (P7.5 CR-14).
+    """
+
+    def test_a_capability_this_deployment_does_not_have(self):
         self.assertEqual(capability_gap_answer("删除客户 Ivydell Works"),
-                         "当前会话不支持这项操作，本次没有执行任何更改。")
+                         "当前接入不支持这项操作，本次没有执行任何更改。")
         self.assertEqual(
             capability_gap_answer("Delete customer Ivydell Works"),
-            "That operation is not supported in this session, so it was not executed.")
+            "That operation is not supported by this integration, so it was not executed.")
 
-    def test_it_is_scoped_to_this_session_not_to_the_product_forever(self):
-        """Installing the capability is a configuration away, so the sentence cannot be
-        absolute; it says what is true of this session."""
-        self.assertIn("当前会话", capability_gap_answer("删除客户 X"))
-        self.assertIn("in this session", capability_gap_answer("Delete customer X"))
+    def test_a_capability_this_account_was_not_granted(self):
+        chinese = capability_gap_answer("新建客户 Ivydell Works", withheld=True)
+        self.assertEqual(chinese, "你的账号没有权限执行这项操作，本次没有执行任何更改。"
+                                  "需要的话请联系管理员授予。")
+        english = capability_gap_answer("Create customer Ivydell Works", withheld=True)
+        self.assertIn("does not have permission", english)
+        self.assertIn("Ask an administrator", english)
+
+    def test_the_sentence_reads_as_a_permission_refusal_to_a_reader_and_a_scorer(self):
+        """"没有权限" / "permission" is how both a person and the evaluator recognise it."""
+        self.assertIn("没有权限", capability_gap_answer("新建客户 X", withheld=True))
+        self.assertIn("permission", capability_gap_answer("Create customer X", withheld=True))
+
+    def test_neither_sentence_suggests_another_session_would_work(self):
+        for text in (capability_gap_answer("删除客户 X"),
+                     capability_gap_answer("删除客户 X", withheld=True),
+                     capability_gap_answer("Delete customer X"),
+                     capability_gap_answer("Delete customer X", withheld=True)):
+            with self.subTest(text=text):
+                self.assertNotIn("当前会话", text)
+                self.assertNotIn("this session", text)
 
     def test_it_never_reports_the_capability_as_not_found(self):
         """A missing capability is not an absent record, and the first draft said "没有找到",

@@ -17,6 +17,7 @@ consumed a permit but the browser lost the page, say -- the run ends as
 """
 from __future__ import annotations
 
+import datetime
 import hashlib
 import json
 import re
@@ -25,6 +26,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Callable
 from urllib.parse import urlencode, urljoin, urlsplit
+from zoneinfo import ZoneInfo
 
 from .application import ApplicationRoutePort, SourceCapability
 from . import answer_protocol
@@ -91,6 +93,23 @@ _NAVIGATION_EXTRA_GOAL = re.compile(
     r"\b(?:and|then|tell|show|list|summari[sz]e|explain)\b",
     re.I,
 )
+
+
+def _validated_time_zone(value: object) -> str:
+    """An IANA zone this machine can resolve, or nothing.
+
+    A zone that does not resolve is refused rather than silently ignored: a turn that thinks
+    it is answering in the person's day and is not is the defect, not the absence of a zone.
+    """
+    if value in (None, ""):
+        return ""
+    if not isinstance(value, str) or len(value) > 64:
+        raise ValueError("time_zone must be an IANA zone name")
+    try:
+        ZoneInfo(value)
+    except Exception as exc:  # ZoneInfoNotFoundError, and whatever a bad key raises
+        raise ValueError(f"time_zone {value!r} is not a zone this machine knows") from exc
+    return value
 
 
 def _is_navigation_only(prompt: str) -> bool:
@@ -669,6 +688,7 @@ class ServerAgentSession:
                  cancelled: Callable[[], bool] | None = None,
                  principal: PrincipalContext | None = None,
                  session_id: str = "", turn_id: str = "",
+                 time_zone: str = "",
                  conversation_context: dict | None = None):
         if source is not None and not isinstance(source, SourceCapability):
             raise TypeError("source must be a SourceCapability or None")
@@ -958,6 +978,7 @@ class ServerAgentSession:
         self.evidence = TurnEvidence()
         self._evidence_feedback = ""
         self._capability_ref = ""
+        self._capability_withheld = False
         self._clarification_choices: dict[str, dict] = {}
         #: Reads this account's authority refused in this turn, in the reader's words. Their
         #: presence closes the page as a source of facts and keeps the answer from claiming
@@ -1009,6 +1030,12 @@ class ServerAgentSession:
         self.oracle_contract = oracle_contract
         self.step_budget = step_budget
         self.wall_budget_s = wall_budget_s
+        #: Where the person is, as an IANA name. "Today" and "this month" are theirs, not
+        #: the server's: an order placed at 08:00 in Shanghai is yesterday's order in UTC,
+        #: and a turn that never learned the zone answered "today's orders" wrongly for the
+        #: first eight hours of every day (P7.5 CR-18). Empty means nobody supplied one and
+        #: the turn says UTC rather than guessing.
+        self.time_zone = _validated_time_zone(time_zone)
         self.terms_cache = terms_cache
         #: How many recent page observations stay in the model's context in full. Older
         #: tool results are replaced by one line each. Without this the context grows
@@ -2396,7 +2423,8 @@ class ServerAgentSession:
                     # that make that checkable rather than taken on the model's word. The
                     # sentence is fixed here; a model free to phrase it is free to soften it
                     # back into "here is what I found instead".
-                    result.agent_said = capability_gap_answer(self.task.prompt)
+                    result.agent_said = capability_gap_answer(
+                        self.task.prompt, withheld=self._capability_withheld)
                     self.ledger.append(
                         "capability_gap", step=step,
                         capability_digest=self._active_capability_digest(),
@@ -3516,6 +3544,9 @@ class ServerAgentSession:
     def _opening(self, obs: PageObservation) -> str:
         # The plan lives in its own message so it can be withdrawn; this one never changes.
         parts = [f"TASK: {self.task.prompt}"]
+        now_line = self._now_line()
+        if now_line:
+            parts.append(now_line)
         if self.task.supported_scope:
             parts.append("WHAT THIS RUN MAY CHANGE: " + self.task.supported_scope)
         if self.conversation_context is not None:
@@ -3534,6 +3565,22 @@ class ServerAgentSession:
         if business_skills:
             parts.append(business_skills)
         return "\n\n".join(parts)
+
+    def _now_line(self) -> str:
+        """What the clock says where the person is, so relative dates resolve to their days.
+
+        Without it the model reads the date off an `observed_at` timestamp, which is UTC, and
+        "today" means the server's day: between midnight and 08:00 in Shanghai, "today's
+        orders" answered for yesterday (P7.5 CR-18). Said only when a zone was supplied --
+        a deployment that does not know where its person is gets no sentence rather than a
+        confident wrong one.
+        """
+        if not self.time_zone:
+            return ""
+        now = datetime.datetime.now(ZoneInfo(self.time_zone))
+        return ("CURRENT TIME: " + now.strftime("%Y-%m-%d %H:%M") + f" ({self.time_zone}). "
+                "Dates the user names -- today, yesterday, this month -- mean days in this "
+                "zone, and every time you report is in it.")
 
     def _render(self, obs: PageObservation, receipt: ActionReceipt, note: str,
                 write: dict, *, affordance_query: str = "") -> str:
@@ -3589,11 +3636,19 @@ class ServerAgentSession:
         # and the gap impossible in the one deployment that enables it.
         writing_actions = {"fill", "select", "submit", "click"} - set(self.disabled_actions)
         extra = [f"page:{name}" for name in sorted(writing_actions & BROWSER_ACTIONS)]
+        allowed = self.business_mutation_approval is not None
         try:
             matches = self.business_tools.resolve_capability(
-                self.task.prompt,
-                allow_mutations=self.business_mutation_approval is not None,
-                extra=tuple(extra))
+                self.task.prompt, allow_mutations=allowed, extra=tuple(extra))
+            # The same search with changes allowed. What it finds and this one does not is
+            # what this actor's delegation (or this deployment) withholds -- the difference
+            # between a capability nobody installed and one nobody granted them.
+            withheld = () if allowed else tuple(
+                name for name in (
+                    tuple(self.business_tools.resolve_capability(
+                        self.task.prompt, allow_mutations=True))
+                    + tuple(self.business_tools.withheld_capability(self.task.prompt)))
+                if name not in matches)
         except (ValueError, TypeError) as exc:
             # A capability check that cannot run leaves the turn without the reference, so no
             # gap can be claimed. That is the safe direction: the model falls back to ordinary
@@ -3610,12 +3665,13 @@ class ServerAgentSession:
             actor=self.principal.actor_authority_digest,
             catalog_digest=self.business_tools.catalog_sha256,
             goal=self.task.prompt[:500],
-            matches=tuple(matches))
+            matches=tuple(matches), withheld=tuple(withheld))
         self.evidence.record(item)
         self._capability_ref = item.evidence_id
+        self._capability_withheld = bool(item.withheld)
         self.ledger.append("capability_check", goal_chars=len(self.task.prompt),
                            catalog_digest=item.catalog_digest,
-                           matches=list(item.matches))
+                           matches=list(item.matches), withheld=list(item.withheld))
         return item.evidence_id
 
     def _capability_check_available(self) -> bool:

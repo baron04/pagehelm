@@ -335,6 +335,12 @@ class CapabilityEvidence:
     catalog_digest: str
     goal: str
     matches: tuple[str, ...] = ()
+    #: Capabilities the catalog holds for this goal that this session may not use, because
+    #: the actor's delegation or the deployment withholds changes. It is the difference
+    #: between "nothing here does that" and "you are not allowed to", which the person has to
+    #: be told apart: the first is a question for whoever installs capabilities, the second
+    #: for whoever grants them.
+    withheld: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _require_id(self.evidence_id)
@@ -351,6 +357,12 @@ class CapabilityEvidence:
         if any(not isinstance(name, str) or not name.strip() for name in matches):
             raise ValueError("every matched capability is named")
         object.__setattr__(self, "matches", matches)
+        withheld = tuple(self.withheld)
+        if any(not isinstance(name, str) or not name.strip() for name in withheld):
+            raise ValueError("every withheld capability is named")
+        if set(withheld) & set(matches):
+            raise ValueError("a capability cannot be both available and withheld")
+        object.__setattr__(self, "withheld", withheld)
 
     @property
     def found_nothing(self) -> bool:

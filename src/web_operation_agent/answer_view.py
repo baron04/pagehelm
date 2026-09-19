@@ -93,7 +93,7 @@ def _basis(words: dict, item: dict) -> str:
             f"{_literal(_named(words, item['scope']))}")
 
 
-def capability_gap_answer(user_text: str) -> str:
+def capability_gap_answer(user_text: str, *, withheld: bool = False) -> str:
     """The one sentence a capability gap gets, fixed here rather than left to the model.
 
     It says what the check found and what followed: this session cannot perform the change,
@@ -105,10 +105,21 @@ def capability_gap_answer(user_text: str) -> str:
     "没有找到可执行这项操作的能力", which is literally a not-found sentence, and a not-found
     sentence is the exact confusion this whole path exists to end: a missing capability is
     not an absent record.
+
+    `withheld` says the catalog does hold something for this goal and this session may not
+    use it. Both sentences used to be "当前会话不支持", which reads as though another session,
+    or a new one, would support it -- so the reader was sent to reopen the assistant when
+    what they needed was an administrator (P7.5 CR-14).
     """
-    return ("当前会话不支持这项操作，本次没有执行任何更改。"
-            if _language(user_text) == "zh" else
-            "That operation is not supported in this session, so it was not executed.")
+    zh = _language(user_text) == "zh"
+    if withheld:
+        return ("你的账号没有权限执行这项操作，本次没有执行任何更改。需要的话请联系管理员授予。"
+                if zh else
+                "Your account does not have permission for that operation, so nothing was "
+                "changed. Ask an administrator to grant it.")
+    return ("当前接入不支持这项操作，本次没有执行任何更改。"
+            if zh else
+            "That operation is not supported by this integration, so it was not executed.")
 
 
 def withdrawn_answer(user_text: str) -> str:
