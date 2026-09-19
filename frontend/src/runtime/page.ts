@@ -1,0 +1,159 @@
+/**
+ * The page, as this Runtime reaches it: through PageController and nothing else.
+ *
+ * PageController is loaded from the application at run time and owns the selector map
+ * that turns a server ref into a live element. Every lookup used to be written out as
+ * `this.getElementByIndex(this.controller.selectorMap, refIndex(ref))` on a controller
+ * that is `null` until startup finishes; this object exists only once it is loaded, so
+ * a lookup cannot happen against nothing.
+ */
+import {
+  actionElementFingerprint, elementsFrom, hydrateFormFacts, hydrateLinkFacts, refIndex,
+  type ElementLike, type ElementLookup,
+} from './pageModel'
+import {canonicalUrl} from './navigation'
+import {MAX_CONTENT_CHARS, type Redactor} from './redaction'
+import type {ElementRef, PageObservation} from './types'
+
+const WIRE_VERSION = 1
+const ANNOTATION_STYLE_ID = 'woa-hide-page-controller-annotations'
+
+export interface BrowserState {
+  url: string
+  title: string
+  header?: string
+  content: string
+  footer?: string
+}
+
+/** The part of PageController this Runtime drives. */
+export interface PageControllerApi {
+  selectorMap: unknown
+  getBrowserState(): Promise<BrowserState>
+  clickElement(index: number): Promise<unknown>
+  inputText(index: number, text: string): Promise<unknown>
+  selectOption(index: number, text: string): Promise<unknown>
+  dispose(): void
+}
+
+interface PageControllerModule {
+  PageController?: new (options: Record<string, unknown>) => PageControllerApi
+  getElementByIndex?: ElementLookup
+}
+
+/** What one observation of the page found, before the session numbers and wraps it. */
+export interface PageReading {
+  observation: PageObservation
+  fingerprints: Map<string, string>
+  canonicalUrl: string
+}
+
+export class Page {
+  constructor(private readonly controller: PageControllerApi,
+              private readonly lookup: ElementLookup,
+              private readonly redactor: Redactor) {}
+
+  /** The live element behind a server ref; an unknown ref is `bad_arguments`. */
+  element(ref: unknown): ElementLike | null | undefined {
+    return this.lookup(this.controller.selectorMap, refIndex(ref))
+  }
+
+  /** What the element under `ref` is now, in the terms an action's meaning depends on. */
+  fingerprint(ref: unknown): string {
+    try {
+      return actionElementFingerprint(this.element(ref))
+    } catch {
+      return 'missing'
+    }
+  }
+
+  click(ref: unknown): Promise<unknown> { return this.controller.clickElement(refIndex(ref)) }
+  input(ref: unknown, text: string): Promise<unknown> {
+    return this.controller.inputText(refIndex(ref), text)
+  }
+  select(ref: unknown, text: string): Promise<unknown> {
+    return this.controller.selectOption(refIndex(ref), text)
+  }
+
+  /** PageController's reading of the page, with its debugging overlay removed. */
+  async read(): Promise<BrowserState> {
+    const state = await this.controller.getBrowserState()
+    // PageController uses numbered overlays while building its private selector map. They
+    // are debugging aids, not product UI; removing them does not change the stored refs.
+    document.getElementById('playwright-highlight-container')?.remove()
+    return state
+  }
+
+  /** The server's view of one reading, numbered with the epoch the session assigned it. */
+  describe(state: BrowserState, epoch: number): PageReading {
+    const content = this.redactor.sanitizePageContent(
+      `${state.header ?? ''}\n${state.content}\n${state.footer ?? ''}`)
+    const map = this.controller.selectorMap
+    const elements: ElementRef[] = hydrateFormFacts(hydrateLinkFacts(
+      elementsFrom(content, epoch, this.redactor), map, this.lookup, this.redactor),
+    map, this.lookup, this.redactor)
+    const fingerprints = new Map<string, string>()
+    for (const item of elements) fingerprints.set(item.ref, this.fingerprint(item.ref))
+    return {
+      observation: {
+        schema_version: WIRE_VERSION,
+        epoch,
+        url: this.redactor.redactString(state.url),
+        title: this.redactor.redactString(state.title).slice(0, 300),
+        landmarks: [],
+        elements,
+        content,
+        messages: [],
+        truncated: state.content.length > MAX_CONTENT_CHARS,
+      },
+      fingerprints,
+      canonicalUrl: canonicalUrl(state.url),
+    }
+  }
+
+  dispose(): void { this.controller.dispose() }
+}
+
+function hideAnnotations(): void {
+  if (document.getElementById(ANNOTATION_STYLE_ID)) return
+  const style = document.createElement('style')
+  style.id = ANNOTATION_STYLE_ID
+  style.textContent = '#playwright-highlight-container{display:none!important}'
+  document.documentElement.appendChild(style)
+}
+
+/** A loaded PageController and the lookup that resolves its indices to live elements. */
+export interface LoadedPageController {
+  controller: PageControllerApi
+  lookup: ElementLookup
+}
+
+/** Load the application's PageController, excluding the assistant's own container. */
+export async function loadPageController(moduleUrl: string | undefined,
+                                         exclude: Element[]): Promise<LoadedPageController> {
+  if (!moduleUrl) throw new Error('pageControllerModule must be an absolute http(s) module URL')
+  const url = new URL(moduleUrl, location.href)
+  if (!['http:', 'https:'].includes(url.protocol)) {
+    throw new Error('pageControllerModule must be an absolute http(s) module URL')
+  }
+  hideAnnotations()
+  const module = await import(/* @vite-ignore */ url.href) as PageControllerModule
+  const {PageController, getElementByIndex} = module
+  if (!PageController || !getElementByIndex) {
+    throw new Error('pageControllerModule does not expose the required PageController API')
+  }
+  const controller = new PageController({
+    enableMask: false,
+    highlightOpacity: 0,
+    highlightLabelOpacity: 0,
+    viewportExpansion: -1,
+    keepSemanticTags: true,
+    includeAttributes: [
+      'href', 'action', 'method', 'target', 'formaction', 'formmethod', 'formtarget',
+      'type', 'name', 'id', 'value',
+      'aria-label', 'placeholder', 'autocomplete',
+    ],
+    interactiveBlacklist: exclude,
+  })
+  return {controller, lookup: getElementByIndex}
+}

@@ -10,7 +10,8 @@
   "scripts": {
     "tokens": "node scripts/build-tokens.mjs",
     "dev": "npm run tokens && vite --open",
-    "build": "npm run tokens && tsc -b --force && vite build",
+    "build": "npm run tokens && tsc -b --force && vite build && npm run build:runtime",
+    "build:runtime": "vite build -c vite.runtime.config.ts",
     "typecheck": "npm run tokens && tsc -b --force",
     "lint": "eslint .",
     "test": "npm run tokens && vitest run",

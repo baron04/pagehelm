@@ -34,4 +34,23 @@ export default [
       'no-console': ['error', {allow: ['warn', 'error']}],
     },
   },
+  {
+    // The Runtime shares its JavaScript realm with the host page (no iframe): an
+    // uncaught error in a raw timer or listener reaches the host's own error handler --
+    // Odoo answers with its "Oops!" dialog. `contain.ts` is the one place a failure is
+    // caught before it can escape; this rule keeps every other module in this directory
+    // from reaching around it.
+    files: ['src/runtime/**/*.ts'],
+    ignores: ['src/runtime/contain.ts'],
+    rules: {
+      'no-restricted-globals': ['error',
+        {name: 'setTimeout', message: "use later() from './contain'"},
+        {name: 'setInterval', message: "use every() from './contain'"},
+      ],
+      'no-restricted-syntax': ['error',
+        {selector: "CallExpression[callee.property.name='addEventListener']",
+          message: "use listen() from './contain'"},
+      ],
+    },
+  },
 ]
