@@ -261,6 +261,9 @@ _INVOICES = _BY_TOOL["query_customer_invoices"]
 #: so the tool pins the value rather than letting a default decide.
 REGULAR_INVOICE = "delivered"
 
+#: How much of one field value an answer shows before it says the rest was left out.
+_LABEL_CHARS = 300
+
 
 def _query_schema(collection: _Collection, description: str) -> dict:
     # The narrowest read this collection offers, and the only way to reach one of two records
@@ -901,7 +904,13 @@ class OdooBusinessToolExecutor:
             if not numeric.is_finite():
                 raise BusinessToolContractError("Odoo returned a non-finite number")
             return format(numeric, f".{max(2, -numeric.as_tuple().exponent)}f")
-        return str(value)[:300]
+        text = str(value)
+        # A value longer than the display bound is shown shortened, and says so. It was cut
+        # to its first 300 characters in silence, and the answer then presented that prefix
+        # as the field's value -- a claim about the record the record does not support.
+        if len(text) > _LABEL_CHARS:
+            return text[:_LABEL_CHARS] + "…"
+        return text
 
     @staticmethod
     def _currency(row: dict) -> str:
