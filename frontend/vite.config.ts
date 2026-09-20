@@ -14,7 +14,6 @@ const contract = fileURLToPath(new URL('../src/web_operation_agent/web_runtime',
  */
 export default defineConfig(({command}) => ({
   resolve: {alias: {'@contract': contract}},
-  css: {preprocessorOptions: {scss: {api: 'modern-compiler'}}},
   // React is bundled, so the build must be told it is in production: lib mode does not do
   // it, and the development build is four times the size. Only on `build`, though --
   // forcing it during `serve` hands Fast Refresh a production React and the dev page dies
@@ -27,12 +26,18 @@ export default defineConfig(({command}) => ({
     emptyOutDir: true,
     target: 'es2022',
     cssCodeSplit: false,
+    // The stylesheet ships as a string inside the module and the browser adopts it whole,
+    // so the suite can assert that the exact palette literals it reads back are the ones
+    // declared in design_tokens.json. lightningcss -- the Vite 8 default -- shortens
+    // `#ffffff` to `#fff` and quietly re-writes rules; esbuild minifies whitespace without
+    // touching any of that, and costs nothing on top.
+    cssMinify: 'esbuild',
     lib: {
       entry: fileURLToPath(new URL('./src/index.ts', import.meta.url)),
       formats: ['es'],
       fileName: () => 'panel.js',
     },
-    rollupOptions: {
+    rolldownOptions: {
       output: {inlineDynamicImports: true},
     },
   },

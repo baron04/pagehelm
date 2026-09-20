@@ -23,6 +23,6 @@ export default defineConfig({
       formats: ['es'],
       fileName: () => 'assistant.js',
     },
-    rollupOptions: {output: {inlineDynamicImports: true}},
+    rolldownOptions: {output: {inlineDynamicImports: true}},
   },
 })

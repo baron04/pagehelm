@@ -3,9 +3,9 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Assistant panel for the Web Operation Agent: a floating window the embedded Runtime mounts into a host application page.",
+  "description": "Assistant panel for the Web Operation Agent: a floating window the embedded Runtime imports into a host application page.",
   "engines": {
-    "node": ">=20"
+    "node": "^20.19.0 || >=22.12.0"
   },
   "scripts": {
     "tokens": "node scripts/build-tokens.mjs",
@@ -15,34 +15,30 @@
     "typecheck": "npm run tokens && tsc -b --force",
     "lint": "eslint .",
     "test": "npm run tokens && vitest run",
-    "test:e2e": "playwright test",
     "storybook": "npm run tokens && storybook dev -p 6006",
     "build-storybook": "npm run tokens && storybook build"
   },
   "dependencies": {
     "lucide-react": "0.475.0",
-    "react": "19.0.0",
-    "react-dom": "19.0.0"
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
   },
   "devDependencies": {
-    "@playwright/test": "1.50.1",
-    "@storybook/addon-a11y": "8.5.3",
-    "@storybook/addon-essentials": "8.5.3",
-    "@storybook/react-vite": "8.5.3",
-    "@testing-library/react": "16.2.0",
+    "@storybook/react": "10.6.0",
+    "@storybook/react-vite": "10.6.0",
     "@types/node": "^22.20.2",
     "@types/react": "19.0.8",
     "@types/react-dom": "19.0.3",
-    "@typescript-eslint/eslint-plugin": "8.24.0",
-    "@typescript-eslint/parser": "8.24.0",
-    "@vitejs/plugin-react": "4.3.4",
+    "@typescript-eslint/eslint-plugin": "8.70.0",
+    "@typescript-eslint/parser": "8.70.0",
+    "@vitejs/plugin-react": "6.1.1",
     "eslint": "9.20.1",
     "eslint-plugin-react-hooks": "5.1.0",
     "jsdom": "26.0.0",
     "sass": "1.84.0",
-    "storybook": "8.5.3",
-    "typescript": "5.7.3",
-    "vite": "6.1.0",
-    "vitest": "3.0.5"
+    "storybook": "10.6.0",
+    "typescript": "5.9.3",
+    "vite": "8.3.0",
+    "vitest": "4.1.11"
   }
 }

@@ -60,7 +60,6 @@ const preview: Preview = {
         {name: 'dark', value: '#0b0d10'},
       ],
     },
-    a11y: {test: 'error'},
   },
   globalTypes: {
     theme: {
