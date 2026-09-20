@@ -109,11 +109,11 @@ button:disabled { cursor: not-allowed; }
 .woa-launcher__nub {
   position: absolute; top: 0; right: 0;
   min-width: 16px; height: 16px; padding: 0 4px;
+  display: flex; align-items: center; justify-content: center;
   border-radius: var(--woa-radius-pill);
   background: var(--woa-accent);
   color: var(--woa-accent-ink);
-  font-size: var(--woa-font-size-micro); font-weight: 600; line-height: 16px;
-  text-align: center;
+  font-size: var(--woa-font-size-micro); font-weight: 600;
   box-shadow: 0 0 0 2px var(--woa-bg);
 }
 .woa-launcher__nub[data-await='true'] { background: var(--woa-warning); color: var(--woa-warning-ink); }
@@ -548,7 +548,9 @@ button.woa-step__line:focus-visible {
   padding: 8px;
   font-family: var(--woa-mono-stack);
   font-size: var(--woa-font-size-meta);
-  line-height: 1.6;
+  /* Code keeps its own leading: one more unit of air per line is what makes a pasted
+     transcript scannable. It is still a declared fact, not a value typed at the rule. */
+  line-height: var(--woa-line-height-code);
   overflow-x: auto;
 }
 .woa-md__more {

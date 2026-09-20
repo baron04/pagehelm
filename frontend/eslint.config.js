@@ -54,4 +54,19 @@ export default [
       ],
     },
   },
+  {
+    // The Runtime is what loads and speaks before any view exists, and the entry note it
+    // renders is the whole interface until the server says otherwise. React arriving in
+    // this directory would quietly merge the two modules the build keeps separate, so
+    // the import itself is what gets refused here, not just the mistake it would cause.
+    files: ['src/runtime/**/*.ts'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        patterns: [{
+          group: ['react', 'react/*', 'react-dom', 'react-dom/*'],
+          message: 'the Runtime holds no view: panel.js imports React, not src/runtime',
+        }],
+      }],
+    },
+  },
 ]

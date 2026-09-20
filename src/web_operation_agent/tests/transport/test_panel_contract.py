@@ -283,6 +283,68 @@ class DesignTokenTests(unittest.TestCase):
         for name, value in design_tokens()["themes"]["light"].items():
             self.assertIn(f"--woa-{name}: {value};", text)
 
+    @staticmethod
+    def _without_comments(text: str) -> str:
+        blanked = lambda m: "\n" * m.group(0).count("\n")  # noqa: E731 -- line numbers survive
+        text = re.sub(r"/\*.*?\*/", blanked, text, flags=re.S)
+        return re.sub(r"^\s*//.*$", "", text, flags=re.M)
+
+    def test_the_handwritten_styles_quote_the_scale_rather_than_restate_it(self):
+        """P3 put every size, radius and colour onto the scale; this keeps them there.
+
+        The scan skips comments -- prose names the hex it argues against -- and reads
+        the panel stylesheet and the entry script. Four rules, each earned by a defect:
+        font-size and line-height are token references, border-radius too (a percentage
+        is allowed only for a true circle); no solid colour is written inline anywhere,
+        the shadow rgba surviving because a shadow is light, not colour; the white that
+        lights a highlight comes from the sheen tokens, except inside the brand disc --
+        the one object allowed its own fixed light, which the test above pins as equal
+        across themes; and the entry, which cannot inherit a token file because it
+        renders outside any panel, states no colour in its own words, only in the
+        palette generated for it from the same file.
+        """
+        stylesheet = FRONTEND / "src" / "styles" / "panel.scss"
+        entry = FRONTEND / "src" / "runtime" / "entry.ts"
+        disc = re.compile(r"\.woa-(launcher__disc|mark)\b")
+        problems: list[str] = []
+        current_selector = ""
+        for lineno, line in enumerate(self._without_comments(
+                stylesheet.read_text(encoding="utf-8")).splitlines(), 1):
+            opened = re.match(r"([^{};]*)\{", line)
+            if opened:
+                current_selector = opened.group(1)
+            if not line.strip():
+                continue
+            for prop, prefix in (("font-size", "--woa-font-size"),
+                                 ("line-height", "--woa-line-height")):
+                value = re.search(rf"\b{prop}\s*:\s*([^;]+)", line)
+                if value and not value.group(1).startswith(f"var({prefix}"):
+                    problems.append(f"panel.scss:{lineno} {prop}: {value.group(1)}")
+            radius = re.search(r"\bborder-radius\s*:\s*([^;]+)", line)
+            if radius and not all(
+                    token.startswith("var(--woa-radius") or token == "50%"
+                    for token in radius.group(1).split()):
+                problems.append(f"panel.scss:{lineno} border-radius: {radius.group(1)}")
+            if re.search(r"#[0-9a-fA-F]{3,8}\b", line):
+                problems.append(f"panel.scss:{lineno} colour literal: {line.strip()}")
+            if re.search(r"rgba\(\s*255,\s*255,\s*255", line) and not disc.search(current_selector):
+                problems.append(f"panel.scss:{lineno} white highlight outside the brand disc")
+        entry_text = self._without_comments(entry.read_text(encoding="utf-8"))
+        if re.search(r"#[0-9a-fA-F]{3,8}\b", entry_text):
+            problems.append("entry.ts states a colour of its own")
+        self.assertEqual(problems, [])
+
+    def test_every_token_the_stylesheet_reaches_for_is_declared(self):
+        """A reference to a token nobody declares falls back to nothing, quietly."""
+        referenced = set(re.findall(r"var\((--woa-[a-z0-9-]+)",
+                                    token_custom_properties()))
+        declared = set(re.findall(r"^\s*(--woa-[a-z0-9-]+):", token_custom_properties(),
+                                  flags=re.M))
+        stylesheet = FRONTEND / "src" / "styles" / "panel.scss"
+        used = set(re.findall(r"var\((--woa-[a-z0-9-]+)",
+                              self._without_comments(stylesheet.read_text(encoding="utf-8"))))
+        self.assertEqual(used - declared - referenced, set())
+
 
 class ASessionEndIsSaidNotCoded(unittest.TestCase):
     """A closed session left "任务结束（delegated_authority_changed）" in the timeline (P7.5)."""
