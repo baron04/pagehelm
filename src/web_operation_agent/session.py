@@ -39,7 +39,7 @@ from .browser import BrowserExecutor, TransportError, TurnCancelled
 from .business import (BUSINESS_SKILL_MATCHER_VERSION, BusinessMutationBlockedError,
                        BusinessMutationIndeterminate, BusinessMutationRefusedError,
                        BusinessSkillSelection, BusinessToolError, BusinessToolPermissionError,
-                       BusinessToolResult, FormDraft, BusinessToolRuntime,
+                       FormDraft, BusinessToolRuntime,
                        trigger_requests_action)
 from .contract import (ContractPlanner, EvidenceBundle, PlanningFailed, SourceRetriever,
                        _segment_from_template, expand_terms)
@@ -55,6 +55,7 @@ from .privacy import (SessionHandoffPolicy, redact_sensitive_assignments,
                       safe_tool_arguments as _safe)
 from .routes import Router, candidate_url, observation_is_at_route
 from .turnwatch import ProgressFeed, RepeatGuard
+from .turn_answer import AnswerState, TurnAnswer
 from .writes import PRE_DISPATCH_ERRORS, WRITE_CAPABLE, WatchState, WriteWatch
 from .prompts import (
     AGENT_SYSTEM, APPLICATION_ENTRY_SYSTEM, APPLICATION_ENTRY_TOOL, ASK_USER_TOOL,
@@ -652,38 +653,13 @@ class ServerAgentSession:
                 reason="unique_exact_read_navigation")
         self._business_routes: set[str] = set()
         self._latest_business_routes: set[str] = set()
-        # Keep the bounded, schema-checked result in server memory so a product shell can
-        # render requested facts directly.  The audit ledger intentionally stores only its
-        # digest and projection; model prose is not a reliable transport for table rows.
-        self.latest_business_tool_result: BusinessToolResult | None = None
         # One adapter-issued draft is usable once, in this turn only. It never enters the
         # browser protocol as authority: the model can request application of the current
         # draft but cannot provide or alter any route, field or value.
         self._form_draft: FormDraft | None = None
-        # What this turn established, as opposed to what its last call returned. Held here
-        # rather than on either result type: a typed read and a page observation back an
-        # answer alike and arrive through different doors with different trust roots.
-        self.evidence = TurnEvidence()
-        self._evidence_feedback = ""
-        self._capability_ref = ""
-        self._capability_withheld = False
-        self._clarification_choices: dict[str, dict] = {}
-        #: Reads this account's authority refused in this turn, in the reader's words. Their
-        #: presence closes the page as a source of facts and keeps the answer from claiming
-        #: complete coverage.
-        self._refused_reads: list[str] = []
-        self._refused_detail = ""
-        self._clarification_feedback = ""
-        self._answer_repairs = 0
-        self._answer_mode = False
         if not isinstance(page_answer_evidence, bool):
             raise ValueError("page_answer_evidence must be a boolean")
         self.page_answer_evidence = page_answer_evidence
-        self._page_answer_digest = ""
-        self._answer_action_receipt: dict | None = None
-        self._latest_business_query_page_actions: int | None = None
-        self.plain_business_answer_min_page_actions = \
-            plain_business_answer_min_page_actions
         self.max_agent_said_chars = max_agent_said_chars
         self.cancelled = cancelled or (lambda: False)
         if business_tools is not None:
@@ -728,6 +704,10 @@ class ServerAgentSession:
         #: not a fact about the task. Identical for every arm.
         self.keep_observations = keep_observations
         self.run_id = run_id or f"{task.task_ref}-{arm}-{uuid.uuid4().hex[:6]}"
+        self._answers = TurnAnswer(
+            ledger=ledger, run_id=self.run_id, prompt=task.prompt,
+            business_tools=business_tools,
+            plain_business_answer_min_page_actions=plain_business_answer_min_page_actions)
         self._approvals = ApprovalWatch(
             ledger=ledger, run_id=self.run_id, principal=principal,
             session_id=session_id, turn_id=turn_id,
@@ -1079,7 +1059,7 @@ class ServerAgentSession:
         messages, obs = turn.messages, turn.obs
         successful_business_tools = turn.successful_business_tools
         kept_reply = turn.kept_reply
-        if name == "finish" and self._structured_answer_required():
+        if name == "finish" and self._answers.answer_mode:
             try:
                 answer = args.get("answer") if isinstance(args, dict) else None
                 conclusions = (answer.get("conclusions")
@@ -1144,9 +1124,9 @@ class ServerAgentSession:
                 messages += [_assistant_call(call), _tool_result(
                     call, "ANSWER REFUSED: " + str(exc)[:500] +
                     ". Correct the evidence reference or perform a supported read/compute; "
-                    "otherwise finish with outcome=unable. " + self._render_answer_action())]
+                    "otherwise finish with outcome=unable. " + self._answers.render_action())]
                 return self._resume(turn, messages, obs, successful_business_tools)
-            verified = self._with_refused_reads(self._with_answer_labels(verified))
+            verified = self._answers.with_refused_reads(self._answers.with_labels(verified))
             result.verified_answer = verified
             if _is_capability_gap(verified):
                 # The claim is that nothing ran, so it is recorded with the two counts
@@ -1193,7 +1173,7 @@ class ServerAgentSession:
                           "Continue, or call finish with done=false if you cannot "
                           "complete it.")]
                 return self._resume(turn, messages, obs, successful_business_tools)
-            if done and self._business_answer_is_projectable():
+            if done and self._answers.business_answer_is_projectable(self.page_actions):
                 result.business_answer_projected = True
                 self.ledger.append(
                     "business_answer", step=step, said=result.agent_said[:300],
@@ -1659,7 +1639,7 @@ class ServerAgentSession:
             self._answer_action_receipt = {
                 "kind": "mutation", "effect": proposal.effect,
                 "targets": list(proposal.targets)}
-            self._collect_evidence(tool_result, step=step)
+            self._answers.collect_evidence(tool_result, step=step)
             self._latest_business_query_page_actions = (
                 self.page_actions if tool_result.query_answer is not None else None)
             self._feed.note(stage="write_done", tool=name)
@@ -1742,7 +1722,7 @@ class ServerAgentSession:
             self.latest_business_tool_result = tool_result
             self._form_draft = (
                 tool_result.form_draft if self.allow_form_prefill else None)
-            recorded_evidence = self._collect_evidence(tool_result, step=step)
+            recorded_evidence = self._answers.collect_evidence(tool_result, step=step)
             self._latest_business_query_page_actions = (
                 self.page_actions if tool_result.query_answer is not None else None)
             if tool_result.query_answer is not None:
@@ -1793,7 +1773,7 @@ class ServerAgentSession:
                         # choose a conclusion; never guess which item proves absence.
                         pass
                     else:
-                        verified = self._with_answer_labels(verified)
+                        verified = self._answers.with_labels(verified)
                         result.verified_answer = verified
                         result.agent_said = render_payload(
                             verified, user_text=self.task.prompt,
@@ -1926,7 +1906,7 @@ class ServerAgentSession:
             # D13). From here every answer must be typed and evidence-backed, page
             # evidence is discarded and refused, and the answer says what was not
             # read whether or not the model chooses to.
-            label = self._operation_label(name)
+            label = self._answers.operation_label(name)
             detail = str(exc)[:500]
             self.ledger.append(
                 "business_tool_permission_denied", step=step, tool=name,
@@ -2144,7 +2124,7 @@ class ServerAgentSession:
             calls = reply.get("tool_calls") or []
             if not calls:
                 said = str(reply.get("content") or "").strip()
-                if self._structured_answer_required():
+                if self._answers.answer_mode:
                     step += 1
                     self._answer_repairs += 1
                     self.ledger.append("answer_contract_refused", step=step,
@@ -2167,7 +2147,8 @@ class ServerAgentSession:
                                   "Use compute if needed; do not repeat the page observation. "
                                   "Use outcome=unable if you cannot support the answer."}]
                     continue
-                minimum_page_actions = self.plain_business_answer_min_page_actions
+                minimum_page_actions = \
+                    self._answers.plain_business_answer_min_page_actions
                 if (successful_business_tools and said
                         and minimum_page_actions is not None
                         and self.page_actions >= minimum_page_actions):
@@ -2180,7 +2161,8 @@ class ServerAgentSession:
                         "business_answer", step=step, said=said[:300],
                         successful_business_tools=successful_business_tools,
                         success_claim="unverified")
-                    result.business_answer_projected = self._business_answer_is_projectable()
+                    result.business_answer_projected = \
+                        self._answers.business_answer_is_projectable(self.page_actions)
                     result.agent_said = said[:self.max_agent_said_chars]
                     return self._finish(
                         result, t0, "agent_finished", result.agent_said, steps=step)
@@ -2288,58 +2270,6 @@ class ServerAgentSession:
             successful_business_tools = turn.successful_business_tools
 
     # -- grounding ---------------------------------------------------------------------
-    def _collect_evidence(self, tool_result, *, step: int) -> tuple[str, ...]:
-        """Take what a read established into the turn, or record that it offered nothing.
-
-        An adapter that produces no evidence is not an error: most do not yet, and the
-        turn simply has nothing for an answer to cite. Saying so in the ledger is what
-        keeps that state from being mistaken for evidence nobody looked at.
-        """
-        items = getattr(tool_result, "evidence", ()) or ()
-        self._evidence_feedback = ""
-        self._clarification_choices = {}
-        self._clarification_feedback = ""
-        if items:
-            self._answer_mode = True
-        recorded, refused = [], []
-        try:
-            recorded = list(self.evidence.capture(items, namespace=f"call{step}"))
-        except (ValueError, TypeError, EvidenceUnknown) as exc:
-            refused.append(str(exc)[:200])
-        if recorded:
-            self._evidence_feedback = (answer_protocol.ANSWER_INSTRUCTIONS + "\n" +
-                                      answer_protocol.evidence_index(self.evidence, tuple(recorded)))
-        elif refused:
-            self._evidence_feedback = "ANSWER EVIDENCE UNAVAILABLE: narrow or repeat the read."
-        if recorded or refused:
-            self.ledger.append("turn_evidence", step=step,
-                               recorded=recorded, refused=refused,
-                               held=len(self.evidence))
-        cards = []
-        for option in getattr(tool_result, "selection_options", ()) or ():
-            label = redact_sensitive_assignments(option.label).strip()
-            record_ref = redact_sensitive_assignments(option.record_ref).strip()
-            seed = json.dumps(
-                {"run_id": self.run_id, "step": step, "record_ref": record_ref},
-                ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-            choice_id = "choice-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:24]
-            choice = {"choice_id": choice_id, "label": label,
-                      "record_ref": record_ref}
-            self._clarification_choices[choice_id] = choice
-            cards.append({"choice_id": choice_id, "label": label})
-        if cards:
-            self._clarification_feedback = (
-                "CLARIFICATION CANDIDATES (current application facts; selecting one grants "
-                "no route or write authority):\n" + json.dumps(
-                    cards, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
-            self.ledger.append(
-                "clarification_candidates_ready", step=step, count=len(cards),
-                choice_ids=[item["choice_id"] for item in cards],
-                label_digests=[hashlib.sha256(item["label"].encode("utf-8")).hexdigest()
-                               for item in cards],
-            )
-        return tuple(recorded)
-
     def tool_schemas(self) -> list[dict]:
         # A disabled action is refused before dispatch, so offering it in the tool surface
         # only invites a call the run will refuse: nothing in the schema tells the model the
@@ -2352,7 +2282,7 @@ class ServerAgentSession:
         if self.page_answer_evidence:
             tools = [page_answer.OBSERVE_TOOL if tool["function"]["name"] == "observe"
                      else tool for tool in tools]
-        if self._structured_answer_required():
+        if self._answers.answer_mode:
             tools = [answer_protocol.FINISH_ANSWER_TOOL if tool["function"]["name"] == "finish"
                      else tool for tool in tools]
         if self.allow_clarification:
@@ -2731,29 +2661,6 @@ class ServerAgentSession:
             return ""
         return ""
 
-    def _with_answer_labels(self, verified: dict | None) -> dict | None:
-        """Attach what the application calls the fields and scopes this answer names.
-
-        Only the entries this answer uses travel with it, so the rendered text and the
-        record of it agree without carrying the adapter's whole vocabulary.
-        """
-        tables = getattr(self.business_tools, "answer_labels", None) or {}
-        if verified is None or not tables:
-            return verified
-        used: set[str] = set()
-        for item in verified.get("conclusions", ()):
-            used.update(value for key in ("field_name", "scope")
-                        if isinstance(value := item.get(key), str))
-            used.update(item.get("fields") or ())
-            for condition in (item.get("condition"), item.get("filter")):
-                used.update(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", str(condition or "")))
-        # A value label ("state=sent") travels with the field it belongs to.
-        labels = {language: {key: value for key, value in table.items()
-                             if key in used or key.partition("=")[0] in used}
-                  for language, table in tables.items()}
-        labels = {language: table for language, table in labels.items() if table}
-        return {**verified, "labels": labels} if labels else verified
-
     def _should_challenge_completion(self) -> bool:
         return (not self._challenged_false_success
                 and self.write_refusals > 0 and self.writes_permitted == 0)
@@ -2806,6 +2713,21 @@ class ServerAgentSession:
     # session's public safety vocabulary. Settlement itself lives in ``WriteWatch``.
     WRITE_CAPABLE = WRITE_CAPABLE
     PRE_DISPATCH_ERRORS = PRE_DISPATCH_ERRORS
+    latest_business_tool_result = AnswerState("latest_business_tool_result")
+    evidence = AnswerState("evidence")
+    _evidence_feedback = AnswerState("evidence_feedback", "")
+    _capability_ref = AnswerState("capability_ref", "")
+    _capability_withheld = AnswerState("capability_withheld", False)
+    _clarification_choices = AnswerState("clarification_choices")
+    _refused_reads = AnswerState("refused_reads")
+    _refused_detail = AnswerState("refused_detail", "")
+    _clarification_feedback = AnswerState("clarification_feedback", "")
+    _answer_repairs = AnswerState("answer_repairs", 0)
+    _answer_mode = AnswerState("answer_mode", False)
+    _page_answer_digest = AnswerState("page_answer_digest", "")
+    _answer_action_receipt = AnswerState("action_receipt")
+    _latest_business_query_page_actions = AnswerState(
+        "latest_business_query_page_actions")
     pending_write = WatchState("pending_write", False)
     writes_permitted = WatchState("writes_permitted", 0)
     write_refusals = WatchState("write_refusals", 0)
@@ -2892,7 +2814,7 @@ class ServerAgentSession:
                         "potentially writing action will stop the run as indeterminate.")
         if note:
             body.append(note)
-        action = self._render_answer_action()
+        action = self._answers.render_action()
         if action:
             body.append(action)
         body.append("CURRENT PAGE:\n" + _render_observation(obs))
@@ -3008,16 +2930,6 @@ class ServerAgentSession:
         return sum(1 for event in self.ledger.events
                    if event.get("event") == "business_mutation_execution_started")
 
-    def _render_answer_action(self) -> str:
-        if not self._answer_mode or self._answer_action_receipt is None:
-            return ""
-        return ("COMPLETED ACTION RECEIPT (server-observed; not proof of other task goals):\n" +
-                json.dumps(self._answer_action_receipt, ensure_ascii=False) +
-                '\nTo report this action, call finish with {"outcome":"acted"}. '
-                "Do not turn a URL, record name or action claim into a field evidence reference. "
-                "If the user also requested data, include validated evidence conclusions "
-                "in the optional answer field of that same finish call.")
-
     def _render_task_skills(self) -> str:
         if not self._task_skills:
             return ""
@@ -3076,21 +2988,6 @@ class ServerAgentSession:
                 + json.dumps(public_payload, ensure_ascii=False, sort_keys=True,
                              separators=(",", ":")))
 
-    def _structured_answer_required(self) -> bool:
-        return self._answer_mode
-
-    def _business_answer_is_projectable(self) -> bool:
-        """Whether the latest typed query still describes this turn's terminal answer."""
-        minimum = self.plain_business_answer_min_page_actions
-        result = self.latest_business_tool_result
-        return bool(
-            minimum is not None
-            and result is not None
-            and result.query_answer is not None
-            and self._latest_business_query_page_actions == self.page_actions
-            and self.page_actions >= minimum
-        )
-
     def _permission_denied(self, result: RunResult, t0: float, step: int, name: str,
                            exc: BusinessToolPermissionError, *, dispatched: bool,
                            identity: dict, approval_id: str = "",
@@ -3106,31 +3003,8 @@ class ServerAgentSession:
             approval_id=approval_id, error_code=exc.code, layer=exc.layer,
             required_scope=exc.required_scope, dispatched=dispatched,
             side_effect_possible=False, identity=identity)
-        result.refused_operation = self._operation_label(name) or None
+        result.refused_operation = self._answers.operation_label(name) or None
         return self._finish(result, t0, "permission_denied", str(exc)[:500], steps=step)
-
-    def _with_refused_reads(self, verified: dict | None) -> dict | None:
-        """State in the answer what this account was not allowed to read.
-
-        The model is asked to declare the gap. Whether it does is not something the reader
-        should have to depend on, so the server states it as well, and an answer that is
-        missing a refused read never stays "complete".
-        """
-        if not verified or not self._refused_reads:
-            return verified
-        verified["coverage"] = ("undetermined" if verified["coverage"] == "undetermined"
-                                else "partial")
-        verified["lowered_because"] = tuple(verified.get("lowered_because") or ()) + tuple(
-            f"{label or 'a read'}: refused by this account's authority"
-            for label in self._refused_reads)
-        verified["refused_reads"] = tuple(self._refused_reads)
-        return verified
-
-    def _operation_label(self, tool: str) -> str:
-        """What the adapter calls this tool for a reader, in the language of this message."""
-        tables = getattr(self.business_tools, "answer_labels", None) or {}
-        language = "zh" if re.search(r"[\u3400-\u9fff]", self.task.prompt) else "en"
-        return str((tables.get(language) or {}).get(tool, ""))[:80]
 
     def _finish(self, result: RunResult, t0: float, reason: str, detail: str = "",
                 steps: int = 0) -> RunResult:
