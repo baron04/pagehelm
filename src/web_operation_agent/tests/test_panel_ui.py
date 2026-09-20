@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from web_operation_agent.panel_view import design_tokens, panel_contract
-from web_operation_agent.remote import RemoteSessionChannel
+from web_operation_agent.transport import RemoteSessionChannel
 
 PANEL_ROOT = Path(__file__).resolve().parents[1] / "web_runtime" / "panel"
 PANEL_BUNDLE = PANEL_ROOT / "panel.js"

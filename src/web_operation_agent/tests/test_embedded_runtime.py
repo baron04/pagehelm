@@ -12,9 +12,9 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from web_operation_agent.embedded_gateway import EmbeddedGateway
+from web_operation_agent.transport.gateway import EmbeddedGateway
 from web_operation_agent.ledger import SessionLedger
-from web_operation_agent.remote import (RemoteBrowserClient, RemoteSessionChannel,
+from web_operation_agent.transport import (RemoteBrowserClient, RemoteSessionChannel,
                                         RemoteSessionRegistry)
 from web_operation_agent.schemas import ApprovalRequest
 from web_operation_agent.execution.session import LabApparatus, ServerAgentSession, TaskSpec

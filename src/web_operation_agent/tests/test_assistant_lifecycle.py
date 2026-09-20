@@ -28,8 +28,8 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from web_operation_agent.embedded_gateway import RUNTIME_PATH, EmbeddedGateway
-from web_operation_agent.remote import RemoteSessionRegistry
+from web_operation_agent.transport.gateway import RUNTIME_PATH, EmbeddedGateway
+from web_operation_agent.transport import RemoteSessionRegistry
 
 PANEL_ROOT = Path(__file__).resolve().parents[1] / "web_runtime" / "panel"
 _PAGE_CONTROLLER_PATH = os.environ.get("WOA_PAGE_CONTROLLER_MODULE", "")

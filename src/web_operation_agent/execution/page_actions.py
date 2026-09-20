@@ -13,7 +13,7 @@ from urllib.parse import urljoin, urlsplit
 
 from ..answer import answer_protocol, page_answer
 from ..answer.evidence import EvidenceUnknown
-from ..browser import TransportError, TurnCancelled
+from ..transport.browser import TransportError, TurnCancelled
 from ..business.writes import WRITE_CAPABLE
 from ..grounding import WRITE_PERMITTED
 from ..privacy import redact_sensitive_assignments, safe_tool_arguments as _safe

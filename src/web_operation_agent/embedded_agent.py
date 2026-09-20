@@ -12,7 +12,8 @@ from dataclasses import dataclass
 from .controlplane import ControlPlaneClient
 from .identity import OperationContext, PrincipalError
 from .ledger import SessionLedger
-from .remote import RemoteSessionChannel, ensure_safe_browser_payload
+from .transport.channel import RemoteSessionChannel
+from .transport.protocol import ensure_safe_browser_payload
 from .schemas import ApprovalDecision, ApprovalRequest, ControlPlan
 
 

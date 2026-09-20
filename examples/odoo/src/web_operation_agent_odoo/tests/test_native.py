@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 from web_operation_agent.durable import SQLiteExpiringNonceStore, SQLiteSessionStore
 from web_operation_agent.identity import PrincipalContext
-from web_operation_agent.remote import RemoteProtocolError
+from web_operation_agent.transport.protocol import RemoteProtocolError
 from web_operation_agent_odoo.adapter import OdooApplicationAdapter
 
 from web_operation_agent_odoo.native import (

@@ -34,7 +34,7 @@ from web_operation_agent.modeling.client import ChatPort, require_chat_port
 from web_operation_agent.execution.product import (
     AgentTurnConfig, AgentTurnError, AgentTurnExecution, AgentTurnExecutor,
 )
-from web_operation_agent.remote import (
+from web_operation_agent.transport import (
     RemoteSessionChannel, RemoteSessionRegistry, SessionGrant,
 )
 from web_operation_agent.schemas import SourceMap

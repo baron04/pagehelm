@@ -9,7 +9,8 @@ from unittest.mock import patch
 from web_operation_agent.durable import (SQLitePrincipalRevocations, SQLiteSessionStore,
                                          DurableStateError)
 from web_operation_agent.identity import PrincipalRevokedError
-from web_operation_agent.remote import RemoteSessionRegistry, RemoteSessionClosed, RemoteProtocolError
+from web_operation_agent.transport import (RemoteProtocolError, RemoteSessionClosed,
+                                      RemoteSessionRegistry)
 from web_operation_agent.schemas import ApprovalRequest, ApprovalDecision
 from web_operation_agent.tests.test_remote_transport import ORIGIN, hello, principal
 

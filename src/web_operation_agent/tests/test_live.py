@@ -17,7 +17,7 @@ from web_operation_agent.modeling.client import ProviderError
 from web_operation_agent.execution.product import (AgentTurnConfig, AgentTurnError,
                                          AgentTurnErrorCode, AgentTurnExecutor,
                                          AgentTurnStatus)
-from web_operation_agent.remote import (RemoteProtocolError, RemoteSessionClosed,
+from web_operation_agent.transport import (RemoteProtocolError, RemoteSessionClosed,
                                          RemoteSessionLimits, RemoteSessionRegistry)
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, CancellationRequest,
                                          ClientHello, ElementRef, ObservationEnvelope,
@@ -597,7 +597,7 @@ class LiveProductSessionTests(unittest.TestCase):
 
     def test_expired_sessions_release_shared_server_capacity(self):
         limits = RemoteSessionLimits(session_ttl_s=60)
-        with mock.patch("web_operation_agent.remote._now_ms", return_value=1_000):
+        with mock.patch("web_operation_agent.transport.channel._now_ms", return_value=1_000):
             server = LiveProductServer(
                 max_sessions=1, sse_wait_s=.01, session_limits=limits)
             first = server.create_session(
@@ -608,7 +608,7 @@ class LiveProductSessionTests(unittest.TestCase):
         try:
             self.assertEqual(first.grant.expires_at, 0)
             self.assertEqual(first.grant.session_expires_at, 61_000)
-            with mock.patch("web_operation_agent.remote._now_ms", return_value=61_000):
+            with mock.patch("web_operation_agent.transport.channel._now_ms", return_value=61_000):
                 self.assertEqual(server.session_count, 0)
                 replacement = server.create_session(
                     allowed_origin=ORIGIN,

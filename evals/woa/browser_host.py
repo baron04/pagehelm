@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from evals.twenty.evidence import visible_page_projection
-from web_operation_agent.embedded_gateway import EmbeddedGateway
+from web_operation_agent.transport.gateway import EmbeddedGateway
 
 
 class PlaywrightRuntimeHost:

@@ -87,7 +87,7 @@ class TheModulesThatUsedToDisagree(unittest.TestCase):
 
     def test_a_session_accepts_a_page_whose_origin_its_deployment_wrote_differently(self):
         """The deployment wrote the origin one way; the browser sends the canonical one."""
-        from web_operation_agent.remote import RemoteSessionRegistry
+        from web_operation_agent.transport import RemoteSessionRegistry
 
         registry = RemoteSessionRegistry()
         grant, channel = registry.create(allowed_origins=["https://App.Example:443"],

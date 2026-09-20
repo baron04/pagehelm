@@ -95,7 +95,7 @@ if __name__ == "__main__":
 import tempfile                                                              # noqa: E402
 from pathlib import Path                                                     # noqa: E402
 
-from web_operation_agent.browser import TransportError                       # noqa: E402
+from web_operation_agent.transport import TransportError                       # noqa: E402
 from web_operation_agent.controlplane import ControlPlaneError               # noqa: E402
 from web_operation_agent.grounding import PlanState                          # noqa: E402
 from web_operation_agent.tests.route_fixture import (                # noqa: E402

@@ -24,7 +24,7 @@ from web_operation_agent.modeling.client import (KeyedLimitedChat, KeyedProvider
                                        ProviderError, ProviderOutcome,
                                        ProviderRuntimeGuard)
 from web_operation_agent.operations import create_state_backup, restore_state_backup
-from web_operation_agent.remote import RemoteProtocolError
+from web_operation_agent.transport import RemoteProtocolError
 
 
 def _chromium_launches() -> bool:

@@ -19,10 +19,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from .origins import origin_of
-from .panel_view import label_keys, panel_limits
-from .remote import RemoteProtocolError, RemoteSessionRegistry, SessionGrant
-from .schemas import (ActionResultEnvelope, ApprovalDecision, CancellationRequest, ClientHello,
+from ..origins import origin_of
+from ..panel_view import label_keys, panel_limits
+from .channel import SessionGrant
+from .protocol import RemoteProtocolError
+from .registry import RemoteSessionRegistry
+from ..schemas import (ActionResultEnvelope, ApprovalDecision, CancellationRequest, ClientHello,
                       ObservationEnvelope, SchemaError, canonical_json)
 
 MAX_BODY_BYTES = 1024 * 1024
@@ -30,7 +32,7 @@ SESSION_PATH = re.compile(
     r"^/v1/sessions/([A-Za-z0-9_-]{1,128})/"
     r"(hello|observations|claims|results|messages|approvals|cancellations|events|timeline|conversation)$"
 )
-WEB_RUNTIME = Path(__file__).resolve().parent / "web_runtime"
+WEB_RUNTIME = Path(__file__).resolve().parent.parent / "web_runtime"
 #: The one script a host page includes to have the assistant: the boot supervisor and the
 #: Runtime, built from `frontend/src/runtime/` by `scripts/build_runtime.py`. The panel is a
 #: separate module under `PANEL_PREFIX` that the Runtime loads once the server has spoken.

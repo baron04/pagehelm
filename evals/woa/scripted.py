@@ -23,7 +23,8 @@ from web_operation_agent.privacy import (
     SENSITIVE_CREDENTIAL_NAME, SESSION_HANDOFF_QUERY_KEYS, redact_sensitive_assignments,
     redact_session_handoffs,
 )
-from web_operation_agent.remote import RemoteProtocolError, RemoteSessionChannel, SessionGrant
+from web_operation_agent.transport import (RemoteProtocolError, RemoteSessionChannel,
+                                      SessionGrant)
 from web_operation_agent.schemas import (
     SCHEMA_VERSIONS, ActionEnvelope, ActionReceipt, ActionResultEnvelope, ApprovalDecision,
     CancellationRequest, ClientHello, ElementRef, ObservationEnvelope, PageObservation,

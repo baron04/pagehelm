@@ -14,7 +14,7 @@ import re
 from ..answer import answer_protocol
 from ..answer.answer_view import render_payload
 from ..answer.evidence import EvidenceUnknown, TurnEvidence
-from ..browser import TransportError, TurnCancelled
+from ..transport.browser import TransportError, TurnCancelled
 from ..business.errors import (BusinessMutationBlockedError, BusinessMutationIndeterminate,
                                BusinessMutationRefusedError, BusinessToolError,
                                BusinessToolPermissionError)

@@ -12,7 +12,7 @@ from web_operation_agent.embedded_agent import (
     ReadOnlyControl,
 )
 from web_operation_agent.ledger import SessionLedger
-from web_operation_agent.remote import RemoteSessionRegistry
+from web_operation_agent.transport import RemoteSessionRegistry
 from web_operation_agent.schemas import (
     ApprovalDecision,
     ClientHello,

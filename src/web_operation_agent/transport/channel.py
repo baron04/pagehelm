@@ -1,39 +1,29 @@
-"""In-process state and browser adapter for the embedded remote runtime.
+"""The session grant, its bounds, and the one journal-and-rendezvous channel per session.
 
-The HTTP gateway and the server agent share these objects in one Python process.  The
-gateway accepts browser facts and wakes the synchronous ``ServerAgentSession`` adapter;
-the adapter publishes exactly one action and blocks for its idempotent result.  No model,
-source material, control plan or evaluator crosses this boundary.
+``RemoteSessionChannel`` is the thread-safe meeting point: the browser side accepts
+observations, results, messages and approvals into it; the server Agent publishes exactly
+one action at a time and waits on it. Lifetimes, leases, capability tokens and the
+append-only event journal are this module's alone.
 """
 from __future__ import annotations
 
 import hashlib
-import hmac
-import json
 import secrets
 import sqlite3
 import threading
 import time
-import uuid
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from .durable import SQLiteSessionStore, DurableStateError, principal_scope
-from .browser import TransportError, TurnCancelled
-from .identity import PrincipalContext, PrincipalError, PrincipalRevokedError
-from .origins import OriginError, origin_of
-from .panel_view import (collapse_timeline, panel_contract, panel_limits,
+from ..durable import SQLiteSessionStore, DurableStateError, principal_scope
+from ..identity import PrincipalContext, PrincipalError, PrincipalRevokedError
+from ..panel_view import (collapse_timeline, panel_contract, panel_limits,
                          progress_message, project_event, project_history_record)
-from .privacy import (SESSION_HANDOFF_QUERY_KEYS, SENSITIVE_CREDENTIAL_NAME,
-                      has_unredacted_sensitive_assignment,
-                      has_unredacted_session_handoff,
-                      redact_sensitive_assignments, redact_session_handoffs)
-from .schemas import (
+from ..privacy import redact_sensitive_assignments, redact_session_handoffs
+from ..schemas import (
     SCHEMA_VERSIONS,
-    ActionCommand,
     ActionEnvelope,
-    ActionReceipt,
     ActionResultEnvelope,
     ApprovalDecision,
     ApprovalRequest,
@@ -41,91 +31,13 @@ from .schemas import (
     ClientHello,
     ObservationEnvelope,
     PageObservation,
-    RECEIPT_ERRORS,
-    SchemaError,
     TaskEvent,
     canonical_json,
-    parse_event_id,
 )
 
-
-class RemoteProtocolError(ValueError):
-    """A remote message conflicts with established session state."""
-
-    def __init__(self, message: str, *, code: str = "protocol_error", status: int = 409):
-        super().__init__(message)
-        self.code = code
-        self.status = status
-
-
-class RemoteSessionClosed(RemoteProtocolError):
-    def __init__(self, message: str = "remote session is closed"):
-        super().__init__(message, code="session_closed", status=410)
-
-
-_MAX_EVENT_BYTES = 256 * 1024
-_MAX_MESSAGE_ID_LENGTH = 128
-_MAX_ORIGIN_LENGTH = 2048
-_MAX_PAGE_URL_LENGTH = 4096
-
-
-def _now_ms() -> int:
-    return int(time.time() * 1000)
-
-
-def _origin(value: str) -> str:
-    """The origin a wire value belongs to -- a page URL as readily as an origin itself."""
-    try:
-        return origin_of(value, name="origin")
-    except OriginError as exc:
-        raise RemoteProtocolError(str(exc), status=400) from exc
-
-
-def _event_sequence(event_id: str) -> int:
-    try:
-        return parse_event_id(event_id, name="Last-Event-ID", allow_empty=True)
-    except SchemaError as exc:
-        raise RemoteProtocolError(str(exc), status=400) from exc
-
-
-def _remote_args_echo(value, key: str = ""):
-    """Mirror the Web Runtime's outbound argument redaction for receipt verification."""
-    if (key == "value" or SENSITIVE_CREDENTIAL_NAME.search(key)
-            or key.lower() in SESSION_HANDOFF_QUERY_KEYS):
-        return "[redacted]"
-    if isinstance(value, dict):
-        return {child: _remote_args_echo(item, str(child))
-                for child, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_remote_args_echo(item) for item in value]
-    if isinstance(value, str):
-        return redact_sensitive_assignments(redact_session_handoffs(value))
-    return value
-
-
-def _safe_payload(value) -> None:
-    if (has_unredacted_session_handoff(value, url_decode_depth=3)
-            or has_unredacted_sensitive_assignment(value, url_decode_depth=3)):
-        raise RemoteProtocolError(
-            "browser payload contains an unredacted credential value",
-            code="privacy_boundary",
-            status=400,
-        )
-
-
-def ensure_safe_browser_payload(value) -> None:
-    """Validate data before a product component records and publishes it to the browser."""
-    _safe_payload(value)
-
-
-def _copy_json(value):
-    """Detach a JSON value from its caller before it enters shared session state."""
-    return json.loads(canonical_json(value))
-
-
-def _copy_wire(value):
-    """Round-trip one wire value so frozen dataclasses do not retain mutable children."""
-    return type(value).from_json(_copy_json(value.to_json()))
+from .protocol import (RemoteProtocolError, RemoteSessionClosed, _MAX_EVENT_BYTES,
+                      _MAX_MESSAGE_ID_LENGTH, _MAX_PAGE_URL_LENGTH, _copy_json, _copy_wire,
+                      _event_sequence, _now_ms, _origin, _remote_args_echo, _safe_payload)
 
 
 @dataclass(frozen=True)
@@ -1231,238 +1143,3 @@ class RemoteSessionChannel:
         with self._condition:
             self._terminate(reason)
 
-
-class RemoteSessionRegistry:
-    """Own capability-token hashes and session channels; raw tokens are never retained."""
-
-    def __init__(self, *, limits: RemoteSessionLimits | None = None,
-                 durable_store: SQLiteSessionStore | None = None,
-                 principal_validator: Callable[[PrincipalContext], None] | None = None):
-        self.durable_store = durable_store
-        if principal_validator is not None and not callable(principal_validator):
-            raise TypeError("principal_validator must be callable or None")
-        self.principal_validator = principal_validator
-        self.limits = limits or RemoteSessionLimits()
-        if not isinstance(self.limits, RemoteSessionLimits):
-            raise TypeError("limits must be RemoteSessionLimits or None")
-        self._lock = threading.RLock()
-        self._channels: dict[str, RemoteSessionChannel] = {}
-        self._token_hashes: dict[str, bytes] = {}
-
-    def create(self, *, allowed_origins: list[str] | tuple[str, ...],
-               session_id: str | None = None,
-               principal: PrincipalContext | None = None
-               ) -> tuple[SessionGrant, RemoteSessionChannel]:
-        sid = session_id or f"s-{uuid.uuid4().hex}"
-        if not sid or len(sid) > 128 or any(not (c.isalnum() or c in "-_") for c in sid):
-            raise ValueError("session_id must contain only letters, digits, '-' and '_'")
-        origins = tuple(dict.fromkeys(_origin(value) for value in allowed_origins))
-        if not origins:
-            raise ValueError("at least one allowed origin is required")
-        if principal is not None:
-            if not isinstance(principal, PrincipalContext):
-                raise TypeError("principal must be a PrincipalContext or None")
-            principal.require_live(now_ms=_now_ms())
-        token = secrets.token_urlsafe(32)
-        self.reap_expired()
-        channel = RemoteSessionChannel(
-            sid, origins, principal, self.limits,
-            durable_store=self.durable_store,
-            principal_validator=self.principal_validator if principal is not None else None)
-        with self._lock:
-            if sid in self._channels:
-                raise ValueError(f"session {sid!r} already exists")
-            self._channels[sid] = channel
-            self._token_hashes[sid] = hashlib.sha256(token.encode()).digest()
-        return SessionGrant(
-            sid, token, origins,
-            application_id=(principal.application_id if principal else ""),
-            principal_digest=(principal.binding_digest if principal else ""),
-            expires_at=(principal.expires_at if principal else 0),
-            session_expires_at=channel.expires_at,
-        ), channel
-
-    def authenticate(self, session_id: str, bearer: str, origin: str) -> RemoteSessionChannel:
-        with self._lock:
-            channel = self._channels.get(session_id)
-            wanted = self._token_hashes.get(session_id)
-        if channel is None or wanted is None:
-            raise RemoteProtocolError("unknown session", code="unknown_session", status=404)
-        got = hashlib.sha256(bearer.encode()).digest()
-        if not hmac.compare_digest(got, wanted):
-            raise RemoteProtocolError("invalid session credential", code="unauthorized", status=401)
-        if origin not in channel.allowed_origins:
-            raise RemoteProtocolError("request origin is outside this session",
-                                      code="origin_refused", status=403)
-        try:
-            channel.validate_live()
-        except RemoteSessionClosed:
-            self.retire(session_id, "session_expired")
-            raise
-        return channel
-
-    def origin_allowed(self, session_id: str, origin: str) -> bool:
-        with self._lock:
-            channel = self._channels.get(session_id)
-        if channel is not None and channel.expired:
-            self.retire(session_id, "session_expired")
-            return False
-        return channel is not None and origin in channel.allowed_origins
-
-    @property
-    def session_count(self) -> int:
-        self.reap_expired()
-        with self._lock:
-            return len(self._channels)
-
-    def reap_expired(self) -> int:
-        with self._lock:
-            session_ids = tuple(
-                session_id for session_id, channel in self._channels.items()
-                if channel.expired)
-        return sum(self.retire(session_id, "session_expired")
-                   for session_id in session_ids)
-
-    def retire(self, session_id: str, reason: str = "session_retired") -> bool:
-        """Revoke one capability and release its in-memory channel state."""
-        with self._lock:
-            channel = self._channels.pop(session_id, None)
-            self._token_hashes.pop(session_id, None)
-        if channel is None:
-            return False
-        channel.close(reason)
-        return True
-
-    def retire_all(self, reason: str = "registry_closed") -> int:
-        with self._lock:
-            session_ids = tuple(self._channels)
-        return sum(self.retire(session_id, reason) for session_id in session_ids)
-
-
-class RemoteBrowserClient:
-    """Synchronous browser interface consumed unchanged by ``ServerAgentSession``."""
-
-    def __init__(self, channel: RemoteSessionChannel, *, timeout_s: float = 90,
-                 turn_id: str = ""):
-        self.channel = channel
-        self.timeout_s = timeout_s
-        self.turn_id = turn_id
-        self.command_count = 0
-        self._delivered_observation: ObservationEnvelope | None = None
-
-    def _deliver(self, envelope: ObservationEnvelope) -> PageObservation:
-        self._delivered_observation = _copy_wire(envelope)
-        return _copy_wire(envelope).observation
-
-    def _fresh_fact_receipt(self, *, action_id: str, action: str, args: dict,
-                            before: ObservationEnvelope,
-                            fresh: ObservationEnvelope) -> ActionReceipt:
-        """Report a page change detected before dispatch, without inventing execution."""
-        self._delivered_observation = _copy_wire(fresh)
-        observe_only = action == "observe"
-        return ActionReceipt(
-            schema_version=SCHEMA_VERSIONS["ActionReceipt"],
-            command_id=action_id,
-            action=action,
-            args_echo=_remote_args_echo(args),
-            ok=observe_only,
-            error_code="" if observe_only else "stale_observation",
-            error_detail=("" if observe_only else
-                          "the page changed before this action was dispatched"),
-            url_before=before.observation.url,
-            url_after=fresh.observation.url,
-            navigated=before.observation.url != fresh.observation.url,
-            epoch_before=before.page_epoch,
-            epoch_after=fresh.page_epoch,
-            observation=_copy_wire(fresh).observation,
-        )
-
-    def start(self, **_ignored) -> dict:
-        try:
-            hello = self.channel.wait_for_client(self.timeout_s)
-            observation = self.channel.wait_for_observation(timeout_s=self.timeout_s)
-        except (TimeoutError, RemoteProtocolError) as exc:
-            raise TransportError(str(exc)) from exc
-        self._deliver(observation)
-        return {"ok": True, "client_id": hello.client_id,
-                "url": observation.observation.url, "embedded": True}
-
-    def observe(self) -> PageObservation:
-        try:
-            observation = self.channel.wait_for_observation(timeout_s=self.timeout_s)
-            return self._deliver(observation)
-        except (TimeoutError, RemoteProtocolError) as exc:
-            raise TransportError(str(exc)) from exc
-
-    def execute(self, action: str, args: dict | None = None, *,
-                expect_navigation: bool = False) -> ActionReceipt:
-        observation = self._delivered_observation
-        if observation is None:
-            raise TransportError("no page observation has been delivered to the server Agent")
-        self.command_count += 1
-        action_id = f"a-{uuid.uuid4().hex}"
-        turn_id = self.turn_id or f"t-{self.command_count:06d}"
-        command = ActionCommand(command_id=action_id, action=action, args=args or {},
-                                expect_navigation=expect_navigation)
-        envelope = ActionEnvelope(
-            schema_version=SCHEMA_VERSIONS["ActionEnvelope"],
-            session_id=self.channel.session_id,
-            turn_id=turn_id,
-            action_id=action_id,
-            based_on_observation_id=observation.observation_id,
-            page_epoch=observation.page_epoch,
-            deadline=_now_ms() + int(self.timeout_s * 1000),
-            command_digest=command.content_digest,
-            command=command,
-        )
-        latest = self.channel.latest_observation_envelope
-        if (latest is not None
-                and (latest.page_epoch != observation.page_epoch
-                     or latest.observation_id != observation.observation_id)):
-            return self._fresh_fact_receipt(
-                action_id=action_id, action=action, args=args or {},
-                before=observation, fresh=latest)
-        try:
-            self.channel.enqueue_action(envelope)
-            result = self.channel.wait_for_result(action_id, timeout_s=self.timeout_s)
-        except (TimeoutError, RemoteProtocolError) as exc:
-            if isinstance(exc, RemoteProtocolError) and exc.code == "turn_cancelled":
-                raise TurnCancelled(str(exc)) from exc
-            if isinstance(exc, RemoteProtocolError) and exc.code == "stale_observation":
-                fresh = self.channel.latest_observation_envelope
-                if fresh is not None:
-                    return self._fresh_fact_receipt(
-                        action_id=action_id, action=action, args=args or {},
-                        before=observation, fresh=fresh)
-            raise TransportError(str(exc)) from exc
-        if result.observation_after is not None:
-            self._deliver(result.observation_after)
-        if result.status == "indeterminate":
-            raise TransportError(result.error_detail or "remote action result is indeterminate")
-        if result.status == "completed":
-            assert result.receipt is not None
-            return result.receipt
-        assert result.observation_after is not None
-        fresh = result.observation_after.observation
-        return ActionReceipt(
-            schema_version=SCHEMA_VERSIONS["ActionReceipt"],
-            command_id=action_id,
-            action=action,
-            args_echo=_remote_args_echo(args or {}),
-            ok=False,
-            error_code=(result.error_code
-                        if result.error_code in RECEIPT_ERRORS else "page_error"),
-            error_detail=result.error_detail,
-            url_before=observation.observation.url,
-            url_after=fresh.url,
-            navigated=observation.observation.url != fresh.url,
-            epoch_before=observation.page_epoch,
-            epoch_after=result.observation_after.page_epoch,
-            observation=fresh,
-        )
-
-    def console(self) -> list[str]:
-        return []
-
-    def close(self) -> None:
-        self.channel.close()

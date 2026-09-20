@@ -13,7 +13,7 @@ import re
 import time
 
 from ..answer.evidence import CapabilityEvidence, Origin
-from ..browser import TransportError
+from ..transport.browser import TransportError
 from ..planning.retrieval import EvidenceBundle
 from ..privacy import redact_sensitive_assignments
 from ..schemas import BROWSER_ACTIONS, PageObservation, digest

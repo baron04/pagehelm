@@ -13,7 +13,7 @@ from typing import Callable
 
 from ..answer import answer_protocol, page_answer
 from ..answer.answer_view import unavailable_answer
-from ..browser import TransportError
+from ..transport.browser import TransportError
 from ..controlplane import ControlPlaneError
 from ..modeling.egress import ProviderEgressError
 from ..modeling.provider import ProviderError
@@ -30,12 +30,12 @@ from .runstate import RunResult, _Next, _Turn
 
 
 # -- one tool, one place ------------------------------------------------------------
-# -- one tool, one place ------------------------------------------------------------
 def handle_named_tool(session, turn: "_Turn", call: dict, name: str,
-                       args: dict) -> "_Next | None":
+                      args: dict) -> "_Next | None":
     """Run the tool this session offers under `name`, or answer `None` for someone else."""
     handler = named_tools(session).get(name)
     return None if handler is None else handler(turn, call, name, args)
+
 
 def named_tools(session):
     """The tools this session is currently offering, by name.

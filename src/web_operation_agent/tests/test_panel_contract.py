@@ -18,7 +18,7 @@ from web_operation_agent.panel_view import (collapse_timeline, describe_action, 
                                             project_event, project_history_record,
                                             token_custom_properties)
 from web_operation_agent.execution.product import AgentTurnStatus
-from web_operation_agent.remote import RemoteSessionChannel
+from web_operation_agent.transport import RemoteSessionChannel
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionCommand,
                                          ActionEnvelope, TaskEvent)
 

@@ -34,7 +34,7 @@ from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.execution.product import AgentTurnExecutor
 
 from .turn import odoo_turn_config
-from web_operation_agent.remote import RemoteProtocolError
+from web_operation_agent.transport.protocol import RemoteProtocolError
 from web_operation_agent.identity import PrincipalContext, PrincipalError
 
 from .adapter import OdooApplicationAdapter

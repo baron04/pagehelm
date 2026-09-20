@@ -31,7 +31,7 @@ from ..business.approvals import ApprovalWatch, NavigationPlan
 from ..answer.answer_view import (capability_gap_answer, render_payload, unavailable_answer,
                           withdrawn_answer)
 from ..affordance import SourceAffordance, resolve_source_affordances
-from ..browser import BrowserExecutor
+from ..transport.browser import BrowserExecutor
 from ..business.runtime import (BUSINESS_SKILL_MATCHER_VERSION, BusinessSkillSelection,
                                FormDraft, BusinessToolRuntime)
 from ..business.errors import BusinessToolPermissionError

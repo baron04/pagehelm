@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 from ..application import BoundApplication
 from ..answer.answering import render_structured_query_answer
 from ..answer.answer_view import render_sources
-from ..browser import TransportError
+from ..transport.browser import RemoteBrowserClient, TransportError
 from ..business.mutation import MutationJournalDurability
 from ..business.runtime import BusinessToolRuntime
 from ..conversation import ConversationState
@@ -24,7 +24,8 @@ from ..ledger import SessionLedger
 from ..modeling.chat import require_chat_port
 from ..panel_view import describe_step, step_facts
 from ..privacy import redact_sensitive_assignments, redact_session_handoffs
-from ..remote import RemoteBrowserClient, RemoteProtocolError, RemoteSessionChannel
+from ..transport.channel import RemoteSessionChannel
+from ..transport.protocol import RemoteProtocolError
 from .product import (
     AgentAnswerContext, AgentTurnConfig, AgentTurnError, AgentTurnErrorCode,
     AgentTurnExecution, AgentTurnMessage, AgentTurnStatus, _status_for,

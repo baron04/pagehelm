@@ -9,10 +9,10 @@ import urllib.error
 import urllib.request
 from unittest import mock
 
-from web_operation_agent.browser import BrowserExecutor, TransportError, TurnCancelled
-from web_operation_agent.embedded_gateway import EmbeddedGateway
+from web_operation_agent.transport import (BrowserExecutor, TransportError, TurnCancelled)
+from web_operation_agent.transport.gateway import EmbeddedGateway
 from web_operation_agent.identity import OperationContext, PrincipalContext
-from web_operation_agent.remote import (RemoteBrowserClient, RemoteProtocolError,
+from web_operation_agent.transport import (RemoteBrowserClient, RemoteProtocolError,
                                          RemoteSessionClosed, RemoteSessionLimits,
                                          RemoteSessionRegistry)
 from web_operation_agent.schemas import (
@@ -187,7 +187,8 @@ class ChannelTests(unittest.TestCase):
 
     def test_trusted_idle_renewal_extends_only_the_same_authority(self):
         initial = principal(1_000)
-        with mock.patch("web_operation_agent.remote._now_ms", return_value=2_000):
+        with mock.patch("web_operation_agent.transport.channel._now_ms", return_value=2_000), \
+             mock.patch("web_operation_agent.transport.registry._now_ms", return_value=2_000):
             registry = RemoteSessionRegistry(limits=RemoteSessionLimits(session_ttl_s=300))
             _grant, channel = registry.create(
                 allowed_origins=[ORIGIN], session_id="renewed-session", principal=initial)
@@ -238,14 +239,14 @@ class ChannelTests(unittest.TestCase):
 
     def test_unbound_session_ttl_revokes_capability_and_registry_state(self):
         limits = RemoteSessionLimits(session_ttl_s=60)
-        with mock.patch("web_operation_agent.remote._now_ms", return_value=1_000):
+        with mock.patch("web_operation_agent.transport.channel._now_ms", return_value=1_000):
             registry = RemoteSessionRegistry(limits=limits)
             grant, channel = registry.create(
                 allowed_origins=[ORIGIN], session_id="ttl-session")
         self.assertEqual(grant.expires_at, 0)
         self.assertEqual(grant.session_expires_at, 61_000)
 
-        with mock.patch("web_operation_agent.remote._now_ms", return_value=61_000):
+        with mock.patch("web_operation_agent.transport.channel._now_ms", return_value=61_000):
             self.assertTrue(channel.message_cancelled("not-yet-cancelled"))
             with self.assertRaisesRegex(RemoteSessionClosed, "expired"):
                 registry.authenticate(
@@ -446,7 +447,7 @@ class ChannelTests(unittest.TestCase):
         grant, channel = registry.create(
             allowed_origins=[ORIGIN], session_id="expiring-session",
             principal=expected)
-        with mock.patch("web_operation_agent.remote._now_ms",
+        with mock.patch("web_operation_agent.transport.channel._now_ms",
                         return_value=expected.expires_at):
             with self.assertRaisesRegex(RemoteSessionClosed, "principal"):
                 registry.authenticate(
@@ -527,10 +528,10 @@ class ChannelTests(unittest.TestCase):
         grant, channel = registry.create(allowed_origins=[ORIGIN], session_id="expiry-session")
         lease = channel.accept_hello(hello(grant.session_id))["lease_id"]
         expired = ApprovalRequest(1, "late", "Change a record", ("Record 1",), now + 1)
-        with mock.patch("web_operation_agent.remote._now_ms", return_value=now):
+        with mock.patch("web_operation_agent.transport.channel._now_ms", return_value=now):
             channel.request_approval(expired)
         decision = ApprovalDecision(1, grant.session_id, "late", "approved")
-        with mock.patch("web_operation_agent.remote._now_ms", return_value=now + 2):
+        with mock.patch("web_operation_agent.transport.channel._now_ms", return_value=now + 2):
             with self.assertRaisesRegex(RemoteProtocolError, "expired"):
                 channel.accept_approval(decision, lease_id=lease)
 
@@ -547,13 +548,13 @@ class ChannelTests(unittest.TestCase):
         grant, channel = registry.create(
             allowed_origins=[ORIGIN], session_id="expired-card-session")
         lease = channel.accept_hello(hello(grant.session_id))["lease_id"]
-        with mock.patch("web_operation_agent.remote._now_ms", return_value=now):
+        with mock.patch("web_operation_agent.transport.channel._now_ms", return_value=now):
             channel.request_approval(
                 ApprovalRequest(1, "late-card", "Change a record", ("Record 1",), now + 40))
             self.assertEqual(
                 channel.panel_timeline(lease_id=lease)["pending_approval"]["approval_id"],
                 "late-card")
-        with mock.patch("web_operation_agent.remote._now_ms", return_value=now + 100):
+        with mock.patch("web_operation_agent.transport.channel._now_ms", return_value=now + 100):
             with self.assertRaisesRegex(RemoteProtocolError, "expired"):
                 channel.wait_for_approval("late-card", timeout_s=0.2)
         self.assertIsNone(channel.panel_timeline(lease_id=lease)["pending_approval"])
@@ -901,7 +902,7 @@ class ChannelTests(unittest.TestCase):
         self.channel.enqueue_action(action)
         self.assertFalse(self.channel.claim_action(
             {"action_id": action.action_id}, lease_id=self.lease)["duplicate"])
-        with mock.patch("web_operation_agent.remote._now_ms",
+        with mock.patch("web_operation_agent.transport.channel._now_ms",
                         return_value=action.deadline + 1):
             retry = self.channel.claim_action(
                 {"action_id": action.action_id}, lease_id=self.lease)
@@ -1100,7 +1101,7 @@ class GatewayTests(unittest.TestCase):
         """`assistant.js` is a build artifact, like the panel, and is missing the same way."""
         from pathlib import Path
 
-        from web_operation_agent import embedded_gateway
+        from web_operation_agent.transport import gateway as embedded_gateway
         missing = Path("/nonexistent/assistant.js")
         with mock.patch.dict(embedded_gateway.RUNTIME_MODULES,
                              {"/v1/runtime/assistant.js": missing}):
