@@ -28,6 +28,7 @@ REGISTER_PATH = ROOT / "deploy" / "odoo-single-node" / "register.py"
 CADDYFILE = ROOT / "deploy" / "odoo-single-node" / "Caddyfile"
 COMPOSEFILE = ROOT / "deploy" / "odoo-single-node" / "docker-compose.yml"
 AGENT_ENTRYPOINT = ROOT / "deploy" / "odoo-single-node" / "agent-entrypoint.sh"
+ODOO_ENTRYPOINT = ROOT / "deploy" / "odoo-single-node" / "odoo-entrypoint.sh"
 REGISTER_SPEC = importlib.util.spec_from_file_location("single_node_register", REGISTER_PATH)
 REGISTER = importlib.util.module_from_spec(REGISTER_SPEC)
 assert REGISTER_SPEC is not None and REGISTER_SPEC.loader is not None
@@ -39,6 +40,17 @@ DEPLOYMENT_SETTINGS = ("WOA_ODOO_IMAGE", "WOA_BUILD_REVISION", "WOA_PRIVATE_DIR"
 
 
 class SingleNodeOperationsTests(unittest.TestCase):
+    def test_odoo_server_start_always_loads_the_current_assistant_addon(self):
+        """A mounted addon is not live until Odoo upgrades its database-backed views."""
+        entrypoint = ODOO_ENTRYPOINT.read_text(encoding="utf-8")
+
+        upgrade = "--database=woa_trial --update=woa_runtime --stop-after-init"
+        server = 'exec setpriv --reuid=100 --regid=101 --init-groups /entrypoint.sh "$@"'
+        self.assertIn(upgrade, entrypoint)
+        self.assertLess(entrypoint.index(upgrade), entrypoint.index(server))
+        self.assertIn('if [[ "${1:-}" == "odoo" ]]', entrypoint)
+        self.assertIn("SELECT 1 FROM pg_database WHERE datname='woa_trial'", entrypoint)
+
     def test_gateway_is_independent_and_agent_mounts_only_required_secrets(self):
         compose = COMPOSEFILE.read_text(encoding="utf-8")
         agent = compose.split("\n  agent:\n", 1)[1].split("\n  gateway:\n", 1)[0]

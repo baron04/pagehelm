@@ -1,6 +1,6 @@
 {
     "name": "WOA Runtime assets",
-    "version": "1.1",
+    "version": "1.2",
     "category": "Hidden",
     "summary": "Put the assistant on signed-in pages and serve PageController same-origin.",
     "description": (
@@ -19,5 +19,6 @@
     "data": ["views/assistant_entry.xml"],
     "installable": True,
     "auto_install": False,
-    "license": "MIT",
+    # Odoo's manifest field is an enum, not an SPDX expression. The project itself is MIT.
+    "license": "Other OSI approved licence",
 }

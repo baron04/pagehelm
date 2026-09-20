@@ -52,10 +52,12 @@ class NothingThirdPartyIsCommitted(unittest.TestCase):
                         "without this the fetched assets would be committed")
 
     def test_the_addon_declares_that_it_serves_files_it_does_not_contain(self):
-        manifest = (deploy.DEPLOY_ROOT / "addons" / "woa_runtime"
-                    / "__manifest__.py").read_text()
-        self.assertIn("page_controller.json", manifest)
-        self.assertIn("license", manifest)
+        import ast
+        manifest_text = (deploy.DEPLOY_ROOT / "addons" / "woa_runtime"
+                         / "__manifest__.py").read_text()
+        manifest = ast.literal_eval(manifest_text)
+        self.assertIn("page_controller.json", manifest_text)
+        self.assertEqual(manifest["license"], "Other OSI approved licence")
 
     def test_the_compose_file_binds_loopback_only(self):
         compose = deploy.COMPOSE_FILE.read_text()
