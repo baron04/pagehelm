@@ -1712,6 +1712,329 @@ class ServerAgentSession:
                                 "agent_finished" if done else "agent_refused",
                                 result.agent_said, steps=step))
 
+    def _take_page_action(self, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
+        """Everything a page action is: refuse it, route it, dispatch it, report what it did.
+
+        The tools above answer for themselves; this is the path the browser is on, and the
+        routing facts it establishes -- an exact source route, a skill's application entry,
+        whether the route is read-only -- are its own, which is why they were the loop's
+        last locals.
+        """
+        result, t0, step = turn.result, turn.started_at, turn.step
+        messages, obs = turn.messages, turn.obs
+        successful_business_tools = turn.successful_business_tools
+        if name in self.disabled_actions:
+            # This refusal is known before dispatch, so it is safe to continue.  Do not
+            # manufacture a failed ActionReceipt for the requested action: that would blur
+            # the decisive fact that the browser never received it.  The real receipt is
+            # for the fresh observe that follows the refusal.
+            self.policy_blocks += 1
+            prior_epoch = obs.epoch
+            self.ledger.append("action_policy_blocked", step=step, tool=name,
+                               args=_safe(args, self.session_handoffs), dispatched=False,
+                               side_effect_possible=False,
+                               page_epoch_before=prior_epoch)
+            try:
+                self._browser_attempts += 1
+                receipt = self.browser.execute("observe", {})
+            except TransportError as e:
+                return _Next(self._finish(result, t0,
+                                    self._transport_terminal("observe", may_write=False),
+                                    str(e), steps=step))
+            write = self._write_outcome(receipt, step, action_may_write=False)
+            observed_epoch = (receipt.observation.epoch
+                              if receipt.observation is not None else None)
+            fresh_observation = bool(
+                receipt.action == "observe" and receipt.ok
+                and receipt.observation is not None
+                and observed_epoch > prior_epoch)
+            self.ledger.append("action_receipt", step=step, tool="observe",
+                               command_id=receipt.command_id, after_tool=name,
+                               policy_block=True, requested_tool_dispatched=False,
+                               write_attribution="unattributed", ok=receipt.ok,
+                               error_code=receipt.error_code,
+                               navigated=receipt.navigated, url_after=receipt.url_after,
+                               elapsed_ms=receipt.elapsed_ms, write=write["state"],
+                               relogin=receipt.relogin,
+                               page_epoch_before=prior_epoch,
+                               observation_epoch=observed_epoch,
+                               fresh_observation=fresh_observation)
+            reason, detail = self._settle_write(write)
+            if reason:
+                return _Next(self._finish(result, t0, reason, detail, steps=step))
+            if not fresh_observation:
+                return _Next(self._finish(
+                    result, t0, "transport_error",
+                    "action-policy refusal could not obtain a successful fresh observation",
+                    steps=step))
+            if receipt.observation is not None:
+                obs = receipt.observation
+            if (self.policy_block_limit is not None
+                    and self.policy_blocks >= self.policy_block_limit):
+                detail = ("stopped after "
+                          f"{self.policy_blocks} pre-dispatch action-policy refusals")
+                self.ledger.append("action_policy_budget_exhausted", step=step,
+                                   blocks=self.policy_blocks,
+                                   limit=self.policy_block_limit)
+                return _Next(self._finish(result, t0, "action_policy_budget", detail,
+                                    steps=step))
+            self._sync_plan_message(messages)
+            feedback = (
+                f"The run's action policy blocked {name!r} before dispatch. "
+                "The browser did not receive that requested action and it could not "
+                "change the application. Inspect the fresh page and choose another "
+                "available action.\n\n" + self._render(obs, receipt, "", write))
+            messages += [_assistant_call(call), _tool_result(call, feedback)]
+            messages = _trim(messages, self.keep_observations)
+            return self._resume(turn, messages, obs, successful_business_tools)
+
+        source_route_citations: list[str] = []
+        source_route_read_only = False
+        latest_business_route = False
+        skill_app_entry = None
+        # The routing tools resolve to a browser action rather than being one. Each of
+        # them used to carry its own copy of the refusal sequence -- ledger, observe,
+        # settle, render, continue -- and the copies had already begun to differ.
+        routing = self._route_tools().get(name)
+        if routing is not None:
+            resolution = routing.resolve(args, obs, step)
+            if resolution.refused:
+                ended = self._refuse_before_dispatch(
+                    name, routing.explanation(resolution.rejection),
+                    obs=obs, step=step, no_fresh_detail=routing.no_fresh_detail)
+                if ended.terminal:
+                    return _Next(self._finish(result, t0, ended.reason, ended.detail,
+                                        steps=step))
+                obs = ended.observation
+                if routing.resync_plan_on_refusal:
+                    self._sync_plan_message(messages)
+                messages += [_assistant_call(call), _tool_result(call, ended.feedback)]
+                messages = _trim(messages, self.keep_observations)
+                return self._resume(turn, messages, obs, successful_business_tools)
+            source_route_read_only = True
+            source_route_citations = list(resolution.citations)
+            skill_app_entry = resolution.skill
+            name, args = resolution.name, dict(resolution.args)
+
+        if name == "open_source_route" and self.runtime_source:
+            url = args.get("url")
+            parsed = urlsplit(url) if isinstance(url, str) else None
+            safe_relative = bool(parsed and url.startswith("/") and not url.startswith("//")
+                                 and not parsed.scheme and not parsed.netloc
+                                 and "%" not in parsed.path
+                                 and ".." not in parsed.path.split("/"))
+            identity = (self._contract_route_identity(url)
+                        if safe_relative else ("", ""))
+            citations = self._source_view_routes.get(identity)
+            if not citations:
+                messages += [_assistant_call(call), _tool_result(
+                    call, "That route was not established as a cited read-only request by "
+                          "a prior source lookup. Query source, use a returned exact route, "
+                          "or act on the current page.")]
+                self.ledger.append("source_route_rejected", step=step,
+                                   url=str(url or "")[:500])
+                return self._resume(turn, messages, obs, successful_business_tools)
+            source_route_citations = sorted(citations)
+            self.ledger.append("source_route_opened", step=step, url=str(url)[:500],
+                               citations=source_route_citations)
+            source_route_read_only = True
+            name, args = "goto", {"url": url}
+
+        if name == "check_capability" and self._capability_check_available():
+            messages += [_assistant_call(call),
+                         _tool_result(call, self._capability_check_feedback())]
+            return self._resume(turn, messages, obs, successful_business_tools)
+
+        if name not in BROWSER_ACTIONS:
+            self.ledger.append(
+                "unknown_tool_rejected", step=step, tool=str(name)[:100],
+                dispatched=False, side_effect_possible=False)
+            messages += [_assistant_call(call),
+                         _tool_result(call, f"There is no tool called {name!r}. "
+                                            f"Available: {sorted(BROWSER_ACTIONS)} and finish.")]
+            return self._resume(turn, messages, obs, successful_business_tools)
+
+        collect_page_answer = False
+        if name == "observe" and self.page_answer_evidence:
+            if (set(args) - {"answer_evidence"}
+                    or not isinstance(args.get("answer_evidence", False), bool)):
+                messages += [_assistant_call(call), _tool_result(
+                    call, "observe accepts only an optional boolean answer_evidence.")]
+                return self._resume(turn, messages, obs, successful_business_tools)
+            collect_page_answer = args.get("answer_evidence", False)
+            if collect_page_answer and self._refused_reads:
+                messages += [_assistant_call(call), _tool_result(
+                    call, "PAGE EVIDENCE REFUSED: an authorization refusal in this turn "
+                    "closed the page as a source of facts. Answer from the typed reads "
+                    "you already have, or finish with outcome=unable.")]
+                return self._resume(turn, messages, obs, successful_business_tools)
+            if collect_page_answer:
+                self._answer_mode = True
+                self.evidence.discard_pages()
+                self._page_answer_digest = ""
+            args = {}
+
+        if name == "goto" and not source_route_read_only:
+            url = args.get("url")
+            if isinstance(url, str) and url in self._business_routes:
+                source_route_read_only = True
+                latest_business_route = url in self._latest_business_routes
+                self.ledger.append(
+                    "business_route_opened", step=step,
+                    url_digest=hashlib.sha256(url.encode()).hexdigest(),
+                    side_effect_possible=False)
+            elif not isinstance(url, str) or not _page_link_allows(url, obs):
+                messages += [_assistant_call(call), _tool_result(
+                    call, "Direct navigation is allowed only to an exact link on the "
+                          "current page, an exact ui_path from a successful business "
+                          "ToolResult, or a cited source route.")]
+                self.ledger.append("page_route_rejected", step=step,
+                                   url=str(url or "")[:500], page_url=obs.url)
+                return self._resume(turn, messages, obs, successful_business_tools)
+
+        action_may_write = name in self.WRITE_CAPABLE and not source_route_read_only
+        if self.pending_write and action_may_write:
+            return _Next(self._finish(result, t0, "indeterminate_write",
+                                "another potentially writing action was requested while a "
+                                "previous authorised request remains unconfirmed", steps=step))
+
+        expect_nav = bool(args.pop("expect_navigation", False))
+        if "ref" in args:
+            args["epoch"] = obs.epoch
+        if self._cancel_requested():
+            return _Next(self._finish(
+                result, t0, "user_cancelled",
+                "the user stopped this task before browser dispatch", steps=step))
+        link = _clicked_link(args, obs) if name == "click" else None
+        if name in ("goto", "back") or (name == "click" and (expect_nav or link is not None)):
+            reason, detail = self._navigation_confirmed(
+                step, obs, action=name,
+                url=(str(args.get("url") or "") if name == "goto" else (link or "")))
+            if reason:
+                return _Next(self._finish(result, t0, reason, detail, steps=step))
+        prior_page_epoch = obs.epoch
+        try:
+            self._browser_attempts += 1
+            self._awaiting_control = action_may_write
+            preserve_completed_write = bool(
+                self._answer_action_receipt is not None
+                and self._answer_action_receipt["kind"] == "mutation"
+                and name in ("goto", "back"))
+            if name not in ("observe", "wait_for") and not preserve_completed_write:
+                self._answer_action_receipt = None
+            receipt = self.browser.execute(name, args, expect_navigation=expect_nav)
+        except TurnCancelled as exc:
+            self.ledger.append(
+                "browser_action_cancelled_before_dispatch", step=step, tool=name,
+                dispatched=False, side_effect_possible=False)
+            return _Next(self._finish(
+                result, t0, "user_cancelled", str(exc), steps=step))
+        except TransportError as e:
+            return _Next(self._finish(result, t0,
+                                self._transport_terminal(name, may_write=action_may_write), str(e),
+                                steps=step))
+
+        if name not in ("observe", "wait_for"):
+            self._settle_confirmed_navigation(receipt)
+        if name != "observe" and receipt.error_code != "stale_observation":
+            self.page_actions += 1
+        write = self._write_outcome(receipt, step, action_may_write=action_may_write)
+        self.ledger.append("action_receipt", step=step, tool=receipt.action,
+                           command_id=receipt.command_id, write_attribution="unattributed",
+                           ok=receipt.ok, error_code=receipt.error_code,
+                           navigated=receipt.navigated, url_after=receipt.url_after,
+                           elapsed_ms=receipt.elapsed_ms, write=write["state"],
+                           # Whether the browser had to log in again to perform this
+                           # action. It is on every receipt and was written to no log, so
+                           # a run that kept arriving at a login page could not be told
+                           # apart from one that was quietly being recovered.
+                           relogin=receipt.relogin,
+                           source_route_citations=source_route_citations)
+        if receipt.error_code == "stale_observation":
+            # A document replacement can preserve the same DOM projection while
+            # invalidating the observation identity. The rejected command was never
+            # dispatched, so let the next ReAct decision retry against the fresh fact.
+            self._reset_no_progress()
+        reason, detail = self._settle_write(write)
+        if reason:
+            return _Next(self._finish(result, t0, reason, detail, steps=step))
+        if receipt.observation is not None:
+            obs = receipt.observation
+        if (name in ("goto", "back") and receipt.ok
+                and receipt.observation is not None):
+            if self._answer_action_receipt is not None and self._answer_action_receipt["kind"] == "mutation":
+                self._answer_action_receipt["navigation_url"] = obs.url
+            else:
+                self._answer_action_receipt = {"kind": "navigation", "url": obs.url}
+        target_observed = False
+        if name == "goto" and isinstance(args.get("url"), str):
+            expected = urlsplit(urljoin(receipt.url_before, args["url"]))
+            actual = urlsplit(obs.url)
+            target_observed = (
+                expected.scheme == actual.scheme
+                and expected.netloc == actual.netloc
+                and (expected.path.rstrip("/") or "/")
+                == (actual.path.rstrip("/") or "/")
+                and expected.query == actual.query)
+        if (self.deterministic_read_navigation and self._navigation_only
+                and sum(skill.read_only for skill in self._task_business_skills) == 1
+                and name == "goto" and latest_business_route
+                and receipt.ok and receipt.observation is not None
+                and receipt.observation.epoch > prior_page_epoch
+                and target_observed):
+            result.agent_said = (
+                "已打开请求的页面。"
+                if re.search(r"[\u3400-\u9fff]", self.task.prompt)
+                else "Opened the requested page.")
+            self.ledger.append(
+                "deterministic_navigation_completed", step=step,
+                url_digest=hashlib.sha256(obs.url.encode()).hexdigest(),
+                observation_epoch=obs.epoch, side_effect_possible=False)
+            return _Next(self._finish(
+                result, t0, "agent_finished", result.agent_said, steps=step))
+        if skill_app_entry is not None:
+            gap = self.knowledge_router.gap_evidence(skill_app_entry, obs)
+            self.ledger.append(
+                "skill_app_observed", step=step, skill_id=skill_app_entry.skill_id,
+                skill_sha256=skill_app_entry.artifact_sha256, **gap)
+        if write["state"] == WRITE_PERMITTED and self.contract_source != "none" \
+                and not self.plan_state.withdrawn:
+            # A write authorisation pauses the plan to prevent a second submission. A
+            # consumed permit is not a saved change or evidence that the task is complete.
+            self.plan_state.pause_for_confirmation(
+                "write permission was consumed; the application result is unconfirmed")
+            self.ledger.append("plan_awaiting_confirmation", step=step)
+        note = self._ground(obs, receipt, write["state"], write["refused_requests"])
+        self._sync_plan_message(messages)
+        page_feedback = ""
+        rendered_observation = obs
+        if collect_page_answer:
+            self._answer_mode = True
+            if (receipt.ok and receipt.action == "observe" and receipt.observation is not None
+                    and receipt.observation.epoch > prior_page_epoch):
+                self.evidence.discard_pages()
+                self._page_answer_digest = obs.content_digest
+                clean = PageObservation.from_json(
+                    redact_sensitive_assignments(self.session_handoffs.redact(obs.to_json())))
+                rendered_observation = clean
+                try:
+                    refs = self.evidence.capture(page_answer.collect(clean, observed_at=str(time.time())),
+                                                 namespace=f"obs{step}")
+                    page_feedback = (answer_protocol.ANSWER_INSTRUCTIONS + "\n" +
+                                     answer_protocol.evidence_index(self.evidence, refs))
+                    self.ledger.append("page_answer_evidence", step=step, epoch=obs.epoch,
+                                       recorded=len(refs), digest=obs.content_digest)
+                except (ValueError, TypeError, EvidenceUnknown):
+                    page_feedback = "PAGE EVIDENCE UNAVAILABLE: the observation could not support an answer."
+            else:
+                page_feedback = "PAGE EVIDENCE UNAVAILABLE: observe did not return a successful fresh page."
+        feedback = self._render(rendered_observation, receipt, note, write)
+        if page_feedback:
+            feedback += "\n" + page_feedback
+        messages += [_assistant_call(call), _tool_result(call, feedback)]
+        messages = _trim(messages, self.keep_observations)
+        return self._resume(turn, messages, obs, successful_business_tools)
+
     def _tool_business(self, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
         """One typed business tool: a read, or the one confirmed write a turn may make.
 
@@ -2553,316 +2876,11 @@ class ServerAgentSession:
                 successful_business_tools = turn.successful_business_tools
                 continue
 
-            if name in self.disabled_actions:
-                # This refusal is known before dispatch, so it is safe to continue.  Do not
-                # manufacture a failed ActionReceipt for the requested action: that would blur
-                # the decisive fact that the browser never received it.  The real receipt is
-                # for the fresh observe that follows the refusal.
-                self.policy_blocks += 1
-                prior_epoch = obs.epoch
-                self.ledger.append("action_policy_blocked", step=step, tool=name,
-                                   args=_safe(args, self.session_handoffs), dispatched=False,
-                                   side_effect_possible=False,
-                                   page_epoch_before=prior_epoch)
-                try:
-                    self._browser_attempts += 1
-                    receipt = self.browser.execute("observe", {})
-                except TransportError as e:
-                    return self._finish(result, t0,
-                                        self._transport_terminal("observe", may_write=False),
-                                        str(e), steps=step)
-                write = self._write_outcome(receipt, step, action_may_write=False)
-                observed_epoch = (receipt.observation.epoch
-                                  if receipt.observation is not None else None)
-                fresh_observation = bool(
-                    receipt.action == "observe" and receipt.ok
-                    and receipt.observation is not None
-                    and observed_epoch > prior_epoch)
-                self.ledger.append("action_receipt", step=step, tool="observe",
-                                   command_id=receipt.command_id, after_tool=name,
-                                   policy_block=True, requested_tool_dispatched=False,
-                                   write_attribution="unattributed", ok=receipt.ok,
-                                   error_code=receipt.error_code,
-                                   navigated=receipt.navigated, url_after=receipt.url_after,
-                                   elapsed_ms=receipt.elapsed_ms, write=write["state"],
-                                   relogin=receipt.relogin,
-                                   page_epoch_before=prior_epoch,
-                                   observation_epoch=observed_epoch,
-                                   fresh_observation=fresh_observation)
-                reason, detail = self._settle_write(write)
-                if reason:
-                    return self._finish(result, t0, reason, detail, steps=step)
-                if not fresh_observation:
-                    return self._finish(
-                        result, t0, "transport_error",
-                        "action-policy refusal could not obtain a successful fresh observation",
-                        steps=step)
-                if receipt.observation is not None:
-                    obs = receipt.observation
-                if (self.policy_block_limit is not None
-                        and self.policy_blocks >= self.policy_block_limit):
-                    detail = ("stopped after "
-                              f"{self.policy_blocks} pre-dispatch action-policy refusals")
-                    self.ledger.append("action_policy_budget_exhausted", step=step,
-                                       blocks=self.policy_blocks,
-                                       limit=self.policy_block_limit)
-                    return self._finish(result, t0, "action_policy_budget", detail,
-                                        steps=step)
-                self._sync_plan_message(messages)
-                feedback = (
-                    f"The run's action policy blocked {name!r} before dispatch. "
-                    "The browser did not receive that requested action and it could not "
-                    "change the application. Inspect the fresh page and choose another "
-                    "available action.\n\n" + self._render(obs, receipt, "", write))
-                messages += [_assistant_call(call), _tool_result(call, feedback)]
-                messages = _trim(messages, self.keep_observations)
-                continue
-
-            source_route_citations: list[str] = []
-            source_route_read_only = False
-            latest_business_route = False
-            skill_app_entry = None
-            # The routing tools resolve to a browser action rather than being one. Each of
-            # them used to carry its own copy of the refusal sequence -- ledger, observe,
-            # settle, render, continue -- and the copies had already begun to differ.
-            routing = self._route_tools().get(name)
-            if routing is not None:
-                resolution = routing.resolve(args, obs, step)
-                if resolution.refused:
-                    ended = self._refuse_before_dispatch(
-                        name, routing.explanation(resolution.rejection),
-                        obs=obs, step=step, no_fresh_detail=routing.no_fresh_detail)
-                    if ended.terminal:
-                        return self._finish(result, t0, ended.reason, ended.detail,
-                                            steps=step)
-                    obs = ended.observation
-                    if routing.resync_plan_on_refusal:
-                        self._sync_plan_message(messages)
-                    messages += [_assistant_call(call), _tool_result(call, ended.feedback)]
-                    messages = _trim(messages, self.keep_observations)
-                    continue
-                source_route_read_only = True
-                source_route_citations = list(resolution.citations)
-                skill_app_entry = resolution.skill
-                name, args = resolution.name, dict(resolution.args)
-
-            if name == "open_source_route" and self.runtime_source:
-                url = args.get("url")
-                parsed = urlsplit(url) if isinstance(url, str) else None
-                safe_relative = bool(parsed and url.startswith("/") and not url.startswith("//")
-                                     and not parsed.scheme and not parsed.netloc
-                                     and "%" not in parsed.path
-                                     and ".." not in parsed.path.split("/"))
-                identity = (self._contract_route_identity(url)
-                            if safe_relative else ("", ""))
-                citations = self._source_view_routes.get(identity)
-                if not citations:
-                    messages += [_assistant_call(call), _tool_result(
-                        call, "That route was not established as a cited read-only request by "
-                              "a prior source lookup. Query source, use a returned exact route, "
-                              "or act on the current page.")]
-                    self.ledger.append("source_route_rejected", step=step,
-                                       url=str(url or "")[:500])
-                    continue
-                source_route_citations = sorted(citations)
-                self.ledger.append("source_route_opened", step=step, url=str(url)[:500],
-                                   citations=source_route_citations)
-                source_route_read_only = True
-                name, args = "goto", {"url": url}
-
-            if name == "check_capability" and self._capability_check_available():
-                messages += [_assistant_call(call),
-                             _tool_result(call, self._capability_check_feedback())]
-                continue
-
-            if name not in BROWSER_ACTIONS:
-                self.ledger.append(
-                    "unknown_tool_rejected", step=step, tool=str(name)[:100],
-                    dispatched=False, side_effect_possible=False)
-                messages += [_assistant_call(call),
-                             _tool_result(call, f"There is no tool called {name!r}. "
-                                                f"Available: {sorted(BROWSER_ACTIONS)} and finish.")]
-                continue
-
-            collect_page_answer = False
-            if name == "observe" and self.page_answer_evidence:
-                if (set(args) - {"answer_evidence"}
-                        or not isinstance(args.get("answer_evidence", False), bool)):
-                    messages += [_assistant_call(call), _tool_result(
-                        call, "observe accepts only an optional boolean answer_evidence.")]
-                    continue
-                collect_page_answer = args.get("answer_evidence", False)
-                if collect_page_answer and self._refused_reads:
-                    messages += [_assistant_call(call), _tool_result(
-                        call, "PAGE EVIDENCE REFUSED: an authorization refusal in this turn "
-                        "closed the page as a source of facts. Answer from the typed reads "
-                        "you already have, or finish with outcome=unable.")]
-                    continue
-                if collect_page_answer:
-                    self._answer_mode = True
-                    self.evidence.discard_pages()
-                    self._page_answer_digest = ""
-                args = {}
-
-            if name == "goto" and not source_route_read_only:
-                url = args.get("url")
-                if isinstance(url, str) and url in self._business_routes:
-                    source_route_read_only = True
-                    latest_business_route = url in self._latest_business_routes
-                    self.ledger.append(
-                        "business_route_opened", step=step,
-                        url_digest=hashlib.sha256(url.encode()).hexdigest(),
-                        side_effect_possible=False)
-                elif not isinstance(url, str) or not _page_link_allows(url, obs):
-                    messages += [_assistant_call(call), _tool_result(
-                        call, "Direct navigation is allowed only to an exact link on the "
-                              "current page, an exact ui_path from a successful business "
-                              "ToolResult, or a cited source route.")]
-                    self.ledger.append("page_route_rejected", step=step,
-                                       url=str(url or "")[:500], page_url=obs.url)
-                    continue
-
-            action_may_write = name in self.WRITE_CAPABLE and not source_route_read_only
-            if self.pending_write and action_may_write:
-                return self._finish(result, t0, "indeterminate_write",
-                                    "another potentially writing action was requested while a "
-                                    "previous authorised request remains unconfirmed", steps=step)
-
-            expect_nav = bool(args.pop("expect_navigation", False))
-            if "ref" in args:
-                args["epoch"] = obs.epoch
-            if self._cancel_requested():
-                return self._finish(
-                    result, t0, "user_cancelled",
-                    "the user stopped this task before browser dispatch", steps=step)
-            link = _clicked_link(args, obs) if name == "click" else None
-            if name in ("goto", "back") or (name == "click" and (expect_nav or link is not None)):
-                reason, detail = self._navigation_confirmed(
-                    step, obs, action=name,
-                    url=(str(args.get("url") or "") if name == "goto" else (link or "")))
-                if reason:
-                    return self._finish(result, t0, reason, detail, steps=step)
-            prior_page_epoch = obs.epoch
-            try:
-                self._browser_attempts += 1
-                self._awaiting_control = action_may_write
-                preserve_completed_write = bool(
-                    self._answer_action_receipt is not None
-                    and self._answer_action_receipt["kind"] == "mutation"
-                    and name in ("goto", "back"))
-                if name not in ("observe", "wait_for") and not preserve_completed_write:
-                    self._answer_action_receipt = None
-                receipt = self.browser.execute(name, args, expect_navigation=expect_nav)
-            except TurnCancelled as exc:
-                self.ledger.append(
-                    "browser_action_cancelled_before_dispatch", step=step, tool=name,
-                    dispatched=False, side_effect_possible=False)
-                return self._finish(
-                    result, t0, "user_cancelled", str(exc), steps=step)
-            except TransportError as e:
-                return self._finish(result, t0,
-                                    self._transport_terminal(name, may_write=action_may_write), str(e),
-                                    steps=step)
-
-            if name not in ("observe", "wait_for"):
-                self._settle_confirmed_navigation(receipt)
-            if name != "observe" and receipt.error_code != "stale_observation":
-                self.page_actions += 1
-            write = self._write_outcome(receipt, step, action_may_write=action_may_write)
-            self.ledger.append("action_receipt", step=step, tool=receipt.action,
-                               command_id=receipt.command_id, write_attribution="unattributed",
-                               ok=receipt.ok, error_code=receipt.error_code,
-                               navigated=receipt.navigated, url_after=receipt.url_after,
-                               elapsed_ms=receipt.elapsed_ms, write=write["state"],
-                               # Whether the browser had to log in again to perform this
-                               # action. It is on every receipt and was written to no log, so
-                               # a run that kept arriving at a login page could not be told
-                               # apart from one that was quietly being recovered.
-                               relogin=receipt.relogin,
-                               source_route_citations=source_route_citations)
-            if receipt.error_code == "stale_observation":
-                # A document replacement can preserve the same DOM projection while
-                # invalidating the observation identity. The rejected command was never
-                # dispatched, so let the next ReAct decision retry against the fresh fact.
-                self._reset_no_progress()
-            reason, detail = self._settle_write(write)
-            if reason:
-                return self._finish(result, t0, reason, detail, steps=step)
-            if receipt.observation is not None:
-                obs = receipt.observation
-            if (name in ("goto", "back") and receipt.ok
-                    and receipt.observation is not None):
-                if self._answer_action_receipt is not None and self._answer_action_receipt["kind"] == "mutation":
-                    self._answer_action_receipt["navigation_url"] = obs.url
-                else:
-                    self._answer_action_receipt = {"kind": "navigation", "url": obs.url}
-            target_observed = False
-            if name == "goto" and isinstance(args.get("url"), str):
-                expected = urlsplit(urljoin(receipt.url_before, args["url"]))
-                actual = urlsplit(obs.url)
-                target_observed = (
-                    expected.scheme == actual.scheme
-                    and expected.netloc == actual.netloc
-                    and (expected.path.rstrip("/") or "/")
-                    == (actual.path.rstrip("/") or "/")
-                    and expected.query == actual.query)
-            if (self.deterministic_read_navigation and self._navigation_only
-                    and sum(skill.read_only for skill in self._task_business_skills) == 1
-                    and name == "goto" and latest_business_route
-                    and receipt.ok and receipt.observation is not None
-                    and receipt.observation.epoch > prior_page_epoch
-                    and target_observed):
-                result.agent_said = (
-                    "已打开请求的页面。"
-                    if re.search(r"[\u3400-\u9fff]", self.task.prompt)
-                    else "Opened the requested page.")
-                self.ledger.append(
-                    "deterministic_navigation_completed", step=step,
-                    url_digest=hashlib.sha256(obs.url.encode()).hexdigest(),
-                    observation_epoch=obs.epoch, side_effect_possible=False)
-                return self._finish(
-                    result, t0, "agent_finished", result.agent_said, steps=step)
-            if skill_app_entry is not None:
-                gap = self.knowledge_router.gap_evidence(skill_app_entry, obs)
-                self.ledger.append(
-                    "skill_app_observed", step=step, skill_id=skill_app_entry.skill_id,
-                    skill_sha256=skill_app_entry.artifact_sha256, **gap)
-            if write["state"] == WRITE_PERMITTED and self.contract_source != "none" \
-                    and not self.plan_state.withdrawn:
-                # A write authorisation pauses the plan to prevent a second submission. A
-                # consumed permit is not a saved change or evidence that the task is complete.
-                self.plan_state.pause_for_confirmation(
-                    "write permission was consumed; the application result is unconfirmed")
-                self.ledger.append("plan_awaiting_confirmation", step=step)
-            note = self._ground(obs, receipt, write["state"], write["refused_requests"])
-            self._sync_plan_message(messages)
-            page_feedback = ""
-            rendered_observation = obs
-            if collect_page_answer:
-                self._answer_mode = True
-                if (receipt.ok and receipt.action == "observe" and receipt.observation is not None
-                        and receipt.observation.epoch > prior_page_epoch):
-                    self.evidence.discard_pages()
-                    self._page_answer_digest = obs.content_digest
-                    clean = PageObservation.from_json(
-                        redact_sensitive_assignments(self.session_handoffs.redact(obs.to_json())))
-                    rendered_observation = clean
-                    try:
-                        refs = self.evidence.capture(page_answer.collect(clean, observed_at=str(time.time())),
-                                                     namespace=f"obs{step}")
-                        page_feedback = (answer_protocol.ANSWER_INSTRUCTIONS + "\n" +
-                                         answer_protocol.evidence_index(self.evidence, refs))
-                        self.ledger.append("page_answer_evidence", step=step, epoch=obs.epoch,
-                                           recorded=len(refs), digest=obs.content_digest)
-                    except (ValueError, TypeError, EvidenceUnknown):
-                        page_feedback = "PAGE EVIDENCE UNAVAILABLE: the observation could not support an answer."
-                else:
-                    page_feedback = "PAGE EVIDENCE UNAVAILABLE: observe did not return a successful fresh page."
-            feedback = self._render(rendered_observation, receipt, note, write)
-            if page_feedback:
-                feedback += "\n" + page_feedback
-            messages += [_assistant_call(call), _tool_result(call, feedback)]
-            messages = _trim(messages, self.keep_observations)
+            outcome = self._take_page_action(turn, call, name, args)
+            if outcome.finished is not None:
+                return outcome.finished
+            messages, obs, step = turn.messages, turn.obs, turn.step
+            successful_business_tools = turn.successful_business_tools
 
     # -- grounding ---------------------------------------------------------------------
     def _collect_evidence(self, tool_result, *, step: int) -> tuple[str, ...]:
