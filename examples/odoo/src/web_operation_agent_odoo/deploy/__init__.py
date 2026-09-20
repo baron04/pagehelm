@@ -41,7 +41,7 @@ from base64 import b64encode
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from web_operation_agent.page_controller import (PINNED_PAGE_CONTROLLER, pinned_version,
+from web_operation_agent.transport.page_controller import (PINNED_PAGE_CONTROLLER, pinned_version,
                                                  require_served_directory,
                                                  verify_served_directory)
 

@@ -1,7 +1,7 @@
 """Server-owned panel configuration and timeline projection."""
 from __future__ import annotations
 
-from ..panel_view import (collapse_timeline, panel_contract, panel_limits,
+from .panel_view import (collapse_timeline, panel_contract, panel_limits,
                           project_event, project_history_record)
 from ..schemas import SCHEMA_VERSIONS
 from .protocol import RemoteProtocolError, _copy_json, _event_sequence

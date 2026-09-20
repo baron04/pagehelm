@@ -31,7 +31,7 @@ from ..answer import answer_protocol
 from ..business.approvals import ApprovalWatch, NavigationPlan
 from ..answer.answer_view import (capability_gap_answer, render_payload, unavailable_answer,
                           withdrawn_answer)
-from ..affordance import SourceAffordance, resolve_source_affordances
+from ..planning.affordance import SourceAffordance, resolve_source_affordances
 from ..transport.browser import BrowserExecutor
 from ..business.runtime import (BUSINESS_SKILL_MATCHER_VERSION, BusinessSkillSelection,
                                FormDraft, BusinessToolRuntime)
@@ -40,9 +40,9 @@ from ..business.text import trigger_requests_action
 from ..planning.contract import (ContractPlanner, PlanningFailed, _segment_from_template,
                                 expand_terms)
 from ..planning.retrieval import EvidenceBundle, SourceRetriever
-from ..controlplane import ControlPlaneClient, ControlPlaneError
+from ..business.controlplane import ControlPlaneClient, ControlPlaneError
 from ..modeling.egress import AuditedChat, ProviderEgressError
-from ..grounding import (NOT_APPLICABLE, REFUTED, WRITE_PERMITTED, WRITE_REFUSED,
+from .grounding import (NOT_APPLICABLE, REFUTED, WRITE_PERMITTED, WRITE_REFUSED,
                         PlanState, opaque_route_identity)
 from ..state.identity import PrincipalContext
 from ..planning.knowledge import ApplicationKnowledgePort

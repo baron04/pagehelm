@@ -16,7 +16,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from web_operation_agent.page_controller import PINNED_PAGE_CONTROLLER, pinned_version
+from web_operation_agent.transport.page_controller import PINNED_PAGE_CONTROLLER, pinned_version
 from web_operation_agent_odoo import deploy
 from web_operation_agent_odoo.deploy.__main__ import build_parser, main
 

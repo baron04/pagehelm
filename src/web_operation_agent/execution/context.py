@@ -5,9 +5,9 @@ import datetime
 import json
 from zoneinfo import ZoneInfo
 
-from ..affordance import SourceAffordance, resolve_source_affordances
+from ..planning.affordance import SourceAffordance, resolve_source_affordances
 from ..business.writes import PRE_DISPATCH_ERRORS, WRITE_CAPABLE, WatchState
-from ..grounding import NOT_APPLICABLE, REFUTED, WRITE_PERMITTED, WRITE_REFUSED
+from .grounding import NOT_APPLICABLE, REFUTED, WRITE_PERMITTED, WRITE_REFUSED
 from ..planning.retrieval import EvidenceBundle
 from ..schemas import ActionReceipt, OperationContract, PageObservation
 from . import knowledge_tools

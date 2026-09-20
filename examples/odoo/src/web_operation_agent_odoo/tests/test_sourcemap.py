@@ -13,8 +13,8 @@ import unittest
 from pathlib import Path
 
 from web_operation_agent.composition.sources import SourceCompiler
-from web_operation_agent.affordance import resolve_source_affordances
-from web_operation_agent.sourcetree import SourceTree
+from web_operation_agent.planning.affordance import resolve_source_affordances
+from web_operation_agent.planning.sourcetree import SourceTree
 
 from web_operation_agent_odoo.route import ODOO_ROUTE_PORT, ODOO_SOURCE_SCOPE
 from web_operation_agent_odoo.sourcemap import ODOO_SOURCE_POLICY, OdooCompiler

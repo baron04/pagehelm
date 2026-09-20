@@ -43,8 +43,8 @@ from pathlib import Path
 
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, EvidenceRef, SourceMap,
                                          SourceRelation)
-from web_operation_agent.sourcetree import AccessDenied, SourceTree
-from web_operation_agent.xmlscan import XMLScanError, parse
+from web_operation_agent.planning.sourcetree import AccessDenied, SourceTree
+from web_operation_agent.planning.xmlscan import XMLScanError, parse
 
 from .route import ODOO_SOURCE_SCOPE
 

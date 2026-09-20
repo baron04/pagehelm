@@ -20,7 +20,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from ..origins import origin_of
-from ..panel_view import label_keys, panel_limits
+from .panel_view import label_keys, panel_limits
 from .channel import SessionGrant
 from .protocol import RemoteProtocolError
 from .registry import RemoteSessionRegistry

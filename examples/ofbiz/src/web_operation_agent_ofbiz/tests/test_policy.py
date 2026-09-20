@@ -9,7 +9,7 @@ import unittest
 from importlib import resources
 from pathlib import Path
 
-from web_operation_agent.sourcetree import SourceTree
+from web_operation_agent.planning.sourcetree import SourceTree
 
 PRODUCT_POLICY = json.loads(
     resources.files("web_operation_agent_ofbiz").joinpath("policies/ofbiz.json").read_text()

@@ -13,8 +13,8 @@ from pathlib import Path
 
 from web_operation_agent.planning.contract import ContractPlanner, _segment_from_template
 from web_operation_agent.planning.retrieval import SourceRetriever
-from web_operation_agent.sourcetree import SourceTree
-from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
+from web_operation_agent.planning.sourcetree import SourceTree
+from web_operation_agent.tests.support.chat_port_contract import CancellableChatDouble
 
 from web_operation_agent_ofbiz.route import OFBIZ_ROUTE_PORT
 from web_operation_agent_ofbiz.sourcemap import OFBizCompiler

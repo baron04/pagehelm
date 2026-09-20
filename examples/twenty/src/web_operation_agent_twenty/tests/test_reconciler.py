@@ -12,7 +12,7 @@ class TwentyReconciliation(unittest.TestCase):
             from types import SimpleNamespace
             from unittest.mock import Mock
             import time
-            from web_operation_agent.tests.test_identity import principal
+            from web_operation_agent.tests.support.identity import principal
             from web_operation_agent_twenty.adapter import _TwentyMutationReconciler
             p = principal(issued_at=int(time.time() * 1000),
                           expires_at=int(time.time() * 1000) + 60_000)

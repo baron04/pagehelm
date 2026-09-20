@@ -6,7 +6,7 @@ from ..transport.browser import TransportError, TurnCancelled
 from ..business.errors import (BusinessMutationBlockedError, BusinessMutationIndeterminate,
                                BusinessMutationRefusedError, BusinessToolError,
                                BusinessToolPermissionError)
-from ..grounding import WRITE_UNKNOWN
+from .grounding import WRITE_UNKNOWN
 from ..schemas import ActionReceipt, PageObservation
 from .prompts import _assistant_call, _tool_result, _trim
 from .runstate import _Next, _Turn

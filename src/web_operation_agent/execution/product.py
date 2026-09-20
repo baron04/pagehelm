@@ -18,7 +18,7 @@ from ..composition.sources import SourceCapability
 from ..answer.answering import render_structured_query_answer
 from ..answer.answer_view import render_payload
 from ..business.runtime import BusinessToolResult
-from ..panel_view import panel_limits
+from ..transport.panel_view import panel_limits
 from ..transport.protocol import RemoteProtocolError, ensure_safe_browser_payload
 from .session import RunResult
 

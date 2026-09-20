@@ -23,7 +23,7 @@ from ..execution.product import AgentTurnError
 from ..transport.channel import RemoteSessionChannel, RemoteSessionLimits, SessionGrant
 from ..transport.protocol import RemoteSessionClosed
 from ..transport.registry import RemoteSessionRegistry
-from ..traceview import build_trace_case, render_trace_html, write_trace_bundle
+from ..state.traceview import build_trace_case, render_trace_html, write_trace_bundle
 
 #: How long an idle event request is held open before it returns "nothing yet".
 #:

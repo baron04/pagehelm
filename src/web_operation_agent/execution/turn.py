@@ -18,11 +18,11 @@ from ..transport.browser import RemoteBrowserClient, TransportError
 from ..business.mutation import MutationJournalDurability
 from ..business.runtime import BusinessToolRuntime
 from ..state.conversation import ConversationState
-from ..embedded_agent import ApprovalGate, ApprovalGrant
+from ..business.control import ApprovalGate, ApprovalGrant
 from ..state.identity import OperationContext, PrincipalError
 from ..state.ledger import SessionLedger
 from ..modeling.chat import require_chat_port
-from ..panel_view import describe_step, step_facts
+from ..transport.panel_view import describe_step, step_facts
 from ..privacy import redact_sensitive_assignments, redact_session_handoffs
 from ..transport.channel import RemoteSessionChannel
 from ..transport.protocol import RemoteProtocolError

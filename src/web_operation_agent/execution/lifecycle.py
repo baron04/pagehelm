@@ -1,6 +1,6 @@
 """Entry observation, planning, control installation, and resource closure."""
 
-from ..grounding import PlanState
+from .grounding import PlanState
 from ..modeling.egress import ProviderEgressError
 from ..planning.contract import (ContractPlanner, PlanningFailed,
                                  _segment_from_template, expand_terms)

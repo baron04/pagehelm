@@ -17,12 +17,12 @@ from examples.contacts.demo import (DemoConfig, ScriptedDemoChat, WRITE_WALKTHRO
 from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.business.runtime import (BusinessMutationIndeterminate,
                                           BusinessToolError)
-from web_operation_agent.embedded_agent import ReadOnlyControl
+from web_operation_agent.business.control import ReadOnlyControl
 from web_operation_agent.state.identity import PrincipalError
 from web_operation_agent.composition.live import LiveConversationRunner, LiveProductSession
 from web_operation_agent.business.mutation import MemoryMutationJournal, SQLiteMutationJournal
 from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnExecutor
-from web_operation_agent.tests.adapter_contract import assert_adapter_contract
+from web_operation_agent.tests.support.adapter_contract import assert_adapter_contract
 
 
 def _chromium_launches() -> bool:
@@ -602,7 +602,7 @@ def _audit_events(directory) -> list[dict]:
 
 def _replays(directory, events: list[dict], summary: dict) -> list[dict]:
     """The redacted replay projection of every turn in the run, built from its own ledger."""
-    from web_operation_agent.traceview import build_trace_case
+    from web_operation_agent.state.traceview import build_trace_case
 
     cases = []
     for index, run_id in enumerate(dict.fromkeys(event["run_id"] for event in events)):

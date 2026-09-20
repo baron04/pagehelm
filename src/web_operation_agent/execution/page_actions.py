@@ -15,7 +15,7 @@ from ..answer import answer_protocol, page_answer
 from ..answer.evidence import EvidenceUnknown
 from ..transport.browser import TransportError, TurnCancelled
 from ..business.writes import WRITE_CAPABLE
-from ..grounding import WRITE_PERMITTED
+from .grounding import WRITE_PERMITTED
 from ..privacy import redact_sensitive_assignments, safe_tool_arguments as _safe
 from ..schemas import BROWSER_ACTIONS, ActionReceipt, PageObservation
 from .knowledge_tools import capability_check_available, capability_check_feedback

@@ -20,7 +20,7 @@ from web_operation_agent.composition.live import LiveConversationRunner, LiveTur
 from web_operation_agent.execution.product import (AgentTurnExecution, AgentTurnMessage,
                                          AgentTurnStatus)
 from web_operation_agent.execution.session import RunResult
-from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
+from web_operation_agent.tests.support.chat_port_contract import CancellableChatDouble
 
 
 BASE_ENV = {

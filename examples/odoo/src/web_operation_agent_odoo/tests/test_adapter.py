@@ -22,14 +22,14 @@ from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.business.runtime import (BusinessMutationIndeterminate,
                                           BusinessMutationRefusedError,
                                           BusinessToolError, BusinessToolRequestError)
-from web_operation_agent.embedded_agent import ReadOnlyControl
+from web_operation_agent.business.control import ReadOnlyControl
 from web_operation_agent.state.identity import IdentityAssertion, PrincipalError
 from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.business.mutation import MemoryMutationJournal
 from web_operation_agent.schemas import ActionReceipt, PageObservation
 from web_operation_agent.execution.session import ServerAgentSession, TaskSpec
-from web_operation_agent.tests.adapter_contract import assert_adapter_contract
-from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
+from web_operation_agent.tests.support.adapter_contract import assert_adapter_contract
+from web_operation_agent.tests.support.chat_port_contract import CancellableChatDouble
 
 from web_operation_agent_odoo.adapter import (APPLICATION_ID, COLLECTIONS, QUERY_SCHEMAS,
                                               MUTATION_SPECS,

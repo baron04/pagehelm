@@ -30,7 +30,7 @@ from web_operation_agent_twenty.adapter import (MUTATION_SPECS, READ_SPECS,
                                         TwentyOAuthTokenStore,
                                         TwentyPageSessionIdentityResolver,
                                         normalize_twenty_domain)
-from web_operation_agent.tests.adapter_contract import assert_adapter_contract
+from web_operation_agent.tests.support.adapter_contract import assert_adapter_contract
 
 
 def _adapter(**kwargs) -> TwentyApplicationAdapter:

@@ -21,7 +21,7 @@ from web_operation_agent.state.conversation import (SQLiteConversationState,
 from web_operation_agent.state import (SQLiteExpiringNonceStore,
                                       SQLitePrincipalRevocations, SQLiteSessionStore)
 from web_operation_agent.modeling.egress import ProviderEgressPolicy
-from web_operation_agent.embedded_agent import ReadOnlyControl
+from web_operation_agent.business.control import ReadOnlyControl
 from web_operation_agent.composition.live import (LiveConversationRunner, LiveProductCapacityError,
                                       LiveProductServer, LiveProductSession)
 from web_operation_agent.modeling.client import (ChatModel, KeyedLimitedChat,

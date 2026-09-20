@@ -14,7 +14,7 @@ from typing import Callable
 from ..answer import answer_protocol, page_answer
 from ..answer.answer_view import unavailable_answer
 from ..transport.browser import TransportError
-from ..controlplane import ControlPlaneError
+from ..business.controlplane import ControlPlaneError
 from ..modeling.egress import ProviderEgressError
 from ..modeling.provider import ProviderError
 from ..modeling.spend import BudgetExhausted

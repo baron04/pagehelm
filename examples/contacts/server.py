@@ -23,7 +23,7 @@ from examples.contacts.app import DEMO_SESSION_COOKIE, DemoActor, MinimalContact
 from examples.contacts.demo import DemoConfig, _chat
 from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.state import SQLitePrincipalRevocations, SQLiteSessionStore
-from web_operation_agent.embedded_agent import ReadOnlyControl
+from web_operation_agent.business.control import ReadOnlyControl
 from web_operation_agent.composition.live import LiveConversationRunner, LiveProductServer, LiveProductSession
 from web_operation_agent.business.mutation import SQLiteMutationJournal
 from web_operation_agent.modeling.client import (KeyedLimitedChat, KeyedProviderAdmission,

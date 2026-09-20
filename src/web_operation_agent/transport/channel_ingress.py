@@ -5,7 +5,7 @@ import hashlib
 import secrets
 import sqlite3
 
-from ..panel_view import progress_message
+from .panel_view import progress_message
 from ..state.store import DurableStateError
 from ..schemas import (SCHEMA_VERSIONS, ActionResultEnvelope, ApprovalDecision,
                        CancellationRequest, ClientHello, ObservationEnvelope)
