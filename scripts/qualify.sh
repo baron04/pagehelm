@@ -297,7 +297,7 @@ elif [[ "${chromium_ready}" != "1" ]]; then
   [[ "${require_browser}" == "1" ]] && failed+=("assistant panel Chromium qualification")
 else
   run_gate "assistant panel Chromium qualification" 1 "${PYTHON}" -m unittest \
-    web_operation_agent.tests.web_runtime.test_panel_ui
+    web_operation_agent.tests.transport.test_panel_ui
 fi
 
 page_controller_module="${ROOT}/evals/pageagent/node_modules/@page-agent/page-controller/dist/lib/page-controller.js"
