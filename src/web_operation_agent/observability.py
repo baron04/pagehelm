@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 
-from .model import require_chat_port
+from .chat import require_chat_port
 
 
 _LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")

@@ -5,6 +5,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 
+from .chat import require_chat_port
 from .privacy import SessionHandoffPolicy, has_unredacted_sensitive_assignment
 
 
@@ -168,8 +169,6 @@ class AuditedChat:
     """Apply an egress policy and record only its non-content projection."""
 
     def __init__(self, delegate, ledger, *, policy: ProviderEgressPolicy | None = None):
-        from .model import require_chat_port  # deferred: model imports this module
-
         require_chat_port(delegate, role="chat delegate")
         if not callable(getattr(ledger, "append", None)):
             raise TypeError("egress ledger must provide append")
