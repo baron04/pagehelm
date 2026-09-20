@@ -34,7 +34,15 @@ docker compose -f examples/odoo/deploy/single-node/docker-compose.yml --profile 
 docker compose -f examples/odoo/deploy/single-node/docker-compose.yml up -d db odoo gateway
 ```
 
-Open `https://localhost:18443/web/login`, use the generated admin password in `.private/odoo-single-node/odoo-admin-login-password`, create the pilot users, and create one expiring API key in each user's profile. Record each numeric user id from Odoo. Save each key in an operator-only temporary JSON file with exactly this shape, then set its mode to `0600`:
+For repeatable local qualification, save the same `WOA_*` assignments in
+`.private/odoo-single-node/deployment.env` and run `./examples/odoo/deploy/single-node/rebuild.sh`.
+The rebuild refreshes the synthetic `woa-writer@example.test` and
+`woa-reader@example.test` accounts, their delegated keys, and all three application services.
+Their generated passwords remain in the correspondingly named `*-login-password` files. On
+the loopback pilot listener, plain HTTP on the configured port redirects to HTTPS on that same
+port.
+
+For non-synthetic pilot users, open `https://localhost:18443/web/login`, use the generated admin password in `.private/odoo-single-node/odoo-admin-login-password`, create the pilot users, and create one expiring API key in each user's profile. Record each numeric user id from Odoo. Save each key in an operator-only temporary JSON file with exactly this shape, then set its mode to `0600`:
 
 ```json
 {"database":"woa_trial","login":"person@example.test","api_key":"REPLACE_WITH_THE_USER_KEY"}

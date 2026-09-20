@@ -24,9 +24,13 @@ export WOA_BUILD_REVISION="$(git rev-parse HEAD)"
 compose=(docker compose -f examples/odoo/deploy/single-node/docker-compose.yml)
 
 "${compose[@]}" build agent odoo
-"${compose[@]}" up -d --no-deps --force-recreate agent
 "${compose[@]}" --profile setup run --rm odoo-init
-"${compose[@]}" up -d --no-deps --force-recreate odoo gateway
+"${compose[@]}" up -d --no-deps --force-recreate odoo
+"${compose[@]}" --profile qualification run --rm odoo-qualification-users
+# Qualification rewrites the delegated API keys and manifest. Start the Agent only
+# after those files are complete so every rebuild keeps browser and API identities
+# in sync with the generated test-login passwords.
+"${compose[@]}" up -d --no-deps --force-recreate agent gateway
 
 healthy=0
 for _attempt in {1..60}; do

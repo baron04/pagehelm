@@ -28,6 +28,7 @@ SPEC.loader.exec_module(OPS)
 REGISTER_PATH = DEPLOYMENT / "register.py"
 CADDYFILE = DEPLOYMENT / "Caddyfile"
 COMPOSEFILE = DEPLOYMENT / "docker-compose.yml"
+REBUILD = DEPLOYMENT / "rebuild.sh"
 AGENT_ENTRYPOINT = DEPLOYMENT / "agent-entrypoint.sh"
 ODOO_ENTRYPOINT = DEPLOYMENT / "odoo-entrypoint.sh"
 REGISTER_SPEC = importlib.util.spec_from_file_location("single_node_register", REGISTER_PATH)
@@ -81,6 +82,23 @@ class SingleNodeOperationsTests(unittest.TestCase):
         self.assertNotIn("header_up Origin", gateway)
         self.assertIn("reverse_proxy @gateway agent:8766", gateway)
         self.assertNotIn("/readyz", config)
+
+    def test_gateway_redirects_plain_http_on_its_tls_port(self):
+        config = CADDYFILE.read_text(encoding="utf-8")
+        wrappers = config.split("listener_wrappers {", 1)[1].split("}", 1)[0]
+
+        self.assertIn("http_redirect", wrappers)
+        self.assertIn("tls", wrappers)
+        self.assertLess(wrappers.index("http_redirect"), wrappers.index("tls"))
+
+    def test_rebuild_refreshes_test_delegations_before_starting_agent(self):
+        script = REBUILD.read_text(encoding="utf-8")
+        qualification = 'run --rm odoo-qualification-users'
+        start_agent = 'up -d --no-deps --force-recreate agent gateway'
+
+        self.assertIn(qualification, script)
+        self.assertIn(start_agent, script)
+        self.assertLess(script.index(qualification), script.index(start_agent))
 
     def _bundle(self, root: Path):
         for relative in (

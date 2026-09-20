@@ -34,7 +34,14 @@ docker compose -f examples/odoo/deploy/single-node/docker-compose.yml --profile 
 docker compose -f examples/odoo/deploy/single-node/docker-compose.yml up -d db odoo gateway
 ```
 
-打开 `https://localhost:18443/web/login`，使用 `.private/odoo-single-node/odoo-admin-login-password` 中生成的管理员密码创建试用用户，并在每位用户自己的 profile 中创建一把有过期时间的 API key。记下 Odoo 的数字用户 id。每把 key 分别保存为只有运维人员可读、权限为 `0600` 的临时 JSON 文件：
+本地重复验收时，可把相同的 `WOA_*` 赋值保存到
+`.private/odoo-single-node/deployment.env`，然后运行
+`./examples/odoo/deploy/single-node/rebuild.sh`。重建会同步测试账号
+`woa-writer@example.test` 和 `woa-reader@example.test`、两者的委托密钥以及三个应用服务；
+生成的密码仍保存在对应的 `*-login-password` 文件中。本地试用端口收到明文 HTTP 时，
+会自动跳转到同一端口的 HTTPS。
+
+如果使用非合成的试用用户，请打开 `https://localhost:18443/web/login`，使用 `.private/odoo-single-node/odoo-admin-login-password` 中生成的管理员密码创建用户，并在每位用户自己的 profile 中创建一把有过期时间的 API key。记下 Odoo 的数字用户 id。每把 key 分别保存为只有运维人员可读、权限为 `0600` 的临时 JSON 文件：
 
 ```json
 {"database":"woa_trial","login":"person@example.test","api_key":"替换为该用户自己的KEY"}
