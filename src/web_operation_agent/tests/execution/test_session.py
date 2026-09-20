@@ -5,6 +5,7 @@ import unittest
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ElementRef, OperationContract,
                                          PageObservation)
 from web_operation_agent.execution.session import _render_contract, _render_observation, _trim
+from web_operation_agent.execution.business_tools import apply_form_draft
 from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
 
 
@@ -742,8 +743,8 @@ class ApplicationIssuedFormPrefill(unittest.TestCase):
                 fields=(FormDraftField("name", "客户名称", "NovaForge"),
                         FormDraftField("email", "邮箱", "ops@novaforge.example")))
 
-            final_page, reason, detail = session._apply_form_draft(
-                draft, browser.pages[0], step=1)
+            final_page, reason, detail = apply_form_draft(
+                session, draft, browser.pages[0], step=1)
 
             self.assertEqual((reason, detail), ("", ""))
             self.assertEqual(final_page.epoch, 4)
@@ -773,8 +774,8 @@ class ApplicationIssuedFormPrefill(unittest.TestCase):
                 route="/accounting/do/createCustomer",
                 fields=(FormDraftField("email", "邮箱", "ops@example.test"),))
 
-            _page_after, reason, detail = session._apply_form_draft(
-                draft, ambiguous, step=1)
+            _page_after, reason, detail = apply_form_draft(
+                session, draft, ambiguous, step=1)
 
             self.assertEqual(reason, "agent_refused")
             self.assertIn("one exact email field", detail)

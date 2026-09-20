@@ -19,6 +19,7 @@ from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.panel_view import panel_contract
 from web_operation_agent.schemas import ActionReceipt
 from web_operation_agent.execution.session import NavigationPlan, ServerAgentSession, TaskSpec
+from web_operation_agent.execution.business_tools import apply_form_draft
 from web_operation_agent.tests.route_fixture import FIXTURE_ROUTE_PORT
 from web_operation_agent.tests.execution.test_session import (ApplicationIssuedFormPrefill, _Browser,
                                                     _Chat, _Control, _obs)
@@ -181,8 +182,8 @@ class TheSessionAsksBeforeLeavingThePage(unittest.TestCase):
                     draft = FormDraft(route="/accounting/do/createCustomer",
                                       fields=(FormDraftField("name", "客户名称", "NovaForge"),))
 
-                    _page, reason, _detail = session._apply_form_draft(
-                        draft, browser.pages[0], step=1)
+                    _page, reason, _detail = apply_form_draft(
+                        session, draft, browser.pages[0], step=1)
 
                     self.assertEqual([plan.url for plan in person.asked],
                                      ["/accounting/do/createCustomer"])
