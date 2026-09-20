@@ -231,7 +231,8 @@ import os, sys
 from pathlib import Path
 import web_operation_agent
 from web_operation_agent.business.mutation import SQLiteMutationJournal
-from web_operation_agent.durable import SQLiteSessionStore, SQLiteProviderQuota
+from web_operation_agent.state.store import SQLiteSessionStore
+from web_operation_agent.state.quota import SQLiteProviderQuota
 from web_operation_agent.business.operations import reconcile
 from web_operation_agent.sourcetree import SourceTree
 
@@ -272,7 +273,7 @@ assert (TwentyApplicationAdapter(
     **common, allow_mutations=True,
     mutation_journal=SQLiteMutationJournal(root / "mutations.sqlite3"),
 ).business_tools.tool_names == frozenset(read_tools | {"create_company"}))
-from web_operation_agent.application import SourceCapability
+from web_operation_agent.composition.sources import SourceCapability
 from web_operation_agent_odoo import ODOO_ROUTE_PORT, ODOO_SOURCE_POLICY
 from web_operation_agent_odoo.adapter import OdooApplicationAdapter
 
