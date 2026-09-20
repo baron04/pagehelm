@@ -5,8 +5,17 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "$script_dir/../../../.." && pwd)"
 cd "$repo_root"
 
+default_private_dir="$repo_root/.private/odoo-single-node"
+deployment_env="${WOA_DEPLOYMENT_ENV:-${WOA_PRIVATE_DIR:-$default_private_dir}/deployment.env}"
+if [[ -f "$deployment_env" ]]; then
+  set -a
+  # shellcheck disable=SC1090 -- the operator explicitly selects this local deployment file.
+  source "$deployment_env"
+  set +a
+fi
+
 export WOA_PROJECT_NAME="${WOA_PROJECT_NAME:-woa-odoo-pilot}"
-export WOA_PRIVATE_DIR="${WOA_PRIVATE_DIR:-$repo_root/.private/odoo-single-node}"
+export WOA_PRIVATE_DIR="${WOA_PRIVATE_DIR:-$default_private_dir}"
 export WOA_PUBLIC_ORIGIN="${WOA_PUBLIC_ORIGIN:-https://localhost:18443}"
 export WOA_HTTPS_PORT="${WOA_HTTPS_PORT:-18443}"
 export WOA_ALLOW_MUTATIONS="${WOA_ALLOW_MUTATIONS:-1}"

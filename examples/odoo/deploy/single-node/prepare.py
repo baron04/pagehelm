@@ -28,7 +28,9 @@ def main(argv=None) -> int:
     keys = root / "delegated-keys"
     keys.mkdir(mode=0o700, exist_ok=True)
     os.chmod(keys, 0o700)
-    _write_private(root / "db-password", (secrets.token_urlsafe(36) + "\n").encode())
+    # Odoo's upstream entrypoint passes this value as the token after ``--db_password``.
+    # A URL-safe token may start with ``-``, which argparse mistakes for another option.
+    _write_private(root / "db-password", ("p" + secrets.token_urlsafe(36) + "\n").encode())
     _write_private(root / "session-secret", secrets.token_bytes(48))
     _write_private(
         root / "odoo-admin-login-password",
