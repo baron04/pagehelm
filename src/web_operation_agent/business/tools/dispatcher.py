@@ -230,7 +230,6 @@ class BusinessToolRuntime:
                 "application data classifier returned invalid classes")
         return replace(result, data_classes=classes)
 
-    @property
     def time_zone(self) -> str:
         """The zone the application says its signed-in user is in, as an IANA name.
 

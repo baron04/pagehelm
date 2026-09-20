@@ -37,6 +37,7 @@ from pathlib import Path
 
 from web_operation_agent.execution import loop as loop_module
 from web_operation_agent.execution import session as session_module
+from web_operation_agent.execution import context as context_module
 from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.tests import golden_session
 from web_operation_agent.tests.golden_session import SCENARIOS, tool_surface_compositions
@@ -266,16 +267,16 @@ class GoldenIsChangeSensitive(unittest.TestCase):
             loop_module.AGENT_SYSTEM = original
 
     def test_a_changed_observation_rendering_is_detected(self):
-        original = session_module._render_observation
+        original = context_module._render_observation
 
-        def without_elements(obs, max_elements=session_module.RENDER_ELEMENTS):
+        def without_elements(obs, max_elements=context_module.RENDER_ELEMENTS):
             return original(obs, max_elements=0)
 
-        session_module._render_observation = without_elements
+        context_module._render_observation = without_elements
         try:
             self.assertDetects("gateway_permitted_the_write", "a changed page rendering")
         finally:
-            session_module._render_observation = original
+            context_module._render_observation = original
 
     def test_a_missing_audit_event_is_detected(self):
         original = SessionLedger.append

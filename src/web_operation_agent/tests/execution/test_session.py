@@ -125,8 +125,8 @@ class LedgerContents(unittest.TestCase):
         """A digest cannot answer 'what was this agent told?', and the provider is not
         reproducible, so the contract itself has to be in the trail."""
         import inspect
-        from web_operation_agent.execution.session import ServerAgentSession
-        src = inspect.getsource(ServerAgentSession)
+        from web_operation_agent.execution.lifecycle import SessionLifecycle
+        src = inspect.getsource(SessionLifecycle._plan)
         self.assertIn("contract=self.contract.to_json()", src)
 
 
