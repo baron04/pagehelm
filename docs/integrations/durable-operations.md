@@ -3,7 +3,7 @@
 Use a shared private SQLite database on a local filesystem for cooperating worker processes. Network filesystems and multiple hosts are outside this backend's supported scope. Stop all old workers before upgrading an existing mutation journal.
 
 ```python
-from web_operation_agent.durable import (
+from web_operation_agent.state import (
     SQLitePrincipalRevocations,
     SQLiteProviderQuota,
     SQLiteSessionStore,

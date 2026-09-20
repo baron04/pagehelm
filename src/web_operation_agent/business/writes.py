@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from ..controlplane import ControlPlaneClient, ControlPlaneError
 from ..grounding import WRITE_MIXED, WRITE_UNKNOWN
-from ..ledger import SessionLedger
+from ..state.ledger import SessionLedger
 from ..schemas import ActionReceipt
 
 

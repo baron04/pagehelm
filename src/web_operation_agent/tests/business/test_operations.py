@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from web_operation_agent.durable import SQLiteSessionStore
+from web_operation_agent.state.store import SQLiteSessionStore
 from web_operation_agent.business.mutation import SQLiteMutationJournal
 from web_operation_agent.operations import (
     OperationalStateError,

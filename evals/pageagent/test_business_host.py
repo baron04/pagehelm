@@ -13,7 +13,7 @@ from web_operation_agent.business.runtime import (BusinessMutationSpec, Business
                                           BusinessToolRequestError,
                                           BusinessToolResult, BusinessToolRuntime,
                                           BusinessToolUnavailableError)
-from web_operation_agent.identity import OperationContext, PrincipalContext
+from web_operation_agent.state.identity import OperationContext, PrincipalContext
 
 
 READ_SCHEMA = {"type": "function", "function": {

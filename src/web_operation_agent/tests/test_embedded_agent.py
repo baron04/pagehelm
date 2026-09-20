@@ -11,7 +11,7 @@ from web_operation_agent.embedded_agent import (
     ApprovalGate,
     ReadOnlyControl,
 )
-from web_operation_agent.ledger import SessionLedger
+from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.transport import RemoteSessionRegistry
 from web_operation_agent.schemas import (
     ApprovalDecision,

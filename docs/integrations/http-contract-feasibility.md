@@ -97,7 +97,7 @@ guarded is not a guarantee.
 
 | Concern | Where it lives today | Why it cannot move |
 |---|---|---|
-| Binding `page_session` and `delegated_api` to one actor and refusing a mismatch | `identity.py:bind_matching_identity` | The application asserting "these are the same user" is the claim under test |
+| Binding `page_session` and `delegated_api` to one actor and refusing a mismatch | `state/identity.py:bind_matching_identity` | The application asserting "these are the same user" is the claim under test |
 | Requiring a fresh, user-visible approval and consuming it once | `product.py` + the approval gate | An application that could mint its own approval has no approval |
 | The atomic mutation journal, its `business_key` exclusion and its terminal states | `mutation.py` | Its whole purpose is to survive the application being unavailable or ambiguous |
 | Never auto-retrying an acknowledged-but-uncertain write | `BusinessMutationIndeterminate` handling | The application is precisely the party that does not know |

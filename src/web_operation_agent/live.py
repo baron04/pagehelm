@@ -15,9 +15,9 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Protocol, cast
 
-from .durable import SQLiteSessionStore
+from .state.store import SQLiteSessionStore
 from .transport.gateway import EmbeddedGateway
-from .identity import PrincipalContext
+from .state.identity import PrincipalContext
 from .privacy import redact_sensitive_assignments, redact_session_handoffs
 from .execution.product import AgentTurnError
 from .transport.channel import RemoteSessionChannel, RemoteSessionLimits, SessionGrant

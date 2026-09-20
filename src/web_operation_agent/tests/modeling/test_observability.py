@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
-from web_operation_agent.ledger import SessionLedger
+from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.modeling.client import KeyedLimitedChat, KeyedProviderAdmission
 from web_operation_agent.modeling.observability import ObservedChat, RuntimeObservability
 

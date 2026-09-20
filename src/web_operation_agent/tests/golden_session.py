@@ -45,7 +45,7 @@ from web_operation_agent.business.runtime import (BusinessMutationIndeterminate,
                                           BusinessToolRuntime)
 from web_operation_agent.controlplane import ControlPlaneError
 from web_operation_agent.embedded_agent import ReadOnlyControl
-from web_operation_agent.ledger import SessionLedger
+from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionReceipt, ElementRef,
                                          PageObservation)
 from web_operation_agent.execution.session import (LabApparatus, ServerAgentSession,

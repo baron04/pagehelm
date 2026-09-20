@@ -37,7 +37,7 @@ from pathlib import Path
 
 from web_operation_agent.execution import loop as loop_module
 from web_operation_agent.execution import session as session_module
-from web_operation_agent.ledger import SessionLedger
+from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.tests import golden_session
 from web_operation_agent.tests.golden_session import SCENARIOS, tool_surface_compositions
 

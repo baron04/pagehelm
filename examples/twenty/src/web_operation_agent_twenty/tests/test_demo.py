@@ -15,7 +15,7 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_ROOT = Path(__file__).resolve().parents[3]
 
 from web_operation_agent_twenty.demo import demo, login, preflight
-from web_operation_agent.identity import PrincipalContext
+from web_operation_agent.state.identity import PrincipalContext
 from web_operation_agent.live import LiveConversationRunner, LiveTurnOutcome
 from web_operation_agent.execution.product import (AgentTurnExecution, AgentTurnMessage,
                                          AgentTurnStatus)

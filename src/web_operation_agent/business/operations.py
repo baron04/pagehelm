@@ -23,7 +23,7 @@ import json
 from pathlib import Path
 
 from ..application import BoundApplication
-from ..identity import PrincipalContext
+from ..state.identity import PrincipalContext
 from .mutation import MutationJournalError, SQLiteMutationJournal
 
 

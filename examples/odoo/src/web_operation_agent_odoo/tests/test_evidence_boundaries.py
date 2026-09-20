@@ -20,7 +20,7 @@ import unittest
 from pathlib import Path
 
 from web_operation_agent.embedded_agent import ReadOnlyControl
-from web_operation_agent.ledger import SessionLedger
+from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.business.mutation import MemoryMutationJournal
 from web_operation_agent.execution.session import ServerAgentSession, TaskSpec
 from web_operation_agent_odoo.adapter import OdooApplicationAdapter

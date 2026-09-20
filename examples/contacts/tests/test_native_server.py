@@ -19,7 +19,7 @@ from examples.contacts.server import (
     NativeContactsHost,
     NativeServerConfig,
 )
-from web_operation_agent.identity import PrincipalRevokedError
+from web_operation_agent.state.identity import PrincipalRevokedError
 from web_operation_agent.modeling.client import (KeyedLimitedChat, KeyedProviderAdmission,
                                        ProviderError, ProviderOutcome,
                                        ProviderRuntimeGuard)

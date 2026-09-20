@@ -8,7 +8,7 @@ import re
 from ..answer import answer_protocol
 from ..business.runtime import BusinessToolResult, BusinessToolRuntime
 from ..answer.evidence import EvidenceUnknown, TurnEvidence
-from ..ledger import SessionLedger
+from ..state.ledger import SessionLedger
 from ..privacy import redact_sensitive_assignments
 
 

@@ -12,8 +12,8 @@ import threading
 import uuid
 from collections.abc import Callable
 
-from ..durable import SQLiteSessionStore
-from ..identity import PrincipalContext
+from ..state.store import SQLiteSessionStore
+from ..state.identity import PrincipalContext
 from .channel import RemoteSessionChannel, RemoteSessionLimits, SessionGrant
 from .protocol import RemoteProtocolError, RemoteSessionClosed, _now_ms, _origin
 

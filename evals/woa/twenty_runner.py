@@ -29,7 +29,7 @@ from evals.woa.scripted import RecordingBusinessRuntime
 from web_operation_agent.application import SourceCapability, bind_application
 from web_operation_agent.business.runtime import BusinessToolError
 from web_operation_agent.embedded_agent import ReadOnlyControl
-from web_operation_agent.identity import PrincipalError
+from web_operation_agent.state.identity import PrincipalError
 from web_operation_agent.modeling.client import ChatPort, require_chat_port
 from web_operation_agent.execution.product import (
     AgentTurnConfig, AgentTurnError, AgentTurnExecution, AgentTurnExecutor,

@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from urllib.parse import quote
 
-from web_operation_agent.ledger import SessionLedger
+from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.privacy import (
     SESSION_HANDOFF_KEYS,
     SESSION_HANDOFF_QUERY_KEYS,

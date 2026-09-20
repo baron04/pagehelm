@@ -17,7 +17,7 @@ from pathlib import Path
 
 from .chat import (ChatPort, KeyedLimitedChat, KeyedProviderAdmission,
                    _ConcreteChatProvider, require_chat_port)
-from ..durable import SQLiteProviderQuota
+from ..state.quota import SQLiteProviderQuota
 from .egress import DEFAULT_PROVIDER_EGRESS_POLICY, ProviderEgressPolicy
 from .provider import ProviderError, ProviderOutcome, ProviderRuntimeGuard
 from .spend import (DEFAULT_LEDGER, PRICES, BudgetExhausted, SpendMeter, UnpricedModel,

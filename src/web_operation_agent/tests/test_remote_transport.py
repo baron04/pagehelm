@@ -11,7 +11,7 @@ from unittest import mock
 
 from web_operation_agent.transport import (BrowserExecutor, TransportError, TurnCancelled)
 from web_operation_agent.transport.gateway import EmbeddedGateway
-from web_operation_agent.identity import OperationContext, PrincipalContext
+from web_operation_agent.state.identity import OperationContext, PrincipalContext
 from web_operation_agent.transport import (RemoteBrowserClient, RemoteProtocolError,
                                          RemoteSessionClosed, RemoteSessionLimits,
                                          RemoteSessionRegistry)

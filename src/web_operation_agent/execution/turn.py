@@ -17,10 +17,10 @@ from ..answer.answer_view import render_sources
 from ..transport.browser import RemoteBrowserClient, TransportError
 from ..business.mutation import MutationJournalDurability
 from ..business.runtime import BusinessToolRuntime
-from ..conversation import ConversationState
+from ..state.conversation import ConversationState
 from ..embedded_agent import ApprovalGate, ApprovalGrant
-from ..identity import OperationContext, PrincipalError
-from ..ledger import SessionLedger
+from ..state.identity import OperationContext, PrincipalError
+from ..state.ledger import SessionLedger
 from ..modeling.chat import require_chat_port
 from ..panel_view import describe_step, step_facts
 from ..privacy import redact_sensitive_assignments, redact_session_handoffs

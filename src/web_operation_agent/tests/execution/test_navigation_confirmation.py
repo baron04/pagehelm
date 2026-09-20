@@ -15,7 +15,7 @@ from pathlib import Path
 
 from web_operation_agent import schemas as S
 from web_operation_agent.business.runtime import FormDraft, FormDraftField
-from web_operation_agent.ledger import SessionLedger
+from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.panel_view import panel_contract
 from web_operation_agent.schemas import ActionReceipt
 from web_operation_agent.execution.session import NavigationPlan, ServerAgentSession, TaskSpec

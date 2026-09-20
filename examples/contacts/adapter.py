@@ -56,7 +56,7 @@ from web_operation_agent.business.runtime import (
     business_text_key,
     normalize_business_text,
 )
-from web_operation_agent.identity import (IdentityAssertion, PrincipalContext,
+from web_operation_agent.state.identity import (IdentityAssertion, PrincipalContext,
                                           PrincipalError, PRINCIPAL_CONTEXT_VERSION,
                                           bind_matching_identity)
 from web_operation_agent.answer.evidence import Origin, QueryEvidence, RecordEvidence

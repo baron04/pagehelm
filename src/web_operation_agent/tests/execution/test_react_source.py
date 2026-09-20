@@ -7,7 +7,7 @@ from pathlib import Path
 from web_operation_agent.application import SourceCapability
 from web_operation_agent.affordance import (AffordanceParameter,
                                              resolve_source_affordances)
-from web_operation_agent.ledger import SessionLedger
+from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.schemas import empty_contract
 from web_operation_agent.execution.session import (LabApparatus, SCOPE_FIRST_SYSTEM,
                                          ServerAgentSession, TaskSpec)

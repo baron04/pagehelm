@@ -24,8 +24,8 @@ from web_operation_agent.business.runtime import (
 from web_operation_agent.application import ResultPostconditionVerifier
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.answer.evidence import Origin, QueryEvidence, RecordEvidence
-from web_operation_agent.ledger import SessionLedger
-from web_operation_agent.identity import OperationContext, PrincipalContext
+from web_operation_agent.state.ledger import SessionLedger
+from web_operation_agent.state.identity import OperationContext, PrincipalContext
 from web_operation_agent.business.mutation import MemoryMutationJournal, MutationJournalError
 from web_operation_agent.schemas import ActionReceipt, ElementRef, PageObservation
 from web_operation_agent.execution.session import (CAPABILITY_GAP_TERMINAL,

@@ -16,11 +16,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from web_operation_agent.application import bind_application
-from web_operation_agent.conversation import (SQLiteConversationState,
+from web_operation_agent.state.conversation import (SQLiteConversationState,
                                                prune_sqlite_conversations)
-from web_operation_agent.durable import (SQLiteExpiringNonceStore,
-                                         SQLitePrincipalRevocations,
-                                         SQLiteSessionStore)
+from web_operation_agent.state import (SQLiteExpiringNonceStore,
+                                      SQLitePrincipalRevocations, SQLiteSessionStore)
 from web_operation_agent.modeling.egress import ProviderEgressPolicy
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.live import (LiveConversationRunner, LiveProductCapacityError,
@@ -30,12 +29,12 @@ from web_operation_agent.modeling.client import (ChatModel, KeyedLimitedChat,
                                        SpendMeter, load_env)
 from web_operation_agent.business.mutation import SQLiteMutationJournal
 from web_operation_agent.modeling.observability import ObservedChat, RuntimeObservability
-from web_operation_agent.ledger import SessionLedger
+from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.execution.product import AgentTurnExecutor
 
 from .turn import odoo_turn_config
 from web_operation_agent.transport.protocol import RemoteProtocolError
-from web_operation_agent.identity import PrincipalContext, PrincipalError
+from web_operation_agent.state.identity import PrincipalContext, PrincipalError
 
 from .adapter import OdooApplicationAdapter
 from .demo.demo import ScriptedOdooChat

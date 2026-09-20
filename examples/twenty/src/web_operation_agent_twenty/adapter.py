@@ -47,7 +47,7 @@ from web_operation_agent.application import (
     DeclaredDataClassifier,
     ResultPostconditionVerifier,
 )
-from web_operation_agent.identity import (IdentityAssertion, OperationContext,
+from web_operation_agent.state.identity import (IdentityAssertion, OperationContext,
                                           PrincipalContext, bind_matching_identity)
 from web_operation_agent.business.mutation import MutationJournal
 

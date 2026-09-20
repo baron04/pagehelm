@@ -17,7 +17,7 @@ import threading
 import time
 from pathlib import Path
 
-from .privacy import redact_sensitive_assignments, redact_session_handoffs
+from ..privacy import redact_sensitive_assignments, redact_session_handoffs
 
 
 class SessionLedger:

@@ -100,7 +100,7 @@ from web_operation_agent.controlplane import ControlPlaneError               # n
 from web_operation_agent.grounding import PlanState                          # noqa: E402
 from web_operation_agent.tests.route_fixture import (                # noqa: E402
     FIXTURE_ROUTE_PORT, fixture_route_identity)
-from web_operation_agent.ledger import SessionLedger                         # noqa: E402
+from web_operation_agent.state.ledger import SessionLedger                         # noqa: E402
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionReceipt,     # noqa: E402
                                          ElementRef, OperationContract, PageObservation)
 from web_operation_agent.execution.session import (LabApparatus, ServerAgentSession,

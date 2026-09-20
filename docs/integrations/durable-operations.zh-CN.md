@@ -3,7 +3,7 @@
 协作进程使用本机文件系统上的同一私有 SQLite 数据库。此后端不支持网络文件系统或跨主机部署。升级既有 mutation journal 前须停止所有旧 worker。
 
 ```python
-from web_operation_agent.durable import (
+from web_operation_agent.state import (
     SQLitePrincipalRevocations,
     SQLiteProviderQuota,
     SQLiteSessionStore,

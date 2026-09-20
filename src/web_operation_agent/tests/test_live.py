@@ -12,7 +12,7 @@ from unittest import mock
 from web_operation_agent.live import (LiveConversationRunner, LiveProductServer,
                                       LiveProductSession, render_live_replay)
 from web_operation_agent.embedded_agent import ReadOnlyControl
-from web_operation_agent.identity import PrincipalContext
+from web_operation_agent.state.identity import PrincipalContext
 from web_operation_agent.modeling.client import ProviderError
 from web_operation_agent.execution.product import (AgentTurnConfig, AgentTurnError,
                                          AgentTurnErrorCode, AgentTurnExecutor,

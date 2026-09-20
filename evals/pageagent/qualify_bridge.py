@@ -15,7 +15,7 @@ from evals.pageagent.host import PageAgentProviderContract, PageAgentProviderPro
 from evals.twenty.fixture import atomic_write_json
 from web_operation_agent.business.runtime import (BusinessSkill, BusinessToolResult,
                                           BusinessToolRuntime)
-from web_operation_agent.identity import OperationContext, PrincipalContext
+from web_operation_agent.state.identity import OperationContext, PrincipalContext
 
 
 def _completion(action: dict[str, Any], *, sequence: int) -> str:

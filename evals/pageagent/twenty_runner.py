@@ -40,7 +40,7 @@ from evals.twenty.outcomes import (
 from web_operation_agent.application import bind_application
 from evals.twenty.breadth_taskset import validate_breadth_execution_case
 from web_operation_agent.business.runtime import BusinessToolError
-from web_operation_agent.identity import OperationContext, PrincipalError
+from web_operation_agent.state.identity import OperationContext, PrincipalError
 from web_operation_agent.modeling.client import ChatModel, SpendMeter, load_env
 from web_operation_agent_twenty.adapter import TwentyApplicationAdapter
 

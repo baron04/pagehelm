@@ -6,9 +6,9 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
-from web_operation_agent.durable import (SQLitePrincipalRevocations, SQLiteSessionStore,
-                                         DurableStateError)
-from web_operation_agent.identity import PrincipalRevokedError
+from web_operation_agent.state import (DurableStateError, SQLitePrincipalRevocations,
+                                      SQLiteSessionStore)
+from web_operation_agent.state.identity import PrincipalRevokedError
 from web_operation_agent.transport import (RemoteProtocolError, RemoteSessionClosed,
                                       RemoteSessionRegistry)
 from web_operation_agent.schemas import ApprovalRequest, ApprovalDecision
@@ -95,7 +95,7 @@ class DurableSessionTests(unittest.TestCase):
 
 
 def _quota_worker(path, output):
-    from web_operation_agent.durable import SQLiteProviderQuota
+    from web_operation_agent.state.quota import SQLiteProviderQuota
     store = SQLiteSessionStore(path)
     quota = SQLiteProviderQuota(store, scope='tenant-provider', max_requests=2)
     output.put(quota.reserve())
@@ -104,7 +104,7 @@ def _quota_worker(path, output):
 class SharedQuotaTests(unittest.TestCase):
     def test_independent_processes_share_a_quota_and_scope_isolation(self):
         import multiprocessing
-        from web_operation_agent.durable import SQLiteProviderQuota
+        from web_operation_agent.state.quota import SQLiteProviderQuota
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'store.db'
             store = SQLiteSessionStore(path)
@@ -129,7 +129,7 @@ class SharedQuotaTests(unittest.TestCase):
                 SQLiteProviderQuota(store, scope='tenant-provider', max_requests=3)
 
     def test_expired_quota_window_and_inactive_session_retention(self):
-        from web_operation_agent.durable import SQLiteProviderQuota
+        from web_operation_agent.state.quota import SQLiteProviderQuota
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteSessionStore(Path(tmp) / 'store.db')
             quota = SQLiteProviderQuota(store, scope='test', max_requests=1, window_ms=1000)

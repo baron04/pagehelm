@@ -12,7 +12,7 @@ from web_operation_agent.business.runtime import (
     BusinessMutationIndeterminate, BusinessMutationProposal, BusinessToolError,
     BusinessToolRuntime,
 )
-from web_operation_agent.identity import OperationContext, PrincipalError
+from web_operation_agent.state.identity import OperationContext, PrincipalError
 
 
 _SAFE_TOKEN = re.compile(r"[^\x00-\x1f\x7f]{16,128}\Z")

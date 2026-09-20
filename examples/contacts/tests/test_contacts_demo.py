@@ -18,7 +18,7 @@ from web_operation_agent.application import bind_application
 from web_operation_agent.business.runtime import (BusinessMutationIndeterminate,
                                           BusinessToolError)
 from web_operation_agent.embedded_agent import ReadOnlyControl
-from web_operation_agent.identity import PrincipalError
+from web_operation_agent.state.identity import PrincipalError
 from web_operation_agent.live import LiveConversationRunner, LiveProductSession
 from web_operation_agent.business.mutation import MemoryMutationJournal, SQLiteMutationJournal
 from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnExecutor
@@ -454,7 +454,7 @@ class TheWriteChainAnAuthorCopies(unittest.TestCase):
 
     def test_a_page_assertion_from_somewhere_else_is_refused(self):
         """The whole point of binding: neither credential may authorise a write alone."""
-        from web_operation_agent.identity import (IdentityAssertion,
+        from web_operation_agent.state.identity import (IdentityAssertion,
                                                   PRINCIPAL_CONTEXT_VERSION)
         import time
         with MinimalContactsApplication() as application:
@@ -979,7 +979,7 @@ class TheApplicationsOwnAuthority(unittest.TestCase):
     def test_the_application_refuses_a_read_to_an_actor_it_grants_nothing(self):
         from examples.contacts.app import ACTORS_BY_ID
         from web_operation_agent.business.runtime import BusinessToolPermissionError
-        from web_operation_agent.identity import PrincipalError
+        from web_operation_agent.state.identity import PrincipalError
         nobody = ACTORS_BY_ID["hedy-lamarr"]
         with MinimalContactsApplication() as application:
             self.assertEqual(self._request(application, "GET", "/api/contacts",

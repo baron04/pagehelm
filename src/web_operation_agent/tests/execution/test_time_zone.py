@@ -13,7 +13,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from web_operation_agent.embedded_agent import ReadOnlyControl
-from web_operation_agent.ledger import SessionLedger
+from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.execution.session import ServerAgentSession, TaskSpec, _validated_time_zone
 from web_operation_agent.tests.business.test_business import _Browser, _Chat, _observation
 

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from web_operation_agent.identity import IdentityAssertion, PrincipalError
+from web_operation_agent.state.identity import IdentityAssertion, PrincipalError
 
 
 APPLICATION_ID = "odoo"

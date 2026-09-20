@@ -54,7 +54,7 @@ from web_operation_agent.business.runtime import (BusinessMutationIndeterminate,
                                           APPLICATION_SAVES_ON_LEAVE,
                                           BusinessToolUnavailableError,
                                           business_text_key, normalize_business_text)
-from web_operation_agent.identity import (IdentityAssertion, OperationContext,
+from web_operation_agent.state.identity import (IdentityAssertion, OperationContext,
                                           PrincipalContext, PrincipalError,
                                           bind_matching_identity)
 from web_operation_agent.business.mutation import MutationJournal

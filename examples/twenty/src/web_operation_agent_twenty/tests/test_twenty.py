@@ -21,7 +21,7 @@ from web_operation_agent.business.runtime import (BusinessMutationIndeterminate,
                                           BusinessToolPermissionError,
                                           BusinessToolRuntime,
                                           BusinessToolUnavailableError)
-from web_operation_agent.identity import IdentityAssertion, PrincipalError
+from web_operation_agent.state.identity import IdentityAssertion, PrincipalError
 from web_operation_agent.business.mutation import (MemoryMutationJournal,
                                           SQLiteMutationJournal)
 from web_operation_agent_twenty.adapter import (MUTATION_SPECS, READ_SPECS,

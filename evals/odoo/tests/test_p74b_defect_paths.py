@@ -27,9 +27,9 @@ from decimal import Decimal
 from pathlib import Path
 
 from evals.odoo import extractor as ex
-from web_operation_agent.conversation import ConversationState
-from web_operation_agent.identity import PrincipalContext
-from web_operation_agent.ledger import SessionLedger
+from web_operation_agent.state.conversation import ConversationState
+from web_operation_agent.state.identity import PrincipalContext
+from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.business.mutation import MemoryMutationJournal
 from web_operation_agent.execution.product import (AgentAnswerContext, AgentTurnMessage,
                                          render_neutral_user_answer)

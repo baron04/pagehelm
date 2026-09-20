@@ -22,7 +22,7 @@ from examples.contacts.adapter import MinimalContactsAdapter
 from examples.contacts.app import DEMO_SESSION_COOKIE, DemoActor, MinimalContactsApplication
 from examples.contacts.demo import DemoConfig, _chat
 from web_operation_agent.application import bind_application
-from web_operation_agent.durable import (SQLitePrincipalRevocations, SQLiteSessionStore)
+from web_operation_agent.state import SQLitePrincipalRevocations, SQLiteSessionStore
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.live import LiveConversationRunner, LiveProductServer, LiveProductSession
 from web_operation_agent.business.mutation import SQLiteMutationJournal

@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from web_operation_agent.transport.gateway import EmbeddedGateway
-from web_operation_agent.ledger import SessionLedger
+from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.transport import (RemoteBrowserClient, RemoteSessionChannel,
                                         RemoteSessionRegistry)
 from web_operation_agent.schemas import ApprovalRequest

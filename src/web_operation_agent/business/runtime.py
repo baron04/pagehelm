@@ -28,7 +28,7 @@ from .errors import (BusinessMutationBlockedError, BusinessMutationIndeterminate
 from .text import (_trigger_matches, business_text_key, normalize_business_text,
                    trigger_requests_action)
 from ..answer.evidence import RecordEvidence
-from ..identity import OperationContext, PrincipalError
+from ..state.identity import OperationContext, PrincipalError
 from .mutation import (MemoryMutationJournal, MutationClaimError, MutationJournal,
                        MutationJournalDurability, MutationJournalError)
 from ..schemas import BROWSER_ACTIONS

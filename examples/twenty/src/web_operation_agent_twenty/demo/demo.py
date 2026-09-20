@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 
 from web_operation_agent import python_is_supported, supported_python_text
 from web_operation_agent.embedded_agent import ReadOnlyControl
-from web_operation_agent.identity import PrincipalContext
+from web_operation_agent.state.identity import PrincipalContext
 from web_operation_agent.live import LiveConversationRunner, LiveProductSession, LiveTurnOutcome
 from web_operation_agent.modeling.client import ChatModel, SpendMeter, load_env
 from web_operation_agent.business.mutation import SQLiteMutationJournal

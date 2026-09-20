@@ -31,7 +31,7 @@ from web_operation_agent.business.runtime import (
     BusinessMutationSpec, BusinessSkill, BusinessToolError, BusinessToolRequestError,
     BusinessToolResult, BusinessToolRuntime,
 )
-from web_operation_agent.identity import PRINCIPAL_CONTEXT_VERSION, PrincipalContext
+from web_operation_agent.state.identity import PRINCIPAL_CONTEXT_VERSION, PrincipalContext
 from web_operation_agent_twenty.adapter import (
     CREATE_COMPANY_SCHEMA, QUERY_COMPANIES_SCHEMA, TwentyApplicationAdapter,
 )

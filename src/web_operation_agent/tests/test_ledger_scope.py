@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from web_operation_agent.ledger import SessionLedger
+from web_operation_agent.state.ledger import SessionLedger
 
 
 BASE = {"session_id": "s-1", "turn_id": "m-7", "tenant_digest": "a" * 64}

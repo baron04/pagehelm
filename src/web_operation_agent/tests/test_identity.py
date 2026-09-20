@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from web_operation_agent.identity import (MAX_PRINCIPAL_LIFETIME_MS,
+from web_operation_agent.state.identity import (MAX_PRINCIPAL_LIFETIME_MS,
                                           IdentityAssertion, OperationContext,
                                           PrincipalContext, PrincipalError,
                                           bind_matching_identity)

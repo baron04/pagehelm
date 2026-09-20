@@ -70,7 +70,7 @@ Python 软件包也按这些服务端边界组织：`modeling/` 负责 provider 
 | `web_operation_agent.application` | 校验版本化应用描述，以及可执行的身份、路由、数据分类、mutation 后置条件与核对端口。 |
 | `web_operation_agent.execution.product` | 定义版本化 turn message、配置、结果、状态和中性回答合同。 |
 | `web_operation_agent.execution.turn` | 把已校验的应用和一条用户消息绑定到最新页面观察，执行一次与具体应用无关的 Agent turn，再结算并发布结果。 |
-| `web_operation_agent.conversation` | 在多轮之间保留有界、脱敏的引用上下文，不把历史事实或路由当成当前权限。 |
+| `web_operation_agent.state.conversation` | 在多轮之间保留有界、脱敏的引用上下文，不把历史事实或路由当成当前权限。 |
 | `web_operation_agent.live` | 管理网关和顺序执行的会话生命周期。 |
 | `web_operation_agent.browser` | 定义结构化浏览器执行协议和类型化传输结果，不包含浏览器引擎。 |
 | `web_operation_agent.remote` | 定义受能力凭据约束的远程浏览器通道和客户端。 |

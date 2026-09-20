@@ -16,8 +16,8 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from ..durable import SQLiteSessionStore, DurableStateError, principal_scope
-from ..identity import PrincipalContext, PrincipalError, PrincipalRevokedError
+from ..state.store import DurableStateError, SQLiteSessionStore, principal_scope
+from ..state.identity import PrincipalContext, PrincipalError, PrincipalRevokedError
 from ..panel_view import (collapse_timeline, panel_contract, panel_limits,
                          progress_message, project_event, project_history_record)
 from ..privacy import redact_sensitive_assignments, redact_session_handoffs

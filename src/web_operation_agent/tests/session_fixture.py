@@ -12,7 +12,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from web_operation_agent.ledger import SessionLedger
+from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.execution.session import ServerAgentSession, TaskSpec
 from web_operation_agent.tests.execution.test_session import _Browser, _Chat, _Control, _obs
 

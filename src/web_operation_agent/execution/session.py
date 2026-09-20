@@ -43,9 +43,9 @@ from ..controlplane import ControlPlaneClient, ControlPlaneError
 from ..modeling.egress import AuditedChat, ProviderEgressError
 from ..grounding import (NOT_APPLICABLE, REFUTED, WRITE_PERMITTED, WRITE_REFUSED,
                         PlanState, opaque_route_identity)
-from ..identity import PrincipalContext
+from ..state.identity import PrincipalContext
 from ..planning.knowledge import ApplicationKnowledgePort
-from ..ledger import SessionLedger
+from ..state.ledger import SessionLedger
 from ..privacy import SessionHandoffPolicy, safe_tool_arguments as _safe
 from .routes import Router, candidate_url
 from .turnwatch import ProgressFeed, RepeatGuard

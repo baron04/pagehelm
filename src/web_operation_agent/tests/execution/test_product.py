@@ -24,10 +24,10 @@ from web_operation_agent.answer.answering import StructuredQueryAnswer
 from web_operation_agent.business.runtime import (BusinessSelectionOption, BusinessSkill,
                                           BusinessToolPermissionError, BusinessToolResult,
                                           BusinessToolRuntime)
-from web_operation_agent.conversation import ConversationState
+from web_operation_agent.state.conversation import ConversationState
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.answer.evidence import Origin, RecordEvidence
-from web_operation_agent.identity import PrincipalContext
+from web_operation_agent.state.identity import PrincipalContext
 from web_operation_agent.modeling.client import ProviderError
 from web_operation_agent.business.mutation import SQLiteMutationJournal
 from web_operation_agent.execution.session import NO_LAB
@@ -1351,7 +1351,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
             captured = []
 
             def ledger_factory(path, run_id, *, base=None):
-                from web_operation_agent.ledger import SessionLedger
+                from web_operation_agent.state.ledger import SessionLedger
                 ledger = SessionLedger(path, run_id, base=base)
                 captured.append(ledger)
                 return ledger

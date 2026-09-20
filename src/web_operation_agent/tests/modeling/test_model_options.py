@@ -147,7 +147,7 @@ class NativeCompletionTransport(unittest.TestCase):
         return response
 
     def test_shared_quota_refuses_before_http_and_spend(self):
-        from web_operation_agent.durable import SQLiteSessionStore, SQLiteProviderQuota
+        from web_operation_agent.state import SQLiteProviderQuota, SQLiteSessionStore
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
             quota = SQLiteProviderQuota(SQLiteSessionStore(path / "quota.db"),
