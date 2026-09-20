@@ -24,7 +24,8 @@ from web_operation_agent.business.runtime import (BusinessMutationIndeterminate,
 from web_operation_agent.identity import IdentityAssertion, PrincipalError
 from web_operation_agent.business.mutation import (MemoryMutationJournal,
                                           SQLiteMutationJournal)
-from web_operation_agent_twenty.adapter import (TwentyApplicationAdapter,
+from web_operation_agent_twenty.adapter import (MUTATION_SPECS, READ_SPECS,
+                                        TwentyApplicationAdapter,
                                         TwentyBusinessToolExecutor,
                                         TwentyOAuthTokenStore,
                                         TwentyPageSessionIdentityResolver,
@@ -39,6 +40,19 @@ def _adapter(**kwargs) -> TwentyApplicationAdapter:
         registration_path="registration.json",
         **kwargs,
     )
+
+
+class TwentyToolSpecificationTests(unittest.TestCase):
+    def test_schema_authority_and_execution_come_from_one_catalog(self):
+        executor = TwentyBusinessToolExecutor(
+            base_url="http://127.0.0.1:3000", tokens=object(), allow_mutations=True)
+        offered = {schema["function"]["name"] for schema in executor.tool_schemas()}
+        for spec in (*READ_SPECS, *MUTATION_SPECS):
+            with self.subTest(tool=spec.name):
+                self.assertIn(spec.name, offered)
+                self.assertEqual(spec.schema["function"]["name"], spec.name)
+                self.assertTrue(callable(getattr(executor, spec.execute_method)))
+                self.assertTrue(spec.scope.endswith(":read") or spec.scope.endswith(":write"))
 
 
 class TwentyPackagedSkillTests(unittest.TestCase):

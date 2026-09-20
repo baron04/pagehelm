@@ -16,6 +16,7 @@ import threading
 import time
 import unicodedata
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.client import HTTPConnection, HTTPSConnection, HTTPException
 from importlib import resources
@@ -141,6 +142,39 @@ CREATE_COMPANY_SCHEMA = {
         },
     },
 }
+
+
+@dataclass(frozen=True)
+class _ToolSpec:
+    """One adapter tool's schema, authority and operational implementation."""
+
+    name: str
+    schema: dict
+    effect: str
+    scope: str
+    data_types: tuple[str, ...]
+    execute_method: str
+
+
+READ_SPECS = (
+    _ToolSpec("query_companies", QUERY_COMPANIES_SCHEMA, "read", "companies:read",
+              ("business.company", "business.identifier", "application.route"),
+              "_execute_companies_query"),
+    _ToolSpec("query_people", QUERY_PEOPLE_SCHEMA, "read", "people:read",
+              ("business.person", "business.identifier", "application.route"),
+              "_execute_people_query"),
+    _ToolSpec("query_opportunities", QUERY_OPPORTUNITIES_SCHEMA, "read",
+              "opportunities:read",
+              ("business.opportunity", "business.identifier", "application.route"),
+              "_execute_opportunities_query"),
+)
+MUTATION_SPECS = (
+    _ToolSpec("create_company", CREATE_COMPANY_SCHEMA, "write", "companies:write",
+              ("business.company", "business.identifier", "application.route",
+               "business.mutation_result"), "_dispatch_create_company"),
+)
+_READ_BY_TOOL = {spec.name: spec for spec in READ_SPECS}
+_MUTATION_BY_TOOL = {spec.name: spec for spec in MUTATION_SPECS}
 
 _UUID = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
@@ -505,14 +539,13 @@ class TwentyBusinessToolExecutor:
         self.allow_mutations = allow_mutations
 
     def tool_schemas(self) -> tuple[dict, ...]:
-        reads = (QUERY_COMPANIES_SCHEMA, QUERY_PEOPLE_SCHEMA, QUERY_OPPORTUNITIES_SCHEMA)
-        return reads + ((CREATE_COMPANY_SCHEMA,) if self.allow_mutations else ())
+        return tuple(spec.schema for spec in READ_SPECS) + (
+            tuple(spec.schema for spec in MUTATION_SPECS) if self.allow_mutations else ())
 
     def tool_effects(self) -> dict[str, str]:
-        effects = {name: "read" for name in
-                   ("query_companies", "query_people", "query_opportunities")}
+        effects = {spec.name: spec.effect for spec in READ_SPECS}
         if self.allow_mutations:
-            effects["create_company"] = "write"
+            effects.update({spec.name: spec.effect for spec in MUTATION_SPECS})
         return effects
 
     def resolve_delegated_identity(self, *, lifetime_s: int = 300,
@@ -557,10 +590,13 @@ class TwentyBusinessToolExecutor:
 
     def execute(self, name: str, args: dict, *,
                 context: OperationContext | None = None) -> BusinessToolResult:
-        if name in {"query_people", "query_opportunities"}:
-            return self._execute_related_query(name, args, context=context)
-        if name != "query_companies":
+        spec = _READ_BY_TOOL.get(name)
+        if spec is None:
             raise BusinessToolRequestError("unknown Twenty business tool")
+        return getattr(self, spec.execute_method)(args, context=context)
+
+    def _execute_companies_query(self, args: dict, *,
+                                 context: OperationContext | None) -> BusinessToolResult:
         unknown = set(args) - {"name_contains", "limit"}
         if unknown:
             raise BusinessToolRequestError(
@@ -679,6 +715,14 @@ class TwentyBusinessToolExecutor:
             ),
         )
 
+    def _execute_people_query(self, args: dict, *,
+                              context: OperationContext | None) -> BusinessToolResult:
+        return self._execute_related_query("query_people", args, context=context)
+
+    def _execute_opportunities_query(self, args: dict, *,
+                                     context: OperationContext | None) -> BusinessToolResult:
+        return self._execute_related_query("query_opportunities", args, context=context)
+
     def _execute_related_query(self, name: str, args: dict, *,
                                context: OperationContext | None) -> BusinessToolResult:
         resource = "people" if name == "query_people" else "opportunities"
@@ -771,8 +815,13 @@ class TwentyBusinessToolExecutor:
     def prepare_mutation(self, name: str, args: dict, *,
                          context: OperationContext | None = None
                          ) -> BusinessMutationSpec:
-        if not self.allow_mutations or name != "create_company":
+        spec = _MUTATION_BY_TOOL.get(name)
+        if not self.allow_mutations or spec is None:
             raise BusinessToolError("unknown Twenty business mutation")
+        return self._prepare_create_company(args, context=context)
+
+    def _prepare_create_company(self, args: dict, *,
+                                context: OperationContext | None) -> BusinessMutationSpec:
         normalized = self._normalize_company(args)
         self._assert_no_duplicate(normalized["name"], normalized["domain"])
         return BusinessMutationSpec(
@@ -785,8 +834,13 @@ class TwentyBusinessToolExecutor:
     def execute_mutation(self, name: str, args: dict, *,
                          context: OperationContext | None = None
                          ) -> BusinessToolResult:
-        if not self.allow_mutations or name != "create_company":
+        spec = _MUTATION_BY_TOOL.get(name)
+        if not self.allow_mutations or spec is None:
             raise BusinessToolError("unknown Twenty business mutation")
+        return getattr(self, spec.execute_method)(args, context=context)
+
+    def _dispatch_create_company(self, args: dict, *,
+                                 context: OperationContext | None) -> BusinessToolResult:
         normalized = self._normalize_company(args)
         # Repeat under the delegated actor immediately before dispatch. This closes the
         # ordinary time-of-check gap without ever retrying the POST itself.
@@ -1184,26 +1238,15 @@ class TwentyApplicationAdapter:
                 BusinessSkill.load(mutation_skill_path)
                 if mutation_skill_path is not None
                 else _packaged_skill(_MUTATION_SKILL_RESOURCE))
-        required_scopes = {"query_companies": "companies:read",
-                           "query_people": "people:read",
-                           "query_opportunities": "opportunities:read"}
+        required_scopes = {spec.name: spec.scope for spec in READ_SPECS}
         if allow_mutations:
-            required_scopes["create_company"] = "companies:write"
-        read_classes = {
-            "query_companies": "business.company",
-            "query_people": "business.person",
-            "query_opportunities": "business.opportunity",
-        }
+            required_scopes.update({spec.name: spec.scope for spec in MUTATION_SPECS})
+        specs = (*READ_SPECS, *(MUTATION_SPECS if allow_mutations else ()))
         data = DeclaredDataClassifier(tuple(
-            (name, ((read_classes[name], "business.identifier", "application.route")
-                    if name in read_classes else
-                    ("business.company", "business.identifier", "application.route",
-                     "business.mutation_result")))
-            for name in sorted(required_scopes)))
+            (spec.name, spec.data_types) for spec in sorted(specs, key=lambda spec: spec.name)))
         postconditions = ResultPostconditionVerifier(
-            (("create_company",
-              ("content.readback_verified", "audit.readback_verified")),)
-            if allow_mutations else ())
+            tuple((spec.name, ("content.readback_verified", "audit.readback_verified"))
+                  for spec in MUTATION_SPECS) if allow_mutations else ())
         routes = DeclaredRoutePort(
             application_id="twenty",
             tool_route_patterns=(
