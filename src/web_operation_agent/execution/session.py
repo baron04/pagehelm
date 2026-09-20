@@ -59,6 +59,7 @@ from .routes import Router, candidate_url, observation_is_at_route
 from ..modeling.spend import BudgetExhausted
 from .turnwatch import ProgressFeed, RepeatGuard
 from .turn_answer import AnswerState, TurnAnswer
+from .tools import ToolSurface
 from ..business.writes import PRE_DISPATCH_ERRORS, WRITE_CAPABLE, WatchState, WriteWatch
 from .prompts import (
     AGENT_SYSTEM, APPLICATION_ENTRY_SYSTEM, APPLICATION_ENTRY_TOOL, ASK_USER_TOOL,
@@ -737,6 +738,7 @@ class ServerAgentSession:
         #: Source-contract scopes declared by the Adapter and observed on the entry page.
         #: Empty until `observe_entry()` has run, which is why planning happens after it.
         self.served_webapps: set[str] = set()
+        self._tool_surface = ToolSurface(self)
 
     # -- phases ------------------------------------------------------------------------
     def observe_entry(self) -> PageObservation:
@@ -2274,43 +2276,7 @@ class ServerAgentSession:
 
     # -- grounding ---------------------------------------------------------------------
     def tool_schemas(self) -> list[dict]:
-        # A disabled action is refused before dispatch, so offering it in the tool surface
-        # only invites a call the run will refuse: nothing in the schema tells the model the
-        # deployment took the tool away. `observe` cannot be disabled and `finish` is not a
-        # browser action, so a run whose every page action is disabled can still end.
-        tools = [tool for tool in TOOL_SCHEMAS
-                 if tool["function"]["name"] not in self.disabled_actions]
-        if self._capability_question:
-            return [tool for tool in tools if tool["function"]["name"] == "finish"]
-        if self.page_answer_evidence:
-            tools = [page_answer.OBSERVE_TOOL if tool["function"]["name"] == "observe"
-                     else tool for tool in tools]
-        if self._answers.answer_mode:
-            tools = [answer_protocol.FINISH_ANSWER_TOOL if tool["function"]["name"] == "finish"
-                     else tool for tool in tools]
-        if self.allow_clarification:
-            tools += [ASK_USER_TOOL]
-        if self._capability_check_available():
-            tools += [CAPABILITY_TOOL]
-        if self._answers_pending_question:
-            tools += [WITHDRAW_TOOL]
-        if len(self.evidence):
-            tools += [answer_protocol.COMPUTE_TOOL]
-        tools += [SOURCE_TOOL, SOURCE_NAV_TOOL] if self.runtime_source else []
-        if self.source_affordance_mode in ("auto", "empty"):
-            tools += [SOURCE_CANDIDATE_TOOL]
-        if self.knowledge_router is not None:
-            tools += [SKILL_APP_TOOL, SKILL_ROUTE_TOOL]
-        if self.allow_application_entry:
-            tools += [APPLICATION_ENTRY_TOOL]
-        if self._task_business_skills:
-            if (not self._auto_loaded_business_skill_ids
-                    or self._loaded_business_skill_ids != self._task_business_skill_ids):
-                tools += [LOAD_SKILL_TOOL]
-            tools += self.business_tools.schemas_for(self._loaded_business_skill_ids)
-        if self.allow_form_prefill and self._form_draft is not None:
-            tools += [PREFILL_FORM_TOOL]
-        return tools
+        return self._tool_surface.schemas()
 
     def _clarification(self, args: object, *, step: int) -> dict:
         if not isinstance(args, dict) or set(args) != {
