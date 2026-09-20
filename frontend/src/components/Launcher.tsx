@@ -27,7 +27,7 @@ export function Launcher({state, unread, labels, onOpen}: {
       <span className="woa-launcher__ring" aria-hidden="true">
         <svg viewBox="0 0 60 60">
           {state === 'working' && (
-            <circle cx="30" cy="30" r="28" fill="none" stroke="var(--woa-launcher-ring)"
+            <circle cx="30" cy="30" r="28" fill="none" stroke="var(--woa-accent)"
                     strokeWidth="2.5" strokeLinecap="round" strokeDasharray="46 130">
               <animateTransform attributeName="transform" type="rotate"
                                 from="0 30 30" to="360 30 30" dur="1.1s"

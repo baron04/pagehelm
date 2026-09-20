@@ -4,10 +4,12 @@
  * It appears while the first connection is still being made and whenever starting failed,
  * and it goes the moment a panel is mounted. It sits exactly where the panel's own launcher
  * will, at the same size, so the swap does not move anything under the person's pointer.
- * Its words are the contract's (`entry` in `panel_contract.json`), not this file's.
+ * Its words are the contract's (`entry` in `panel_contract.json`), not this file's, and so
+ * are its colours (`design_tokens.json`, through the palette this file imports).
  */
 import {entry as contractEntry} from '@contract/panel_contract.json'
 import {listen, type Cancel} from './contain'
+import {ENTRY_DARK, ENTRY_LIGHT} from './entry-palette.generated'
 
 export const ENTRY_ID = 'woa-assistant-entry'
 
@@ -42,47 +44,67 @@ export interface StandingEntry {
   remove(): void
 }
 
+/** The roles the entry's own markup uses; the generator writes exactly these keys. */
+interface EntryPalette {
+  readonly ink: string
+  readonly muted: string
+  readonly card: string
+  readonly line: string
+  readonly lineStrong: string
+  readonly accent: string
+  readonly button: string
+  readonly warning: string
+  readonly shadow: string
+}
+
+// Annotating the generated literals: a renamed role fails the build here rather than
+// interpolating `undefined` into a colour and rendering it as none.
+const LIGHT: EntryPalette = ENTRY_LIGHT
+const DARK: EntryPalette = ENTRY_DARK
+
 const STYLE = `
   :host { all: initial }
   .entry {
     position: fixed; right: 20px; bottom: 20px;
     display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
-    font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color: #1f2430;
+    font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color: ${LIGHT.ink};
   }
   .badge {
     position: relative; width: 52px; height: 52px; padding: 0; border-radius: 50%;
-    border: 1px solid rgba(15, 18, 25, .14); background: #fff; color: #4b5563;
-    box-shadow: 0 6px 18px rgba(15, 18, 25, .16); cursor: pointer; font: inherit;
+    border: 1px solid ${LIGHT.line}; background: ${LIGHT.card}; color: ${LIGHT.muted};
+    box-shadow: ${LIGHT.shadow}; cursor: pointer; font: inherit;
   }
-  .badge:focus-visible { outline: 2px solid #2557dd; outline-offset: 2px }
+  .badge:focus-visible { outline: 2px solid ${LIGHT.accent}; outline-offset: 2px }
   .ring {
     position: absolute; inset: -4px; border-radius: 50%;
-    border: 2px solid transparent; border-top-color: #2557dd;
+    border: 2px solid transparent; border-top-color: ${LIGHT.accent};
     animation: spin 1s linear infinite; display: none;
   }
   .entry[data-state='connecting'] .ring { display: block }
   .dot {
     position: absolute; top: 2px; right: 2px; width: 10px; height: 10px; border-radius: 50%;
-    background: #d97706; box-shadow: 0 0 0 2px #fff; display: none;
+    background: ${LIGHT.warning}; box-shadow: 0 0 0 2px ${LIGHT.card}; display: none;
   }
   .entry[data-state='unavailable'] .dot { display: block }
   .note {
-    max-width: 260px; padding: 10px 12px; border-radius: 10px; background: #fff;
-    border: 1px solid rgba(15, 18, 25, .14); box-shadow: 0 6px 18px rgba(15, 18, 25, .16);
+    max-width: 260px; padding: 10px 12px; border-radius: 10px; background: ${LIGHT.card};
+    border: 1px solid ${LIGHT.line}; box-shadow: ${LIGHT.shadow};
   }
   .note p { margin: 0 }
   .note button {
     margin-top: 8px; font: inherit; padding: 4px 10px; border-radius: 7px; cursor: pointer;
-    border: 1px solid rgba(15, 18, 25, .2); background: #f6f7f9; color: inherit;
+    border: 1px solid ${LIGHT.lineStrong}; background: ${LIGHT.button}; color: inherit;
   }
   .note button[hidden] { display: none }
   @keyframes spin { to { transform: rotate(360deg) } }
-  @media (prefers-reduced-motion: reduce) { .ring { animation: none; border-color: #2557dd } }
+  @media (prefers-reduced-motion: reduce) { .ring { animation: none; border-color: ${LIGHT.accent} } }
   @media (prefers-color-scheme: dark) {
-    .entry { color: #e7e9ee }
-    .badge, .note { background: #20242c; border-color: rgba(255, 255, 255, .16); color: #d1d5db }
-    .dot { box-shadow: 0 0 0 2px #20242c }
-    .note button { background: #2b303a; border-color: rgba(255, 255, 255, .2) }
+    .entry { color: ${DARK.ink} }
+    .badge, .note { background: ${DARK.card}; border-color: ${DARK.line}; color: ${DARK.muted} }
+    .badge:focus-visible { outline-color: ${DARK.accent} }
+    .ring { border-top-color: ${DARK.accent} }
+    .dot { background: ${DARK.warning}; box-shadow: 0 0 0 2px ${DARK.card} }
+    .note button { background: ${DARK.button}; border-color: ${DARK.lineStrong} }
   }`
 
 /**

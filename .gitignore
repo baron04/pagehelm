@@ -32,6 +32,7 @@ src/web_operation_agent/web_runtime/panel/
 src/web_operation_agent/web_runtime/assistant.js
 frontend/src/styles/_tokens.generated.scss
 frontend/src/contract/protocol.generated.ts
+frontend/src/runtime/entry-palette.generated.ts
 
 # Java / Maven
 target/

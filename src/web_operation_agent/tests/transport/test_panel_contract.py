@@ -263,6 +263,12 @@ class DesignTokenTests(unittest.TestCase):
         light, dark = design_tokens()["themes"]["light"], design_tokens()["themes"]["dark"]
         self.assertEqual(set(light), set(dark))
 
+    def test_the_brand_disc_is_the_same_object_in_both_themes(self):
+        """The launcher disc is one brand moment; a theme must not quietly fork it."""
+        themes = design_tokens()["themes"]
+        for name in ("brand-top", "brand-mid", "brand-bottom", "brand-ink"):
+            self.assertEqual(themes["light"][name], themes["dark"][name], name)
+
     def test_the_generated_properties_carry_both_themes(self):
         css = token_custom_properties()
         self.assertIn("--woa-accent: #1d4ed8;", css)
