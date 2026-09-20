@@ -35,16 +35,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import (fixture, harness, leakcheck, ledger, population as population_module, protocol,
-               report, scripted, tasks)
-from .driver import AttemptPlan
-from .gateway import (SCRIPTED_MODEL, GatewayBudgets, ProviderGateway, ScriptedBackend,
+from evals.odoo.domain import population as population_module, protocol, tasks
+from evals.odoo.execution import harness, scripted
+from evals.odoo.fixture import fixture
+from evals.odoo.judging import leakcheck
+from evals.odoo.reporting import ledger, report
+from evals.odoo.execution.driver import AttemptPlan
+from evals.odoo.provider.gateway import (SCRIPTED_MODEL, GatewayBudgets, ProviderGateway, ScriptedBackend,
                       provider_binding_digest)
-from .harness import (PRIVATE, Context, batch_bindings, finish_batch, fixture_manifest_path,
+from evals.odoo.execution.harness import (PRIVATE, Context, batch_bindings, finish_batch, fixture_manifest_path,
                       load_context, protocol_budgets)
-from .projection import actor_projection
-from .rpc import OdooActorClient
-from .stack import REPOSITORY, Stack
+from evals.odoo.fixture.projection import actor_projection
+from evals.odoo.fixture.rpc import OdooActorClient
+from evals.odoo.fixture.stack import REPOSITORY, Stack
 
 ADAPTER_IN_IMAGE = "/usr/local/lib/python3.12/site-packages/web_operation_agent_odoo/adapter.py"
 QUOTATION_DOMAIN = 'domain=[("state", "in", ("draft", "sent"))],'
@@ -727,7 +730,7 @@ def _truth_reached(ctx: Context, task_id: str, directory: Path) -> bool:
     env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
     env["PYTHONPATH"] = str(REPOSITORY)
     completed = subprocess.run(
-        [sys.executable, "-m", "evals.odoo.evaluator", "truth",
+        [sys.executable, "-m", "evals.odoo.judging.evaluator", "truth",
          "--job", str(directory / "evaluator-job.json"),
          "--output", str(directory / "evaluator-truth.json")],
         cwd=REPOSITORY, env=env, capture_output=True, timeout=300, check=False)

@@ -22,11 +22,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import fixture, manifest, population as population_module
-from .population import digest_json
-from .projection import actor_projection
-from .runner_woa import ActorCredential, WoaRunnerConfig, login, logout
-from .stack import REPOSITORY, Stack, StackError
+from evals.odoo.domain import population as population_module
+from evals.odoo.fixture import fixture, manifest
+from evals.odoo.domain.population import digest_json
+from evals.odoo.fixture.projection import actor_projection
+from evals.odoo.execution.runner_woa import ActorCredential, WoaRunnerConfig, login, logout
+from evals.odoo.fixture.stack import REPOSITORY, Stack, StackError
 
 ROLES = ("writer", "reader", "other")
 
@@ -116,7 +117,7 @@ def seed_database(stack: Stack, private: Path, population: dict[str, Any],
               "--log-level=warn < /run/p74/seed.py; test -f /run/woa-generated/truth.json; "
               "for f in /run/woa-generated/*; do install -m 0600 $f /run/woa-output/; done")
     stack.compose("run", "--rm", "--no-deps",
-                  "-v", f"{REPOSITORY / 'evals/odoo/odoo_seed.py'}:/run/p74/seed.py:ro",
+                  "-v", f"{REPOSITORY / 'evals/odoo/fixture/odoo_seed.py'}:/run/p74/seed.py:ro",
                   "-v", f"{population_file}:/run/p74/population.json:ro", *mounts,
                   "-v", f"{seeded}:/run/woa-output", "--entrypoint", "bash", "odoo", "-lc",
                   script, timeout=900)

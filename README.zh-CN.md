@@ -64,6 +64,8 @@ examples/odoo/                 唯一公开参考接入
   deploy/single-node/            单节点部署示例
   deploy/addons/                 两种部署共用的 Odoo Runtime addon
 evals/odoo/                    独立 Odoo evaluator 与密封任务装置
+  domain/ fixture/ execution/  评测规格、装置与运行流程
+  provider/ judging/ reporting/ 模型中介、判定与证据报告
 evals/pageagent/               通用 PageAgent 对比桥接
 testapps/contacts/             内部合成资格测试应用
 frontend/                      助手面板源码

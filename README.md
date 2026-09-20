@@ -71,6 +71,8 @@ examples/odoo/                 the only public reference integration
   deploy/single-node/            operated single-node example
   deploy/addons/                 shared Odoo Runtime addon
 evals/odoo/                    independent Odoo evaluator and sealed task apparatus
+  domain/ fixture/ execution/  evaluation specification and runtime
+  provider/ judging/ reporting/ mediation, scoring, and evidence
 evals/pageagent/               generic PageAgent comparison bridge
 testapps/contacts/             synthetic internal qualification application
 frontend/                      assistant panel source

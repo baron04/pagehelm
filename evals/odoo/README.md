@@ -70,16 +70,20 @@ A held-out batch keeps what protects its conclusion. The task set was sealed and
 
 ## How it works
 
-- [`population.py`](population.py) generates the synthetic Odoo population from a 128-bit seed; [`odoo_seed.py`](odoo_seed.py) builds it inside an isolated, demo-free database and verifies every predicted reference, amount, state and date before committing.
-- [`tasks.py`](tasks.py) validates, seals and instantiates task sets: 30 families per split, five per stratum, disjoint across splits. Instantiation returns a `RunnerInput` separate from the `EvaluatorInput`. [`tasksets/`](tasksets) holds the development set, both seals and the split verification.
-- [`stack.py`](stack.py) and [`compose.p74.yml`](compose.p74.yml) run the isolated stack on top of `examples/odoo/deploy/single-node`. Images are built only from a clean checkout and labelled with its commit, which [`revision.py`](revision.py) checks.
-- [`gateway.py`](gateway.py) is the only provider path for both arms. It binds each request to the open attempt, writes it to the ledger before forwarding, enforces the shared request contract and budgets, and types every provider result; attempts are classified from these records alone. Each dispatch is a lease that settles exactly once, and a call whose cost nobody knows holds the batch until its own late answer prices it or the owner's reconciliation covers it. [`provider_relay.py`](provider_relay.py) forwards the Agent's loopback calls to the gateway.
-- [`ledger.py`](ledger.py) is the append-only, hash-chained attempt ledger. It enforces one open attempt, a fixed record order, legal combinations of the three outcome axes from [`outcomes.py`](outcomes.py), bounded replacements that immediately follow their original, and mandatory seals after safety events, reset failures, unclassified results, model-string changes, unowned requests, a refused credential, an unaccounted call and a request outside the contract.
-- [`runner_woa.py`](runner_woa.py) and [`runner_pageagent.py`](runner_pageagent.py) drive real Chromium; [`oracle.py`](oracle.py) decides confirmation cards; [`trace.py`](trace.py) projects both engines' traces onto one reported schema.
-- [`evaluator.py`](evaluator.py) runs as a separate process, computes truth through [`rpc.py`](rpc.py) under the trial's own actor and judges answers through [`extractor.py`](extractor.py).
-- [`capture.py`](capture.py) types every fallible observation, so a source nobody could read is never taken for one read as empty; [`consumers.py`](consumers.py) lists every reader of each source, and the tests hold the code to it.
-- [`fixture.py`](fixture.py) digests, snapshots, restores and verifies the fixture; [`manifest.py`](manifest.py) binds everything that decides what the fixture becomes.
-- [`driver.py`](driver.py) runs one attempt end to end; [`harness.py`](harness.py) holds the bindings and setup every batch shares; [`batch.py`](batch.py) is the paid entry; [`protocol.py`](protocol.py) is the machine protocol; [`stats.py`](stats.py) and [`report.py`](report.py) recompute the report; [`qualify.py`](qualify.py) is the zero-model qualification.
+The apparatus is grouped by responsibility; its tests use the same groups:
+
+| Package | Responsibility |
+| --- | --- |
+| [`domain/`](domain/) | task population, sealed task specifications, protocol, and outcome algebra |
+| [`fixture/`](fixture/) | isolated Odoo stack, seed, snapshots, manifest, revision, and actor-side reads |
+| [`execution/`](execution/) | attempt driver, shared harness, browser runners, approval oracle, and trace projection |
+| [`provider/`](provider/) | the only model-provider gateway and the Agent's loopback relay |
+| [`judging/`](judging/) | independent truth, extraction, observation typing, leak checks, and judgement |
+| [`reporting/`](reporting/) | append-only ledger, exact statistics, and schema-fixed reports |
+
+[`tasksets/`](tasksets/) holds the development set, both seals, and the split verification.
+The three root command modules remain the supported entry points: [`provision.py`](provision.py),
+[`qualify.py`](qualify.py), and [`batch.py`](batch.py).
 
 ## Limitations
 

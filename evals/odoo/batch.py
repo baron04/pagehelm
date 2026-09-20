@@ -42,13 +42,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import fixture, harness, ledger, protocol, report, revision, tasks
-from .driver import AttemptPlan
-from .gateway import (UpstreamBackend, priced_late_answers, provider_binding_digest,
+from evals.odoo.domain import protocol, tasks
+from evals.odoo.execution import harness
+from evals.odoo.fixture import fixture, revision
+from evals.odoo.reporting import ledger, report
+from evals.odoo.execution.driver import AttemptPlan
+from evals.odoo.provider.gateway import (UpstreamBackend, priced_late_answers, provider_binding_digest,
                       read_evaluation_key, upstream_identity)
-from .population import digest_json
-from .projection import actor_projection
-from .stack import StackError
+from evals.odoo.domain.population import digest_json
+from evals.odoo.fixture.projection import actor_projection
+from evals.odoo.fixture.stack import StackError
 
 POPULATIONS = protocol.POPULATIONS
 
