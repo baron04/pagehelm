@@ -15,7 +15,7 @@ from pathlib import Path
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.execution.session import TOOL_SCHEMAS, ServerAgentSession, TaskSpec
-from web_operation_agent.tests.business.test_business import _Browser, _Chat, _observation
+from web_operation_agent.tests.business.support import _Browser, _Chat, _observation
 
 REPLY = ("我可以帮你查询客户、报价单、销售订单、产品和发票；在你确认后创建客户、确认报价单、"
          "为订单开票；也可以预填一张新客户表单，由你自己提交。")
