@@ -1,0 +1,240 @@
+"""Skill discovery and capability selection over a validated business catalog."""
+from __future__ import annotations
+
+import hashlib
+import json
+
+from ..text import _trigger_matches
+from .skills import (BUSINESS_SKILL_MATCHER_VERSION, BusinessSkill,
+                     BusinessSkillSelection, _without_redundant_reads)
+
+
+class BusinessSkillCatalog:
+    """Read-only view of installed Skills and their typed tool schemas."""
+
+    def __init__(self, *, skills: dict[str, BusinessSkill], schemas: dict[str, dict],
+                 effects: dict[str, str], required_scopes: dict[str, str],
+                 route_skill_hints: tuple, withheld_skills: tuple[BusinessSkill, ...]):
+        self._skills = skills
+        self._schemas = schemas
+        self._effects = effects
+        self._required_scopes = required_scopes
+        self._route_skill_hints = route_skill_hints
+        self._withheld_skills = withheld_skills
+
+    @property
+    def catalog_manifest(self) -> dict:
+        """Return a versioned, non-secret description of installed Skills and tools."""
+        skills = [{
+            "skill_id": skill.skill_id,
+            "artifact_sha256": skill.artifact_sha256,
+            "read_only": skill.read_only,
+            "tools": list(skill.tool_names),
+        } for skill in sorted(self._skills.values(), key=lambda item: item.skill_id)]
+        tools = [{
+            "name": name,
+            "effect": self._effects[name],
+            "required_scope": self._required_scopes.get(name, ""),
+            "schema_sha256": hashlib.sha256(json.dumps(
+                self._schemas[name], ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"), allow_nan=False,
+            ).encode("utf-8")).hexdigest(),
+        } for name in sorted(self._schemas)]
+        route_hints = [{"pattern": pattern, "skill_id": skill_id}
+                       for _compiled, pattern, skill_id in self._route_skill_hints]
+        return {"schema_version": 1, "skills": skills, "tools": tools,
+                "route_skill_hints": route_hints}
+
+    @property
+    def catalog_sha256(self) -> str:
+        encoded = json.dumps(
+            self.catalog_manifest, ensure_ascii=False, sort_keys=True,
+            separators=(",", ":"), allow_nan=False,
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    def resolve_capability(self, goal: str, *, allow_mutations: bool,
+                           effect: str = "write",
+                           extra: tuple[str, ...] = ()) -> tuple[str, ...]:
+        """Every installed capability that could serve this goal, from the whole catalog.
+
+        Deliberately not `relevant`/`select`. Those rank candidates to decide what to load,
+        and a miss there is a ranking miss; read as an answer it would say the application
+        cannot do something it can, which is the one error a capability gap must never make.
+        So this searches every installed Skill, and falls back to the tool names themselves
+        when no trigger matches -- a Skill whose triggers are all English still answers a
+        Chinese request to use the tool it owns.
+
+        `extra` carries the non-typed surfaces the session knows about (declarative page
+        actions, form handoff) so a gap means the whole executable surface was searched.
+        """
+        if not isinstance(allow_mutations, bool):
+            raise ValueError("allow_mutations must be a boolean")
+        if effect not in ("write", "any"):
+            raise ValueError("a capability search looks for write capabilities or any")
+        folded = str(goal or "").casefold()
+        if not folded.strip():
+            raise ValueError("a capability search needs the goal it searched for")
+        # Searching for a change means searching the capabilities that can make one. A read
+        # Skill whose trigger is a bare noun matches any sentence containing that noun --
+        # `customers-query` triggers on "客户" and so matches "删除客户" -- and counting it
+        # would answer "you have a capability" when what this session has is the capability
+        # to look at the thing it cannot change.
+        available = [skill for skill in sorted(self._skills.values(),
+                                               key=lambda item: item.skill_id)
+                     if (skill.read_only or allow_mutations)
+                     and (effect == "any" or not skill.read_only)]
+        found: list[str] = []
+        for skill in available:
+            if any(_trigger_matches(trigger, folded) for trigger in skill.triggers):
+                found.append(skill.skill_id)
+                continue
+            # A trigger list that missed does not retire the tools it owns.
+            if any(name.replace("_", " ") in folded or name in folded
+                   for name in skill.tool_names):
+                found.append(skill.skill_id)
+        found += [name for name in extra
+                  if isinstance(name, str) and name.strip() and name not in found]
+        return tuple(dict.fromkeys(found))
+
+    def withheld_capability(self, goal: str) -> tuple[str, ...]:
+        """Installed capabilities that match this goal and this session may not use.
+
+        Same matching as `resolve_capability`, over the Skills the adapter declared as
+        withheld from this grant. Empty when the application genuinely has nothing for the
+        goal, which is the distinction the refusal sentence turns on.
+        """
+        folded = str(goal or "").casefold()
+        if not folded.strip():
+            raise ValueError("a capability search needs the goal it searched for")
+        found: list[str] = []
+        for skill in sorted(self._withheld_skills, key=lambda item: item.skill_id):
+            if (any(_trigger_matches(trigger, folded) for trigger in skill.triggers)
+                    or any(name.replace("_", " ") in folded or name in folded
+                           for name in skill.tool_names)):
+                found.append(skill.skill_id)
+        return tuple(dict.fromkeys(found))
+
+    def relevant(self, task: str, limit: int = 3) -> tuple[BusinessSkill, ...]:
+        folded = task.casefold()
+        ranked: list[tuple[int, str, BusinessSkill]] = []
+        for skill in self._skills.values():
+            score = sum(1 for trigger in skill.triggers
+                        if _trigger_matches(trigger, folded))
+            if score:
+                ranked.append((-score, skill.skill_id, skill))
+        selected = [row[2] for row in sorted(ranked)]
+        # A mutation Skill often contains the read tools needed for duplicate checks and
+        # verification.  In that case a broader read-only Skill adds a second, ambiguous
+        # route to a strict subset of the same tools.  Remove only that redundant candidate;
+        # unrelated read Skills remain available for mixed-intent tasks.
+        return tuple(_without_redundant_reads(selected)[:limit])
+
+    def capability_skills(self, *, allow_mutations: bool) -> tuple[BusinessSkill, ...]:
+        """Return the installed user-facing capability catalog in stable order.
+
+        This is descriptive only: exposing a mutation Skill here neither loads its tools nor
+        grants approval.  Keeping the catalog on the runtime avoids teaching the generic
+        session about an application's entities.
+        """
+        if not isinstance(allow_mutations, bool):
+            raise ValueError("allow_mutations must be a boolean")
+        return tuple(
+            skill for skill in sorted(self._skills.values(), key=lambda item: item.skill_id)
+            if skill.read_only or allow_mutations)
+
+    def select(self, task: str, *, allow_mutations: bool,
+               trusted_entry_path: str = "",
+               limit: int = 5) -> BusinessSkillSelection:
+        """Select task candidates and use a bounded capability-aware empty fallback.
+
+        Trigger matching is the primary high-precision route. If it finds nothing eligible,
+        expose read-only Skills plus mutation Skills only when this turn has a real approval
+        path. This preserves the user-text-only injection boundary while preventing one missed
+        paraphrase from making the application's entire typed tool surface disappear.
+        """
+        if not isinstance(allow_mutations, bool):
+            raise ValueError("allow_mutations must be a boolean")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
+            raise ValueError("Skill candidate limit must be an integer from 1 to 20")
+        if trusted_entry_path and (
+                not isinstance(trusted_entry_path, str)
+                or not trusted_entry_path.startswith("/")
+                or len(trusted_entry_path) > 1_000):
+            raise ValueError("trusted_entry_path must be a bounded absolute path")
+        matched = self.relevant(task, limit=max(limit, len(self._skills)))
+        eligible = [skill for skill in matched if skill.read_only or allow_mutations]
+        route_context_used = False
+        if not eligible and trusted_entry_path:
+            context_ids = []
+            for pattern, _source, skill_id in self._route_skill_hints:
+                if pattern.fullmatch(trusted_entry_path) and skill_id not in context_ids:
+                    context_ids.append(skill_id)
+            eligible = [self._skills[skill_id] for skill_id in context_ids]
+            route_context_used = bool(eligible)
+        # Trigger phrases rank the catalog; they do not decide what this turn is able to do.
+        # A write trigger is a verb and its object ("confirm quotation", "确认报价单"); the
+        # read trigger beside it is usually the object alone ("quotation", "报价单"). Every
+        # sentence matching the write therefore matches the read, and none of the reverse.
+        # When word order breaks the write phrase -- "把报价单 S00002 确认掉" puts the verb
+        # last -- the read Skill still matches, `matched` is not empty, and the fallback below
+        # never runs, because it only ever fired on *no* match. The turn is then left with no
+        # write tool and refuses correctly for the wrong reason, which reads exactly like the
+        # product holding its line. Measured on the Odoo catalog: 10 of 21 ordinary phrasings
+        # reached the write Skill through triggers alone.
+        #
+        # The catalog itself says which write belongs to which read: a mutation Skill carries
+        # the read tools its own preflight needs, so its tool set is a strict superset of the
+        # narrower read-only Skill about the same subject. When triggers land on that read
+        # Skill and this turn can write, offer both and let the model say which it meant.
+        # Widening no further is the point -- "list every product" gains nothing, because
+        # `products-query` has no write Skill extending it.
+        widened = False
+        if (allow_mutations and eligible and not route_context_used
+                and all(skill.read_only for skill in eligible)):
+            selected_tools = [set(skill.tool_names) for skill in eligible]
+            present = {skill.skill_id for skill in eligible}
+            # Subsuming *every* matched read Skill is what makes this safe. "Create a person
+            # named Bob at Acme company" matches both people and companies, and company
+            # creation extends only one of them -- so the sentence is about more than that
+            # write, and nothing is added. A subject named alone, whose whole read surface one
+            # mutation Skill already carries, is the only case triggers cannot resolve.
+            addition = [
+                skill for skill in sorted(self._skills.values(),
+                                          key=lambda item: item.skill_id)
+                if (not skill.read_only and skill.skill_id not in present
+                    and all(tools < set(skill.tool_names) for tools in selected_tools))]
+            widened = bool(addition)
+            eligible += addition
+        # Pruning the read-only Skill here would undo the widening: it was added on that
+        # Skill's account, and the reader may well have meant the read.
+        if not widened:
+            eligible = _without_redundant_reads(eligible)
+        if eligible:
+            return BusinessSkillSelection(
+                BUSINESS_SKILL_MATCHER_VERSION, tuple(eligible[:limit]),
+                tuple(skill.skill_id for skill in matched), False,
+                mutation_surface_widened=widened,
+                route_context_used=route_context_used)
+
+        fallback = [
+            skill for skill in sorted(self._skills.values(), key=lambda item: item.skill_id)
+            if skill.read_only or allow_mutations
+        ]
+        fallback = _without_redundant_reads(fallback)
+        return BusinessSkillSelection(
+            BUSINESS_SKILL_MATCHER_VERSION, tuple(fallback[:limit]),
+            tuple(skill.skill_id for skill in matched), bool(fallback))
+
+    def load(self, skill_id: object, allowed_ids: set[str]) -> tuple[BusinessSkill | None, str]:
+        if not isinstance(skill_id, str) or skill_id not in allowed_ids:
+            return None, "skill_id was not selected for this task"
+        skill = self._skills.get(skill_id)
+        if skill is None:
+            return None, "skill_id is no longer in the server catalog"
+        return skill, ""
+
+    def schemas_for(self, loaded_ids: set[str]) -> list[dict]:
+        names = {name for skill_id in loaded_ids
+                 for name in self._skills[skill_id].tool_names}
+        return [self._schemas[name] for name in sorted(names)]
