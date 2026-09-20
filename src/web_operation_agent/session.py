@@ -31,6 +31,7 @@ from zoneinfo import ZoneInfo
 from .application import ApplicationRoutePort, SourceCapability
 from . import answer_protocol
 from . import page_answer
+from .approvals import ApprovalWatch, NavigationPlan
 from .answer_view import (capability_gap_answer, render_payload, unavailable_answer,
                           withdrawn_answer)
 from .affordance import SourceAffordance, resolve_source_affordances
@@ -46,7 +47,7 @@ from .controlplane import ControlPlaneClient, ControlPlaneError
 from .egress import AuditedChat, ProviderEgressError
 from .grounding import (NOT_APPLICABLE, REFUTED, WRITE_PERMITTED, WRITE_REFUSED,
                         WRITE_UNKNOWN, PlanState, opaque_route_identity)
-from .identity import OperationContext, PrincipalContext
+from .identity import PrincipalContext
 from .knowledge import ApplicationKnowledgePort
 from .ledger import SessionLedger
 from .model import BudgetExhausted, ProviderError
@@ -227,28 +228,6 @@ class TaskSpec:
         if self.supported_scope:
             return f"{self.prompt}\n\nWhat this run may change: {self.supported_scope}"
         return self.prompt
-
-
-@dataclass(frozen=True)
-class NavigationPlan:
-    """The one page switch a navigation confirmation authorises.
-
-    It carries the destination for the server's own check that the decision is about this
-    switch; the browser sees only the effect and targets the confirmation card shows.
-    """
-
-    action: str
-    url: str = ""
-
-    @property
-    def content_digest(self) -> str:
-        return hashlib.sha256(json.dumps(
-            {"kind": "navigation", "action": self.action, "url": self.url},
-            sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
-
-    def redacted(self) -> dict:
-        return {"kind": "navigation", "action": self.action,
-                "url_digest": hashlib.sha256(self.url.encode("utf-8")).hexdigest()}
 
 
 @dataclass
@@ -533,18 +512,9 @@ class ServerAgentSession:
         #: listening -- every apparatus without a panel -- and the run does not depend on it.
         self._progress = progress
         self._feed = ProgressFeed(progress, on_failure=self.ledger.append)
-        self.business_mutation_approval = business_mutation_approval
+        mutations_enabled = business_mutation_approval is not None
         if navigation_confirmation is not None and not callable(navigation_confirmation):
             raise TypeError("navigation_confirmation must be callable or None")
-        #: Asks the person before the assistant leaves the current page. None where no person
-        #: can be asked -- a scripted apparatus or a unit test -- and the page switches as
-        #: before.
-        self.navigation_confirmation = navigation_confirmation
-        self._navigation_control = {"requested": 0, "confirmed": 0, "not_confirmed": 0}
-        #: The switch the person confirmed and the browser has not yet reached. A retry of
-        #: that same switch after a pre-dispatch refusal -- the page was replaced while the
-        #: model decided -- is not asked about twice.
-        self._confirmed_navigation = ""
         self._capability_question = bool(_CAPABILITY_QUESTION.fullmatch(task.prompt))
         if not isinstance(allow_clarification, bool):
             raise ValueError("allow_clarification must be a boolean")
@@ -586,7 +556,7 @@ class ServerAgentSession:
         else:
             if self._capability_question:
                 selected = business_tools.capability_skills(
-                    allow_mutations=business_mutation_approval is not None)
+                    allow_mutations=mutations_enabled)
                 selection = BusinessSkillSelection(
                     BUSINESS_SKILL_MATCHER_VERSION, selected, (), False)
             else:
@@ -597,7 +567,7 @@ class ServerAgentSession:
                 # trigger. Keep policy in model context, outside intent routing.
                 selection = business_tools.select(
                     task.prompt,
-                    allow_mutations=business_mutation_approval is not None,
+                    allow_mutations=mutations_enabled,
                     trusted_entry_path=(task.entry_path if current_navigation_only else ""),
                     limit=5,
                 )
@@ -608,7 +578,7 @@ class ServerAgentSession:
                 if continuation_prompt and selection.fallback_used:
                     continued = business_tools.select(
                         f"{continuation_prompt}\n{task.prompt}",
-                        allow_mutations=business_mutation_approval is not None,
+                        allow_mutations=mutations_enabled,
                         trusted_entry_path=(
                             task.entry_path if _is_navigation_only(continuation_prompt)
                             else ""),
@@ -651,7 +621,7 @@ class ServerAgentSession:
                 trigger_match_empty=not selection.trigger_matches,
                 fallback_used=selection.fallback_used,
                 mutation_surface_widened=selection.mutation_surface_widened,
-                mutations_enabled=business_mutation_approval is not None,
+                mutations_enabled=mutations_enabled,
                 prior_user_context_used=bool(prior_skills),
                 bounded_limit=5,
                 **({"clarification_context_used": True}
@@ -724,10 +694,6 @@ class ServerAgentSession:
             plain_business_answer_min_page_actions
         self.max_agent_said_chars = max_agent_said_chars
         self.cancelled = cancelled or (lambda: False)
-        self.principal = principal
-        self.session_id = session_id
-        self.turn_id = turn_id
-        self._turn_deadline_ms = 0
         if business_tools is not None:
             reserved = set(BROWSER_ACTIONS) | {
                 "finish", "ask_user", "compute", "load_skill", "lookup_source", "open_source_route",
@@ -770,6 +736,12 @@ class ServerAgentSession:
         #: not a fact about the task. Identical for every arm.
         self.keep_observations = keep_observations
         self.run_id = run_id or f"{task.task_ref}-{arm}-{uuid.uuid4().hex[:6]}"
+        self._approvals = ApprovalWatch(
+            ledger=ledger, run_id=self.run_id, principal=principal,
+            session_id=session_id, turn_id=turn_id,
+            business_approval=business_mutation_approval,
+            navigation_confirmation=navigation_confirmation,
+            cancelled=self._cancel_requested)
         self.contract: OperationContract = empty_contract(task.task_ref)
         self.contract_source = "none"
         self.bundle: EvidenceBundle | None = None
@@ -825,127 +797,6 @@ class ServerAgentSession:
             self.planning_error = str(e)[:800]
             self.ledger.append("planning_failed", detail=self.planning_error)
             return self.contract
-
-    def _operation_context(self, step: int, tool: str) -> OperationContext | None:
-        """Bind a server tool call to the immutable principal and current turn."""
-        if self.principal is None:
-            return None
-        if not self._turn_deadline_ms:
-            raise RuntimeError("operation context cannot be created before the turn starts")
-        operation_seed = f"{self.run_id}\0{step}\0{tool}".encode("utf-8")
-        return OperationContext.create(
-            self.principal,
-            session_id=self.session_id,
-            turn_id=self.turn_id,
-            operation_id="op-" + hashlib.sha256(operation_seed).hexdigest()[:32],
-            deadline_ms=self._turn_deadline_ms,
-        )
-
-    def _confirm_form_handoff(self, draft: FormDraft, step: int) -> tuple[str, str]:
-        """Ask before typing into a form the application saves by itself.
-
-        Owner ruling: a form the application commits on leaving the page may still be
-        prepared for the person -- it is the shape of change they finish themselves -- and
-        what makes that safe is being asked first, in the same card a write uses. So this
-        goes through the same visible confirmation, and refusing it types nothing.
-        """
-        if self.business_mutation_approval is None:
-            self.ledger.append(
-                "form_handoff_approval_unavailable", step=step, draft=draft.redacted(),
-                dispatched=False, side_effect_possible=False)
-            return ("approval_unavailable",
-                    "preparing this form requires an authenticated user decision")
-        self.ledger.append("form_handoff_proposed", step=step, draft=draft.redacted(),
-                           effect=draft.effect, targets=list(draft.targets),
-                           dispatched=False, side_effect_possible=False)
-        if self._cancel_requested():
-            return "user_cancelled", "the user stopped this task before the confirmation"
-        context = self._operation_context(step, "form_handoff")
-        try:
-            grant = (self.business_mutation_approval(draft)
-                     if context is None
-                     else self.business_mutation_approval(draft, context=context))
-        except Exception as exc:
-            self.ledger.append(
-                "form_handoff_approval_failed", step=step, draft=draft.redacted(),
-                error_type=type(exc).__name__, dispatched=False,
-                side_effect_possible=False)
-            return "approval_failed", "the confirmation for this form was unavailable"
-        if self._cancel_requested():
-            return ("user_cancelled",
-                    "the user stopped this task while the confirmation was pending")
-        decision = getattr(grant, "decision", "")
-        if decision == "expired":
-            self.ledger.append("form_handoff_approval_expired", step=step,
-                               draft=draft.redacted(), dispatched=False,
-                               side_effect_possible=False)
-            return "approval_expired", "the confirmation expired before anything was typed"
-        if (decision != "approved"
-                or getattr(grant, "plan_digest", "") != draft.content_digest):
-            self.ledger.append("form_handoff_denied", step=step, draft=draft.redacted(),
-                               decision=str(decision)[:40], dispatched=False,
-                               side_effect_possible=False)
-            return "approval_denied", "the user declined preparing this form"
-        self.ledger.append("form_handoff_approved", step=step, draft=draft.redacted(),
-                           approval_id=str(getattr(grant, "approval_id", ""))[:200],
-                           dispatched=False, side_effect_possible=False)
-        return "", ""
-
-    def _navigation_confirmed(self, step: int, obs: PageObservation, *, action: str,
-                              url: str = "") -> tuple[str, str]:
-        """Ask the person before the assistant leaves the current page (owner ruling D7).
-
-        Leaving a page can discard what the person typed there, or let the application save
-        it on the way out, and it loses the page's own state; the server sees none of that.
-        So every switch is confirmed, whatever the application: an unsaved form is not
-        something a generic server can detect, and a guess would leave unprotected exactly
-        the case it misses. A goto to the page already shown switches nothing and is not
-        asked about. Returns ``("", "")`` to proceed, or the terminal reason and detail that
-        end the turn without navigating.
-        """
-        if self.navigation_confirmation is None:
-            return "", ""
-        if action == "goto" and url and _same_page(url, obs.url):
-            return "", ""
-        plan = NavigationPlan(action=action, url=url)
-        if plan.content_digest == self._confirmed_navigation:
-            return "", ""
-        self._navigation_control["requested"] += 1
-        self.ledger.append("navigation_confirmation_needed", step=step, tool=action,
-                           plan=plan.redacted(), dispatched=False,
-                           side_effect_possible=False)
-        if self._cancel_requested():
-            return "user_cancelled", "the user stopped this task before the page switch"
-        try:
-            grant = self.navigation_confirmation(
-                plan, context=self._operation_context(step, "navigation"))
-        except Exception as exc:
-            self._navigation_control["not_confirmed"] += 1
-            self.ledger.append("navigation_confirmation_failed", step=step, tool=action,
-                               error_type=type(exc).__name__, dispatched=False,
-                               side_effect_possible=False)
-            return "navigation_not_confirmed", "the page switch could not be confirmed"
-        if self._cancel_requested():
-            return ("user_cancelled",
-                    "the user stopped this task while the page switch awaited confirmation")
-        decision = getattr(grant, "decision", "")
-        if decision != "approved" or getattr(grant, "plan_digest", "") != plan.content_digest:
-            self._navigation_control["not_confirmed"] += 1
-            self.ledger.append("navigation_not_confirmed", step=step, tool=action,
-                               decision=str(decision)[:40], dispatched=False,
-                               side_effect_possible=False)
-            return "navigation_not_confirmed", "the page switch was not confirmed"
-        self._navigation_control["confirmed"] += 1
-        self._confirmed_navigation = plan.content_digest
-        self.ledger.append("navigation_confirmed", step=step, tool=action,
-                           approval_id=str(getattr(grant, "approval_id", ""))[:200])
-        return "", ""
-
-    def _settle_confirmed_navigation(self, receipt: ActionReceipt) -> None:
-        """A dispatch that reached the page uses the confirmation up; one refused before
-        dispatch leaves it for the retry of the same switch."""
-        if receipt.error_code not in PRE_DISPATCH_ERRORS:
-            self._confirmed_navigation = ""
 
     def _plan(self) -> OperationContract:
         source_contract = self.source_contract
@@ -1132,7 +983,7 @@ class ServerAgentSession:
             return self._reply(turn, call,
                                "No current application-issued form draft is available.")
         if draft.needs_confirmation:
-            reason, detail = self._confirm_form_handoff(draft, turn.step)
+            reason, detail = self._approvals.confirm_form_handoff(draft, turn.step)
             if reason:
                 return _Next(self._finish(turn.result, turn.started_at, reason, detail,
                                           steps=turn.step))
@@ -1564,7 +1415,7 @@ class ServerAgentSession:
                 "the user stopped this task before browser dispatch", steps=step))
         link = _clicked_link(args, obs) if name == "click" else None
         if name in ("goto", "back") or (name == "click" and (expect_nav or link is not None)):
-            reason, detail = self._navigation_confirmed(
+            reason, detail = self._approvals.confirm_navigation(
                 step, obs, action=name,
                 url=(str(args.get("url") or "") if name == "goto" else (link or "")))
             if reason:
@@ -1592,7 +1443,7 @@ class ServerAgentSession:
                                 steps=step))
 
         if name not in ("observe", "wait_for"):
-            self._settle_confirmed_navigation(receipt)
+            self._approvals.settle_navigation(receipt)
         if name != "observe" and receipt.error_code != "stale_observation":
             self.page_actions += 1
         write = self._writes.write_outcome(
@@ -1703,7 +1554,7 @@ class ServerAgentSession:
         result, t0, step = turn.result, turn.started_at, turn.step
         messages, obs = turn.messages, turn.obs
         successful_business_tools = turn.successful_business_tools
-        operation_context = self._operation_context(step, name)
+        operation_context = self._approvals.context(step, name)
         operation_identity = (operation_context.audit_projection()
                               if operation_context is not None else {})
         if self.business_tools.is_mutation(name):
@@ -1747,7 +1598,7 @@ class ServerAgentSession:
                 proposal=proposal.redacted(), effect=proposal.effect,
                 targets=list(proposal.targets), dispatched=False,
                 side_effect_possible=False, identity=operation_identity)
-            if self.business_mutation_approval is None:
+            if self._approvals.business_approval is None:
                 self.ledger.append(
                     "business_mutation_approval_unavailable", step=step,
                     proposal_digest=proposal.content_digest,
@@ -1761,9 +1612,9 @@ class ServerAgentSession:
                     result, t0, "user_cancelled",
                     "the user stopped this task before approval", steps=step))
             try:
-                grant = (self.business_mutation_approval(proposal)
+                grant = (self._approvals.business_approval(proposal)
                          if operation_context is None
-                         else self.business_mutation_approval(
+                         else self._approvals.business_approval(
                              proposal, context=operation_context))
             except Exception as exc:
                 self.ledger.append(
@@ -2103,7 +1954,7 @@ class ServerAgentSession:
                         result, t0, "user_cancelled",
                         "the user stopped this task before browser dispatch",
                         steps=step))
-                reason, detail = self._navigation_confirmed(
+                reason, detail = self._approvals.confirm_navigation(
                     step, obs, action="goto", url=target)
                 if reason:
                     return _Next(self._finish(result, t0, reason, detail, steps=step))
@@ -2122,7 +1973,7 @@ class ServerAgentSession:
                     return _Next(self._finish(
                         result, t0, self._transport_terminal(
                             "goto", may_write=False), str(exc), steps=step))
-                self._settle_confirmed_navigation(receipt)
+                self._approvals.settle_navigation(receipt)
                 if receipt.error_code != "stale_observation":
                     self.page_actions += 1
                 write = self._writes.write_outcome(
@@ -2242,7 +2093,7 @@ class ServerAgentSession:
 
     def _run(self) -> RunResult:
         t0 = time.time()
-        self._turn_deadline_ms = int((t0 + self.wall_budget_s) * 1000)
+        self._approvals.start_turn(int((t0 + self.wall_budget_s) * 1000))
         result = RunResult(run_id=self.run_id, task_ref=self.task.task_ref, arm=self.arm,
                            terminal_reason="agent_finished",
                            contract_digest=self.contract.content_digest,
@@ -2826,7 +2677,7 @@ class ServerAgentSession:
             except TransportError as exc:
                 return before, "transport_error", str(exc)
             if action not in ("observe", "wait_for"):
-                self._settle_confirmed_navigation(receipt)
+                self._approvals.settle_navigation(receipt)
             if action != "observe":
                 self.page_actions += 1
             write = self._writes.write_outcome(receipt, step, action_may_write=False)
@@ -2856,7 +2707,7 @@ class ServerAgentSession:
 
         for action, args, field in actions:
             if action == "goto":
-                reason, detail = self._navigation_confirmed(
+                reason, detail = self._approvals.confirm_navigation(
                     step, current, action="goto", url=args["url"])
                 if reason:
                     return current, reason, detail
@@ -3180,7 +3031,7 @@ class ServerAgentSession:
         # and the gap impossible in the one deployment that enables it.
         writing_actions = {"fill", "select", "submit", "click"} - set(self.disabled_actions)
         extra = [f"page:{name}" for name in sorted(writing_actions & BROWSER_ACTIONS)]
-        allowed = self.business_mutation_approval is not None
+        allowed = self._approvals.mutations_enabled
         try:
             matches = self.business_tools.resolve_capability(
                 self.task.prompt, allow_mutations=allowed, extra=tuple(extra))
@@ -3204,9 +3055,9 @@ class ServerAgentSession:
             origin=Origin(kind="capability", reference=f"capability-check:{self.run_id}",
                           observed_at=str(time.time()),
                           scope=self.task.supported_scope or self.arm),
-            application=self.principal.application_id,
+            application=self._approvals.principal.application_id,
             application_version=self.contract.content_digest,
-            actor=self.principal.actor_authority_digest,
+            actor=self._approvals.principal.actor_authority_digest,
             catalog_digest=self.business_tools.catalog_sha256,
             goal=self.task.prompt[:500],
             matches=tuple(matches), withheld=tuple(withheld))
@@ -3219,7 +3070,7 @@ class ServerAgentSession:
         return item.evidence_id
 
     def _capability_check_available(self) -> bool:
-        return (self.business_tools is not None and self.principal is not None
+        return (self.business_tools is not None and self._approvals.principal is not None
                 and not self._capability_question)
 
     def _capability_check_feedback(self) -> str:
@@ -3427,8 +3278,7 @@ class ServerAgentSession:
         result.plan_withdrawn = self.plan_state.withdrawn
         result.write_refusals = self.write_refusals
         result.business_control = dict(self._business_control)
-        result.navigation_control = (dict(self._navigation_control)
-                                     if self.navigation_confirmation is not None else None)
+        result.navigation_control = self._approvals.navigation_result()
         result.policy_blocks = self.policy_blocks
         self.ledger.append("run_finished", **result.to_json())
         return result
@@ -3534,20 +3384,6 @@ def _trim(messages: list[dict], keep: int) -> list[dict]:
         messages[i] = {**messages[i],
                        "content": f"(earlier) {head}" + (f" | page: {url}" if url else "")}
     return messages
-
-
-
-
-def _same_page(url: str, current: str) -> bool:
-    """Whether ``url`` names the page already shown: same origin, path and query."""
-    try:
-        here = urlsplit(current)
-        there = urlsplit(urljoin(current, url))
-    except (TypeError, ValueError):
-        return False
-    return ((there.scheme, there.netloc, there.path.rstrip("/") or "/", there.query)
-            == (here.scheme, here.netloc, here.path.rstrip("/") or "/", here.query))
-
 
 def _clicked_link(args: dict, obs: PageObservation) -> str | None:
     """The target of the link a click names, "" for a link without one, None for no link."""

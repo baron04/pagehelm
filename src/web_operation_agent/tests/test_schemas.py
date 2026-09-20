@@ -7,9 +7,10 @@ class TerminalReasonContract(unittest.TestCase):
     """Every emitted terminal reason must have one shared classification."""
 
     def test_every_reason_the_runner_emits_is_classified(self):
+        from web_operation_agent.approvals import ApprovalWatch
         from web_operation_agent.session import ServerAgentSession
-        emitted = _reasons_emitted_by(ServerAgentSession)
-        self.assertTrue(emitted, "could not find any terminal reason in the session source")
+        emitted = _reasons_emitted_by(ServerAgentSession, ApprovalWatch)
+        self.assertTrue(emitted, "could not find any terminal reason in the runner source")
         S.assert_terminal_reason_contract(emitted, set(S.SCORABLE_TERMINAL_REASONS))
 
     def test_classification_is_total_and_disjoint(self):
@@ -28,8 +29,8 @@ class TerminalReasonContract(unittest.TestCase):
             S.classify_terminal("something_new")
 
 
-def _reasons_emitted_by(cls) -> set[str]:
-    """Read the terminal reasons out of the session's own source.
+def _reasons_emitted_by(*classes) -> set[str]:
+    """Read terminal reasons from the session and its collaborating state objects.
 
     Comparing a hand-written list against another hand-written list proves nothing; the
     point is to catch the runner learning a new reason that the analyser has never heard
@@ -37,7 +38,7 @@ def _reasons_emitted_by(cls) -> set[str]:
     """
     import inspect
     import re
-    src = inspect.getsource(inspect.getmodule(cls))
+    src = "\n".join(inspect.getsource(inspect.getmodule(cls)) for cls in classes)
     found = set()
     for m in re.finditer(r'_finish\(\s*result,\s*t0,\s*("[a-z_]+"|[a-z_]+\s+if)', src):
         token = m.group(1)
