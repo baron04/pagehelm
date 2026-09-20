@@ -207,6 +207,16 @@ class _PanelBrowser(unittest.TestCase):
                "expires_at": 0, "principal_digest": "", "turn_id": "turn-1",
                "operation_id": "op-1"}
 
+    @staticmethod
+    def _settle(page) -> None:
+        """Let entrance animations finish, so geometry and pixels are the resting ones.
+
+        A bounding box taken mid-arrival reads the window as translated and scaled by the
+        entrance -- sub-pixel lies the suite would otherwise chase under a bundler bump.
+        """
+        page.evaluate("""() => Promise.all(document.querySelector('#woa-assistant')
+          .shadowRoot.getAnimations().map(animation => animation.finished))""")
+
     def raise_approval(self, page, **overrides) -> None:
         """Publish a confirmation the way the session does, after the panel is up."""
         request = {**self.PENDING, **overrides}
@@ -717,6 +727,7 @@ class PanelUITests(_PanelBrowser):
             _entry("e2", "result", answer, panel_state="success"),
         ]))
         page.locator(".woa-launcher").click()
+        self._settle(page)
         thread = page.locator(".woa-thread")
         thread.evaluate("node => { node.scrollTop = 0 }")
         page.locator(".woa-jump").wait_for()
@@ -1181,12 +1192,6 @@ class PanelU07Tests(_PanelBrowser):
                    "| S00002 | 2947.50 USD |\n| S00007 | 1180.00 USD |",
                    authored="server", panel_state="success"),
         ])
-
-    @staticmethod
-    def _settle(page) -> None:
-        """Let entrance animations finish, so geometry and pixels are the resting ones."""
-        page.evaluate("""() => Promise.all(document.querySelector('#woa-assistant')
-          .shadowRoot.getAnimations().map(animation => animation.finished))""")
 
     def assertLaidOut(self, page, where: str) -> None:
         """Nothing a person needs is clipped by the window or drawn over by something else."""
