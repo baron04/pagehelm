@@ -1,10 +1,10 @@
-"""Append-only, hash-chained attempt ledger for P7.4 batches.
+"""Append-only, hash-chained attempt ledger for Odoo evaluation batches.
 
 Every attempt is written down before its runner starts, every model request before it is
 forwarded, and every result afterwards, so a failed or interrupted trial cannot be rerun
 without leaving a trace. The file reuses the Twenty batch ledger's discipline -- a private
 ``0600`` regular file, a POSIX lock held across read-validate-append, SHA-256 entry digests
-linking each line to the previous one -- but records attempts rather than completed trials:
+linking each line to the previous one. It records attempts rather than completed trials:
 an attempt may be interrupted, replaced within a closed policy, or end a batch.
 
 Validation replays the whole chain on every append and on every read. The rules it enforces
@@ -20,17 +20,19 @@ is refused whole rather than read by rules it was not written under.
 """
 from __future__ import annotations
 
+import fcntl
+import json
 import os
 import re
+import stat
 from collections import Counter
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
-
-from evals.twenty.evaluator import EvaluationInputError, digest_json
-from evals.twenty.records import _canonical_model_string, _decode, _json_line, _locked_ledger
+from typing import Any, Iterator
 
 from . import outcomes
+from .population import digest_json
 
 LEDGER_VERSION = 2
 _ID = re.compile(r"[a-z0-9][a-z0-9_.:-]{2,119}\Z")
@@ -63,6 +65,72 @@ _SEAL_PRIORITY = outcomes.SEAL_PRIORITY
 #: What a batch may do next, most constrained first. A reader branches on one of these rather
 #: than re-deriving it from `status`, `open_attempt`, `pending_seal` and `cost_unknown`.
 DISPOSITIONS = ("complete", "sealed", "attempt_open", "must_seal", "holding", "running")
+_MAX_LEDGER_BYTES = 64 * 1024 * 1024
+_MAX_LINE_BYTES = 2 * 1024 * 1024
+
+
+class EvaluationInputError(ValueError):
+    """An evaluation artifact cannot support a deterministic decision."""
+
+
+def _canonical_model_string(item: Any) -> bool:
+    """Whether ``item`` is already in the canonical provider-model form."""
+    return (isinstance(item, str) and item == item.strip() and 1 <= len(item) <= 120
+            and not any(ord(character) < 32 or ord(character) == 127 for character in item))
+
+
+def _json_line(value: dict[str, Any]) -> bytes:
+    try:
+        encoded = (json.dumps(value, ensure_ascii=False, sort_keys=True,
+                              separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise EvaluationInputError("ledger entry is not canonical JSON") from exc
+    if len(encoded) > _MAX_LINE_BYTES:
+        raise EvaluationInputError("ledger entry exceeds its size limit")
+    return encoded
+
+
+@contextmanager
+def _locked_ledger(path: Path) -> Iterator[Any]:
+    handle = None
+    try:
+        descriptor = os.open(path, os.O_RDWR | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0))
+        handle = os.fdopen(descriptor, "r+b", closefd=True)
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077:
+            raise EvaluationInputError("ledger must be a private regular file")
+        yield handle
+        handle.flush()
+        os.fsync(handle.fileno())
+    except EvaluationInputError:
+        raise
+    except OSError as exc:
+        raise EvaluationInputError("ledger is unavailable") from exc
+    finally:
+        if handle is not None and not handle.closed:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            finally:
+                handle.close()
+
+
+def _decode(handle: Any) -> list[dict[str, Any]]:
+    handle.seek(0, os.SEEK_END)
+    size = handle.tell()
+    if not 1 <= size <= _MAX_LEDGER_BYTES:
+        raise EvaluationInputError("ledger is empty or exceeds its size limit")
+    handle.seek(0)
+    raw_lines = handle.read().splitlines()
+    if not raw_lines or any(not line or len(line) > _MAX_LINE_BYTES for line in raw_lines):
+        raise EvaluationInputError("ledger contains an empty or oversized entry")
+    try:
+        values = [json.loads(line) for line in raw_lines]
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise EvaluationInputError("ledger contains invalid JSON") from exc
+    if any(not isinstance(value, dict) for value in values):
+        raise EvaluationInputError("ledger entries must be objects")
+    return values
 
 KINDS = frozenset({
     "batch_header", "attempt_started", "model_request_dispatched", "model_request_refused",

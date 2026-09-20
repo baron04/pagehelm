@@ -1,9 +1,9 @@
 """A synthetic application route grammar for core tests.
 
-Before this existed the core suite imported `web_operation_agent_ofbiz.route`, which had two
+Before this existed the core suite imported a reference adapter's route module, which had two
 costs. The suite could not run without an application distribution installed, and -- worse --
 every generic consumer of a route port (`affordance`, `contract`, `grounding`, `source_skill`,
-`session`) was only ever exercised against OFBiz's `/webapp/control/request` spelling, so a
+`session`) was only ever exercised against one application's URL spelling, so a
 grammar assumption leaking into the core would have passed unnoticed.
 
 The spelling here is deliberately neither OFBiz's nor Odoo's: the contract segment is `do`,

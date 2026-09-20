@@ -103,7 +103,6 @@ Gateway 为每个会话签发随机 capability，并绑定允许的页面 Origin
 
 Gateway 在 loopback 管理面提供两个无凭据探针：`/healthz` 只证明 HTTP 进程仍在响应，`/readyz` 表示组合仍可处理工作。就绪响应经过固定 schema 投影，只允许协议版本、是否就绪、是否接受新 session、当前 session 数量、容量和 provider guard 的数值/布尔状态；不包含 session id、capability、Origin、用户输入、页面内容、应用数据或回调错误正文。Provider 电路打开时返回 503，但容量已满只会把 `accepting_sessions` 设为 false，现有 session 仍可由同一进程服务。回调异常、字段畸形或不一致会返回不含异常文本的 503。该管理面目前只绑定 loopback，尚未替代部署平台的认证监控、指标采集和告警。
 
-应用宿主还可以在创建 session 前提供短期不可变 `PrincipalContext`。它包含 application、tenant、workspace、actor、delegation 和 scopes，但原始标识只存在于可信服务端内存中；bootstrap、Runtime hello 和跨浏览器协议只携带 application id 与主体摘要。启用 `require_identity` 后，缺少主体、主体过期或应用不匹配会在建立 turn 前拒绝。公开 Twenty demo 已从可信 Playwright 宿主读取即将用于浏览器的 HttpOnly session cookie，由 Twenty `/metadata` 解析页面 actor/workspace，再与 delegated OAuth 身份严格匹配；cookie 不进入 Runtime、模型或日志。浏览器运行期间宿主轮询 cookie 单向摘要，删除或替换会关闭 Agent session。
 
 Remote Session 维护严格 schema 的消息、观察、动作、结果、确认和事件序列。每个页面动作必须：
 
@@ -203,7 +202,6 @@ Application Adapter 是应用专有事实进入通用 Agent 的组合边界。�
 
 每个 Adapter 必须先通过版本化 `ApplicationDescriptor` 和 `ApplicationPorts` 绑定。Descriptor 固定应用 ID、Origin、导航模式、同源 PageController URL，以及当前 Skill/tool catalog 的 SHA-256。Ports 是会被产品路径实际调用的合同：Identity Port 校验 principal，Route Port 限定 typed tool 可授权的页面路径，Data Port 为结果附加应用声明的数据类别，Postcondition Port 在确认写入后决定能否记录为 completed，Reconciliation Port 为历史不确定写入提供只读核对边界。会话组合在接收用户任务前重新计算 catalog 摘要，并检查端口覆盖所有工具、scope 和 mutation；Descriptor、catalog、端口或运行时接线不一致时拒绝启动。自然语言目标不经过应用专有的正则分类器或有限意图枚举。目标先由通用匹配器按 Skill 自己声明的触发词选出候选，这一步会以 `business_skill_candidates` 记账并标出是否用了兜底；匹配为空时退回一个有界的、按能力挑选的候选集，因此一种没被触发词覆盖的说法不会静默地让某项能力从工具面消失。其余交给通用 Agent，由候选 Skill、typed tool 和页面观察逐步收敛。
 
-Adapter 不拥有 ReAct 循环，也不应把具体应用路由写入 Agent 核心。当前仓库中的 `TwentyApplicationAdapter` 是一条窄纵切：它接入公司查询与创建，验证 Origin，把 OAuth 凭据保留在服务端，并构造 `BusinessToolRuntime` 和五类端口。Minimal Contacts 与测试中的发票 Adapter 使用相同绑定暴露不同 Skill、工具和路由，Agent 核心没有应用名或任务类型分支。当前 Reconciliation Port 对不确定写入仍保守返回需要人工处理；持久 reconciliation key、扫描和恢复调度属于后续可靠性工作。
 
 ### 6.2 Business Skill
 
@@ -234,9 +232,7 @@ Skill 不保存当前业务数据或凭据。Agent 只能先从当前任务匹�
 
 如果一次 turn 在成功读取 typed tool 后直接返回答案，且该结果带有 `StructuredQueryAnswer`，产品层会忽略模型对业务事实的转述，并用结构化投影生成用户可见答案。完整性说明排在记录之前；答案长度不足以容纳全部记录时只在记录边界截断，并明确写出展示数量。结构化投影也进入公开 `AgentTurnExecution` 摘要，Session Ledger 记录投影摘要、返回数、展示数和是否展示截断，不记录另一份原始结果。用于定位记录后继续导航的查询不触发该替换，最终打开页面的说明仍由 Agent 给出。
 
-当前 Twenty executor 使用委托用户 OAuth 身份查询公司。公司枚举通过 `pageInfo.endCursor` 和 `starting_after` 进行有页数、记录数与响应一致性上限的 cursor 扫描；cursor 不前进、记录重复、总数变化、缺失分页信息、响应异常或达到上限都会产生带原因的部分结果，不能对用户宣称为完整清单。OAuth token 刷新使用进程内锁与 POSIX 文件锁串行化，在获得锁后重新读取 token，若其他执行者已经替换被拒绝的 token 就直接复用；新 token 以 `0600` 临时文件、`fsync` 和原子替换落盘。创建公司时，它在提案前和 dispatch 前检查重复项，且只有完整扫描当前集合才继续；随后执行一次创建请求，并用同一用户读取新记录。响应或回读无法确定时返回不确定写入，不自动重试。
 
-Twenty Adapter 通过 `/metadata` 查询 `currentUser` 与 `currentWorkspace`，并将页面 session 身份与 delegated OAuth 身份逐字段匹配。只有 application、tenant/workspace 和 actor 全部一致才会生成 `PrincipalContext`。页面 DOM、自报 user id 或 capability 的持有本身都不能证明 Twenty 登录身份。当前 Playwright demo 只把严格匹配 host、根路径、Secure 语义和有效期的 `twenty-session` 或 `__Host-twenty-session` HttpOnly cookie 直接发送到固定 Twenty origin，不跟随重定向、不发送 analytics cookie 或 localStorage，并限制 storage state 与响应大小；普通第一方嵌入部署应由应用服务端登录边界产生等价断言。
 
 ### 6.4 App Skill 与源码 Provider
 
@@ -269,9 +265,7 @@ Business Skill 候选只根据当前用户文本和受限的历史用户文本�
 7. 最多发送一次写请求；
 8. 将确定结果持久记录为 `completed` 或 `failed`，将无法确定的结果记录为 `indeterminate`；需要业务成功判定的集成还应由 Adapter 进行同用户回读。
 
-`allow_business_mutations` 默认是 `false`。启用时，turn 配置必须同时要求经过验证的 principal；组合还必须提供写工具。`deployment_profile` 默认为 `production`，该 profile 只接受明确声明为跨重启持久的 mutation journal。内存 journal 仅可在显式 `test` profile 中使用，且 test profile 不放宽身份或确认要求。Twenty Adapter 自身也拒绝启用写入却省略 journal。没有显式启用或没有确认通道时，写工具在 dispatch 前终止。用户拒绝对应 `CANCELLED`。
 
-任何发生在 dispatch 后、又无法确定结果的异常都必须对应 `INDETERMINATE`。系统不会因为超时、连接丢失、回执格式错误、回读失败或进程在 dispatch 后崩溃而自动重试写请求。公开 Twenty composition 要求独立的私有 SQLite journal；它持久保留 proposal digest、operation context digest、状态、期限、结果摘要，以及一份供 reconciliation 使用的元数据：按 application id、工具名、租户/工作区/执行者摘要和规范化参数算出的 `business_key`，和包含归一化调用参数（`args`）的 reconciliation 记录。journal 不保存原始身份字段，身份只以租户/工作区/执行者摘要形式保留。journal 解决的是重复发送风险，不提供应用数据库事务或自动判断崩溃前的请求是否已经生效。
 
 这项一次性保证以 proposal digest 为单位。每次 proposal 都包含新的服务端 nonce，因此两个会话分别为同一业务对象生成的新 proposal 目前不会互斥。基于应用声明的业务键和 actor 的跨会话在途互斥属于后续持久恢复工作；在此之前，部署方不应把 proposal 幂等描述为业务语义上的全局 exactly-once。
 
@@ -339,7 +333,6 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 - 多个 session 可以共享一个 Gateway，并通过独立 capability 和 channel 隔离；TTL、队列背压和逐类硬配额已经限制单 session 资源占用，但 Remote Session registry、事件序列、消息队列和 lease 仍在单个 Python 进程内存中，进程重启后不能恢复会话。
 - Conversation Host 使用进程内线程、队列和有界引用上下文，没有加密的持久会话、外部任务队列、跨实例调度或服务级高可用。进程崩溃会丢失对话引用；当前同步 Python 调用栈也无法从 ReAct 中间步骤安全续跑。
 - Session Ledger 是本机 append-only JSONL，逐条 flush 与 fsync；它不是集中式审计存储，也没有跨进程事务。
-- capability、Origin、短期 principal、turn、业务工具 scope、审批和 mutation proposal 绑定已经实现；Twenty demo 会匹配页面 session 与 OAuth 身份，并在浏览器 cookie 变化时终止 session；Twenty API 写 proposal 的 dispatch 状态可以持久化。普通嵌入部署的应用服务端身份断言、principal 续期、完整的持久会话、组织级策略和跨进程撤销尚未完成。
 - 旧外部页面控制网关仍是全局状态，当前客户端只能通过跨进程独占和双边界 reset 安全地串行运行；网关原生的租户/会话/轮次隔离与崩溃后 TTL 尚未实现。
 - 浏览器 sessionStorage 可以处理同一标签页内的刷新恢复，不能替代服务端持久幂等存储。
 - 模型调用、页面动作和确认有局部超时；provider 排队和 socket 调用共用剩余 deadline，并受进程内并发槽与瞬时故障短路保护。消息级取消已覆盖审批、业务工具和未认领页面动作；provider 请求的主动中断、跨进程取消、分布式租户配额和完整资源回收仍不完整。
@@ -373,7 +366,7 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 - 有界对话引用状态：[conversation.py](../../src/web_operation_agent/state/conversation.py)
 - 单 Agent ReAct 循环：[session.py](../../src/web_operation_agent/execution/session.py)
 - Business Skill 与业务工具合同：[runtime.py](../../src/web_operation_agent/business/runtime.py)
-- 当前 Application Adapter 示例：[twenty.py](../../src/web_operation_agent/twenty.py)
+- 公开 Application Adapter 参考：[examples/odoo/](../../examples/odoo/README.md)
 - Embedded Gateway：[gateway.py](../../src/web_operation_agent/transport/gateway.py)
 - 浏览器端入口 `assistant.js`（启动监督者 + Runtime，构建源在 [frontend/src/runtime/](../../frontend/src/runtime/)）：[boot.ts](../../frontend/src/runtime/boot.ts)、[runtime.ts](../../frontend/src/runtime/runtime.ts)
 - 助手面板（React 19 + Shadow DOM，构建源在 [frontend/](../../frontend/)）：[mount.tsx](../../frontend/src/mount.tsx)

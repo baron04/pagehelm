@@ -157,8 +157,6 @@ Python wheel.
 
 | Application | Qualified version | License | Source |
 | --- | ---: | --- | --- |
-| Twenty CRM | 2.39.0 | Primarily AGPL-3.0 with the Twenty Application Exception; individually marked files may use MIT or commercial terms | [twentyhq/twenty](https://github.com/twentyhq/twenty) |
-| Apache OFBiz | 24.09.07 | Apache-2.0 | [apache/ofbiz-framework](https://github.com/apache/ofbiz-framework) |
 
 Adapters and Skills in this repository are independent project code that call
 these applications' documented interfaces. They do not copy or import either

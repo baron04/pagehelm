@@ -1,7 +1,6 @@
 """Narrow-domain compiler: Odoo's own module descriptors -> a cited SourceMap.
 
-Odoo keeps in XML what OFBiz keeps in controller, screen, form and menu descriptors, and
-keeps in Python what OFBiz keeps in service definitions:
+Odoo keeps navigation and view declarations in XML, and model behavior in Python:
 
     <menuitem>                        a labelled navigation item -> the action it opens
     <record model="ir.actions.act_window">

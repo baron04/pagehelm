@@ -11,10 +11,10 @@
 # written pins that machine's wheels and refuses to install anywhere else, with no
 # message that says why.
 #
-# The example distributions depend on the core and on nothing else; if that ever
+# The Odoo distribution depends on the core and on nothing else; if that ever
 # stops being true, a new name appears here.
 
-# MIT AND PSF-2.0 (required by examples/odoo, examples/ofbiz, examples/twenty, web-operation-agent)
+# MIT AND PSF-2.0 (required by examples/odoo, web-operation-agent)
 greenlet==3.5.6 \
     --hash=sha256:a5876d0a60355af98d535c47f6cd6eb0f8a432396dab26845d380b92f8412422 \
     --hash=sha256:f96f0e30b5a95c7631b12bfe214cbc90ec8fe8cfa36920596c10514a65743519 \
@@ -22,14 +22,14 @@ greenlet==3.5.6 \
     --hash=sha256:f98e8215e172f567ce80eeaed9107fb4d32b6c44f26983d9b8334658136a205a \
     --hash=sha256:e85880b538e59a59f55117b81f208a6660ad5ac328aad9305f812d9b8bc67a0f \
     --hash=sha256:c75116c9de79949de23006e2d9b35ee82874c594fcf5c0311b439acaa14b8441
-# Apache-2.0 (required by examples/odoo, examples/ofbiz, examples/twenty, web-operation-agent)
+# Apache-2.0 (required by examples/odoo, web-operation-agent)
 playwright==1.52.0 \
     --hash=sha256:0797c0479cbdc99607412a3c486a3a2ec9ddc77ac461259fd2878c975bcbb94a \
     --hash=sha256:d010124d24a321e0489a8c0d38a3971a7ca7656becea7656c9376bfea7f916d4 \
     --hash=sha256:4173e453c43180acc60fd77ffe1ebee8d0efbfd9986c03267007b9c3845415af
-# MIT (required by examples/odoo, examples/ofbiz, examples/twenty, web-operation-agent)
+# MIT (required by examples/odoo, web-operation-agent)
 pyee==13.0.1 \
     --hash=sha256:af2f8fede4171ef667dfded53f96e2ed0d6e6bd7ee3bb46437f77e3b57689228
-# PSF-2.0 (required by examples/odoo, examples/ofbiz, examples/twenty, web-operation-agent)
+# PSF-2.0 (required by examples/odoo, web-operation-agent)
 typing_extensions==4.16.0 \
     --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8

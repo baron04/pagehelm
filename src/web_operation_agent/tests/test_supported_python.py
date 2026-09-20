@@ -14,8 +14,7 @@ from web_operation_agent import (SUPPORTED_PYTHON, python_is_supported,
                                  supported_python_text)
 
 ROOT = Path(__file__).resolve().parents[3]
-PROJECTS = ("pyproject.toml", "examples/odoo/pyproject.toml",
-            "examples/ofbiz/pyproject.toml", "examples/twenty/pyproject.toml")
+PROJECTS = ("pyproject.toml", "examples/odoo/pyproject.toml")
 
 
 class TheRangeIsStatedOnce(unittest.TestCase):

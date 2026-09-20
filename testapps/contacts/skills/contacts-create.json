@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "skill_id": "minimal.contacts-create",
+  "title": "Create a contact",
+  "intent": "Create exactly one contact from a user-supplied name and email, after checking for a duplicate and receiving explicit confirmation.",
+  "triggers": [
+    "create contact",
+    "create a contact",
+    "add contact",
+    "add a contact",
+    "new contact",
+    "register contact"
+  ],
+  "instructions": [
+    "Call list_contacts first when it helps establish what already exists; the write re-checks anyway, but a needless proposal wastes the user's attention.",
+    "Call create_contact with the exact name and email the user supplied. Do not invent an email, and do not tidy a name into something the user did not say.",
+    "The server normalizes the proposal, checks for a duplicate over a complete read, shows the exact effect and targets for confirmation, executes at most once, and reads the record back under the same actor.",
+    "After a successful result, open only the returned ui_path and observe the page before finishing.",
+    "If confirmation is denied, stop and say so. If the outcome is uncertain, stop and say that instead; never retry the write."
+  ],
+  "tool_names": [
+    "list_contacts",
+    "create_contact"
+  ],
+  "provenance": [
+    "src:contacts@v1:testapps/contacts/app.py#MinimalContactsApplication",
+    "api:contacts@v1:/api/contacts#post"
+  ],
+  "read_only": false
+}

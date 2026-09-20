@@ -3,7 +3,7 @@
 
 Three checks scoped to ``src/web_operation_agent``. The first two look at non-test ``.py``
 files; the third deliberately includes the tests, because that is where the boundary broke
-last time -- ten core test modules imported ``web_operation_agent_ofbiz``, so the core suite
+last time -- core test modules imported a reference adapter, so the core suite
 could not run without an application distribution installed and every generic route consumer
 was only ever exercised against one application's URL spelling.
 

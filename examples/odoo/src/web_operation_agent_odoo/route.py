@@ -10,7 +10,7 @@ resolves the subpath in the browser. Two subpath shapes carry meaning:
 The action path is not a convention this file invented: it is a stored field, and the G2
 spike compared all 32 of them against the compiled source with no mismatch. That is why
 the source-contract identity of an Odoo page is ``(odoo, <action-path>)`` -- Odoo has a
-single web client rather than OFBiz's several webapps, so the scope is constant, and the
+single web client, so the scope is constant, and the
 route is the part that actually varies.
 """
 from __future__ import annotations

@@ -162,7 +162,7 @@ class TheCoreBoundaryGateCatchesWhatItNames(unittest.TestCase):
     def test_core_importing_the_evaluation_harness_is_caught(self):
         with _Copy(*self.FILES) as root:
             target = root / "src/web_operation_agent/execution/session.py"
-            target.write_text("from evals.twenty import protocol  # noqa\n"
+            target.write_text("from evals.odoo import protocol  # noqa\n"
                               + target.read_text())
             done = _run("check_core_boundary.py", cwd=root)
 
@@ -179,9 +179,9 @@ class TheWheelGateCatchesWhatItNames(unittest.TestCase):
             sys.path.pop(0)
 
         core = gate.DISTRIBUTIONS["web-operation-agent (core)"]
-        for expected in ("odoo", "twenty", "ofbiz", "contacts"):
+        for expected in ("odoo", "contacts", "testapps"):
             self.assertIn(expected, core["forbidden_name_substrings"],
-                          "an application this repository ships an example for is not "
+                          "an application outside the core distribution is not "
                           "forbidden in the core wheel")
         self.assertTrue(core["required"], "the core wheel requires nothing of itself")
 

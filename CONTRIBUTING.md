@@ -44,7 +44,7 @@ Run a focused module by filename pattern:
 
 ```bash
 python src/web_operation_agent/tests/run_all.py -k test_product.py
-python src/web_operation_agent/tests/run_all.py -k test_twenty.py
+python src/web_operation_agent/tests/run_all.py -k test_session.py
 ```
 
 The runner redirects accidental test usage records to scratch storage and verifies that the real model-spend ledger remains unchanged. Unit tests must not make paid model calls or contact production services.
@@ -57,14 +57,14 @@ python -m pip wheel --no-deps --wheel-dir dist .
 
 The continuous-integration workflow installs the package, checks required package resources, imports the installed wheel outside the checkout, and runs the product suite.
 
-Run the independent Twenty evaluator foundation tests separately:
+Run the independent Odoo evaluator tests separately:
 
 ```bash
-python -m unittest discover -s evals/twenty/tests -v
+python scripts/offline_suite.py --start-dir evals/odoo/tests --top-level .
 ```
 
-These tests are offline and use a fake command runner. They do not show that the fixture
-commands work against a real Docker-backed Twenty deployment.
+These tests are offline. They do not show that the fixture commands work against a real
+Docker-backed Odoo deployment.
 
 ## Design expectations
 

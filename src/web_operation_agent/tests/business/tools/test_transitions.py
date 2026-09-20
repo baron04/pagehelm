@@ -1125,7 +1125,7 @@ class TriggersRankTheCatalogRatherThanGateIt(unittest.TestCase):
 
         "Create a person named Bob at Acme company" matches people and companies both, and
         company creation extends only the companies read -- so the sentence is about more
-        than that write, and the surface stays where the triggers put it. `examples/twenty`
+        than that write, and the surface stays where the triggers put it. An earlier adapter
         has carried this as a packaged-Skill test; it belongs next to the rule as well.
         """
         with tempfile.TemporaryDirectory() as tmp:

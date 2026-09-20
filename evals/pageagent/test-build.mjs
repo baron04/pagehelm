@@ -12,7 +12,7 @@ const bundle = await readFile(join(firstRoot, 'pageagent-baseline.js'), 'utf8')
 for (const marker of ['__WOA_PAGEAGENT_BASELINE__', '__WOA_PAGEAGENT_PROVIDER_FETCH__', '__WOA_PAGEAGENT_BUSINESS_TOOL__', '__WOA_PAGEAGENT_OPEN_ROUTE__', 'PageAgentCore']) {
   if (!bundle.includes(marker)) throw new Error(`PageAgent baseline bundle is missing ${marker}`)
 }
-for (const forbidden of ['AGENT_OPENAI_API_KEY', 'WOA_TWENTY_OAUTH', 'sourceMappingURL=', 'execute_javascript: tool']) {
+for (const forbidden of ['AGENT_OPENAI_API_KEY', 'WOA_APPLICATION_OAUTH', 'sourceMappingURL=', 'execute_javascript: tool']) {
   if (bundle.includes(forbidden)) throw new Error(`PageAgent baseline bundle contains forbidden marker ${forbidden}`)
 }
 process.stdout.write(`${JSON.stringify({ status: 'READY', ...first })}\n`)

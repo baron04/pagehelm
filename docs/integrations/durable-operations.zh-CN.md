@@ -61,4 +61,4 @@ python -m web_operation_agent.business.operations --journal private/mutations.sq
 
 第二条命令默认 dry-run。确认旧 writer 及上游请求不可能继续执行，并取得完成或确定失败的证据后，才使用 `--apply`。当前存在同名记录不能证明是此 proposal 创建，当前不存在记录也不能排除在途请求。时间戳比较防止旧裁决覆盖新状态；裁决记录及 operator/evidence 摘要与状态变化在同一事务提交。不会重试原写入或恢复审批。
 
-`mutation_ops.reconcile(journal, proposal_digest, application=bound_adapter, principal=fresh_principal)` 使用原 actor 的新鲜身份执行应用拥有的只读核对，不改变 journal。Twenty 报告当前匹配记录数与扫描完整性，保守返回需人工处理的 unknown。CLI 不自动查找凭据或加载任意 Adapter。
+`mutation_ops.reconcile(journal, proposal_digest, application=bound_adapter, principal=fresh_principal)` 使用原 actor 的新鲜身份执行应用拥有的只读核对，不改变 journal。Adapter 报告当前匹配记录数与扫描完整性，保守返回需人工处理的 unknown。CLI 不自动查找凭据或加载任意 Adapter。

@@ -21,7 +21,7 @@
         },
         {
           "name": "woa:requiredBy",
-          "value": "examples/odoo, examples/ofbiz, examples/twenty, web-operation-agent"
+          "value": "examples/odoo, web-operation-agent"
         },
         {
           "name": "woa:direct",
@@ -56,7 +56,7 @@
         },
         {
           "name": "woa:requiredBy",
-          "value": "examples/odoo, examples/ofbiz, examples/twenty, web-operation-agent"
+          "value": "examples/odoo, web-operation-agent"
         },
         {
           "name": "woa:direct",
@@ -91,7 +91,7 @@
         },
         {
           "name": "woa:requiredBy",
-          "value": "examples/odoo, examples/ofbiz, examples/twenty, web-operation-agent"
+          "value": "examples/odoo, web-operation-agent"
         },
         {
           "name": "woa:direct",
@@ -126,7 +126,7 @@
         },
         {
           "name": "woa:requiredBy",
-          "value": "examples/odoo, examples/ofbiz, examples/twenty, web-operation-agent"
+          "value": "examples/odoo, web-operation-agent"
         },
         {
           "name": "woa:direct",

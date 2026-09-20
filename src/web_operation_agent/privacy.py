@@ -15,7 +15,7 @@ from functools import lru_cache
 from urllib.parse import unquote
 
 
-# Apache OFBiz uses the first name for normal inter-app hand-offs. The two shorter
+# Some server applications use the first name for normal inter-app hand-offs. The two shorter
 # spellings also occur in the bound public 24.09.07 source and carry the same secret value.
 # This list is the floor, never the whole vocabulary -- see the module docstring.
 SESSION_HANDOFF_KEYS = (

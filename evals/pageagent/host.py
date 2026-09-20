@@ -102,7 +102,7 @@ def require_completion_client(candidate: Any, *, error: type[Exception] = TypeEr
     `ChatPort`, so this is a separate and narrower contract: one dispatch method, a frozen
     model label and a meter that can project one run. It is checked structurally on purpose.
     An `isinstance(candidate, ChatModel)` gate here would accept any subclass of the concrete
-    provider whose constructor never ran, which is the shape that made `evals/woa` report
+    provider whose constructor never ran, which once made the evaluation runner report
     apparatus failures at `61603fe`.
     """
     if not callable(getattr(candidate, "request_completion", None)):

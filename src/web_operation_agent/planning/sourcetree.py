@@ -91,7 +91,7 @@ class SourceTree:
 
         ``package`` is the importable package that ships ``policies/<name>.json`` -- the core
         package ships none of its own; an application distribution such as
-        ``web_operation_agent_ofbiz`` ships its own policy under its own package name.
+        An application adapter ships its own policy under its own package name.
         """
         if (not isinstance(name, str) or not name
                 or not re.fullmatch(r"[A-Za-z0-9_.-]+", name)):

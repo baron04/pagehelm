@@ -48,33 +48,8 @@ DISTRIBUTIONS = {
             "web_operation_agent/web_runtime/panel_host.js",
         ],
         # The core package must not carry any application's own assets. A name containing
-        # either application's slug, wherever it appears in the path, is a leak.
-        # The core wheel carries no application and no demo: an example application lives in
-        # `examples/`, is run from a checkout, and is never installed alongside the framework.
-        "forbidden_name_substrings": ["ofbiz", "twenty", "odoo", "demo", "contacts"],
-    },
-    "web-operation-agent-ofbiz": {
-        "glob": "examples/ofbiz/dist/*.whl",
-        "required": [
-            "web_operation_agent_ofbiz/__init__.py",
-            "web_operation_agent_ofbiz/route.py",
-            "web_operation_agent_ofbiz/knowledge.py",
-            "web_operation_agent_ofbiz/sourcemap.py",
-            "web_operation_agent_ofbiz/policies/ofbiz.json",
-        ],
-        "forbidden_name_substrings": ["twenty", "odoo"],
-    },
-    "web-operation-agent-twenty": {
-        "glob": "examples/twenty/dist/*.whl",
-        "required": [
-            "web_operation_agent_twenty/__init__.py",
-            "web_operation_agent_twenty/adapter.py",
-            "web_operation_agent_twenty/skills/companies-query.json",
-            "web_operation_agent_twenty/skills/companies-create.json",
-            "web_operation_agent_twenty/skills/people-query.json",
-            "web_operation_agent_twenty/skills/opportunities-query.json",
-        ],
-        "forbidden_name_substrings": ["ofbiz", "odoo"],
+        # The core wheel carries no application, example, or internal test application.
+        "forbidden_name_substrings": ["odoo", "demo", "contacts", "testapps"],
     },
     "web-operation-agent-odoo": {
         "glob": "examples/odoo/dist/*.whl",
@@ -93,7 +68,7 @@ DISTRIBUTIONS = {
         # it would put a fixture master password in a wheel and offer a command that cannot
         # work once installed.
         "forbidden_prefixes": ["web_operation_agent_odoo/deploy/"],
-        "forbidden_name_substrings": ["ofbiz", "twenty"],
+        "forbidden_name_substrings": ["contacts", "testapps"],
     },
 }
 

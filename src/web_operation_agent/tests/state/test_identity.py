@@ -57,7 +57,7 @@ class PrincipalContextTests(unittest.TestCase):
         base = principal().to_json()
         invalid = (
             {**base, "schema_version": 2},
-            {**base, "application_id": "Twenty CRM"},
+            {**base, "application_id": "Fixture CRM"},
             {**base, "actor_id": "actor/../../other"},
             {**base, "scopes": []},
             {**base, "scopes": ["page:operate", "page:operate"]},

@@ -816,8 +816,7 @@ class IsolationTests(unittest.TestCase):
         env["PYTHONPATH"] = str(REPOSITORY)
         code = ("import json, sys, evals.odoo.evaluator; print(json.dumps(sorted(m for m in "
                 "sys.modules if m.split('.')[0] in {'web_operation_agent', "
-                "'web_operation_agent_odoo'} or m.startswith(('evals.twenty', "
-                "'evals.pageagent')))))")
+                "'web_operation_agent_odoo'} or m.startswith('evals.pageagent'))))")
         completed = subprocess.run([sys.executable, "-c", code], cwd=REPOSITORY, env=env,
                                    capture_output=True, text=True, check=True)
         self.assertEqual(json.loads(completed.stdout.strip().splitlines()[-1]), [])

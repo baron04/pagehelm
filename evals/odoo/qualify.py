@@ -286,8 +286,7 @@ INTERRUPTED_SPECS = [SlotSpec("d01", "woa_product", "INTERRUPTED_THEN_REPLACED")
 
 def _child_env() -> dict[str, str]:
     return {**os.environ, "PYTHONPATH": os.pathsep.join(
-        str(REPOSITORY / item) for item in ("src", "examples/odoo/src", "examples/twenty/src",
-                                            "."))}
+        str(REPOSITORY / item) for item in ("src", "examples/odoo/src", "."))}
 
 
 #: A driver killed once its first turn was read and written down: the recovered attempt is judged

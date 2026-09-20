@@ -739,7 +739,7 @@ def _judge_write(ctx: Context, truth: dict[str, Any], obs: dict[str, Any], verdi
 def _isolation() -> dict[str, Any]:
     forbidden = sorted(name for name in sys.modules
                        if name.split(".")[0] in {"web_operation_agent", "web_operation_agent_odoo"}
-                       or name.startswith(("evals.twenty", "evals.pageagent")))
+                       or name.startswith("evals.pageagent"))
     return {"product_or_engine_modules_loaded": forbidden}
 
 

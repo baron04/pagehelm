@@ -42,7 +42,7 @@ SBOM_FILE = ROOT / "sbom.json"
 NOTICE_FILE = ROOT / "THIRD_PARTY.md"
 #: Every distribution whose runtime closure ships. The examples declare the core as their
 #: only dependency, so resolving them separately is what proves that is still true.
-DISTRIBUTIONS = ("", "examples/ofbiz", "examples/twenty", "examples/odoo")
+DISTRIBUTIONS = ("", "examples/odoo")
 #: npm lockfiles whose components are part of the release inventory even though no wheel
 #: carries them: one builds the evaluation baseline, one builds the assistant panel.
 NPM_LOCKS = {

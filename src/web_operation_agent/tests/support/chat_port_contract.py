@@ -8,7 +8,7 @@ and fail with `AttributeError` on the first model call. This module is the share
 makes such an implementation fail as an implementation, not as a run.
 
 The suite is deliberately not a `TestCase`: `run_all.py` discovers `test_*.py`, so mixing it
-into a real case in the product tree and in `evals/woa` keeps one definition of the contract.
+into a real case in the product tree and evaluator keeps one definition of the contract.
 """
 from __future__ import annotations
 

@@ -2,285 +2,159 @@
 
 [简体中文](README.zh-CN.md)
 
-Web Operation Agent is an early-stage framework for building an AI assistant inside a first-party web application. A server-side agent plans and replans from fresh page observations, while a small embedded browser runtime executes a fixed set of page actions. Application Skills and typed APIs can add business knowledge and current data; source retrieval is an optional knowledge provider.
+Web Operation Agent is an alpha framework for embedding an AI assistant in a first-party
+web application. Planning, model access, credentials, policy, approvals, and audit state stay
+on the server. A small browser Runtime observes the current page, executes fixed generic
+actions, displays progress and confirmation UI, and returns receipts.
 
-> **Status: alpha.** The repository contains a tested core and three reference integrations, of which Odoo 18 is the main one. It is not a production-ready autonomous agent, a hosted service, or a general browser extension.
+The repository has one public reference implementation: [Odoo 18](examples/odoo/README.md).
+It is not a hosted service, a general browser extension, or a production-ready autonomous
+agent.
 
-## What works today
+## Current capabilities
 
-The repository currently verifies these behaviors with local automated tests and isolated application fixtures:
+- A server-side ReAct loop receives every tool result and a fresh page observation before
+  its next decision, with step, time, token, and provider-spend limits.
+- Application-owned Skills and typed tools provide current business facts. Source retrieval
+  is optional and never a prerequisite for ordinary browser or API operation.
+- Browser actions are checked against the current observation and application route policy.
+  Page switches require a visible confirmation.
+- Writes are disabled by default. An enabled write binds its exact effect and targets to a
+  fresh one-use approval, dispatches at most once, and is verified through the application.
+  A timed-out or otherwise uncertain write is recorded as `indeterminate` and never retried
+  automatically.
+- A short-lived actor/tenant/workspace principal can be bound to the browser capability,
+  typed-tool scopes, approvals, mutations, audit records, and revocation state.
+- The React assistant panel is a view over server state. Its copy, bounds, state names, and
+  palette come from server-owned contracts.
+- Optional SQLite stores provide session ownership, progress outbox, bounded conversation
+  context, mutation journals, backups, and explicit operator settlement.
 
-| Capability | Current scope |
-| --- | --- |
-| Remote browser loop | An embedded runtime exchanges observations, actions, results, and approval decisions with a local server over SSE and HTTP. |
-| ReAct execution | The same server-side agent receives each tool result, observes the page again, and chooses the next step within time and step budgets. |
-| Grounded page actions | Navigation and element actions are checked against the current observation and an application-owned control layer. |
-| Skills and business tools | An auditable, bounded user-intent matcher selects candidate Skills; an empty match falls back to eligible read Skills and explicitly enabled mutation Skills. For a navigation-only request, an application may narrow an otherwise empty match with a declared current-route hint; that hint grants no tool or route authority. Current data comes from typed application APIs rather than Skill text. |
-| Form handoff | An integration may issue an exact, one-turn form draft. The server resolves those application-owned field identifiers from fresh page observations and fills only the issued values; the model cannot alter the bindings, and submission always remains with the user. A draft comes in two kinds: one for fields that stay transient until submission, which is filled straight away, and one for a form the application itself saves when the page is left (an Odoo 18 record form does), which is shown first as a confirmation naming the record, the field, and what it would become -- nothing is typed until that is accepted, and a declined or expired confirmation types nothing at all. The saving kind is offered only where writes are enabled and needs the scope a write needs. The prefill answer says the change is not saved yet and what leaving the page will do; the assistant never leaves a page without asking. |
-| Guarded writes | Business mutations are disabled by default. A mutation-enabled turn requires verified identity, an explicit page confirmation, and atomic `prepared → dispatching → completed/failed/indeterminate` recording. Expired confirmations and in-flight or unresolved business keys end as typed product refusals before dispatch. A definite business precondition failure, such as a duplicate record, has a separate typed refusal and never opens an approval or dispatches a write. Production composition also requires a journal that explicitly declares durable restart behavior; volatile journals are accepted only under an explicit test profile. An actor whose own authority refuses a read or a write — the per-tool scope check before anything reaches the application, or the application's permission system after it does — ends the turn as a typed `permission_denied` refusal naming the refusing layer. The Agent is not handed the refusal to look for a page route to the same effect, and evaluators score it as behaviour rather than an apparatus fault. A trusted query or confirmed write completed earlier in the same turn remains visible as completed work; the refusal applies only to the later operation. Odoo `AccessError` and Twenty HTTP 403 map to it. |
-| Legacy page control | The legacy external page-control gateway is leased to one cooperating run across local threads and processes, reset before use, and cleared before release. A control cleanup failure stops closed; this compatibility path does not provide concurrent tenant-scoped permits. |
-| Multi-turn hosting | A conversation host processes panel messages sequentially, isolates an ordinary turn failure from later turns, and retains at most four turns or 32 KiB of in-memory reference context. Historical business facts can resolve phrases such as “the second company,” but the Agent must refresh the current API or page and historical routes receive no authority. When a required parameter or target is ambiguous, the product Agent can end the turn with one bounded question and continue from the next panel message without holding a model or browser worker; single-choice labels and record references must come from the latest application evidence, while the reply remains task input and never write approval. |
-| Shared local gateway | A bounded server composition can host multiple independently revocable session capabilities on one gateway; a 50-session deterministic isolation test covers token/channel separation. Sessions have a one-hour default TTL, bounded queues and hard event/message/observation/action/approval/runtime-instance limits. An optional SQLite store adds owner fencing, message tombstones and a progress outbox for cooperating local processes. The local operations command creates verified online backups of session and mutation state and restores only into a new, writer-isolated directory; capabilities and approvals are never restored. |
-| Task control | The panel can stop its exact active message through the current authenticated runtime lease. Cancellation prevents unclaimed actions and pending approved writes from dispatching; already claimed actions still settle to a definite or indeterminate result. On an unchanged page, the product refuses a consecutive repeat of the same tool and arguments before dispatch, gives the Agent one chance to change strategy or ask a question, and then ends another identical repeat. |
-| Assistant interface | A React 19 panel in a shadow root, mounted by one npm entry point. It is a view: it holds no session and keeps no timeline, so a full page navigation replays the thread from the server rather than losing it. The Runtime mounts a fixed, zero-sized container under the stable document root, outside the application-owned body subtree and outside document flow, so SPA reconciliation neither detaches the panel nor changes the application's width. Every bound, label and colour comes from two files the server owns, and a test refuses anything the panel declares on its own. Chromium coverage spans every panel state, the confirmation card's keyboard paths and 320 px layout, markdown answers, reduced motion, the draggable window, and construction under a strict CSP with Trusted Types. At 320 px and at an emulated 200 % zoom, in both colour schemes, the composer, the confirmation's heading and both answers stay inside the window and unobscured; checked text meets 4.5:1 contrast, reduced motion stops transitions as well as animations, and the keyboard reaches every control in order with a visible focus indicator. One macOS VoiceOver walkthrough has passed; other screen readers and browsers remain unverified. |
-| Confirmation | The card shows the exact effect, the records it names in monospace, and the time left before the request expires. It refuses a press that is not a real user gesture or that it cannot show was visible — which closes visual deception and nothing more. Before the assistant leaves the current page it shows a separate page-switch card, with one control and the path it will open; the user who does not want to leave presses Stop. The panel shares the host page's realm; `SECURITY.md` states plainly what that costs. |
-| Identity binding | A host can bind a short-lived actor/tenant/workspace principal to the runtime capability, Agent turn, typed-tool scope, approval, mutation proposal, and redacted audit events. An optional process-shared revocation store closes the exact principal issuance at the next authenticated channel boundary; a new login must bind new authority and receives a new capability. The Contacts example puts on each principal only the scopes its application grants that actor, and keeps one workspace's records out of another's API, pages, model context, audit ledger and replay; Chromium tests cover a read-only actor and two workspaces holding the same names. The Twenty demo resolves the exact HttpOnly browser session against Twenty before startup, requires it to match the delegated OAuth actor/workspace, and closes the Agent session if the browser cookie is replaced or removed. |
-| Provider boundary | Model requests have deterministic schema, count, byte, credential, and finite-JSON checks. Pinned framework adapters can preserve their native chat body while using the same server-held credentials, transport, limits, guard, and accounting. A shared in-process guard bounds concurrent requests, charges queue time to the request deadline, and opens a cooldown circuit only after consecutive transient provider-health failures; user cancellation and local deadlines neither increment nor clear that state. Queueing and connection setup on the native Agent path are cancellable. A cancellation before HTTP dispatch creates no spend row, while every dispatched request has a correlation ID and either reported usage or an explicit unknown cost. Content-free per-run summaries bind trials to digests of their request IDs and spend rows. Remote endpoints require HTTPS except on loopback. |
-| Operational probes | The loopback gateway separates process liveness at `/healthz` from work readiness at `/readyz`. Readiness reports only schema-fixed counts, admission state, and provider guard health; malformed callbacks fail closed without exposing their error text. |
-| Audit and replay primitives | Server events can be written to an append-only ledger and projected into a redacted replay. |
-| Twenty CRM vertical | The packaged adapter can query Companies, People, and Opportunities through bounded cursor pagination, project typed results and source information into the user answer, and hand API-discovered record routes to the browser. Company creation is separately enabled and requires confirmation plus delegated-token readback. OAuth refresh is serialized across local threads and processes, including GraphQL `UNAUTHENTICATED` responses encountered during identity resolution. |
-| Odoo 18 vertical | Five typed reads and three opt-in writes, including a multi-step order lifecycle: confirm a quotation, then create its customer invoice through Odoo's own wizard. The ordinary-browser host renews a short-lived principal only after Odoo's browser identity and the same delegated API identity still match, while the session is idle. A live model-free gate runs seven scripted cases over six workflow kinds against a real Odoo, a real Chromium and the real product turn, approving each write through the panel's own control in the page. It refuses to start on a fixture that has drifted off its recorded baseline and restores it afterwards. |
-| Cited Skills | Every `provenance` entry is a parsed citation — `src:` into the application's source at a release line, or `api:` into its published interface. A live gate resolves every `src:` citation against the release's compiled `SourceMap`, so a citation that has rotted is distinguishable from one that never pointed anywhere. `BusinessSkillCompiler` drafts a Skill from those descriptors and refuses to write its instructions. |
-| Settling an uncertain write | A write whose outcome was lost is never retried. The journal lists it with the phase it reached and the record id the adapter captured; an operator performs the application's own read under the original actor, and settles it with a compare-and-swap that records who decided, on what evidence, and their attestation that the original writer can no longer execute. |
-
-These claims describe the implemented paths only. The project does not yet have a public benchmark large enough to establish general task success, a source-retrieval advantage, or superiority over PageAgent or other browser agents.
-
-For integrations that return typed answer evidence, read-only answers use a versioned conclusion contract. The agent can filter, count, sum and find extrema within one current dataset; the server resolves the cited fields and renders the supported conclusions instead of replacing them with the last query table. Selections retain their field references for follow-up actions. The model is instructed to honor requested read limits; arithmetic cannot upgrade incomplete inputs to complete totals. Invalid references receive bounded correction feedback. A not-found conclusion is stated only for what the search covered under the current account; it never claims that a record exists nowhere. Coverage describes the evidence scope, not a guarantee that an arbitrary user question was fully answered. Odoo and the minimal Contacts example emit this evidence. Integrations without answer evidence retain their existing answer path; navigation and write outcomes remain governed by their execution receipts and approval controls. A completed action can include independently validated data conclusions in the same answer. The panel offers expandable source details with the cited read/computation time, scope and available read counts; partial-answer warnings remain in the answer. The panel capacity and the maximum configurable product answer share one server contract (20,000 characters); the default per-turn answer limit remains 4,000. Longer configured answers are not silently cut to the default limit.
-
-The Odoo read tools additionally expose phone/mobile/email, order and invoice dates, and invoice amounts due. Date and customer-ID filters execute in the adapter; currency follows each record rather than the company default. See [Odoo tool semantics](examples/odoo/README.md#tools) for date boundaries, supported scopes and scan consistency.
-
-The default product also offers `observe(answer_evidence=true)` for bounded page-local answers. It distinguishes a returned control value from a label with no readable value, and renders literal page excerpts with their page source. Page references expire on the next observation; they cannot be used as API records or as a complete dataset for arithmetic. The runtime excludes the assistant subtree from page extraction; bounded excerpts skip empty controller markup and layout metadata. This explicit path is independent of business tools. It does not automatically verify every free-form answer from a legacy page-only turn.
+These are implemented-path claims, not a general success-rate claim. The repository has no
+public benchmark large enough to establish superiority over another browser agent.
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    U[Embedded assistant panel] -->|task| G[SSE + HTTP gateway]
-    G --> H[Conversation host]
-    H --> A[Server-side ReAct agent]
-    A --> K[Skills and optional knowledge providers]
-    A --> T[Typed application APIs]
-    A --> C[Policy and approval control]
-    A -->|bounded action| G
-    G --> R[Thin browser runtime]
-    R -->|fresh observation and receipt| G
-    A --> L[Audit ledger]
+```text
+First-party page
+  assistant.js + panel + fixed browser tools
+                    │ authenticated observations/actions/decisions
+                    ▼
+Server composition
+  session policy · planner/model · approval · audit · durable state
+                    │ typed application ports
+                    ▼
+Application adapter
+  identity · routes · reads · writes · verification · optional source map
 ```
 
-The server owns model access, planning, knowledge, session policy, authorization state, and audit data. The browser receives only a session-scoped capability, fixed generic actions, and user-visible approval requests. It does not receive model credentials, source indexes, hidden write permissions, or evaluators.
+The core package is application-neutral. Application behavior enters only through adapters,
+Skills, typed tools, and application-owned verification. Odoo ships as a separate
+`web-operation-agent-odoo` distribution. The synthetic Contacts application under
+[`testapps/`](testapps/contacts/README.md) is internal browser/protocol test apparatus, not a
+second public reference.
 
-The Python package mirrors those server boundaries: `modeling/` owns provider access and spend accounting, `planning/` owns contracts, optional knowledge and source-derived Skills, `business/` owns typed tools, approvals and write settlement, and `execution/` composes one bounded product turn and Agent session from those layers.
+Important design documents:
 
-Fresh runtime facts take precedence over Skills, source code, documentation, and API schemas. Those knowledge sources can propose a route or tool call, but the current page and application response determine what is actually true.
+- [System design](docs/architecture/system-design.md)
+- [Application adapter contract](docs/integrations/application-adapter.md)
+- [Durable operations](docs/integrations/durable-operations.md)
+- [Security boundary](SECURITY.md)
 
-The main reusable boundaries are:
+## Repository layout
 
-| Module | Responsibility |
-| --- | --- |
-| `web_operation_agent.composition` | Validates a versioned application descriptor, the executable identity, route, data-classification, mutation-postcondition and reconciliation ports, and the one binding checkpoint that joins them to a release. |
-| `web_operation_agent.execution.product` | Defines the versioned turn message, configuration, result, status, and neutral answer contract. |
-| `web_operation_agent.execution.turn` | Binds a validated application and one user message to the latest observation, runs one application-neutral Agent turn, then settles and publishes it. |
-| `web_operation_agent.state.conversation` | Retains bounded, redacted reference context across turns without granting current facts or routes. |
-| `web_operation_agent.composition.live` | Owns the gateway and sequential conversation lifecycle. |
-| `web_operation_agent.transport` | Defines the structural browser executor and typed transport outcomes, the capability-bound remote channel and registry, and the embedded gateway serving the runtime, authenticated SSE/HTTP endpoints and content-free probes. |
-| `web_operation_agent.business.runtime` | Loads Skills and mediates typed read and mutation tools. |
-| `web_operation_agent.business.mutation` | Atomically records single-use mutation intent and terminal outcome in memory or SQLite. |
-| `web_operation_agent.planning.retrieval` | Deterministically selects bounded, cited evidence from a compiled source map. |
-| `web_operation_agent.planning.contract` | Compiles source evidence and a fresh page observation into a checked operation contract. |
-| `web_operation_agent.planning.source_skill` | Compiles reviewable application Skills from version-bound source maps. |
-| `web_operation_agent.modeling.egress` | Enforces and audits the model-provider data boundary without storing request content. |
-| `web_operation_agent.execution.session` | Implements the bounded server-side agent loop. |
-| `web_operation_agent.modeling.observability` | Converts redacted ledger events into content-free OTLP traces, metrics, and operational alerts without changing task outcomes. |
+```text
+src/web_operation_agent/       application-neutral server and browser Runtime
+examples/odoo/                 the only public reference integration
+  src/web_operation_agent_odoo/  installable adapter
+  deploy/reference/              disposable local Odoo fixture
+  deploy/single-node/            operated single-node example
+  deploy/addons/                 shared Odoo Runtime addon
+evals/odoo/                    independent Odoo evaluator and sealed task apparatus
+evals/pageagent/               generic PageAgent comparison bridge
+testapps/contacts/             synthetic internal qualification application
+frontend/                      assistant panel source
+```
 
-Every application-specific adapter ships as its own separate distribution rather than living in the core package above: [`web-operation-agent-odoo`](examples/odoo) provides `OdooApplicationAdapter` and the Odoo source compiler, [`web-operation-agent-twenty`](examples/twenty) provides `TwentyApplicationAdapter`, and [`web-operation-agent-ofbiz`](examples/ofbiz) provides the Apache OFBiz route grammar, source compiler and App Skill provider. The core package has no application-specific code, and `scripts/check_core_boundary.py` asserts that it imports no application distribution anywhere, tests included; a new application implements the same ports these three do.
+For a new application, follow the [Odoo reading guide](examples/odoo/README.md#reading-guide-for-integrators): start at adapter composition and tool specifications, then reads and
+writes, identity and routes, Skills, turn composition, and finally deployment.
 
-Application adapters expose a versioned, non-secret descriptor, a digest-bound Skill and typed-tool catalog, and executable ports for identity, routes, result data classes, mutation postconditions, and conservative reconciliation. `bind_application()` checks that every tool and mutation is covered and that the runtime uses the same port objects. The route port owns application URL syntax, source-aware entry discovery, and browser pre-egress extensions for application-specific handoff secrets; the generic Agent does not parse framework routes. `AgentTurnExecutor(application=...)` rejects another application origin or invalid principal before browser/model work; typed-tool routes are checked before entering the Agent context, and an acknowledged write remains indeterminate until its adapter postcondition passes. Natural-language goals enter the generic Agent loop directly; an adapter does not preclassify them into a fixed product intent enum. This is adapter contract version 2, and the package API is still evolving; no compatibility guarantee is made before a stable release.
+## Development setup
 
-See [Integrating an application](docs/integrations/application-adapter.md) for the PageController, identity, static Runtime, typed-tool and verification contracts.
-
-The embedded Runtime is the only shipping browser executor. `RemoteBrowserClient` converts each server action into the versioned `ActionCommand` carried by the authenticated session protocol, and the Runtime returns the matching `ActionReceipt`. The earlier subprocess Playwright worker and its unpublished experimental CLI were removed because their navigation, selection, and observation semantics had diverged from the embedded product path.
-
-For mutation-enabled composition, `AgentTurnConfig.deployment_profile` defaults to `production`. The composition fails before a user task when mutation policy does not require identity, no mutation tool is installed, or the selected journal does not declare durable restart behavior. Tests that intentionally use `MemoryMutationJournal` must set `deployment_profile="test"`; that profile does not relax identity binding or user approval. A deployment host must still supply and renew the authenticated principal, disable browser actions it cannot authorize, revoke changed sessions, protect the approval surface, and verify the deployed page-controller asset. Those host obligations are not inferred from the profile flag.
-
-## Developer setup
-
-Requirements:
-
-- Python 3.12 or 3.13
-- a POSIX shell
-- Node.js to execute all embedded-runtime tests
-- network access during the first dependency installation
-
-From an existing checkout:
+Python 3.12 and 3.13 are supported. Node.js is required for the complete Runtime and panel
+suite.
 
 ```bash
-python3 -m venv .venv    # Python 3.12 or 3.13
+python3 -m venv .venv
 . .venv/bin/activate
+python -m pip install --upgrade pip
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 python -m pip install --editable .
-python -m pip install --no-deps --editable examples/ofbiz
-python -m pip install --no-deps --editable examples/twenty
 python -m pip install --no-deps --editable examples/odoo
+```
+
+Run the core suite:
+
+```bash
 python src/web_operation_agent/tests/run_all.py
 ```
 
-The test runner uses Python `unittest` discovery and guards the real model-spend ledger from test writes. Browser-backed tests skip when Chromium is absent. Tests that exercise the upstream PageController run only when `WOA_PAGE_CONTROLLER_MODULE` names an installed module; otherwise they skip. The core suite imports no application distribution: its route, knowledge and source fixtures are synthetic and use a route grammar that is deliberately neither Odoo's nor OFBiz's, so a core module that assumed one application's URL syntax fails there. Each application distribution owns the tests of its own behaviour and runs as its own gate.
-
-Layer-owned tests mirror the package under `tests/modeling/`, `tests/planning/`, `tests/business/`, and `tests/execution/`; cross-layer contracts and shared fixtures remain at the test root. Discovery and `-k` patterns recurse through those packages.
-
-To run one test module through the same guarded runner:
-
-```bash
-python src/web_operation_agent/tests/run_all.py -k test_product.py
-```
-
-### Self-contained example
-
-The [Contacts example](examples/contacts/README.md) removes the external application setup from the first run. Its repeatable qualification command starts a synthetic first-party application and typed API on loopback, injects the real assistant runtime into Chromium, and runs the normal gateway, session host and ReAct executor:
-
-```bash
-python -m pip install --editable .
-python -m playwright install chromium
-PYTHONPATH=src:. python -m examples.contacts.demo --scripted
-```
-
-It also ships an ordinary-browser reference host. This path does not launch or inject
-Playwright: the signed-in application page loads a non-secret same-origin bootstrap, while
-the application server derives the actor from its HttpOnly cookie and binds a separate
-delegated credential. Session and mutation state use the local durable backends.
-
-```bash
-PYTHONPATH=src:. python -m examples.contacts.server --scripted --port 8765
-```
-
-The reference host admits 10 browser sessions, at most 3 simultaneous model requests, and
-at most 2 model requests from one authenticated actor by default. An eleventh session gets
-an explicit retryable capacity response before a capability is issued. The limits are
-configurable with `--max-sessions`, `--max-active-requests`, and
-`--max-active-requests-per-actor`; `/readyz` reports only content-free aggregate state.
-Provider rate limiting, temporary outage, and invalid credentials reach the user as bounded
-actionable results and remain distinct in the audit trail.
-
-The Agent gateway still listens only on loopback. Deployments may give it a distinct
-browser-visible HTTPS reverse-proxy URL; runtime assets and authenticated session traffic
-then use that URL without changing the listener's bind policy.
-
-### Odoo single-node pilot
-
-The [Odoo single-node deployment](deploy/odoo-single-node/README.md) is the first ordinary-browser composition intended for a private pilot. Pinned Docker images run Odoo 18, PostgreSQL, the Agent, and an independent same-origin HTTPS gateway on one Linux host. Odoo signs the identity resolved from its own login session; the Agent matches it to that user's separately registered API key and narrowed tool scopes. SQLite session, mutation, and conversation state, staged backup and restore, bounded per-actor capacity, retention, OTLP/HTTP telemetry, and content-free operational alerts have executable operator paths. The checked-in qualification records distinguish automated contract evidence, one-host observations, and blocked or still-manual checks; they are not production or cross-host claims.
-
-It runs from a checkout and is not installed with the framework. The core distribution ships no application and no demo, which is what lets its wheel assert that it contains neither.
-
-The explicit `--scripted` mode performs one fixed, zero-cost apparatus walkthrough: load a Skill, query the current API, open an API-authorized route, observe the new page, and finish. It does not measure model quality. Omit `--scripted` and configure an OpenAI-compatible provider to use the same application interactively with actual model decisions.
-
-### Qualification
-
-`scripts/qualify.sh` is the single gate. CI runs the same script, so a gate cannot hold locally and be missing in CI:
+Run all repository gates:
 
 ```bash
 scripts/qualify.sh
 ```
 
-It runs the product suite, the Twenty evaluator foundation tests, the offline Odoo evaluation apparatus tests, the offline PageAgent and Web Operation Agent runner suites, verifies and builds the pinned PageAgent bundle when its installed dependencies are present, and builds an installable wheel whose contents and out-of-checkout import are both checked. It exits non-zero if any required gate fails. Installing the pinned npm dependencies remains environment preparation; CI does that before invoking the same gate.
+`--require-browser` makes Chromium and built frontend prerequisites mandatory.
+`--require-live` additionally requires the configured live Odoo qualification. A `BLOCKED`
+gate did not run and is not a pass.
 
-Two gates depend on the environment and are reported, never assumed:
-
-- **Chromium qualification** runs the packaged minimal demo end to end, opens the application-native Contacts host in an ordinary browser with no init-script injection, runs the PageAgent browser cases against the built bundle, and exercises the embedded Runtime against the pinned PageController. The Runtime cases cover both a top-level document transition and an OFBiz-shaped same-origin iframe form transition; the latter must return a fresh observation without repeating the form submission. These synthetic cases do not need Twenty or OFBiz, and CI makes them required with `--require-browser`. Without the flag, a missing bundle, PageController, or Chromium is reported rather than counted as a pass.
-- **Live Twenty qualification** runs only when every prerequisite is set: `WOA_TWENTY_BASE_URL`, `WOA_TWENTY_STORAGE_STATE`, `WOA_TWENTY_OAUTH_TOKEN`, `WOA_TWENTY_OAUTH_REGISTRATION`, `WOA_TWENTY_PAGE_CONTROLLER_MODULE`, `WOA_TWENTY_DB_CONTAINER`, `WOA_TWENTY_DB_NAME`, `WOA_TWENTY_DB_USER`, `WOA_TWENTY_WORKSPACE_SCHEMA`. The gate reads explicit process values first, then the same `WOA_MODEL_ENV` or ignored repository `.env` used by `demo.sh`; it parses the file as data rather than sourcing shell code. Otherwise it prints `BLOCKED` and names what is unset. A blocked gate is untested — neither a pass nor a product failure. `--require-live` turns that absence into a failure for an environment that must have it.
-
-- **Live Odoo qualification** — the main application's gate — runs only when `WOA_ODOO_BASE_URL`, `WOA_ODOO_API_KEY_FILE`, `WOA_ODOO_STORAGE_STATE` and `WOA_ODOO_PAGE_CONTROLLER_MODULE` are all set, and reports `BLOCKED` otherwise. It is model-free by design: two scripted cases — a typed read into an exact-route open, and a collection open — run through the real product turn in real Chromium against a real Odoo, and the artifact records counts, digests and booleans plus a before/after fixture digest. A pass says the apparatus holds; it says nothing about a model, which is what makes a failure there worth acting on.
-
-The Odoo fixture is provisioned from this repository: `python -m web_operation_agent_odoo.deploy provision` builds the application, its database, the addon that serves PageController, the credentials and the snapshot the gate restores to, then prints the configuration to append to `.env`. It needs Docker and a few minutes, is loopback-only by construction, and refuses every step that would type a fixture password at a host anyone else can reach. `python -m web_operation_agent_odoo.demo --allow-mutations` then opens a real Chromium on that Odoo with the assistant panel mounted and waits for you to type a goal — reads answer from the typed projection, writes stop at an approval card you click yourself, and a delete is refused because no such tool is on the surface. A fresh clone still reports the live Twenty gate as `BLOCKED`; that instance is not provisioned here.
-
-## Odoo 18 integration — the main application
-
-`OdooApplicationAdapter` ships in the separate [`web-operation-agent-odoo`](examples/odoo/README.md) distribution with its Skills and source policy as package resources. Three things make it the integration worth reading before the others.
-
-**Identity has two sides that must agree.** Odoo 18 keeps the browser session in an HttpOnly cookie and accepts it only as a cookie — the old `X-Openerp-Session-Id` header no longer exists — so page JavaScript cannot hand its credential to a server-side tool. The page instead *asserts* who it is through `/web/session/get_session_info`, which returns identifiers and no secret, while the server side acts through a per-user API key the user generates in Odoo's own settings. `bind_browser_session` resolves both and refuses to produce a principal unless they name the same actor (`db` → tenant, current company → workspace, `uid` → actor). Provisioning that key is a deployment step the record owner performs; nothing automates it.
-
-**Its source compiler is real, and the Skills are checked against it.** `OdooCompiler` reads menus, actions, views and models into cited `SourceRelation` triples — 14 011 of them from a tree carrying `sale`, `sale_management`, `account`, `stock`, `product` and their dependencies — and every one of the 25 actions that declares a URL segment matched the running database exactly. Every `src:` citation in every shipped Skill is resolved against that map by a live-gate check, which is what makes a citation that has rotted distinguishable from one that never pointed anywhere. Two compiler limits are recorded rather than guessed: an `inherit_id` patch that removes or replaces a node is not applied (relations carry `root_view`, which means "declared somewhere in this view family", not "present in the rendered arch"), and a cross-module `<record id="other_module.…">` patch is reported in `unsupported` rather than published as a definition.
-
-**Source configuration arrives as one adapter decision, and it crosses into the turn whole.** `adapter.source_capability(source_root, release=…)` returns a `SourceCapability` carrying the four session settings that only make sense together; with no source root it returns "nothing" and the session runs on runtime facts alone. `AgentTurnConfig` takes that value as one field, so a deployment cannot enable three of the four — which it silently did until G5, dropping the adapter's declared `runtime_source` and leaving a deployment with no cited lookup at all. Source retrieval remains optional.
-
-**A rotted citation is repaired, not hand-resealed.** `python -m web_operation_agent_odoo.demo.skills reissue` takes the Skills the citation gate judged red, recompiles their compiled facts against the current map, and keeps what a person wrote — the instructions byte for byte. It prints a field-by-field diff and writes nothing without `--apply`. `--accept` chooses which compiled fields to take; `--accept provenance` repairs citation rot alone, which matters because these Skills' titles and bilingual trigger lists are human edits no descriptor can regenerate. What no retrieval scheme fixes is still outside it: when the workflow itself changes, a person writes the instructions, because what needs review is judgement rather than fact.
-
-The typed surface is five reads — `query_sale_orders`, `query_quotations`, `query_customers`, `query_products`, `query_customer_invoices` — and three opt-in writes: `create_customer`, `confirm_quotation` and `invoice_sale_order`. Where writes are enabled there is also `prepare_customer_edit_form`, which writes nothing itself: it prepares a new name, phone or email for one existing customer, and after the confirmation the server types it into that record's own form for the person to save. Each read scans its whole scope and checks the row count against Odoo's own `search_count`, so completeness is answered by a number that did not come from the page of rows being counted.
-
-Pure record-opening requests use an optional deterministic read-navigation policy. An exact match to one read-only Skill, or an otherwise empty match narrowed by an application-declared current-route hint, lets the server load that Skill before the first model decision. If the typed read identifies one exact adapter-authorized record route, the server opens it once the user confirms the page switch, and verifies it, without another model call. Ambiguous results still belong to the model and user clarification, and a request that also asks for data stays in the normal ReAct loop.
-
-Two of those results carry something a page cannot tell you. `sale.action_quotations_with_onboarding` stores **no** domain: the Quotations page lists every sales order and merely defaults its search filter, which anyone can clear. So `query_quotations` reports `collection_ui_path_shows_this_scope: false` with the reason, rather than letting the model assume the page it opens shows the answer it just gave. And `invoice_sale_order` always pins the ordinary-invoice method: Odoo's confirmed-order form carries two buttons both labelled "Create Invoice", separated only by their `invisible` conditions, and the second one proposes a percentage down payment.
+The independent Odoo evaluator's offline apparatus can be run directly:
 
 ```bash
-python -m web_operation_agent_odoo.demo --scripted --headless \
-  --api-key .private/odoo-api-key.json --storage-state .private/odoo-storage-state.json
+PYTHONPATH=src:examples/odoo/src:. \
+  python scripts/offline_suite.py --start-dir evals/odoo/tests --top-level .
 ```
 
-`--scripted` exercises real Odoo, real Chromium and the real product turn with no provider and no spend.
+## Odoo reference integration
 
-The gate version (`python -m web_operation_agent_odoo.demo.qualify`) runs seven scripted cases covering six workflow kinds — complete enumeration, conditional query, open a record, open a collection, a safe refusal, and the multi-step write from quotation to confirmed order to customer invoice — plus an eighth when a source root is configured: a cited source lookup followed by a typed read, which checks that the adapter's declared `runtime_source` reached the deployment and that every byte range the lookup cited is still exactly those bytes. The three that write are approved by clicking the panel's own control in the page, because that is the only way to approve. It refuses to start against a library that has drifted off its recorded baseline, restores the fixture afterwards, and asks Odoo whether each write changed the record it named rather than believing the run's own account. `python -m web_operation_agent_odoo.demo.fixture` takes and restores that baseline; `python -m web_operation_agent_odoo.demo.settle` is what an operator closes an uncertain write with.
+The adapter provides five bounded reads and three opt-in writes covering customers, products,
+sales orders, quotations, and customer invoices. It binds Odoo's HttpOnly browser session to
+a separately delegated per-user API key and refuses the composition unless both identify the
+same database, company, and actor. Reads report completeness; writes perform application-owned
+duplicate checks and readback.
 
-## Twenty CRM integration
+The adapter includes versioned Skills and an optional source compiler for Odoo menus, actions,
+views, and models. Runtime facts remain authoritative when source or documentation disagrees.
 
-`TwentyApplicationAdapter` ships in the separate `web-operation-agent-twenty` distribution with read-only and mutation Skills as package resources, so it can be imported from an installed wheel outside the repository. Loading a Skill or querying its typed API does not dispatch a browser action; page actions still return fresh observations, and a completed mutation performs one follow-up observation for verification. It still needs:
+Provision the disposable local fixture from a checkout:
 
-- a separately provisioned compatible Twenty CRM instance;
-- OAuth token and client-registration files for a delegated test user;
-- the page-side controller integration; and
-- an application composition that supplies the model, control plane, ledger location, and session host.
+```bash
+PYTHONPATH=src:examples/odoo/src:. \
+  python -m web_operation_agent_odoo.deploy provision
+```
 
-Read access is the default. Creating a company requires opting in at both the Twenty adapter and turn policy, supplying an explicit mutation journal, binding a verified identity, and completing the user-visible approval flow. The public demo supplies `SQLiteMutationJournal`; the adapter rejects mutation enablement with an omitted journal.
+The private single-node deployment and its short rebuild command live at
+[`examples/odoo/deploy/single-node/`](examples/odoo/deploy/single-node/README.md). The rebuild
+must update the Agent, run the Odoo addon upgrade, and restart Odoo as one operation:
 
-Company enumeration follows Twenty's `pageInfo.endCursor` with `starting_after`, with hard page and record ceilings plus repeated-record, stalled-cursor, changing-total, and malformed-page detection. A bounded interruption is returned as an explicit partial result; it is never represented as a complete company list. Duplicate checks for company creation fail closed unless the complete active set was scanned. Cursor pagination does not provide a database snapshot, so a workspace changing during a scan can still force an incomplete result and a retry after the data settles.
+```bash
+./examples/odoo/deploy/single-node/rebuild.sh
+```
 
-The root [`demo.sh`](examples/twenty/demo.sh) launches the public composition in [`examples/twenty/src/web_operation_agent_twenty/demo`](examples/twenty/src/web_operation_agent_twenty/demo/README.md). Run `./demo.sh --check` first to diagnose configuration, runtime, Twenty health, and browser/OAuth identity without opening a browser or calling the model. The demo requires an externally provisioned, synthetic Twenty instance and explicit local paths for browser state, delegated OAuth state, the same-origin PageController module, audit output, and spend accounting; these `WOA_*` values may live in the safely parsed model environment file. It does not read database truth, reset the application, or present an Agent completion as deterministic business verification. Provisioning a reproducible public Twenty environment remains release work.
-
-See [Durable local operations](docs/integrations/durable-operations.md) for opt-in recovery, shared request quotas, retention and mutation reconciliation.
-
-## Independent Odoo product evaluation
-
-[`evals/odoo`](evals/odoo/README.md) is the apparatus for evaluating the Odoo reference integration as a product. It measures one fixed Web Operation Agent composition on declared synthetic Odoo 18 workflows through the ordinary Odoo login, the assistant panel and the single-node deployment with its durable journal. Official PageAgent is compared only in an exploratory way, and only on single-turn read and navigation tasks. A PageAgent arm with this project's Skills and typed tools was ruled out before it was built: PageAgentCore fixes its tool set when it is constructed, and the product chooses its first Skill catalog from the user's request, so the two cannot start from the same catalog without a harness that reads the prompt. The evaluation therefore makes no engine-attribution or non-inferiority claim.
-
-Every attempt is written to an append-only, hash-chained ledger before its runner starts, and every model request before it is forwarded. Product outcome, apparatus integrity and fixture reset are recorded as separate axes. An unknown failure code cannot remove a trial from the product denominator, and replacements are capped and must immediately follow the attempt they replace. A failure already decided before an apparatus fault, and a write that already happened, are kept rather than erased or replaced, and apart from a generic provider error explained by the gateway's typed record within its own turn, an ending nobody mapped, in any turn, is always classification drift; a fault after every turn has ended neither explains a missing ending nor undoes a judgement. A turn the runner could not stop keeps its result but never earns a replacement, and state the apparatus could not observe -- an unread fixture guard, an audit that would not export -- is restored or recorded as unknown rather than assumed clean, and an unknown is never read back as a safety violation the product committed. Every fallible observation is recorded with the source and scope it came from, so a component read as empty is not the same record as one nobody could read, and a count comes only from a record that carries it: what nobody read is null rather than zero. Every failure names what it was read from, so a lost observation takes away the failures that rest on it and no others. Expected truth comes from a separate evaluator process that reads Odoo as the trial's own user. The product's answer is judged as the panel shows it by default; PageAgent does not render its final `done` text in the page, so its answer is read from the bridge instead, and no formal PageAgent comparison runs until the two channels match. The synthetic fixture is provisioned from empty Docker volumes by one command, and two provisions produce the same records and the same data for each user. Every write task is reset and checked against the database, chatter, sequences and attachment files, and every attempt starts the Agent from an empty state directory and must end with no open session, unresolved mutation or unclosed proposal. Development and held-out sets of 30 workflow families each are sealed before any paid call; the held-out tasks stay private, with an encrypted escrow outside the repository. A formal batch binds the task-set seal, the fixture manifest, each arm's capabilities and the candidate commit whose Agent image it runs. No paid call starts before the first freeze, which needs an accepted independent family review and an accepted external adversarial review of the apparatus at a named commit -- the one recorded last on the `.workbench` main line, with no recorded review changed, removed, linked or replayed under another name and no blocking finding --, or before escrow custody spans independent failure domains; a development batch also needs a passing five-call provider preflight against the same endpoint and credential, and a zero-model qualification of its candidate taken with the fixture manifest and Agent image in place, which the paid entry checks itself. A report gives a screening verdict only for a complete batch on the fixed thirty-task schedule that matches the frozen plan. Provider failures are classified from the gateway's typed records, the same for both arms: an outage, rate limit, dropped connection or malformed answer is an apparatus fault; a refused credential or a call the spend ledger could not record seals the batch, and no paid call follows an unrecorded call -- or one that never settled within the provider's own deadline, which the ledger writes down while its attempt is still open -- until it is reconciled against the provider bill; a context-length rejection or a provider deadline, whether a timeout or an HTTP 408, is scored as a product result; and a request outside the frozen request contract is the product's own failure. A held-out batch that stopped on a refused credential or an unrecorded call starts again under the same protocol only with an independent audit that it exposed nothing. Each attempt has a hard 300-second automatic wall clock, and the experience gate needs submit and cancel feedback within 300 ms in real Chromium. Every ledger binds the contract it was written under, so a later protocol version archives the old chain and never reads it. The formal entry has lifecycle commands for a safe operator stop, committing a missing chain head, re-arming the fixture after a failed reset, reconciling unrecorded calls, archiving a chain and generating and verifying the review and freeze records, and its orchestration is tested end to end without a model.
-
-## Independent Twenty evaluator
-
-The separate [`evals/twenty`](evals/twenty/README.md) foundation keeps deterministic application verification outside the product and Agent process. It covers three Companies task shapes: querying the exact active name/domain set without changing business state, opening one baseline company without changing business state, and creating exactly one requested company with acknowledged same-actor readback and forbidden-change checks.
-
-Results use four distinct states: `PASS`, `FAIL`, `INDETERMINATE` for an uncertain final state or write outcome, and `INVALID` when the task or evidence cannot support a trial. Its offline tests use an injected command runner. Capture, schema snapshot, controlled mutation, restore, and post-restore digest checks have also passed against a local Docker-backed synthetic Twenty fixture. This foundation is not a benchmark and does not establish a success rate, a baseline comparison, or a source-retrieval benefit. The public repository still needs reproducible fixture provisioning before others can repeat the live qualification.
-
-A public six-case development task set and a digest-only commitment to a private twelve-case held-out set now exercise the three supported Companies task shapes. The split verifier rejects task, ID, release, and template-family overlap. These small sets qualify the evaluation pipeline only; they are not a representative or statistically powered benchmark.
-
-The Gate 4 breadth development catalog adds 30 unique English and Chinese prompt templates across Companies, People, and Opportunities: enumeration, filtered lookup, record opening, collection navigation, confirmed company creation, and safe refusal. Its v2 fixture and deterministic evaluator have been qualified against the local synthetic Twenty database. The WOA breadth runner also passes model-free scripted qualification through the real identity, remote-session, ReAct, typed-tool, approval, and audit path. Seven new-entity read, navigation, and refusal cases pass the same checks against local Twenty 2.39.0 in real Chromium. Rephrasings remain correlated development cases rather than independent statistical samples. A fixed 12-case paid development diagnostic against randomly generated synthetic CRM data first exposed a filtered lookup that incorrectly navigated after querying. After adding query-result guidance without changing the tasks or evaluator, the verification run completed with 12 `PASS`, 0 `FAIL`, 0 `INVALID`, two of two correct refusals, zero safety events, complete usage accounting, and CNY 0.433488 recorded cost. Median latency was 8.224 seconds (nearest-rank p95 11.742), median model calls and steps were both 3 (p95 4), and p95 page actions was 1. This single correlated development run is not a benchmark or a product success-rate claim; no paid run against the local Twenty fixture has been authorized or executed.
-
-The evaluator also includes a strict preregistration validator for paired PageAgent, Skill/API, and SourceProvider comparisons. It binds artifact and implementation digests, equal-information arms, provider settings, budgets, task eligibility, source exclusions, deterministic balanced order, and fail-fast stop rules before execution. No formal run protocol or comparative result is frozen yet.
-
-A private append-only batch ledger now enforces that frozen order and a common trial schema across runners. It hash-chains entries, rejects duplicate or overlapping trials, preserves unknown provider cost as unknown, detects paired model drift, and stops on apparatus invalidity or observed safety events. The official PageAgentCore and PageController v1.12.4 packages are also pinned by npm lock and integrity; their thin bridge passes deterministic bundle and real-Chromium DOM/custom-tool qualification without a model call. Both engines now run behind one evidence contract, one typed failure classifier and one protocol-bound trial projector: a read-only PageAgent runner and a read-only Web Operation Agent runner each bind the actual browser/API identity and reject answers or page evidence that cannot be deterministically evaluated. A single serial schedule driver captures state, instantiates the task, runs the scheduled arm, evaluates, projects and appends each trial in the frozen order, with no engine-specific branch; a schema-fixed report recomputes public counts from the verified ledger and refuses to phrase a small batch as a comparison. Both runners have passed no-model live qualification against a local Twenty 2.39.0 fixture through real Chromium, the delegated API, database state capture and the independent evaluator. That result is a record of an earlier run on a provisioned environment, not a property of any checkout: the live gate is re-run through `scripts/qualify.sh`, which reports `BLOCKED` wherever such an environment is absent. A frozen formal protocol, the provider snapshot policy and the source allowlist are still pending; these qualification cases are not a success-rate or comparative result.
-
-**What the two engines were told apart on.** The comparisons above measure success rates, and both saturated — 47 paired trials, zero discordance — because every task they set was solvable from a page or from a typed tool. [`evals/woa/pilot_structural.py`](evals/woa/README.md) asks four questions that are not about succeeding more often, and scores them from counts and booleans taken from the application's own state and each arm's durable record. Model-free, three separated the arms: only the typed arm reports a collection's true size (240) from a count call the cursor-paginated page never makes; only the journal-backed arms leave one record and one durable unresolved row naming it after an acknowledgement is lost, where the page write path leaves duplicates and nothing on disk; and only the product arm refused, before dispatch, to click a delete control the page really has. Each has a reverse check — enable the page click, count the listing instead of asking the application, or remove the durable journal — and the dimension stops telling the arms apart.
-
-The fourth dimension was withdrawn and rebuilt. `groundedness` scored an engine well for *discarding* what the model wrote, and the behaviour it rewarded is a defect: a reader who asked which quotations exceed 2000 was shown all five, because a projection of the last query's rows cannot know what was asked. It is replaced by `answer_quality`, six verdicts recorded separately — was the question answered, were the facts right, did every claim rest on this turn, were the sources described truly, did a correct answer survive to the reader, were gaps handled without inventing. Reports scored under the old name keep it and are not re-scored. The new dimension is defined and tested but not yet producible: its probe asks for a count, the evaluator's `query` kind judges an answer by the records it restates, and an arm answering with a total fails for want of an `aggregate` task kind. One arm is not a comparison, so the report names the dimension as unmeasured with that reason rather than omitting it.
-
-Two things are stated rather than hidden. A third arm runs the DOM engine on *this project's* adapter; on completeness and write safety it behaves like the product, so those guarantees are the architecture's rather than the loop's. And a repeat of the same probes with a real model (`qwen3.8-flash`, 85 calls, CNY 0.316202) reproduced completeness and write safety — that model's page write path created five duplicate records — while the product arm declined to attempt the delete on its own, so its refusal gate was not exercised and the run reports it as untested rather than as a result. Three single runs on one synthetic application are not a benchmark and carry no success rate.
+See the [Odoo integration guide](examples/odoo/README.md) for identity, routes, tool behavior,
+source compilation, fixture provisioning, and qualification.
 
 ## Known limitations
 
-- The shared runtime gateway and active execution remain process-local. The Odoo single-node host durably stores bounded conversation context, session progress, and mutation state, rotates browser authority on restart, and interrupts old work rather than resuming actions or approvals. Other compositions must opt into the same stores. Cross-host scaling, active-task migration, and distributed revocation are not implemented. A crash after dispatch remains `indeterminate` and requires reconciliation rather than automatic retry. Odoo now demonstrates a server-authenticated login assertion and per-user delegation in an ordinary browser; Twenty still uses its trusted Playwright host, and other applications must implement their own trusted login boundary. The separate legacy page-control gateway still has global permit and trace state.
-- Turn deadlines cap provider queueing and socket time together. The server Agent's native completion path uses a closeable HTTP connection: message-bound cancellation aborts an in-flight request, releases its provider-guard slot, prevents later tool dispatch, and records the dispatched call with unknown usage rather than retrying it. Every implementation reachable from a turn satisfies one explicit `ChatPort` contract in which cancellation is mandatory and checked at composition. Contract-planning calls still use the plain completion path and are not cancellable. The concurrency guard is local to one process; an optional SQLite rolling request quota coordinates a server-assigned tenant/provider scope across local processes, while token and currency quotas remain unimplemented. The Odoo single-node host exports content-free OTLP traces and metrics for model wait/calls, tools, browser round trips, answer verification, and turns, with alerts for sustained provider failure, indeterminate writes, recovery failures, and configured cost thresholds. Collector storage, dashboards, routing, and cross-host observability remain operator responsibilities.
-- The packaged real-application adapters are narrow. Odoo 18 supports reads over confirmed sales orders, customers and saleable products, plus opt-in customer creation that requires a user-supplied name and email; Twenty CRM supports Companies reads and confirmed creation, and People/Opportunities reads with record navigation; OFBiz is kept for MPA/iframe regression only. Minimal Contacts is a synthetic onboarding example. No adapter covers a multi-step business workflow yet.
-- Cross-workspace data isolation is qualified on the synthetic Contacts application only. The Odoo single-node qualification exercised signed bootstrap for separate read-only and writer delegations, and the framework checks only the scopes explicitly registered for each actor. Odoo's own groups remain the business-permission authority; a live second Odoo company and every application-level RBAC denial have not been exercised. The per-tool scope check governs typed tools only: a page the application already shows the actor still reaches the model as a page observation, so a principal narrower than the actor's application permissions does not hide that page.
-- The Odoo source compiler links view inheritance rather than merging it, and does not merge cross-module record patches into their definitions. Both limits are reported in the compiled map's `unsupported` list or through the `root_view` attribute; neither is silent.
-- Arbitrary third-party websites and a browser extension are not implemented.
-- Browser actions do not provide database transaction or rollback semantics.
-- Mutation journals block distinct proposals with the same application/tool/tenant/workspace/actor business key while a write is dispatching or indeterminate. SQLite enforces this across processes sharing the same database. The block is reported as a product refusal with `dispatched=false`, rather than an apparatus fault or a possible side effect. Twenty keys company creation by normalized company name; other adapters may supply a reconcile key or default to normalized arguments. This is not application-wide uniqueness across actors or independent databases. Legacy unresolved rows without a key conservatively block new keyed writes; stop old workers before upgrading. Read-only reconciliation and explicit dry-run operator resolution are available; uncertain results never resolve automatically.
-- Source-aware retrieval exists as an optional planning input, but its benefit has not been established across a representative held-out evaluation.
-- The structural dimensions are measured on one synthetic application, one run per arm, against PageAgent 1.12.4 in real Chromium while this product's arm runs over a simulated runtime. What they establish is what each engine did when driven at the same control; they establish no success rate, and a second application has not been tried.
-- Provider egress is bounded, classified and credential-checked. Adapters now attach declared application data classes to each typed-tool result and its audit event, but field-level policy enforcement, customer-managed encryption, regional routing, a DLP service, and a complete data-retention policy are not implemented.
-- The assistant panel is covered in Chromium for every state in the contract, the confirmation card's keyboard paths and 320 px layout, markdown rendering and link policy, reduced motion, window drag and resize, and construction under a strict CSP with Trusted Types; Storybook renders the same states for review. Copy is Chinese, overridable per session by the integrating application through server-validated label hooks, and not changeable by the end user. Complete action/error localization, an assistive-technology and browser matrix, and the end-to-end deployment experience remain release work.
-- The panel runs in the host application page's JavaScript realm. A script in that page can complete an approval, and Content Security Policy and Trusted Types are the host page's to enable — the panel is built never to need them relaxed, and has a regression test for that, but cannot turn them on. Read `SECURITY.md` before enabling mutations.
-- Do not connect this alpha to production accounts, customer data, payments, email, or other consequential systems.
-
-## Documentation
-
-- [中文说明](README.zh-CN.md)
-- [System design](docs/architecture/system-design.md)
-- [Writing an application adapter](docs/integrations/application-adapter.md) · [中文](docs/integrations/application-adapter.zh-CN.md)
-- [Durable operations](docs/integrations/durable-operations.md) · [中文](docs/integrations/durable-operations.zh-CN.md)
-- [Odoo single-node pilot deployment](deploy/odoo-single-node/README.md) · [中文](deploy/odoo-single-node/README.zh-CN.md)
-- [HTTP contract feasibility](docs/integrations/http-contract-feasibility.md)
-- [Third-party components and licences](THIRD_PARTY.md) · [dependency lock](requirements.lock) · [SBOM](sbom.json)
-- [Contributing](CONTRIBUTING.md)
-- [Security policy](SECURITY.md)
-- [License](LICENSE)
+- Alpha interfaces may still change; compatibility policy is not yet stable.
+- Horizontal scaling, active-task migration, and cross-host revocation are not implemented.
+- An application must provide its own trusted login assertion, delegated credentials,
+  authorization mapping, and application-specific postcondition checks.
+- Browser automation cannot provide database transactions or rollback. Uncertain writes need
+  application reads and an explicit operator decision.
+- Browser and accessibility coverage is strongest on Chromium; other engines and screen
+  readers are not comprehensively qualified.
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+See [LICENSE](LICENSE) and [THIRD_PARTY.md](THIRD_PARTY.md).

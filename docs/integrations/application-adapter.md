@@ -52,4 +52,6 @@ Bind once with `application = bind_application(adapter)`, pass that object to `A
 
 Run the reusable adapter contract assertions for every adapter, then add application tests for valid routes, identity mismatch, read completeness, mutation refusal, approval, postcondition failure, and credential redaction. `scripts/qualify.sh --require-browser` runs the product suite, isolated wheel checks, the minimal embedded Runtime walkthrough, and the canonical browser protocol in real Chromium. A live application gate that reports `BLOCKED` has not run and is not a pass.
 
-Minimal Contacts, Twenty CRM, Odoo and Apache OFBiz currently satisfy the same Adapter v2 contract without application branches in the Agent core. Minimal Contacts is the onboarding reference; the three real application adapters ship as separate distributions.
+Odoo is the only public reference implementation. Its installable distribution satisfies
+the complete Adapter v2 contract without application branches in the Agent core. The small
+Contacts application under `testapps/` remains internal browser and protocol test apparatus.

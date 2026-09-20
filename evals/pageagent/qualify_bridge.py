@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -12,10 +14,28 @@ from playwright.sync_api import Page, sync_playwright
 
 from evals.pageagent.business_host import PageAgentBusinessProxy
 from evals.pageagent.host import PageAgentProviderContract, PageAgentProviderProxy
-from evals.twenty.fixture import atomic_write_json
 from web_operation_agent.business.runtime import (BusinessSkill, BusinessToolResult,
                                           BusinessToolRuntime)
 from web_operation_agent.state.identity import OperationContext, PrincipalContext
+
+
+def atomic_write_json(path: Path, value: Any) -> None:
+    """Write a private JSON artifact completely before publishing its final name."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, ensure_ascii=False, sort_keys=True, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
 
 
 def _completion(action: dict[str, Any], *, sequence: int) -> str:

@@ -24,7 +24,7 @@ a run survive a restore as orphaned files. They are unreachable once the rows th
 them are gone, so they cannot change a later measurement, but they do accumulate; a gate
 that starts exercising attachments needs this extended, not assumed.
 
-The design follows ``evals/twenty/fixture.py`` on purpose -- same recovery-record protocol,
+The design uses the evaluator's recovery-record protocol --
 same "record the uncertainty before the write" ordering -- so that one habit covers both
 applications.
 """
@@ -294,7 +294,7 @@ class OdooPostgresFixture:
 
 # -- the recovery record ------------------------------------------------------------------
 #
-# Same protocol as the Twenty fixture: the uncertainty is written down *before* the database
+# The uncertainty is written down *before* the database
 # write, so a restore that dies half way is INDETERMINATE on the next read rather than
 # silently retried.
 
@@ -378,7 +378,7 @@ def restore_snapshot(*, fixture: OdooPostgresFixture, snapshot_path: Path,
                      record_path: Path) -> dict:
     """Restore once, recording the uncertainty before the database write, never after.
 
-    Unlike the Twenty recovery record this one is not consumed: a gate that writes restores
+    This recovery record is not consumed: a gate that writes restores
     after *every* run, so a successful restore returns the record to READY. What is not
     reusable is an uncertain one -- once a restore has failed to report an outcome, the
     only honest answer to "what is in this database?" is "nobody knows", and a person has

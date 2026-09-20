@@ -1,6 +1,6 @@
 """The model boundary is a contract, not a base class.
 
-These cases pin the regression that made `evals/woa` report 22 of 36 failures at `61603fe`:
+These cases pin a regression that caused widespread evaluation-runner failures:
 `ScriptedWoaChat(ChatModel)` never ran the provider constructor, inherited the real
 `complete_cancellable`, and raised `AttributeError: max_completion_tokens` inside the turn,
 which the runner then classified as `apparatus_invalid`. A boundary that is checked at

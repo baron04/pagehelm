@@ -21,8 +21,7 @@ class SourceCompiler(Protocol):
     offline, once per deployment release, against a version-bound source tree, and its output
     -- a ``SourceMap`` of ``SourceRelation`` triples, each carrying a checkable citation -- is
     what a session is later handed as ``source_map``. Every application distribution that
-    offers source-backed knowledge implements this against its own declarative shape (OFBiz's
-    ``web_operation_agent_ofbiz.OFBizCompiler`` reads XML controller and widget descriptors);
+    offers source-backed knowledge implements this against its own declarative shape;
     the core Agent never reads application source itself.
     """
 

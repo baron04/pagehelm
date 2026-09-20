@@ -52,4 +52,6 @@ Adapter 与 turn policy 默认都关闭写入。启用写入的 Adapter 在生�
 
 每个 Adapter 都应运行可复用的 contract assertion，并增加有效路由、身份不匹配、读取完整性、mutation 拒绝、确认、后置条件失败和凭据脱敏测试。`scripts/qualify.sh --require-browser` 会运行产品套件、隔离 wheel 检查、Minimal 内嵌 Runtime 演练和真实 Chromium 中的规范浏览器协议。真实应用门若显示 `BLOCKED`，表示没有执行，不能算通过。
 
-Minimal Contacts 与 Twenty CRM 当前使用同一 Adapter v2 合同，Agent 核心没有应用分支。Minimal Contacts 是接入参考。SPI 尚未稳定，因此 Twenty 暂时保留在主 distribution 中；现在拆包只会增加第二套发布和兼容面，尚无独立版本需求的证据。
+Odoo 是唯一公开参考实现。它的独立可安装 distribution 完整实现 Adapter v2 合同，
+Agent 核心中没有应用分支。`testapps/` 下的小型 Contacts 应用只用于内部浏览器与协议测试，
+不是第二套接入模板。

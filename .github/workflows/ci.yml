@@ -46,8 +46,6 @@ jobs:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
         run: |
           python -m pip install --editable .
-          python -m pip install --no-deps --editable examples/ofbiz
-          python -m pip install --no-deps --editable examples/twenty
           python -m pip install --no-deps --editable examples/odoo
       - name: Install pinned PageAgent baseline
         working-directory: evals/pageagent

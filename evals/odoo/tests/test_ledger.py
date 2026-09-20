@@ -465,7 +465,6 @@ class MandatorySealTests(unittest.TestCase):
         a second definition written anywhere on either side fails here rather than in a batch."""
         from web_operation_agent.modeling.client import SpendMeter, reported_model_string
         from evals.pageagent import host as pageagent_host
-        from evals.twenty import records as twenty_records
 
         for raw, kept in (("qwen3.8-flash", "qwen3.8-flash"),
                           (" qwen3.8-flash ", "qwen3.8-flash"),
@@ -485,7 +484,7 @@ class MandatorySealTests(unittest.TestCase):
                     # the canonical form structurally; that form is this definition's fixed
                     # point, and each must accept a string exactly when it is already canonical.
                     canonical = kept == raw
-                    self.assertEqual(twenty_records._canonical_model_string(raw), canonical)
+                    self.assertEqual(ledger._canonical_model_string(raw), canonical)
                     self.assertEqual(bool(pageagent_host._SAFE_MODEL.fullmatch(raw))
                                      and raw == raw.strip(), canonical)
                 if kept is None and raw is not None:

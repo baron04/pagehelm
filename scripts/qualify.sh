@@ -5,7 +5,7 @@
 # CI runs this same script, so a gate cannot pass locally and be missing in CI, or vice
 # versa. Two rules matter more than the list of suites:
 #
-#   * A gate that cannot run is never reported as a pass. The browser and live-Twenty gates
+#   * A gate that cannot run is never reported as a pass. The browser and live-Odoo gates
 #     print SKIPPED or BLOCKED with the exact prerequisite that is absent, and `--require-*`
 #     turns that absence into a failure for environments that must have it.
 #   * Any required failure makes this script exit non-zero. There is no summary line that
@@ -14,13 +14,7 @@
 # Usage:
 #   scripts/qualify.sh [--require-browser] [--require-live] [--skip-wheel]
 #
-# Live-Twenty prerequisites (all of them, or the gate reports BLOCKED):
-#   WOA_TWENTY_BASE_URL WOA_TWENTY_STORAGE_STATE WOA_TWENTY_OAUTH_TOKEN
-#   WOA_TWENTY_OAUTH_REGISTRATION WOA_TWENTY_PAGE_CONTROLLER_MODULE
-#   WOA_TWENTY_DB_CONTAINER WOA_TWENTY_DB_NAME WOA_TWENTY_DB_USER
-#   WOA_TWENTY_WORKSPACE_SCHEMA
-#
-# Live-Odoo prerequisites (the main application; all of them, or the gate reports BLOCKED):
+# Live-Odoo prerequisites (all of them, or the gate reports BLOCKED):
 #   WOA_ODOO_BASE_URL WOA_ODOO_API_KEY_FILE WOA_ODOO_STORAGE_STATE
 #   WOA_ODOO_PAGE_CONTROLLER_MODULE
 #   optionally WOA_ODOO_SOURCE_ROOT + WOA_ODOO_SOURCE_RELEASE, which add the source gate
@@ -86,7 +80,7 @@ run_gate() {   # run_gate <name> <required:0|1> <command...>
   fi
 }
 
-export PYTHONPATH="${ROOT}/src:${ROOT}/examples/ofbiz/src:${ROOT}/examples/twenty/src:${ROOT}/examples/odoo/src:${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
+export PYTHONPATH="${ROOT}/src:${ROOT}/examples/odoo/src:${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 
 # ---------------------------------------------------------------- offline gates
 run_gate "core distribution boundary" 1 "${PYTHON}" scripts/check_core_boundary.py
@@ -122,19 +116,12 @@ fi
 
 run_gate "product suite" 1 "${PYTHON}" src/web_operation_agent/tests/run_all.py
 run_gate "ordinary-browser host (offline)" 1 "${PYTHON}" -m unittest \
-  examples.contacts.tests.test_native_server.NativeContactsHostTests
-run_gate "ofbiz example suite" 1 "${PYTHON}" -m unittest discover \
-  -s examples/ofbiz/src/web_operation_agent_ofbiz/tests \
-  -t examples/ofbiz/src
-run_gate "twenty example suite" 1 "${PYTHON}" -m unittest discover \
-  -s examples/twenty/src/web_operation_agent_twenty/tests \
-  -t examples/twenty/src
+  testapps.contacts.tests.test_native_server.NativeContactsHostTests
 run_gate "odoo example suite" 1 "${PYTHON}" -m unittest discover \
   -s examples/odoo/src/web_operation_agent_odoo/tests \
   -t examples/odoo/src
 # Citation resolution needs the deployed release's source, so the authoritative run of it is
 # the live gate's `every_skill_citation_resolves_in_this_release`, not a skippable test.
-run_gate "evals/twenty foundation" 1 "${PYTHON}" -m unittest discover -s evals/twenty/tests
 # The P7.4 Odoo apparatus: ledger, outcome axes, gateway, task sets and seals, evaluator
 # extraction, statistics and report. Offline by design; the live fixture qualification runs
 # separately through `python -m evals.odoo.qualify` against the isolated evaluation stack.
@@ -146,17 +133,8 @@ run_gate "evals/odoo apparatus (offline)" 1 "${PYTHON}" scripts/offline_suite.py
 # The structural apparatus and scorer, model-free. It belongs with the offline gates rather
 # than the browser ones: the apparatus half needs no browser at all, and the probe half
 # skips itself with a named prerequisite when the PageAgent bundle is absent.
-run_gate "structural dimensions (offline)" 1 "${PYTHON}" -m unittest \
-  evals.woa.test_pilot_structural
-run_gate "PageAgent host and runner (offline)" 1 "${PYTHON}" -m unittest \
-  evals.pageagent.test_host evals.pageagent.test_business_host \
-  evals.pageagent.test_twenty_runner evals.pageagent.test_qualify_twenty_runner
-run_gate "WOA runner and schedule driver (offline)" 1 "${PYTHON}" -m unittest \
-  evals.woa.test_chat_port evals.woa.test_assembler evals.woa.test_twenty_runner \
-  evals.woa.test_breadth_runner evals.woa.test_pilot_breadth \
-  evals.woa.test_qualify_schedule \
-  evals.woa.test_pilot_paired_synthetic.PairedPilotProtocolTests \
-  evals.woa.test_pilot_paired_breadth.PairedBreadthPilotTests
+run_gate "PageAgent host (offline)" 1 "${PYTHON}" -m unittest \
+  evals.pageagent.test_host evals.pageagent.test_business_host
 
 # ---------------------------------------------------------------- PageAgent bundle gate
 # `npm ci` is environment preparation. Reproducibility verification and the build itself are
@@ -185,19 +163,9 @@ build_and_check_wheel() {
   # setuptools may otherwise copy deleted modules from an ignored build/lib tree into a new
   # wheel. A release gate must build from the current source tree, not incremental residue.
   rm -rf dist build src/*.egg-info
-  rm -rf examples/ofbiz/dist examples/ofbiz/build \
-    examples/ofbiz/src/*.egg-info
-  rm -rf examples/twenty/dist examples/twenty/build \
-    examples/twenty/src/*.egg-info
   rm -rf examples/odoo/dist examples/odoo/build \
     examples/odoo/src/*.egg-info
   "${PYTHON}" -m pip wheel --no-deps --quiet --wheel-dir dist . || return 1
-  "${PYTHON}" -m pip wheel --no-deps --quiet \
-    --wheel-dir examples/ofbiz/dist examples/ofbiz \
-    || return 1
-  "${PYTHON}" -m pip wheel --no-deps --quiet \
-    --wheel-dir examples/twenty/dist examples/twenty \
-    || return 1
   "${PYTHON}" -m pip wheel --no-deps --quiet \
     --wheel-dir examples/odoo/dist examples/odoo \
     || return 1
@@ -205,13 +173,9 @@ build_and_check_wheel() {
 
   # Importing from outside the checkout is the part a path-shadowed test cannot prove. Core
   # is installed and probed alone first -- it must compose and run with no application
-  # distribution present -- then the two application distributions are added on top of it.
-  local core_wheel ofbiz_wheel twenty_wheel odoo_wheel smoke_venv smoke_cwd
+  # distribution present -- then the Odoo distribution is added on top of it.
+  local core_wheel odoo_wheel smoke_venv smoke_cwd
   core_wheel="$("${PYTHON}" -c 'import glob, os; print(os.path.abspath(glob.glob("dist/*.whl")[0]))')"
-  ofbiz_wheel="$("${PYTHON}" -c \
-    'import glob, os; print(os.path.abspath(glob.glob("examples/ofbiz/dist/*.whl")[0]))')"
-  twenty_wheel="$("${PYTHON}" -c \
-    'import glob, os; print(os.path.abspath(glob.glob("examples/twenty/dist/*.whl")[0]))')"
   odoo_wheel="$("${PYTHON}" -c \
     'import glob, os; print(os.path.abspath(glob.glob("examples/odoo/dist/*.whl")[0]))')"
   smoke_venv="$(mktemp -d)/venv"
@@ -243,8 +207,7 @@ assert SQLiteMutationJournal and SQLiteSessionStore and SQLiteProviderQuota
 assert reconcile and SourceTree
 # The framework ships no application and no example. Any of these resolving here would mean
 # the core wheel is carrying something a framework has no business carrying.
-for name in ("web_operation_agent_ofbiz", "web_operation_agent_twenty",
-             "web_operation_agent_odoo", "web_operation_agent_demo", "examples"):
+for name in ("web_operation_agent_odoo", "web_operation_agent_demo", "examples", "testapps"):
     import importlib.util
     assert importlib.util.find_spec(name) is None, \
         f"core alone must not resolve {name}; applications and examples install separately"
@@ -252,27 +215,11 @@ print("core wheel alone imports and composes, and carries no application or exam
 PY
   ) || return 1
   env -u PYTHONPATH "${smoke_venv}/bin/python" -m pip install --no-deps \
-    "${ofbiz_wheel}" "${twenty_wheel}" "${odoo_wheel}" | grep -v "^\[notice\]" || return 1
+    "${odoo_wheel}" | grep -v "^\[notice\]" || return 1
   ( cd "${smoke_cwd}" && env -u PYTHONPATH \
       "${smoke_venv}/bin/python" -I - <<'PY'
 from pathlib import Path
-from web_operation_agent.business.mutation import SQLiteMutationJournal
-from web_operation_agent.sourcetree import SourceTree
-from web_operation_agent_ofbiz import OFBIZ_ROUTE_PORT
-from web_operation_agent_twenty import TwentyApplicationAdapter
-
 root = Path.cwd().resolve()
-assert SourceTree.load("ofbiz", root, package="web_operation_agent_ofbiz").root == root
-assert OFBIZ_ROUTE_PORT.compose_contract_route("accounting", "findPayments") == \
-    "/accounting/control/findPayments"
-common = dict(base_url="http://127.0.0.1:3000", token_path="tokens.json",
-              registration_path="registration.json")
-read_tools = {"query_companies", "query_people", "query_opportunities"}
-assert TwentyApplicationAdapter(**common).business_tools.tool_names == frozenset(read_tools)
-assert (TwentyApplicationAdapter(
-    **common, allow_mutations=True,
-    mutation_journal=SQLiteMutationJournal(root / "mutations.sqlite3"),
-).business_tools.tool_names == frozenset(read_tools | {"create_company"}))
 from web_operation_agent.composition.sources import SourceCapability
 from web_operation_agent_odoo import ODOO_ROUTE_PORT, ODOO_SOURCE_POLICY
 from web_operation_agent_odoo.adapter import OdooApplicationAdapter
@@ -301,8 +248,7 @@ assert writing.business_tools.mutation_tool_names == frozenset(
     {"create_customer", "confirm_quotation", "invoice_sale_order"})
 assert odoo.source_capability().session_kwargs()["source_affordance_mode"] == "off"
 assert isinstance(odoo.source_capability(), SourceCapability)
-print("ofbiz, twenty and odoo distributions install on top of core "
-      "and compose outside the checkout")
+print("the Odoo distribution installs on top of core and composes outside the checkout")
 PY
   ) || return 1
   rm -rf "${smoke_venv}" "${smoke_cwd}"
@@ -315,8 +261,8 @@ else
 fi
 
 # ---------------------------------------------------------------- browser gate
-# Self-contained once the deterministic bundle and Chromium are available; no Twenty is
-# involved. Run with the suite's required flag whenever prerequisites are present, so a real
+# Self-contained once the deterministic bundle and Chromium are available. Run with the
+# suite's required flag whenever prerequisites are present, so a real
 # test failure can never be downgraded to an optional skip.
 chromium_ready=0
 if ! "${PYTHON}" - <<'PY'
@@ -331,14 +277,14 @@ except Exception:
 raise SystemExit(0)
 PY
 then
-  record "contacts example Chromium qualification" BLOCKED "Chromium is unavailable"
-  [[ "${require_browser}" == "1" ]] && failed+=("contacts example Chromium qualification")
+  record "synthetic Contacts Chromium qualification" BLOCKED "Chromium is unavailable"
+  [[ "${require_browser}" == "1" ]] && failed+=("synthetic Contacts Chromium qualification")
 else
   chromium_ready=1
-  run_gate "contacts example Chromium qualification" 1 \
+  run_gate "synthetic Contacts Chromium qualification" 1 \
     env WOA_REQUIRE_MINIMAL_DEMO_BROWSER=1 PYTHONPATH="${ROOT}/src:${ROOT}" "${PYTHON}" \
-    -m unittest examples.contacts.tests.test_contacts_demo \
-      examples.contacts.tests.test_native_server.NativeContactsBrowserTests
+    -m unittest testapps.contacts.tests.test_contacts_demo \
+      testapps.contacts.tests.test_native_server.NativeContactsBrowserTests
 fi
 
 # The panel's own Chromium checks: every state, the confirmation card's keyboard and narrow
@@ -351,26 +297,7 @@ elif [[ "${chromium_ready}" != "1" ]]; then
   [[ "${require_browser}" == "1" ]] && failed+=("assistant panel Chromium qualification")
 else
   run_gate "assistant panel Chromium qualification" 1 "${PYTHON}" -m unittest \
-    web_operation_agent.tests.test_panel_ui
-fi
-
-browser_bundle="${WOA_PAGEAGENT_BUNDLE:-${ROOT}/.artifacts/evals/pageagent/pageagent-baseline.js}"
-if [[ "${pageagent_ready}" != "1" ]]; then
-  record "PageAgent Chromium qualification" BLOCKED \
-    "the deterministic PageAgent bundle was not qualified"
-  [[ "${require_browser}" == "1" ]] && failed+=("PageAgent Chromium qualification")
-elif [[ ! -f "${browser_bundle}" ]]; then
-  record "PageAgent Chromium qualification" BLOCKED "bundle is absent: ${browser_bundle}"
-  [[ "${require_browser}" == "1" ]] && failed+=("PageAgent Chromium qualification")
-elif [[ "${chromium_ready}" != "1" ]]; then
-  record "PageAgent Chromium qualification" BLOCKED "Chromium is unavailable"
-  [[ "${require_browser}" == "1" ]] && failed+=("PageAgent Chromium qualification")
-else
-  run_gate "PageAgent Chromium qualification" 1 \
-    env WOA_REQUIRE_PAGEAGENT_BROWSER=1 "${PYTHON}" -m unittest \
-    evals.pageagent.test_twenty_runner_browser \
-    evals.woa.test_pilot_paired_synthetic.PairedPilotChromiumTests \
-    evals.woa.test_pilot_paired_breadth.PairedBreadthPilotChromiumTests
+    web_operation_agent.tests.web_runtime.test_panel_ui
 fi
 
 page_controller_module="${ROOT}/evals/pageagent/node_modules/@page-agent/page-controller/dist/lib/page-controller.js"
@@ -390,83 +317,18 @@ elif [[ "${chromium_ready}" != "1" ]]; then
 else
   run_gate "embedded Runtime Chromium qualification" 1 \
     env WOA_PAGE_CONTROLLER_MODULE="${page_controller_module}" "${PYTHON}" -m unittest \
-    web_operation_agent.tests.test_embedded_runtime.EmbeddedRuntimeTests.test_real_pagecontroller_survives_navigation_without_repeating_action \
-    web_operation_agent.tests.test_embedded_runtime.EmbeddedRuntimeTests.test_same_origin_iframe_form_navigation_is_observed_without_top_level_change \
-    web_operation_agent.tests.test_embedded_runtime.EmbeddedRuntimeTests.test_real_confirmation_card_posts_authenticated_user_decision \
-    web_operation_agent.tests.test_embedded_runtime.EmbeddedRuntimeTests.test_the_timeline_survives_a_full_page_navigation
+    web_operation_agent.tests.transport.test_embedded_runtime.EmbeddedRuntimeTests.test_real_pagecontroller_survives_navigation_without_repeating_action \
+    web_operation_agent.tests.transport.test_embedded_runtime.EmbeddedRuntimeTests.test_same_origin_iframe_form_navigation_is_observed_without_top_level_change \
+    web_operation_agent.tests.transport.test_embedded_runtime.EmbeddedRuntimeTests.test_real_confirmation_card_posts_authenticated_user_decision \
+    web_operation_agent.tests.transport.test_embedded_runtime.EmbeddedRuntimeTests.test_the_timeline_survives_a_full_page_navigation
   # D21's two invariants under injected faults: the host page never hears the assistant fail
   # (I1), and the assistant is never silently absent (I2).
   run_gate "assistant lifecycle faults (I1, I2)" 1 \
     env WOA_PAGE_CONTROLLER_MODULE="${page_controller_module}" "${PYTHON}" -m unittest \
-    web_operation_agent.tests.test_assistant_lifecycle
+    web_operation_agent.tests.transport.test_assistant_lifecycle
 fi
 
-# ---------------------------------------------------------------- live gate
-# Reported as READY only when it actually ran a live qualification. A missing prerequisite is
-# BLOCKED and names what is missing; it is never PASS, and never a product failure.
-printf '\n\033[1m── live Twenty qualification ──\033[0m\n'
-live_vars=(WOA_TWENTY_BASE_URL WOA_TWENTY_STORAGE_STATE WOA_TWENTY_OAUTH_TOKEN
-           WOA_TWENTY_OAUTH_REGISTRATION WOA_TWENTY_PAGE_CONTROLLER_MODULE
-           WOA_TWENTY_DB_CONTAINER WOA_TWENTY_DB_NAME WOA_TWENTY_DB_USER
-           WOA_TWENTY_WORKSPACE_SCHEMA)
-live_values=()
-# Match demo.sh without sourcing the dotenv file as shell code. Explicit process values win;
-# otherwise WOA_MODEL_ENV, or the repository-local ignored .env, supplies configuration.
-while IFS= read -r value; do live_values+=("${value}"); done < <(
-  "${PYTHON}" -c '
-import os, sys
-from pathlib import Path
-from web_operation_agent.modeling.client import load_env
-root = Path(sys.argv[1])
-configured = os.environ.get("WOA_MODEL_ENV", "").strip()
-loaded = load_env(Path(configured).expanduser() if configured else root / ".env")
-for name in sys.argv[2:]:
-    print(str(os.environ[name] if name in os.environ else loaded.get(name, "")).strip())
-' "${ROOT}" "${live_vars[@]}"
-)
-missing=()
-for ((index=0; index<${#live_vars[@]}; index++)); do
-  [[ -z "${live_values[${index}]:-}" ]] && missing+=("${live_vars[${index}]}")
-done
-
-if (( ${#missing[@]} )); then
-  echo "BLOCKED: no live Twenty environment here."
-  printf '  unset: %s\n' "${missing[*]}"
-  echo "  This gate did not run. It is not a product failure and not a pass."
-  record "live Twenty qualification" BLOCKED "unset: ${missing[*]}"
-  if [[ "${require_live}" == "1" ]]; then failed+=("live Twenty qualification"); fi
-else
-  echo "READY: every prerequisite is present; running the live qualification."
-  live_out="$(mktemp -d)"
-  live_ok=1
-  "${PYTHON}" -m evals.woa.qualify_live \
-    --base-url "${live_values[0]}" --storage-state "${live_values[1]}" \
-    --oauth-token "${live_values[2]}" \
-    --oauth-registration "${live_values[3]}" \
-    --page-controller-module "${live_values[4]}" \
-    --audit-ledger "${live_out}/woa-audit.jsonl" \
-    --container "${live_values[5]}" --database "${live_values[6]}" \
-    --db-user "${live_values[7]}" --workspace-schema "${live_values[8]}" \
-    --output "${live_out}/woa-live.json" || live_ok=0
-  "${PYTHON}" -m evals.woa.qualify_breadth_live \
-    --base-url "${live_values[0]}" --storage-state "${live_values[1]}" \
-    --oauth-token "${live_values[2]}" \
-    --oauth-registration "${live_values[3]}" \
-    --page-controller-module "${live_values[4]}" \
-    --audit-ledger "${live_out}/woa-breadth-audit.jsonl" \
-    --container "${live_values[5]}" --database "${live_values[6]}" \
-    --db-user "${live_values[7]}" --workspace-schema "${live_values[8]}" \
-    --output "${live_out}/woa-breadth-live.json" || live_ok=0
-  if [[ "${live_ok}" == "1" ]]; then
-    record "live Twenty qualification" PASS \
-      "artifacts ${live_out}/woa-live.json and ${live_out}/woa-breadth-live.json"
-  else
-    record "live Twenty qualification" FAIL "see ${live_out}"
-    failed+=("live Twenty qualification")
-  fi
-fi
-
-# ------------------------------------------------------- live Odoo (main application)
+# ---------------------------------------------------------------- live Odoo
 # The main application's gate is model-free on purpose: two scripted cases through the real
 # product turn, in real Chromium, against a real Odoo. A pass says the apparatus holds; it
 # says nothing about a model, which is what makes a failure here worth acting on.
