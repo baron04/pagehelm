@@ -190,6 +190,7 @@ export function standingEntry(doc: Document = document, text: EntryText = ENTRY_
       view.entry.dataset.state = 'unavailable'
       view.badge.setAttribute('aria-label', text.label_unavailable)
       view.sentence.textContent = failureSentence(failure, text)
+      view.note.hidden = false
       view.again.hidden = false
       view.again.disabled = false
     },

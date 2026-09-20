@@ -34,7 +34,6 @@ describe('the standing entry', () => {
     const retry = vi.fn()
     entry.unavailable({status: 503, retrying: true}, retry)
     const root = shadow()
-    root.querySelector<HTMLButtonElement>('.badge')!.click()
     expect(root.querySelector<HTMLElement>('.note')!.hidden).toBe(false)
     expect(root.querySelector('.note p')!.textContent).toContain('正在重试（503）')
     const button = root.querySelector<HTMLButtonElement>('.note button')!

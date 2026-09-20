@@ -23,6 +23,7 @@ export WOA_BUILD_REVISION="$(git rev-parse HEAD)"
 
 compose=(docker compose -f examples/odoo/deploy/single-node/docker-compose.yml)
 
+PYTHONPATH=src:examples/odoo/src python3 -m web_operation_agent_odoo.deploy assets
 "${compose[@]}" build agent odoo
 "${compose[@]}" --profile setup run --rm odoo-init
 "${compose[@]}" up -d --no-deps --force-recreate odoo
@@ -44,6 +45,17 @@ if [[ "$healthy" != 1 ]]; then
   echo "assistant health check did not recover within 120 seconds" >&2
   exit 1
 fi
+
+for path in \
+  /woa_runtime/static/src/loader.js \
+  /woa_runtime/static/src/page-controller.js \
+  /assistant/v1/runtime/assistant.js \
+  /assistant/v1/runtime/panel/panel.js; do
+  if ! curl -fsSk -o /dev/null "$WOA_PUBLIC_ORIGIN$path"; then
+    echo "required browser asset is unavailable: $path" >&2
+    exit 1
+  fi
+done
 
 "${compose[@]}" exec -T agent python -c \
   "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8766/readyz').read().decode())"

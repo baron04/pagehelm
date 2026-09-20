@@ -39,15 +39,18 @@ class TheFixtureIsLoopbackByConstruction(unittest.TestCase):
         self.assertEqual((deploy.DEMO_LOGIN, deploy.DEMO_PASSWORD), ("admin", "admin"))
 
 
-class NothingThirdPartyIsCommitted(unittest.TestCase):
-    def test_the_served_directory_holds_no_tracked_assets(self):
-        """The repository serves PageController; it does not redistribute it."""
+class OnlyFirstPartyBootstrapCodeIsCommitted(unittest.TestCase):
+    def test_the_served_directory_tracks_only_the_first_party_loader(self):
+        """The local loader ships here; third-party PageController remains provisioned."""
         tracked = sorted(path.name for path in deploy.SERVED_ASSETS.glob("*")
-                         if path.name != ".gitignore")
+                         if path.name not in {".gitignore", "loader.js"})
         for name in tracked:
             with self.subTest(name=name):
                 self.assertIn(name, PINNED_PAGE_CONTROLLER["served_files"],
                               "an unpinned file is being served from the addon")
+        loader = deploy.SERVED_ASSETS / "loader.js"
+        self.assertTrue(loader.is_file())
+        self.assertIn("woa-assistant-bootstrap-shell", loader.read_text())
         self.assertTrue((deploy.SERVED_ASSETS / ".gitignore").is_file(),
                         "without this the fetched assets would be committed")
 
@@ -64,13 +67,7 @@ class NothingThirdPartyIsCommitted(unittest.TestCase):
         self.assertIn('"127.0.0.1:8069:8069"', compose)
         self.assertNotIn('"8069:8069"', compose)
 
-    def test_the_addon_bootstraps_only_from_an_authenticated_server_assertion(self):
-        """The addon adds one tag; starting, renewing and reconnecting are `assistant.js`'s.
-
-        It used to compile its own loader into Odoo's asset bundle: a second copy of the
-        start-up logic, deployed with Odoo rather than with the agent, and changed only by
-        restarting Odoo (P7.5 J5.05, D21).
-        """
+    def test_the_addon_keeps_a_local_shell_but_runtime_uses_server_identity(self):
         import ast
         import xml.etree.ElementTree as ElementTree
         addon = deploy.ADDONS_ROOT / "woa_runtime"
@@ -83,7 +80,8 @@ class NothingThirdPartyIsCommitted(unittest.TestCase):
         script = template.find("xpath/script")
         self.assertEqual(script.attrib, {
             "type": "module",
-            "src": "/assistant/v1/runtime/assistant.js",
+            "src": "/woa_runtime/static/src/loader.js?v=1.3",
+            "data-woa-runtime": "/assistant/v1/runtime/assistant.js",
             "data-woa-identity": "/woa/session-assertion",
             "data-woa-bootstrap": "/assistant/bootstrap",
         })
@@ -96,6 +94,7 @@ class NothingThirdPartyIsCommitted(unittest.TestCase):
         source = (single_node / "qualification-users.py").read_text()
         self.assertIn('"Azure Interior", "azure.interior@example.test"', source)
         self.assertIn('with_context(active_test=False)', source)
+        self.assertIn('_crypt_context().verify(password, stored)', source)
         self.assertIn("synthetic customer fixture did not reach its exact postcondition", source)
         compose = (single_node / "docker-compose.yml").read_text()
         self.assertEqual(
@@ -148,6 +147,20 @@ class AFetchedAssetIsCheckedTwice(unittest.TestCase):
         opener.assert_not_called()
         self.assertFalse(report["fetched"])
         self.assertIn(pinned_version(), report["detail"])
+
+    def test_a_verified_installed_package_avoids_a_registry_dependency(self):
+        source = (Path(__file__).resolve().parents[5] / "evals" / "pageagent" / "node_modules"
+                  / "@page-agent" / "page-controller")
+        if not source.is_dir():
+            self.skipTest("needs the pinned npm package; run npm ci in evals/pageagent")
+        with patch.object(deploy, "SERVED_ASSETS", self.served), \
+                patch.object(deploy, "LOCAL_PAGE_CONTROLLER", source), \
+                patch.object(deploy.urllib.request, "urlopen") as opener:
+            report = deploy.fetch_assets()
+        opener.assert_not_called()
+        self.assertTrue(report["fetched"])
+        self.assertEqual(report["source"], "installed_package")
+        self.assertTrue(deploy.verify_served_directory(self.served)["verified"])
 
 
 class TheStepsRunInTheOnlyOrderThatWorks(unittest.TestCase):

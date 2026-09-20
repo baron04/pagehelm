@@ -124,7 +124,7 @@ docker compose -f examples/odoo/deploy/single-node/docker-compose.yml up -d --no
 docker compose -f examples/odoo/deploy/single-node/docker-compose.yml exec -T agent python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8766/readyz').read().decode())"
 ```
 
-助手的浏览器端代码（`assistant.js` 与面板）由 Agent 提供，升级它只需重建 Agent。当发布改动了 `woa_runtime` 插件本身时，还要重新构建镜像并重新创建 Odoo 容器。Odoo 入口会在开始接受流量前幂等升级该插件，因此挂载进来的模板或控制器不会继续以数据库中的旧版本运行并静默移除助手入口。独立的 setup 步骤只在首次创建数据库并设置生成的管理员密码时仍然必需。
+Odoo 自己提供一个很小的常驻启动外壳，因此即使 Agent 不可用，助手入口和启动错误仍然可见；完整的 `assistant.js` Runtime 与面板仍由 Agent 提供。只改 Runtime 时重建 Agent 即可；改动启动外壳或其它 `woa_runtime` 内容时，还要重建并重新创建 Odoo。Odoo 会在开始接受流量前幂等升级插件，因此挂载进来的模板或控制器不会继续以数据库中的旧版本运行并静默移除助手入口。独立的 setup 步骤只在首次创建数据库并设置生成的管理员密码时仍然必需。
 
 ```bash
 docker compose -f examples/odoo/deploy/single-node/docker-compose.yml build odoo

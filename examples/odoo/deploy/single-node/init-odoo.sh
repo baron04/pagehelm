@@ -28,7 +28,11 @@ password = open('/run/woa-private/odoo-admin-login-password').read().strip()
 if len(password) < 20:
     raise RuntimeError('admin login password is too short')
 admin = env.ref('base.user_admin')
-admin.write({'login': 'admin', 'password': password})
+values = {'login': 'admin'}
+stored = admin.sudo().password
+if not stored or not env['res.users']._crypt_context().verify(password, stored):
+    values['password'] = password
+admin.write(values)
 env.cr.commit()
 PY
 

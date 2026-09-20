@@ -29,6 +29,7 @@ REGISTER_PATH = DEPLOYMENT / "register.py"
 CADDYFILE = DEPLOYMENT / "Caddyfile"
 COMPOSEFILE = DEPLOYMENT / "docker-compose.yml"
 REBUILD = DEPLOYMENT / "rebuild.sh"
+AGENT_DOCKERFILE = DEPLOYMENT / "Dockerfile.agent"
 AGENT_ENTRYPOINT = DEPLOYMENT / "agent-entrypoint.sh"
 ODOO_ENTRYPOINT = DEPLOYMENT / "odoo-entrypoint.sh"
 REGISTER_SPEC = importlib.util.spec_from_file_location("single_node_register", REGISTER_PATH)
@@ -69,6 +70,16 @@ class SingleNodeOperationsTests(unittest.TestCase):
         self.assertNotIn("caddy run", entrypoint)
         self.assertIn("exec setpriv", entrypoint)
 
+    def test_agent_image_contains_both_runtime_and_panel_builds(self):
+        dockerfile = AGENT_DOCKERFILE.read_text(encoding="utf-8")
+
+        self.assertIn("/build/frontend/dist/runtime ./frontend/dist/runtime", dockerfile)
+        self.assertIn("python scripts/build_runtime.py --skip-build", dockerfile)
+        self.assertLess(
+            dockerfile.index("python scripts/build_runtime.py --skip-build"),
+            dockerfile.index("python scripts/build_panel.py --skip-build"),
+        )
+
     def test_same_origin_gateway_gets_a_trusted_application_origin(self):
         config = CADDYFILE.read_text(encoding="utf-8")
         gateway = config.split("handle_path /assistant/* {", 1)[1].split(
@@ -93,12 +104,22 @@ class SingleNodeOperationsTests(unittest.TestCase):
 
     def test_rebuild_refreshes_test_delegations_before_starting_agent(self):
         script = REBUILD.read_text(encoding="utf-8")
+        assets = 'python3 -m web_operation_agent_odoo.deploy assets'
+        build = '"${compose[@]}" build agent odoo'
         qualification = 'run --rm odoo-qualification-users'
         start_agent = 'up -d --no-deps --force-recreate agent gateway'
 
+        self.assertIn(assets, script)
+        self.assertLess(script.index(assets), script.index(build))
         self.assertIn(qualification, script)
         self.assertIn(start_agent, script)
         self.assertLess(script.index(qualification), script.index(start_agent))
+        for path in (
+                "/woa_runtime/static/src/loader.js",
+                "/woa_runtime/static/src/page-controller.js",
+                "/assistant/v1/runtime/assistant.js",
+                "/assistant/v1/runtime/panel/panel.js"):
+            self.assertIn(path, script)
 
     def _bundle(self, root: Path):
         for relative in (

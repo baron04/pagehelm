@@ -56,6 +56,8 @@ SINGLE_NODE_DEPLOY = DEPLOY_ROOT / "single-node"
 ADDONS_ROOT = DEPLOY_ROOT / "addons"
 COMPOSE_FILE = REFERENCE_DEPLOY / "docker-compose.yml"
 SERVED_ASSETS = ADDONS_ROOT / "woa_runtime" / "static" / "src"
+LOCAL_PAGE_CONTROLLER = (INTEGRATION_ROOT.parents[1] / "evals" / "pageagent" /
+                         "node_modules" / "@page-agent" / "page-controller")
 COMPOSE_PROJECT = "woa-odoo-reference"
 ODOO_SERVICE = "odoo"
 DB_SERVICE = "db"
@@ -144,6 +146,34 @@ def fetch_assets(*, force: bool = False) -> dict:
     if not force and verify_served_directory(SERVED_ASSETS)["verified"]:
         return {"step": "assets", "fetched": False,
                 "detail": f"{pinned_version()} is already served and every digest matches"}
+
+    if not force and LOCAL_PAGE_CONTROLLER.is_dir():
+        package_file = LOCAL_PAGE_CONTROLLER / "package.json"
+        try:
+            installed_version = json.loads(package_file.read_text())["version"]
+        except (OSError, KeyError, json.JSONDecodeError):
+            installed_version = ""
+        bodies = {}
+        if installed_version == pinned_version():
+            for name, entry in PINNED_PAGE_CONTROLLER["served_files"].items():
+                relative = entry["tarball_path"].removeprefix("package/")
+                source = LOCAL_PAGE_CONTROLLER / relative
+                try:
+                    body = source.read_bytes()
+                except OSError:
+                    bodies = {}
+                    break
+                if hashlib.sha256(body).hexdigest() != entry["sha256"]:
+                    bodies = {}
+                    break
+                bodies[name] = body
+        if bodies:
+            for name, body in bodies.items():
+                (SERVED_ASSETS / name).write_bytes(body)
+            report = require_served_directory(SERVED_ASSETS)
+            return {"step": "assets", "fetched": True, "source": "installed_package",
+                    "version": report["version"], "files": sorted(report["files"]),
+                    "detail": f"served {len(report['files'])} verified files from local npm"}
 
     url = PINNED_PAGE_CONTROLLER["registry_tarball"]
     try:

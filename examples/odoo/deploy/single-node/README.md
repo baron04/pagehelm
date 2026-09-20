@@ -125,7 +125,7 @@ docker compose -f examples/odoo/deploy/single-node/docker-compose.yml up -d --no
 docker compose -f examples/odoo/deploy/single-node/docker-compose.yml exec -T agent python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8766/readyz').read().decode())"
 ```
 
-The assistant's browser code (`assistant.js` and the panel) is served by the Agent, so recreating the Agent is the whole upgrade for it. When a release changes the `woa_runtime` addon itself, rebuild and recreate Odoo as well. Its entrypoint performs an idempotent addon upgrade before accepting traffic, so a mounted template or controller cannot remain stale in the database and silently remove the assistant entry. The separate setup step remains necessary only to create the initial database and set its generated administrator password.
+Odoo serves a small, stable startup shell so the assistant entry and startup errors remain visible even when the Agent is unavailable. The full `assistant.js` Runtime and panel are served by the Agent. A Runtime-only release needs an Agent rebuild; a startup-shell or other `woa_runtime` change also needs the Odoo image rebuilt and recreated. Odoo performs an idempotent addon upgrade before accepting traffic, so a mounted template or controller cannot remain stale in the database and silently remove the assistant entry. The separate setup step remains necessary only to create the initial database and set its generated administrator password.
 
 ```bash
 docker compose -f examples/odoo/deploy/single-node/docker-compose.yml build odoo

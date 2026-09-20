@@ -38,15 +38,18 @@ def user(login, name, password, groups):
         "name": name,
         "login": login,
         "email": login,
-        "password": password,
         "company_id": env.company.id,
         "company_ids": [(6, 0, [env.company.id])],
         "groups_id": [(6, 0, groups)],
         "active": True,
     }
     if found:
+        stored = found.sudo().password
+        if not stored or not users._crypt_context().verify(password, stored):
+            values["password"] = password
         found.write(values)
         return found
+    values["password"] = password
     return users.create(values)
 
 

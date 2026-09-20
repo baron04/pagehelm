@@ -1,18 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
     <!--
-    The assistant on every signed-in backend page: one module script, served by the agent at
-    the same origin through the gateway, and told where this application issues identity.
+    The assistant on every signed-in backend page starts with a small Odoo-owned shell. The
+    shell is independent of the Agent, so it can still show startup errors and retry when the
+    Agent Runtime is missing or unavailable.
 
-    `assistant.js` asks `/woa/session-assertion` (this addon) for a signed statement of who is
-    signed in, hands it to the agent's `/assistant/bootstrap`, and from then on starts, renews
-    and reconnects sessions itself. It is not part of Odoo's asset bundle, so a new agent
-    release reaches the page without restarting Odoo, and Odoo's own JavaScript never runs it.
-    The login page does not render `web.webclient_bootstrap`, so nobody signed out sees it.
+    The shell imports the versioned `assistant.js` from the Agent. That Runtime asks this addon
+    for identity and owns normal startup, renewal, reconnection and the full panel. The login
+    page does not render `web.webclient_bootstrap`, so nobody signed out sees the shell.
     -->
     <template id="assistant_entry" inherit_id="web.webclient_bootstrap" name="Web Operation Agent assistant">
         <xpath expr="//t[@t-set='head_web']" position="inside">
-            <script type="module" src="/assistant/v1/runtime/assistant.js"
+            <script type="module" src="/woa_runtime/static/src/loader.js?v=1.3"
+                    data-woa-runtime="/assistant/v1/runtime/assistant.js"
                     data-woa-identity="/woa/session-assertion"
                     data-woa-bootstrap="/assistant/bootstrap"/>
         </xpath>

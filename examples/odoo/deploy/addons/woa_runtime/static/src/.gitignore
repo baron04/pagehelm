@@ -4,3 +4,4 @@
 # redistribute them, and a committed copy would drift from the pin without anyone noticing.
 *
 !.gitignore
+!loader.js
