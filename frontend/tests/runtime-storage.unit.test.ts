@@ -1,6 +1,6 @@
-import {beforeEach, describe, expect, it} from 'vitest'
+import {beforeEach, describe, expect, it, vi} from 'vitest'
 import {createRedactor} from '../src/runtime/redaction'
-import {loadSession, readStored, writeStored} from '../src/runtime/storage'
+import {clearStored, loadSession, readStored, writeStored} from '../src/runtime/storage'
 
 const redactor = createRedactor()
 
@@ -40,12 +40,78 @@ describe('loadSession normalizes and persists the stored state for this incarnat
 })
 
 describe('readStored tolerates a missing or corrupt entry', () => {
+  // Unique session ids: once a document has written a session, reads answer from the
+  // in-memory mirror, and the suite shares that map across its cases.
   it('returns an empty object rather than throwing on invalid JSON', () => {
-    sessionStorage.setItem('woa.remote.v1.s1', '{not json')
-    expect(readStored('s1')).toEqual({})
+    sessionStorage.setItem('woa.remote.v1.s-corrupt', '{not json')
+    expect(readStored('s-corrupt')).toEqual({})
   })
 
   it('returns an empty object when nothing was ever stored', () => {
     expect(readStored('never-seen')).toEqual({})
+  })
+})
+
+describe('storage that refuses -- Safari private mode, a full quota', () => {
+  it('writeStored survives a throwing setItem, and the mirror keeps the page coherent', () => {
+    const spy = vi.spyOn(Storage.prototype, 'setItem')
+      .mockImplementation(() => {
+        throw new DOMException('QuotaExceededError')
+      })
+    try {
+      expect(() => writeStored('s-throw', {epoch: 3})).not.toThrow()
+    } finally {
+      spy.mockRestore()
+    }
+    // The real storage never got the value; the mirror is what the rest of the document
+    // reads back until a navigation -- the one thing a mirror cannot survive.
+    expect(readStored('s-throw')).toEqual({epoch: 3})
+    expect(sessionStorage.getItem('woa.remote.v1.s-throw')).toBe(null)
+  })
+
+  it('readStored survives a throwing getItem -- a session never mirrored, storage unreadable', () => {
+    const spy = vi.spyOn(Storage.prototype, 'getItem')
+      .mockImplementation(() => {
+        throw new DOMException('SecurityError')
+      })
+    try {
+      expect(readStored('s-blocked')).toEqual({})
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('loadSession does not throw on boot when storage is hostile', () => {
+    const spy = vi.spyOn(Storage.prototype, 'setItem')
+      .mockImplementation(() => {
+        throw new DOMException('QuotaExceededError')
+      })
+    try {
+      expect(() => loadSession('s-boot', 'gen-9', redactor)).not.toThrow()
+    } finally {
+      spy.mockRestore()
+    }
+  })
+})
+
+describe('clearStored says goodbye to a finished session', () => {
+  it('removes both the mirror and the real entry', () => {
+    writeStored('s-done', {epoch: 5})
+    expect(readStored('s-done')).toEqual({epoch: 5})
+    clearStored('s-done')
+    expect(readStored('s-done')).toEqual({})
+    expect(sessionStorage.getItem('woa.remote.v1.s-done')).toBe(null)
+  })
+
+  it('survives a throwing removeItem', () => {
+    const spy = vi.spyOn(Storage.prototype, 'removeItem')
+      .mockImplementation(() => {
+        throw new DOMException('SecurityError')
+      })
+    try {
+      expect(() => clearStored('s-any')).not.toThrow()
+    } finally {
+      spy.mockRestore()
+    }
   })
 })

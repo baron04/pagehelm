@@ -13,9 +13,8 @@ import {
 } from './pageModel'
 import {canonicalUrl} from './navigation'
 import {MAX_CONTENT_CHARS, type Redactor} from './redaction'
-import type {ElementRef, PageObservation} from './types'
+import {WIRE_VERSION, type ElementRef, type PageObservation} from './types'
 
-const WIRE_VERSION = 1
 const ANNOTATION_STYLE_ID = 'woa-hide-page-controller-annotations'
 
 export interface BrowserState {

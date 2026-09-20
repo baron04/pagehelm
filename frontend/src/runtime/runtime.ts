@@ -27,15 +27,12 @@ import {createPanelContainer, keepAttached, mountPanel, type PanelHandle} from '
 import {PanelHost, backoffAfter, classifyTransportError, type TransportVerdict} from './panelHost'
 import {createRedactor, type Redactor} from './redaction'
 import * as results from './results'
-import {loadSession, writeStored, type SessionState} from './storage'
+import {clearStored, loadSession, writeStored, type SessionState} from './storage'
 import {SessionClient, sseBatches} from './transport'
 import type {ApprovalRequest, PanelConfiguration, PanelState} from '../contract/panel'
-import type {
-  ActionCommand, ActionEnvelope, ActionResultEnvelope, JsonObject, ObservationEnvelope,
-  RuntimeConfig,
-} from './types'
+import {WIRE_VERSION, type ActionCommand, type ActionEnvelope, type ActionResultEnvelope,
+  type JsonObject, type ObservationEnvelope, type RuntimeConfig} from './types'
 
-const WIRE_VERSION = 1
 // The build this Runtime is qualified against. It is stated once in
 // `policies/page_controller.json`; `test_page_controller.py` fails if this string drifts.
 const RUNTIME_NAME = 'woa-embedded/page-controller-1.12.4'
@@ -159,6 +156,14 @@ export class EmbeddedWebRuntime {
     const was = Boolean(this.stoppedFlag)
     this.stoppedFlag = value
     if (!value || was) return
+    // A session the server will not speak for again has nothing left to recover with, and
+    // its stored state can hold a full page observation -- say goodbye to it here, the one
+    // place every stop passes. `suspended` and `replaced` keep theirs: a successor on this
+    // very page reads it, which is the whole point of those two states.
+    if (this.sessionId && this.endState
+        && this.endState !== 'suspended' && this.endState !== 'replaced') {
+      clearStored(this.sessionId)
+    }
     // Told after the current task: the Runtime finishes stopping before anyone reacts.
     for (const listener of [...(this.stopListeners ?? [])]) soon('stop listener', listener)
   }
@@ -593,8 +598,15 @@ export class EmbeddedWebRuntime {
   async _readEventStream(stream: ReadableStream<Uint8Array>): Promise<void> {
     for await (const batch of sseBatches(stream, () => this.stopped)) {
       for (const frame of batch) {
+        // Frames that were parsed before a stop may still sit in the current batch. Do not
+        // handle them, and above all never `_save` after a terminal stop: the session's
+        // storage was just cleared, and saving would resurrect what it said goodbye to.
+        // Breaking (not returning) still lets the batch's final timeline fetch run -- that
+        // is how the panel shows the last message of a session that ended mid-batch.
+        if (this.stopped) break
         const event = JSON.parse(frame.data) as WireEvent
         await this._handleEvent(event)
+        if (this.stopped) break
         this.stored.lastEventId = frame.id
         this._save()
         if (event.kind === 'action') {

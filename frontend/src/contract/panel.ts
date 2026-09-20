@@ -98,7 +98,9 @@ export interface PanelConfiguration {
   principal_expires_at: number
 }
 
-export const PANEL_PROTOCOL: number = raw.protocol
+// One generated integer, shared with the Runtime (`runtime/panelHost.ts`) so the two sides
+// of the handshake can never state the protocol version differently.
+export {PANEL_PROTOCOL} from './protocol.generated'
 export const DEFAULT_CONFIGURATION: PanelConfiguration = {
   protocol: raw.protocol,
   limits: raw.limits as PanelLimits,

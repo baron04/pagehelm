@@ -7,11 +7,8 @@
  * write out separately. They share it now.
  */
 import type {Redactor} from './redaction'
-import type {
-  ActionCommand, ActionEnvelope, ActionReceipt, ActionResultEnvelope, ObservationEnvelope,
-} from './types'
-
-const WIRE_VERSION = 1
+import {WIRE_VERSION, type ActionCommand, type ActionEnvelope,
+  type ActionReceipt, type ActionResultEnvelope, type ObservationEnvelope} from './types'
 
 export type ResultStatus = 'completed' | 'rejected' | 'indeterminate'
 

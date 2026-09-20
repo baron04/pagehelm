@@ -17,8 +17,9 @@ import type {
 import type {
   ApprovalRequest, PanelConfiguration, PanelState, TimelineEntry, TimelinePage,
 } from '../contract/panel'
-
-export const PANEL_PROTOCOL = 1
+// Not a hand-written `1` any more: `scripts/build-tokens.mjs` lifts it out of the server's
+// own `panel_contract.json`, the same source `contract/panel.ts` re-exports for the panel.
+import {PANEL_PROTOCOL} from '../contract/protocol.generated'
 
 const RETRY_FLOOR_MS = 250
 const RETRY_CEILING_MS = 4000

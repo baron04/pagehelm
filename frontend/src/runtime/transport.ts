@@ -100,6 +100,11 @@ export async function* sseBatches(stream: ReadableStream<Uint8Array>,
   const reader = stream.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  // The spec's "last event ID buffer": a frame without an `id:` line dispatches under the
+  // id the last one carried, so a cursor-less event can never rewind `last-event-id` to
+  // ''. The gateway labels every frame today -- this is what makes the parser agree with
+  // `EventSource` about a stream that ever stops doing so.
+  let lastId = ''
   while (!stopped()) {
     const {value, done} = await reader.read()
     if (done) return
@@ -110,12 +115,17 @@ export async function* sseBatches(stream: ReadableStream<Uint8Array>,
       const frame = buffer.slice(0, end)
       buffer = buffer.slice(end + 2)
       if (!frame || frame.startsWith(':')) continue
-      let id = ''
+      let id = lastId
+      let hasId = false
       const data: string[] = []
       for (const line of frame.split('\n')) {
-        if (line.startsWith('id:')) id = line.slice(3).trim()
+        if (line.startsWith('id:')) {
+          id = line.slice(3).trim()
+          hasId = true
+        }
         if (line.startsWith('data:')) data.push(line.slice(5).trimStart())
       }
+      if (hasId) lastId = id
       if (data.length) batch.push({id, data: data.join('\n')})
     }
     yield batch

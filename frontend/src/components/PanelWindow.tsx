@@ -14,6 +14,10 @@ import {Thread} from './Thread'
 
 const HANDLES: Handle[] = ['n', 's', 'e', 'w', 'nw', 'ne', 'sw', 'se']
 const CLOSED_STATES = new Set(['ended', 'replaced'])
+// A pressed approval card settles its own spinner: the server answers within a tick, and
+// this is how long the press stays visibly "registered" before the card comes down. It is
+// a floor for the animation, not a race -- the real end is the pending approval clearing.
+const DECIDE_SETTLE_MS = 400
 
 export function PanelWindow({host, allowedOrigins}: {
   host: PanelHost
@@ -97,12 +101,15 @@ export function PanelWindow({host, allowedOrigins}: {
     if (added > 0) setUnread(count => count + added)
   }, [open, snapshot.entries.length])
 
+  const decidingTimer = useRef(0)
   const decide = useCallback((decision: 'approved' | 'denied') => {
     if (!pending) return
     setDeciding(true)
     call(() => host.decide(pending.approval_id, decision))
-    window.setTimeout(() => setDeciding(false), 400)
+    window.clearTimeout(decidingTimer.current)
+    decidingTimer.current = window.setTimeout(() => setDeciding(false), DECIDE_SETTLE_MS)
   }, [call, host, pending])
+  useEffect(() => () => window.clearTimeout(decidingTimer.current), [])
 
   const submit = useCallback((text: string) => {
     setDraft('')

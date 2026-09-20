@@ -18,7 +18,23 @@ function storageKey(sessionId: string): string {
   return `woa.remote.v1.${sessionId}`
 }
 
+/**
+ * Storage the page can actually lose.
+ *
+ * Safari in private mode throws on `setItem` and a full quota throws on any origin -- and
+ * boot used to call this on its way through the constructor, so one throw was an
+ * "Oops!" in the host application over a page nothing had gone wrong on. The mirror keeps
+ * the current document self-consistent when the real storage refuses: every read answers
+ * from it once this document has written the session, because a write the storage refused
+ * must not leave reads serving the stale copy behind. Only survival across a full
+ * navigation degrades -- the mirror dies with the document, and a page that never lets
+ * storage be written simply starts fresh every time.
+ */
+const mirror = new Map<string, StoredState>()
+
 export function readStored(sessionId: string): StoredState {
+  const kept = mirror.get(sessionId)
+  if (kept) return kept
   try {
     const raw = sessionStorage.getItem(storageKey(sessionId))
     const parsed: unknown = raw ? JSON.parse(raw) : null
@@ -29,7 +45,29 @@ export function readStored(sessionId: string): StoredState {
 }
 
 export function writeStored(sessionId: string, value: StoredState): void {
-  sessionStorage.setItem(storageKey(sessionId), JSON.stringify(value))
+  mirror.set(sessionId, value)
+  try {
+    sessionStorage.setItem(storageKey(sessionId), JSON.stringify(value))
+  } catch {
+    // The mirror above holds it. Nothing here may throw: see the note on `mirror`.
+  }
+}
+
+/**
+ * Drop a session's durable state for good.
+ *
+ * The stored state carries cached results of up to the observation ceiling, and the key is
+ * named by the session id -- so without this, every expired session left a copy of a page
+ * read behind in sessionStorage of every tab that had ever opened the panel. The Runtime
+ * calls it once the server says the session is over, when nothing can replay from it.
+ */
+export function clearStored(sessionId: string): void {
+  mirror.delete(sessionId)
+  try {
+    sessionStorage.removeItem(storageKey(sessionId))
+  } catch {
+    // A storage that throws on read throws on remove; there is nothing left to do.
+  }
 }
 
 /** The stored state for this incarnation, normalized and written back. */

@@ -1,4 +1,5 @@
 import {describe, expect, it} from 'vitest'
+import raw from '@contract/panel_contract.json'
 import {
   DEFAULT_CONFIGURATION, PANEL_PROTOCOL, isPanelState, statusLabelKey, toneOf,
 } from '../src/contract/panel'
@@ -49,5 +50,13 @@ describe('the host contract is checked where it is assembled', () => {
   it('refuses a host with no server configuration', () => {
     expect(() => requirePanelHost({...actions})).toThrow(/no server configuration/)
     expect(PANEL_PROTOCOL).toBe(DEFAULT_CONFIGURATION.protocol)
+  })
+
+  // The panel and the Runtime both check the server's `protocol`; both read it from the
+  // file `scripts/build-tokens.mjs` generates. This fails if that script stops being run
+  // -- a stale integer in a generated file is exactly the drift the two hand-written
+  // copies used to invite.
+  it('states the protocol as the contract states it, not as the generator last ran', () => {
+    expect(PANEL_PROTOCOL).toBe(raw.protocol)
   })
 })

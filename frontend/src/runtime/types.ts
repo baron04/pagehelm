@@ -27,6 +27,13 @@ export interface RuntimeConfig {
 
 export type JsonObject = Record<string, unknown>
 
+/**
+ * The envelope version every request body this Runtime sends carries; the gateway
+ * validates it. One constant here so `runtime.ts`, `page.ts` and `results.ts` cannot
+ * state the same fact three ways.
+ */
+export const WIRE_VERSION = 1
+
 export interface ElementRef {
   ref: string
   role: string

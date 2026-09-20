@@ -36,9 +36,17 @@ export function Composer(props: ComposerProps): React.JSX.Element {
     // Disabling the field lowers its ceiling, so it is measured again when that changes.
   }, [draft, disabled])
 
+  // Deliberately keyed on `disabled` alone: the panel remounts the composer every time it
+  // opens, so "it mounted usable" is the moment to take focus, and "a lock lifted" is the
+  // next. A turn *ending* (`busy` flipping to false) is not -- that lands while the person
+  // may be pointing at the host page behind us, and yanking the caret into the textarea is
+  // the panel stealing the operator's own work. `busy` is read when focus is decided, not
+  // followed: hence the ref, which keeps the effect honest with the exhaustive-deps rule.
+  const busyNow = useRef(busy)
+  busyNow.current = busy
   useEffect(() => {
-    if (!disabled && !busy) input.current?.focus()
-  }, [disabled, busy])
+    if (!disabled && !busyNow.current) input.current?.focus()
+  }, [disabled])
 
   const send = () => {
     const text = draft.trim()
