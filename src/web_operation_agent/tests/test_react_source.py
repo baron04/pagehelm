@@ -15,12 +15,13 @@ from web_operation_agent.tests.route_fixture import (FIXTURE_ROUTE_PORT,
                                                      fixture_route_identity)
 from web_operation_agent.privacy import (SESSION_HANDOFF_QUERY_KEYS,
                                          SessionHandoffPolicy)
+from web_operation_agent.routes import candidate_url
 from web_operation_agent.tests.test_contract import _map
 from web_operation_agent.tests.test_session import _Chat, _Control, _Browser, _obs
 
 
 def _candidate_url(candidate, bindings):
-    return ServerAgentSession._candidate_url(
+    return candidate_url(
         candidate, bindings, route_identity=fixture_route_identity,
         handoffs=SessionHandoffPolicy.extending(
             FIXTURE_ROUTE_PORT.session_handoff_query_keys))

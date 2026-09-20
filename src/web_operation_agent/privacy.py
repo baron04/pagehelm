@@ -280,3 +280,28 @@ def has_unredacted_session_handoff(value, *, url_decode_depth: int = 0) -> bool:
     """
     return _has_unredacted_handoff(
         value, BASELINE_SESSION_HANDOFFS, url_decode_depth=url_decode_depth)
+
+
+def safe_tool_arguments(args: dict, handoffs: SessionHandoffPolicy | None = None) -> dict:
+    """Project tool arguments for the audit ledger.
+
+    `handoffs` is the mounted application's widened vocabulary; omitting it falls back to
+    the package baseline, which cannot see an application's own session parameter.
+    """
+    policy = handoffs or SessionHandoffPolicy.extending(())
+    cleaned = redact_sensitive_assignments(policy.redact(args))
+    sensitive = re.compile(
+        r"password|passwd|pwd|secret|token|api[_-]?key|authorization|jsessionid", re.I)
+
+    def scrub(key: str, value):
+        # Tool values can contain passwords as easily as ordinary form data.  The audit trail
+        # needs the selected ref and action, not a replayable credential or personal value.
+        if key == "value" or sensitive.search(key):
+            return "[redacted]"
+        if isinstance(value, dict):
+            return {child: scrub(str(child), item) for child, item in value.items()}
+        if isinstance(value, list):
+            return [scrub("", item) for item in value]
+        return value
+
+    return {key: scrub(str(key), value) for key, value in cleaned.items()}
