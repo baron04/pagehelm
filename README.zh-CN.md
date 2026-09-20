@@ -77,7 +77,8 @@ Python 软件包也按这些服务端边界组织：`modeling/` 负责 provider 
 | `web_operation_agent.business.runtime` | 加载 Skill，并代理类型化的读取和写入工具。 |
 | `web_operation_agent.modeling.egress` | 执行模型 provider 数据边界，并在不保存请求内容的前提下生成审计记录。 |
 | `web_operation_agent.business.mutation` | 在内存或 SQLite 中原子记录一次性 mutation intent 与终态。 |
-| `web_operation_agent.planning.contract` | 检索有界源码证据，并编译经过校验的 operation contract。 |
+| `web_operation_agent.planning.retrieval` | 从编译后的 source map 中确定性地选择有界且带引用的证据。 |
+| `web_operation_agent.planning.contract` | 把源码证据与最新页面观察编译成经过校验的 operation contract。 |
 | `web_operation_agent.planning.source_skill` | 从版本绑定的 source map 编译可审查的应用 Skill。 |
 | `web_operation_agent.session` | 实现有步数和时间限制的服务端 Agent 循环。 |
 | `web_operation_agent.modeling.observability` | 把脱敏账本事件转换为无业务内容的 OTLP trace、metric 和运维告警，不改变任务结果。 |

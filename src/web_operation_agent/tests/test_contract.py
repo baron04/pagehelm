@@ -11,8 +11,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from web_operation_agent.planning.contract import (ContractPlanner, PlanningFailed, SourceRetriever,
-                                          _segment_from_template, validate_contract)
+from web_operation_agent.planning.contract import (ContractPlanner, PlanningFailed,
+                                                    _segment_from_template, validate_contract)
+from web_operation_agent.planning.retrieval import EvidenceBundle, SourceRetriever
 from web_operation_agent.schemas import OperationContract
 from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
 from web_operation_agent.tests.route_fixture import FIXTURE_ROUTE_PORT
@@ -630,7 +631,7 @@ class TheTwoArmsShareEverythingButTheEvidence(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.map = _map(Path(self.tmp.name))
         self.bundle = SourceRetriever(self.map).retrieve("T", TASK)
-        from web_operation_agent.planning.contract import EvidenceBundle, SupportIndex
+        from web_operation_agent.planning.contract import SupportIndex
         self.empty = EvidenceBundle(task_ref="T")
         index = SupportIndex(self.map, segment=SEGMENT)
         # A citation the bundle really contains and that is really about the step it backs;

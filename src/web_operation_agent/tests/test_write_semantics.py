@@ -333,7 +333,7 @@ class TheEvidenceThePlannerHadIsRecorded(unittest.TestCase):
     def test_the_lines_are_written_not_just_counted(self):
         """Drives the real planning stage and reads the ledger it wrote."""
         import json as _json
-        from web_operation_agent.planning.contract import EvidenceBundle
+        from web_operation_agent.planning.retrieval import EvidenceBundle
         from web_operation_agent.session import ServerAgentSession
 
         class _PlanChat(CancellableChatDouble):
@@ -366,7 +366,7 @@ class TheEvidenceThePlannerHadIsRecorded(unittest.TestCase):
 
     def test_the_count_and_the_content_do_not_collide(self):
         """`stats` already carries a `lines` count; the content needs its own key."""
-        from web_operation_agent.planning.contract import EvidenceBundle
+        from web_operation_agent.planning.retrieval import EvidenceBundle
         b = EvidenceBundle(task_ref="T", lines=["[a.xml:1-2] a fact"])
         b.stats = {"lines": 1, "citations": 1}
         payload = {**b.stats, "evidence": list(b.lines)}

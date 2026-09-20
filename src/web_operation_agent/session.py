@@ -42,8 +42,9 @@ from .business.errors import (BusinessMutationBlockedError, BusinessMutationInde
                               BusinessMutationRefusedError, BusinessToolError,
                               BusinessToolPermissionError)
 from .business.text import trigger_requests_action
-from .planning.contract import (ContractPlanner, EvidenceBundle, PlanningFailed, SourceRetriever,
-                       _segment_from_template, expand_terms)
+from .planning.contract import (ContractPlanner, PlanningFailed, _segment_from_template,
+                                expand_terms)
+from .planning.retrieval import EvidenceBundle, SourceRetriever
 from .controlplane import ControlPlaneClient, ControlPlaneError
 from .modeling.egress import AuditedChat, ProviderEgressError
 from .grounding import (NOT_APPLICABLE, REFUTED, WRITE_PERMITTED, WRITE_REFUSED,
