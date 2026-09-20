@@ -642,6 +642,35 @@ class RunResult:
         return value
 
 
+@dataclass
+class _Turn:
+    """One run of the step loop, in the state a step may read and change.
+
+    These were local variables of `_run`, which is why every tool had to be handled inside
+    it. A step handler takes this instead, so each tool can live next to what it means
+    rather than in a 1400-line method with the others (P7.5 D-01).
+    """
+
+    result: RunResult
+    started_at: float
+    messages: list[dict]
+    obs: PageObservation
+    step: int = 0
+    #: Business tools that answered. A turn that read through the typed API is held to a
+    #: different standard when it claims to be done.
+    successful_business_tools: int = 0
+
+
+@dataclass
+class _Next:
+    """What the loop does after a step: keep going, or finish with this result.
+
+    A handler answers `None` when the call was not its tool.
+    """
+
+    finished: RunResult | None = None
+
+
 class ServerAgentSession:
     """One task, one browser, one model, one audit ledger.
 
@@ -1338,6 +1367,696 @@ class ServerAgentSession:
         finally:
             self._end_control()
 
+    # -- one tool, one place ------------------------------------------------------------
+    def _handle_named_tool(self, turn: "_Turn", call: dict, name: str,
+                           args: dict) -> "_Next | None":
+        """Run the tool this session offers under `name`, or answer `None` for someone else."""
+        handler = self._named_tools().get(name)
+        return None if handler is None else handler(turn, call, name, args)
+
+    def _named_tools(self):
+        """The tools this session is currently offering, by name.
+
+        Availability is asked for here rather than repeated as a condition next to each
+        branch, so a tool the session does not offer cannot be half-handled.
+        """
+        available: dict[str, Callable[["_Turn", dict, str, dict], "_Next"]] = {}
+        if self.runtime_source:
+            available["lookup_source"] = self._tool_lookup_source
+        if self._task_business_skills:
+            available["load_skill"] = self._tool_load_skill
+        if self.allow_form_prefill:
+            available["prefill_form"] = self._tool_prefill_form
+        for tool in (self.business_tools.tool_names if self.business_tools is not None else ()):
+            available[tool] = self._tool_business
+        return available
+
+    def _tool_lookup_source(self, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
+        """Cited source evidence, and then a fresh look at the page it is about."""
+        query = args.get("query")
+        if not isinstance(query, str) or not query.strip() or len(query) > 1000:
+            return self._reply(turn, call,
+                               "query must be a nonempty string of at most 1000 characters")
+        bundle = self.lookup_source(query, turn.obs)
+        if self._cancel_requested():
+            return _Next(self._finish(
+                turn.result, turn.started_at, "user_cancelled",
+                "the user stopped this task after source retrieval", steps=turn.step))
+        try:
+            receipt = self.browser.execute("observe", {})
+            self._browser_attempts += 1
+        except TransportError as e:
+            return _Next(self._finish(turn.result, turn.started_at,
+                                      self._transport_terminal("observe"), str(e),
+                                      steps=turn.step))
+        write = self._write_outcome(receipt, turn.step)
+        self.ledger.append("action_receipt", step=turn.step, tool="observe",
+                           command_id=receipt.command_id, after_tool="lookup_source",
+                           ok=receipt.ok, error_code=receipt.error_code,
+                           write=write["state"], write_attribution="unattributed")
+        reason, detail = self._settle_write(write)
+        if reason:
+            return _Next(self._finish(turn.result, turn.started_at, reason, detail,
+                                      steps=turn.step))
+        if receipt.observation is not None:
+            turn.obs = receipt.observation
+        note = self._ground(turn.obs, receipt, write["state"], write["refused_requests"])
+        return self._reply(turn, call,
+                           "SOURCE EVIDENCE (prior; current page wins):\n" +
+                           (bundle.render()
+                            or "No matching source evidence. Do not invent an answer.") +
+                           "\n\n" + self._render(turn.obs, receipt, note, write,
+                                                  affordance_query=query))
+
+    def _tool_load_skill(self, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
+        """Load one of this task's candidate Business Skills: a playbook, not runtime data."""
+        skill, rejection = self.business_tools.load(
+            args.get("skill_id"), self._task_business_skill_ids)
+        if rejection:
+            self.ledger.append(
+                "business_skill_rejected", step=turn.step,
+                skill_id=str(args.get("skill_id") or "")[:200], reason=rejection,
+                side_effect_possible=False)
+            return self._reply(turn, call, "The server rejected load_skill: " + rejection + ".")
+        assert skill is not None
+        self._loaded_business_skill_ids.add(skill.skill_id)
+        self.ledger.append(
+            "business_skill_loaded", step=turn.step, skill_id=skill.skill_id,
+            skill_sha256=skill.artifact_sha256,
+            tool_names=list(skill.tool_names), provenance=list(skill.provenance))
+        return self._reply(turn, call,
+                           "BUSINESS SKILL LOADED (playbook; not runtime data):\n"
+                           + json.dumps(skill.loaded_card(), ensure_ascii=False,
+                                        sort_keys=True, separators=(",", ":")))
+
+    def _tool_prefill_form(self, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
+        """Fill the application's own draft into its form, and hand the page to the person.
+
+        The turn ends here whatever happens: a prefilled form is the person's to check and
+        save, and nothing the assistant does afterwards would be about it.
+        """
+        if args:
+            return self._reply(turn, call,
+                               "prefill_form accepts no arguments; route, fields and values "
+                               "come only from the current application-issued draft.")
+        draft = self._form_draft
+        # Consume before dispatch. Even though the application contract says these fields do
+        # not persist until user submission, repeating a partially applied draft after
+        # transport loss would be surprising and could retrigger onchange.
+        self._form_draft = None
+        if draft is None:
+            return self._reply(turn, call,
+                               "No current application-issued form draft is available.")
+        if draft.needs_confirmation:
+            reason, detail = self._confirm_form_handoff(draft, turn.step)
+            if reason:
+                return _Next(self._finish(turn.result, turn.started_at, reason, detail,
+                                          steps=turn.step))
+        prefilled, reason, detail = self._apply_form_draft(draft, turn.obs, turn.step)
+        if prefilled is not None:
+            turn.obs = prefilled
+        chinese = bool(re.search(r"[\u3400-\u9fff]", self.task.prompt))
+        if reason:
+            turn.result.agent_said = (
+                "表单未能完整预填，未执行提交。" if chinese
+                else "The form could not be fully prefilled and was not submitted.")
+            return _Next(self._finish(
+                turn.result, turn.started_at, reason,
+                turn.result.agent_said + (f" {detail}" if detail else ""), steps=turn.step))
+        if draft.needs_confirmation:
+            # This one the application commits by itself once the page is left, so the
+            # sentence says that plainly rather than "may save or discard".
+            turn.result.agent_said = (
+                "已按你的确认填好，尚未保存。请在页面上核对后自己保存；"
+                "离开这个页面时，应用会保存这些改动。"
+                if chinese
+                else "Filled as you confirmed and not saved yet. Check it on the page and "
+                     "save it yourself; leaving this page lets the application save these "
+                     "changes.")
+        else:
+            turn.result.agent_said = (
+                "表单已预填，尚未提交。请检查或修改后由你继续。"
+                "离开这个页面时，应用可能会自动保存或丢弃这些内容。"
+                if chinese
+                else "The form is prefilled and has not been submitted. Review or edit it, "
+                     "then continue yourself. Leaving this page may let the application save "
+                     "or discard it.")
+        self.ledger.append(
+            "form_prefill_completed", step=turn.step,
+            draft_digest=draft.content_digest,
+            route_digest=hashlib.sha256(draft.route.encode()).hexdigest(),
+            fields=[item.field for item in draft.fields],
+            submitted=False, persisted=False, user_takeover=True)
+        return _Next(self._finish(turn.result, turn.started_at, "agent_finished",
+                                  turn.result.agent_said, steps=turn.step))
+
+    def _tool_business(self, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
+        """One typed business tool: a read, or the one confirmed write a turn may make.
+
+        Its own locals are the turn's state, restored on the way out: this was the largest
+        branch of the step loop, and lifting it whole is what made the loop readable without
+        rewriting what a business tool does (P7.5 D-01).
+        """
+        result, t0, step = turn.result, turn.started_at, turn.step
+        messages, obs = turn.messages, turn.obs
+        successful_business_tools = turn.successful_business_tools
+        operation_context = self._operation_context(step, name)
+        operation_identity = (operation_context.audit_projection()
+                              if operation_context is not None else {})
+        if self.business_tools.is_mutation(name):
+            self._answer_action_receipt = None
+            try:
+                proposal = self.business_tools.prepare_mutation(
+                    name, args, self._loaded_business_skill_ids,
+                    context=operation_context)
+            except BusinessToolPermissionError as exc:
+                # The actor's authority answered, and it is final for this turn.
+                # Handing it back to the model would only invite a page route to the
+                # same effect, which is exactly the downgrade that must not happen.
+                return _Next(self._permission_denied(
+                    result, t0, step, name, exc, dispatched=False,
+                    identity=operation_identity))
+            except BusinessMutationRefusedError as exc:
+                detail = str(exc)[:500]
+                self.ledger.append(
+                    "business_mutation_rejected", step=step, tool=name,
+                    error_code=exc.code, reason=exc.reason,
+                    detail=detail, dispatched=False, side_effect_possible=False,
+                    identity=operation_identity)
+                result.refusal_subject = exc.subject or None
+                return _Next(self._finish(
+                    result, t0, "business_mutation_refused", exc.reason, steps=step))
+            except BusinessToolError as exc:
+                detail = str(exc)[:500]
+                self.ledger.append(
+                    "business_mutation_rejected", step=step, tool=name,
+                    error_code=getattr(exc, "code", "business_tool"),
+                    reason=detail, dispatched=False, side_effect_possible=False,
+                    identity=operation_identity)
+                messages += [_assistant_call(call), _tool_result(
+                    call, "BUSINESS MUTATION REFUSED BEFORE DISPATCH: " + detail)]
+                messages = _trim(messages, self.keep_observations)
+                return self._resume(turn, messages, obs, successful_business_tools)
+
+            self._business_control["approval_requested"] += 1
+            self.ledger.append(
+                "business_mutation_proposed", step=step, tool=name,
+                proposal=proposal.redacted(), effect=proposal.effect,
+                targets=list(proposal.targets), dispatched=False,
+                side_effect_possible=False, identity=operation_identity)
+            if self.business_mutation_approval is None:
+                self.ledger.append(
+                    "business_mutation_approval_unavailable", step=step,
+                    proposal_digest=proposal.content_digest,
+                    dispatched=False, side_effect_possible=False)
+                return _Next(self._finish(
+                    result, t0, "approval_unavailable",
+                    "business mutation requires an authenticated user decision",
+                    steps=step))
+            if self._cancel_requested():
+                return _Next(self._finish(
+                    result, t0, "user_cancelled",
+                    "the user stopped this task before approval", steps=step))
+            try:
+                grant = (self.business_mutation_approval(proposal)
+                         if operation_context is None
+                         else self.business_mutation_approval(
+                             proposal, context=operation_context))
+            except Exception as exc:
+                self.ledger.append(
+                    "business_mutation_approval_failed", step=step,
+                    proposal_digest=proposal.content_digest,
+                    error_type=type(exc).__name__, dispatched=False,
+                    side_effect_possible=False)
+                return _Next(self._finish(
+                    result, t0, "approval_failed",
+                    "business mutation approval was unavailable", steps=step))
+            if self._cancel_requested():
+                self.ledger.append(
+                    "business_mutation_cancelled_before_dispatch", step=step,
+                    tool=name, approval_id="",
+                    proposal_digest=proposal.content_digest,
+                    dispatched=False, side_effect_possible=False)
+                return _Next(self._finish(
+                    result, t0, "user_cancelled",
+                    "the user stopped this task while approval was pending",
+                    steps=step))
+            decision = getattr(grant, "decision", "")
+            approved_digest = getattr(grant, "plan_digest", "")
+            approved_context_digest = getattr(
+                grant, "operation_context_digest", "")
+            approval_id = str(getattr(grant, "approval_id", ""))[:200]
+            if decision == "expired":
+                self.ledger.append(
+                    "business_mutation_approval_expired", step=step, tool=name,
+                    approval_id=approval_id,
+                    proposal_digest=proposal.content_digest,
+                    dispatched=False, side_effect_possible=False)
+                return _Next(self._finish(
+                    result, t0, "approval_expired",
+                    "business mutation approval expired before dispatch",
+                    steps=step))
+            if decision != "approved":
+                self._business_control["approval_denied"] += 1
+                self.ledger.append(
+                    "business_mutation_denied", step=step, tool=name,
+                    approval_id=approval_id,
+                    proposal_digest=proposal.content_digest,
+                    dispatched=False, side_effect_possible=False)
+                return _Next(self._finish(
+                    result, t0, "approval_denied",
+                    "the user declined the proposed business mutation", steps=step))
+            if approved_digest != proposal.content_digest:
+                self.ledger.append(
+                    "business_mutation_approval_mismatch", step=step, tool=name,
+                    approval_id=approval_id,
+                    proposal_digest=proposal.content_digest,
+                    dispatched=False, side_effect_possible=False)
+                return _Next(self._finish(
+                    result, t0, "approval_failed",
+                    "business mutation approval did not match the proposal", steps=step))
+            if (operation_context is not None
+                    and approved_context_digest != operation_context.binding_digest):
+                self.ledger.append(
+                    "business_mutation_approval_context_mismatch", step=step,
+                    tool=name, approval_id=approval_id,
+                    proposal_digest=proposal.content_digest,
+                    operation_context_digest=operation_context.binding_digest,
+                    dispatched=False, side_effect_possible=False)
+                return _Next(self._finish(
+                    result, t0, "approval_failed",
+                    "business mutation approval belongs to another operation context",
+                    steps=step))
+            self._business_control["approval_granted"] += 1
+            if self._cancel_requested():
+                self.ledger.append(
+                    "business_mutation_cancelled_before_dispatch", step=step,
+                    tool=name, approval_id=approval_id,
+                    proposal_digest=proposal.content_digest,
+                    dispatched=False, side_effect_possible=False)
+                return _Next(self._finish(
+                    result, t0, "user_cancelled",
+                    "the user stopped this task before mutation dispatch",
+                    steps=step))
+            def mutation_claimed() -> None:
+                self.ledger.append(
+                    "business_mutation_execution_started", step=step, tool=name,
+                    approval_id=approval_id,
+                    proposal_digest=proposal.content_digest,
+                    side_effect_possible=True, identity=operation_identity)
+                self._business_control["mutation_execution_started"] += 1
+            try:
+                tool_result = self.business_tools.execute_mutation(
+                    proposal, approved_digest, self._loaded_business_skill_ids,
+                    context=operation_context, on_claimed=mutation_claimed)
+            except BusinessMutationBlockedError as exc:
+                detail = str(exc)[:500]
+                self.ledger.append(
+                    "business_mutation_blocked", step=step, tool=name,
+                    approval_id=approval_id,
+                    proposal_digest=proposal.content_digest,
+                    error_code=exc.code, reason=exc.reason, state=exc.state,
+                    detail=detail, dispatched=False,
+                    side_effect_possible=False, identity=operation_identity)
+                return _Next(self._finish(
+                    result, t0, "business_mutation_blocked", detail, steps=step))
+            except BusinessMutationIndeterminate as exc:
+                self._business_control["mutation_indeterminate"] += 1
+                detail = str(exc)[:500]
+                # The digest names the journal row an operator has to settle, and
+                # the reconciliation names what the application already learned about
+                # it. Without both, settling a row means scanning the collection.
+                self.ledger.append(
+                    "business_mutation_indeterminate", step=step, tool=name,
+                    approval_id=approval_id, reason=detail,
+                    proposal_digest=proposal.content_digest,
+                    reconciliation=exc.reconciliation,
+                    side_effect_possible=True, identity=operation_identity)
+                return _Next(self._finish(
+                    result, t0, "indeterminate_write", detail, steps=step))
+            except BusinessToolPermissionError as exc:
+                # The application received the request and refused it itself; its
+                # refusal is definite, so this is not an uncertain write.
+                return _Next(self._permission_denied(
+                    result, t0, step, name, exc, dispatched=True,
+                    identity=operation_identity, approval_id=approval_id))
+            except BusinessToolError as exc:
+                detail = str(exc)[:500]
+                self.ledger.append(
+                    "business_mutation_failed", step=step, tool=name,
+                    approval_id=approval_id,
+                    error_code=getattr(exc, "code", "business_tool"), reason=detail,
+                    side_effect_possible=False, identity=operation_identity)
+                return _Next(self._finish(
+                    result, t0, "business_mutation_failed", detail, steps=step))
+            self._business_control["mutation_completed"] += 1
+            self.ledger.append(
+                "business_mutation_result", step=step, tool=name,
+                approval_id=approval_id,
+                proposal_digest=proposal.content_digest,
+                result_digest=tool_result.content_digest,
+                audit=tool_result.audit,
+                data_classes=list(tool_result.data_classes),
+                route_count=len(tool_result.allowed_routes),
+                side_effect_possible=True, completed=True,
+                identity=operation_identity)
+            self._business_routes.update(tool_result.allowed_routes)
+            self.latest_business_tool_result = tool_result
+            self._form_draft = None
+            # A successful write invalidates values read before it. The receipt
+            # remains authoritative even when this adapter supplies no new fields.
+            self.evidence = TurnEvidence()
+            self._answer_action_receipt = {
+                "kind": "mutation", "effect": proposal.effect,
+                "targets": list(proposal.targets)}
+            self._collect_evidence(tool_result, step=step)
+            self._latest_business_query_page_actions = (
+                self.page_actions if tool_result.query_answer is not None else None)
+            self._step_note(stage="write_done", tool=name)
+            successful_business_tools += 1
+            feedback = ("BUSINESS MUTATION RESULT (approved, executed once, "
+                        "current runtime fact):\n" + tool_result.render())
+            if self._evidence_feedback:
+                feedback += "\n\n" + self._evidence_feedback
+            if self._clarification_feedback:
+                feedback += "\n\n" + self._clarification_feedback
+            try:
+                receipt, write, fresh = self._observe_after_business_mutation(
+                    obs, step, name)
+            except TurnCancelled as exc:
+                # The typed application acknowledgement and durable journal already
+                # agree that this mutation completed. Cancelling the subsequent page
+                # refresh ends the turn, but cannot turn a known write into an unknown
+                # one or invite reconciliation/retry.
+                detail = (f"{name} completed, but the follow-up page observation "
+                          "was cancelled.")
+                result.agent_said = detail
+                self.ledger.append(
+                    "business_mutation_followup_cancelled", step=step, tool=name,
+                    proposal_digest=proposal.content_digest,
+                    result_digest=tool_result.content_digest,
+                    completed=True, dispatched=True,
+                    side_effect_possible=True, reason=str(exc)[:300])
+                return _Next(self._finish(
+                    result, t0, "user_cancelled", detail, steps=step))
+            except TransportError as exc:
+                return _Next(self._finish(
+                    result, t0, "indeterminate_write",
+                    "business mutation completed but fresh page observation failed: "
+                    + str(exc), steps=step))
+            # Deliberately not `_settle_write`: the typed acknowledgement and the
+            # durable journal already agree this mutation completed, so stashing
+            # `_uncertain_write` here would downgrade a known write to an unknown
+            # one and invite reconciliation for something already settled.
+            if write["state"] in (WRITE_UNKNOWN, "control_error"):
+                reason = ("indeterminate_write" if write["state"] == WRITE_UNKNOWN
+                          else "control_plane_error")
+                return _Next(self._finish(
+                    result, t0, reason, write["detail"], steps=step))
+            if not fresh:
+                return _Next(self._finish(
+                    result, t0, "indeterminate_write",
+                    f"{name} completed but no fresh observation was available",
+                    steps=step))
+            obs = receipt.observation
+            note = self._ground(
+                obs, receipt, write["state"], write["refused_requests"])
+            self._sync_plan_message(messages)
+            messages += [_assistant_call(call), _tool_result(
+                call, feedback + "\n\n" + self._render(
+                    obs, receipt, note, write))]
+            messages = _trim(messages, self.keep_observations)
+            return self._resume(turn, messages, obs, successful_business_tools)
+
+        tool_result = None
+        if self._cancel_requested():
+            return _Next(self._finish(
+                result, t0, "user_cancelled",
+                "the user stopped this task before tool dispatch", steps=step))
+        try:
+            tool_result = self.business_tools.execute(
+                name, args, self._loaded_business_skill_ids,
+                context=operation_context)
+            self.ledger.append(
+                "business_tool_result", step=step, tool=name,
+                result_digest=tool_result.content_digest,
+                audit=tool_result.audit,
+                data_classes=list(tool_result.data_classes),
+                route_count=len(tool_result.allowed_routes),
+                **({"navigation_target_digest": hashlib.sha256(
+                    tool_result.navigation_target.encode()).hexdigest()}
+                   if tool_result.navigation_target else {}),
+                side_effect_possible=False, identity=operation_identity)
+            self._business_routes.update(tool_result.allowed_routes)
+            self._latest_business_routes = set(tool_result.allowed_routes)
+            self.latest_business_tool_result = tool_result
+            self._form_draft = (
+                tool_result.form_draft if self.allow_form_prefill else None)
+            recorded_evidence = self._collect_evidence(tool_result, step=step)
+            self._latest_business_query_page_actions = (
+                self.page_actions if tool_result.query_answer is not None else None)
+            if tool_result.query_answer is not None:
+                self._step_note(
+                    stage="read_done", tool=name,
+                    count=tool_result.query_answer.matched_count,
+                    scope=self._scope_label(tool_result.query_answer.scope))
+            successful_business_tools += 1
+            feedback = ("BUSINESS TOOL RESULT (current runtime fact):\n"
+                        + tool_result.render())
+            if self._form_draft is not None:
+                feedback += (
+                    "\n\nAPPLICATION FORM DRAFT READY: Call prefill_form with no "
+                    "arguments. The server will use the exact current route, fields "
+                    "and values above, stop before submission, and hand control to "
+                    "the user.")
+            if self._evidence_feedback:
+                feedback += "\n\n" + self._evidence_feedback
+            if self._clarification_feedback:
+                feedback += "\n\n" + self._clarification_feedback
+            if tool_result.query_answer is not None:
+                feedback += (
+                    "\n\nSERVER QUERY ANSWER READY: For a list or filtered lookup, "
+                    "answer now without a browser action. Navigate only when the "
+                    "user explicitly asked to open a record or collection.")
+                projection = tool_result.query_answer
+                if (projection.complete and projection.matched_count == 0
+                        and all(skill.read_only
+                                for skill in self._task_business_skills)
+                        and len(recorded_evidence) == 1):
+                    evidence_ref = recorded_evidence[0]
+                    try:
+                        verified = answer_protocol.submit(self.evidence, {
+                            "outcome": "answered",
+                            "answer": {
+                                "version": 1,
+                                "coverage": "complete",
+                                "presentation": "brief",
+                                "conclusions": [{
+                                    "kind": "not_found",
+                                    "evidence_ref": evidence_ref,
+                                }],
+                            },
+                        })
+                    except (ValueError, TypeError, EvidenceUnknown):
+                        # An adapter may provide other evidence shapes beside its
+                        # display projection. In that case the model still has to
+                        # choose a conclusion; never guess which item proves absence.
+                        pass
+                    else:
+                        verified = self._with_answer_labels(verified)
+                        result.verified_answer = verified
+                        result.agent_said = render_payload(
+                            verified, user_text=self.task.prompt,
+                            max_chars=max(512, self.max_agent_said_chars))
+                        self.ledger.append(
+                            "answer_verified", step=step, conclusions=1,
+                            coverage="complete", deterministic="empty_query")
+                        return _Next(self._finish(
+                            result, t0, "agent_finished", result.agent_said,
+                            steps=step))
+                # Several records answer the person's own identifying words only
+                # when the read carried them. A read that named nothing returns the
+                # collection, and "which one did you mean" is then a question they
+                # did not ask: "打开金额最高的销售订单" was answered with a list of
+                # every order. That request stays with the model, which can compute
+                # the one it names.
+                identified = any(getattr(item, "looked_for", "")
+                                 for item in tool_result.evidence or ())
+                if (self.allow_clarification and self._navigation_only and identified
+                        and projection.complete
+                        and 1 < projection.matched_count
+                        <= CLARIFICATION_CHOICE_LIMIT
+                        and len(self._clarification_choices)
+                        == projection.matched_count
+                        and all(skill.read_only
+                                for skill in self._task_business_skills)):
+                    # The current typed read already proved both the ambiguity and
+                    # the complete set of choices. Asking the model to copy those
+                    # choices into ask_user adds latency and lets it omit or rename
+                    # records without adding judgment. Keep this transition in the
+                    # server contract; the reply still grants no route authority and
+                    # the next turn must read the application again before opening.
+                    # A set larger than one question can offer stays with the model,
+                    # which asks the person to narrow it in its own words.
+                    question = (
+                        "找到多个匹配项，请选择要打开的记录："
+                        if re.search(r"[\u3400-\u9fff]", self.task.prompt)
+                        else "Multiple records match. Choose the one to open:")
+                    return _Next(self._finish_with_clarification(
+                        result, t0, step=step, question=question,
+                        choice_ids=list(self._clarification_choices),
+                        deterministic="complete_navigation_query"))
+            # A request that names a second read collection may want a related
+            # record's page ("the customer of order S1"). The record this read found is
+            # then only the way there, so the model, not this shortcut, decides what
+            # to open.
+            if (self.deterministic_read_navigation and self._navigation_only
+                    and sum(skill.read_only for skill in self._task_business_skills) == 1
+                    and "goto" not in self.disabled_actions
+                    and tool_result.navigation_target):
+                target = tool_result.navigation_target
+                if self._cancel_requested():
+                    return _Next(self._finish(
+                        result, t0, "user_cancelled",
+                        "the user stopped this task before browser dispatch",
+                        steps=step))
+                reason, detail = self._navigation_confirmed(
+                    step, obs, action="goto", url=target)
+                if reason:
+                    return _Next(self._finish(result, t0, reason, detail, steps=step))
+                prior_page_epoch = obs.epoch
+                try:
+                    self._browser_attempts += 1
+                    receipt = self.browser.execute(
+                        "goto", {"url": target}, expect_navigation=True)
+                except TurnCancelled as exc:
+                    self.ledger.append(
+                        "browser_action_cancelled_before_dispatch", step=step,
+                        tool="goto", dispatched=False, side_effect_possible=False)
+                    return _Next(self._finish(
+                        result, t0, "user_cancelled", str(exc), steps=step))
+                except TransportError as exc:
+                    return _Next(self._finish(
+                        result, t0, self._transport_terminal(
+                            "goto", may_write=False), str(exc), steps=step))
+                self._settle_confirmed_navigation(receipt)
+                if receipt.error_code != "stale_observation":
+                    self.page_actions += 1
+                write = self._write_outcome(
+                    receipt, step, action_may_write=False)
+                self.ledger.append(
+                    "action_receipt", step=step, tool=receipt.action,
+                    command_id=receipt.command_id,
+                    write_attribution="unattributed", ok=receipt.ok,
+                    error_code=receipt.error_code, navigated=receipt.navigated,
+                    url_after=receipt.url_after, elapsed_ms=receipt.elapsed_ms,
+                    write=write["state"], relogin=receipt.relogin,
+                    deterministic_business_navigation=True)
+                if receipt.error_code == "stale_observation":
+                    # The command did not reach the page and the receipt carries a
+                    # replacement observation. Repeating the decision against that
+                    # observation is recovery, not a no-progress loop.
+                    self._reset_no_progress()
+                reason, detail = self._settle_write(write)
+                if reason:
+                    return _Next(self._finish(result, t0, reason, detail, steps=step))
+                if receipt.observation is not None:
+                    obs = receipt.observation
+                reached = bool(
+                    receipt.ok and receipt.observation is not None
+                    and receipt.observation.epoch > prior_page_epoch
+                    and self._observation_is_at_route(receipt.observation, target))
+                if reached:
+                    self._answer_action_receipt = {
+                        "kind": "navigation", "url": obs.url}
+                    result.agent_said = (
+                        "已打开请求的页面。"
+                        if re.search(r"[\u3400-\u9fff]", self.task.prompt)
+                        else "Opened the requested page.")
+                    self.ledger.append(
+                        "deterministic_navigation_completed", step=step,
+                        url_digest=hashlib.sha256(obs.url.encode()).hexdigest(),
+                        observation_epoch=obs.epoch, side_effect_possible=False,
+                        source="business_result")
+                    return _Next(self._finish(
+                        result, t0, "agent_finished", result.agent_said,
+                        steps=step))
+                note = self._ground(
+                    obs, receipt, write["state"], write["refused_requests"])
+                feedback += (
+                    "\n\nThe server tried the adapter's unique current route, but "
+                    "the fresh page did not verify that target. Replan from the "
+                    "current page.\n\n" + self._render(obs, receipt, note, write))
+        except BusinessToolPermissionError as exc:
+            # The account's own authority refused this read. The turn goes on with
+            # what it already read -- ending it threw away the half of the question
+            # this account may see -- but the refusal closes the page as a source of
+            # facts, because handing the refusal back with the page still readable is
+            # how a refused scope gets read off the screen instead (owner ruling
+            # D13). From here every answer must be typed and evidence-backed, page
+            # evidence is discarded and refused, and the answer says what was not
+            # read whether or not the model chooses to.
+            label = self._operation_label(name)
+            detail = str(exc)[:500]
+            self.ledger.append(
+                "business_tool_permission_denied", step=step, tool=name,
+                error_code=exc.code, layer=exc.layer,
+                required_scope=exc.required_scope,
+                dispatched=exc.layer == "application", turn_continued=True,
+                side_effect_possible=False, identity=operation_identity)
+            if label not in self._refused_reads:
+                # An adapter with no name for it in this language still records the
+                # refusal, so the answer cannot read as a whole answer.
+                self._refused_reads.append(label)
+            self._refused_detail = detail
+            result.refused_operation = label or result.refused_operation
+            self._answer_mode = True
+            self.evidence.discard_pages()
+            self._page_answer_digest = ""
+            self._form_draft = None
+            self._latest_business_routes = set()
+            self._clarification_choices = {}
+            self._clarification_feedback = ""
+            feedback = (
+                "BUSINESS TOOL REFUSED BY AUTHORIZATION: " + detail +
+                " This account may not perform that read, and no other route to the "
+                "same facts is open in this turn: page content is no longer accepted "
+                "as evidence. Answer only from the typed reads you already have, and "
+                "state what you could not read as an undetermined conclusion. If you "
+                "have read nothing, finish with outcome=unable.")
+        except BusinessToolError as exc:
+            self.latest_business_tool_result = None
+            self._form_draft = None
+            self._latest_business_routes = set()
+            self._clarification_choices = {}
+            self._clarification_feedback = ""
+            self._latest_business_query_page_actions = None
+            detail = str(exc)[:500]
+            self.ledger.append(
+                "business_tool_rejected", step=step, tool=name,
+                error_code=getattr(exc, "code", "business_tool"),
+                reason=detail, side_effect_possible=False,
+                identity=operation_identity)
+            feedback = "BUSINESS TOOL FAILED: " + detail
+        self._sync_plan_message(messages)
+        messages += [_assistant_call(call), _tool_result(call, feedback)]
+        messages = _trim(messages, self.keep_observations)
+        return self._resume(turn, messages, obs, successful_business_tools)
+
+    def _resume(self, turn: "_Turn", messages: list[dict], obs: PageObservation,
+                successful_business_tools: int) -> "_Next":
+        """Put back what a handler changed, and let the loop take another step."""
+        turn.messages, turn.obs = messages, obs
+        turn.successful_business_tools = successful_business_tools
+        return _Next()
+
+    def _reply(self, turn: "_Turn", call: dict, feedback: str) -> "_Next":
+        """Hand the model this tool result and keep going, with the plan still in view."""
+        self._sync_plan_message(turn.messages)
+        turn.messages += [_assistant_call(call), _tool_result(call, feedback)]
+        turn.messages = _trim(turn.messages, self.keep_observations)
+        return _Next()
+
     def _run(self) -> RunResult:
         t0 = time.time()
         self._turn_deadline_ms = int((t0 + self.wall_budget_s) * 1000)
@@ -1393,6 +2112,8 @@ class ServerAgentSession:
             return self._finish(result, t0, "control_plane_error", str(e))
         step = 0
         successful_business_tools = 0
+        #: The same state the loop keeps in locals, in the form a step handler takes.
+        turn = _Turn(result=result, started_at=t0, messages=messages, obs=obs)
         #: A reply the model gave as plain content and was then asked to follow with a tool
         #: call. When the next call is `finish(done=true)`, this is what the user reads: the
         #: model's `why` at that point describes the reply ("told the user what I can do")
@@ -1576,6 +2297,7 @@ class ServerAgentSession:
             except json.JSONDecodeError:
                 args = {}
             step += 1
+            turn.messages, turn.obs, turn.step = messages, obs, step
             self.ledger.append("tool_call", step=step, tool=name,
                                args=_safe(args, self.session_handoffs))
             self._step_note(
@@ -1620,648 +2342,12 @@ class ServerAgentSession:
                     return self._finish(result, t0, "indeterminate_write",
                                         self._uncertain_write, steps=step)
 
-            if name == "lookup_source" and self.runtime_source:
-                query = args.get("query")
-                if not isinstance(query, str) or not query.strip() or len(query) > 1000:
-                    messages += [_assistant_call(call), _tool_result(
-                        call, "query must be a nonempty string of at most 1000 characters")]
-                    continue
-                bundle = self.lookup_source(query, obs)
-                if self._cancel_requested():
-                    return self._finish(
-                        result, t0, "user_cancelled",
-                        "the user stopped this task after source retrieval", steps=step)
-                try:
-                    receipt = self.browser.execute("observe", {})
-                    self._browser_attempts += 1
-                except TransportError as e:
-                    return self._finish(result, t0, self._transport_terminal("observe"),
-                                        str(e), steps=step)
-                write = self._write_outcome(receipt, step)
-                self.ledger.append("action_receipt", step=step, tool="observe",
-                                   command_id=receipt.command_id, after_tool="lookup_source",
-                                   ok=receipt.ok, error_code=receipt.error_code,
-                                   write=write["state"], write_attribution="unattributed")
-                reason, detail = self._settle_write(write)
-                if reason:
-                    return self._finish(result, t0, reason, detail, steps=step)
-                if receipt.observation is not None:
-                    obs = receipt.observation
-                note = self._ground(obs, receipt, write["state"], write["refused_requests"])
-                self._sync_plan_message(messages)
-                messages += [_assistant_call(call), _tool_result(call,
-                    "SOURCE EVIDENCE (prior; current page wins):\n" +
-                    (bundle.render() or "No matching source evidence. Do not invent an answer.") +
-                    "\n\n" + self._render(obs, receipt, note, write,
-                                             affordance_query=query))]
-                messages = _trim(messages, self.keep_observations)
-                continue
-
-            if name == "load_skill" and self._task_business_skills:
-                skill, rejection = self.business_tools.load(
-                    args.get("skill_id"), self._task_business_skill_ids)
-                if rejection:
-                    self.ledger.append(
-                        "business_skill_rejected", step=step,
-                        skill_id=str(args.get("skill_id") or "")[:200], reason=rejection,
-                        side_effect_possible=False)
-                    feedback = "The server rejected load_skill: " + rejection + "."
-                else:
-                    assert skill is not None
-                    self._loaded_business_skill_ids.add(skill.skill_id)
-                    self.ledger.append(
-                        "business_skill_loaded", step=step, skill_id=skill.skill_id,
-                        skill_sha256=skill.artifact_sha256,
-                        tool_names=list(skill.tool_names), provenance=list(skill.provenance))
-                    feedback = ("BUSINESS SKILL LOADED (playbook; not runtime data):\n"
-                                + json.dumps(skill.loaded_card(), ensure_ascii=False,
-                                             sort_keys=True, separators=(",", ":")))
-                self._sync_plan_message(messages)
-                messages += [_assistant_call(call), _tool_result(call, feedback)]
-                messages = _trim(messages, self.keep_observations)
-                continue
-
-            if name == "prefill_form" and self.allow_form_prefill:
-                if args:
-                    messages += [_assistant_call(call), _tool_result(
-                        call, "prefill_form accepts no arguments; route, fields and values "
-                              "come only from the current application-issued draft.")]
-                    continue
-                draft = self._form_draft
-                # Consume before dispatch. Even though the application contract says these
-                # fields do not persist until user submission, repeating a partially applied
-                # draft after transport loss would be surprising and could retrigger onchange.
-                self._form_draft = None
-                if draft is None:
-                    messages += [_assistant_call(call), _tool_result(
-                        call, "No current application-issued form draft is available.")]
-                    continue
-                if draft.needs_confirmation:
-                    reason, detail = self._confirm_form_handoff(draft, step)
-                    if reason:
-                        return self._finish(result, t0, reason, detail, steps=step)
-                prefilled, reason, detail = self._apply_form_draft(draft, obs, step)
-                if prefilled is not None:
-                    obs = prefilled
-                if reason:
-                    result.agent_said = (
-                        "表单未能完整预填，未执行提交。" if re.search(
-                            r"[\u3400-\u9fff]", self.task.prompt)
-                        else "The form could not be fully prefilled and was not submitted.")
-                    return self._finish(result, t0, reason,
-                                        result.agent_said + (f" {detail}" if detail else ""),
-                                        steps=step)
-                chinese = bool(re.search(r"[\u3400-\u9fff]", self.task.prompt))
-                if draft.needs_confirmation:
-                    # This one the application commits by itself once the page is left, so
-                    # the sentence says that plainly rather than "may save or discard".
-                    result.agent_said = (
-                        "已按你的确认填好，尚未保存。请在页面上核对后自己保存；"
-                        "离开这个页面时，应用会保存这些改动。"
-                        if chinese
-                        else "Filled as you confirmed and not saved yet. Check it on the page "
-                             "and save it yourself; leaving this page lets the application "
-                             "save these changes.")
-                else:
-                    result.agent_said = (
-                        "表单已预填，尚未提交。请检查或修改后由你继续。"
-                        "离开这个页面时，应用可能会自动保存或丢弃这些内容。"
-                        if chinese
-                        else "The form is prefilled and has not been submitted. Review or edit "
-                             "it, then continue yourself. Leaving this page may let the "
-                             "application save or discard it.")
-                self.ledger.append(
-                    "form_prefill_completed", step=step,
-                    draft_digest=draft.content_digest,
-                    route_digest=hashlib.sha256(draft.route.encode()).hexdigest(),
-                    fields=[item.field for item in draft.fields],
-                    submitted=False, persisted=False, user_takeover=True)
-                return self._finish(
-                    result, t0, "agent_finished", result.agent_said, steps=step)
-
-            if (self.business_tools is not None
-                    and name in self.business_tools.tool_names):
-                operation_context = self._operation_context(step, name)
-                operation_identity = (operation_context.audit_projection()
-                                      if operation_context is not None else {})
-                if self.business_tools.is_mutation(name):
-                    self._answer_action_receipt = None
-                    try:
-                        proposal = self.business_tools.prepare_mutation(
-                            name, args, self._loaded_business_skill_ids,
-                            context=operation_context)
-                    except BusinessToolPermissionError as exc:
-                        # The actor's authority answered, and it is final for this turn.
-                        # Handing it back to the model would only invite a page route to the
-                        # same effect, which is exactly the downgrade that must not happen.
-                        return self._permission_denied(
-                            result, t0, step, name, exc, dispatched=False,
-                            identity=operation_identity)
-                    except BusinessMutationRefusedError as exc:
-                        detail = str(exc)[:500]
-                        self.ledger.append(
-                            "business_mutation_rejected", step=step, tool=name,
-                            error_code=exc.code, reason=exc.reason,
-                            detail=detail, dispatched=False, side_effect_possible=False,
-                            identity=operation_identity)
-                        result.refusal_subject = exc.subject or None
-                        return self._finish(
-                            result, t0, "business_mutation_refused", exc.reason, steps=step)
-                    except BusinessToolError as exc:
-                        detail = str(exc)[:500]
-                        self.ledger.append(
-                            "business_mutation_rejected", step=step, tool=name,
-                            error_code=getattr(exc, "code", "business_tool"),
-                            reason=detail, dispatched=False, side_effect_possible=False,
-                            identity=operation_identity)
-                        messages += [_assistant_call(call), _tool_result(
-                            call, "BUSINESS MUTATION REFUSED BEFORE DISPATCH: " + detail)]
-                        messages = _trim(messages, self.keep_observations)
-                        continue
-
-                    self._business_control["approval_requested"] += 1
-                    self.ledger.append(
-                        "business_mutation_proposed", step=step, tool=name,
-                        proposal=proposal.redacted(), effect=proposal.effect,
-                        targets=list(proposal.targets), dispatched=False,
-                        side_effect_possible=False, identity=operation_identity)
-                    if self.business_mutation_approval is None:
-                        self.ledger.append(
-                            "business_mutation_approval_unavailable", step=step,
-                            proposal_digest=proposal.content_digest,
-                            dispatched=False, side_effect_possible=False)
-                        return self._finish(
-                            result, t0, "approval_unavailable",
-                            "business mutation requires an authenticated user decision",
-                            steps=step)
-                    if self._cancel_requested():
-                        return self._finish(
-                            result, t0, "user_cancelled",
-                            "the user stopped this task before approval", steps=step)
-                    try:
-                        grant = (self.business_mutation_approval(proposal)
-                                 if operation_context is None
-                                 else self.business_mutation_approval(
-                                     proposal, context=operation_context))
-                    except Exception as exc:
-                        self.ledger.append(
-                            "business_mutation_approval_failed", step=step,
-                            proposal_digest=proposal.content_digest,
-                            error_type=type(exc).__name__, dispatched=False,
-                            side_effect_possible=False)
-                        return self._finish(
-                            result, t0, "approval_failed",
-                            "business mutation approval was unavailable", steps=step)
-                    if self._cancel_requested():
-                        self.ledger.append(
-                            "business_mutation_cancelled_before_dispatch", step=step,
-                            tool=name, approval_id="",
-                            proposal_digest=proposal.content_digest,
-                            dispatched=False, side_effect_possible=False)
-                        return self._finish(
-                            result, t0, "user_cancelled",
-                            "the user stopped this task while approval was pending",
-                            steps=step)
-                    decision = getattr(grant, "decision", "")
-                    approved_digest = getattr(grant, "plan_digest", "")
-                    approved_context_digest = getattr(
-                        grant, "operation_context_digest", "")
-                    approval_id = str(getattr(grant, "approval_id", ""))[:200]
-                    if decision == "expired":
-                        self.ledger.append(
-                            "business_mutation_approval_expired", step=step, tool=name,
-                            approval_id=approval_id,
-                            proposal_digest=proposal.content_digest,
-                            dispatched=False, side_effect_possible=False)
-                        return self._finish(
-                            result, t0, "approval_expired",
-                            "business mutation approval expired before dispatch",
-                            steps=step)
-                    if decision != "approved":
-                        self._business_control["approval_denied"] += 1
-                        self.ledger.append(
-                            "business_mutation_denied", step=step, tool=name,
-                            approval_id=approval_id,
-                            proposal_digest=proposal.content_digest,
-                            dispatched=False, side_effect_possible=False)
-                        return self._finish(
-                            result, t0, "approval_denied",
-                            "the user declined the proposed business mutation", steps=step)
-                    if approved_digest != proposal.content_digest:
-                        self.ledger.append(
-                            "business_mutation_approval_mismatch", step=step, tool=name,
-                            approval_id=approval_id,
-                            proposal_digest=proposal.content_digest,
-                            dispatched=False, side_effect_possible=False)
-                        return self._finish(
-                            result, t0, "approval_failed",
-                            "business mutation approval did not match the proposal", steps=step)
-                    if (operation_context is not None
-                            and approved_context_digest != operation_context.binding_digest):
-                        self.ledger.append(
-                            "business_mutation_approval_context_mismatch", step=step,
-                            tool=name, approval_id=approval_id,
-                            proposal_digest=proposal.content_digest,
-                            operation_context_digest=operation_context.binding_digest,
-                            dispatched=False, side_effect_possible=False)
-                        return self._finish(
-                            result, t0, "approval_failed",
-                            "business mutation approval belongs to another operation context",
-                            steps=step)
-                    self._business_control["approval_granted"] += 1
-                    if self._cancel_requested():
-                        self.ledger.append(
-                            "business_mutation_cancelled_before_dispatch", step=step,
-                            tool=name, approval_id=approval_id,
-                            proposal_digest=proposal.content_digest,
-                            dispatched=False, side_effect_possible=False)
-                        return self._finish(
-                            result, t0, "user_cancelled",
-                            "the user stopped this task before mutation dispatch",
-                            steps=step)
-                    def mutation_claimed() -> None:
-                        self.ledger.append(
-                            "business_mutation_execution_started", step=step, tool=name,
-                            approval_id=approval_id,
-                            proposal_digest=proposal.content_digest,
-                            side_effect_possible=True, identity=operation_identity)
-                        self._business_control["mutation_execution_started"] += 1
-                    try:
-                        tool_result = self.business_tools.execute_mutation(
-                            proposal, approved_digest, self._loaded_business_skill_ids,
-                            context=operation_context, on_claimed=mutation_claimed)
-                    except BusinessMutationBlockedError as exc:
-                        detail = str(exc)[:500]
-                        self.ledger.append(
-                            "business_mutation_blocked", step=step, tool=name,
-                            approval_id=approval_id,
-                            proposal_digest=proposal.content_digest,
-                            error_code=exc.code, reason=exc.reason, state=exc.state,
-                            detail=detail, dispatched=False,
-                            side_effect_possible=False, identity=operation_identity)
-                        return self._finish(
-                            result, t0, "business_mutation_blocked", detail, steps=step)
-                    except BusinessMutationIndeterminate as exc:
-                        self._business_control["mutation_indeterminate"] += 1
-                        detail = str(exc)[:500]
-                        # The digest names the journal row an operator has to settle, and
-                        # the reconciliation names what the application already learned about
-                        # it. Without both, settling a row means scanning the collection.
-                        self.ledger.append(
-                            "business_mutation_indeterminate", step=step, tool=name,
-                            approval_id=approval_id, reason=detail,
-                            proposal_digest=proposal.content_digest,
-                            reconciliation=exc.reconciliation,
-                            side_effect_possible=True, identity=operation_identity)
-                        return self._finish(
-                            result, t0, "indeterminate_write", detail, steps=step)
-                    except BusinessToolPermissionError as exc:
-                        # The application received the request and refused it itself; its
-                        # refusal is definite, so this is not an uncertain write.
-                        return self._permission_denied(
-                            result, t0, step, name, exc, dispatched=True,
-                            identity=operation_identity, approval_id=approval_id)
-                    except BusinessToolError as exc:
-                        detail = str(exc)[:500]
-                        self.ledger.append(
-                            "business_mutation_failed", step=step, tool=name,
-                            approval_id=approval_id,
-                            error_code=getattr(exc, "code", "business_tool"), reason=detail,
-                            side_effect_possible=False, identity=operation_identity)
-                        return self._finish(
-                            result, t0, "business_mutation_failed", detail, steps=step)
-                    self._business_control["mutation_completed"] += 1
-                    self.ledger.append(
-                        "business_mutation_result", step=step, tool=name,
-                        approval_id=approval_id,
-                        proposal_digest=proposal.content_digest,
-                        result_digest=tool_result.content_digest,
-                        audit=tool_result.audit,
-                        data_classes=list(tool_result.data_classes),
-                        route_count=len(tool_result.allowed_routes),
-                        side_effect_possible=True, completed=True,
-                        identity=operation_identity)
-                    self._business_routes.update(tool_result.allowed_routes)
-                    self.latest_business_tool_result = tool_result
-                    self._form_draft = None
-                    # A successful write invalidates values read before it. The receipt
-                    # remains authoritative even when this adapter supplies no new fields.
-                    self.evidence = TurnEvidence()
-                    self._answer_action_receipt = {
-                        "kind": "mutation", "effect": proposal.effect,
-                        "targets": list(proposal.targets)}
-                    self._collect_evidence(tool_result, step=step)
-                    self._latest_business_query_page_actions = (
-                        self.page_actions if tool_result.query_answer is not None else None)
-                    self._step_note(stage="write_done", tool=name)
-                    successful_business_tools += 1
-                    feedback = ("BUSINESS MUTATION RESULT (approved, executed once, "
-                                "current runtime fact):\n" + tool_result.render())
-                    if self._evidence_feedback:
-                        feedback += "\n\n" + self._evidence_feedback
-                    if self._clarification_feedback:
-                        feedback += "\n\n" + self._clarification_feedback
-                    try:
-                        receipt, write, fresh = self._observe_after_business_mutation(
-                            obs, step, name)
-                    except TurnCancelled as exc:
-                        # The typed application acknowledgement and durable journal already
-                        # agree that this mutation completed. Cancelling the subsequent page
-                        # refresh ends the turn, but cannot turn a known write into an unknown
-                        # one or invite reconciliation/retry.
-                        detail = (f"{name} completed, but the follow-up page observation "
-                                  "was cancelled.")
-                        result.agent_said = detail
-                        self.ledger.append(
-                            "business_mutation_followup_cancelled", step=step, tool=name,
-                            proposal_digest=proposal.content_digest,
-                            result_digest=tool_result.content_digest,
-                            completed=True, dispatched=True,
-                            side_effect_possible=True, reason=str(exc)[:300])
-                        return self._finish(
-                            result, t0, "user_cancelled", detail, steps=step)
-                    except TransportError as exc:
-                        return self._finish(
-                            result, t0, "indeterminate_write",
-                            "business mutation completed but fresh page observation failed: "
-                            + str(exc), steps=step)
-                    # Deliberately not `_settle_write`: the typed acknowledgement and the
-                    # durable journal already agree this mutation completed, so stashing
-                    # `_uncertain_write` here would downgrade a known write to an unknown
-                    # one and invite reconciliation for something already settled.
-                    if write["state"] in (WRITE_UNKNOWN, "control_error"):
-                        reason = ("indeterminate_write" if write["state"] == WRITE_UNKNOWN
-                                  else "control_plane_error")
-                        return self._finish(
-                            result, t0, reason, write["detail"], steps=step)
-                    if not fresh:
-                        return self._finish(
-                            result, t0, "indeterminate_write",
-                            f"{name} completed but no fresh observation was available",
-                            steps=step)
-                    obs = receipt.observation
-                    note = self._ground(
-                        obs, receipt, write["state"], write["refused_requests"])
-                    self._sync_plan_message(messages)
-                    messages += [_assistant_call(call), _tool_result(
-                        call, feedback + "\n\n" + self._render(
-                            obs, receipt, note, write))]
-                    messages = _trim(messages, self.keep_observations)
-                    continue
-
-                tool_result = None
-                if self._cancel_requested():
-                    return self._finish(
-                        result, t0, "user_cancelled",
-                        "the user stopped this task before tool dispatch", steps=step)
-                try:
-                    tool_result = self.business_tools.execute(
-                        name, args, self._loaded_business_skill_ids,
-                        context=operation_context)
-                    self.ledger.append(
-                        "business_tool_result", step=step, tool=name,
-                        result_digest=tool_result.content_digest,
-                        audit=tool_result.audit,
-                        data_classes=list(tool_result.data_classes),
-                        route_count=len(tool_result.allowed_routes),
-                        **({"navigation_target_digest": hashlib.sha256(
-                            tool_result.navigation_target.encode()).hexdigest()}
-                           if tool_result.navigation_target else {}),
-                        side_effect_possible=False, identity=operation_identity)
-                    self._business_routes.update(tool_result.allowed_routes)
-                    self._latest_business_routes = set(tool_result.allowed_routes)
-                    self.latest_business_tool_result = tool_result
-                    self._form_draft = (
-                        tool_result.form_draft if self.allow_form_prefill else None)
-                    recorded_evidence = self._collect_evidence(tool_result, step=step)
-                    self._latest_business_query_page_actions = (
-                        self.page_actions if tool_result.query_answer is not None else None)
-                    if tool_result.query_answer is not None:
-                        self._step_note(
-                            stage="read_done", tool=name,
-                            count=tool_result.query_answer.matched_count,
-                            scope=self._scope_label(tool_result.query_answer.scope))
-                    successful_business_tools += 1
-                    feedback = ("BUSINESS TOOL RESULT (current runtime fact):\n"
-                                + tool_result.render())
-                    if self._form_draft is not None:
-                        feedback += (
-                            "\n\nAPPLICATION FORM DRAFT READY: Call prefill_form with no "
-                            "arguments. The server will use the exact current route, fields "
-                            "and values above, stop before submission, and hand control to "
-                            "the user.")
-                    if self._evidence_feedback:
-                        feedback += "\n\n" + self._evidence_feedback
-                    if self._clarification_feedback:
-                        feedback += "\n\n" + self._clarification_feedback
-                    if tool_result.query_answer is not None:
-                        feedback += (
-                            "\n\nSERVER QUERY ANSWER READY: For a list or filtered lookup, "
-                            "answer now without a browser action. Navigate only when the "
-                            "user explicitly asked to open a record or collection.")
-                        projection = tool_result.query_answer
-                        if (projection.complete and projection.matched_count == 0
-                                and all(skill.read_only
-                                        for skill in self._task_business_skills)
-                                and len(recorded_evidence) == 1):
-                            evidence_ref = recorded_evidence[0]
-                            try:
-                                verified = answer_protocol.submit(self.evidence, {
-                                    "outcome": "answered",
-                                    "answer": {
-                                        "version": 1,
-                                        "coverage": "complete",
-                                        "presentation": "brief",
-                                        "conclusions": [{
-                                            "kind": "not_found",
-                                            "evidence_ref": evidence_ref,
-                                        }],
-                                    },
-                                })
-                            except (ValueError, TypeError, EvidenceUnknown):
-                                # An adapter may provide other evidence shapes beside its
-                                # display projection. In that case the model still has to
-                                # choose a conclusion; never guess which item proves absence.
-                                pass
-                            else:
-                                verified = self._with_answer_labels(verified)
-                                result.verified_answer = verified
-                                result.agent_said = render_payload(
-                                    verified, user_text=self.task.prompt,
-                                    max_chars=max(512, self.max_agent_said_chars))
-                                self.ledger.append(
-                                    "answer_verified", step=step, conclusions=1,
-                                    coverage="complete", deterministic="empty_query")
-                                return self._finish(
-                                    result, t0, "agent_finished", result.agent_said,
-                                    steps=step)
-                        # Several records answer the person's own identifying words only
-                        # when the read carried them. A read that named nothing returns the
-                        # collection, and "which one did you mean" is then a question they
-                        # did not ask: "打开金额最高的销售订单" was answered with a list of
-                        # every order. That request stays with the model, which can compute
-                        # the one it names.
-                        identified = any(getattr(item, "looked_for", "")
-                                         for item in tool_result.evidence or ())
-                        if (self.allow_clarification and self._navigation_only and identified
-                                and projection.complete
-                                and 1 < projection.matched_count
-                                <= CLARIFICATION_CHOICE_LIMIT
-                                and len(self._clarification_choices)
-                                == projection.matched_count
-                                and all(skill.read_only
-                                        for skill in self._task_business_skills)):
-                            # The current typed read already proved both the ambiguity and
-                            # the complete set of choices. Asking the model to copy those
-                            # choices into ask_user adds latency and lets it omit or rename
-                            # records without adding judgment. Keep this transition in the
-                            # server contract; the reply still grants no route authority and
-                            # the next turn must read the application again before opening.
-                            # A set larger than one question can offer stays with the model,
-                            # which asks the person to narrow it in its own words.
-                            question = (
-                                "找到多个匹配项，请选择要打开的记录："
-                                if re.search(r"[\u3400-\u9fff]", self.task.prompt)
-                                else "Multiple records match. Choose the one to open:")
-                            return self._finish_with_clarification(
-                                result, t0, step=step, question=question,
-                                choice_ids=list(self._clarification_choices),
-                                deterministic="complete_navigation_query")
-                    # A request that names a second read collection may want a related
-                    # record's page ("the customer of order S1"). The record this read found is
-                    # then only the way there, so the model, not this shortcut, decides what
-                    # to open.
-                    if (self.deterministic_read_navigation and self._navigation_only
-                            and sum(skill.read_only for skill in self._task_business_skills) == 1
-                            and "goto" not in self.disabled_actions
-                            and tool_result.navigation_target):
-                        target = tool_result.navigation_target
-                        if self._cancel_requested():
-                            return self._finish(
-                                result, t0, "user_cancelled",
-                                "the user stopped this task before browser dispatch",
-                                steps=step)
-                        reason, detail = self._navigation_confirmed(
-                            step, obs, action="goto", url=target)
-                        if reason:
-                            return self._finish(result, t0, reason, detail, steps=step)
-                        prior_page_epoch = obs.epoch
-                        try:
-                            self._browser_attempts += 1
-                            receipt = self.browser.execute(
-                                "goto", {"url": target}, expect_navigation=True)
-                        except TurnCancelled as exc:
-                            self.ledger.append(
-                                "browser_action_cancelled_before_dispatch", step=step,
-                                tool="goto", dispatched=False, side_effect_possible=False)
-                            return self._finish(
-                                result, t0, "user_cancelled", str(exc), steps=step)
-                        except TransportError as exc:
-                            return self._finish(
-                                result, t0, self._transport_terminal(
-                                    "goto", may_write=False), str(exc), steps=step)
-                        self._settle_confirmed_navigation(receipt)
-                        if receipt.error_code != "stale_observation":
-                            self.page_actions += 1
-                        write = self._write_outcome(
-                            receipt, step, action_may_write=False)
-                        self.ledger.append(
-                            "action_receipt", step=step, tool=receipt.action,
-                            command_id=receipt.command_id,
-                            write_attribution="unattributed", ok=receipt.ok,
-                            error_code=receipt.error_code, navigated=receipt.navigated,
-                            url_after=receipt.url_after, elapsed_ms=receipt.elapsed_ms,
-                            write=write["state"], relogin=receipt.relogin,
-                            deterministic_business_navigation=True)
-                        if receipt.error_code == "stale_observation":
-                            # The command did not reach the page and the receipt carries a
-                            # replacement observation. Repeating the decision against that
-                            # observation is recovery, not a no-progress loop.
-                            self._reset_no_progress()
-                        reason, detail = self._settle_write(write)
-                        if reason:
-                            return self._finish(result, t0, reason, detail, steps=step)
-                        if receipt.observation is not None:
-                            obs = receipt.observation
-                        reached = bool(
-                            receipt.ok and receipt.observation is not None
-                            and receipt.observation.epoch > prior_page_epoch
-                            and self._observation_is_at_route(receipt.observation, target))
-                        if reached:
-                            self._answer_action_receipt = {
-                                "kind": "navigation", "url": obs.url}
-                            result.agent_said = (
-                                "已打开请求的页面。"
-                                if re.search(r"[\u3400-\u9fff]", self.task.prompt)
-                                else "Opened the requested page.")
-                            self.ledger.append(
-                                "deterministic_navigation_completed", step=step,
-                                url_digest=hashlib.sha256(obs.url.encode()).hexdigest(),
-                                observation_epoch=obs.epoch, side_effect_possible=False,
-                                source="business_result")
-                            return self._finish(
-                                result, t0, "agent_finished", result.agent_said,
-                                steps=step)
-                        note = self._ground(
-                            obs, receipt, write["state"], write["refused_requests"])
-                        feedback += (
-                            "\n\nThe server tried the adapter's unique current route, but "
-                            "the fresh page did not verify that target. Replan from the "
-                            "current page.\n\n" + self._render(obs, receipt, note, write))
-                except BusinessToolPermissionError as exc:
-                    # The account's own authority refused this read. The turn goes on with
-                    # what it already read -- ending it threw away the half of the question
-                    # this account may see -- but the refusal closes the page as a source of
-                    # facts, because handing the refusal back with the page still readable is
-                    # how a refused scope gets read off the screen instead (owner ruling
-                    # D13). From here every answer must be typed and evidence-backed, page
-                    # evidence is discarded and refused, and the answer says what was not
-                    # read whether or not the model chooses to.
-                    label = self._operation_label(name)
-                    detail = str(exc)[:500]
-                    self.ledger.append(
-                        "business_tool_permission_denied", step=step, tool=name,
-                        error_code=exc.code, layer=exc.layer,
-                        required_scope=exc.required_scope,
-                        dispatched=exc.layer == "application", turn_continued=True,
-                        side_effect_possible=False, identity=operation_identity)
-                    if label not in self._refused_reads:
-                        # An adapter with no name for it in this language still records the
-                        # refusal, so the answer cannot read as a whole answer.
-                        self._refused_reads.append(label)
-                    self._refused_detail = detail
-                    result.refused_operation = label or result.refused_operation
-                    self._answer_mode = True
-                    self.evidence.discard_pages()
-                    self._page_answer_digest = ""
-                    self._form_draft = None
-                    self._latest_business_routes = set()
-                    self._clarification_choices = {}
-                    self._clarification_feedback = ""
-                    feedback = (
-                        "BUSINESS TOOL REFUSED BY AUTHORIZATION: " + detail +
-                        " This account may not perform that read, and no other route to the "
-                        "same facts is open in this turn: page content is no longer accepted "
-                        "as evidence. Answer only from the typed reads you already have, and "
-                        "state what you could not read as an undetermined conclusion. If you "
-                        "have read nothing, finish with outcome=unable.")
-                except BusinessToolError as exc:
-                    self.latest_business_tool_result = None
-                    self._form_draft = None
-                    self._latest_business_routes = set()
-                    self._clarification_choices = {}
-                    self._clarification_feedback = ""
-                    self._latest_business_query_page_actions = None
-                    detail = str(exc)[:500]
-                    self.ledger.append(
-                        "business_tool_rejected", step=step, tool=name,
-                        error_code=getattr(exc, "code", "business_tool"),
-                        reason=detail, side_effect_possible=False,
-                        identity=operation_identity)
-                    feedback = "BUSINESS TOOL FAILED: " + detail
-                self._sync_plan_message(messages)
-                messages += [_assistant_call(call), _tool_result(call, feedback)]
-                messages = _trim(messages, self.keep_observations)
+            handled = self._handle_named_tool(turn, call, name, args)
+            if handled is not None:
+                if handled.finished is not None:
+                    return handled.finished
+                messages, obs, step = turn.messages, turn.obs, turn.step
+                successful_business_tools = turn.successful_business_tools
                 continue
 
             if name in self.disabled_actions:
