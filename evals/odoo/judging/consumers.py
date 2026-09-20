@@ -34,7 +34,7 @@ CONSUMERS: dict[str, tuple[Consumer, ...]] = {
         Consumer("evals/odoo/execution/driver.py", "Driver.run_attempt",
                  "whether the product started, which turns were recorded and how they ended, "
                  "the attempt's times, and which apparatus fault the run met"),
-        Consumer("evals/odoo/execution/driver.py", "_final_page",
+        Consumer("evals/odoo/execution/attempt_results.py", "final_page",
                  "whether a final page was captured at all, or why it was not"),
         Consumer("evals/odoo/execution/driver.py", "Driver._judge_persisted",
                  "the turns a dead driver wrote down as its runner read them, each checked "
@@ -48,11 +48,11 @@ CONSUMERS: dict[str, tuple[Consumer, ...]] = {
         Consumer("evals/odoo/judging/evaluator.py", "_text",
                  "the answer a turn showed, where a turn nobody read an answer from is not an "
                  "empty answer"),
-        Consumer("evals/odoo/judging/evaluator.py", "_judge_write",
+        Consumer("evals/odoo/judging/write_judgement.py", "judge_write",
                  "the approval decisions the oracle made, which carry their own safety events"),
     ),
     "final_page": (
-        Consumer("evals/odoo/execution/driver.py", "_final_page", "the capture the evaluator reads"),
+        Consumer("evals/odoo/execution/attempt_results.py", "final_page", "the capture the evaluator reads"),
         Consumer("evals/odoo/execution/driver.py", "Driver._judge_persisted",
                  "none: the page a dead driver's run ended on was never read, and a recovered "
                  "judgement is given it as unavailable"),
@@ -75,7 +75,7 @@ CONSUMERS: dict[str, tuple[Consumer, ...]] = {
         Consumer("evals/odoo/execution/driver.py", "Driver._judge_persisted",
                  "the trace a recovered judgement reads; an audit nobody could export reaches "
                  "it as unavailable"),
-        Consumer("evals/odoo/execution/driver.py", "agent_assertions",
+        Consumer("evals/odoo/execution/attempt_results.py", "agent_assertions",
                  "which proposals the audit closes, so residue is not read from silence"),
         Consumer("evals/odoo/execution/oracle.py", "ApprovalOracle.decide",
                  "whether the card matches what the product proposed; a proposal nobody read "
@@ -83,7 +83,7 @@ CONSUMERS: dict[str, tuple[Consumer, ...]] = {
         Consumer("evals/odoo/judging/evaluator.py", "_no_changes",
                  "whether a read-only task dispatched anything; an unread audit is no safety "
                  "event"),
-        Consumer("evals/odoo/judging/evaluator.py", "_judge_write",
+        Consumer("evals/odoo/judging/write_judgement.py", "judge_write",
                  "whether the write was dispatched and approved exactly once"),
         Consumer("evals/odoo/judging/evaluator.py", "judge",
                  "whether a refusal task's denial was confirmed"),
@@ -93,7 +93,7 @@ CONSUMERS: dict[str, tuple[Consumer, ...]] = {
                  "the Agent's state after the run, which the reset asserts against"),
         Consumer("evals/odoo/execution/driver.py", "Driver.recover_open_attempt",
                  "the same after an orphaned session is ended"),
-        Consumer("evals/odoo/execution/driver.py", "agent_assertions",
+        Consumer("evals/odoo/execution/attempt_results.py", "agent_assertions",
                  "the residue an attempt leaves; an unread state never passes a reset"),
     ),
     "fixture_guard": (
@@ -110,7 +110,7 @@ CONSUMERS: dict[str, tuple[Consumer, ...]] = {
                  "not be read"),
         Consumer("evals/odoo/judging/evaluator.py", "_no_changes",
                  "whether a read-only task changed the fixture"),
-        Consumer("evals/odoo/judging/evaluator.py", "_judge_write",
+        Consumer("evals/odoo/judging/write_judgement.py", "judge_write",
                  "whether a write touched anything outside its target"),
     ),
     "evaluator_output": (
@@ -129,7 +129,7 @@ CONSUMERS: dict[str, tuple[Consumer, ...]] = {
         Consumer("evals/odoo/reporting/replay.py", "_Replay.model_unresolved",
                  "that a call settled exactly once, and that an attempt ends only when all of "
                  "its calls have"),
-        Consumer("evals/odoo/execution/driver.py", "_cost",
+        Consumer("evals/odoo/execution/attempt_results.py", "attempt_cost",
                  "the attempt's cost, where a call with no answer is usage unavailable"),
         Consumer("evals/odoo/batch.py", "owed",
                  "which calls the bill must account for before any later paid call"),
@@ -175,7 +175,7 @@ DELIBERATE_SUBSTITUTIONS = (
      "artifact['approvals'] if arm == 'woa_product' else []",
      "Only the product has an approval channel. The browser-only arm has none to observe, so "
      "the empty list is what that arm is rather than a record its runner failed to write."),
-    ("evals/odoo/execution/driver.py", "agent_assertions",
+    ("evals/odoo/execution/attempt_results.py", "agent_assertions",
      "set(end['prepared_proposals']) if end is not None else set()",
      "An end state nobody could read holds no proposals to compare, and the zero counts that "
      "follow are never read as an attempt that left nothing open: `_agent_counts` records that "

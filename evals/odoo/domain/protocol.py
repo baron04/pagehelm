@@ -210,7 +210,9 @@ RUNNERS = {
                        "a preselected Skill"],
 }
 EVALUATOR = {
-    "modules": ["evals/odoo/judging/evaluator.py", "evals/odoo/judging/extractor.py", "evals/odoo/fixture/rpc.py",
+    "modules": ["evals/odoo/judging/evaluator.py",
+                "evals/odoo/judging/write_judgement.py",
+                "evals/odoo/judging/extractor.py", "evals/odoo/fixture/rpc.py",
                 "evals/odoo/judging/capture.py"],
     "process": ("a separate process whose PYTHONPATH is the checkout root; the environment can "
                 "still import the product, so it writes no result if a product, adapter or other "
@@ -298,7 +300,9 @@ APPARATUS_MODULES = {
     "reset": RESET["modules"],
     "candidate": ["evals/odoo/fixture/revision.py"],
     "approval_oracle": [APPROVAL_ORACLE["module"]],
-    "attempts": ["evals/odoo/execution/driver.py", "evals/odoo/reporting/ledger.py",
+    "attempts": ["evals/odoo/execution/driver.py",
+                 "evals/odoo/execution/attempt_results.py",
+                 "evals/odoo/reporting/ledger.py",
                  "evals/odoo/reporting/replay.py", "evals/odoo/reporting/validation.py",
                  "evals/odoo/domain/outcomes.py",
                  "evals/odoo/execution/trace.py", "evals/odoo/judging/capture.py", "evals/odoo/judging/consumers.py",
