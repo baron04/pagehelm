@@ -12,7 +12,7 @@ from web_operation_agent.state.identity import PrincipalRevokedError
 from web_operation_agent.transport import (RemoteProtocolError, RemoteSessionClosed,
                                       RemoteSessionRegistry)
 from web_operation_agent.schemas import ApprovalRequest, ApprovalDecision
-from web_operation_agent.tests.test_remote_transport import ORIGIN, hello, principal
+from web_operation_agent.tests.transport.support import ORIGIN, hello, principal
 
 
 class DurableSessionTests(unittest.TestCase):
