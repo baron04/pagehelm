@@ -338,3 +338,36 @@ page, use an available read-only discovery or navigation tool instead of enterin
 inventing a path. A tool refusal is runtime evidence: inspect the returned fresh page and
 choose a different allowed action.
 """
+
+
+def _assistant_call(call: dict) -> dict:
+    return {"role": "assistant", "content": "", "tool_calls": [call]}
+
+
+def _tool_result(call: dict, text: str) -> dict:
+    return {"role": "tool", "tool_call_id": call.get("id") or "0",
+            "name": (call.get("function") or {}).get("name") or "", "content": text}
+
+
+def _trim(messages: list[dict], keep: int) -> list[dict]:
+    """Keep the opening context and the last `keep` tool results in full.
+
+    Older tool results become a single line saying what the action was and where it landed,
+    which is what the model actually needs from them; the page they described is gone.
+    """
+    tool_indexes = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+    if len(tool_indexes) <= keep:
+        return messages
+    for i in tool_indexes[:-keep]:
+        content = messages[i].get("content") or ""
+        if content.startswith("(earlier) "):
+            continue
+        head = content.split("\n", 1)[0]
+        url = ""
+        for line in content.splitlines():
+            if line.startswith("url: "):
+                url = line[5:]
+                break
+        messages[i] = {**messages[i],
+                       "content": f"(earlier) {head}" + (f" | page: {url}" if url else "")}
+    return messages

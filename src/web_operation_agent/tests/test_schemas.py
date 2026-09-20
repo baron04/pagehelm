@@ -7,9 +7,15 @@ class TerminalReasonContract(unittest.TestCase):
     """Every emitted terminal reason must have one shared classification."""
 
     def test_every_reason_the_runner_emits_is_classified(self):
+        import importlib
+        import pkgutil
+
+        import web_operation_agent.execution as ex
         from web_operation_agent.business.approvals import ApprovalWatch
         from web_operation_agent.execution.session import ServerAgentSession
-        emitted = _reasons_emitted_by(ServerAgentSession, ApprovalWatch)
+        modules = [importlib.import_module(f'{ex.__name__}.{m.name}')
+                   for m in pkgutil.iter_modules(ex.__path__)]
+        emitted = _reasons_emitted_by(ServerAgentSession, ApprovalWatch, *modules)
         self.assertTrue(emitted, "could not find any terminal reason in the runner source")
         S.assert_terminal_reason_contract(emitted, set(S.SCORABLE_TERMINAL_REASONS))
 
@@ -34,11 +40,14 @@ def _reasons_emitted_by(*classes) -> set[str]:
 
     Comparing a hand-written list against another hand-written list proves nothing; the
     point is to catch the runner learning a new reason that the analyser has never heard
-    of, so the runner's code is the source of truth.
+    of, so the runner's code is the source of truth. Step code now lives in handler modules
+    beside the session, so a module is scanned as itself and the caller passes every
+    module that makes up the runner.
     """
     import inspect
     import re
-    src = "\n".join(inspect.getsource(inspect.getmodule(cls)) for cls in classes)
+    src = "\n".join(inspect.getsource(cls if inspect.ismodule(cls)
+                                      else inspect.getmodule(cls)) for cls in classes)
     found = set()
     for m in re.finditer(r'_finish\(\s*result,\s*t0,\s*("[a-z_]+"|[a-z_]+\s+if)', src):
         token = m.group(1)
