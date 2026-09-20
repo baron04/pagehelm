@@ -18,11 +18,11 @@ import uuid
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from urllib.parse import urlsplit
 
 from .durable import SQLiteSessionStore, DurableStateError, principal_scope
 from .browser import TransportError, TurnCancelled
 from .identity import PrincipalContext, PrincipalError, PrincipalRevokedError
+from .origins import OriginError, origin_of
 from .panel_view import (collapse_timeline, panel_contract, panel_limits,
                          progress_message, project_event, project_history_record)
 from .privacy import (SESSION_HANDOFF_QUERY_KEYS, SENSITIVE_CREDENTIAL_NAME,
@@ -74,13 +74,11 @@ def _now_ms() -> int:
 
 
 def _origin(value: str) -> str:
-    if not isinstance(value, str) or len(value) > _MAX_ORIGIN_LENGTH:
-        raise RemoteProtocolError("expected a bounded absolute http(s) origin", status=400)
-    parsed = urlsplit(value)
-    if (parsed.scheme not in {"http", "https"} or not parsed.hostname
-            or parsed.username is not None or parsed.password is not None):
-        raise RemoteProtocolError("expected an absolute http(s) origin", status=400)
-    return f"{parsed.scheme}://{parsed.netloc}"
+    """The origin a wire value belongs to -- a page URL as readily as an origin itself."""
+    try:
+        return origin_of(value, name="origin")
+    except OriginError as exc:
+        raise RemoteProtocolError(str(exc), status=400) from exc
 
 
 def _event_sequence(event_id: str) -> int:

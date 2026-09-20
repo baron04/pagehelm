@@ -10,6 +10,7 @@ from .business import (BusinessDataClassifier, BusinessPostconditionVerifier,
                        BusinessRouteValidator, BusinessToolResult, BusinessToolRuntime,
                        MutationPostcondition)
 from .identity import IdentityAssertion, PrincipalContext, PrincipalError
+from .origins import normalize_origin
 from .schemas import SourceMap
 
 
@@ -21,24 +22,9 @@ _SAFE_ROUTE = re.compile(r"^/[^\\\x00-\x20\x7f]*$")
 
 
 def _origin(value: object) -> str:
-    if not isinstance(value, str):
-        raise ValueError("application origin must be a string")
-    parsed = urlsplit(value)
-    if (parsed.scheme not in {"http", "https"} or not parsed.hostname
-            or parsed.username is not None or parsed.password is not None
-            or parsed.path not in {"", "/"} or parsed.query or parsed.fragment):
-        raise ValueError("application origin must be an http(s) origin")
-    try:
-        port = parsed.port
-    except ValueError as exc:
-        raise ValueError("application origin port is invalid") from exc
-    if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
-        raise ValueError("plain HTTP application origins must use loopback")
-    host = parsed.hostname.casefold()
-    rendered_host = f"[{host}]" if ":" in host else host
-    default_port = 80 if parsed.scheme == "http" else 443
-    suffix = f":{port}" if port is not None and port != default_port else ""
-    return f"{parsed.scheme}://{rendered_host}{suffix}"
+    """The application's own origin: the strict form, and plain HTTP only on loopback."""
+    return normalize_origin(value, name="application origin",
+                            require_secure_unless_loopback=True)
 
 
 @dataclass(frozen=True)

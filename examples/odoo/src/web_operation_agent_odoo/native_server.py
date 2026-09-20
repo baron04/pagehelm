@@ -31,7 +31,9 @@ from web_operation_agent.model import (ChatModel, KeyedLimitedChat,
 from web_operation_agent.mutation import SQLiteMutationJournal
 from web_operation_agent.observability import ObservedChat, RuntimeObservability
 from web_operation_agent.ledger import SessionLedger
-from web_operation_agent.product import AgentTurnConfig, AgentTurnExecutor
+from web_operation_agent.product import AgentTurnExecutor
+
+from .turn import odoo_turn_config
 from web_operation_agent.remote import RemoteProtocolError
 from web_operation_agent.identity import PrincipalContext, PrincipalError
 
@@ -402,36 +404,11 @@ class OdooNativeHost:
 
                 executor = AgentTurnExecutor(
                     channel=channel,
-                    config=AgentTurnConfig(
-                        supported_scope=(
-                            "Read current Odoo records through the typed API and open only "
-                            "an exact route returned by that API. Do not modify records or "
-                            "submit forms."
-                            if not allow_mutations else
-                            "Read current Odoo records through the typed API, and make at "
-                            "most the one record change the user confirms, through a typed "
-                            "write tool. Do not submit page forms. Open only an exact route "
-                            "returned by the API."),
-                        ledger_path=run_dir / "audit.jsonl",
-                        step_budget=10,
-                        wall_budget_s=self.config.turn_timeout_s,
-                        transport_timeout_s=min(30, self.config.turn_timeout_s),
-                        disabled_actions=frozenset(
-                            {"click", "fill", "select", "submit", "back"}),
-                        scope_first_policy=True,
-                        policy_block_limit=3,
-                        plain_business_answer_min_page_actions=0,
-                        deterministic_read_navigation=not self.config.scripted,
-                        require_identity=True,
-                        allow_business_mutations=allow_mutations,
-                        allow_form_prefill=True,
-                        deployment_profile="production",
-                        source=adapter.source_capability(),
-                        # The signed-in Odoo user's own zone, so "today" is their day and
-                        # every time the assistant reports matches what Odoo shows them.
-                        time_zone=adapter.business_tools.time_zone(),
-                        max_user_answer_chars=8_000,
-                    ),
+                    config=odoo_turn_config(
+                        adapter=adapter, run_dir=run_dir,
+                        allow_mutations=allow_mutations,
+                        scripted=self.config.scripted,
+                        turn_timeout_s=self.config.turn_timeout_s),
                     chat=chat, application=bound, control=ReadOnlyControl(),
                     run_id_factory=lambda _message: "odoo-" + uuid.uuid4().hex[:16],
                     ledger_factory=ledger_factory,

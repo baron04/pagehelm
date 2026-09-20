@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+from .origins import origin_of
 from .panel_view import label_keys, panel_limits
 from .remote import RemoteProtocolError, RemoteSessionRegistry, SessionGrant
 from .schemas import (ActionResultEnvelope, ApprovalDecision, CancellationRequest, ClientHello,
@@ -102,20 +103,6 @@ def _sensitive_query_keys(value) -> list[str]:
                    for key in value)):
         raise ValueError("sensitive_query_keys must contain at most 32 safe query names")
     return sorted({key.casefold() for key in value})
-
-
-def _normalized_origin(value: str) -> str:
-    parsed = urlsplit(value)
-    scheme = parsed.scheme.lower()
-    if scheme not in {"http", "https"} or parsed.hostname is None:
-        raise ValueError("expected an absolute http(s) URL")
-    port = parsed.port
-    if port == (80 if scheme == "http" else 443):
-        port = None
-    host = parsed.hostname.lower()
-    if ":" in host:
-        host = f"[{host}]"
-    return f"{scheme}://{host}{f':{port}' if port is not None else ''}"
 
 
 def _readiness_payload(value: Mapping) -> dict:
@@ -319,8 +306,7 @@ def _handler(registry: RemoteSessionRegistry, *, sse_wait_s: float,
                 body = self._body()
                 if endpoint == "hello":
                     hello = ClientHello.from_json(body)
-                    page = urlsplit(hello.page_origin)
-                    if f"{page.scheme}://{page.netloc}" != self._origin():
+                    if origin_of(hello.page_origin) != origin_of(self._origin()):
                         raise RemoteProtocolError(
                             "hello page_origin does not match the request Origin",
                             code="origin_refused",
@@ -522,9 +508,8 @@ class EmbeddedGateway:
         if (parsed.scheme not in {"http", "https"} or not parsed.netloc
                 or parsed.username is not None or parsed.password is not None):
             raise ValueError("page_controller_module must be an absolute http(s) URL")
-        module_origin = _normalized_origin(page_controller_module)
-        allowed_module_origins = {_normalized_origin(origin)
-                                  for origin in grant.allowed_origins}
+        module_origin = origin_of(page_controller_module, name="page_controller_module")
+        allowed_module_origins = {origin_of(origin) for origin in grant.allowed_origins}
         if module_origin not in allowed_module_origins:
             raise ValueError(
                 "page_controller_module origin must be an allowed session origin")

@@ -413,7 +413,8 @@ class ChannelTests(unittest.TestCase):
                 "text": "Task",
                 "page_url": ORIGIN + "/start",
             }, lease_id=self.lease)
-        with self.assertRaisesRegex(RemoteProtocolError, "absolute"):
+        # The refusal names what is wrong with it, rather than "not an absolute origin".
+        with self.assertRaisesRegex(RemoteProtocolError, "user information"):
             RemoteSessionRegistry().create(
                 allowed_origins=["http://user:password@app.test"],
                 session_id="credential-origin",

@@ -40,10 +40,11 @@ from web_operation_agent.identity import PrincipalContext
 from web_operation_agent.live import LiveConversationRunner, LiveProductSession
 from web_operation_agent.model import ChatModel, ProviderError, SpendMeter, load_env
 from web_operation_agent.mutation import SQLiteMutationJournal
-from web_operation_agent.product import (AgentTurnConfig, AgentTurnExecution,
+from web_operation_agent.product import (AgentTurnExecution,
                                          AgentTurnExecutor)
 
 from ..adapter import OdooApplicationAdapter
+from ..turn import odoo_turn_config
 
 _MODEL_ENV_KEYS = ("AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY",
                    "AGENT_OPENAI_MODEL", "AGENT_PROVIDER")
@@ -607,39 +608,12 @@ def run_demo(config: OdooDemoConfig, *,
     def runner_factory(channel):
         executor = AgentTurnExecutor(
             channel=channel,
-            config=AgentTurnConfig(
-                supported_scope=(
-                    "Read current Odoo records through the typed API and open only an exact "
-                    "route returned by that API. Do not modify records or submit forms."
-                    if not config.allow_mutations else
-                    "Read current Odoo records through the typed API, and make at most the "
-                    "one record change the user confirms, through a typed write tool. Do "
-                    "not submit page forms. Open only an exact route returned by the API."),
-                ledger_path=run_dir / "audit.jsonl",
-                step_budget=10,
-                wall_budget_s=max(1, int(config.turn_timeout_s)),
-                transport_timeout_s=min(30, config.turn_timeout_s),
-                disabled_actions=frozenset(
-                    {"click", "fill", "select", "submit", "back"}),
-                scope_first_policy=True,
-                policy_block_limit=3,
-                plain_business_answer_min_page_actions=0,
-                # The scripted apparatus deliberately exercises the explicit load/finish
-                # transitions. Provider mode may remove those two model round trips once
-                # the server has enough trusted evidence to do so.
-                deterministic_read_navigation=not config.scripted,
-                require_identity=True,
-                allow_business_mutations=config.allow_mutations,
-                # The adapter may issue an exact transient customer-form draft. Direct
-                # model fill/select/submit actions above remain unavailable.
-                allow_form_prefill=True,
-                deployment_profile="production",
-                # The adapter's whole answer, not a selection from it: with a source root
-                # configured this is what turns on cited runtime lookup as well as source
-                # affordance candidates.
-                source=capability,
-                max_user_answer_chars=8_000,
-            ),
+            config=odoo_turn_config(
+                adapter=adapter, run_dir=run_dir,
+                allow_mutations=config.allow_mutations,
+                scripted=config.scripted,
+                turn_timeout_s=config.turn_timeout_s,
+                source=capability),
             chat=chat,
             application=bound,
             control=ReadOnlyControl(),

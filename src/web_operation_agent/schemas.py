@@ -17,7 +17,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import urlsplit
+from .origins import OriginError, normalize_origin
 
 SCHEMA_VERSIONS = {
     "EvidenceRef": 1,
@@ -123,15 +123,12 @@ def _string_sequence(v: Any, name: str) -> tuple[str, ...]:
 
 
 def _page_origin(v: Any) -> str:
-    origin = _str(v, "page_origin")
-    parsed = urlsplit(origin)
-    _require(parsed.scheme in {"http", "https"} and bool(parsed.netloc),
-             "page_origin must be an absolute http(s) origin")
-    _require(parsed.path in {"", "/"} and not parsed.query and not parsed.fragment,
-             "page_origin must not contain a path, query, or fragment")
-    _require(parsed.username is None and parsed.password is None,
-             "page_origin must not contain user information")
-    return origin
+    """The page's own origin, canonical: whoever receives it compares it with the browser's
+    Origin header and with the session's allowed origins."""
+    try:
+        return normalize_origin(_str(v, "page_origin"), name="page_origin")
+    except OriginError as exc:
+        raise SchemaError(str(exc)) from exc
 
 
 # --------------------------------------------------------------------------------------
@@ -745,7 +742,7 @@ class ClientHello:
         _str(self.runtime, "runtime")
         object.__setattr__(self, "capabilities",
                            _string_sequence(self.capabilities, "capabilities"))
-        _page_origin(self.page_origin)
+        object.__setattr__(self, "page_origin", _page_origin(self.page_origin))
         _str(self.application_id, "application_id", allow_empty=True)
         _str(self.principal_digest, "principal_digest", allow_empty=True)
         _require(bool(self.application_id) == bool(self.principal_digest),
