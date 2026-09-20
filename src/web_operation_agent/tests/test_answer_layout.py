@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import unittest
 
-from web_operation_agent.answer_protocol import compute, submit
-from web_operation_agent.answer_view import render_payload
-from web_operation_agent.evidence import Origin, QueryEvidence, RecordEvidence, TurnEvidence
+from web_operation_agent.answer.answer_protocol import compute, submit
+from web_operation_agent.answer.answer_view import render_payload
+from web_operation_agent.answer.evidence import Origin, QueryEvidence, RecordEvidence, TurnEvidence
 
 AT = "2026-09-18T00:00:00+00:00"
 ORDERS = (("sale.order/13", "S00013", "2026-09-15 12:27:38", "900.00"),
@@ -101,7 +101,7 @@ class AFilterTheListStandsOnIsShown(unittest.TestCase):
 
 class APageFactSaysWhatItCovers(unittest.TestCase):
     def test_the_scope_of_a_page_fact_is_a_sentence_not_an_epoch(self):
-        from web_operation_agent.evidence import PageEvidence
+        from web_operation_agent.answer.evidence import PageEvidence
         turn = TurnEvidence()
         turn.record(PageEvidence(
             evidence_id="page#1",

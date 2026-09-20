@@ -2,9 +2,9 @@
 from dataclasses import replace
 import unittest
 
-from web_operation_agent.answer_protocol import compute, evidence_index, submit, MAX_INDEX_BYTES
-from web_operation_agent.answer_view import render_payload
-from web_operation_agent.conclusion import ConclusionRefused
+from web_operation_agent.answer.answer_protocol import compute, evidence_index, submit, MAX_INDEX_BYTES
+from web_operation_agent.answer.answer_view import render_payload
+from web_operation_agent.answer.conclusion import ConclusionRefused
 from web_operation_agent.tests.test_computation import _turn, AT
 
 

@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from web_operation_agent.answering import StructuredQueryAnswer
+from web_operation_agent.answer.answering import StructuredQueryAnswer
 from web_operation_agent.business.runtime import (
     APPLICATION_SAVES_ON_LEAVE,
     BusinessMutationBlockedError, BusinessMutationIndeterminate,
@@ -23,7 +23,7 @@ from web_operation_agent.business.runtime import (
 )
 from web_operation_agent.application import ResultPostconditionVerifier
 from web_operation_agent.embedded_agent import ReadOnlyControl
-from web_operation_agent.evidence import Origin, QueryEvidence, RecordEvidence
+from web_operation_agent.answer.evidence import Origin, QueryEvidence, RecordEvidence
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.identity import OperationContext, PrincipalContext
 from web_operation_agent.business.mutation import MemoryMutationJournal, MutationJournalError

@@ -5,9 +5,9 @@ import hashlib
 import json
 import re
 
-from .. import answer_protocol
+from ..answer import answer_protocol
 from ..business.runtime import BusinessToolResult, BusinessToolRuntime
-from ..evidence import EvidenceUnknown, TurnEvidence
+from ..answer.evidence import EvidenceUnknown, TurnEvidence
 from ..ledger import SessionLedger
 from ..privacy import redact_sensitive_assignments
 

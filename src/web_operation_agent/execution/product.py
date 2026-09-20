@@ -15,8 +15,8 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from ..application import SourceCapability
-from ..answering import render_structured_query_answer
-from ..answer_view import render_payload
+from ..answer.answering import render_structured_query_answer
+from ..answer.answer_view import render_payload
 from ..business.runtime import BusinessToolResult
 from ..panel_view import panel_limits
 from ..remote import RemoteProtocolError, ensure_safe_browser_payload

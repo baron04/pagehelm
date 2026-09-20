@@ -103,7 +103,7 @@ guarded is not a guarantee.
 | Never auto-retrying an acknowledged-but-uncertain write | `BusinessMutationIndeterminate` handling | The application is precisely the party that does not know |
 | Refusing a route the current result did not authorise | `DeclaredRoutePort` + `allowed_routes` | An application that authorises its own navigation authorises everything |
 | Redacting credentials before audit and before provider egress | `privacy.py`, `egress.py` | Data leaving for a third party is not the application's decision to review |
-| Projecting the typed answer instead of model prose | `answering.py` | The point is that neither the model nor the application writes the user-visible fact |
+| Projecting the typed answer instead of model prose | `answer/answering.py` | The point is that neither the model nor the application writes the user-visible fact |
 
 The ratio that matters is therefore not 22%/16% but this: **the movable part is the part an
 application team is already better at, and the immovable part is the entire product.** That
@@ -124,7 +124,7 @@ that is true for reads and **not yet true for writes**. Seven gaps, concretely:
 | 4 | **Delegated identity has no wire shape.** `resolve_delegated_identity()` returns an `IdentityAssertion` built in-process. | `adapter.py` per application | `GET /identity` → `{tenant_id, workspace_id, actor_id, expires_at}`, identifiers only, never a credential |
 | 5 | **Reconciliation has no wire shape.** `MutationReconciliation(outcome, requires_human, reason)` exists as a dataclass but is not part of any result. | `application.py:408` | `POST /tools/<name>/reconcile` → the same three fields |
 | 6 | **The postcondition assertion is adapter-side configuration.** `ResultPostconditionVerifier` is handed dotted paths such as `content.readback_verified`. | `application.py:368` | Either travels in a capability document, or `readback_verified` becomes a fixed top-level field of the result — the second is better: fewer ways to be wrong |
-| 7 | **Records have no identity.** `StructuredQueryAnswer.records` are positional *display strings*; the record id survives only inside `content[*].ui_path`. | `answering.py:37` | A per-row `record_key`, so framework-side dedupe, readback and cross-call comparison do not have to parse a URL |
+| 7 | **Records have no identity.** `StructuredQueryAnswer.records` are positional *display strings*; the record id survives only inside `content[*].ui_path`. | `answer/answering.py:37` | A per-row `record_key`, so framework-side dedupe, readback and cross-call comparison do not have to parse a URL |
 
 Gaps 1–3 and 5 are the write path; 4 is identity; 6–7 are small and mechanical. None of them
 is a redesign: every one already exists as a Python value, and the work is giving it a name

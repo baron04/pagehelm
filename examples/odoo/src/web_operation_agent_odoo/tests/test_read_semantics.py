@@ -1,11 +1,11 @@
 """Read facts keep their application meaning through the default answer contract."""
 import unittest
 
-from web_operation_agent.answer_protocol import compute, submit
-from web_operation_agent.answer_view import render_payload
+from web_operation_agent.answer.answer_protocol import compute, submit
+from web_operation_agent.answer.answer_view import render_payload
 from web_operation_agent.business.runtime import BusinessToolContractError, BusinessToolRequestError
-from web_operation_agent.computation import ComputationRefused
-from web_operation_agent.evidence import RecordEvidence, TurnEvidence
+from web_operation_agent.answer.computation import ComputationRefused
+from web_operation_agent.answer.evidence import RecordEvidence, TurnEvidence
 
 from .test_adapter import _FakeOdoo, _customers, _orders, _quotations
 

@@ -10,7 +10,7 @@ from evals.woa.assembler import (
     ENGINE_ANSWER_CEILING, FinalPageSample, TurnEvidence, WoaRunAssemblyError,
     assemble_woa_run, permitted_routes, utc_now,
 )
-from web_operation_agent.answering import StructuredQueryAnswer
+from web_operation_agent.answer.answering import StructuredQueryAnswer
 from web_operation_agent.business.runtime import BusinessToolResult
 from web_operation_agent.execution.product import AgentTurnExecution, AgentTurnMessage, AgentTurnStatus
 from web_operation_agent.execution.session import RunResult

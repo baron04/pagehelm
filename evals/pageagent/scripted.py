@@ -26,7 +26,7 @@ from web_operation_agent.application import (
     DeclaredDataClassifier,
     ResultPostconditionVerifier,
 )
-from web_operation_agent.answering import StructuredQueryAnswer
+from web_operation_agent.answer.answering import StructuredQueryAnswer
 from web_operation_agent.business.runtime import (
     BusinessMutationSpec, BusinessSkill, BusinessToolError, BusinessToolRequestError,
     BusinessToolResult, BusinessToolRuntime,

@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import unittest
 
-from web_operation_agent.answer_protocol import submit
-from web_operation_agent.answer_view import render_payload
-from web_operation_agent.evidence import Origin, QueryEvidence, RecordEvidence, TurnEvidence
+from web_operation_agent.answer.answer_protocol import submit
+from web_operation_agent.answer.answer_view import render_payload
+from web_operation_agent.answer.evidence import Origin, QueryEvidence, RecordEvidence, TurnEvidence
 
 AT = "2026-09-18T00:00:00+00:00"
 SCOPE = "customers visible to the delegated user"

@@ -12,13 +12,13 @@ from __future__ import annotations
 
 import unittest
 
-from web_operation_agent.answer_view import render
-from web_operation_agent.computation import ComputationRequest, run
-from web_operation_agent.conclusion import (
+from web_operation_agent.answer.answer_view import render
+from web_operation_agent.answer.computation import ComputationRequest, run
+from web_operation_agent.answer.conclusion import (
     Aggregate, AnswerDraft, ConclusionRefused, FieldValue, NotFound, Selection, Undetermined,
     verify,
 )
-from web_operation_agent.evidence import (
+from web_operation_agent.answer.evidence import (
     Origin, PageEvidence, QueryEvidence, RecordEvidence, TurnEvidence,
 )
 

@@ -59,7 +59,7 @@ from web_operation_agent.business.runtime import (
 from web_operation_agent.identity import (IdentityAssertion, PrincipalContext,
                                           PrincipalError, PRINCIPAL_CONTEXT_VERSION,
                                           bind_matching_identity)
-from web_operation_agent.evidence import Origin, QueryEvidence, RecordEvidence
+from web_operation_agent.answer.evidence import Origin, QueryEvidence, RecordEvidence
 
 
 #: Skills are artifacts, not literals. A real integration ships one file per Skill and

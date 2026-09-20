@@ -2,8 +2,8 @@
 from dataclasses import replace
 import unittest
 
-from web_operation_agent.computation import ComputationRefused, ComputationRequest, run
-from web_operation_agent.evidence import EvidenceUnknown, TurnEvidence
+from web_operation_agent.answer.computation import ComputationRefused, ComputationRequest, run
+from web_operation_agent.answer.evidence import EvidenceUnknown, TurnEvidence
 from web_operation_agent.tests.test_computation import _turn, AT
 
 

@@ -88,7 +88,7 @@ class AChineseAnswerSpeaksChinese(unittest.TestCase):
         self.assertEqual({key.partition("=")[0] for key in labels if "=" in key}, {"state"})
 
     def test_a_value_is_labelled_only_in_its_own_field(self):
-        from web_operation_agent.answer_view import _value_label
+        from web_operation_agent.answer.answer_view import _value_label
         words = {"labels": {"state=sale": "已确认"}}
         self.assertEqual(_value_label(words, "state", "sale"), "已确认")
         self.assertEqual(_value_label(words, "name", "sale"), "sale")

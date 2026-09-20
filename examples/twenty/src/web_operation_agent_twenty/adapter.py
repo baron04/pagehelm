@@ -25,7 +25,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
-from web_operation_agent.answering import StructuredQueryAnswer
+from web_operation_agent.answer.answering import StructuredQueryAnswer
 from web_operation_agent.business.runtime import (BusinessMutationIndeterminate,
                                           BusinessMutationSpec, BusinessSkill,
                                           BusinessToolAuthenticationError,

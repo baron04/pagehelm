@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from web_operation_agent.answering import (
+from web_operation_agent.answer.answering import (
     StructuredQueryAnswer, render_structured_query_answer,
 )
 

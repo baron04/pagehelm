@@ -12,12 +12,12 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from web_operation_agent import answer_protocol
-from web_operation_agent.answer_view import capability_gap_answer
+from web_operation_agent.answer import answer_protocol
+from web_operation_agent.answer.answer_view import capability_gap_answer
 from web_operation_agent.business.runtime import BusinessSkill, BusinessToolRuntime
-from web_operation_agent.computation import ComputationRefused, ComputationRequest, run
-from web_operation_agent.conclusion import ConclusionRefused
-from web_operation_agent.evidence import (CapabilityEvidence, Origin, QueryEvidence,
+from web_operation_agent.answer.computation import ComputationRefused, ComputationRequest, run
+from web_operation_agent.answer.conclusion import ConclusionRefused
+from web_operation_agent.answer.evidence import (CapabilityEvidence, Origin, QueryEvidence,
                                           TurnEvidence)
 
 

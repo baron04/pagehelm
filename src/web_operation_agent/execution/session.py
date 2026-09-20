@@ -29,10 +29,10 @@ from urllib.parse import urlencode, urljoin, urlsplit
 from zoneinfo import ZoneInfo
 
 from ..application import ApplicationRoutePort, SourceCapability
-from .. import answer_protocol
-from .. import page_answer
+from ..answer import answer_protocol
+from ..answer import page_answer
 from ..business.approvals import ApprovalWatch, NavigationPlan
-from ..answer_view import (capability_gap_answer, render_payload, unavailable_answer,
+from ..answer.answer_view import (capability_gap_answer, render_payload, unavailable_answer,
                           withdrawn_answer)
 from ..affordance import SourceAffordance, resolve_source_affordances
 from ..browser import BrowserExecutor, TransportError, TurnCancelled
@@ -71,7 +71,7 @@ from .prompts import (
     _REFERENCE_FOLLOWUP)
 from ..schemas import (BROWSER_ACTIONS, ActionReceipt, ControlPlan, OperationContract,
                       PageObservation, digest, empty_contract)
-from ..evidence import CapabilityEvidence, EvidenceUnknown, Origin, TurnEvidence
+from ..answer.evidence import CapabilityEvidence, EvidenceUnknown, Origin, TurnEvidence
 
 #: Describe a plan by its actual origin. A page-only plan must never be presented to the model
 #: as source-derived, because that would change the information available to that mode.

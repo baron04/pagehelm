@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import unittest
 
-from web_operation_agent.answer_view import render
-from web_operation_agent.computation import ComputationRequest, run
-from web_operation_agent.conclusion import Aggregate, AnswerDraft, NotFound, Selection, verify
-from web_operation_agent.evidence import QueryEvidence, RecordEvidence, TurnEvidence
+from web_operation_agent.answer.answer_view import render
+from web_operation_agent.answer.computation import ComputationRequest, run
+from web_operation_agent.answer.conclusion import Aggregate, AnswerDraft, NotFound, Selection, verify
+from web_operation_agent.answer.evidence import QueryEvidence, RecordEvidence, TurnEvidence
 
 from .test_adapter import _FakeOdoo, _customers, _quotations
 

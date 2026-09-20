@@ -12,8 +12,8 @@ from typing import Callable
 from urllib.parse import urlsplit
 
 from ..application import BoundApplication
-from ..answering import render_structured_query_answer
-from ..answer_view import render_sources
+from ..answer.answering import render_structured_query_answer
+from ..answer.answer_view import render_sources
 from ..browser import TransportError
 from ..business.mutation import MutationJournalDurability
 from ..business.runtime import BusinessToolRuntime

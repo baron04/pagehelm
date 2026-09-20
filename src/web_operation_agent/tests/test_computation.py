@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import unittest
 
-from web_operation_agent.computation import ComputationRefused, ComputationRequest, run
-from web_operation_agent.evidence import Origin, QueryEvidence, RecordEvidence, TurnEvidence
+from web_operation_agent.answer.computation import ComputationRefused, ComputationRequest, run
+from web_operation_agent.answer.evidence import Origin, QueryEvidence, RecordEvidence, TurnEvidence
 
 AT = "2026-09-12T10:04:07+00:00"
 SCOPE = "open quotations, neither confirmed nor cancelled"

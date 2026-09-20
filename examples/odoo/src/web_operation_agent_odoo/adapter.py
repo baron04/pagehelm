@@ -33,7 +33,7 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from web_operation_agent.answering import StructuredQueryAnswer
+from web_operation_agent.answer.answering import StructuredQueryAnswer
 from web_operation_agent.application import (APPLICATION_ADAPTER_VERSION,
                                              ApplicationDescriptor, ApplicationPorts,
                                              DeclaredDataClassifier,
@@ -61,7 +61,7 @@ from web_operation_agent.business.mutation import MutationJournal
 
 from .route import ODOO_ROUTE_PORT, ODOO_SOURCE_SCOPE
 from .sourcemap import OdooCompiler, odoo_source_tree
-from web_operation_agent.evidence import Origin, QueryEvidence, RecordEvidence
+from web_operation_agent.answer.evidence import Origin, QueryEvidence, RecordEvidence
 
 
 APPLICATION_ID = "odoo"

@@ -2,7 +2,7 @@
 import re
 
 from .evidence import Origin, PageEvidence
-from .schemas import PageObservation
+from ..schemas import PageObservation
 
 MAX_PAGE_ITEMS = 32
 MAX_PAGE_EXCERPT_CHARS = 300

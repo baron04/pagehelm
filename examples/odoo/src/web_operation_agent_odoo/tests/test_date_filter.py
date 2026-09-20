@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import unittest
 
-from web_operation_agent.answer_protocol import compute, submit
-from web_operation_agent.answer_view import render_payload
-from web_operation_agent.computation import ComputationRefused
-from web_operation_agent.evidence import TurnEvidence
+from web_operation_agent.answer.answer_protocol import compute, submit
+from web_operation_agent.answer.answer_view import render_payload
+from web_operation_agent.answer.computation import ComputationRefused
+from web_operation_agent.answer.evidence import TurnEvidence
 from web_operation_agent_odoo.tests.test_adapter import _FakeOdoo
 
 
