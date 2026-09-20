@@ -37,11 +37,11 @@ from .answer_view import (capability_gap_answer, render_payload, unavailable_ans
 from .affordance import SourceAffordance, resolve_source_affordances
 from .browser import BrowserExecutor, TransportError, TurnCancelled
 from .business import (BUSINESS_SKILL_MATCHER_VERSION, BusinessSkillSelection,
-                       FormDraft, BusinessToolRuntime,
-                       trigger_requests_action)
+                       FormDraft, BusinessToolRuntime)
 from .business_errors import (BusinessMutationBlockedError, BusinessMutationIndeterminate,
                               BusinessMutationRefusedError, BusinessToolError,
                               BusinessToolPermissionError)
+from .business_text import trigger_requests_action
 from .contract import (ContractPlanner, EvidenceBundle, PlanningFailed, SourceRetriever,
                        _segment_from_template, expand_terms)
 from .controlplane import ControlPlaneClient, ControlPlaneError
