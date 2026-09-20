@@ -211,6 +211,7 @@ RUNNERS = {
 }
 EVALUATOR = {
     "modules": ["evals/odoo/judging/evaluator.py",
+                "evals/odoo/judging/truth.py",
                 "evals/odoo/judging/write_judgement.py",
                 "evals/odoo/judging/extractor.py", "evals/odoo/fixture/rpc.py",
                 "evals/odoo/judging/capture.py"],
@@ -301,9 +302,12 @@ APPARATUS_MODULES = {
     "candidate": ["evals/odoo/fixture/revision.py"],
     "approval_oracle": [APPROVAL_ORACLE["module"]],
     "attempts": ["evals/odoo/execution/driver.py",
+                 "evals/odoo/execution/attempt_execution.py",
                  "evals/odoo/execution/attempt_results.py",
                  "evals/odoo/reporting/ledger.py",
-                 "evals/odoo/reporting/replay.py", "evals/odoo/reporting/validation.py",
+                 "evals/odoo/reporting/replay.py",
+                 "evals/odoo/reporting/replay_summary.py",
+                 "evals/odoo/reporting/validation.py",
                  "evals/odoo/domain/outcomes.py",
                  "evals/odoo/execution/trace.py", "evals/odoo/judging/capture.py", "evals/odoo/judging/consumers.py",
                  "evals/odoo/judging/evaluator.py"],
@@ -314,8 +318,10 @@ APPARATUS_MODULES = {
                           "evals/odoo/fixture/manifest.py", "evals/odoo/judging/leakcheck.py"],
     "statistics_and_report": ["evals/odoo/reporting/stats.py",
                               "evals/odoo/reporting/report.py",
+                              "evals/odoo/reporting/report_sections.py",
                               "evals/odoo/reporting/report_validation.py"],
-    "entry": ["evals/odoo/batch.py", "evals/odoo/execution/harness.py"],
+    "entry": ["evals/odoo/batch.py", "evals/odoo/batch_setup.py",
+              "evals/odoo/execution/harness.py"],
 }
 def arm_capability_digest(arm: str) -> str:
     return digest_json({"arm": arm, "capabilities": ARMS[arm],

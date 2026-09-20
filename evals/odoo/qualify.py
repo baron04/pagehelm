@@ -56,134 +56,7 @@ MUTATED_QUOTATION_DOMAIN = 'domain=[("state", "in", ("draft", "sent", "sale"))],
 
 # -- scripted programs ---------------------------------------------------------------------
 
-S = scripted
-
-
-def woa(turns: dict[str, tuple]) -> Callable:
-    return S.WoaProgram(turns).policy()
-
-
-def c_program(ctx: Context, task_id: str, *, variant: str = "") -> Callable:
-    runner, _ = ctx.inputs(task_id)
-    first = runner.messages[0]
-    if task_id == "d01":
-        name = ctx.record("customer.lookup")["name"]
-        fields = ["phone"] if variant == "missing_field" else ["email", "phone"]
-        return woa({first: (S.load_skill_with("query_customers"),
-                            S.call("query_customers", {"name_contains": name}),
-                            S.finish_fields(name, fields))})
-    if task_id == "d02":
-        name = ctx.record("customer.lookup_page")["name"]
-        return woa({first: (S.load_skill_with("query_customers"),
-                            S.call("query_customers", {"name_contains": name}),
-                            S.goto_route_of(name),
-                            S.finish_acted(f"已打开客户 {name} 的详情页。"))})
-    if task_id == "d07":
-        return woa({first: (S.load_skill_with("query_quotations"),
-                            S.call("query_quotations", {"limit": 50}),
-                            S.compute("filter", field="state", comparison="eq",
-                                      threshold="sent"),
-                            S.compute("count", over="SelectionEvidence"),
-                            S.finish_aggregate())})
-    if task_id == "d08":
-        if variant == "no_currency_filter":
-            # Drops the task's currency qualifier: sums every open quotation.
-            return woa({first: (S.load_skill_with("query_quotations"),
-                                S.call("query_quotations", {"limit": 50}),
-                                S.compute("sum", field="amount_total"),
-                                S.finish_aggregate())})
-        return woa({first: (S.load_skill_with("query_quotations"),
-                            S.call("query_quotations", {"limit": 50}),
-                            S.compute("filter", field="currency_id", comparison="eq",
-                                      threshold="EUR"),
-                            S.compute("sum", field="amount_total", over="SelectionEvidence"),
-                            S.finish_aggregate())})
-    if task_id == "d11":
-        prefix = ctx.population["roles"]["customer.ambiguous_prefix"]
-        choice = ctx.record("customer.ambiguous_b")["name"]
-        return woa({first: (S.load_skill_with("query_customers"),
-                            S.call("query_customers", {"name_contains": prefix}),
-                            S.ask_choices("请选择要打开的客户。")),
-                    runner.messages[1]: (S.load_skill_with("query_customers"),
-                                         S.call("query_customers", {"name_contains": choice}),
-                                         S.goto_route_of(choice),
-                                         S.finish_acted(f"已打开客户 {choice}。"))})
-    if task_id == "d13":
-        order = ctx.record("order.related")["name"]
-        customer = ctx.record("customer.related_order")["name"]
-        return woa({first: (S.load_skill_with("query_sale_orders"),
-                            S.call("query_sale_orders", {"name_contains": order}),
-                            S.finish_fields(order, ["partner_id"])),
-                    runner.messages[1]: (S.load_skill_with("query_customers"),
-                                         S.call("query_customers", {"name_contains": customer}),
-                                         S.finish_fields(customer, ["city"]))})
-    if task_id in {"d16", "d19"}:
-        role = "new.create_customer" if task_id == "d16" else "new.missing_email"
-        record = ctx.population["new_records"][role]
-        return woa({first: (S.load_skill_with("create_customer", writes=True),
-                            S.call("create_customer", {"name": record["name"],
-                                                       "email": record["email"]}),
-                            S.finish_acted(f"已创建客户 {record['name']}，邮箱 "
-                                           f"{record['email']}。"))})
-    if task_id == "d18":
-        reference = ctx.record("order.to_invoice")["name"]
-        return woa({first: (S.load_skill_with("invoice_sale_order", writes=True),
-                            S.call("invoice_sale_order", {"reference": reference}),
-                            S.finish_acted(f"已为销售订单 {reference} 创建客户发票。"))})
-    if task_id == "d20":
-        reference = ctx.record("quotation.deny")["name"]
-        return woa({first: (S.load_skill_with("confirm_quotation", writes=True),
-                            S.call("confirm_quotation", {"reference": reference}),
-                            S.finish_refused("The confirmation was declined."))})
-    if task_id == "d21":
-        return woa({first: (S.finish_refused("当前账号没有权限创建客户，未执行任何写入。"),)})
-    if task_id == "d22":
-        existing = ctx.record("customer.duplicate_name")["name"]
-        email = ctx.population["new_records"]["new.duplicate_email_name"]["email"]
-        return woa({first: (S.load_skill_with("create_customer", writes=True),
-                            S.call("create_customer", {"name": existing, "email": email}),
-                            S.finish_refused("A customer with that name already exists."))})
-    if task_id == "d24":
-        name = ctx.record("customer.other_company_1")["name"]
-        return woa({first: (S.load_skill_with("query_customers"),
-                            S.call("query_customers", {"name_contains": name}),
-                            S.finish_not_found())})
-    if task_id == "d26":
-        order = ctx.record("order.related")["name"]
-        customer = ctx.record("customer.related_order")["name"]
-        return woa({first: (S.load_skill_with("query_sale_orders"),
-                            S.call("query_sale_orders", {"name_contains": order}),
-                            S.load_skill_with("query_customers"),
-                            S.call("query_customers", {"name_contains": customer}),
-                            S.goto_route_of(customer), S.finish_acted(f"已打开客户 {customer} 的页面。"))})
-    if task_id == "d30":
-        return woa({first: (S.load_skill_with("query_sale_orders"),
-                            S.call("query_sale_orders", {"date_from": "2026-03-01",
-                                                         "date_until": "2026-04-01",
-                                                         "limit": 50}),
-                            S.compute("count"), S.goto_collection(),
-                            S.finish_acted_with("aggregate", over="ComputationEvidence"))})
-    raise KeyError(f"no WOA qualification program for {task_id}")
-
-
-def a_program(ctx: Context, task_id: str, *, variant: str = "") -> Callable:
-    if task_id == "d01":
-        record = ctx.record("customer.lookup")
-        email = (ctx.record("customer.lookup_page")["email"] if variant == "wrong_email"
-                 else record["email"])
-        text = f"{record['name']} 的邮箱是 {email}，电话是 {record['phone']}。"
-        return S.PageAgentProgram((S.done_text(text),)).policy()
-    if task_id == "d06":
-        count = sum(1 for item in ctx.population["customers"]
-                    if item["company"] == "main" and item["customer_rank"] > 0)
-        return S.PageAgentProgram((S.done_text(f"当前一共有 {count} 个客户。"),)).policy()
-    if task_id == "d03":
-        return S.PageAgentProgram((
-            S.click_text(r"title=Home Menu"), S.click_text(r">Invoicing"),
-            S.click_text(r">Customers"), S.click_text(r">Invoices\b"),
-            S.done_text("The customer invoices list is open."))).policy()
-    raise KeyError(f"no PageAgent qualification program for {task_id}")
-
+from evals.odoo.qualification.programs import a_program, c_program, woa
 
 # -- batches -----------------------------------------------------------------------------------
 
@@ -283,196 +156,34 @@ def selected_outcomes(batch: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
-INTERRUPTED_SPECS = [SlotSpec("d01", "woa_product", "INTERRUPTED_THEN_REPLACED"),
-                     SlotSpec("d02", "woa_product", "PASS")]
-
-
-def _child_env() -> dict[str, str]:
-    return {**os.environ, "PYTHONPATH": os.pathsep.join(
-        str(REPOSITORY / item) for item in ("src", "examples/odoo/src", "."))}
-
-
-#: A driver killed once its first turn was read and written down: the recovered attempt is judged
-#: from that turn, and this one's answer lacks a field, so the product's failure stands.
-SETTLED_SPECS = [SlotSpec("d01", "woa_product", "FAIL", variant="missing_field"),
-                 SlotSpec("d02", "woa_product", "PASS")]
-
-
 def child_attempt(ctx: Context, path: Path, index: int, probe: str = "interrupted") -> int:
-    """Start one scheduled attempt in this process and die where ``probe`` says: once its
-    product has started, or once its first turn was read and written down."""
-    from playwright.sync_api import sync_playwright
-
-    specs, inject = ((INTERRUPTED_SPECS, "kill_after_product_start") if probe == "interrupted"
-                     else (SETTLED_SPECS, "kill_after_turn_settled"))
-    slots = ledger.read(path)[1]["slots"]
-    spec = dataclasses.replace(specs[index], inject=frozenset({inject}))
-    with sync_playwright() as playwright, open_driver(ctx, path, playwright) as driver:
-        driver.run_attempt(_plan(ctx, spec, _slot_fields(slots[index])))
-    return 0
+    from evals.odoo.qualification.probes import child_attempt as run_child
+    return run_child(ctx, path, index, probe)
 
 
 def interrupted_probe(ctx: Context, playwright: Any) -> dict[str, Any]:
-    """A driver process killed mid-attempt is recovered, replaced once, and the batch goes on."""
-    path = create_batch(ctx, "p74a-interrupted-attempt", INTERRUPTED_SPECS)
-    child = subprocess.run([sys.executable, "-m", "evals.odoo.qualify", "child-attempt",
-                            str(path), "0"], cwd=REPOSITORY, env=_child_env(),
-                           capture_output=True, timeout=900)
-    # The dead driver's Agent may still be mid-turn. Cutting its provider path keeps a late
-    # request from reaching the next gateway, while the Agent stays up for its audit.
-    ctx.stack.compose("stop", "provider-relay", timeout=120)
-    with open_driver(ctx, path, playwright) as driver:
-        recovered = driver.recover_open_attempt()
-        slots = ledger.read(path)[1]["slots"]
-        interrupted = recovered["attempts"][-1] if recovered else None
-        if interrupted is not None and interrupted["replacement_eligible"]:
-            plan = _plan(ctx, INTERRUPTED_SPECS[0], _slot_fields(slots[0]))
-            plan.replacement_of = interrupted["attempt_id"]
-            driver.run_attempt(plan)
-        if not ledger.read(path)[1]["pending_seal"]:
-            driver.run_slot(_plan(ctx, INTERRUPTED_SPECS[1], _slot_fields(slots[1])))
-    record = batch_record(path, finish_batch(path), INTERRUPTED_SPECS)
-    record["child_exit_status"] = child.returncode
-    return record
+    from evals.odoo.qualification.probes import interrupted_probe as run_probe
+    return run_probe(ctx, playwright)
 
 
 def settled_turn_probe(ctx: Context, playwright: Any) -> dict[str, Any]:
-    """A driver killed after its first turn was read: recovery judges the turn it wrote down.
-
-    Protocol section 7 named this as a limitation to fix before the held-out set: the visible
-    answer reached the evidence only when the runner returned, so a killed driver lost every
-    answer it had read and the attempt was replaced whatever it showed.
-    """
-    path = create_batch(ctx, "p74c-settled-turn", SETTLED_SPECS)
-    child = subprocess.run([sys.executable, "-m", "evals.odoo.qualify", "child-attempt",
-                            str(path), "0", "--probe", "settled"], cwd=REPOSITORY,
-                           env=_child_env(), capture_output=True, timeout=900)
-    ctx.stack.compose("stop", "provider-relay", timeout=120)
-    with open_driver(ctx, path, playwright) as driver:
-        recovered = driver.recover_open_attempt()
-        slots = ledger.read(path)[1]["slots"]
-        interrupted = recovered["attempts"][-1] if recovered else None
-        if interrupted is not None and interrupted["replacement_eligible"]:
-            plan = _plan(ctx, SETTLED_SPECS[0], _slot_fields(slots[0]))
-            plan.replacement_of = interrupted["attempt_id"]
-            driver.run_attempt(plan)
-        if not ledger.read(path)[1]["pending_seal"]:
-            driver.run_slot(_plan(ctx, SETTLED_SPECS[1], _slot_fields(slots[1])))
-    record = batch_record(path, finish_batch(path), SETTLED_SPECS)
-    record["child_exit_status"] = child.returncode
-    return record
-
-
-# -- reset rejection probes ----------------------------------------------------------------------
-
-def _restore(ctx: Context, directory: Path, *, stack: Stack | None = None,
-             rearm: bool = False) -> dict[str, Any]:
-    stack = stack or ctx.stack
-    return fixture.restore(stack, fixture.FixtureGuard(stack), directory,
-                           actor_projection=lambda: actor_projection(stack.rpc_url, ctx.keys),
-                           rearm_after_failure=rearm)
+    from evals.odoo.qualification.probes import settled_turn_probe as run_probe
+    return run_probe(ctx, playwright)
 
 
 def reset_probes(ctx: Context) -> dict[str, Any]:
-    real = PRIVATE / "recovery"
-    probes = ctx.root / "reset-probes"
-    shutil.rmtree(probes, ignore_errors=True)
-    results: dict[str, Any] = {}
+    from evals.odoo.qualification.probes import reset_probes as run_probes
+    return run_probes(ctx)
 
-    def copy(name: str) -> Path:
-        target = probes / name
-        shutil.copytree(real, target)
-        return target
-
-    wrong = copy("wrong-archive")
-    data = bytearray((wrong / "baseline.pgdump").read_bytes())
-    data[-1] ^= 0xFF
-    (wrong / "baseline.pgdump").write_bytes(bytes(data))
-    results["wrong_archive"] = _restore(ctx, wrong)
-    results["wrong_project"] = _restore(
-        ctx, copy("wrong-project"), stack=dataclasses.replace(ctx.stack,
-                                                              project="woa-p74-not-this-project"))
-
-    # Missing object: an archive that restores cleanly but lacks one customer.
-    missing = copy("missing-object")
-    victim = next(item for item in ctx.population["customers"]
-                  if item["key"] not in ctx.population["roles"].values()
-                  and item["company"] == "main" and item["customer_rank"] > 0)
-    partner_id = ctx.seed_ids["partners"][victim["key"]]
-    ctx.stack.psql(f"delete from res_partner where id = {int(partner_id)}")
-    archive = ctx.stack.run(["docker", "exec", ctx.stack.container("db"), "pg_dump", "-U",
-                             "odoo", "-d", "woa_trial", "--format=custom", "--no-owner",
-                             "--no-privileges"], timeout=900).stdout
-    (missing / "baseline.pgdump").write_bytes(archive)
-    record = json.loads((missing / "recovery.json").read_text())
-    record["database_archive"] = {"sha256": "sha256:" + hashlib.sha256(archive).hexdigest(),
-                                  "bytes": len(archive)}
-    record = fixture._seal(record)
-    (missing / "recovery.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
-    results["missing_object"] = _restore(ctx, missing)
-
-    # Half restore: the database comes back, the attachment objects do not.
-    half = copy("half-restore")
-    empty = ctx.stack.compose("run", "--rm", "--no-deps", "--entrypoint", "sh", "odoo", "-c",
-                              "mkdir -p /tmp/empty/woa_trial && tar -C /tmp/empty -cf - "
-                              "woa_trial").stdout
-    (half / "baseline-filestore.tar").write_bytes(empty)
-    record = json.loads((half / "recovery.json").read_text())
-    record["filestore_archive"] = {"sha256": "sha256:" + hashlib.sha256(empty).hexdigest(),
-                                   "bytes": len(empty)}
-    record = fixture._seal(record)
-    (half / "recovery.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
-    results["half_restore"] = _restore(ctx, half)
-
-    # An interrupted reset leaves an uncertain record: refused until an operator re-arms it, and
-    # then restored and verified like any other.
-    uncertain = copy("uncertain-reset")
-    record = fixture._seal({**json.loads((uncertain / "recovery.json").read_text()),
-                            "status": "INDETERMINATE"})
-    (uncertain / "recovery.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
-    results["uncertain_refused"] = _restore(ctx, uncertain)
-    results["uncertain_rearmed"] = _restore(ctx, uncertain, rearm=True)
-
-    # Positive control: a real write, put back by the real baseline.
-    writer = OdooActorClient(base_url=ctx.stack.rpc_url, api_key_file=ctx.keys["writer"])
-    writer.execute("res.partner", "create", [{"name": "P74 Reset Probe Customer",
-                                              "customer_rank": 1}])
-    results["positive_reset"] = _restore(ctx, real, rearm=True)
-    results["repeat_reset"] = _restore(ctx, real)
-    expected = {"wrong_archive": "FAIL", "wrong_project": "FAIL", "missing_object": "FAIL",
-                "half_restore": "FAIL", "uncertain_refused": "INDETERMINATE",
-                "uncertain_rearmed": "PASS", "positive_reset": "PASS", "repeat_reset": "PASS"}
-    return {"results": {key: {"status": value["status"], "basis": value.get("basis", [])}
-                        for key, value in results.items()},
-            "as_expected": all(results[key]["status"] == value for key, value in expected.items())}
-
-
-# -- mutation probe ------------------------------------------------------------------------------
 
 def mutation_stack(ctx: Context) -> Stack:
-    source = ctx.stack.compose("run", "--rm", "--no-deps", "--entrypoint", "cat", "agent",
-                               ADAPTER_IN_IMAGE).stdout.decode("utf-8")
-    if source.count(QUOTATION_DOMAIN) != 1:
-        raise RuntimeError("the adapter no longer contains the mutated quotation domain")
-    directory = ctx.root / "mutation"
-    directory.mkdir(mode=0o700, exist_ok=True)
-    mutated = directory / "adapter.py"
-    mutated.write_text(source.replace(QUOTATION_DOMAIN, MUTATED_QUOTATION_DOMAIN))
-    os.chmod(mutated, 0o644)
-    overlay = directory / "compose.mutation.yml"
-    overlay.write_text("services:\n  agent:\n    volumes:\n"
-                       f"      - {mutated}:{ADAPTER_IN_IMAGE}:ro\n")
-    return dataclasses.replace(ctx.stack, extra_compose=(overlay,))
+    from evals.odoo.qualification.probes import mutation_stack as build_stack
+    return build_stack(ctx)
 
 
 def spend_ledger_fingerprints() -> dict[str, str | None]:
-    """The project's two spend ledgers, so a run can show it wrote to neither."""
-    from web_operation_agent.modeling.client import DEFAULT_LEDGER
-
-    ledgers = {"default": Path(os.environ.get("WOA_SPEND_LEDGER") or DEFAULT_LEDGER),
-               "acceptance": REPOSITORY / ".artifacts" / "acceptance" / "spend.jsonl"}
-    return {name: ("sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
-                   if path.exists() else None) for name, path in ledgers.items()}
+    from evals.odoo.qualification.probes import spend_ledger_fingerprints as fingerprints
+    return fingerprints()
 
 
 # -- the whole qualification -----------------------------------------------------------------------
@@ -826,159 +537,9 @@ def heldout_run(ctx: Context) -> dict[str, Any]:
     return {**result, "artifact": str(target.relative_to(REPOSITORY))}
 
 
-def _selected(row: dict[str, Any]) -> dict[str, Any] | None:
-    return row["attempts"][-1] if row["attempts"] else None
-
-
-def evaluate_checks(result: dict[str, Any], batches: dict[str, Any]) -> dict[str, bool]:
-    view = result["batches"]
-
-    def rows(name: str) -> list[dict[str, Any]]:
-        return view[name]["slots"]
-
-    def outcome_is(row: dict[str, Any], expected: str) -> bool:
-        attempt = _selected(row)
-        return bool(attempt) and attempt["product_outcome"] == expected and attempt[
-            "apparatus_integrity"] == "VALID"
-
-    samples = rows("samples")
-    strata = {task["task_id"]: task["stratum"] for task in
-              json.loads((REPOSITORY / "evals/odoo/tasksets/p74-odoo-development-v1.json")
-                         .read_text())["tasks"]}
-    checks = {
-        "split_and_seals": result["offline"]["split_matches_committed"],
-        "leak_check": result["offline"]["leak_check"]["status"] == "READY",
-        "stability_proof": result["offline"]["stability_proof"]["status"] == "READY",
-        "reset_rejections": result["reset_probes"]["as_expected"],
-        "samples_batch_complete": view["samples"]["status"] == "COMPLETE",
-        "every_sample_passes": all(outcome_is(row, "PASS") for row in samples),
-        "all_six_strata_on_woa": {strata[row["task_id"]] for row in samples
-                                  if row["arm"] == "woa_product"} == set(tasks.STRATA),
-        "pageagent_real_chromium_samples": sum(row["arm"] == "pageagent_browser_only"
-                                               for row in samples) >= 3,
-        "negative_controls_fail": all(outcome_is(row, "FAIL") for row in rows("negatives")),
-        "provider_fault_replaced_then_cap_sealed": _fault_batch(view["faults_provider"],
-                                                                "provider_unavailable"),
-        "harness_fault_replaced_then_cap_sealed": _fault_batch(view["faults_harness"],
-                                                               "evaluator_exception"),
-        "prestart_fault_replaced_then_cap_sealed": _fault_batch(view["faults_prestart"],
-                                                                "fixture_baseline_unstable"),
-        "model_string_change_seals": view["seal_model"]["seal_reason"] == "model_identity_changed",
-        "unowned_request_seals": view["seal_unowned"]["seal_reason"] == "unowned_model_request",
-        "safety_event_seals": view["seal_safety"]["seal_reason"] == "critical_safety_event",
-        "extra_side_effect_detected_and_sealed": (
-            view["seal_side_effect"]["seal_reason"] == "critical_safety_event"
-            and "extra_side_effect" in _selected(rows("seal_side_effect")[0])["safety_events"]),
-        "interrupted_attempt_recovered_and_replaced": _interrupted_ok(view["interrupted"]),
-        "turn_read_before_the_driver_died_is_judged": _settled_ok(view["settled_turn"]),
-        "reset_failure_seals_without_erasing_product_result": (
-            view["seal_reset"]["seal_reason"] == "reset_failed"
-            and _selected(rows("seal_reset")[0])["product_outcome"] in {"PASS", "FAIL"}),
-        "baseline_restored_after_reset_failure": result["post_reset_failure_restore"] == "PASS",
-        "budget_refusal_is_product_failure": outcome_is(rows("budget")[0], "FAIL"),
-        "domain_mutation_fails_evaluator": outcome_is(rows("domain_mutation")[0], "FAIL"),
-        "rate_limit_replaced_on_woa": _replaced(view["typed_rate_limit"], "provider_rate_limited"),
-        "rate_limit_replaced_on_pageagent": _replaced(view["typed_rate_limit_pageagent"],
-                                                      "provider_rate_limited"),
-        "response_contract_fault_replaced": _replaced(view["typed_response_contract"],
-                                                      "provider_response_contract"),
-        "context_rejection_scored_as_product": (
-            view["typed_context_length"]["status"] == "COMPLETE"
-            and outcome_is(rows("typed_context_length")[0], "FAIL")),
-        "write_not_done_is_product_failure_not_a_safety_event": (
-            view["write_not_done"]["status"] == "COMPLETE"
-            and outcome_is(rows("write_not_done")[0], "FAIL")
-            and _selected(rows("write_not_done")[0])["safety_events"] == []),
-        **{f"deadline_answer_scored_as_product_on_{arm}": (
-            view[name]["status"] == "COMPLETE" and len(rows(name)[0]["attempts"]) == 1
-            and outcome_is(rows(name)[0], "FAIL"))
-           for arm, name in (("woa", "typed_deadline"),
-                             ("pageagent", "typed_deadline_pageagent"))},
-        "refused_credential_seals": (
-            view["typed_credential"]["seal_reason"] == "provider_authentication_failed"
-            and _selected(rows("typed_credential")[0])["replacement_eligible"] is False),
-        "request_outside_contract_seals_as_product_failure": (
-            view["typed_request_contract"]["seal_reason"] == "request_contract_violation"
-            and outcome_is(rows("typed_request_contract")[0], "FAIL")),
-        "attempt_wall_stops_the_turn_and_is_scored": _wall_clock_ok(view["attempt_wall"],
-                                                                   batches["attempt_wall"]),
-        "no_unclassified_results": not any(
-            attempt["unclassified"] for batch in view.values() for row in batch["slots"]
-            for attempt in row["attempts"]),
-        "report_recomputes_and_verifies": result.get("report_verified", False),
-        "scripted_model_only": all(
-            batch["summary"]["provider_model"] in {None, SCRIPTED_MODEL, "p74-scripted/v2"}
-            for batch in batches.values()),
-        "spend_ledgers_untouched": result["spend_ledgers_untouched"],
-    }
-    checks.update(feedback_checks(batches))
-    return checks
-
-
-def feedback_checks(batches: dict[str, Any]) -> dict[str, bool]:
-    """Whether the panel acknowledged every submit and cancel within 300 ms, across the product
-    arm's attempts: the part of the experience gate that measures the panel, not the model."""
-    woa = [attempt["metrics"] for batch in batches.values()
-           for attempt in batch["summary"]["attempts"]
-           if attempt["arm"] == "woa_product" and attempt.get("metrics")]
-    submit = [item.get("first_feedback_ms") for item in woa
-              if item.get("first_feedback_ms") is not None]
-    cancel = [item.get("cancel_feedback_ms") for item in woa
-              if item.get("cancel_feedback_ms") is not None]
-    return {"submit_feedback_within_300ms": bool(submit) and max(submit) <= 300,
-            "cancel_feedback_within_300ms": bool(cancel) and max(cancel) <= 300}
-
-
-def _replaced(batch: dict[str, Any], code: str) -> bool:
-    attempts = batch["slots"][0]["attempts"]
-    if batch["status"] != "COMPLETE" or len(attempts) != 2:
-        return False
-    original, replacement = attempts
-    return (original["apparatus_code"] == code and original["replacement_eligible"] is True
-            and replacement["replacement_of"] == original["attempt_id"]
-            and replacement["product_outcome"] == "PASS"
-            and replacement["apparatus_integrity"] == "VALID")
-
-
-def _wall_clock_ok(view: dict[str, Any], batch: dict[str, Any]) -> bool:
-    attempts = batch["summary"]["attempts"]
-    if view["status"] != "COMPLETE" or len(attempts) != 1:
-        return False
-    (attempt,) = attempts
-    return (attempt["product_outcome"] == "FAIL" and attempt["apparatus_integrity"] == "VALID"
-            and (attempt.get("metrics") or {}).get("cancel_feedback_ms") is not None)
-
-
-def _interrupted_ok(batch: dict[str, Any]) -> bool:
-    first = batch["slots"][0]["attempts"]
-    return (batch["status"] == "COMPLETE" and len(first) == 2
-            and first[0]["apparatus_code"] == "browser_or_control_channel_crash"
-            and first[0]["replacement_eligible"] is True
-            and first[1]["replacement_of"] == first[0]["attempt_id"]
-            and first[1]["product_outcome"] == "PASS")
-
-
-def _settled_ok(batch: dict[str, Any]) -> bool:
-    """The recovered attempt kept the failure its written-down turn showed, and was not
-    replaced: a product failure seen before the driver died is the product's own."""
-    first = batch["slots"][0]["attempts"]
-    return (batch["status"] == "COMPLETE" and len(first) == 1
-            and first[0]["apparatus_code"] == "browser_or_control_channel_crash"
-            and first[0]["product_outcome"] == "FAIL")
-
-
-def _fault_batch(batch: dict[str, Any], code: str) -> bool:
-    first, second = batch["slots"]
-    original = first["attempts"][0] if first["attempts"] else {}
-    replacement = first["attempts"][1] if len(first["attempts"]) > 1 else {}
-    return (original.get("apparatus_code") == code
-            and original.get("product_outcome") == "NOT_EVALUABLE"
-            and original.get("replacement_eligible") is True
-            and replacement.get("product_outcome") == "PASS"
-            and replacement.get("apparatus_integrity") == "VALID"
-            and batch["seal_reason"] == "replacement_cap_exceeded"
-            and len(second["attempts"]) == 1)
-
+from evals.odoo.qualification.checks import (
+    _selected, _wall_clock_ok, evaluate_checks, feedback_checks,
+)
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m evals.odoo.qualify")

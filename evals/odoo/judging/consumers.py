@@ -31,7 +31,7 @@ CONSUMERS: dict[str, tuple[Consumer, ...]] = {
                  "never started reports"),
         Consumer("evals/odoo/execution/runner_pageagent.py", "empty_artifact",
                  "the same, for the browser-only arm"),
-        Consumer("evals/odoo/execution/driver.py", "Driver.run_attempt",
+        Consumer("evals/odoo/execution/attempt_execution.py", "run_attempt",
                  "whether the product started, which turns were recorded and how they ended, "
                  "the attempt's times, and which apparatus fault the run met"),
         Consumer("evals/odoo/execution/attempt_results.py", "final_page",
@@ -67,7 +67,7 @@ CONSUMERS: dict[str, tuple[Consumer, ...]] = {
     "agent_audit": (
         Consumer("evals/odoo/execution/trace.py", "project_woa",
                  "the product's endings, counts, approvals and furthest dispatch"),
-        Consumer("evals/odoo/execution/driver.py", "Driver.run_attempt",
+        Consumer("evals/odoo/execution/attempt_execution.py", "run_attempt",
                  "the dispatch state, the per-turn endings, the trace counts, and whether the "
                  "fixture must be restored because nobody read them"),
         Consumer("evals/odoo/execution/driver.py", "Driver.recover_open_attempt",
@@ -89,7 +89,7 @@ CONSUMERS: dict[str, tuple[Consumer, ...]] = {
                  "whether a refusal task's denial was confirmed"),
     ),
     "agent_state": (
-        Consumer("evals/odoo/execution/driver.py", "Driver.run_attempt",
+        Consumer("evals/odoo/execution/attempt_execution.py", "run_attempt",
                  "the Agent's state after the run, which the reset asserts against"),
         Consumer("evals/odoo/execution/driver.py", "Driver.recover_open_attempt",
                  "the same after an orphaned session is ended"),
@@ -97,7 +97,7 @@ CONSUMERS: dict[str, tuple[Consumer, ...]] = {
                  "the residue an attempt leaves; an unread state never passes a reset"),
     ),
     "fixture_guard": (
-        Consumer("evals/odoo/execution/driver.py", "Driver.run_attempt",
+        Consumer("evals/odoo/execution/attempt_execution.py", "run_attempt",
                  "what the run changed, and whether the fixture must be restored because "
                  "nobody could read it"),
         Consumer("evals/odoo/execution/driver.py", "Driver._reset",
@@ -116,7 +116,7 @@ CONSUMERS: dict[str, tuple[Consumer, ...]] = {
     "evaluator_output": (
         Consumer("evals/odoo/execution/driver.py", "Driver._evaluator",
                  "the truth and the judgement, or that the evaluator process produced neither"),
-        Consumer("evals/odoo/execution/driver.py", "Driver.run_attempt",
+        Consumer("evals/odoo/execution/attempt_execution.py", "run_attempt",
                  "the product outcome, and whether a judgement was reached at all"),
     ),
     "provider_settlement": (
@@ -154,24 +154,24 @@ DELIBERATE_SUBSTITUTIONS = (
      "answers a currency sum has only when the naive total differs -- rather than from an "
      "observation. What `judge` reads of the attempt goes through `_read`, `_page_is` and "
      "`_no_changes`, which this rule still covers."),
-    ("evals/odoo/execution/driver.py", "Driver.run_attempt",
+    ("evals/odoo/execution/attempt_execution.py", "run_attempt",
      "max(len(recorded_turns), len({int(value['turn']) for value in checkpoints if 'turn' in "
      "value})) if product_started else 0",
      "A product that did not start sent no turn. `product_started` is read from the runner's "
      "own record, so the zero is that observation's consequence rather than a stand-in for a "
      "count nobody took."),
-    ("evals/odoo/execution/driver.py", "Driver.run_attempt",
+    ("evals/odoo/execution/attempt_execution.py", "run_attempt",
      "audit_read.value if audit_read.available else []",
      "The empty audit is read only by `agent_assertions`, and there it counts every prepared "
      "proposal as still open: an audit nobody read closes nothing. It moves the attempt toward "
      "residue, never toward clean, and what the product dispatched and counted is taken from "
      "`UNREAD_TRACE` on the next line rather than from this list."),
-    ("evals/odoo/execution/driver.py", "Driver.run_attempt",
+    ("evals/odoo/execution/attempt_execution.py", "run_attempt",
      "guard_read.value if guard_read.available else []",
      "A guard nobody could capture shows no differences, and this list is never read as a "
      "fixture that did not change: the unread capture raises its own apparatus event above, and "
      "the reset is forced whatever the list holds."),
-    ("evals/odoo/execution/driver.py", "Driver.run_attempt",
+    ("evals/odoo/execution/attempt_execution.py", "run_attempt",
      "artifact['approvals'] if arm == 'woa_product' else []",
      "Only the product has an approval channel. The browser-only arm has none to observe, so "
      "the empty list is what that arm is rather than a record its runner failed to write."),

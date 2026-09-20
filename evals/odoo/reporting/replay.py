@@ -528,61 +528,8 @@ class _Replay:
         return "running"
 
     def summary(self) -> dict[str, Any]:
-        status = "OPEN"
-        if self.terminal is not None:
-            status = "COMPLETE" if self.terminal["kind"] == "batch_completed" else "SEALED"
-        attempts = []
-        for attempt_id in self.attempt_order:
-            item = self.attempts[attempt_id]
-            outcome = item["outcome"] or {}
-            attempts.append({
-                "attempt_id": attempt_id, "slot_id": item["slot_id"], "arm": item["arm"],
-                "task_id": item["task_id"], "replicate": item["replicate"],
-                "replacement_of": item["replacement_of"], "terminal": item["terminal"],
-                "product_outcome": outcome.get("product_outcome"),
-                "apparatus_integrity": outcome.get("apparatus_integrity"),
-                "apparatus_code": outcome.get("apparatus_code"),
-                "unclassified": outcome.get("unclassified"),
-                "safety_events": outcome.get("safety_events") or [],
-                "extraction_ambiguous": outcome.get("extraction_ambiguous"),
-                "reset_outcome": item["reset"], "cost": item["cost"],
-                "metrics": item["metrics"],
-                "replacement_eligible": item["replacement_eligible"],
-            })
-        return {
-            "artifact_version": self.version,
-            "kind": "p74_attempt_ledger_status",
-            "status": status,
-            #: What this batch may do next, from what the ledger holds. Every rule below was
-            #: read as its own condition in three places -- the driver, the entry and the
-            #: harness -- and the defects that caused were combinations of those conditions no
-            #: single place enumerated, not rules anyone had left out. An
-            #: operator's stop is deliberately not here: it lives outside the ledger, and a
-            #: caller weighs it against this.
-            "disposition": self._disposition(status),
-            "seal_reason": self.terminal["reason"] if self.terminal else None,
-            "pending_seal": self.pending_seal,
-            #: The calls this batch holds for. While any is listed it takes no new attempt,
-            #: forwards no new call and cannot complete; a reconciliation of the bill lifts it.
-            "cost_unknown": sorted(self.cost_unknown),
-            # Every reason met, most serious first: the batch seals for the first of them and
-            # the rest are kept rather than lost to whichever arrived first.
-            "seal_reasons": sorted(self.seal_reasons, key=_SEAL_PRIORITY.index),
-            "batch": {key: self.header[key] for key in (
-                "batch_id", "protocol_id", "protocol_digest", "schedule_digest", "purpose",
-                "provider_config_digest", "task_set_seal_digest", "fixture",
-                "capability_digests", "candidate", "schedule_seed",
-                "provider_binding_digest")} if self.header else None,
-            "slots": [{**{key: slot[key] for key in ("slot_id", "arm", "task_id",
-                                                       "replicate")},
-                       "attempts": list(slot["attempts"])}
-                      for slot in (self.slots[item] for item in self.slot_order)],
-            "attempts": attempts,
-            "open_attempt": self.open_attempt,
-            "provider_model": self.batch_model,
-            "replacements": dict(self.replacements_by_arm),
-            "chain_head": self.head,
-        }
+        from evals.odoo.reporting.replay_summary import summarize
+        return summarize(self)
 
 
 def replay(entries: list[dict[str, Any]], *, version: int = LEDGER_VERSION) -> dict[str, Any]:

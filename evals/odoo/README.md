@@ -79,6 +79,7 @@ The apparatus is grouped by responsibility; its tests use the same groups:
 | [`execution/`](execution/) | attempt driver, shared harness, browser runners, approval oracle, and trace projection |
 | [`provider/`](provider/) | the only model-provider gateway and the Agent's loopback relay |
 | [`judging/`](judging/) | independent truth, extraction, observation typing, leak checks, and judgement |
+| [`qualification/`](qualification/) | deterministic scripted programs, destructive probes, and qualification-result checks |
 | [`reporting/`](reporting/) | append-only ledger, exact statistics, and schema-fixed reports |
 
 [`tasksets/`](tasksets/) holds the development set, both seals, and the split verification.
