@@ -62,7 +62,7 @@ def keep_manifest(path: Path) -> Path | None:
 
 
 def prepare_inputs(stack: Stack, private: Path) -> None:
-    subprocess.run([sys.executable, str(REPOSITORY / "deploy/odoo-single-node/prepare.py"),
+    subprocess.run([sys.executable, str(REPOSITORY / "examples/odoo/deploy/single-node/prepare.py"),
                     "--private-dir", str(stack.stack_inputs)], check=True, capture_output=True)
     other = stack.stack_inputs / "other-login-password"
     if not other.exists():

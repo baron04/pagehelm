@@ -18,7 +18,7 @@ from .stack import REPOSITORY
 
 PRODUCT_ROOTS = (
     "src/web_operation_agent", "examples/odoo/src/web_operation_agent_odoo",
-    "examples/odoo/deploy/addons/woa_runtime", "frontend/src", "deploy/odoo-single-node",
+    "examples/odoo/deploy/addons/woa_runtime", "frontend/src", "examples/odoo/deploy/single-node",
 )
 OPTIONAL_ROOTS = (".fixture/odoo-source",)
 HARNESS_MARKERS = ("evals.odoo", "evals/odoo", "p74-odoo-development", "p74-odoo-heldout",

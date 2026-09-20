@@ -19,16 +19,17 @@ from web_operation_agent.composition.operations import (OperationalStateError, c
 
 
 ROOT = Path(__file__).resolve().parents[4]
-MODULE_PATH = ROOT / "deploy" / "odoo-single-node" / "operations.py"
+DEPLOYMENT = ROOT / "examples" / "odoo" / "deploy" / "single-node"
+MODULE_PATH = DEPLOYMENT / "operations.py"
 SPEC = importlib.util.spec_from_file_location("single_node_operations", MODULE_PATH)
 OPS = importlib.util.module_from_spec(SPEC)
 assert SPEC is not None and SPEC.loader is not None
 SPEC.loader.exec_module(OPS)
-REGISTER_PATH = ROOT / "deploy" / "odoo-single-node" / "register.py"
-CADDYFILE = ROOT / "deploy" / "odoo-single-node" / "Caddyfile"
-COMPOSEFILE = ROOT / "deploy" / "odoo-single-node" / "docker-compose.yml"
-AGENT_ENTRYPOINT = ROOT / "deploy" / "odoo-single-node" / "agent-entrypoint.sh"
-ODOO_ENTRYPOINT = ROOT / "deploy" / "odoo-single-node" / "odoo-entrypoint.sh"
+REGISTER_PATH = DEPLOYMENT / "register.py"
+CADDYFILE = DEPLOYMENT / "Caddyfile"
+COMPOSEFILE = DEPLOYMENT / "docker-compose.yml"
+AGENT_ENTRYPOINT = DEPLOYMENT / "agent-entrypoint.sh"
+ODOO_ENTRYPOINT = DEPLOYMENT / "odoo-entrypoint.sh"
 REGISTER_SPEC = importlib.util.spec_from_file_location("single_node_register", REGISTER_PATH)
 REGISTER = importlib.util.module_from_spec(REGISTER_SPEC)
 assert REGISTER_SPEC is not None and REGISTER_SPEC.loader is not None

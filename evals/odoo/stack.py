@@ -24,7 +24,7 @@ from typing import Any
 from .revision import RevisionError, repository_state, require_clean_head, require_commit
 
 REPOSITORY = Path(__file__).resolve().parents[2]
-BASE_COMPOSE = REPOSITORY / "deploy" / "odoo-single-node" / "docker-compose.yml"
+BASE_COMPOSE = REPOSITORY / "examples" / "odoo" / "deploy" / "single-node" / "docker-compose.yml"
 OVERLAY_COMPOSE = REPOSITORY / "evals" / "odoo" / "compose.p74.yml"
 DATABASE = "woa_trial"
 _PROJECT = re.compile(r"woa-p74-[a-z0-9][a-z0-9-]{1,40}\Z")

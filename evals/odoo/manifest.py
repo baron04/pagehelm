@@ -59,7 +59,7 @@ FIXTURE_SOURCES = (
     "evals/odoo/revision.py", "evals/odoo/rpc.py", "evals/odoo/runner_woa.py",
     "evals/odoo/stack.py", "evals/odoo/tasks.py", "evals/odoo/compose.p74.yml",
     # The deployment they run: images, entrypoints, initialisation and the inputs it prepares.
-    "deploy/odoo-single-node",
+    "examples/odoo/deploy/single-node",
 )
 #: The programs the closure starts from: the seed the stack runs inside Odoo, and provisioning.
 FIXTURE_ENTRY_POINTS = ("evals/odoo/odoo_seed.py", "evals/odoo/provision.py")
@@ -168,7 +168,7 @@ def addons_source() -> Path:
 
 def _odoo_base_image() -> str:
     return re.search(r"FROM (odoo@sha256:[0-9a-f]{64})",
-                     (REPOSITORY / "deploy/odoo-single-node/Dockerfile.odoo")
+                     (REPOSITORY / "examples/odoo/deploy/single-node/Dockerfile.odoo")
                      .read_text()).group(1)
 
 

@@ -41,7 +41,7 @@ services:
       - ./odoo.conf:/etc/odoo/odoo.conf:ro
       # The addon serves the pinned PageController from Odoo's own origin, which is the only
       # place the embedded Runtime may import it from.
-      - ./addons:/mnt/extra-addons:ro
+      - ../addons:/mnt/extra-addons:ro
     command: ["odoo", "--config=/etc/odoo/odoo.conf"]
 
 volumes:

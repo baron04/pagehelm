@@ -9,7 +9,7 @@ services:
       POSTGRES_PASSWORD_FILE: /run/woa-input/db-password
     volumes:
       - database:/var/lib/postgresql/data
-      - ${WOA_PRIVATE_DIR:-../../.private/odoo-single-node}/db-password:/run/woa-input/db-password:ro
+      - ${WOA_PRIVATE_DIR:-../../../../.private/odoo-single-node}/db-password:/run/woa-input/db-password:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U odoo -d postgres"]
       interval: 5s
@@ -20,8 +20,8 @@ services:
   odoo:
     image: ${WOA_ODOO_IMAGE:-woa-odoo-single-node-app}:${WOA_BUILD_REVISION:-local}
     build:
-      context: ../..
-      dockerfile: deploy/odoo-single-node/Dockerfile.odoo
+      context: ../../../..
+      dockerfile: examples/odoo/deploy/single-node/Dockerfile.odoo
     depends_on:
       db:
         condition: service_healthy
@@ -31,10 +31,10 @@ services:
       WOA_AGENT_REVOKE_URL: http://agent:8767/internal/revoke
     volumes:
       - odoo-data:/var/lib/odoo
-      - ../../examples/odoo/deploy/addons:/mnt/extra-addons:ro
-      - ${WOA_PRIVATE_DIR:-../../.private/odoo-single-node}/db-password:/run/woa-input/db-password:ro
-      - ${WOA_PRIVATE_DIR:-../../.private/odoo-single-node}/session-secret:/run/woa-input/session-secret:ro
-      - ${WOA_PRIVATE_DIR:-../../.private/odoo-single-node}/odoo.conf:/run/woa-input/odoo.conf:ro
+      - ../addons:/mnt/extra-addons:ro
+      - ${WOA_PRIVATE_DIR:-../../../../.private/odoo-single-node}/db-password:/run/woa-input/db-password:ro
+      - ${WOA_PRIVATE_DIR:-../../../../.private/odoo-single-node}/session-secret:/run/woa-input/session-secret:ro
+      - ${WOA_PRIVATE_DIR:-../../../../.private/odoo-single-node}/odoo.conf:/run/woa-input/odoo.conf:ro
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8069/web/login', timeout=3)"]
       interval: 10s
@@ -46,26 +46,26 @@ services:
     profiles: ["setup"]
     image: ${WOA_ODOO_IMAGE:-woa-odoo-single-node-app}:${WOA_BUILD_REVISION:-local}
     build:
-      context: ../..
-      dockerfile: deploy/odoo-single-node/Dockerfile.odoo
+      context: ../../../..
+      dockerfile: examples/odoo/deploy/single-node/Dockerfile.odoo
     depends_on:
       db:
         condition: service_healthy
     volumes:
       - odoo-data:/var/lib/odoo
-      - ../../examples/odoo/deploy/addons:/mnt/extra-addons:ro
-      - ${WOA_PRIVATE_DIR:-../../.private/odoo-single-node}/db-password:/run/woa-input/db-password:ro
-      - ${WOA_PRIVATE_DIR:-../../.private/odoo-single-node}/session-secret:/run/woa-input/session-secret:ro
-      - ${WOA_PRIVATE_DIR:-../../.private/odoo-single-node}/odoo.conf:/run/woa-input/odoo.conf:ro
-      - ${WOA_PRIVATE_DIR:-../../.private/odoo-single-node}/odoo-admin-login-password:/run/woa-input/odoo-admin-login-password:ro
+      - ../addons:/mnt/extra-addons:ro
+      - ${WOA_PRIVATE_DIR:-../../../../.private/odoo-single-node}/db-password:/run/woa-input/db-password:ro
+      - ${WOA_PRIVATE_DIR:-../../../../.private/odoo-single-node}/session-secret:/run/woa-input/session-secret:ro
+      - ${WOA_PRIVATE_DIR:-../../../../.private/odoo-single-node}/odoo.conf:/run/woa-input/odoo.conf:ro
+      - ${WOA_PRIVATE_DIR:-../../../../.private/odoo-single-node}/odoo-admin-login-password:/run/woa-input/odoo-admin-login-password:ro
     entrypoint: ["/usr/local/bin/init-woa-odoo"]
 
   odoo-qualification-users:
     profiles: ["qualification"]
     image: ${WOA_ODOO_IMAGE:-woa-odoo-single-node-app}:${WOA_BUILD_REVISION:-local}
     build:
-      context: ../..
-      dockerfile: deploy/odoo-single-node/Dockerfile.odoo
+      context: ../../../..
+      dockerfile: examples/odoo/deploy/single-node/Dockerfile.odoo
     depends_on:
       odoo:
         condition: service_healthy
@@ -73,19 +73,19 @@ services:
       WOA_QUALIFICATION: "1"
     volumes:
       - odoo-data:/var/lib/odoo
-      - ../../examples/odoo/deploy/addons:/mnt/extra-addons:ro
-      - ${WOA_PRIVATE_DIR:-../../.private/odoo-single-node}/db-password:/run/woa-input/db-password:ro
-      - ${WOA_PRIVATE_DIR:-../../.private/odoo-single-node}/session-secret:/run/woa-input/session-secret:ro
-      - ${WOA_PRIVATE_DIR:-../../.private/odoo-single-node}/odoo.conf:/run/woa-input/odoo.conf:ro
-      - ${WOA_PRIVATE_DIR:-../../.private/odoo-single-node}/writer-login-password:/run/woa-input/writer-login-password:ro
-      - ${WOA_PRIVATE_DIR:-../../.private/odoo-single-node}/reader-login-password:/run/woa-input/reader-login-password:ro
-      - ${WOA_PRIVATE_DIR:-../../.private/odoo-single-node}:/run/woa-output
+      - ../addons:/mnt/extra-addons:ro
+      - ${WOA_PRIVATE_DIR:-../../../../.private/odoo-single-node}/db-password:/run/woa-input/db-password:ro
+      - ${WOA_PRIVATE_DIR:-../../../../.private/odoo-single-node}/session-secret:/run/woa-input/session-secret:ro
+      - ${WOA_PRIVATE_DIR:-../../../../.private/odoo-single-node}/odoo.conf:/run/woa-input/odoo.conf:ro
+      - ${WOA_PRIVATE_DIR:-../../../../.private/odoo-single-node}/writer-login-password:/run/woa-input/writer-login-password:ro
+      - ${WOA_PRIVATE_DIR:-../../../../.private/odoo-single-node}/reader-login-password:/run/woa-input/reader-login-password:ro
+      - ${WOA_PRIVATE_DIR:-../../../../.private/odoo-single-node}:/run/woa-output
     entrypoint: ["/usr/local/bin/woa-qualification-users"]
 
   agent:
     build:
-      context: ../..
-      dockerfile: deploy/odoo-single-node/Dockerfile.agent
+      context: ../../../..
+      dockerfile: examples/odoo/deploy/single-node/Dockerfile.agent
       args:
         WOA_BUILD_REVISION: ${WOA_BUILD_REVISION:-unversioned}
     depends_on:
@@ -102,10 +102,10 @@ services:
       WOA_COST_ALERT_CNY: ${WOA_COST_ALERT_CNY:-}
     volumes:
       - agent-state:/var/lib/woa
-      - ${WOA_PRIVATE_DIR:-../../.private/odoo-single-node}/session-secret:/run/woa-input/session-secret:ro
-      - ${WOA_PRIVATE_DIR:-../../.private/odoo-single-node}/delegations.json:/run/woa-input/delegations.json:ro
-      - ${WOA_PRIVATE_DIR:-../../.private/odoo-single-node}/model.env:/run/woa-input/model.env:ro
-      - ${WOA_PRIVATE_DIR:-../../.private/odoo-single-node}/delegated-keys:/run/woa-input/delegated-keys:ro
+      - ${WOA_PRIVATE_DIR:-../../../../.private/odoo-single-node}/session-secret:/run/woa-input/session-secret:ro
+      - ${WOA_PRIVATE_DIR:-../../../../.private/odoo-single-node}/delegations.json:/run/woa-input/delegations.json:ro
+      - ${WOA_PRIVATE_DIR:-../../../../.private/odoo-single-node}/model.env:/run/woa-input/model.env:ro
+      - ${WOA_PRIVATE_DIR:-../../../../.private/odoo-single-node}/delegated-keys:/run/woa-input/delegated-keys:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8767/healthz', timeout=3)"]
       interval: 5s

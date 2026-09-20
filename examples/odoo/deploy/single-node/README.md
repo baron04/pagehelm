@@ -16,7 +16,7 @@ Fetch and verify the PageController release pinned by the repository before buil
 
 ```bash
 PYTHONPATH=src:examples/odoo/src .venv/bin/python -m web_operation_agent_odoo.deploy assets
-python deploy/odoo-single-node/prepare.py --private-dir .private/odoo-single-node
+python examples/odoo/deploy/single-node/prepare.py --private-dir .private/odoo-single-node
 ```
 
 Write the provider settings into `.private/odoo-single-node/model.env`. The file accepts `AGENT_OPENAI_BASE_URL`, `AGENT_OPENAI_API_KEY`, `AGENT_OPENAI_MODEL`, and optional `AGENT_PROVIDER`. Keep its mode at `0600`. For a deterministic qualification that does not contact a model, set `WOA_SCRIPTED=1` instead.
@@ -29,9 +29,9 @@ export WOA_PRIVATE_DIR="$PWD/.private/odoo-single-node"
 export WOA_PUBLIC_ORIGIN=https://localhost:18443
 export WOA_HTTPS_PORT=18443
 export WOA_BUILD_REVISION="$(git rev-parse HEAD)"
-docker compose -f deploy/odoo-single-node/docker-compose.yml build
-docker compose -f deploy/odoo-single-node/docker-compose.yml --profile setup run --rm odoo-init
-docker compose -f deploy/odoo-single-node/docker-compose.yml up -d db odoo gateway
+docker compose -f examples/odoo/deploy/single-node/docker-compose.yml build
+docker compose -f examples/odoo/deploy/single-node/docker-compose.yml --profile setup run --rm odoo-init
+docker compose -f examples/odoo/deploy/single-node/docker-compose.yml up -d db odoo gateway
 ```
 
 Open `https://localhost:18443/web/login`, use the generated admin password in `.private/odoo-single-node/odoo-admin-login-password`, create the pilot users, and create one expiring API key in each user's profile. Record each numeric user id from Odoo. Save each key in an operator-only temporary JSON file with exactly this shape, then set its mode to `0600`:
@@ -43,29 +43,29 @@ Open `https://localhost:18443/web/login`, use the generated admin password in `.
 Register a read-only user through the built image. This command authenticates the key against the running Odoo instance and refuses an actor mismatch before copying the credential into the private directory.
 
 ```bash
-docker compose -f deploy/odoo-single-node/docker-compose.yml run --rm --no-deps --entrypoint python -v "$PWD/reader-key.json:/run/woa-register/key.json:ro" -v "$WOA_PRIVATE_DIR:/run/woa-output" agent /usr/local/lib/woa-register.py --private-dir /run/woa-output --rpc-base-url http://odoo:8069 --actor-id 9 --api-key-file /run/woa-register/key.json --scope customers:read --scope invoices:read --scope products:read --scope sale_orders:read
+docker compose -f examples/odoo/deploy/single-node/docker-compose.yml run --rm --no-deps --entrypoint python -v "$PWD/reader-key.json:/run/woa-register/key.json:ro" -v "$WOA_PRIVATE_DIR:/run/woa-output" agent /usr/local/lib/woa-register.py --private-dir /run/woa-output --rpc-base-url http://odoo:8069 --actor-id 9 --api-key-file /run/woa-register/key.json --scope customers:read --scope invoices:read --scope products:read --scope sale_orders:read
 ```
 
 Register a writer only with the write scopes the person needs. `--allow-mutations` makes those scopes eligible; the deployment-wide `WOA_ALLOW_MUTATIONS=1` switch and a fresh in-panel approval are still required before dispatch.
 
 ```bash
-docker compose -f deploy/odoo-single-node/docker-compose.yml run --rm --no-deps --entrypoint python -v "$PWD/writer-key.json:/run/woa-register/key.json:ro" -v "$WOA_PRIVATE_DIR:/run/woa-output" agent /usr/local/lib/woa-register.py --private-dir /run/woa-output --rpc-base-url http://odoo:8069 --actor-id 8 --api-key-file /run/woa-register/key.json --scope customers:read --scope invoices:read --scope products:read --scope sale_orders:read --scope customers:write --scope invoices:write --scope sale_orders:write --allow-mutations
+docker compose -f examples/odoo/deploy/single-node/docker-compose.yml run --rm --no-deps --entrypoint python -v "$PWD/writer-key.json:/run/woa-register/key.json:ro" -v "$WOA_PRIVATE_DIR:/run/woa-output" agent /usr/local/lib/woa-register.py --private-dir /run/woa-output --rpc-base-url http://odoo:8069 --actor-id 8 --api-key-file /run/woa-register/key.json --scope customers:read --scope invoices:read --scope products:read --scope sale_orders:read --scope customers:write --scope invoices:write --scope sale_orders:write --allow-mutations
 ```
 
 Remove a delegation without supplying its old key, then restart the Agent:
 
 ```bash
-docker compose -f deploy/odoo-single-node/docker-compose.yml run --rm --no-deps --entrypoint python -v "$WOA_PRIVATE_DIR:/run/woa-output" agent /usr/local/lib/woa-register.py --private-dir /run/woa-output --actor-id 8 --database woa_trial --remove
-docker compose -f deploy/odoo-single-node/docker-compose.yml restart agent
+docker compose -f examples/odoo/deploy/single-node/docker-compose.yml run --rm --no-deps --entrypoint python -v "$WOA_PRIVATE_DIR:/run/woa-output" agent /usr/local/lib/woa-register.py --private-dir /run/woa-output --actor-id 8 --database woa_trial --remove
+docker compose -f examples/odoo/deploy/single-node/docker-compose.yml restart agent
 ```
 
 Delete the temporary input files after registration. Restart the Agent after every registration, replacement, or removal so it reloads the manifest and only the referenced files from `delegated-keys`. The Agent container receives no database password, Odoo master password, or user login password. Ordinary users now log in through Odoo and see the embedded assistant without Playwright, browser profile injection, or a separate launcher.
 
 ```bash
 export WOA_ALLOW_MUTATIONS=1
-docker compose -f deploy/odoo-single-node/docker-compose.yml up -d
+docker compose -f examples/odoo/deploy/single-node/docker-compose.yml up -d
 curl -sk "$WOA_PUBLIC_ORIGIN/assistant/healthz"
-docker compose -f deploy/odoo-single-node/docker-compose.yml exec -T agent python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8766/readyz').read().decode())"
+docker compose -f examples/odoo/deploy/single-node/docker-compose.yml exec -T agent python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8766/readyz').read().decode())"
 ```
 
 The reference Caddy ingress supplies `WOA_PUBLIC_ORIGIN` to authenticated Agent requests only when a same-origin browser request omits the `Origin` header. An explicit `Origin` is preserved for the core gateway to validate and reject when it does not match. Keep the gateway listener on loopback, route Odoo and `/assistant/` through the same trusted ingress, and set `WOA_PUBLIC_ORIGIN` to the exact browser-visible origin.
@@ -73,7 +73,7 @@ The reference Caddy ingress supplies `WOA_PUBLIC_ORIGIN` to authenticated Agent 
 `healthz` reports Agent process liveness. `readyz` reports bounded session and provider admission state without user content and is deliberately not routed through the public gateway. The internal telemetry snapshot is also available only inside the Agent container:
 
 ```bash
-docker compose -f deploy/odoo-single-node/docker-compose.yml exec -T agent python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8767/internal/metrics').read().decode())"
+docker compose -f examples/odoo/deploy/single-node/docker-compose.yml exec -T agent python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8767/internal/metrics').read().decode())"
 ```
 
 The default limits are 10 browser sessions, 3 browser sessions per actor, 3 active provider calls globally, and 2 active provider calls per actor. A browser that makes no authenticated Agent request for 90 seconds releases its session slot; internal owner heartbeats do not keep it alive. Capacity exhaustion receives a typed `429 assistant_capacity` response. Change these limits only through a reviewed host configuration; the reference Compose intentionally does not turn them into unbounded environment switches.
@@ -93,14 +93,14 @@ The Agent runs hourly retention maintenance. It keeps unresolved mutation rows a
 Run a deployment backup at least daily to meet the pilot RPO target of 24 hours. The operation stops Agent and Odoo writers, uses SQLite's online backup API for session, mutation, and conversation state, creates an MVCC-consistent PostgreSQL dump, archives Odoo attachments, verifies every digest, and restarts the services. It excludes API keys, model credentials, browser capabilities, leases, and approvals. Back up the private credential directory separately with the organization's secret manager.
 
 ```bash
-deploy/odoo-single-node/operations.py --project "$WOA_PROJECT_NAME" backup --destination .private/odoo-backups/2026-09-14
-deploy/odoo-single-node/operations.py --project "$WOA_PROJECT_NAME" verify .private/odoo-backups/2026-09-14
+examples/odoo/deploy/single-node/operations.py --project "$WOA_PROJECT_NAME" backup --destination .private/odoo-backups/2026-09-14
+examples/odoo/deploy/single-node/operations.py --project "$WOA_PROJECT_NAME" verify .private/odoo-backups/2026-09-14
 ```
 
 Restore is destructive to the explicitly named isolated Compose project and therefore requires the same project name twice. Verify business writes dispatched after the backup timestamp before restoring: an old journal is evidence and must never cause an action to run again. The command refuses unresolved mutations in both the backup and current deployment, creates and verifies a pre-restore safety backup, restores the database, attachments, and Agent state into staging namespaces, then performs a short cutover. A failure leaves Agent and Odoo stopped and reports the safety backup path. Restored state discards execution authority and issues no model or tool call. Backup and restore start exactly the services they stopped, and take the image and private directory for their own one-off containers from the running deployment, so a command run from a shell that exports only the project name cannot bring the deployment back with this file's defaults.
 
 ```bash
-deploy/odoo-single-node/operations.py --project "$WOA_PROJECT_NAME" restore .private/odoo-backups/2026-09-14 --confirm-project "$WOA_PROJECT_NAME"
+examples/odoo/deploy/single-node/operations.py --project "$WOA_PROJECT_NAME" restore .private/odoo-backups/2026-09-14 --confirm-project "$WOA_PROJECT_NAME"
 ```
 
 Measure restore time and recovery behavior on the target host before setting an RTO. A successful command reports `recovery_seconds`; a skipped or failed exercise is not recovery evidence. After every exercise, verify an ordinary read, confirm that old cookies and browser capabilities are rejected, and inspect unresolved mutation state before re-enabling writes.
@@ -112,16 +112,16 @@ Take and verify a backup before every upgrade. Preserve the current image under 
 ```bash
 docker image tag "$WOA_PROJECT_NAME-agent:latest" "$WOA_PROJECT_NAME-agent:rollback-$(date +%Y%m%d)"
 export WOA_BUILD_REVISION="$(git rev-parse HEAD)"
-docker compose -f deploy/odoo-single-node/docker-compose.yml build agent
-docker compose -f deploy/odoo-single-node/docker-compose.yml up -d --no-deps --force-recreate agent
-docker compose -f deploy/odoo-single-node/docker-compose.yml exec -T agent python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8766/readyz').read().decode())"
+docker compose -f examples/odoo/deploy/single-node/docker-compose.yml build agent
+docker compose -f examples/odoo/deploy/single-node/docker-compose.yml up -d --no-deps --force-recreate agent
+docker compose -f examples/odoo/deploy/single-node/docker-compose.yml exec -T agent python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8766/readyz').read().decode())"
 ```
 
 The assistant's browser code (`assistant.js` and the panel) is served by the Agent, so recreating the Agent is the whole upgrade for it. When a release changes the `woa_runtime` addon itself, rebuild and recreate Odoo as well. Its entrypoint performs an idempotent addon upgrade before accepting traffic, so a mounted template or controller cannot remain stale in the database and silently remove the assistant entry. The separate setup step remains necessary only to create the initial database and set its generated administrator password.
 
 ```bash
-docker compose -f deploy/odoo-single-node/docker-compose.yml build odoo
-docker compose -f deploy/odoo-single-node/docker-compose.yml up -d --no-deps --force-recreate odoo
+docker compose -f examples/odoo/deploy/single-node/docker-compose.yml build odoo
+docker compose -f examples/odoo/deploy/single-node/docker-compose.yml up -d --no-deps --force-recreate odoo
 ```
 
 If qualification fails before a data migration, retag the saved digest as `latest`, recreate Agent, and rerun readiness plus a read-only browser journey. Record the image digest, checks, and resulting audit-state inspection for that deployment; an unexecuted rollback command is only a procedure, not evidence.

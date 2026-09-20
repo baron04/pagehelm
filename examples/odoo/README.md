@@ -15,6 +15,25 @@ from web_operation_agent_odoo import ODOO_ROUTE_PORT, OdooCompiler
 from web_operation_agent_odoo.adapter import OdooApplicationAdapter
 ```
 
+## Reading guide for integrators
+
+Read this integration in dependency order instead of starting from the demo:
+
+1. `adapter.py` assembles the application contract and keeps the core application-neutral.
+2. `server/specs.py` defines the public tool schemas and scopes.
+3. `server/reads.py` and `server/mutations.py` implement bounded reads, guarded writes, and
+   application-owned verification.
+4. `server/identity.py`, `route.py`, and `server/transport.py` bind the browser actor, allowed
+   navigation, and Odoo JSON-RPC boundary.
+5. `skills/` contains the auditable business instructions paired with those tools.
+6. `turn.py` and `demo/` show composition; they contain no Odoo business rules of their own.
+7. `deploy/reference/` is a disposable local fixture, `deploy/single-node/` is the operated
+   single-node example, and `deploy/addons/` is the shared Odoo addon used by both.
+
+Only `src/web_operation_agent_odoo/` is packaged. Deployment files and evaluation fixtures
+remain checkout-owned so importing the adapter never implies Docker, demo passwords, or a
+particular topology.
+
 ## Identity: two sides that must agree
 
 Odoo's session story is not the browser-hand-off shape most integrations use, and the
@@ -32,7 +51,7 @@ difference is the reason this adapter is worth reading:
 `bind_browser_session` resolves both and refuses to produce a principal unless they name the
 same actor. The mapping is `db` → tenant, the current company → workspace, `uid` → actor.
 
-The [single-node pilot deployment](../../deploy/odoo-single-node/README.md) replaces the development browser-profile handoff with an application-native path. The Odoo addon resolves the HttpOnly session on the application server and signs only the current database, company, actor, and one browser Runtime instance. The browser couriers this short-lived event to the same-origin Agent endpoint. The Agent verifies freshness, signature, and one-use nonce, then matches it to the actor's separately registered API key before issuing a browser capability. Logout signs a revoke event for every session issued to that Odoo actor. Playwright is not part of this path.
+The [single-node pilot deployment](deploy/single-node/README.md) replaces the development browser-profile handoff with an application-native path. The Odoo addon resolves the HttpOnly session on the application server and signs only the current database, company, actor, and one browser Runtime instance. The browser couriers this short-lived event to the same-origin Agent endpoint. The Agent verifies freshness, signature, and one-use nonce, then matches it to the actor's separately registered API key before issuing a browser capability. Logout signs a revoke event for every session issued to that Odoo actor. Playwright is not part of this path.
 
 Provisioning the API key is a **deployment step performed by the person whose records the
 Agent will act on**: Settings → My Profile → Account Security → New API Key. Store it, the

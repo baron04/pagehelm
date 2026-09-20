@@ -2,7 +2,7 @@
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd -- "$script_dir/../.." && pwd)"
+repo_root="$(cd -- "$script_dir/../../../.." && pwd)"
 cd "$repo_root"
 
 export WOA_PROJECT_NAME="${WOA_PROJECT_NAME:-woa-odoo-pilot}"
@@ -12,7 +12,7 @@ export WOA_HTTPS_PORT="${WOA_HTTPS_PORT:-18443}"
 export WOA_ALLOW_MUTATIONS="${WOA_ALLOW_MUTATIONS:-1}"
 export WOA_BUILD_REVISION="$(git rev-parse HEAD)"
 
-compose=(docker compose -f deploy/odoo-single-node/docker-compose.yml)
+compose=(docker compose -f examples/odoo/deploy/single-node/docker-compose.yml)
 
 "${compose[@]}" build agent odoo
 "${compose[@]}" up -d --no-deps --force-recreate agent

@@ -23,8 +23,8 @@ import uuid
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[2]
-COMPOSE = ROOT / "deploy" / "odoo-single-node" / "docker-compose.yml"
+ROOT = Path(__file__).resolve().parents[4]
+COMPOSE = ROOT / "examples" / "odoo" / "deploy" / "single-node" / "docker-compose.yml"
 SCHEMA_VERSION = 2
 PROJECT = re.compile(r"woa-[a-z0-9][a-z0-9_-]{2,62}\Z")
 

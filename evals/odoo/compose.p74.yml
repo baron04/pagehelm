@@ -1,6 +1,6 @@
 # Evaluation-only overlay for the Odoo single-node deployment (`p74_odoo_v1`).
 #
-# Applied after deploy/odoo-single-node/docker-compose.yml with an explicit woa-p74-* project
+# Applied after examples/odoo/deploy/single-node/docker-compose.yml with an explicit woa-p74-* project
 # name. It changes nothing about how the product runs; it only adds what an evaluation host
 # needs beside it:
 #   * a loopback-only Odoo RPC port for the independent evaluator, which must not share the

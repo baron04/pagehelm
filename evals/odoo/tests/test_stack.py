@@ -47,7 +47,7 @@ class StackTests(unittest.TestCase):
         stack.compose("ps")
         argv = stack.calls[-1]
         self.assertEqual(argv[:4], ["docker", "compose", "-p", "woa-p74-odoo-v1"])
-        self.assertTrue(argv[5].endswith("deploy/odoo-single-node/docker-compose.yml"))
+        self.assertTrue(argv[5].endswith("examples/odoo/deploy/single-node/docker-compose.yml"))
         self.assertTrue(argv[7].endswith("evals/odoo/compose.p74.yml"))
         self.assertEqual(argv[8:10], ["-f", "/tmp/p74/mutation.yml"])
         env = stack.env()

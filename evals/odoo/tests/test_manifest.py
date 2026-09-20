@@ -83,7 +83,7 @@ class VerifyManifestTests(unittest.TestCase):
         for relative in manifest.FIXTURE_SOURCES:
             self.assertTrue((repository / relative).exists(), relative)
         for expected in ("evals/odoo/odoo_seed.py", "evals/odoo/provision.py",
-                         "evals/odoo/compose.p74.yml", "deploy/odoo-single-node"):
+                         "evals/odoo/compose.p74.yml", "examples/odoo/deploy/single-node"):
             self.assertIn(expected, manifest.FIXTURE_SOURCES)
         digests = manifest._source_digests()
         self.assertEqual(set(digests), set(manifest.FIXTURE_SOURCES))
@@ -175,7 +175,7 @@ class VerifyManifestTests(unittest.TestCase):
         apart."""
         from pathlib import Path as _Path
         repository = _Path(__file__).resolve().parents[3]
-        compose = (repository / "deploy/odoo-single-node/docker-compose.yml").read_text(
+        compose = (repository / "examples/odoo/deploy/single-node/docker-compose.yml").read_text(
             encoding="utf-8")
         mounts = [line.strip().lstrip("- ").split(":")[0] for line in compose.splitlines()
                   if f":{manifest.ADDONS_MOUNT}:" in line]
@@ -183,7 +183,7 @@ class VerifyManifestTests(unittest.TestCase):
         self.assertTrue(mounts)
         self.assertEqual(len(set(mounts)), 1, mounts)
         source = manifest.addons_source()
-        self.assertEqual(source, (repository / "deploy/odoo-single-node" / mounts[0]).resolve())
+        self.assertEqual(source, (repository / "examples/odoo/deploy/single-node" / mounts[0]).resolve())
         self.assertTrue(source.is_dir(), source)
 
         # An addon beside the one this file used to name is another fixture.

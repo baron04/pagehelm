@@ -46,11 +46,16 @@ from web_operation_agent.transport.page_controller import (PINNED_PAGE_CONTROLLE
                                                  verify_served_directory)
 
 
-#: Everything Compose needs, kept beside the Compose file rather than in the Python package:
-#: a person reads `examples/odoo/deploy/` to understand the fixture, and the code follows.
-DEPLOY_ROOT = Path(__file__).resolve().parents[3] / "deploy"
-COMPOSE_FILE = DEPLOY_ROOT / "docker-compose.yml"
-SERVED_ASSETS = DEPLOY_ROOT / "addons" / "woa_runtime" / "static" / "src"
+#: Checkout-only deployment resources are grouped by purpose beside the adapter.  The
+#: reference fixture is disposable; the single-node stack is the deployment example; the
+#: addon is shared because both serve the same browser Runtime.
+INTEGRATION_ROOT = Path(__file__).resolve().parents[3]
+DEPLOY_ROOT = INTEGRATION_ROOT / "deploy"
+REFERENCE_DEPLOY = DEPLOY_ROOT / "reference"
+SINGLE_NODE_DEPLOY = DEPLOY_ROOT / "single-node"
+ADDONS_ROOT = DEPLOY_ROOT / "addons"
+COMPOSE_FILE = REFERENCE_DEPLOY / "docker-compose.yml"
+SERVED_ASSETS = ADDONS_ROOT / "woa_runtime" / "static" / "src"
 COMPOSE_PROJECT = "woa-odoo-reference"
 ODOO_SERVICE = "odoo"
 DB_SERVICE = "db"

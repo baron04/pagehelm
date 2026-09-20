@@ -53,7 +53,7 @@ class NothingThirdPartyIsCommitted(unittest.TestCase):
 
     def test_the_addon_declares_that_it_serves_files_it_does_not_contain(self):
         import ast
-        manifest_text = (deploy.DEPLOY_ROOT / "addons" / "woa_runtime"
+        manifest_text = (deploy.ADDONS_ROOT / "woa_runtime"
                          / "__manifest__.py").read_text()
         manifest = ast.literal_eval(manifest_text)
         self.assertIn("page_controller.json", manifest_text)
@@ -73,7 +73,7 @@ class NothingThirdPartyIsCommitted(unittest.TestCase):
         """
         import ast
         import xml.etree.ElementTree as ElementTree
-        addon = deploy.DEPLOY_ROOT / "addons" / "woa_runtime"
+        addon = deploy.ADDONS_ROOT / "woa_runtime"
         manifest = ast.literal_eval((addon / "__manifest__.py").read_text())
         controller = (addon / "controllers" / "session.py").read_text()
         self.assertNotIn("assets", manifest)
@@ -92,7 +92,7 @@ class NothingThirdPartyIsCommitted(unittest.TestCase):
         self.assertIn("WOA_SESSION_SECRET_FILE", controller)
 
     def test_the_manual_qualification_customer_is_seeded_idempotently(self):
-        single_node = deploy.DEPLOY_ROOT.parents[2] / "deploy" / "odoo-single-node"
+        single_node = deploy.SINGLE_NODE_DEPLOY
         source = (single_node / "qualification-users.py").read_text()
         self.assertIn('"Azure Interior", "azure.interior@example.test"', source)
         self.assertIn('with_context(active_test=False)', source)

@@ -19,7 +19,7 @@ The two arms' answers reach the evaluator through different channels: PageAgent'
 
 ## Running it
 
-Everything runs from the repository root with `PYTHONPATH=src:examples/odoo/src:examples/twenty/src:.`. Private inputs, seeds, the held-out set, the fixture archives, ledgers and evidence live under `.private/p74-odoo-v1/`, which Git ignores. The live steps need Docker, the pinned PageAgent bundle (`npm ci && npm run build` in `evals/pageagent`) and Playwright Chromium.
+Everything runs from the repository root with `PYTHONPATH=src:examples/odoo/src:.`. Private inputs, seeds, the held-out set, the fixture archives, ledgers and evidence live under `.private/p74-odoo-v1/`, which Git ignores. The live steps need Docker, the pinned PageAgent bundle (`npm ci && npm run build` in `evals/pageagent`) and Playwright Chromium.
 
 Offline tests, with the stack, the fixture, the browser runner and the evaluator process faked and everything else real:
 
@@ -72,7 +72,7 @@ A held-out batch keeps what protects its conclusion. The task set was sealed and
 
 - [`population.py`](population.py) generates the synthetic Odoo population from a 128-bit seed; [`odoo_seed.py`](odoo_seed.py) builds it inside an isolated, demo-free database and verifies every predicted reference, amount, state and date before committing.
 - [`tasks.py`](tasks.py) validates, seals and instantiates task sets: 30 families per split, five per stratum, disjoint across splits. Instantiation returns a `RunnerInput` separate from the `EvaluatorInput`. [`tasksets/`](tasksets) holds the development set, both seals and the split verification.
-- [`stack.py`](stack.py) and [`compose.p74.yml`](compose.p74.yml) run the isolated stack on top of `deploy/odoo-single-node`. Images are built only from a clean checkout and labelled with its commit, which [`revision.py`](revision.py) checks.
+- [`stack.py`](stack.py) and [`compose.p74.yml`](compose.p74.yml) run the isolated stack on top of `examples/odoo/deploy/single-node`. Images are built only from a clean checkout and labelled with its commit, which [`revision.py`](revision.py) checks.
 - [`gateway.py`](gateway.py) is the only provider path for both arms. It binds each request to the open attempt, writes it to the ledger before forwarding, enforces the shared request contract and budgets, and types every provider result; attempts are classified from these records alone. Each dispatch is a lease that settles exactly once, and a call whose cost nobody knows holds the batch until its own late answer prices it or the owner's reconciliation covers it. [`provider_relay.py`](provider_relay.py) forwards the Agent's loopback calls to the gateway.
 - [`ledger.py`](ledger.py) is the append-only, hash-chained attempt ledger. It enforces one open attempt, a fixed record order, legal combinations of the three outcome axes from [`outcomes.py`](outcomes.py), bounded replacements that immediately follow their original, and mandatory seals after safety events, reset failures, unclassified results, model-string changes, unowned requests, a refused credential, an unaccounted call and a request outside the contract.
 - [`runner_woa.py`](runner_woa.py) and [`runner_pageagent.py`](runner_pageagent.py) drive real Chromium; [`oracle.py`](oracle.py) decides confirmation cards; [`trace.py`](trace.py) projects both engines' traces onto one reported schema.
