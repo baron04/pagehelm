@@ -51,6 +51,7 @@ from .knowledge import ApplicationKnowledgePort
 from .ledger import SessionLedger
 from .model import BudgetExhausted, ProviderError
 from .privacy import SessionHandoffPolicy, redact_sensitive_assignments
+from .turnwatch import ProgressFeed, RepeatGuard
 from .schemas import (BROWSER_ACTIONS, ActionReceipt, ControlPlan, OperationContract,
                       PageObservation, digest, empty_contract)
 from .evidence import CapabilityEvidence, EvidenceUnknown, Origin, TurnEvidence
@@ -841,9 +842,10 @@ class ServerAgentSession:
         self._task_skill_ids = {skill.skill_id for skill in self._task_skills}
         self.allow_application_entry = bool(allow_application_entry)
         self.business_tools = business_tools
-        #: Where the turn reports what it is doing, between page actions. None in every
-        #: apparatus that has no panel; the run does not depend on anyone listening.
+        #: Where the turn reports what it is doing, between page actions. Nobody may be
+        #: listening -- every apparatus without a panel -- and the run does not depend on it.
         self._progress = progress
+        self._feed = ProgressFeed(progress, on_failure=self.ledger.append)
         self.business_mutation_approval = business_mutation_approval
         if navigation_confirmation is not None and not callable(navigation_confirmation):
             raise TypeError("navigation_confirmation must be callable or None")
@@ -1057,9 +1059,9 @@ class ServerAgentSession:
         self.policy_blocks = 0
         self.policy_block_limit = policy_block_limit
         self.no_progress_repeat_limit = no_progress_repeat_limit
-        self._last_decision_fingerprint = ""
-        self._same_decision_count = 0
-        self._no_progress_warned = False
+        #: Deciding the same thing twice on the same page is not progress, and the step
+        #: budget finds that out only after spending every remaining step.
+        self._repeats = RepeatGuard(no_progress_repeat_limit)
         self.lab = lab
         #: Plan from the task and the page, with no source evidence. The control arm of the
         #: comparison: same planner, same schema, same withdrawal and recovery, nothing to cite.
@@ -1954,7 +1956,7 @@ class ServerAgentSession:
             # A document replacement can preserve the same DOM projection while
             # invalidating the observation identity. The rejected command was never
             # dispatched, so let the next ReAct decision retry against the fresh fact.
-            self._reset_no_progress()
+            self._repeats.reset()
         reason, detail = self._settle_write(write)
         if reason:
             return _Next(self._finish(result, t0, reason, detail, steps=step))
@@ -2257,7 +2259,7 @@ class ServerAgentSession:
             self._collect_evidence(tool_result, step=step)
             self._latest_business_query_page_actions = (
                 self.page_actions if tool_result.query_answer is not None else None)
-            self._step_note(stage="write_done", tool=name)
+            self._feed.note(stage="write_done", tool=name)
             successful_business_tools += 1
             feedback = ("BUSINESS MUTATION RESULT (approved, executed once, "
                         "current runtime fact):\n" + tool_result.render())
@@ -2341,7 +2343,7 @@ class ServerAgentSession:
             self._latest_business_query_page_actions = (
                 self.page_actions if tool_result.query_answer is not None else None)
             if tool_result.query_answer is not None:
-                self._step_note(
+                self._feed.note(
                     stage="read_done", tool=name,
                     count=tool_result.query_answer.matched_count,
                     scope=self._scope_label(tool_result.query_answer.scope))
@@ -2481,7 +2483,7 @@ class ServerAgentSession:
                     # The command did not reach the page and the receipt carries a
                     # replacement observation. Repeating the decision against that
                     # observation is recovery, not a no-progress loop.
-                    self._reset_no_progress()
+                    self._repeats.reset()
                 reason, detail = self._settle_write(write)
                 if reason:
                     return _Next(self._finish(result, t0, reason, detail, steps=step))
@@ -2666,7 +2668,7 @@ class ServerAgentSession:
             if elapsed >= self.wall_budget_s:
                 return self._finish(result, t0, "wall_clock_budget",
                                     f"exceeded {self.wall_budget_s}s", steps=step)
-            self._step_note(stage="thinking", step=step + 1)
+            self._feed.note(stage="thinking", step=step + 1)
             try:
                 reply = self.chat.complete_cancellable(
                     messages, self.tool_schemas(), self.run_id,
@@ -2825,7 +2827,7 @@ class ServerAgentSession:
             turn.messages, turn.obs, turn.step = messages, obs, step
             self.ledger.append("tool_call", step=step, tool=name,
                                args=_safe(args, self.session_handoffs))
-            self._step_note(
+            self._feed.note(
                 stage="tool", tool=name, step=step,
                 arguments=_safe(args, self.session_handoffs) if isinstance(args, dict) else {},
                 mutation=bool(
@@ -2835,11 +2837,11 @@ class ServerAgentSession:
             kept_reply, unanswered_reply = (unanswered_reply if name == "finish" else ""), ""
             turn.kept_reply = kept_reply
 
-            no_progress = self._track_progress(name, args, obs)
+            no_progress = self._repeats.decide(name, args, obs)
             if no_progress == "warn":
                 self.ledger.append(
                     "no_progress_detected", step=step, tool=name,
-                    repeated=self._same_decision_count, dispatched=False,
+                    repeated=self._repeats.repeats, dispatched=False,
                     side_effect_possible=False)
                 messages += [_assistant_call(call), _tool_result(
                     call, "NO PROGRESS: the same tool and arguments were already used on "
@@ -2852,7 +2854,7 @@ class ServerAgentSession:
                     "No repeated action was dispatched.")
                 self.ledger.append(
                     "no_progress_terminated", step=step, tool=name,
-                    repeated=self._same_decision_count, dispatched=False,
+                    repeated=self._repeats.repeats, dispatched=False,
                     side_effect_possible=False)
                 return self._finish(
                     result, t0, "no_progress", result.agent_said, steps=step)
@@ -3044,63 +3046,10 @@ class ServerAgentSession:
         )
         return self._finish(result, t0, "needs_input", result.agent_said, steps=step)
 
-    def _step_note(self, **facts) -> None:
-        """Report one thing this turn is doing, for whoever is watching it happen.
-
-        Facts only: the sentence a person reads is written by the panel view, and a
-        listener that raises is a broken panel, not a broken turn.
-        """
-        if self._progress is None:
-            return
-        try:
-            self._progress(facts)
-        except Exception as exc:  # noqa: BLE001 -- see the docstring
-            self.ledger.append("progress_publish_failed", error_type=type(exc).__name__)
-
     def _scope_label(self, scope: str) -> str:
         """The reader's own words for a read's scope, from the adapter's answer labels."""
         tables = getattr(self.business_tools, "answer_labels", None) or {}
         return str((tables.get("zh") or {}).get(scope) or "")
-
-    def _track_progress(self, name: str, args: object,
-                        observation: PageObservation) -> str:
-        """Refuse a consecutive semantic repeat before it reaches any execution tool."""
-        if self.no_progress_repeat_limit is None or name in {"finish", "ask_user"}:
-            self._last_decision_fingerprint = ""
-            self._same_decision_count = 0
-            self._no_progress_warned = False
-            return ""
-        page = observation.to_json()
-        page.pop("epoch", None)
-        for element in page.get("elements", ()):
-            element.pop("epoch", None)
-        try:
-            encoded = json.dumps(
-                {"tool": name, "args": args, "page": page}, ensure_ascii=False,
-                sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
-        except (TypeError, ValueError):
-            encoded = json.dumps(
-                {"tool": name, "args_type": type(args).__name__, "page": page},
-                ensure_ascii=False, sort_keys=True,
-                separators=(",", ":")).encode("utf-8")
-        fingerprint = hashlib.sha256(encoded).hexdigest()
-        if fingerprint != self._last_decision_fingerprint:
-            self._last_decision_fingerprint = fingerprint
-            self._same_decision_count = 1
-            self._no_progress_warned = False
-            return ""
-        self._same_decision_count += 1
-        if self._no_progress_warned:
-            return "end"
-        if self._same_decision_count >= self.no_progress_repeat_limit:
-            self._no_progress_warned = True
-            return "warn"
-        return ""
-
-    def _reset_no_progress(self) -> None:
-        self._last_decision_fingerprint = ""
-        self._same_decision_count = 0
-        self._no_progress_warned = False
 
     def _application_link_ref(self, ref: object, obs: PageObservation) -> tuple[str, str]:
         if self.application_routes is None:
