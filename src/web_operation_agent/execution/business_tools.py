@@ -21,6 +21,7 @@ from ..business.errors import (BusinessMutationBlockedError, BusinessMutationInd
 from ..business.runtime import FormDraft
 from ..grounding import WRITE_UNKNOWN
 from ..schemas import ActionReceipt, PageObservation
+from .knowledge_tools import finish_with_clarification
 from .prompts import CLARIFICATION_CHOICE_LIMIT, _assistant_call, _tool_result, _trim
 from .routes import observation_is_at_route
 from .runstate import _Next, _Turn
@@ -322,8 +323,8 @@ def business_tool(session, turn: "_Turn", call: dict, name: str, args: dict) -> 
                     "找到多个匹配项，请选择要打开的记录："
                     if re.search(r"[\u3400-\u9fff]", session.task.prompt)
                     else "Multiple records match. Choose the one to open:")
-                return _Next(session._finish_with_clarification(
-                    result, t0, step=step, question=question,
+                return _Next(finish_with_clarification(
+                    session, result, t0, step=step, question=question,
                     choice_ids=list(session._clarification_choices),
                     deterministic="complete_navigation_query"))
         # A request that names a second read collection may want a related

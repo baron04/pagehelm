@@ -18,6 +18,7 @@ from ..business.writes import WRITE_CAPABLE
 from ..grounding import WRITE_PERMITTED
 from ..privacy import redact_sensitive_assignments, safe_tool_arguments as _safe
 from ..schemas import BROWSER_ACTIONS, ActionReceipt, PageObservation
+from .knowledge_tools import capability_check_available, capability_check_feedback
 from .prompts import _assistant_call, _tool_result, _trim
 from .runstate import _Next, _StepEnd, _Turn
 
@@ -152,9 +153,9 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
         source_route_read_only = True
         name, args = "goto", {"url": url}
 
-    if name == "check_capability" and session._capability_check_available():
+    if name == "check_capability" and capability_check_available(session):
         messages += [_assistant_call(call),
-                     _tool_result(call, session._capability_check_feedback())]
+                     _tool_result(call, capability_check_feedback(session))]
         return session._resume(turn, messages, obs, successful_business_tools)
 
     if name not in BROWSER_ACTIONS:

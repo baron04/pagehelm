@@ -20,7 +20,6 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
-import re
 import time
 import uuid
 from functools import partial
@@ -50,8 +49,7 @@ from ..identity import PrincipalContext
 from ..planning.knowledge import ApplicationKnowledgePort
 from ..ledger import SessionLedger
 from ..modeling.provider import ProviderError
-from ..privacy import (SessionHandoffPolicy, redact_sensitive_assignments,
-                      safe_tool_arguments as _safe)
+from ..privacy import SessionHandoffPolicy, safe_tool_arguments as _safe
 from .routes import Router, candidate_url
 from ..modeling.spend import BudgetExhausted
 from .turnwatch import ProgressFeed, RepeatGuard
@@ -60,18 +58,21 @@ from .tools import ToolSurface
 from .page_actions import take_page_action
 from .business_tools import (business_tool, load_skill, prefill_form,
                              render_business_skills)
+from . import knowledge_tools
+from .knowledge_tools import (active_capability_digest, ask_user_tool,
+                              lookup_source_tool)
 from .runstate import (CAPABILITY_GAP_TERMINAL, LabApparatus, NO_LAB, RunResult,
                        TaskSpec, _Next, _Turn)
 from ..business.writes import PRE_DISPATCH_ERRORS, WRITE_CAPABLE, WatchState, WriteWatch
 from .prompts import (
     AGENT_SYSTEM, APPLICATION_ENTRY_SYSTEM, BUSINESS_SKILL_SYSTEM, CAPABILITY_SYSTEM,
-    CLARIFICATION_CHOICE_LIMIT, CLARIFICATION_SYSTEM, CONVERSATION_SYSTEM,
+    CLARIFICATION_SYSTEM, CONVERSATION_SYSTEM,
     REACT_SOURCE_SYSTEM, SCOPE_FIRST_SYSTEM, SKILL_SYSTEM, SOURCE_AFFORDANCE_SYSTEM,
     TOOL_SCHEMAS, _CAPABILITY_QUESTION, _NAVIGATION_EXTRA_GOAL, _NAVIGATION_ONLY,
     _PLAN_PREAMBLE, _REFERENCE_FOLLOWUP, _assistant_call, _tool_result, _trim)
 from ..schemas import (BROWSER_ACTIONS, ActionReceipt, ControlPlan, OperationContract,
                       PageObservation, digest, empty_contract)
-from ..answer.evidence import CapabilityEvidence, EvidenceUnknown, Origin
+from ..answer.evidence import EvidenceUnknown
 
 #: Describe a plan by its actual origin. A page-only plan must never be presented to the model
 #: as source-derived, because that would change the information available to that mode.
@@ -657,7 +658,7 @@ class ServerAgentSession:
         """
         available: dict[str, Callable[["_Turn", dict, str, dict], "_Next"]] = {}
         if self.runtime_source:
-            available["lookup_source"] = self._tool_lookup_source
+            available["lookup_source"] = partial(lookup_source_tool, self)
         if self._task_business_skills:
             available["load_skill"] = partial(load_skill, self)
         if self.allow_form_prefill:
@@ -667,48 +668,11 @@ class ServerAgentSession:
         if len(self.evidence):
             available["compute"] = self._tool_compute
         if self.allow_clarification:
-            available["ask_user"] = self._tool_ask_user
+            available["ask_user"] = partial(ask_user_tool, self)
         available["finish"] = self._tool_finish
         for tool in (self.business_tools.tool_names if self.business_tools is not None else ()):
             available[tool] = partial(business_tool, self)
         return available
-
-    def _tool_lookup_source(self, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
-        """Cited source evidence, and then a fresh look at the page it is about."""
-        query = args.get("query")
-        if not isinstance(query, str) or not query.strip() or len(query) > 1000:
-            return self._reply(turn, call,
-                               "query must be a nonempty string of at most 1000 characters")
-        bundle = self.lookup_source(query, turn.obs)
-        if self._cancel_requested():
-            return _Next(self._finish(
-                turn.result, turn.started_at, "user_cancelled",
-                "the user stopped this task after source retrieval", steps=turn.step))
-        try:
-            receipt = self.browser.execute("observe", {})
-            self._browser_attempts += 1
-        except TransportError as e:
-            return _Next(self._finish(turn.result, turn.started_at,
-                                      self._transport_terminal("observe"), str(e),
-                                      steps=turn.step))
-        write = self._writes.write_outcome(receipt, turn.step)
-        self.ledger.append("action_receipt", step=turn.step, tool="observe",
-                           command_id=receipt.command_id, after_tool="lookup_source",
-                           ok=receipt.ok, error_code=receipt.error_code,
-                           write=write["state"], write_attribution="unattributed")
-        reason, detail = self._writes.settle_write(write)
-        if reason:
-            return _Next(self._finish(turn.result, turn.started_at, reason, detail,
-                                      steps=turn.step))
-        if receipt.observation is not None:
-            turn.obs = receipt.observation
-        note = self._ground(turn.obs, receipt, write["state"], write["refused_requests"])
-        return self._reply(turn, call,
-                           "SOURCE EVIDENCE (prior; current page wins):\n" +
-                           (bundle.render()
-                            or "No matching source evidence. Do not invent an answer.") +
-                           "\n\n" + self._render(turn.obs, receipt, note, write,
-                                                  affordance_query=query))
 
     def _tool_withdraw_request(self, turn: "_Turn", call: dict, name: str,
                                args: dict) -> "_Next":
@@ -747,19 +711,6 @@ class ServerAgentSession:
                                error_type=type(exc).__name__, detail=str(exc)[:500])
         turn.messages += [_assistant_call(call), _tool_result(call, feedback)]
         return _Next()
-
-    def _tool_ask_user(self, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
-        """One question back to the person, which ends the turn holding what it knows."""
-        try:
-            clarification = self._clarification(args, step=turn.step)
-        except (TypeError, ValueError) as exc:
-            self.ledger.append("clarification_refused", step=turn.step,
-                               error_type=type(exc).__name__)
-            turn.messages += [_assistant_call(call), _tool_result(
-                call, "CLARIFICATION REFUSED: " + str(exc)[:500])]
-            return _Next()
-        return _Next(self._finish_with_clarification(
-            turn.result, turn.started_at, step=turn.step, clarification=clarification))
 
     def _tool_finish(self, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
         """The turn's own end: a verified answer where one is required, or a plain claim.
@@ -850,7 +801,7 @@ class ServerAgentSession:
                     self.task.prompt, withheld=self._capability_withheld)
                 self.ledger.append(
                     "capability_gap", step=step,
-                    capability_digest=self._active_capability_digest(),
+                    capability_digest=active_capability_digest(self),
                     mutation_proposals=self._mutation_proposal_count(),
                     dispatches=self._mutation_dispatch_count())
                 return _Next(self._finish(result, t0, CAPABILITY_GAP_TERMINAL,
@@ -1223,119 +1174,15 @@ class ServerAgentSession:
     def tool_schemas(self) -> list[dict]:
         return self._tool_surface.schemas()
 
-    def _clarification(self, args: object, *, step: int) -> dict:
-        if not isinstance(args, dict) or set(args) != {
-                "question", "response_kind", "choice_ids"}:
-            raise ValueError(
-                "ask_user requires exactly question, response_kind, and choice_ids")
-        question = args.get("question")
-        kind = args.get("response_kind")
-        choice_ids = args.get("choice_ids")
-        if (not isinstance(question, str) or not question.strip()
-                or len(question.strip()) > 500
-                or re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", question)):
-            raise ValueError("question must be 1-500 visible characters")
-        if kind not in {"free_text", "single_choice"}:
-            raise ValueError("response_kind must be free_text or single_choice")
-        if (not isinstance(choice_ids, list) or len(choice_ids) > CLARIFICATION_CHOICE_LIMIT
-                or any(not isinstance(item, str) or item not in self._clarification_choices
-                       for item in choice_ids)
-                or len(set(choice_ids)) != len(choice_ids)):
-            raise ValueError(
-                "choice_ids must be distinct current business-tool clarification candidates")
-        choices = [dict(self._clarification_choices[item]) for item in choice_ids]
-        if kind == "single_choice" and len(choices) < 1:
-            raise ValueError("single_choice requires at least one current choice")
-        if kind == "free_text" and choices:
-            raise ValueError("free_text does not accept choice_ids")
-        if len({item["label"] for item in choices}) != len(choices):
-            raise ValueError("current choices do not have distinct user-visible labels")
-        prior = ((self.conversation_context or {}).get("pending_clarification") or {})
-        task_id = str(prior.get("task_id") or "")
-        if not re.fullmatch(r"task-[a-f0-9]{24}", task_id):
-            task_id = "task-" + hashlib.sha256(self.run_id.encode("utf-8")).hexdigest()[:24]
-        safe_question = redact_sensitive_assignments(question.strip())
-        seed = json.dumps({"run_id": self.run_id, "step": step, "question": safe_question,
-                           "kind": kind, "choices": choices},
-                          ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        return {
-            "schema_version": 1,
-            "clarification_id": "clarify-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:24],
-            "task_id": task_id,
-            "question": safe_question,
-            "response_kind": kind,
-            "choices": choices,
-        }
-
-    def _finish_with_clarification(self, result: RunResult, t0: float, *,
-                                   step: int, clarification: dict | None = None,
-                                   question: str = "",
-                                   choice_ids: list[str] | None = None,
-                                   deterministic: str = "") -> RunResult:
-        if clarification is None:
-            clarification = self._clarification({
-                "question": question,
-                "response_kind": "single_choice",
-                "choice_ids": list(choice_ids or ()),
-            }, step=step)
-        result.clarification = clarification
-        result.agent_said = clarification["question"]
-        self.ledger.append(
-            "clarification_requested", step=step,
-            clarification_id=clarification["clarification_id"],
-            task_id=clarification["task_id"],
-            response_kind=clarification["response_kind"],
-            choice_count=len(clarification["choices"]),
-            choice_ids=[item["choice_id"] for item in clarification["choices"]],
-            question_digest=hashlib.sha256(
-                clarification["question"].encode("utf-8")).hexdigest(),
-            **({"deterministic": deterministic} if deterministic else {}),
-        )
-        return self._finish(result, t0, "needs_input", result.agent_said, steps=step)
-
     def _scope_label(self, scope: str) -> str:
         """The reader's own words for a read's scope, from the adapter's answer labels."""
         tables = getattr(self.business_tools, "answer_labels", None) or {}
         return str((tables.get("zh") or {}).get(scope) or "")
 
 
-    # -- routing tools ---------------------------------------------------------------
-
-
     def lookup_source(self, query: str, obs: PageObservation) -> EvidenceBundle:
-        """Local retrieval only: no planner/model call, filesystem expansion or hidden data.
-
-        The query originates in the live loop, and the current page provides its context.
-        The exact bounded evidence is persisted for a decision-level audit.
-        """
-        if not self.runtime_source:
-            raise ValueError("runtime source lookup is disabled")
-        if self.source_affordance_mode == "empty":
-            bundle = EvidenceBundle(task_ref=self.task.task_ref)
-            self.ledger.append("runtime_source_retrieved", query=query, page_url=obs.url,
-                               page_epoch=obs.epoch, source_digest="",
-                               evidence=[], licensed_view_routes=[], **bundle.stats)
-            return bundle
-        if self._runtime_retriever is None:
-            raise ValueError("runtime source lookup has no retriever")
-        bundle = self._runtime_retriever.retrieve(
-            self.task.task_ref, query,
-            webapps=self.served_webapps, max_requests=12, max_menu=4, max_forms=4, max_lines=70)
-        cited = bundle.citation_keys
-        for relation in self.source_map.by_kind("request_handler"):
-            if relation.attrs.get("event_type") != "view-only":
-                continue
-            keys = {ref.key for ref in relation.evidence} & cited
-            if keys:
-                webapp, _, request = relation.subject.partition("/")
-                self._source_view_routes.setdefault(
-                    (webapp.lower(), request.rstrip("/").lower()), set()).update(keys)
-        self.ledger.append("runtime_source_retrieved", query=query, page_url=obs.url,
-                           page_epoch=obs.epoch, source_digest=self.source_map.content_digest,
-                           evidence=list(bundle.lines),
-                           licensed_view_routes=[f"{a}/{r}" for a, r in self._source_view_routes],
-                           **bundle.stats)
-        return bundle
+        """Public entry: local retrieval only. See knowledge_tools.lookup_source."""
+        return knowledge_tools.lookup_source(self, query, obs)
 
     def _ground(self, obs: PageObservation, receipt: ActionReceipt, write_state: str,
                 refused_requests: list[str] | None = None) -> str:
@@ -1531,98 +1378,6 @@ class ServerAgentSession:
         if business_skills:
             body.append(business_skills)
         return "\n\n".join(body)
-
-    def _register_capability_evidence(self) -> str:
-        """Search the whole installed catalog for this turn's goal and record what it found.
-
-        Run once, before the loop, so a decline always has something to stand on and never
-        has to be inferred from the turn simply stopping. The search covers the typed Skill
-        catalog plus the non-typed surfaces this deployment actually enables, because a gap
-        is a statement about the whole executable surface.
-        """
-        if not self._capability_check_available():
-            return ""
-        if self._capability_ref:
-            return self._capability_ref
-        # Only the surfaces that can make the change themselves. Page actions that write can,
-        # so while they are enabled no gap may be claimed: the session might do it through the
-        # page. A form handoff cannot -- it prepares a form and the user submits it, or does
-        # not -- and it answers every goal alike, so counting it made every search non-empty
-        # and the gap impossible in the one deployment that enables it.
-        writing_actions = {"fill", "select", "submit", "click"} - set(self.disabled_actions)
-        extra = [f"page:{name}" for name in sorted(writing_actions & BROWSER_ACTIONS)]
-        allowed = self._approvals.mutations_enabled
-        try:
-            matches = self.business_tools.resolve_capability(
-                self.task.prompt, allow_mutations=allowed, extra=tuple(extra))
-            # The same search with changes allowed. What it finds and this one does not is
-            # what this actor's delegation (or this deployment) withholds -- the difference
-            # between a capability nobody installed and one nobody granted them.
-            withheld = () if allowed else tuple(
-                name for name in (
-                    tuple(self.business_tools.resolve_capability(
-                        self.task.prompt, allow_mutations=True))
-                    + tuple(self.business_tools.withheld_capability(self.task.prompt)))
-                if name not in matches)
-        except (ValueError, TypeError) as exc:
-            # A capability check that cannot run leaves the turn without the reference, so no
-            # gap can be claimed. That is the safe direction: the model falls back to ordinary
-            # work rather than declining on a search that never happened.
-            self.ledger.append("capability_check_unavailable", reason=str(exc)[:200])
-            return ""
-        item = CapabilityEvidence(
-            evidence_id="capability#1",
-            origin=Origin(kind="capability", reference=f"capability-check:{self.run_id}",
-                          observed_at=str(time.time()),
-                          scope=self.task.supported_scope or self.arm),
-            application=self._approvals.principal.application_id,
-            application_version=self.contract.content_digest,
-            actor=self._approvals.principal.actor_authority_digest,
-            catalog_digest=self.business_tools.catalog_sha256,
-            goal=self.task.prompt[:500],
-            matches=tuple(matches), withheld=tuple(withheld))
-        self.evidence.record(item)
-        self._capability_ref = item.evidence_id
-        self._capability_withheld = bool(item.withheld)
-        self.ledger.append("capability_check", goal_chars=len(self.task.prompt),
-                           catalog_digest=item.catalog_digest,
-                           matches=list(item.matches), withheld=list(item.withheld))
-        return item.evidence_id
-
-    def _capability_check_available(self) -> bool:
-        return (self.business_tools is not None and self._approvals.principal is not None
-                and not self._capability_question)
-
-    def _capability_check_feedback(self) -> str:
-        ref = self._register_capability_evidence()
-        if not ref:
-            return ("CAPABILITY CHECK UNAVAILABLE: no search could run, so no capability gap "
-                    "can be claimed.")
-        # The structured finish is what can carry the conclusion, and until now it opened only
-        # after a business read -- the one thing a turn declining a change must not do first.
-        self._answer_mode = True
-        held = self.evidence.get(ref)
-        if held.matches:
-            return (f"CAPABILITY CHECK {ref}: this session can perform it with "
-                    + ", ".join(held.matches) + ". Load that Skill and use it; a "
-                    "capability_gap citing this check is refused.")
-        return (f"CAPABILITY CHECK {ref}: nothing installed for this actor performs the change "
-                "the user asked for. Finish now with outcome=unable and answer "
-                '{"version": 1, "coverage": "undetermined", "conclusions": '
-                f'[{{"kind": "capability_gap", "evidence_ref": "{ref}"}}]}}. '
-                "Do not look the record up, do not goto it, do not answer with a related query, "
-                "and do not substitute a different change.")
-
-    def _active_capability_digest(self) -> str:
-        """A digest of the business tools this turn could actually call.
-
-        An unsupported-operation refusal is a claim about the toolset, so the toolset is what
-        is recorded. Names alone, sorted: the digest answers "which capabilities were live",
-        and a reader comparing two runs can see the set change without the ledger carrying
-        the tool definitions themselves.
-        """
-        names = sorted(self.business_tools.tool_names) if self.business_tools is not None else []
-        return digest({"business_tools": names})
 
     def _mutation_proposal_count(self) -> int:
         return sum(1 for event in self.ledger.events

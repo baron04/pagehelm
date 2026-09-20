@@ -8,6 +8,7 @@ surface separate first prevents their availability rules from being duplicated a
 from __future__ import annotations
 
 from ..answer import answer_protocol, page_answer
+from .knowledge_tools import capability_check_available
 from .prompts import (APPLICATION_ENTRY_TOOL, ASK_USER_TOOL, CAPABILITY_TOOL,
                       LOAD_SKILL_TOOL, SOURCE_CANDIDATE_TOOL, SOURCE_NAV_TOOL,
                       SOURCE_TOOL, SKILL_APP_TOOL, SKILL_ROUTE_TOOL, TOOL_SCHEMAS,
@@ -34,7 +35,7 @@ class ToolSurface:
                      else tool for tool in tools]
         if session.allow_clarification:
             tools += [ASK_USER_TOOL]
-        if session._capability_check_available():
+        if capability_check_available(session):
             tools += [CAPABILITY_TOOL]
         if session._answers_pending_question:
             tools += [WITHDRAW_TOOL]
