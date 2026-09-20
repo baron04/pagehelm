@@ -541,14 +541,6 @@ class ServerAgentSession:
                 continuation_prompt = prior["user"].strip()
         self._answers_pending_question = bool(continuation_prompt)
         clarification_context_used = False
-        self._business_control = {
-            "approval_requested": 0,
-            "approval_granted": 0,
-            "approval_denied": 0,
-            "mutation_execution_started": 0,
-            "mutation_completed": 0,
-            "mutation_indeterminate": 0,
-        }
         selection = BusinessSkillSelection(
             BUSINESS_SKILL_MATCHER_VERSION, (), (), False)
         if business_tools is None:
@@ -1096,7 +1088,7 @@ class ServerAgentSession:
                     isinstance(conclusions, list)
                     and any(isinstance(item, dict) for item in conclusions))
                 if (self._explicit_mutation_intent and claims_read_only_result
-                        and self._business_control["mutation_completed"] == 0
+                        and self._approvals.business_counts["mutation_completed"] == 0
                         and isinstance(args, dict)
                         and args.get("outcome") in ("answered", "partial")):
                     raise ValueError(
@@ -1592,116 +1584,20 @@ class ServerAgentSession:
                 messages = _trim(messages, self.keep_observations)
                 return self._resume(turn, messages, obs, successful_business_tools)
 
-            self._business_control["approval_requested"] += 1
-            self.ledger.append(
-                "business_mutation_proposed", step=step, tool=name,
-                proposal=proposal.redacted(), effect=proposal.effect,
-                targets=list(proposal.targets), dispatched=False,
-                side_effect_possible=False, identity=operation_identity)
-            if self._approvals.business_approval is None:
-                self.ledger.append(
-                    "business_mutation_approval_unavailable", step=step,
-                    proposal_digest=proposal.content_digest,
-                    dispatched=False, side_effect_possible=False)
+            approval = self._approvals.approve_mutation(
+                proposal, step=step, tool=name, context=operation_context,
+                identity=operation_identity)
+            if not approval.approved:
                 return _Next(self._finish(
-                    result, t0, "approval_unavailable",
-                    "business mutation requires an authenticated user decision",
-                    steps=step))
-            if self._cancel_requested():
-                return _Next(self._finish(
-                    result, t0, "user_cancelled",
-                    "the user stopped this task before approval", steps=step))
-            try:
-                grant = (self._approvals.business_approval(proposal)
-                         if operation_context is None
-                         else self._approvals.business_approval(
-                             proposal, context=operation_context))
-            except Exception as exc:
-                self.ledger.append(
-                    "business_mutation_approval_failed", step=step,
-                    proposal_digest=proposal.content_digest,
-                    error_type=type(exc).__name__, dispatched=False,
-                    side_effect_possible=False)
-                return _Next(self._finish(
-                    result, t0, "approval_failed",
-                    "business mutation approval was unavailable", steps=step))
-            if self._cancel_requested():
-                self.ledger.append(
-                    "business_mutation_cancelled_before_dispatch", step=step,
-                    tool=name, approval_id="",
-                    proposal_digest=proposal.content_digest,
-                    dispatched=False, side_effect_possible=False)
-                return _Next(self._finish(
-                    result, t0, "user_cancelled",
-                    "the user stopped this task while approval was pending",
-                    steps=step))
-            decision = getattr(grant, "decision", "")
-            approved_digest = getattr(grant, "plan_digest", "")
-            approved_context_digest = getattr(
-                grant, "operation_context_digest", "")
-            approval_id = str(getattr(grant, "approval_id", ""))[:200]
-            if decision == "expired":
-                self.ledger.append(
-                    "business_mutation_approval_expired", step=step, tool=name,
-                    approval_id=approval_id,
-                    proposal_digest=proposal.content_digest,
-                    dispatched=False, side_effect_possible=False)
-                return _Next(self._finish(
-                    result, t0, "approval_expired",
-                    "business mutation approval expired before dispatch",
-                    steps=step))
-            if decision != "approved":
-                self._business_control["approval_denied"] += 1
-                self.ledger.append(
-                    "business_mutation_denied", step=step, tool=name,
-                    approval_id=approval_id,
-                    proposal_digest=proposal.content_digest,
-                    dispatched=False, side_effect_possible=False)
-                return _Next(self._finish(
-                    result, t0, "approval_denied",
-                    "the user declined the proposed business mutation", steps=step))
-            if approved_digest != proposal.content_digest:
-                self.ledger.append(
-                    "business_mutation_approval_mismatch", step=step, tool=name,
-                    approval_id=approval_id,
-                    proposal_digest=proposal.content_digest,
-                    dispatched=False, side_effect_possible=False)
-                return _Next(self._finish(
-                    result, t0, "approval_failed",
-                    "business mutation approval did not match the proposal", steps=step))
-            if (operation_context is not None
-                    and approved_context_digest != operation_context.binding_digest):
-                self.ledger.append(
-                    "business_mutation_approval_context_mismatch", step=step,
-                    tool=name, approval_id=approval_id,
-                    proposal_digest=proposal.content_digest,
-                    operation_context_digest=operation_context.binding_digest,
-                    dispatched=False, side_effect_possible=False)
-                return _Next(self._finish(
-                    result, t0, "approval_failed",
-                    "business mutation approval belongs to another operation context",
-                    steps=step))
-            self._business_control["approval_granted"] += 1
-            if self._cancel_requested():
-                self.ledger.append(
-                    "business_mutation_cancelled_before_dispatch", step=step,
-                    tool=name, approval_id=approval_id,
-                    proposal_digest=proposal.content_digest,
-                    dispatched=False, side_effect_possible=False)
-                return _Next(self._finish(
-                    result, t0, "user_cancelled",
-                    "the user stopped this task before mutation dispatch",
-                    steps=step))
+                    result, t0, approval.reason, approval.detail, steps=step))
+            approval_id = approval.approval_id
             def mutation_claimed() -> None:
-                self.ledger.append(
-                    "business_mutation_execution_started", step=step, tool=name,
-                    approval_id=approval_id,
-                    proposal_digest=proposal.content_digest,
-                    side_effect_possible=True, identity=operation_identity)
-                self._business_control["mutation_execution_started"] += 1
+                self._approvals.mutation_claimed(
+                    proposal, step=step, tool=name, approval_id=approval_id,
+                    identity=operation_identity)
             try:
                 tool_result = self.business_tools.execute_mutation(
-                    proposal, approved_digest, self._loaded_business_skill_ids,
+                    proposal, approval.approved_digest, self._loaded_business_skill_ids,
                     context=operation_context, on_claimed=mutation_claimed)
             except BusinessMutationBlockedError as exc:
                 detail = str(exc)[:500]
@@ -1715,7 +1611,7 @@ class ServerAgentSession:
                 return _Next(self._finish(
                     result, t0, "business_mutation_blocked", detail, steps=step))
             except BusinessMutationIndeterminate as exc:
-                self._business_control["mutation_indeterminate"] += 1
+                self._approvals.mutation_indeterminate()
                 detail = str(exc)[:500]
                 # The digest names the journal row an operator has to settle, and
                 # the reconciliation names what the application already learned about
@@ -1743,7 +1639,7 @@ class ServerAgentSession:
                     side_effect_possible=False, identity=operation_identity)
                 return _Next(self._finish(
                     result, t0, "business_mutation_failed", detail, steps=step))
-            self._business_control["mutation_completed"] += 1
+            self._approvals.mutation_completed()
             self.ledger.append(
                 "business_mutation_result", step=step, tool=name,
                 approval_id=approval_id,
@@ -3277,7 +3173,7 @@ class ServerAgentSession:
         result.plan_status = self.plan_state.counts() if self.contract_source != "none" else {}
         result.plan_withdrawn = self.plan_state.withdrawn
         result.write_refusals = self.write_refusals
-        result.business_control = dict(self._business_control)
+        result.business_control = self._approvals.business_result()
         result.navigation_control = self._approvals.navigation_result()
         result.policy_blocks = self.policy_blocks
         self.ledger.append("run_finished", **result.to_json())

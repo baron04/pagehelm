@@ -44,6 +44,10 @@ def _reasons_emitted_by(*classes) -> set[str]:
         token = m.group(1)
         if token.startswith('"'):
             found.add(token.strip('"'))
+    # Collaborators return terminal values for the session to pass to ``_finish``. Keep
+    # discovering unknown literals at direct finish sites above, and add every already-known
+    # terminal literal used by those collaborators to the reachability side of the contract.
+    found |= (set(re.findall(r'["\']([a-z_]+)["\']', src)) & set(S.TERMINAL_REASONS))
     found |= set(re.findall(r'"(agent_finished|agent_refused|step_budget|wall_clock_budget|'
                             r'token_budget|action_policy_budget|provider_error|transport_error|'
                             r'indeterminate_write|navigation_not_confirmed|'
