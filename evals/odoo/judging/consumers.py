@@ -126,7 +126,7 @@ CONSUMERS: dict[str, tuple[Consumer, ...]] = {
         Consumer("evals/odoo/provider/gateway.py", "ProviderGateway._record_locked",
                  "whether an answer still settles its call, or arrives after it was written "
                  "down as unresolved"),
-        Consumer("evals/odoo/reporting/ledger.py", "_Replay.model_unresolved",
+        Consumer("evals/odoo/reporting/replay.py", "_Replay.model_unresolved",
                  "that a call settled exactly once, and that an attempt ends only when all of "
                  "its calls have"),
         Consumer("evals/odoo/execution/driver.py", "_cost",
