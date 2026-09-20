@@ -83,7 +83,11 @@ def _stable(value):
     if isinstance(value, str):
         return _HEX32.sub("<hex32>", value)
     if isinstance(value, dict):
-        return {key: _stable(item) for key, item in value.items()}
+        return {
+            key: ("<unix-time>" if key == "observed_at" and isinstance(item, str)
+                  and re.fullmatch(r"[0-9]{10}(?:\.[0-9]+)?", item) else _stable(item))
+            for key, item in value.items()
+        }
     if isinstance(value, (list, tuple)):
         # Tuples become lists: JSON has one sequence type, and a snapshot that compares
         # unequal after a round trip through its own file is a snapshot of nothing.

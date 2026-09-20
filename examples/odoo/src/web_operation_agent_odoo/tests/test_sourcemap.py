@@ -140,6 +140,88 @@ class Tray(models.Model):
         <field name="view_mode">form</field>
     </record>
 </odoo>""",
+    "addons/greenhouse/models/tray_rules.py": '''from odoo import _, api, fields, models
+from odoo.exceptions import UserError, ValidationError
+
+TRAY_STAGE = [
+    ("seeded", "Seeded"),
+    ("sprouting", "Sprouting"),
+]
+TRAY_STAGE_WITH_HARVEST = TRAY_STAGE + [("harvested", "Harvested")]
+
+
+class TrayRules(models.Model):
+    _inherit = "greenhouse.tray"
+
+    stage = fields.Selection(selection=TRAY_STAGE_WITH_HARVEST, string="Stage")
+    pinned = fields.Boolean(help="Pinned trays cannot be moved.")
+
+    def action_move(self):
+        if any(tray.pinned for tray in self):
+            raise UserError(_("You cannot move a pinned tray. Unpin it first."))
+        for tray in self:
+            if tray.stage == "harvested":
+                raise ValidationError(_(
+                    "A harvested tray has nothing left to move."
+                    " Archive it instead."))
+            elif not tray.cultivar_id:
+                raise UserError(_("Pick a cultivar before moving the tray."))
+        if not self:
+            raise ValueError("nothing to move")
+        return True
+
+    def _move_error_message(self):
+        """Return why the trays cannot be moved, or False."""
+        if self.stage == "seeded":
+            return _("Seeded trays stay where they were sown.")
+        return False
+
+    def _display_label(self):
+        if self.pinned:
+            return _("Pinned tray")
+        return self.name
+
+    def _compute_sprout_window(self):
+        """
+        Compute how long a tray may sprout. Possible outcomes:
+        - short: the cultivar sprouts within a week, which is the ordinary case for leafy
+          greens and most herbs grown on a standard tray.
+        - long: the cultivar needs more than a week; this is possible only for a cultivar
+          sown on the deep tray, and only while the tray is not pinned.
+        """
+        for tray in self:
+            tray.stage = tray.stage
+''',
+    "addons/greenhouse/wizard/move_wizard_views.xml": """<?xml version="1.0"?>
+<odoo>
+    <record id="action_move_trays_wizard" model="ir.actions.act_window">
+        <field name="name">Move Trays</field>
+        <field name="res_model">greenhouse.move.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+    </record>
+    <record id="action_trays_to_water" model="ir.actions.act_window">
+        <field name="name">Trays to Water</field>
+        <field name="res_model">greenhouse.tray</field>
+        <field name="view_mode">list,form</field>
+        <field name="domain">[('stage', '=', 'sprouting')]</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+            No tray needs water
+            </p><p>
+            A tray needs water while it is sprouting &amp; not pinned.
+            </p>
+        </field>
+    </record>
+</odoo>""",
+    "addons/orchard/models/tree.py": '''from odoo import fields, models
+
+
+class Tree(models.Model):
+    _name = "orchard.tree"
+
+    name = fields.Char("Tree")
+''',
     "addons/lighthouse/views/lamp_menus.xml": """<?xml version="1.0"?>
 <odoo>
     <menuitem id="lighthouse_root" name="Lighthouse">
@@ -292,6 +374,108 @@ class Extraction(unittest.TestCase):
                  if relation.subject == f"{ODOO_SOURCE_SCOPE}/trays"]
         self.assertEqual([relation.attrs["response_name"] for relation in trays], ["success"])
         self.assertEqual(trays[0].object, "greenhouse.view_tray_list")
+
+
+class Rules(unittest.TestCase):
+    """Facts a read-only assistant never triggers and a page therefore never shows."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.map = compile_fixture(self.root)
+        self.tree = build(self.root)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _guards(self, subject):
+        return [relation for relation in self.map.by_kind("service_guard")
+                if relation.subject == subject]
+
+    def test_a_refusal_carries_its_condition_and_cites_test_through_raise(self):
+        pinned = next(relation for relation in self._guards("greenhouse.tray.action_move")
+                      if "pinned" in relation.object)
+        self.assertEqual(pinned.object, "You cannot move a pinned tray. Unpin it first.")
+        self.assertEqual(pinned.attrs["exception"], "UserError")
+        self.assertEqual(pinned.attrs["condition"], "any((tray.pinned for tray in self))")
+        cited = self.tree.read_text(pinned.evidence[0].path).splitlines()[
+            pinned.evidence[0].start_line - 1:pinned.evidence[0].end_line]
+        self.assertIn("if any(tray.pinned", cited[0])
+        self.assertIn("raise UserError", cited[-1])
+        self.assertTrue(self.tree.verify(pinned.evidence[0]))
+
+    def test_joined_messages_loops_and_else_branches_are_kept(self):
+        harvested, cultivar = [
+            relation for relation in self._guards("greenhouse.tray.action_move")
+            if relation.attrs["loop"]]
+        self.assertEqual(harvested.object,
+                         "A harvested tray has nothing left to move. Archive it instead.")
+        self.assertEqual(harvested.attrs["loop"], "tray in self")
+        self.assertEqual(harvested.attrs["exception"], "ValidationError")
+        self.assertEqual(cultivar.attrs["condition"],
+                         "(not (tray.stage == 'harvested')) and (not tray.cultivar_id)")
+
+    def test_a_programming_error_is_not_published_as_a_business_rule(self):
+        messages = {relation.object for relation in self._guards(
+            "greenhouse.tray.action_move")}
+        self.assertNotIn("'nothing to move'", messages)
+        self.assertEqual(len(messages), 3)
+
+    def test_an_error_method_return_is_a_rule_but_a_display_label_is_not(self):
+        returned = self._guards("greenhouse.tray._move_error_message")
+        self.assertEqual([relation.object for relation in returned],
+                         ["Seeded trays stay where they were sown."])
+        self.assertEqual(returned[0].attrs["form"], "return")
+        self.assertEqual(returned[0].attrs["condition"], "self.stage == 'seeded'")
+        self.assertEqual(self._guards("greenhouse.tray._display_label"), [])
+
+    def test_a_selection_named_by_a_module_constant_carries_its_values(self):
+        stage = next(relation for relation in self.map.by_kind("service_entity")
+                     if relation.object == "stage")
+        self.assertIn("('harvested', 'Harvested')", stage.attrs["selection"])
+        self.assertIn("('sprouting', 'Sprouting')", stage.attrs["selection"])
+
+    def test_a_long_docstring_is_kept_and_covered_by_its_citation(self):
+        window = next(relation for relation in self.map.by_kind("service_parameter")
+                      if relation.subject == "greenhouse.tray._compute_sprout_window")
+        self.assertIn("only while the tray is not pinned", window.attrs["doc"])
+        body = "\n".join(self.tree.read_text(window.evidence[0].path).splitlines()[
+            window.evidence[0].start_line - 1:window.evidence[0].end_line])
+        self.assertIn("only while the tray is not pinned", body)
+        self.assertIn("only while the tray is not pinned", window.evidence[0].excerpt,
+                      "the answer quotes the stored excerpt, not the ranker's summary")
+
+    def test_a_dialog_action_is_not_a_read_only_affordance(self):
+        actions = {relation.attrs["action_id"]: relation
+                   for relation in self.map.by_kind("request_handler")}
+        self.assertEqual(actions["greenhouse.action_move_trays_wizard"].attrs["event_type"],
+                         "dialog")
+        self.assertEqual(actions["greenhouse.action_trays_to_water"].attrs["event_type"],
+                         "view-only")
+        candidates = resolve_source_affordances(
+            self.map, task="move trays", served_webapps={ODOO_SOURCE_SCOPE},
+            route_port=ODOO_ROUTE_PORT, limit=12)
+        self.assertNotIn("action-greenhouse.action_move_trays_wizard",
+                         {candidate.request for candidate in candidates})
+
+    def test_action_html_help_is_normalized_to_text(self):
+        water = next(relation for relation in self.map.by_kind("request_handler")
+                     if relation.attrs["action_id"] == "greenhouse.action_trays_to_water")
+        self.assertEqual(water.attrs["help"], "No tray needs water A tray needs water while "
+                                              "it is sprouting & not pinned.")
+        self.assertIn("A tray needs water while it is sprouting &amp; not pinned",
+                      water.evidence[0].excerpt)
+
+    def test_a_deployment_compiles_only_installed_modules(self):
+        everything = {relation.attrs.get("module") for relation in self.map.relations}
+        self.assertIn("orchard", everything)
+        only = OdooCompiler(self.tree, "fixture", modules={"greenhouse"}).compile()
+        self.assertEqual({relation.attrs.get("module") for relation in only.relations},
+                         {"greenhouse"})
+        with self.assertRaises(ValueError):
+            OdooCompiler(self.tree, "fixture", modules=set())
+        with self.assertRaises(ValueError):
+            OdooCompiler(self.tree, "fixture", modules={"../etc"})
 
 
 class AffordanceInterop(unittest.TestCase):

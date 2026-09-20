@@ -15,8 +15,10 @@ agent.
 
 - A server-side ReAct loop receives every tool result and a fresh page observation before
   its next decision, with step, time, token, and provider-spend limits.
-- Application-owned Skills and typed tools provide current business facts. Source retrieval
-  is optional and never a prerequisite for ordinary browser or API operation.
+- Application-owned Skills and typed tools provide current business facts. When explicitly
+  enabled, a deployment-bound local source compiler can answer rule questions with exact
+  file, line, release, and byte-digest provenance. Source retrieval remains optional and is
+  never a prerequisite for ordinary browser or API operation.
 - Browser actions are checked against the current observation and application route policy.
   Page switches require a visible confirmation.
 - Writes are disabled by default. Core turn configuration initially disables every browser
@@ -140,7 +142,11 @@ same database, company, and actor. Reads report completeness; writes perform app
 duplicate checks and readback.
 
 The adapter includes versioned Skills and an optional source compiler for Odoo menus, actions,
-views, and models. Runtime facts remain authoritative when source or documentation disagrees.
+views, fields, method documentation, and user-visible refusal conditions. Compilation is
+restricted to modules installed in the running deployment, and source answers quote cited
+bytes from that release. Runtime facts remain authoritative when source or documentation
+disagrees. The installed add-on also exposes a bounded actor-scoped model/action catalog as
+the foundation for broader read discovery; that catalog is not yet a generic query tool.
 
 Provision the disposable local fixture from a checkout:
 

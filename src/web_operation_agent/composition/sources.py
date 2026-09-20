@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from ..schemas import SourceMap
+from ..planning.source_facts import CompiledSourceLookup, SourceLookup
 
 
 @runtime_checkable
@@ -46,6 +47,9 @@ class SourceCapability:
     source_contract: bool = False
     runtime_source: bool = False
     source_affordance_mode: str = "off"
+    #: Optional alternative local search over the same release. When absent, lookup uses
+    #: the compiled map's deterministic rule index.
+    lookup: SourceLookup | None = None
 
     def __post_init__(self) -> None:
         if self.source_map is not None and not isinstance(self.source_map, SourceMap):
@@ -59,11 +63,43 @@ class SourceCapability:
                         or self.source_affordance_mode == "auto")
         if wants_source and self.source_map is None:
             raise ValueError("source-backed settings require a version-bound SourceMap")
+        if self.lookup is not None:
+            if not isinstance(self.lookup, SourceLookup):
+                raise TypeError("lookup must implement SourceLookup")
+            if not self.runtime_source:
+                raise ValueError("a source lookup is used only by runtime source lookup")
+            if self.lookup.release != self.source_map.release:
+                raise ValueError("a source lookup must search the map's own release")
 
     @staticmethod
     def none() -> "SourceCapability":
         """The capability of a deployment whose application ships no source compiler."""
         return SourceCapability()
+
+    def fact_lookup(self) -> SourceLookup | None:
+        """What runtime lookup asks about application rules."""
+        if self.lookup is not None:
+            return self.lookup
+        return CompiledSourceLookup(self.source_map) if self.source_map is not None else None
+
+    def control(self, *, lookup: SourceLookup | None = None) -> "SourceCapability":
+        """Keep the interface and release, replacing compiled facts with an empty map."""
+        if self.source_map is None:
+            raise ValueError("a capability without a map has no control to derive")
+        empty = SourceMap(
+            schema_version=self.source_map.schema_version,
+            attestation_id=self.source_map.attestation_id,
+            repository_id=self.source_map.repository_id,
+            release=self.source_map.release,
+            relations=[],
+        )
+        return SourceCapability(
+            source_map=empty,
+            source_contract=self.source_contract,
+            runtime_source=self.runtime_source,
+            source_affordance_mode=self.source_affordance_mode,
+            lookup=lookup,
+        )
 
     def session_kwargs(self) -> dict:
         """The exact keywords a session takes, so a composition cannot pick three of four."""

@@ -5862,8 +5862,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 7373,
-          "input_digest": "cca5541646d8715c058516bd2bb48a4880c8febe3273e9ce997004796d4c06fc",
+          "input_bytes": 7800,
+          "input_digest": "56c0cfe34cf3c2b32dd8b867a2a4124f9b312b1c8f09bce58bce1e5397c99e86",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -5888,6 +5888,8 @@
           "citations": 7,
           "event": "runtime_source_retrieved",
           "evidence": [
+            "source#1 [apps/greenhouse/glasshouse.decl:1-1] screen 'glasshouse/findTrays' at /glasshouse/do/findTrays",
+            "source#2 [apps/greenhouse/glasshouse.services:3-3] method sproutSeedling(trayId)",
             "[apps/greenhouse/glasshouse.menus:1-1] navigation: the menu item shown as \"Seed Trays\" links to request `findTrays` (webapps: glasshouse; declared parameters: `trayId` from field `selectedTrayId`; `viewMode` from literal `summary`; `gardenId` from the same-named field (implicit))",
             "[apps/greenhouse/glasshouse.decl:1-1] request `glasshouse/findTrays` is handled by view-only (auth=true)",
             "[apps/greenhouse/glasshouse.decl:2-2] response `success` of request `glasshouse/findTrays` renders view `TrayList`",
@@ -5897,12 +5899,13 @@
             "[apps/greenhouse/glasshouse.services:3-3] service `sproutSeedling` requires trayId, cultivarId; optional inputs include nurseryNote"
           ],
           "extra_terms": [],
+          "facts_shown": 2,
           "form_candidates": 0,
           "forms_shown": 0,
           "licensed_view_routes": [
             "glasshouse/findtrays"
           ],
-          "lines": 7,
+          "lines": 9,
           "menu_candidates": 1,
           "page_epoch": 1,
           "page_url": "http://app.test/glasshouse/do/main",
@@ -5950,8 +5953,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 8891,
-          "input_digest": "5b5cdcb1560ec437efc1fd73e67e56669d90420b43564fcc191eae7c82d40c0f",
+          "input_bytes": 12154,
+          "input_digest": "627767812c101645e29affacb9ae2efe330462f44814e7bf006deb851160ad8d",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -5966,8 +5969,17 @@
         },
         {
           "args": {
-            "done": true,
-            "why": "the source answered the question"
+            "answer": {
+              "conclusions": [
+                {
+                  "evidence_ref": "source#1",
+                  "kind": "source_excerpt"
+                }
+              ],
+              "coverage": "partial",
+              "version": 1
+            },
+            "outcome": "partial"
           },
           "event": "tool_call",
           "run_id": "runtime_source_lookup_returns_cited_evidence",
@@ -5976,9 +5988,9 @@
           "tool": "finish"
         },
         {
-          "challenged": false,
-          "claim": "unverified",
-          "event": "success_claim",
+          "conclusions": 1,
+          "coverage": "partial",
+          "event": "answer_verified",
           "run_id": "runtime_source_lookup_returns_cited_evidence",
           "seq": 11,
           "step": 2
@@ -5989,7 +6001,7 @@
           "seq": 12
         },
         {
-          "agent_said": "the source answered the question",
+          "agent_said": "**Rule in the source** (apps/greenhouse/glasshouse.decl:1-1):\n```\nroute findTrays handled by view-only, auth required\n```\n> source: a rule in the deployed release's code, not current data · v0 · lines sha256:a867c432897f5c7ecc7f68738df248d97885901687b79520e7b1a35374fd1b33\n\n> **Answered the part supported by current data**",
           "arm": "G",
           "business_answer_projected": false,
           "business_control": {
@@ -6012,7 +6024,7 @@
             "trace_events": 0,
             "write_blocked": 0
           },
-          "detail": "the source answered the question",
+          "detail": "**Rule in the source** (apps/greenhouse/glasshouse.decl:1-1):\n```\nroute findTrays handled by view-only, auth required\n```\n> source: a rule in the deployed release's code, not current data · v0 · lines sha256:a867c432897f5c7ecc7f68738df248d97885901687b79520e7b1a35374fd1b33\n\n> **Answered the part supported by current data**",
           "event": "run_finished",
           "page_actions": 0,
           "plan_status": {},
@@ -6028,6 +6040,30 @@
           "success_claim": "unverified",
           "task_ref": "T",
           "terminal_reason": "agent_finished",
+          "verified_answer": {
+            "conclusions": [
+              {
+                "citation": "apps/greenhouse/glasshouse.decl:1-1",
+                "excerpt": "route findTrays handled by view-only, auth required",
+                "kind": "source_excerpt",
+                "release": "v0",
+                "scope": "the deployed release v0",
+                "sha256": "a867c432897f5c7ecc7f68738df248d97885901687b79520e7b1a35374fd1b33",
+                "source_kind": "source"
+              }
+            ],
+            "coverage": "partial",
+            "lowered_because": [],
+            "presentation": "brief",
+            "prose": "",
+            "sources": [
+              {
+                "kind": "source",
+                "observed_at": "<unix-time>",
+                "scope": "the deployed release v0"
+              }
+            ]
+          },
           "wall_seconds": 0.0,
           "write_refusals": 0
         }
@@ -6042,8 +6078,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION",
-          "system_chars": 3565,
-          "system_digest": "sha256:dacfd34aba70a002d8511095729a434890f43f27cd7c6d5db1a2db809b99e41f",
+          "system_chars": 3934,
+          "system_digest": "sha256:0ec64918f7355623b481788839717f40b3ab1f467d09386ec715aa237669d6ef",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -6060,12 +6096,12 @@
           ]
         },
         {
-          "system_chars": 3565,
-          "system_digest": "sha256:dacfd34aba70a002d8511095729a434890f43f27cd7c6d5db1a2db809b99e41f",
+          "system_chars": 3934,
+          "system_digest": "sha256:0ec64918f7355623b481788839717f40b3ab1f467d09386ec715aa237669d6ef",
           "tool_results": [
             {
               "name": "lookup_source",
-              "text": "SOURCE EVIDENCE (prior; current page wins):\n[apps/greenhouse/glasshouse.menus:1-1] navigation: the menu item shown as \"Seed Trays\" links to request `findTrays` (webapps: glasshouse; declared parameters: `trayId` from field `selectedTrayId`; `viewMode` from literal `summary`; `gardenId` from the same-named field (implicit))\n[apps/greenhouse/glasshouse.decl:1-1] request `glasshouse/findTrays` is handled by view-only (auth=true)\n[apps/greenhouse/glasshouse.decl:2-2] response `success` of request `glasshouse/findTrays` renders view `TrayList`\n[apps/greenhouse/glasshouse.decl:3-3] request `glasshouse/sproutSeedling` is handled by service `sproutSeedling`, which writes Seedling (auth=true)\n[apps/greenhouse/glasshouse.decl:4-4] response `success` of request `glasshouse/sproutSeedling` renders view `TrayDetail`\n[apps/greenhouse/glasshouse.forms:1-1] form `SproutSeedlingForm` submits to `sproutSeedling`; it posts: trayId, cultivarId, sproutButton\n[apps/greenhouse/glasshouse.services:3-3] service `sproutSeedling` requires trayId, cultivarId; optional inputs include nurseryNote\n\nobserve -> ok\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 2\nelements (epoch 2):\nEND_UNTRUSTED_PAGE_OBSERVATION"
+              "text": "SOURCE EVIDENCE (prior; current page wins):\nsource#1 [apps/greenhouse/glasshouse.decl:1-1] screen 'glasshouse/findTrays' at /glasshouse/do/findTrays\nsource#2 [apps/greenhouse/glasshouse.services:3-3] method sproutSeedling(trayId)\n[apps/greenhouse/glasshouse.menus:1-1] navigation: the menu item shown as \"Seed Trays\" links to request `findTrays` (webapps: glasshouse; declared parameters: `trayId` from field `selectedTrayId`; `viewMode` from literal `summary`; `gardenId` from the same-named field (implicit))\n[apps/greenhouse/glasshouse.decl:1-1] request `glasshouse/findTrays` is handled by view-only (auth=true)\n[apps/greenhouse/glasshouse.decl:2-2] response `success` of request `glasshouse/findTrays` renders view `TrayList`\n[apps/greenhouse/glasshouse.decl:3-3] request `glasshouse/sproutSeedling` is handled by service `sproutSeedling`, which writes Seedling (auth=true)\n[apps/greenhouse/glasshouse.decl:4-4] response `success` of request `glasshouse/sproutSeedling` renders view `TrayDetail`\n[apps/greenhouse/glasshouse.forms:1-1] form `SproutSeedlingForm` submits to `sproutSeedling`; it posts: trayId, cultivarId, sproutButton\n[apps/greenhouse/glasshouse.services:3-3] service `sproutSeedling` requires trayId, cultivarId; optional inputs include nurseryNote\n\nobserve -> ok\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 2\nelements (epoch 2):\nEND_UNTRUSTED_PAGE_OBSERVATION"
             }
           ],
           "tools_offered": [
@@ -6084,7 +6120,7 @@
         }
       ],
       "result": {
-        "agent_said": "the source answered the question",
+        "agent_said": "**Rule in the source** (apps/greenhouse/glasshouse.decl:1-1):\n```\nroute findTrays handled by view-only, auth required\n```\n> source: a rule in the deployed release's code, not current data · v0 · lines sha256:a867c432897f5c7ecc7f68738df248d97885901687b79520e7b1a35374fd1b33\n\n> **Answered the part supported by current data**",
         "arm": "G",
         "business_answer_projected": false,
         "business_control": {
@@ -6107,7 +6143,7 @@
           "trace_events": 0,
           "write_blocked": 0
         },
-        "detail": "the source answered the question",
+        "detail": "**Rule in the source** (apps/greenhouse/glasshouse.decl:1-1):\n```\nroute findTrays handled by view-only, auth required\n```\n> source: a rule in the deployed release's code, not current data · v0 · lines sha256:a867c432897f5c7ecc7f68738df248d97885901687b79520e7b1a35374fd1b33\n\n> **Answered the part supported by current data**",
         "page_actions": 0,
         "plan_status": {},
         "plan_withdrawn": false,
@@ -6121,6 +6157,30 @@
         "success_claim": "unverified",
         "task_ref": "T",
         "terminal_reason": "agent_finished",
+        "verified_answer": {
+          "conclusions": [
+            {
+              "citation": "apps/greenhouse/glasshouse.decl:1-1",
+              "excerpt": "route findTrays handled by view-only, auth required",
+              "kind": "source_excerpt",
+              "release": "v0",
+              "scope": "the deployed release v0",
+              "sha256": "a867c432897f5c7ecc7f68738df248d97885901687b79520e7b1a35374fd1b33",
+              "source_kind": "source"
+            }
+          ],
+          "coverage": "partial",
+          "lowered_because": [],
+          "presentation": "brief",
+          "prose": "",
+          "sources": [
+            {
+              "kind": "source",
+              "observed_at": "<unix-time>",
+              "scope": "the deployed release v0"
+            }
+          ]
+        },
         "write_refusals": 0
       },
       "why": "explicit source retrieval is bounded and cited"
@@ -9312,12 +9372,12 @@
       },
       {
         "function": {
-          "description": "Look up a specific question raised by the current page in the deployed source descriptors. Returns bounded cited relations, then a fresh page. Source is a prior, not proof of current UI availability or a saved write.",
+          "description": "Look up the deployed release's source: what a field and its values mean, when an operation is refused, which screens exist and what they list. Returns bounded cited lines, then a fresh page. Source states release rules, not current records or proof of a saved write.",
           "name": "lookup_source",
           "parameters": {
             "properties": {
               "query": {
-                "description": "Concrete question about this page's form, request, fields or server continuation; use descriptive words.",
+                "description": "Concrete question in English, using words the code would use: record, field, status, action or screen names.",
                 "type": "string"
               }
             },

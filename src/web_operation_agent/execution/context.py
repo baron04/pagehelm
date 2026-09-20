@@ -116,6 +116,8 @@ class SessionContext:
     PRE_DISPATCH_ERRORS = PRE_DISPATCH_ERRORS
     latest_business_tool_result = AnswerState("latest_business_tool_result")
     evidence = AnswerState("evidence")
+    _source_evidence_ids = AnswerState("source_evidence_ids")
+    _source_evidence_count = AnswerState("source_evidence_count", 0)
     _evidence_feedback = AnswerState("evidence_feedback", "")
     _capability_ref = AnswerState("capability_ref", "")
     _capability_withheld = AnswerState("capability_withheld", False)

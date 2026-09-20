@@ -65,6 +65,7 @@ RELATION_KINDS = frozenset({
     "screen_includes_form",  # a screen renders a form
     "service_parameter",     # a service declares an IN/OUT parameter
     "service_entity",        # a service is declared against an entity
+    "service_guard",         # a service refuses under this declared condition and message
 })
 
 

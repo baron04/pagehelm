@@ -52,7 +52,7 @@ def named_tools(session):
         available["prefill_form"] = partial(prefill_form, session)
     if session._answers_pending_question:
         available["withdraw_request"] = session._tool_withdraw_request
-    if len(session.evidence):
+    if session.evidence.has_application_evidence():
         available["compute"] = session._tool_compute
     if session.allow_clarification:
         available["ask_user"] = partial(ask_user_tool, session)
@@ -224,7 +224,8 @@ def run_loop(session) -> RunResult:
                 session._answer_repairs += 1
                 session.ledger.append("answer_contract_refused", step=step,
                                    reason="plain_content", repair=session._answer_repairs)
-                if session._refused_reads and not len(session.evidence):
+                if (session._refused_reads
+                        and not session.evidence.has_application_evidence()):
                     # An authorization refusal and nothing read: there is no answer to
                     # repair, and what the person has to hear is which operation their
                     # account was refused. Repairing here would spend model calls to

@@ -714,7 +714,10 @@ def runtime_source_lookup_returns_cited_evidence(tmp: Path) -> Prepared:
     source_map = fixture_source_map(tmp / "source")
     chat = ScriptedChat([
         ("lookup_source", {"query": "trays"}),
-        ("finish", {"done": True, "why": "the source answered the question"}),
+        ("finish", {"outcome": "partial", "answer": {
+            "version": 1, "coverage": "partial", "conclusions": [
+                {"kind": "source_excerpt", "evidence_ref": "source#1"}],
+        }}),
     ])
     browser = ScriptedBrowser()
     session = _session(

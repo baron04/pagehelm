@@ -22,7 +22,7 @@ from typing import Union
 
 from .evidence import (
     CapabilityEvidence, ComputationEvidence, EvidenceUnknown, PageEvidence, QueryEvidence,
-    RecordEvidence, SelectionEvidence, TurnEvidence,
+    RecordEvidence, SelectionEvidence, SourceEvidence, TurnEvidence,
 )
 
 #: How much of the question this answer covers. The model proposes one; the server may only
@@ -293,8 +293,22 @@ class CapabilityGap:
                 "scope": item.origin.scope, "source_kind": item.origin.kind}
 
 
+@dataclass(frozen=True, slots=True)
+class SourceExcerpt:
+    """A verbatim rule excerpt from the exact deployed source release."""
+
+    evidence_id: str
+    kind = "source_excerpt"
+
+    def verify(self, turn: TurnEvidence) -> dict:
+        item = _one(turn, self.evidence_id, SourceEvidence, "a source excerpt")
+        return {"kind": self.kind, "citation": item.citation, "release": item.release,
+                "sha256": item.sha256, "excerpt": item.excerpt, "scope": item.origin.scope,
+                "source_kind": "source"}
+
+
 Conclusion = Union[FieldValue, Selection, Aggregate, NotFound, Undetermined, PageFact,
-                   CapabilityGap]
+                   CapabilityGap, SourceExcerpt]
 
 #: `action_succeeded` is deliberately absent. Whether a write happened already comes from the
 #: mutation journal's terminal state and a same-actor readback, and routing it through a

@@ -36,7 +36,7 @@ _EVIDENCE_ID = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*#[0-9]{1,6}")
 #: it against the goal. It is not a read of the application's data, and keeping it out of
 #: `typed` matters: "nothing in this session can do that" and "the application holds no such
 #: record" are different claims, and collapsing them is how a missing tool became a NotFound.
-SOURCE_KINDS = ("typed", "page", "computed", "capability")
+SOURCE_KINDS = ("typed", "page", "computed", "capability", "source")
 MAX_TURN_EVIDENCE_BYTES = 256 * 1024
 
 
@@ -369,8 +369,54 @@ class CapabilityEvidence:
         return not self.matches
 
 
+@dataclass(frozen=True, slots=True)
+class SourceEvidence:
+    """Verbatim bytes from the exact deployed release returned by source lookup.
+
+    It can establish only that this release's code says the excerpt. Whether a current
+    record is affected still requires a typed read of that record.
+    """
+
+    evidence_id: str
+    origin: Origin
+    path: str
+    start_line: int
+    end_line: int
+    release: str
+    sha256: str
+    excerpt: str
+    summary: str = ""
+
+    def __post_init__(self) -> None:
+        _require_id(self.evidence_id)
+        _require_origin(self.origin)
+        if self.origin.kind != "source":
+            raise ValueError("source evidence must come from a source lookup")
+        path = _text(self.path, "path")
+        if path.startswith("/") or ".." in path.split("/"):
+            raise ValueError("source evidence path must be repository-relative")
+        object.__setattr__(self, "path", path)
+        object.__setattr__(self, "release", _text(self.release, "release"))
+        if (isinstance(self.start_line, bool) or isinstance(self.end_line, bool)
+                or not isinstance(self.start_line, int) or not isinstance(self.end_line, int)
+                or not 1 <= self.start_line <= self.end_line):
+            raise ValueError("source evidence cites a line range")
+        if not isinstance(self.sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", self.sha256):
+            raise ValueError("source evidence carries the digest of the bytes it cites")
+        if not isinstance(self.excerpt, str) or not self.excerpt.strip():
+            raise ValueError("source evidence quotes the bytes it cites")
+        if len(self.excerpt.encode("utf-8")) > 16 * 1024:
+            raise ValueError("source evidence excerpt exceeds 16 KiB")
+        if not isinstance(self.summary, str):
+            raise TypeError("summary must be a string")
+
+    @property
+    def citation(self) -> str:
+        return f"{self.path}:{self.start_line}-{self.end_line}"
+
+
 Evidence = Union[RecordEvidence, QueryEvidence, PageEvidence, CapabilityEvidence,
-                 ComputationEvidence, SelectionEvidence]
+                 ComputationEvidence, SelectionEvidence, SourceEvidence]
 
 
 def _require_id(value: object) -> None:
@@ -450,9 +496,11 @@ class TurnEvidence:
     def record(self, item: Evidence) -> str:
         # `capture` deliberately does not accept CapabilityEvidence: an adapter imports what
         # it read, and what this session can execute is not something an adapter gets to
-        # assert. It is minted here or not at all.
+        # assert. It is minted here or not at all. SourceEvidence is likewise minted only
+        # by this session's release-bound lookup.
         if not isinstance(item, (RecordEvidence, QueryEvidence, PageEvidence,
-                                 ComputationEvidence, SelectionEvidence, CapabilityEvidence)):
+                                 ComputationEvidence, SelectionEvidence, CapabilityEvidence,
+                                 SourceEvidence)):
             raise TypeError("only evidence can be recorded")
         if item.evidence_id in self._items:
             raise ValueError(f"evidence {item.evidence_id} was already recorded this turn")
@@ -501,6 +549,10 @@ class TurnEvidence:
 
     def __len__(self) -> int:
         return len(self._items)
+
+    def has_application_evidence(self) -> bool:
+        """Whether the turn read runtime application state, not only release source."""
+        return any(not isinstance(item, SourceEvidence) for item in self._items.values())
 
     def __contains__(self, evidence_id: object) -> bool:
         return evidence_id in self._items

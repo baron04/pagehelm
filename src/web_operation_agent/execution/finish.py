@@ -83,7 +83,8 @@ class FinishHandler:
                 self.ledger.append("answer_contract_refused", step=step,
                                    reason=type(exc).__name__, detail=str(exc)[:500],
                                    repair=self._answer_repairs)
-                if self._refused_reads and not len(self.evidence):
+                if (self._refused_reads
+                        and not self.evidence.has_application_evidence()):
                     # An authorization refusal and nothing read: there is no answer to
                     # repair, and what the person has to hear is which operation their
                     # account was refused. Repairing here would spend model calls to

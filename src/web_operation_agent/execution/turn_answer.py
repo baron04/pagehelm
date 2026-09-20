@@ -48,6 +48,11 @@ class TurnAnswer:
         self.plain_business_answer_min_page_actions = plain_business_answer_min_page_actions
         self.latest_business_tool_result: BusinessToolResult | None = None
         self.evidence = TurnEvidence()
+        # Source citations are stable within a turn: asking the same question twice must
+        # not mint two authorities for the same exact bytes.  The source lookup, not an
+        # application adapter, owns these IDs.
+        self.source_evidence_ids: dict[str, str] = {}
+        self.source_evidence_count = 0
         self.evidence_feedback = ""
         self.capability_ref = ""
         self.capability_withheld = False

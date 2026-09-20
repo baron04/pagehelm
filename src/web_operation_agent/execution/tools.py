@@ -31,15 +31,16 @@ class ToolSurface:
             tools = [page_answer.OBSERVE_TOOL if tool["function"]["name"] == "observe"
                      else tool for tool in tools]
         if session._answers.answer_mode:
-            tools = [answer_protocol.FINISH_ANSWER_TOOL if tool["function"]["name"] == "finish"
-                     else tool for tool in tools]
+            finish = answer_protocol.finish_answer_tool(source=session.runtime_source)
+            tools = [finish if tool["function"]["name"] == "finish" else tool
+                     for tool in tools]
         if session.allow_clarification:
             tools += [ASK_USER_TOOL]
         if capability_check_available(session):
             tools += [CAPABILITY_TOOL]
         if session._answers_pending_question:
             tools += [WITHDRAW_TOOL]
-        if len(session.evidence):
+        if session.evidence.has_application_evidence():
             tools += [answer_protocol.COMPUTE_TOOL]
         tools += [SOURCE_TOOL, SOURCE_NAV_TOOL] if session.runtime_source else []
         if session.source_affordance_mode in ("auto", "empty"):

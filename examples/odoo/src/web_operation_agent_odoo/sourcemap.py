@@ -11,14 +11,18 @@ Odoo keeps navigation and view declarations in XML, and model behavior in Python
                                       conditions, and its buttons with the condition under
                                       which each one is reachable at all
     models/*.py                       a model -> its `fields.*` declarations (type, selection,
-                                      compute, store) and its method signatures with their
-                                      `@api.depends`
+                                      compute, store), its method signatures with their
+                                      `@api.depends` and docstrings, and every condition under
+                                      which a method refuses: the `raise UserError(...)` or
+                                      returned error message together with the `if` guarding it
 
 Chaining those answers what a page cannot show until the answer no longer matters: on a
 confirmed sales order the two buttons both labelled "Create Invoice" are distinguished only
 by `invisible="invoice_status != 'to invoice'"` versus
 `invisible="invoice_status != 'no' or state != 'sale'"`, and the second one silently
-defaults to a percentage down payment. The DOM renders one button with one label.
+defaults to a percentage down payment. The DOM renders one button with one label. A
+refusal is the same kind of fact: a read-only assistant never triggers it, so the page
+never shows it, and only the method that raises it says when it applies.
 
 This is a reader for one framework's own configuration, not a general static analyser.
 Two limits are deliberate and are recorded rather than guessed:
@@ -35,8 +39,10 @@ Two limits are deliberate and are recorded rather than guessed:
 from __future__ import annotations
 
 import ast
+import html
 import json
 import re
+from collections.abc import Iterable
 from importlib import resources
 from pathlib import Path
 
@@ -65,6 +71,29 @@ FIELD_KEYWORDS = frozenset({"string", "required", "readonly", "compute", "relate
                             "selection", "comodel_name", "domain", "default", "store",
                             "tracking", "help", "index", "copy"})
 _MAX_ATTR_CHARS = 400
+#: A docstring is where Odoo explains a computed status value ("upselling: this is possible
+#: only for ..."), and that explanation routinely starts past the first few hundred
+#: characters. The citation grows with it, so the bytes it proves still hold the text.
+_MAX_DOC_CHARS = 1200
+_MAX_DOC_LINES = 40
+#: A guard whose `if` and `raise` sit further apart than this is cited by its `raise` alone:
+#: a citation that spans a whole method proves nothing in particular.
+_MAX_GUARD_LINES = 30
+# A fact may rank on text near the end of a multi-line field, action help block or
+# docstring.  The answer quotes ``EvidenceRef.excerpt`` rather than the ranker's summary,
+# so the stored excerpt must reach the text that made the fact a hit.  These are still
+# bounded; unusually large declarations remain visible by citation but are not copied whole.
+_FIELD_EXCERPT_CHARS = 1200
+_ACTION_EXCERPT_CHARS = 2000
+_METHOD_EXCERPT_CHARS = 2400
+_GUARD_EXCERPT_CHARS = 1000
+#: `odoo.exceptions` classes a user sees as a refusal. A `ValueError` or `KeyError` is a
+#: programming contract, not a rule a user runs into, so it is not one of them.
+REFUSALS = frozenset({"UserError", "ValidationError", "AccessError", "RedirectWarning",
+                      "MissingError"})
+#: A method whose job is to produce a refusal's text. A translated string returned anywhere
+#: else is a label or a display name, not a rule.
+_REASON_METHOD = re.compile(r"error|warning|reason|check", re.I)
 
 
 def _load_policy() -> dict:
@@ -109,14 +138,25 @@ class OdooCompiler:
     """
 
     def __init__(self, tree: SourceTree, attestation_id: str, *,
-                 read_models: bool = True):
+                 read_models: bool = True, modules: Iterable[str] | None = None):
+        """`modules` restricts the map to modules this deployment actually installed.
+
+        An extracted tree can carry every module the image ships, while an uninstalled
+        module's overrides are not facts about the running application.
+        """
         if not isinstance(tree, SourceTree):
             raise TypeError("OdooCompiler requires a SourceTree")
         if not isinstance(attestation_id, str) or not attestation_id.strip():
             raise ValueError("attestation_id must be a non-empty string")
+        if modules is not None:
+            modules = frozenset(modules)
+            if not modules or not all(isinstance(name, str) and re.fullmatch(
+                    r"[a-z0-9_]{1,64}", name) for name in modules):
+                raise ValueError("modules must be a non-empty set of Odoo module names")
         self.tree = tree
         self.attestation_id = attestation_id.strip()
         self.read_models = bool(read_models)
+        self.modules = modules
         self.relations: list[SourceRelation] = []
         self.unsupported: list[dict] = []
         #: action xml_id -> the URL route it is reachable at, and its display name. Menus
@@ -147,6 +187,8 @@ class OdooCompiler:
     # -- entry point --------------------------------------------------------------------
     def compile(self) -> SourceMap:
         files = self.tree.files()
+        if self.modules is not None:
+            files = [name for name in files if module_of(name) in self.modules]
         for rel in (name for name in files if name.endswith(".xml")):
             try:
                 root = parse(self.tree.read_text(rel))
@@ -223,6 +265,21 @@ class OdooCompiler:
         match = re.search(r">([^<]*)</field>", span, re.S)
         return (match.group(1).strip() if match else "")[:_MAX_ATTR_CHARS]
 
+    def _markup_text(self, rel: str, node) -> str:
+        """Readable text of a ``type="html"`` field such as empty-list help."""
+        if node is None:
+            return ""
+        try:
+            lines = self.tree.read_text(rel).splitlines()
+        except AccessDenied:
+            return ""
+        span = "\n".join(lines[node.start_line - 1:(node.end_line or node.start_line)])
+        match = re.search(r"<field\b[^>]*>(.*)</field>", span, re.S)
+        if not match:
+            return ""
+        text = html.unescape(re.sub(r"<[^>]+>", " ", match.group(1)))
+        return " ".join(text.split())[:_MAX_ATTR_CHARS]
+
     def _action(self, rel: str, module: str, node, xml_id: str, fields: dict) -> None:
         if not xml_id:
             self._skip(rel, node.start_line, "record", "act_window declares no xml id")
@@ -241,14 +298,19 @@ class OdooCompiler:
         self.action_routes[xml_id] = route
         if name:
             self.action_names[xml_id] = name
+        target = self._text(rel, fields.get("target"))
+        # A target=new action is a dialog/wizard, commonly a mutation such as payment or
+        # mass cancellation. It must never be offered as a read-only navigation candidate.
         self._add("request_handler", identity, res_model,
-                  {"module": module, "action_id": xml_id, "event_type": "view-only",
+                  {"module": module, "action_id": xml_id,
+                   "event_type": "dialog" if target == "new" else "view-only",
                    "name": name, "url_path": url_path,
                    "view_mode": self._text(rel, fields.get("view_mode")),
                    "domain": self._text(rel, fields.get("domain")),
                    "context": self._text(rel, fields.get("context")),
-                   "target": self._text(rel, fields.get("target"))},
-                  self._cite(rel, node, excerpt=240))
+                   "target": target,
+                   "help": self._markup_text(rel, fields.get("help"))},
+                  self._cite(rel, node, excerpt=_ACTION_EXCERPT_CHARS))
         primary = self._ref(module, fields, "view_id")
         if primary:
             self._add("request_response", identity, primary,
@@ -389,6 +451,7 @@ class OdooCompiler:
         except (AccessDenied, SyntaxError, ValueError, RecursionError) as exc:
             self._skip(rel, 1, "#module", f"unparsed: {type(exc).__name__}")
             return
+        constants = _module_constants(tree)
         for node in tree.body:
             if not isinstance(node, ast.ClassDef):
                 continue
@@ -397,9 +460,10 @@ class OdooCompiler:
                 continue
             for item in node.body:
                 if isinstance(item, ast.Assign):
-                    self._field(rel, module, model, item)
+                    self._field(rel, module, model, item, constants)
                 elif isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     self._method(rel, module, model, item)
+                    self._guards(rel, module, model, item)
 
     @staticmethod
     def _declared_model(node: ast.ClassDef) -> str:
@@ -412,7 +476,8 @@ class OdooCompiler:
                 return item.value.value
         return ""
 
-    def _field(self, rel: str, module: str, model: str, item: ast.Assign) -> None:
+    def _field(self, rel: str, module: str, model: str, item: ast.Assign,
+               constants: dict | None = None) -> None:
         call = item.value
         if (not isinstance(call, ast.Call) or not isinstance(call.func, ast.Attribute)
                 or not isinstance(call.func.value, ast.Name)
@@ -422,12 +487,12 @@ class OdooCompiler:
         attrs = {"module": module, "field_type": call.func.attr}
         for keyword in call.keywords:
             if keyword.arg in FIELD_KEYWORDS:
-                attrs[keyword.arg] = _literal(keyword.value)
+                attrs[keyword.arg] = _literal(keyword.value, constants)
         if call.args and isinstance(call.args[0], ast.Constant):
             attrs.setdefault("string", str(call.args[0].value)[:_MAX_ATTR_CHARS])
         self._add("service_entity", model, item.targets[0].id, attrs,
                   self.tree.cite(rel, item.lineno, item.end_lineno or item.lineno,
-                                 excerpt_chars=240))
+                                 excerpt_chars=_FIELD_EXCERPT_CHARS))
 
     def _method(self, rel: str, module: str, model: str, item) -> None:
         if item.name.startswith("__"):
@@ -438,17 +503,145 @@ class OdooCompiler:
         if item.args.kwarg:
             arguments.append("**" + item.args.kwarg.arg)
         arguments += [argument.arg for argument in item.args.kwonlyargs]
+        end = min(item.lineno + 3, item.end_lineno or item.lineno)
+        docstring = ast.get_docstring(item) or ""
+        first = item.body[0] if item.body else None
+        if docstring and isinstance(first, ast.Expr) and first.end_lineno:
+            # The explanation carried in `doc` must remain inside its citation.
+            end = max(end, min(first.end_lineno, item.lineno + _MAX_DOC_LINES))
         self._add("service_parameter", f"{model}.{item.name}", ",".join(arguments),
                   {"module": module,
                    "decorators": [_literal(node) for node in item.decorator_list],
-                   "doc": (ast.get_docstring(item) or "")[:300]},
-                  self.tree.cite(rel, item.lineno,
-                                 min(item.lineno + 3, item.end_lineno or item.lineno),
-                                 excerpt_chars=240))
+                   "doc": docstring[:_MAX_DOC_CHARS]},
+                  self.tree.cite(rel, item.lineno, end,
+                                 excerpt_chars=_METHOD_EXCERPT_CHARS))
+
+    def _guards(self, rel: str, module: str, model: str, item) -> None:
+        """Record each user-visible refusal together with its enclosing condition."""
+        if item.name.startswith("__"):
+            return
+        decorators = [_literal(node) for node in item.decorator_list]
+        for statement, context in _refusal_statements(item.body, ()):
+            if isinstance(statement, ast.Raise):
+                exception = _exception_name(statement.exc)
+                if exception not in REFUSALS:
+                    continue
+                message = _message(statement.exc)
+                form = "raise"
+            else:
+                if (not _REASON_METHOD.search(item.name)
+                        or not any(kind == "if" for kind, _, _ in context)):
+                    continue
+                message = _translated(statement.value)
+                if not message:
+                    continue
+                exception, form = "", "return"
+            conditions = [text for kind, text, _ in context if kind == "if"]
+            loops = [text for kind, text, _ in context if kind == "for"]
+            guard_line = next((line for kind, _, line in reversed(context) if kind == "if"),
+                              statement.lineno)
+            end = statement.end_lineno or statement.lineno
+            start = guard_line if end - guard_line < _MAX_GUARD_LINES else statement.lineno
+            self._add("service_guard", f"{model}.{item.name}", message[:_MAX_ATTR_CHARS],
+                      {"module": module, "form": form, "exception": exception,
+                       "condition": " and ".join(
+                           f"({text})" if len(conditions) > 1 else text
+                           for text in conditions)[:_MAX_ATTR_CHARS],
+                       "loop": "; ".join(loops)[:_MAX_ATTR_CHARS],
+                       "decorators": decorators},
+                      self.tree.cite(rel, start, end,
+                                     excerpt_chars=_GUARD_EXCERPT_CHARS))
 
 
-def _literal(node) -> str:
+def _module_constants(tree: ast.Module) -> dict:
+    """Resolve module-level literal collections used by field declarations."""
+    constants: dict = {}
+    for node in tree.body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)):
+            value = _evaluate(node.value, constants)
+            if isinstance(value, (list, tuple, dict)):
+                constants[node.targets[0].id] = value
+    return constants
+
+
+def _evaluate(node, constants: dict):
+    """A literal, a named module constant, or a sum of two literal lists."""
+    try:
+        return ast.literal_eval(node)
+    except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+        pass
+    if isinstance(node, ast.Name):
+        return constants.get(node.id)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = _evaluate(node.left, constants), _evaluate(node.right, constants)
+        if isinstance(left, list) and isinstance(right, list):
+            return left + right
+    return None
+
+
+def _refusal_statements(body, context: tuple):
+    """Yield raises and returns with their enclosing if/for context."""
+    for statement in body:
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        if isinstance(statement, ast.If):
+            test = ast.unparse(statement.test)
+            yield from _refusal_statements(
+                statement.body, context + (("if", test, statement.lineno),))
+            yield from _refusal_statements(
+                statement.orelse, context + (("if", f"not ({test})", statement.lineno),))
+        elif isinstance(statement, (ast.For, ast.AsyncFor)):
+            header = f"{ast.unparse(statement.target)} in {ast.unparse(statement.iter)}"
+            yield from _refusal_statements(
+                statement.body, context + (("for", header, statement.lineno),))
+            yield from _refusal_statements(statement.orelse, context)
+        elif isinstance(statement, (ast.While, ast.With, ast.AsyncWith)):
+            yield from _refusal_statements(statement.body, context)
+            yield from _refusal_statements(getattr(statement, "orelse", []), context)
+        elif isinstance(statement, ast.Try):
+            for block in (statement.body, statement.orelse, statement.finalbody,
+                          *(handler.body for handler in statement.handlers)):
+                yield from _refusal_statements(block, context)
+        elif isinstance(statement, ast.Raise) and statement.exc is not None:
+            yield statement, context
+        elif isinstance(statement, ast.Return) and statement.value is not None:
+            yield statement, context
+
+
+def _exception_name(node) -> str:
+    call = node.func if isinstance(node, ast.Call) else node
+    if isinstance(call, ast.Name):
+        return call.id
+    if isinstance(call, ast.Attribute):
+        return call.attr
+    return ""
+
+
+def _translated(node) -> str:
+    """Text of ``_("...")`` or ``self.env._("...")``, excluding formatting args."""
+    if (isinstance(node, ast.Call) and node.args
+            and ((isinstance(node.func, ast.Name) and node.func.id == "_")
+                 or (isinstance(node.func, ast.Attribute) and node.func.attr == "_"))):
+        first = node.args[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            return " ".join(first.value.split())
+    return ""
+
+
+def _message(node) -> str:
+    """What a refusal says: translated text, or its first argument expression."""
+    if isinstance(node, ast.Call) and node.args:
+        return _translated(node.args[0]) or " ".join(ast.unparse(node.args[0]).split())
+    return ""
+
+
+def _literal(node, constants: dict | None = None) -> str:
     try:
         return str(ast.literal_eval(node))[:_MAX_ATTR_CHARS]
     except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
-        return ast.unparse(node)[:_MAX_ATTR_CHARS]
+        pass
+    value = _evaluate(node, constants or {})
+    if value is not None:
+        return str(value)[:_MAX_ATTR_CHARS]
+    return ast.unparse(node)[:_MAX_ATTR_CHARS]

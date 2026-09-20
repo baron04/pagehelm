@@ -12,7 +12,7 @@ import json
 import re
 import time
 
-from ..answer.evidence import CapabilityEvidence, Origin
+from ..answer.evidence import CapabilityEvidence, Origin, SourceEvidence
 from ..transport.browser import TransportError
 from ..planning.retrieval import EvidenceBundle
 from ..privacy import redact_sensitive_assignments
@@ -22,6 +22,39 @@ from .runstate import RunResult, _Next, _Turn
 
 
 # -- routing tools ---------------------------------------------------------------
+
+
+def _source_route_path(session, identity: str) -> str:
+    """Render a source request identity in the application's configured route shape."""
+    scope, _, route = identity.partition("/")
+    if not scope or not route or session.application_routes is None:
+        return identity
+    try:
+        return session.application_routes.compose_contract_route(scope, route)
+    except ValueError:
+        return identity
+
+
+def _source_line(session, hit, query: str) -> str:
+    """Give quotable source bytes a turn-owned evidence reference."""
+    reference = hit.evidence
+    if not reference.excerpt.strip():
+        return hit.line
+    ref = session._source_evidence_ids.get(reference.key, "")
+    if not ref or ref not in session.evidence:
+        session._source_evidence_count += 1
+        ref = f"source#{session._source_evidence_count}"
+        session.evidence.record(SourceEvidence(
+            evidence_id=ref,
+            origin=Origin(kind="source", reference=f"lookup_source:{query[:120]}",
+                          observed_at=str(time.time()),
+                          scope=f"the deployed release {reference.release}"),
+            path=reference.path, start_line=reference.start_line,
+            end_line=reference.end_line, release=reference.release,
+            sha256=reference.sha256, excerpt=reference.excerpt, summary=hit.text))
+        session._source_evidence_ids[reference.key] = ref
+    session._answers.answer_mode = True
+    return f"{ref} {hit.line}"
 
 
 def lookup_source(session, query: str, obs: PageObservation) -> EvidenceBundle:
@@ -40,9 +73,21 @@ def lookup_source(session, query: str, obs: PageObservation) -> EvidenceBundle:
         return bundle
     if session._runtime_retriever is None:
         raise ValueError("runtime source lookup has no retriever")
+    started = time.monotonic()
+    lookup = session.source.fact_lookup()
+    hits = (lookup.search(query, limit=8,
+                          route=lambda identity: _source_route_path(session, identity))
+            if lookup is not None else ())
     bundle = session._runtime_retriever.retrieve(
         session.task.task_ref, query,
         webapps=session.served_webapps, max_requests=12, max_menu=4, max_forms=4, max_lines=70)
+    if hits:
+        bundle.lines[:0] = [_source_line(session, hit, query) for hit in hits]
+        for hit in hits:
+            bundle.refs.setdefault(hit.evidence.key, hit.evidence)
+    bundle.stats = {**bundle.stats, "facts_shown": len(hits),
+                    "lines": len(bundle.lines), "citations": len(bundle.refs),
+                    "latency_ms": round((time.monotonic() - started) * 1000, 1)}
     cited = bundle.citation_keys
     for relation in session.source_map.by_kind("request_handler"):
         if relation.attrs.get("event_type") != "view-only":

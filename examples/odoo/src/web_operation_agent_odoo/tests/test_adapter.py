@@ -1230,7 +1230,19 @@ class AdapterDeliveredSourceConfiguration(unittest.TestCase):
     """The four source settings arrive as one adapter decision, never as four flags."""
 
     def _adapter(self, tmp):
-        return OdooApplicationAdapter(base_url=BASE, api_key_path=_key_file(Path(tmp)))
+        from web_operation_agent_odoo.server.descriptors import (
+            OdooInstalledModule,
+            OdooSourceManifest,
+        )
+        adapter = OdooApplicationAdapter(base_url=BASE, api_key_path=_key_file(Path(tmp)))
+        manifest = OdooSourceManifest(
+            schema_version=1, odoo_release="18.0",
+            module_digest="sha256:" + "1" * 64,
+            modules=tuple(OdooInstalledModule(name, "18.0")
+                          for name in ("greenhouse", "lighthouse", "orchard")))
+        adapter.runtime_descriptors = type(
+            "SourceManifestReader", (), {"source_manifest": lambda _self: manifest})()
+        return adapter
 
     def test_without_a_source_root_a_session_runs_on_runtime_facts_only(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1258,6 +1270,11 @@ class AdapterDeliveredSourceConfiguration(unittest.TestCase):
             capability = self._adapter(tmp).source_capability(
                 root, release="18.0-fixture")
         self.assertTrue(capability.source_map.relations)
+        self.assertRegex(capability.source_map.release, r"sha256:[0-9a-f]{64}")
+        self.assertTrue(all(relation.attrs.get("module") in {
+            "greenhouse", "lighthouse", "orchard"}
+            for relation in capability.source_map.relations
+            if relation.attrs.get("module")))
         self.assertEqual(capability.source_affordance_mode, "auto")
         self.assertTrue(capability.runtime_source)
         # Odoo's writes are button methods with no route of their own, so the route-shaped

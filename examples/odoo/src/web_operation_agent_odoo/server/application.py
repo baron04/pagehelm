@@ -1,6 +1,7 @@
 """Composition ports and top-level application adapter for Odoo 18."""
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -27,6 +28,7 @@ from web_operation_agent.state.identity import (IdentityAssertion, PrincipalCont
 from ..route import ODOO_ROUTE_PORT, ODOO_SOURCE_SCOPE
 from ..sourcemap import OdooCompiler, odoo_source_tree
 from .executor import OdooBusinessToolExecutor
+from .descriptors import OdooRuntimeDescriptorReader
 from .identity import OdooApiKeyStore, OdooPageSessionIdentityResolver
 from .specs import (ANSWER_LABELS_ZH, APPLICATION_ID, ARCHIVE_CUSTOMER_TOOL,
                     COLLECTIONS, CREATE_CUSTOMER_TOOL, MUTATION_SPECS, MUTATION_TOOLS,
@@ -164,6 +166,10 @@ class OdooApplicationAdapter:
             base_url=self.rpc_origin, keys=OdooApiKeyStore(api_key_path),
             timeout_s=timeout_s, allow_mutations=allow_mutations,
             allow_private_http=allow_private_http)
+        # Discovery metadata is actor-scoped and inert: it grants neither a business read
+        # nor a page/write action. Phase 8 consumers must still pass through the ordinary
+        # typed evidence and mutation boundaries before this can widen a turn.
+        self.runtime_descriptors = OdooRuntimeDescriptorReader(executor)
         skills = [_packaged_skill(name) for name in _READ_SKILLS]
         withheld: list[BusinessSkill] = []
         if allow_mutations:
@@ -245,11 +251,19 @@ class OdooApplicationAdapter:
             return SourceCapability.none()
         if not release:
             raise ValueError("an Odoo source root must be bound to an exact release")
-        tree = odoo_source_tree(source_root, release=release)
-        if not tree.available():
+        # Reject a missing extraction before making a live metadata call.  This keeps a
+        # local deployment configuration error distinct from an unavailable application.
+        if not odoo_source_tree(source_root, release=release).available():
             raise ValueError("the Odoo source root does not exist")
+        manifest = self.runtime_descriptors.source_manifest()
+        release_binding = "sha256:" + hashlib.sha256(json.dumps(
+            {"build_release": release, "module_digest": manifest.module_digest},
+            sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        ).encode("utf-8")).hexdigest()
+        tree = odoo_source_tree(source_root, release=release_binding)
         source_map = OdooCompiler(
-            tree, attestation_id or f"odoo:{release}").compile()
+            tree, attestation_id or f"odoo:{release_binding}",
+            modules=(item.name for item in manifest.modules)).compile()
         return SourceCapability(
             source_map=source_map,
             # Odoo's writes are button methods with no URL of their own, so the legacy

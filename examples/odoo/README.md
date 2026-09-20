@@ -77,10 +77,11 @@ output was compared against every one of them in a live database with no mismatc
 
 ## Source
 
-`OdooCompiler` reads menus, actions, views and models into `SourceRelation` triples, each
-with a citation that `SourceTree.verify` can re-check against the exact bytes. What that
-buys is the class of fact a page cannot show. On a confirmed sales order, two buttons are
-both labelled "Create Invoice":
+`OdooCompiler` reads menus, actions, views, model fields, method documentation, and
+user-visible refusal conditions into `SourceRelation` triples, each with a citation that
+`SourceTree.verify` can re-check against the exact bytes. What that buys is the class of fact
+a page cannot show. On a confirmed sales order, two buttons are both labelled "Create
+Invoice":
 
 ```
 invisible="invoice_status != 'to invoice'"                      → a regular invoice
@@ -109,10 +110,16 @@ capability = adapter.source_capability(source_root, release="18.0-20260908+…")
 config = AgentTurnConfig(..., source=capability)
 ```
 
-The capability goes into the turn as one value. Handing over a selection of its fields is how
-a deployment came to enable source affordances while silently dropping the `runtime_source`
-this adapter declares — so `lookup_source` and `open_source_route`, the cited retrieval this
-`SourceMap` exists to serve, were never on the model's tool surface at all.
+The add-on supplies the running deployment's installed-module manifest before compilation.
+The map excludes modules that merely exist in the image, and its release combines the image
+release with the installed-module digest. The capability goes into the turn as one value;
+`lookup_source` ranks the compiled rule relations locally and mints turn-owned evidence, so a
+source answer quotes the cited bytes rather than trusting the model's paraphrase.
+
+The same add-on exposes a bounded actor-scoped model/action catalog. It derives actions only
+from the current user's filtered menu tree and reports model-level access, but reads no
+business records. It is Phase 8 discovery infrastructure, not yet a generic model-facing
+query tool and never mutation authority.
 
 ## Keeping Skills current
 

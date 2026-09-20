@@ -34,6 +34,9 @@ _WORDS = {
         "source_page": "来源：页面观察",
         "source_typed": "来源：应用的类型化读取",
         "source_computed": "来源：在本轮读到的数据上计算",
+        "source_source": "来源：部署版本源码中的规则，不是当前数据",
+        "source_capability": "来源：当前会话的能力目录",
+        "source_rule": "源码规则",
         "empty": "（该字段已读取，内容为空）",
         "page_scope": "只代表当时页面上显示的内容，不代表完整数据",
         "subtotal": "小计（未覆盖全部范围）",
@@ -53,6 +56,9 @@ _WORDS = {
         "source_page": "source: page observation",
         "source_typed": "source: the application's typed read",
         "source_computed": "source: computed over what this turn read",
+        "source_source": "source: a rule in the deployed release's code, not current data",
+        "source_capability": "source: this session's capability catalog",
+        "source_rule": "Rule in the source",
         "empty": "(read, and holds nothing)",
         "page_scope": "only what the page showed at that moment; not a complete collection",
         "subtotal": "subtotal (does not cover the whole scope)",
@@ -67,7 +73,9 @@ def _language(user_text: str) -> str:
 
 def _source_line(words: dict, item: dict) -> str:
     return {"page": words["source_page"], "typed": words["source_typed"],
-            "computed": words["source_computed"]}[item["source_kind"]]
+            "computed": words["source_computed"],
+            "source": words["source_source"],
+            "capability": words["source_capability"]}[item["source_kind"]]
 
 
 def _named(words: dict, text: str) -> str:
@@ -432,6 +440,19 @@ def _one(words: dict, item: dict, *, presentation: str) -> list[str]:
         # not on anything read from the application, and labelling it "source: typed read"
         # would say the application answered a question it was never asked.
         return [words["capability_gap"]]
+    if kind == "source_excerpt":
+        # A fence longer than every backtick run keeps arbitrary source bytes inside the
+        # quote instead of allowing the excerpt to become answer markup.
+        excerpt = item["excerpt"].replace("\r", "").rstrip()
+        fence = "`" * max(3, 1 + max((len(run) for run in re.findall(r"`+", excerpt)),
+                                     default=0))
+        head = (f"**{words['source_rule']}**（{_literal(item['citation'])}）："
+                if words["lang"] == "zh" else
+                f"**{words['source_rule']}** ({_literal(item['citation'])}):")
+        return [head,
+                fence, excerpt, fence,
+                f"> {_source_line(words, item)} · {_literal(item['release'])} · "
+                f"lines sha256:{_literal(item['sha256'])}"]
     if kind == "page_observation":
         label = "页面显示" if words["lang"] == "zh" else "The page shows"
         # The scope of a page fact is always the same claim -- this page, at that moment --

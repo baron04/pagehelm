@@ -6,9 +6,9 @@ from dataclasses import asdict
 
 from .computation import COMPARISONS, ComputationRequest, run
 from .conclusion import (Aggregate, AnswerDraft, CapabilityGap, ConclusionRefused, FieldValue,
-                         NotFound, PageFact, Selection, Undetermined, verify)
+                         NotFound, PageFact, Selection, SourceExcerpt, Undetermined, verify)
 from .evidence import (CapabilityEvidence, ComputationEvidence, PageEvidence, QueryEvidence,
-                       RecordEvidence, SelectionEvidence, TurnEvidence)
+                       RecordEvidence, SelectionEvidence, SourceEvidence, TurnEvidence)
 
 MAX_INDEX_BYTES = 24 * 1024
 MAX_CONCLUSIONS = 50
@@ -19,26 +19,37 @@ _REF = {"type": "string", "maxLength": 200}
 _FIELDS = {"type": "array", "maxItems": 12, "uniqueItems": True,
            "description": "Only selection may include fields. Omit this for every other kind.",
            "items": {"type": "string", "maxLength": 100}}
-ANSWER_SCHEMA = {
-    "type": "object", "additionalProperties": False,
-    "properties": {
-        "version": {"type": "integer", "enum": [1]},
-        "coverage": {"type": "string", "enum": ["complete", "partial", "undetermined"]},
-        "presentation": {"type": "string", "enum": ["brief", "list", "table"]},
-        "conclusions": {"type": "array", "minItems": 1, "maxItems": MAX_CONCLUSIONS,
-                        "items": {"anyOf": [
-                            {"type": "object", "additionalProperties": False,
-                             "properties": {"kind": {"type": "string", "enum": [kind]},
-                                            "evidence_ref": _REF,
-                                            **({"fields": _FIELDS} if kind == "selection" else {})},
-                             "required": ["kind", "evidence_ref"]}
-                            for kind in ("field_value", "selection", "aggregate", "not_found",
-                                         "undetermined", "page_observation",
-                                         "capability_gap")]}},
-    }, "required": ["version", "coverage", "conclusions"],
-}
-FINISH_ANSWER_TOOL = {"type": "function", "function": {
-    "name": "finish", "description": (
+CONCLUSION_KINDS = ("field_value", "selection", "aggregate", "not_found", "undetermined",
+                    "page_observation", "capability_gap")
+
+
+def answer_schema(*, source: bool = False) -> dict:
+    kinds = CONCLUSION_KINDS + (("source_excerpt",) if source else ())
+    return {
+        "type": "object", "additionalProperties": False,
+        "properties": {
+            "version": {"type": "integer", "enum": [1]},
+            "coverage": {"type": "string", "enum": [
+                "complete", "partial", "undetermined"]},
+            "presentation": {"type": "string", "enum": ["brief", "list", "table"]},
+            "conclusions": {"type": "array", "minItems": 1,
+                            "maxItems": MAX_CONCLUSIONS, "items": {"anyOf": [
+                                {"type": "object", "additionalProperties": False,
+                                 "properties": {
+                                     "kind": {"type": "string", "enum": [kind]},
+                                     "evidence_ref": _REF,
+                                     **({"fields": _FIELDS} if kind == "selection" else {}),
+                                 },
+                                 "required": ["kind", "evidence_ref"]}
+                                for kind in kinds]}},
+        },
+        "required": ["version", "coverage", "conclusions"],
+    }
+
+
+def finish_answer_tool(*, source: bool = False) -> dict:
+    return {"type": "function", "function": {
+        "name": "finish", "description": (
         "Answer the user's question with evidence-backed conclusions. Use compute for "
         "arithmetic or filtering, then cite its result. Never submit facts as free prose. "
         "Answer only what was asked: for a total, one aggregate is enough, without a table. "
@@ -49,10 +60,15 @@ FINISH_ANSWER_TOOL = {"type": "function", "function": {
         "conclusion citing that check: do not search for the record first, do not answer with "
         "a related query, and do not substitute a different change. "
         "Use outcome=unable without an answer if the available evidence cannot answer."),
-    "parameters": {"type": "object", "additionalProperties": False,
-                   "properties": {"outcome": {"type": "string", "enum": [
-                       "answered", "partial", "unable", "acted"]}, "answer": ANSWER_SCHEMA},
-                   "required": ["outcome"]}}}
+        "parameters": {"type": "object", "additionalProperties": False,
+                       "properties": {"outcome": {"type": "string", "enum": [
+                           "answered", "partial", "unable", "acted"]},
+                           "answer": answer_schema(source=source)},
+                       "required": ["outcome"]}}}
+
+
+ANSWER_SCHEMA = answer_schema()
+FINISH_ANSWER_TOOL = finish_answer_tool()
 COMPUTE_TOOL = {"type": "function", "function": {
     "name": "compute", "description": (
         "Compute over one current query or a previous selection. The server resolves "
@@ -102,10 +118,11 @@ expire at the next observation. They prove only that excerpt, never API data or 
 _CITES = {"field_value": "a record field", "selection": "a query or a selection",
           "aggregate": "a compute result, so call compute first",
           "page_observation": "a page observation", "not_found": "a query",
-          "capability_gap": "the capability check"}
+          "capability_gap": "the capability check", "source_excerpt": "source lookup"}
 _KIND_OF = {RecordEvidence: "a record field", QueryEvidence: "a query",
             SelectionEvidence: "a selection", ComputationEvidence: "a compute result",
-            PageEvidence: "a page observation", CapabilityEvidence: "a capability check"}
+            PageEvidence: "a page observation", CapabilityEvidence: "a capability check",
+            SourceEvidence: "a source excerpt"}
 
 
 def _shape(value: object, allowed: set[str], required: set[str], where: str) -> dict:
@@ -198,6 +215,8 @@ def submit(turn: TurnEvidence, args: dict) -> dict | None:
                 raise ConclusionRefused(
                     "a capability gap is the entire answer and carries no other conclusion")
             conclusions.append(CapabilityGap(ref))
+        elif kind == "source_excerpt" and isinstance(item, SourceEvidence):
+            conclusions.append(SourceExcerpt(ref))
         elif kind == "undetermined":
             about = (f"{item.record_id}.{item.field_name}" if isinstance(item, RecordEvidence)
                      else item.collection if isinstance(item, QueryEvidence)
