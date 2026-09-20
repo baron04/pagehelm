@@ -22,18 +22,16 @@ import hashlib
 import json
 import time
 import uuid
-from functools import partial
 from typing import Callable
 from zoneinfo import ZoneInfo
 
 from ..application import ApplicationRoutePort, SourceCapability
 from ..answer import answer_protocol
-from ..answer import page_answer
 from ..business.approvals import ApprovalWatch, NavigationPlan
 from ..answer.answer_view import (capability_gap_answer, render_payload, unavailable_answer,
                           withdrawn_answer)
 from ..affordance import SourceAffordance, resolve_source_affordances
-from ..browser import BrowserExecutor, TransportError, TurnCancelled
+from ..browser import BrowserExecutor
 from ..business.runtime import (BUSINESS_SKILL_MATCHER_VERSION, BusinessSkillSelection,
                                FormDraft, BusinessToolRuntime)
 from ..business.errors import BusinessToolPermissionError
@@ -48,28 +46,21 @@ from ..grounding import (NOT_APPLICABLE, REFUTED, WRITE_PERMITTED, WRITE_REFUSED
 from ..identity import PrincipalContext
 from ..planning.knowledge import ApplicationKnowledgePort
 from ..ledger import SessionLedger
-from ..modeling.provider import ProviderError
 from ..privacy import SessionHandoffPolicy, safe_tool_arguments as _safe
 from .routes import Router, candidate_url
-from ..modeling.spend import BudgetExhausted
 from .turnwatch import ProgressFeed, RepeatGuard
 from .turn_answer import AnswerState, TurnAnswer
 from .tools import ToolSurface
-from .page_actions import take_page_action
-from .business_tools import (business_tool, load_skill, prefill_form,
-                             render_business_skills)
+from .business_tools import render_business_skills
 from . import knowledge_tools
-from .knowledge_tools import (active_capability_digest, ask_user_tool,
-                              lookup_source_tool)
+from .knowledge_tools import active_capability_digest
+from .loop import run_loop
 from .runstate import (CAPABILITY_GAP_TERMINAL, LabApparatus, NO_LAB, RunResult,
                        TaskSpec, _Next, _Turn)
 from ..business.writes import PRE_DISPATCH_ERRORS, WRITE_CAPABLE, WatchState, WriteWatch
-from .prompts import (
-    AGENT_SYSTEM, APPLICATION_ENTRY_SYSTEM, BUSINESS_SKILL_SYSTEM, CAPABILITY_SYSTEM,
-    CLARIFICATION_SYSTEM, CONVERSATION_SYSTEM,
-    REACT_SOURCE_SYSTEM, SCOPE_FIRST_SYSTEM, SKILL_SYSTEM, SOURCE_AFFORDANCE_SYSTEM,
-    TOOL_SCHEMAS, _CAPABILITY_QUESTION, _NAVIGATION_EXTRA_GOAL, _NAVIGATION_ONLY,
-    _PLAN_PREAMBLE, _REFERENCE_FOLLOWUP, _assistant_call, _tool_result, _trim)
+from .prompts import (AGENT_SYSTEM, SCOPE_FIRST_SYSTEM, TOOL_SCHEMAS, _CAPABILITY_QUESTION,
+                      _NAVIGATION_EXTRA_GOAL, _NAVIGATION_ONLY, _PLAN_PREAMBLE,
+                      _REFERENCE_FOLLOWUP, _assistant_call, _tool_result, _trim)
 from ..schemas import (BROWSER_ACTIONS, ActionReceipt, ControlPlan, OperationContract,
                       PageObservation, digest, empty_contract)
 from ..answer.evidence import EvidenceUnknown
@@ -639,40 +630,9 @@ class ServerAgentSession:
     # -- the loop ----------------------------------------------------------------------
     def run(self) -> RunResult:
         try:
-            return self._run()
+            return run_loop(self)
         finally:
             self._writes.end_control()
-
-    # -- one tool, one place ------------------------------------------------------------
-    def _handle_named_tool(self, turn: "_Turn", call: dict, name: str,
-                           args: dict) -> "_Next | None":
-        """Run the tool this session offers under `name`, or answer `None` for someone else."""
-        handler = self._named_tools().get(name)
-        return None if handler is None else handler(turn, call, name, args)
-
-    def _named_tools(self):
-        """The tools this session is currently offering, by name.
-
-        Availability is asked for here rather than repeated as a condition next to each
-        branch, so a tool the session does not offer cannot be half-handled.
-        """
-        available: dict[str, Callable[["_Turn", dict, str, dict], "_Next"]] = {}
-        if self.runtime_source:
-            available["lookup_source"] = partial(lookup_source_tool, self)
-        if self._task_business_skills:
-            available["load_skill"] = partial(load_skill, self)
-        if self.allow_form_prefill:
-            available["prefill_form"] = partial(prefill_form, self)
-        if self._answers_pending_question:
-            available["withdraw_request"] = self._tool_withdraw_request
-        if len(self.evidence):
-            available["compute"] = self._tool_compute
-        if self.allow_clarification:
-            available["ask_user"] = partial(ask_user_tool, self)
-        available["finish"] = self._tool_finish
-        for tool in (self.business_tools.tool_names if self.business_tools is not None else ()):
-            available[tool] = partial(business_tool, self)
-        return available
 
     def _tool_withdraw_request(self, turn: "_Turn", call: dict, name: str,
                                args: dict) -> "_Next":
@@ -867,308 +827,6 @@ class ServerAgentSession:
         turn.messages += [_assistant_call(call), _tool_result(call, feedback)]
         turn.messages = _trim(turn.messages, self.keep_observations)
         return _Next()
-
-    def _run(self) -> RunResult:
-        t0 = time.time()
-        self._approvals.start_turn(int((t0 + self.wall_budget_s) * 1000))
-        result = RunResult(run_id=self.run_id, task_ref=self.task.task_ref, arm=self.arm,
-                           terminal_reason="agent_finished",
-                           contract_digest=self.contract.content_digest,
-                           contract_source=self.contract_source,
-                           citations=len(self.contract.cited_keys()))
-        try:
-            self._writes.begin_control()
-        except ControlPlaneError as exc:
-            return self._finish(result, t0, "control_plane_error", str(exc))
-        if self._cancel_requested():
-            return self._finish(
-                result, t0, "user_cancelled", "the user stopped this task")
-        if self.planning_error:
-            return self._finish(result, t0, "planning_failed", self.planning_error)
-        try:
-            obs = self.entry_observation or self.browser.observe()
-        except TransportError as e:
-            reason = "user_cancelled" if self._cancel_requested() else "transport_error"
-            return self._finish(result, t0, reason, str(e))
-        self.ledger.append("observation", epoch=obs.epoch, url=obs.url,
-                           elements=len(obs.elements), digest=obs.content_digest)
-
-        system = AGENT_SYSTEM
-        if self.page_answer_evidence:
-            system += "\n" + page_answer.SYSTEM
-        if self.runtime_source:
-            system += "\n" + REACT_SOURCE_SYSTEM
-        if self.source_affordance_mode in ("auto", "empty"):
-            system += "\n" + SOURCE_AFFORDANCE_SYSTEM
-        if self.knowledge_router is not None:
-            system += "\n" + SKILL_SYSTEM
-        if self.allow_application_entry:
-            system += "\n" + APPLICATION_ENTRY_SYSTEM
-        if self._task_business_skills:
-            system += "\n" + BUSINESS_SKILL_SYSTEM
-        if self.conversation_context is not None:
-            system += "\n" + CONVERSATION_SYSTEM
-        if self.allow_clarification:
-            system += "\n" + CLARIFICATION_SYSTEM
-        if self._capability_question:
-            system += "\n" + CAPABILITY_SYSTEM
-        if self.scope_first_policy:
-            system += "\n" + SCOPE_FIRST_SYSTEM
-        messages = [{"role": "system", "content": system},
-                    {"role": "user", "content": self._opening(obs)}]
-        self._sync_plan_message(messages)
-        try:
-            self._writes.start_observing()
-        except ControlPlaneError as e:
-            return self._finish(result, t0, "control_plane_error", str(e))
-        step = 0
-        successful_business_tools = 0
-        #: The same state the loop keeps in locals, in the form a step handler takes.
-        turn = _Turn(result=result, started_at=t0, messages=messages, obs=obs)
-        #: A reply the model gave as plain content and was then asked to follow with a tool
-        #: call. When the next call is `finish(done=true)`, this is what the user reads: the
-        #: model's `why` at that point describes the reply ("told the user what I can do")
-        #: rather than being one, and showing it replaced a complete answer with a run report.
-        unanswered_reply = ""
-        while True:
-            if self._page_answer_digest and self._page_answer_digest != obs.content_digest:
-                self.evidence.discard_pages()
-                self._page_answer_digest = ""
-            if (self._answer_action_receipt is not None
-                    and self._answer_action_receipt["kind"] == "navigation"
-                    and self._answer_action_receipt["url"] != obs.url):
-                self._answer_action_receipt = None
-            if (self._answer_action_receipt is not None
-                    and self._answer_action_receipt.get("navigation_url", obs.url) != obs.url):
-                self._answer_action_receipt.pop("navigation_url", None)
-            if self._cancel_requested():
-                return self._finish(
-                    result, t0, "user_cancelled", "the user stopped this task",
-                    steps=step)
-            if step >= self.step_budget:
-                return self._finish(result, t0, "step_budget", f"used all {self.step_budget} steps",
-                                    steps=step)
-            elapsed = time.time() - t0
-            if elapsed >= self.wall_budget_s:
-                return self._finish(result, t0, "wall_clock_budget",
-                                    f"exceeded {self.wall_budget_s}s", steps=step)
-            self._feed.note(stage="thinking", step=step + 1)
-            try:
-                reply = self.chat.complete_cancellable(
-                    messages, self.tool_schemas(), self.run_id,
-                    timeout_s=max(0.001, self.wall_budget_s - elapsed),
-                    cancelled=self._cancel_requested,
-                )
-            except BudgetExhausted as e:
-                if self._cancel_requested():
-                    return self._finish(
-                        result, t0, "user_cancelled",
-                        "the user stopped this task while the provider was working",
-                        steps=step)
-                return self._finish(result, t0, "token_budget" if e.kind == "token_budget"
-                                    else "wall_clock_budget", str(e), steps=step)
-            except (ProviderError, ProviderEgressError) as e:
-                provider_code = getattr(e, "code", "provider_error")
-                result.provider_error_code = provider_code
-                request_id = getattr(e, "request_id", "")
-                dispatched = getattr(e, "dispatched", None)
-                if provider_code == "provider_cancelled":
-                    self.ledger.append(
-                        "provider_cancelled",
-                        step=step,
-                        dispatched=bool(dispatched),
-                        accounting_status=("usage_unavailable" if dispatched
-                                           else "not_dispatched"),
-                    )
-                    return self._finish(
-                        result, t0, "user_cancelled",
-                        "the user stopped this task while the provider was working",
-                        steps=step)
-                if provider_code == "provider_deadline":
-                    self.ledger.append(
-                        "provider_deadline",
-                        step=step,
-                        dispatched=bool(dispatched),
-                        accounting_status=("usage_unavailable" if dispatched
-                                           else "not_dispatched"),
-                    )
-                    return self._finish(
-                        result, t0, "wall_clock_budget",
-                        "the provider request reached the turn deadline",
-                        steps=step)
-                if request_id:
-                    self.ledger.append(
-                        "provider_failed",
-                        step=step,
-                        provider_request_id=request_id,
-                        provider_error_code=provider_code,
-                        retryable=bool(getattr(e, "retryable", False)),
-                    )
-                reason = ("wall_clock_budget"
-                          if time.time() - t0 >= self.wall_budget_s
-                          else "provider_error")
-                return self._finish(result, t0, reason, str(e), steps=step)
-
-            if time.time() - t0 >= self.wall_budget_s:
-                return self._finish(
-                    result, t0, "wall_clock_budget",
-                    f"provider returned after the {self.wall_budget_s}s deadline",
-                    steps=step,
-                )
-            if self._cancel_requested():
-                return self._finish(
-                    result, t0, "user_cancelled",
-                    "the user stopped this task while the provider was working",
-                    steps=step,
-                )
-
-            calls = reply.get("tool_calls") or []
-            if not calls:
-                said = str(reply.get("content") or "").strip()
-                if self._answers.answer_mode:
-                    step += 1
-                    self._answer_repairs += 1
-                    self.ledger.append("answer_contract_refused", step=step,
-                                       reason="plain_content", repair=self._answer_repairs)
-                    if self._refused_reads and not len(self.evidence):
-                        # An authorization refusal and nothing read: there is no answer to
-                        # repair, and what the person has to hear is which operation their
-                        # account was refused. Repairing here would spend model calls to
-                        # reach the same end.
-                        result.agent_said = unavailable_answer(self.task.prompt)
-                        return self._finish(result, t0, "permission_denied",
-                                            self._refused_detail, steps=step)
-                    if self._answer_repairs > answer_protocol.MAX_ANSWER_REPAIRS:
-                        result.agent_said = unavailable_answer(self.task.prompt)
-                        return self._finish(result, t0, "agent_refused", result.agent_said,
-                                            steps=step)
-                    messages += [{"role": "assistant", "content": said},
-                                 {"role": "user", "content":
-                                  "Submit finish with outcome and an evidence-backed answer. "
-                                  "Use compute if needed; do not repeat the page observation. "
-                                  "Use outcome=unable if you cannot support the answer."}]
-                    continue
-                minimum_page_actions = \
-                    self._answers.plain_business_answer_min_page_actions
-                if (successful_business_tools and said
-                        and minimum_page_actions is not None
-                        and self.page_actions >= minimum_page_actions):
-                    # A normal tool-calling assistant returns its answer as plain content after
-                    # receiving the final read-only ToolResult. Requiring a synthetic finish
-                    # call here adds cost without adding evidence. The product-level verifier
-                    # still decides whether this unverified answer satisfies the user task.
-                    step += 1
-                    self.ledger.append(
-                        "business_answer", step=step, said=said[:300],
-                        successful_business_tools=successful_business_tools,
-                        success_claim="unverified")
-                    result.business_answer_projected = \
-                        self._answers.business_answer_is_projectable(self.page_actions)
-                    result.agent_said = said[:self.max_agent_said_chars]
-                    return self._finish(
-                        result, t0, "agent_finished", result.agent_said, steps=step)
-                # No tool call is not a terminal event by itself: nudge once per step, the
-                # step budget still bounds it. Read-only business answers are the exception
-                # above because they are checked by the product verifier after this loop.
-                step += 1
-                unanswered_reply = said
-                messages += [{"role": "assistant", "content": reply.get("content") or ""},
-                             {"role": "user", "content":
-                                 "Call one of the tools. If your reply above already answers "
-                                 "the user, call finish with done=true and the user will read "
-                                 "that reply. If the task is impossible, call finish with "
-                                 "done=false."}]
-                self.ledger.append("no_tool_call", step=step,
-                                   said=(reply.get("content") or "")[:300])
-                continue
-            if len(calls) > 1:
-                # ReAct has exactly one action/receipt/observation transition.  Silently
-                # taking calls[0] made an invalid reference in the discarded second call
-                # look as though the provider or browser had failed.  Dispatch none: there
-                # is no result for any proposed call, so the next inference starts from the
-                # same page and receives explicit protocol feedback.
-                step += 1
-                names = [str((call.get("function") or {}).get("name") or "")[:100]
-                         for call in calls]
-                self.ledger.append("multiple_tool_calls_rejected", step=step,
-                                   count=len(calls), tools=names,
-                                   dispatched=False, side_effect_possible=False)
-                messages += [
-                    {"role": "assistant", "content": reply.get("content") or ""},
-                    {"role": "user", "content":
-                     "You proposed more than one tool call. None was dispatched. Call "
-                     "exactly one tool, wait for its result, and then replan."},
-                ]
-                messages = _trim(messages, self.keep_observations)
-                continue
-
-            call = calls[0]
-            name = (call.get("function") or {}).get("name") or ""
-            raw_args = (call.get("function") or {}).get("arguments") or "{}"
-            try:
-                args = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
-            except json.JSONDecodeError:
-                args = {}
-            step += 1
-            turn.messages, turn.obs, turn.step = messages, obs, step
-            self.ledger.append("tool_call", step=step, tool=name,
-                               args=_safe(args, self.session_handoffs))
-            self._feed.note(
-                stage="tool", tool=name, step=step,
-                arguments=_safe(args, self.session_handoffs) if isinstance(args, dict) else {},
-                mutation=bool(
-                    self.business_tools is not None
-                    and name in self.business_tools.tool_names
-                    and self.business_tools.is_mutation(name)))
-            kept_reply, unanswered_reply = (unanswered_reply if name == "finish" else ""), ""
-            turn.kept_reply = kept_reply
-
-            no_progress = self._repeats.decide(name, args, obs)
-            if no_progress == "warn":
-                self.ledger.append(
-                    "no_progress_detected", step=step, tool=name,
-                    repeated=self._repeats.repeats, dispatched=False,
-                    side_effect_possible=False)
-                messages += [_assistant_call(call), _tool_result(
-                    call, "NO PROGRESS: the same tool and arguments were already used on "
-                          "the same page state. Nothing was dispatched. Change strategy, "
-                          "ask one necessary clarification, or finish honestly.")]
-                continue
-            if no_progress == "end":
-                result.agent_said = (
-                    "I couldn't make progress after the same step was repeated. "
-                    "No repeated action was dispatched.")
-                self.ledger.append(
-                    "no_progress_terminated", step=step, tool=name,
-                    repeated=self._repeats.repeats, dispatched=False,
-                    side_effect_possible=False)
-                return self._finish(
-                    result, t0, "no_progress", result.agent_said, steps=step)
-
-            # Decisions can arrive during model inference. Refresh before another browser
-            # command or a completion claim; a trace window is not command correlation.
-            if self._browser_attempts:
-                try:
-                    self._writes.refresh_control()
-                except ControlPlaneError as e:
-                    return self._finish(result, t0, "control_plane_error", str(e), steps=step)
-                if self._writes.uncertain_write:
-                    return self._finish(result, t0, "indeterminate_write",
-                                        self._writes.uncertain_write, steps=step)
-
-            handled = self._handle_named_tool(turn, call, name, args)
-            if handled is not None:
-                if handled.finished is not None:
-                    return handled.finished
-                messages, obs, step = turn.messages, turn.obs, turn.step
-                successful_business_tools = turn.successful_business_tools
-                continue
-
-            outcome = take_page_action(self, turn, call, name, args)
-            if outcome.finished is not None:
-                return outcome.finished
-            messages, obs, step = turn.messages, turn.obs, turn.step
-            successful_business_tools = turn.successful_business_tools
 
     # -- grounding ---------------------------------------------------------------------
     def tool_schemas(self) -> list[dict]:

@@ -35,6 +35,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from web_operation_agent.execution import loop as loop_module
 from web_operation_agent.execution import session as session_module
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.tests import golden_session
@@ -256,12 +257,13 @@ class GoldenIsChangeSensitive(unittest.TestCase):
                       f"whatever {scenario_name} was recording")
 
     def test_a_changed_system_prompt_is_detected(self):
-        original = session_module.AGENT_SYSTEM
-        session_module.AGENT_SYSTEM = original + "\nOne more instruction."
+        # The prompt is read where the loop lives, so that is the module to disturb.
+        original = loop_module.AGENT_SYSTEM
+        loop_module.AGENT_SYSTEM = original + "\nOne more instruction."
         try:
             self.assertDetects("read_and_finish", "a changed system prompt")
         finally:
-            session_module.AGENT_SYSTEM = original
+            loop_module.AGENT_SYSTEM = original
 
     def test_a_changed_observation_rendering_is_detected(self):
         original = session_module._render_observation
