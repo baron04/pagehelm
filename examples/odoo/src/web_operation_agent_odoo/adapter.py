@@ -23,6 +23,7 @@ import re
 import threading
 import time
 import unicodedata
+from dataclasses import dataclass
 from datetime import date, datetime, time as time_of_day, timezone
 from decimal import Decimal
 from importlib import resources
@@ -129,11 +130,17 @@ class _Collection:
     """
 
     __slots__ = ("tool", "model", "domain", "fields", "scope", "action_xml_id",
-                 "route", "answer_fields", "data_class", "route_scope_note")
+                 "route", "answer_fields", "data_class", "route_scope_note",
+                 "projection_fields", "selection_fields", "match_field",
+                 "empty_value_labels", "description")
 
     def __init__(self, *, tool: str, model: str, domain: list, fields: tuple[str, ...],
                  scope: str, action_xml_id: str, route: str,
                  answer_fields: tuple[str, ...], data_class: str,
+                 projection_fields: tuple[tuple[str, str], ...],
+                 selection_fields: tuple[str, ...], match_field: str,
+                 description: str,
+                 empty_value_labels: tuple[tuple[str, str], ...] = (),
                  route_scope_note: str = ""):
         self.tool = tool
         self.model = model
@@ -144,6 +151,13 @@ class _Collection:
         self.route = route
         self.answer_fields = answer_fields
         self.data_class = data_class
+        # These views were once a chain keyed by tool name in `_project`. Keeping them with
+        # the tool descriptor makes adding a query a local specification change.
+        self.projection_fields = projection_fields
+        self.selection_fields = selection_fields
+        self.match_field = match_field
+        self.empty_value_labels = dict(empty_value_labels)
+        self.description = description
         #: Empty when the page at ``route`` shows exactly this tool's scope.
         self.route_scope_note = route_scope_note
 
@@ -159,7 +173,13 @@ COLLECTIONS: tuple[_Collection, ...] = (
         scope="confirmed sales orders visible to the delegated user",
         action_xml_id="sale.action_orders", route="/odoo/orders",
         answer_fields=("reference", "customer", "state", "total"),
-        data_class="business.sales_order"),
+        data_class="business.sales_order",
+        projection_fields=(("reference", "name"), ("customer", "partner_id"),
+                           ("state", "state"), ("total", "amount_total"),
+                           ("invoice_status", "invoice_status"),
+                           ("currency_id", "currency_id"), ("date_order", "date_order")),
+        selection_fields=("reference", "customer", "total"), match_field="reference",
+        description="Read confirmed Odoo sales orders visible to the currently delegated user."),
     _Collection(
         tool="query_customers", model="res.partner",
         domain=[("customer_rank", ">", 0)],
@@ -171,7 +191,12 @@ COLLECTIONS: tuple[_Collection, ...] = (
         scope="customers visible to the delegated user",
         action_xml_id="account.res_partner_action_customer", route="/odoo/customers",
         answer_fields=("name", "email"),
-        data_class="business.customer"),
+        data_class="business.customer",
+        projection_fields=(("name", "name"), ("email", "email"), ("phone", "phone"),
+                           ("mobile", "mobile"), ("city", "city"),
+                           ("country", "country_id")),
+        selection_fields=("name", "email", "city"), match_field="name",
+        description="Read Odoo customers visible to the currently delegated user."),
     _Collection(
         tool="query_products", model="product.template",
         domain=[("sale_ok", "=", True)],
@@ -179,7 +204,12 @@ COLLECTIONS: tuple[_Collection, ...] = (
         scope="saleable products visible to the delegated user",
         action_xml_id="sale.product_template_action", route="/odoo/products",
         answer_fields=("name", "code", "price"),
-        data_class="business.product"),
+        data_class="business.product",
+        projection_fields=(("name", "name"), ("code", "default_code"),
+                           ("price", "list_price"), ("type", "type"),
+                           ("currency_id", "currency_id")),
+        selection_fields=("name", "code", "price"), match_field="name",
+        description="Read saleable Odoo products visible to the currently delegated user."),
     _Collection(
         tool="query_quotations", model="sale.order",
         # The complement of `query_sale_orders`: what the Orders page excludes.
@@ -190,6 +220,13 @@ COLLECTIONS: tuple[_Collection, ...] = (
         action_xml_id="sale.action_quotations_with_onboarding", route="/odoo/sales",
         answer_fields=("reference", "customer", "state", "total"),
         data_class="business.sales_order",
+        projection_fields=(("reference", "name"), ("customer", "partner_id"),
+                           ("state", "state"), ("total", "amount_total"),
+                           ("valid_until", "validity_date"),
+                           ("currency_id", "currency_id"), ("date_order", "date_order")),
+        selection_fields=("reference", "customer", "total"), match_field="reference",
+        description=("Read open Odoo quotations -- draft and sent sales orders -- visible to "
+                     "the currently delegated user."),
         route_scope_note=(
             "sale.action_quotations_with_onboarding stores no domain: the Quotations page "
             "lists every sales order and only defaults its search to "
@@ -207,6 +244,15 @@ COLLECTIONS: tuple[_Collection, ...] = (
         route="/odoo/customer-invoices",
         answer_fields=("reference", "customer", "state", "total"),
         data_class="business.invoice",
+        projection_fields=(("reference", "name"), ("customer", "partner_id"),
+                           ("state", "state"), ("total", "amount_total"),
+                           ("sale_order", "invoice_origin"),
+                           ("currency_id", "currency_id"), ("invoice_date", "invoice_date"),
+                           ("invoice_date_due", "invoice_date_due"),
+                           ("amount_residual", "amount_residual")),
+        selection_fields=("reference", "customer", "total"), match_field="reference",
+        description="Read Odoo customer invoices visible to the currently delegated user.",
+        empty_value_labels=(("reference", "(draft, not yet numbered)"),),
         route_scope_note=(
             "account.action_move_out_invoice also lists credit notes (out_refund); this "
             "tool reads invoices only."),),
@@ -247,7 +293,6 @@ PREPARE_CUSTOMER_FORM_TOOL = "prepare_customer_form"
 PREPARE_CUSTOMER_EDIT_TOOL = "prepare_customer_edit_form"
 CONFIRM_QUOTATION_TOOL = "confirm_quotation"
 INVOICE_SALE_ORDER_TOOL = "invoice_sale_order"
-MUTATION_TOOLS = (CREATE_CUSTOMER_TOOL, CONFIRM_QUOTATION_TOOL, INVOICE_SALE_ORDER_TOOL)
 _CUSTOMERS = _BY_TOOL["query_customers"]
 _QUOTATIONS = _BY_TOOL["query_quotations"]
 _ORDERS = _BY_TOOL["query_sale_orders"]
@@ -313,22 +358,8 @@ def _query_schema(collection: _Collection, description: str) -> dict:
 
 
 QUERY_SCHEMAS = {
-    "query_sale_orders": _query_schema(
-        _ORDERS,
-        "Read confirmed Odoo sales orders visible to the currently delegated user."),
-    "query_customers": _query_schema(
-        _CUSTOMERS,
-        "Read Odoo customers visible to the currently delegated user."),
-    "query_products": _query_schema(
-        _BY_TOOL["query_products"],
-        "Read saleable Odoo products visible to the currently delegated user."),
-    "query_quotations": _query_schema(
-        _QUOTATIONS,
-        "Read open Odoo quotations -- draft and sent sales orders -- visible to the "
-        "currently delegated user."),
-    "query_customer_invoices": _query_schema(
-        _INVOICES,
-        "Read Odoo customer invoices visible to the currently delegated user."),
+    collection.tool: _query_schema(collection, collection.description)
+    for collection in COLLECTIONS
 }
 
 CREATE_CUSTOMER_SCHEMA = {
@@ -461,6 +492,48 @@ INVOICE_SALE_ORDER_SCHEMA = _reference_schema(
     "explicit user confirmation. Refused unless the order still has something to invoice. "
     "Never a down payment: the regular-invoice method is pinned.",
     "Exact sales order reference, such as S00007.")
+
+
+@dataclass(frozen=True)
+class _MutationToolSpec:
+    """One Odoo write's complete server-side contract.
+
+    The method names deliberately include the readback in ``dispatch_method``: a mutation
+    is not complete when RPC acknowledges it, but only when its application-owned
+    postcondition has been read back under the same delegated actor.
+    """
+
+    name: str
+    schema: dict
+    prepare_method: str
+    dispatch_method: str
+    write_scope: str
+    reconciliation_scope: str
+    data_types: tuple[str, ...]
+
+
+MUTATION_SPECS = (
+    _MutationToolSpec(
+        CREATE_CUSTOMER_TOOL, CREATE_CUSTOMER_SCHEMA,
+        "_prepare_create_customer", "_dispatch_create_customer",
+        "customers:write", "customers:read",
+        ("business.customer", "business.identifier", "application.route",
+         "business.mutation_result")),
+    _MutationToolSpec(
+        CONFIRM_QUOTATION_TOOL, CONFIRM_QUOTATION_SCHEMA,
+        "_prepare_confirm_quotation", "_dispatch_confirm_quotation",
+        "sale_orders:write", "sale_orders:read",
+        ("business.sales_order", "business.identifier", "application.route",
+         "business.mutation_result")),
+    _MutationToolSpec(
+        INVOICE_SALE_ORDER_TOOL, INVOICE_SALE_ORDER_SCHEMA,
+        "_prepare_invoice_sale_order", "_dispatch_invoice_sale_order",
+        "invoices:write", "sale_orders:read",
+        ("business.invoice", "business.identifier", "application.route",
+         "business.mutation_result")),
+)
+_MUTATION_BY_TOOL = {spec.name: spec for spec in MUTATION_SPECS}
+MUTATION_TOOLS = tuple(spec.name for spec in MUTATION_SPECS)
 
 
 # ---------------------------------------------------------------------------- credentials
@@ -662,8 +735,7 @@ class OdooBusinessToolExecutor:
     # -- tool catalog -------------------------------------------------------------------
     def tool_schemas(self) -> tuple[dict, ...]:
         reads = tuple(QUERY_SCHEMAS[collection.tool] for collection in COLLECTIONS)
-        writes = (CREATE_CUSTOMER_SCHEMA, CONFIRM_QUOTATION_SCHEMA,
-                  INVOICE_SALE_ORDER_SCHEMA)
+        writes = tuple(spec.schema for spec in MUTATION_SPECS)
         return reads + (PREPARE_CUSTOMER_FORM_SCHEMA,) + (
             (PREPARE_CUSTOMER_EDIT_SCHEMA,) + writes if self.allow_mutations else ())
 
@@ -981,41 +1053,12 @@ class OdooBusinessToolExecutor:
 
     def _project(self, collection: _Collection, row: dict) -> dict:
         record_id = row.get("id")
-        item = {"name": self._label(row, "name")}
-        if collection.tool == "query_sale_orders":
-            item = {"reference": self._label(row, "name"),
-                    "customer": self._label(row, "partner_id"),
-                    "state": self._label(row, "state"),
-                    "total": self._label(row, "amount_total"),
-                    "invoice_status": self._label(row, "invoice_status")}
-        elif collection.tool == "query_quotations":
-            item = {"reference": self._label(row, "name"),
-                    "customer": self._label(row, "partner_id"),
-                    "state": self._label(row, "state"),
-                    "total": self._label(row, "amount_total"),
-                    "valid_until": self._label(row, "validity_date")}
-        elif collection.tool == "query_customer_invoices":
-            # A draft `account.move` has no number; Odoo stores `False` there, and a row
-            # that rendered it as "False" would be a fact the model could act on wrongly.
-            item = {"reference": (self._label(row, "name")
-                                  or "(draft, not yet numbered)"),
-                    "customer": self._label(row, "partner_id"),
-                    "state": self._label(row, "state"),
-                    "total": self._label(row, "amount_total"),
-                    "sale_order": self._label(row, "invoice_origin")}
-        elif collection.tool == "query_customers":
-            item = {"name": self._label(row, "name"), "email": self._label(row, "email"),
-                    "phone": self._label(row, "phone"), "mobile": self._label(row, "mobile"),
-                    "city": self._label(row, "city"),
-                    "country": self._label(row, "country_id")}
-        else:
-            item = {"name": self._label(row, "name"),
-                    "code": self._label(row, "default_code"),
-                    "price": self._label(row, "list_price"),
-                    "type": self._label(row, "type")}
-        for field in ("currency_id", "date_order", "invoice_date", "invoice_date_due", "amount_residual"):
-            if field in collection.fields:
-                item[field] = self._label(row, field)
+        item = {}
+        for output, source in collection.projection_fields:
+            value = self._label(row, source)
+            # A draft `account.move` has no number. The descriptor supplies the honest
+            # display fallback; no query-specific control branch decides it here.
+            item[output] = value or collection.empty_value_labels.get(output, "")
         if not isinstance(record_id, bool) and isinstance(record_id, int) and record_id > 0:
             item["ui_path"] = f"{collection.route}/{record_id}"
         return item
@@ -1026,17 +1069,8 @@ class OdooBusinessToolExecutor:
         record_id = row.get("id")
         if isinstance(record_id, bool) or not isinstance(record_id, int) or record_id <= 0:
             return None
-        if collection.tool == "query_customers":
-            fields = ("name", "email", "city")
-        elif collection.tool == "query_products":
-            fields = ("name", "code", "price")
-        else:
-            # Not the state: it is Odoo's own code word ("sale"), and a Chinese question
-            # got a list of choices reading "S00001 — Azure Interior — 287.50 — sale"
-            # while the same value in an answer reads 已确认. The reference already
-            # identifies the record, which is all a choice has to do.
-            fields = ("reference", "customer", "total")
-        values = [str(item.get(field) or "").strip() for field in fields]
+        values = [str(item.get(field) or "").strip()
+                  for field in collection.selection_fields]
         values = [value for value in values if value]
         if not values:
             return None
@@ -1044,10 +1078,6 @@ class OdooBusinessToolExecutor:
             record_ref=f"{collection.model}/{record_id}",
             label=" — ".join(values)[:200],
         )
-
-    @staticmethod
-    def _match_field(collection: _Collection) -> str:
-        return "name" if "reference" not in collection.answer_fields else "reference"
 
     def execute(self, name: str, args: dict, *,
                 context: OperationContext | None = None) -> BusinessToolResult:
@@ -1088,7 +1118,7 @@ class OdooBusinessToolExecutor:
         if collection is None:
             raise BusinessToolRequestError("unknown Odoo business tool")
         needle, limit, extra_domain = self._read_args(name, args)
-        field = self._match_field(collection)
+        field = collection.match_field
         # Let Odoo's indexed/domain query discard unrelated rows before pagination. Keep the
         # literal Python comparison below as the final semantic check. PostgreSQL LIKE uses
         # backslash escaping, so user `%` and `_` remain ordinary name characters here.
@@ -1382,31 +1412,40 @@ class OdooBusinessToolExecutor:
 
     def prepare_mutation(self, name: str, args: dict, *,
                          context: OperationContext | None = None) -> BusinessMutationSpec:
-        if not self.allow_mutations or name not in MUTATION_TOOLS:
+        spec = _MUTATION_BY_TOOL.get(name)
+        if not self.allow_mutations or spec is None:
             raise BusinessToolError("unknown Odoo business mutation")
-        if name == CONFIRM_QUOTATION_TOOL:
-            reference = self._reference(name, args)
-            quotation = self._one_order(reference, _QUOTATIONS, "quotation")
-            return BusinessMutationSpec(
-                args={"reference": reference},
-                reconcile_key=reference.casefold(),
-                effect="在 Odoo 中确认 1 张报价单",
-                targets=(f"报价单：{reference}",
-                         f"客户：{self._label(quotation, 'partner_id')}",
-                         f"金额：{self._label(quotation, 'amount_total')}"),
-            )
-        if name == INVOICE_SALE_ORDER_TOOL:
-            reference = self._reference(name, args)
-            order = self._invoiceable(reference)
-            return BusinessMutationSpec(
-                args={"reference": reference},
-                reconcile_key=reference.casefold(),
-                effect="在 Odoo 中为 1 张销售订单开具 1 张普通客户发票",
-                targets=(f"销售订单：{reference}",
-                         f"客户：{self._label(order, 'partner_id')}",
-                         f"金额：{self._label(order, 'amount_total')}",
-                         "开票方式：普通发票（非预付款）"),
-            )
+        return getattr(self, spec.prepare_method)(args, context)
+
+    def _prepare_confirm_quotation(self, args: dict,
+                                   context: OperationContext | None) -> BusinessMutationSpec:
+        reference = self._reference(CONFIRM_QUOTATION_TOOL, args)
+        quotation = self._one_order(reference, _QUOTATIONS, "quotation")
+        return BusinessMutationSpec(
+            args={"reference": reference},
+            reconcile_key=reference.casefold(),
+            effect="在 Odoo 中确认 1 张报价单",
+            targets=(f"报价单：{reference}",
+                     f"客户：{self._label(quotation, 'partner_id')}",
+                     f"金额：{self._label(quotation, 'amount_total')}"),
+        )
+
+    def _prepare_invoice_sale_order(self, args: dict,
+                                    context: OperationContext | None) -> BusinessMutationSpec:
+        reference = self._reference(INVOICE_SALE_ORDER_TOOL, args)
+        order = self._invoiceable(reference)
+        return BusinessMutationSpec(
+            args={"reference": reference},
+            reconcile_key=reference.casefold(),
+            effect="在 Odoo 中为 1 张销售订单开具 1 张普通客户发票",
+            targets=(f"销售订单：{reference}",
+                     f"客户：{self._label(order, 'partner_id')}",
+                     f"金额：{self._label(order, 'amount_total')}",
+                     "开票方式：普通发票（非预付款）"),
+        )
+
+    def _prepare_create_customer(self, args: dict,
+                                 context: OperationContext | None) -> BusinessMutationSpec:
         normalized = self._normalize_customer(args)
         self._assert_no_duplicate(normalized["name"], normalized["email"])
         return BusinessMutationSpec(
@@ -1575,12 +1614,23 @@ class OdooBusinessToolExecutor:
 
     def execute_mutation(self, name: str, args: dict, *,
                          context: OperationContext | None = None) -> BusinessToolResult:
-        if not self.allow_mutations or name not in MUTATION_TOOLS:
+        spec = _MUTATION_BY_TOOL.get(name)
+        if not self.allow_mutations or spec is None:
             raise BusinessToolError("unknown Odoo business mutation")
-        if name == CONFIRM_QUOTATION_TOOL:
-            return self._confirm_quotation(self._reference(name, args), context)
-        if name == INVOICE_SALE_ORDER_TOOL:
-            return self._invoice_sale_order(self._reference(name, args), context)
+        return getattr(self, spec.dispatch_method)(args, context)
+
+    def _dispatch_confirm_quotation(self, args: dict,
+                                    context: OperationContext | None) -> BusinessToolResult:
+        return self._confirm_quotation(
+            self._reference(CONFIRM_QUOTATION_TOOL, args), context)
+
+    def _dispatch_invoice_sale_order(self, args: dict,
+                                     context: OperationContext | None) -> BusinessToolResult:
+        return self._invoice_sale_order(
+            self._reference(INVOICE_SALE_ORDER_TOOL, args), context)
+
+    def _dispatch_create_customer(self, args: dict,
+                                  context: OperationContext | None) -> BusinessToolResult:
         normalized = self._normalize_customer(args)
         # Repeat under the delegated actor immediately before dispatch. This closes the
         # ordinary time-of-check gap without ever retrying the create itself.
@@ -1664,10 +1714,9 @@ class _OdooMutationReconciler:
     gathered under the same delegated actor, over a scan that says whether it finished.
     """
 
-    #: Each write and the read scope its evidence needs.
-    _SCOPES = {CREATE_CUSTOMER_TOOL: "customers:read",
-               CONFIRM_QUOTATION_TOOL: "sale_orders:read",
-               INVOICE_SALE_ORDER_TOOL: "sale_orders:read"}
+    #: Each write and the delegated read scope its evidence needs. This must be the same
+    #: catalog that selected its dispatch/readback implementation.
+    _SCOPES = {spec.name: spec.reconciliation_scope for spec in MUTATION_SPECS}
 
     def __init__(self, executor: OdooBusinessToolExecutor, enabled: bool):
         self._executor = executor
@@ -1767,9 +1816,7 @@ class OdooApplicationAdapter:
             # It stages a change to an existing customer, so it needs the same scope a
             # write does, even though the application is what commits it.
             required_scopes[PREPARE_CUSTOMER_EDIT_TOOL] = "customers:write"
-            required_scopes[CREATE_CUSTOMER_TOOL] = "customers:write"
-            required_scopes[CONFIRM_QUOTATION_TOOL] = "sale_orders:write"
-            required_scopes[INVOICE_SALE_ORDER_TOOL] = "invoices:write"
+            required_scopes.update({spec.name: spec.write_scope for spec in MUTATION_SPECS})
         declarations = [
             (collection.tool,
              (collection.data_class, "business.identifier", "application.route"))
@@ -1781,17 +1828,7 @@ class OdooApplicationAdapter:
             declarations.append((
                 PREPARE_CUSTOMER_EDIT_TOOL,
                 ("business.customer", "application.route", "business.form_draft")))
-            declarations += [
-                (CREATE_CUSTOMER_TOOL,
-                 ("business.customer", "business.identifier", "application.route",
-                  "business.mutation_result")),
-                (CONFIRM_QUOTATION_TOOL,
-                 ("business.sales_order", "business.identifier", "application.route",
-                  "business.mutation_result")),
-                (INVOICE_SALE_ORDER_TOOL,
-                 ("business.invoice", "business.identifier", "application.route",
-                  "business.mutation_result")),
-            ]
+            declarations += [(spec.name, spec.data_types) for spec in MUTATION_SPECS]
         data = DeclaredDataClassifier(tuple(sorted(declarations)))
         # Every write must be able to say the application confirmed it, under the same user.
         # A mutation without this pair in its result is refused by the core before it can be

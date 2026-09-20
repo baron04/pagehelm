@@ -31,13 +31,30 @@ from web_operation_agent.execution.session import ServerAgentSession, TaskSpec
 from web_operation_agent.tests.adapter_contract import assert_adapter_contract
 from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
 
-from web_operation_agent_odoo.adapter import (APPLICATION_ID, COLLECTIONS,
+from web_operation_agent_odoo.adapter import (APPLICATION_ID, COLLECTIONS, QUERY_SCHEMAS,
+                                              MUTATION_SPECS,
                                               OdooApplicationAdapter,
                                               OdooBusinessToolExecutor,
                                               OdooPageSessionIdentityResolver,
                                               PREPARE_CUSTOMER_FORM_TOOL)
 
 BASE = "http://127.0.0.1:8069"
+
+
+class ToolSpecificationTableTests(unittest.TestCase):
+    def test_every_read_specification_owns_schema_projection_and_selection(self):
+        """A new query must not require another name-based branch in the executor."""
+        for collection in COLLECTIONS:
+            with self.subTest(tool=collection.tool):
+                self.assertEqual(QUERY_SCHEMAS[collection.tool]["function"]["name"],
+                                 collection.tool)
+                projected = {output for output, _source in collection.projection_fields}
+                self.assertTrue(collection.description)
+                self.assertIn(collection.match_field, projected)
+                self.assertTrue(set(collection.selection_fields) <= projected)
+                self.assertTrue(
+                    {source for _output, source in collection.projection_fields}
+                    <= set(collection.fields))
 
 
 class _RoutingChat(CancellableChatDouble):
@@ -773,6 +790,22 @@ class TypedReads(unittest.TestCase):
 class TheOneWrite(unittest.TestCase):
     def _executor(self, existing=()):
         return _FakeOdoo({"res.partner": _customers(existing)}, allow_mutations=True)
+
+    def test_one_specification_owns_every_write_entrypoint(self):
+        """Adding a write cannot update its schema but forget dispatch or readback."""
+        executor = self._executor()
+        offered = {schema["function"]["name"] for schema in executor.tool_schemas()}
+        self.assertEqual(
+            {spec.name for spec in MUTATION_SPECS},
+            {"create_customer", "confirm_quotation", "invoice_sale_order"})
+        for spec in MUTATION_SPECS:
+            with self.subTest(tool=spec.name):
+                self.assertIn(spec.name, offered)
+                self.assertEqual(spec.schema["function"]["name"], spec.name)
+                self.assertTrue(callable(getattr(executor, spec.prepare_method)))
+                self.assertTrue(callable(getattr(executor, spec.dispatch_method)))
+                self.assertTrue(spec.write_scope.endswith(":write"))
+                self.assertTrue(spec.reconciliation_scope.endswith(":read"))
 
     def test_a_proposal_normalises_and_states_its_exact_effect(self):
         executor = self._executor()
