@@ -30,7 +30,7 @@ from evals.odoo import extractor as ex
 from web_operation_agent.conversation import ConversationState
 from web_operation_agent.identity import PrincipalContext
 from web_operation_agent.ledger import SessionLedger
-from web_operation_agent.mutation import MemoryMutationJournal
+from web_operation_agent.business.mutation import MemoryMutationJournal
 from web_operation_agent.product import (AgentAnswerContext, AgentTurnMessage,
                                          render_neutral_user_answer)
 from web_operation_agent.session import ServerAgentSession, TaskSpec

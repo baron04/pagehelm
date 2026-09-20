@@ -230,9 +230,9 @@ build_and_check_wheel() {
 import os, sys
 from pathlib import Path
 import web_operation_agent
-from web_operation_agent.mutation import SQLiteMutationJournal
+from web_operation_agent.business.mutation import SQLiteMutationJournal
 from web_operation_agent.durable import SQLiteSessionStore, SQLiteProviderQuota
-from web_operation_agent.mutation_ops import reconcile
+from web_operation_agent.business.operations import reconcile
 from web_operation_agent.sourcetree import SourceTree
 
 installed = Path(web_operation_agent.__file__).resolve()
@@ -255,7 +255,7 @@ PY
   ( cd "${smoke_cwd}" && env -u PYTHONPATH \
       "${smoke_venv}/bin/python" -I - <<'PY'
 from pathlib import Path
-from web_operation_agent.mutation import SQLiteMutationJournal
+from web_operation_agent.business.mutation import SQLiteMutationJournal
 from web_operation_agent.sourcetree import SourceTree
 from web_operation_agent_ofbiz import OFBIZ_ROUTE_PORT
 from web_operation_agent_twenty import TwentyApplicationAdapter
@@ -292,7 +292,7 @@ assert odoo.business_tools.mutation_tool_names == frozenset()
 # The packaged write Skills have to be present in the wheel too, or a mutation-enabled
 # deployment fails at composition time with a missing package-data entry -- exactly the
 # failure a path-shadowed test cannot see.
-from web_operation_agent.mutation import SQLiteMutationJournal as _Journal
+from web_operation_agent.business.mutation import SQLiteMutationJournal as _Journal
 writing = OdooApplicationAdapter(
     base_url="http://127.0.0.1:8069", api_key_path=root / "odoo-key.json",
     allow_mutations=True, mutation_journal=_Journal(root / "odoo-mutations.sqlite3"))

@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from web_operation_agent.durable import SQLiteSessionStore
-from web_operation_agent.mutation import SQLiteMutationJournal
+from web_operation_agent.business.mutation import SQLiteMutationJournal
 from web_operation_agent.operations import (OperationalStateError, create_state_backup,
                                             restore_state_backup)
 

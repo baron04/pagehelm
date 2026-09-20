@@ -14,7 +14,7 @@ from web_operation_agent.application import (APPLICATION_ADAPTER_VERSION,
                                               ResultPostconditionVerifier,
                                               SourceCapability,
                                               bind_application)
-from web_operation_agent.business import (BusinessSkill, BusinessToolContractError,
+from web_operation_agent.business.runtime import (BusinessSkill, BusinessToolContractError,
                                           BusinessToolResult, BusinessToolRuntime)
 
 

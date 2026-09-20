@@ -8,8 +8,8 @@ ledger event carried no digest at all, and settling a row meant scanning the col
 import json
 import unittest
 
-from web_operation_agent.business import BusinessMutationIndeterminate
-from web_operation_agent.mutation import MemoryMutationJournal, merged_reconciliation
+from web_operation_agent.business.runtime import BusinessMutationIndeterminate
+from web_operation_agent.business.mutation import MemoryMutationJournal, merged_reconciliation
 
 
 DIGEST = "0" * 64

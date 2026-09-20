@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from web_operation_agent import product
-from web_operation_agent.business import BusinessToolRuntime
+from web_operation_agent.business.runtime import BusinessToolRuntime
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.evidence import Origin, QueryEvidence, RecordEvidence
 from web_operation_agent.product import AgentTurnConfig, AgentTurnExecutor, AgentTurnStatus

@@ -4,7 +4,7 @@ A write whose outcome was lost is never retried. It sits in the journal as `disp
 `indeterminate`, and something has to close it -- otherwise the durable record of "we do not
 know" grows forever and nobody can tell an old uncertainty from a new one.
 
-`web_operation_agent.mutation_ops` has both halves of the machinery already: `reconcile`
+`web_operation_agent.business.operations` has both halves of the machinery already: `reconcile`
 performs the application's own read under the original actor, and
 `SQLiteMutationJournal.resolve` applies a compare-and-swap that records who decided and on
 what evidence. What was missing was the step in between -- the one that needs a real
@@ -38,8 +38,8 @@ import uuid
 from pathlib import Path
 
 from web_operation_agent.application import bind_application
-from web_operation_agent.mutation import MutationJournalError, SQLiteMutationJournal
-from web_operation_agent.mutation_ops import reconcile, unresolved_report
+from web_operation_agent.business.mutation import MutationJournalError, SQLiteMutationJournal
+from web_operation_agent.business.operations import reconcile, unresolved_report
 
 from ..adapter import OdooApplicationAdapter
 

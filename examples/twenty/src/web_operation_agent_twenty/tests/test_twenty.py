@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 
-from web_operation_agent.business import (BusinessMutationIndeterminate,
+from web_operation_agent.business.runtime import (BusinessMutationIndeterminate,
                                           BusinessSkill,
                                           BusinessToolAuthenticationError,
                                           BusinessToolError,
@@ -22,7 +22,7 @@ from web_operation_agent.business import (BusinessMutationIndeterminate,
                                           BusinessToolRuntime,
                                           BusinessToolUnavailableError)
 from web_operation_agent.identity import IdentityAssertion, PrincipalError
-from web_operation_agent.mutation import (MemoryMutationJournal,
+from web_operation_agent.business.mutation import (MemoryMutationJournal,
                                           SQLiteMutationJournal)
 from web_operation_agent_twenty.adapter import (TwentyApplicationAdapter,
                                         TwentyBusinessToolExecutor,

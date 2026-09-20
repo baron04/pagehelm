@@ -7,7 +7,7 @@ import unittest
 
 from evals.pageagent.business_host import (PageAgentBusinessHostError,
                                            PageAgentBusinessProxy)
-from web_operation_agent.business import (BusinessMutationSpec, BusinessSkill,
+from web_operation_agent.business.runtime import (BusinessMutationSpec, BusinessSkill,
                                           BusinessToolContractError,
                                           BusinessToolIdentityError,
                                           BusinessToolRequestError,

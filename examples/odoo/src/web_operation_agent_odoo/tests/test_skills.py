@@ -5,7 +5,7 @@ import os
 import unittest
 from pathlib import Path
 
-from web_operation_agent.business import Citation
+from web_operation_agent.business.runtime import Citation
 from web_operation_agent_odoo.demo.skills import (APPLICATION, compiler, packaged_skills,
                                                   reissue_packaged_skills,
                                                   skill_artifact_path,
@@ -121,7 +121,7 @@ class CitationsAgainstARealRelease(unittest.TestCase):
         self.assertEqual(reissue.skill["triggers"], list(original.triggers))
         self.assertEqual([change.field for change in reissue.changed], ["provenance"])
 
-        from web_operation_agent.business import BusinessSkill
+        from web_operation_agent.business.runtime import BusinessSkill
         import json
         verified = compiler(self.root, self.release).verify(
             BusinessSkill.from_bytes(
@@ -133,7 +133,7 @@ class CitationsAgainstARealRelease(unittest.TestCase):
 
     def test_a_renamed_anchor_stops_resolving(self):
         """Reverse verification: the checker must be able to fail."""
-        from web_operation_agent.business import BusinessSkill
+        from web_operation_agent.business.runtime import BusinessSkill
         import json, tempfile
         checker = compiler(self.root, self.release)
         with tempfile.TemporaryDirectory() as tmp:

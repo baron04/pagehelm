@@ -22,8 +22,8 @@ import hashlib
 import json
 from pathlib import Path
 
-from .application import BoundApplication
-from .identity import PrincipalContext
+from ..application import BoundApplication
+from ..identity import PrincipalContext
 from .mutation import MutationJournalError, SQLiteMutationJournal
 
 
@@ -76,7 +76,7 @@ def unresolved_report(intent, *, journal_path: Path) -> dict:
         # The application's own identifier for what was written, when the adapter had one.
         "record_id": str(metadata.get("record_id") or ""),
         "resolve_command": (
-            f"python -m web_operation_agent.mutation_ops --journal {journal_path} "
+            f"python -m web_operation_agent.business.operations --journal {journal_path} "
             f"resolve {intent.proposal_digest} "
             f"--expected-updated-at {intent.updated_at} "
             "--outcome completed|failed --operator <you> --evidence <file> "

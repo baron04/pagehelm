@@ -9,7 +9,7 @@ from typing import Any
 from web_operation_agent.application import (DeclaredDataClassifier, DeclaredRoutePort,
                                              ResultPostconditionVerifier)
 from web_operation_agent.answering import StructuredQueryAnswer
-from web_operation_agent.business import (BusinessSkill, BusinessToolRequestError,
+from web_operation_agent.business.runtime import (BusinessSkill, BusinessToolRequestError,
                                            BusinessToolResult, BusinessToolRuntime)
 from web_operation_agent.schemas import ElementRef
 from web_operation_agent_twenty.adapter import (QUERY_COMPANIES_SCHEMA, QUERY_OPPORTUNITIES_SCHEMA,

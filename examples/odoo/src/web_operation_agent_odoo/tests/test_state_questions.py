@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import unittest
 
-from web_operation_agent.business import trigger_requests_action
+from web_operation_agent.business.runtime import trigger_requests_action
 
 
 class AStateQuestionIsNotARequest(unittest.TestCase):

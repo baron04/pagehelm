@@ -14,10 +14,10 @@ import time
 import unittest
 from pathlib import Path
 
-from web_operation_agent.business import BusinessToolRuntime
+from web_operation_agent.business.runtime import BusinessToolRuntime
 from web_operation_agent.identity import PrincipalContext
 from web_operation_agent.ledger import SessionLedger
-from web_operation_agent.mutation import MemoryMutationJournal
+from web_operation_agent.business.mutation import MemoryMutationJournal
 from web_operation_agent.session import ServerAgentSession, TaskSpec
 from web_operation_agent_odoo.adapter import ANSWER_LABELS_ZH, OdooApplicationAdapter
 from web_operation_agent_odoo.tests.test_adapter import (
@@ -122,7 +122,7 @@ class AChineseAnswerSpeaksChinese(unittest.TestCase):
 
 class TheLabelTableIsBounded(unittest.TestCase):
     def test_a_malformed_table_is_refused(self):
-        from web_operation_agent.business import _answer_labels
+        from web_operation_agent.business.runtime import _answer_labels
         for tables in ({"chinese": {"a": "b"}}, {"zh": {"a": ""}}, {"zh": {"a": "b\nc"}},
                        {"zh": ["a"]}):
             with self.subTest(tables=tables), self.assertRaises(ValueError):
@@ -174,7 +174,7 @@ class ARefusalNamesWhatWasRefused(unittest.TestCase):
 
 class ASessionCarriesTheRefusedOperation(unittest.TestCase):
     def test_an_application_refusal_names_the_read_it_refused(self):
-        from web_operation_agent.business import BusinessToolPermissionError
+        from web_operation_agent.business.runtime import BusinessToolPermissionError
 
         class Refusing:
             def __init__(self, inner):

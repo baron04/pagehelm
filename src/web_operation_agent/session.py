@@ -31,17 +31,17 @@ from zoneinfo import ZoneInfo
 from .application import ApplicationRoutePort, SourceCapability
 from . import answer_protocol
 from . import page_answer
-from .approvals import ApprovalWatch, NavigationPlan
+from .business.approvals import ApprovalWatch, NavigationPlan
 from .answer_view import (capability_gap_answer, render_payload, unavailable_answer,
                           withdrawn_answer)
 from .affordance import SourceAffordance, resolve_source_affordances
 from .browser import BrowserExecutor, TransportError, TurnCancelled
-from .business import (BUSINESS_SKILL_MATCHER_VERSION, BusinessSkillSelection,
-                       FormDraft, BusinessToolRuntime)
-from .business_errors import (BusinessMutationBlockedError, BusinessMutationIndeterminate,
+from .business.runtime import (BUSINESS_SKILL_MATCHER_VERSION, BusinessSkillSelection,
+                               FormDraft, BusinessToolRuntime)
+from .business.errors import (BusinessMutationBlockedError, BusinessMutationIndeterminate,
                               BusinessMutationRefusedError, BusinessToolError,
                               BusinessToolPermissionError)
-from .business_text import trigger_requests_action
+from .business.text import trigger_requests_action
 from .contract import (ContractPlanner, EvidenceBundle, PlanningFailed, SourceRetriever,
                        _segment_from_template, expand_terms)
 from .controlplane import ControlPlaneClient, ControlPlaneError
@@ -58,7 +58,7 @@ from .routes import Router, candidate_url, observation_is_at_route
 from .modeling.spend import BudgetExhausted
 from .turnwatch import ProgressFeed, RepeatGuard
 from .turn_answer import AnswerState, TurnAnswer
-from .writes import PRE_DISPATCH_ERRORS, WRITE_CAPABLE, WatchState, WriteWatch
+from .business.writes import PRE_DISPATCH_ERRORS, WRITE_CAPABLE, WatchState, WriteWatch
 from .prompts import (
     AGENT_SYSTEM, APPLICATION_ENTRY_SYSTEM, APPLICATION_ENTRY_TOOL, ASK_USER_TOOL,
     BUSINESS_SKILL_SYSTEM, CAPABILITY_SYSTEM, CAPABILITY_TOOL,

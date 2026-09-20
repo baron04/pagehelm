@@ -20,7 +20,7 @@ from evals.pageagent.scripted import (
 from evals.woa.assembler import ENGINE_ANSWER_CEILING
 from evals.woa.scripted import ScriptedWoaChat, SimulatedRuntime, SyntheticPageModel
 from evals.woa.twenty_runner import WoaTwentyConfig, WoaTwentyRunnerError, run_case
-from web_operation_agent.business import (
+from web_operation_agent.business.runtime import (
     BusinessToolIdentityError, BusinessToolUnavailableError,
 )
 from web_operation_agent.schemas import SourceMap

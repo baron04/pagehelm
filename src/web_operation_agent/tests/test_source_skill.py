@@ -133,7 +133,7 @@ if __name__ == "__main__":
 # ---------------------------------------------------------------- Business Skill drafts
 
 
-from web_operation_agent.business import BusinessSkill                      # noqa: E402
+from web_operation_agent.business.runtime import BusinessSkill                      # noqa: E402
 from web_operation_agent.source_skill import BusinessSkillCompiler          # noqa: E402
 from web_operation_agent.tests.source_fixture import fixture_source_map     # noqa: E402
 

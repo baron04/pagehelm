@@ -13,7 +13,7 @@ from playwright.sync_api import Page, sync_playwright
 from evals.pageagent.business_host import PageAgentBusinessProxy
 from evals.pageagent.host import PageAgentProviderContract, PageAgentProviderProxy
 from evals.twenty.fixture import atomic_write_json
-from web_operation_agent.business import (BusinessSkill, BusinessToolResult,
+from web_operation_agent.business.runtime import (BusinessSkill, BusinessToolResult,
                                           BusinessToolRuntime)
 from web_operation_agent.identity import OperationContext, PrincipalContext
 

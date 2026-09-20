@@ -58,7 +58,7 @@ from evals.woa.structural_apparatus import (CompanyStore, CursorCompanyPage,
                                             structural_business_runtime, structural_companies)
 from evals.woa.twenty_runner import WoaTwentyConfig
 from web_operation_agent.modeling.client import ChatModel, SpendMeter
-from web_operation_agent.mutation import SQLiteMutationJournal
+from web_operation_agent.business.mutation import SQLiteMutationJournal
 
 
 PILOT_VERSION = 1

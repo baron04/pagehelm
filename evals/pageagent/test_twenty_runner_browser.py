@@ -22,7 +22,7 @@ from evals.pageagent.scripted import (
     synthetic_business_runtime, synthetic_companies, synthetic_state, write_storage_state,
 )
 from evals.pageagent.twenty_runner import PageAgentTwentyConfig, run_case
-from web_operation_agent.business import (
+from web_operation_agent.business.runtime import (
     BusinessToolIdentityError, BusinessToolUnavailableError,
 )
 

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .application import ApplicationRoutePort
-from .business import BusinessSkill, Citation
+from .business.runtime import BusinessSkill, Citation
 from .schemas import SourceMap, SourceRelation
 
 

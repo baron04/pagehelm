@@ -72,9 +72,9 @@ flowchart LR
 | `web_operation_agent.browser` | 定义结构化浏览器执行协议和类型化传输结果，不包含浏览器引擎。 |
 | `web_operation_agent.remote` | 定义受能力凭据约束的远程浏览器通道和客户端。 |
 | `web_operation_agent.embedded_gateway` | 提供页面 Runtime、带认证的 SSE/HTTP 端点，以及不含业务内容的存活与就绪探针。 |
-| `web_operation_agent.business` | 加载 Skill，并代理类型化的读取和写入工具。 |
+| `web_operation_agent.business.runtime` | 加载 Skill，并代理类型化的读取和写入工具。 |
 | `web_operation_agent.modeling.egress` | 执行模型 provider 数据边界，并在不保存请求内容的前提下生成审计记录。 |
-| `web_operation_agent.mutation` | 在内存或 SQLite 中原子记录一次性 mutation intent 与终态。 |
+| `web_operation_agent.business.mutation` | 在内存或 SQLite 中原子记录一次性 mutation intent 与终态。 |
 | `web_operation_agent.session` | 实现有步数和时间限制的服务端 Agent 循环。 |
 | `web_operation_agent.modeling.observability` | 把脱敏账本事件转换为无业务内容的 OTLP trace、metric 和运维告警，不改变任务结果。 |
 

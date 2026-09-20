@@ -55,8 +55,8 @@ No browser capability, runtime lease, approval, delegated credential, or model c
 ## Inspect and resolve uncertain writes
 
 ```bash
-python -m web_operation_agent.mutation_ops --journal private/mutations.sqlite3 list
-python -m web_operation_agent.mutation_ops --journal private/mutations.sqlite3 resolve PROPOSAL_DIGEST --expected-updated-at TIMESTAMP --outcome completed --operator OPERATOR_ID --evidence verified-evidence.json --writer-stopped
+python -m web_operation_agent.business.operations --journal private/mutations.sqlite3 list
+python -m web_operation_agent.business.operations --journal private/mutations.sqlite3 resolve PROPOSAL_DIGEST --expected-updated-at TIMESTAMP --outcome completed --operator OPERATOR_ID --evidence verified-evidence.json --writer-stopped
 ```
 
 The second command is a dry run. Add `--apply` only after verifying the old writer and upstream request can no longer execute and obtaining definitive evidence of completion or definite failure. A matching current record alone cannot prove that this proposal created it; an absent record cannot rule out an in-flight write. The expected timestamp prevents a stale resolution from overwriting newer journal state. The resolution and its operator/evidence digests commit atomically with the terminal state. No operation retries the original write or reissues approval.

@@ -10,7 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from web_operation_agent.answering import StructuredQueryAnswer
-from web_operation_agent.business import (
+from web_operation_agent.business.runtime import (
     APPLICATION_SAVES_ON_LEAVE,
     BusinessMutationBlockedError, BusinessMutationIndeterminate,
     BusinessMutationRefusedError, BusinessMutationSpec,
@@ -26,7 +26,7 @@ from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.evidence import Origin, QueryEvidence, RecordEvidence
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.identity import OperationContext, PrincipalContext
-from web_operation_agent.mutation import MemoryMutationJournal, MutationJournalError
+from web_operation_agent.business.mutation import MemoryMutationJournal, MutationJournalError
 from web_operation_agent.schemas import ActionReceipt, ElementRef, PageObservation
 from web_operation_agent.session import (CAPABILITY_GAP_TERMINAL,
                                         ServerAgentSession, TaskSpec)

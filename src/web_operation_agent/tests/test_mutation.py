@@ -7,7 +7,7 @@ import threading
 import unittest
 from pathlib import Path
 
-from web_operation_agent.mutation import (MemoryMutationJournal,
+from web_operation_agent.business.mutation import (MemoryMutationJournal,
                                           MutationClaimError,
                                           MutationJournalDurability,
                                           MutationJournalError,

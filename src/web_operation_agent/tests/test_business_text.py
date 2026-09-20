@@ -6,7 +6,7 @@ confirmation card rendered identically to the first (review finding P2-a).
 """
 import unittest
 
-from web_operation_agent.business import (BusinessToolRequestError, business_text_key,
+from web_operation_agent.business.runtime import (BusinessToolRequestError, business_text_key,
                                           normalize_business_text)
 
 

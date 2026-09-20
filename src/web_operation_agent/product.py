@@ -22,12 +22,12 @@ from .answer_view import render_payload, render_sources
 from .modeling.chat import require_chat_port
 from .panel_view import describe_step, panel_limits, step_facts
 from .browser import TransportError
-from .business import BusinessToolResult, BusinessToolRuntime
+from .business.runtime import BusinessToolResult, BusinessToolRuntime
 from .conversation import ConversationState
 from .embedded_agent import ApprovalGate, ApprovalGrant
 from .identity import OperationContext, PrincipalError
 from .ledger import SessionLedger
-from .mutation import MutationJournalDurability
+from .business.mutation import MutationJournalDurability
 from .privacy import redact_sensitive_assignments, redact_session_handoffs
 from .remote import (RemoteBrowserClient, RemoteProtocolError,
                      RemoteSessionChannel, ensure_safe_browser_payload)

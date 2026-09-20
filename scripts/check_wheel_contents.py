@@ -16,7 +16,7 @@ DISTRIBUTIONS = {
         "glob": "dist/*.whl",
         "required": [
             "web_operation_agent/durable.py",
-            "web_operation_agent/mutation_ops.py",
+            "web_operation_agent/business/operations.py",
             "web_operation_agent/application.py",
             "web_operation_agent/sourcetree.py",
             "web_operation_agent/xmlscan.py",

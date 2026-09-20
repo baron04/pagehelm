@@ -44,7 +44,7 @@ from web_operation_agent.application import (
     APPLICATION_ADAPTER_VERSION, ApplicationDescriptor, ApplicationPorts,
     DeclaredDataClassifier, DeclaredRoutePort, MutationReconciliation,
     ResultPostconditionVerifier)
-from web_operation_agent.business import (
+from web_operation_agent.business.runtime import (
     BusinessMutationIndeterminate,
     BusinessMutationSpec,
     BusinessSkill,

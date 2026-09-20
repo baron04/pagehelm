@@ -7,7 +7,7 @@ class TerminalReasonContract(unittest.TestCase):
     """Every emitted terminal reason must have one shared classification."""
 
     def test_every_reason_the_runner_emits_is_classified(self):
-        from web_operation_agent.approvals import ApprovalWatch
+        from web_operation_agent.business.approvals import ApprovalWatch
         from web_operation_agent.session import ServerAgentSession
         emitted = _reasons_emitted_by(ServerAgentSession, ApprovalWatch)
         self.assertTrue(emitted, "could not find any terminal reason in the runner source")

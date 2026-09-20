@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from .business_errors import BusinessToolRequestError
+from .errors import BusinessToolRequestError
 
 
 def _trigger_tokens(value: str) -> tuple[str, ...]:

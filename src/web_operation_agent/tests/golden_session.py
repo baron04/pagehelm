@@ -39,7 +39,7 @@ from typing import Callable
 
 from web_operation_agent.answering import StructuredQueryAnswer
 from web_operation_agent.application import SourceCapability
-from web_operation_agent.business import (BusinessMutationIndeterminate,
+from web_operation_agent.business.runtime import (BusinessMutationIndeterminate,
                                           BusinessMutationSpec, BusinessSkill,
                                           BusinessToolError, BusinessToolResult,
                                           BusinessToolRuntime)

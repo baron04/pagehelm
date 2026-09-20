@@ -142,7 +142,7 @@ from web_operation_agent.tests.route_fixture import (FIXTURE_ROUTE_PORT,
 from web_operation_agent.tests.knowledge_fixture import (FixtureKnowledgeRouter,
                                                          FixtureSkill)
 from web_operation_agent.ledger import SessionLedger
-from web_operation_agent.business import FormDraft, FormDraftField
+from web_operation_agent.business.runtime import FormDraft, FormDraftField
 from web_operation_agent.schemas import ActionReceipt, OperationContract, empty_contract
 from web_operation_agent.session import (AGENT_SYSTEM, SCOPE_FIRST_SYSTEM,
                                          LabApparatus, ServerAgentSession, TaskSpec,

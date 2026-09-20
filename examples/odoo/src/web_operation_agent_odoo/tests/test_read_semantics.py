@@ -3,7 +3,7 @@ import unittest
 
 from web_operation_agent.answer_protocol import compute, submit
 from web_operation_agent.answer_view import render_payload
-from web_operation_agent.business import BusinessToolContractError, BusinessToolRequestError
+from web_operation_agent.business.runtime import BusinessToolContractError, BusinessToolRequestError
 from web_operation_agent.computation import ComputationRefused
 from web_operation_agent.evidence import RecordEvidence, TurnEvidence
 

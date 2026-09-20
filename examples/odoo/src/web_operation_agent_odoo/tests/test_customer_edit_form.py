@@ -12,10 +12,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from web_operation_agent.business import (APPLICATION_SAVES_ON_LEAVE,
+from web_operation_agent.business.runtime import (APPLICATION_SAVES_ON_LEAVE,
                                           BusinessMutationRefusedError,
                                           BusinessToolRequestError)
-from web_operation_agent.mutation import MemoryMutationJournal
+from web_operation_agent.business.mutation import MemoryMutationJournal
 from web_operation_agent_odoo.adapter import (EDITABLE_CUSTOMER_FIELDS,
                                               PREPARE_CUSTOMER_EDIT_TOOL,
                                               OdooApplicationAdapter)

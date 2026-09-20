@@ -15,7 +15,7 @@ import time
 import unittest
 from pathlib import Path
 
-from web_operation_agent.business import BusinessToolPermissionError
+from web_operation_agent.business.runtime import BusinessToolPermissionError
 from web_operation_agent.identity import PrincipalContext
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.session import ServerAgentSession, TaskSpec

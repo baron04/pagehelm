@@ -9,7 +9,7 @@ from web_operation_agent.application import (
     BoundApplication,
     bind_application,
 )
-from web_operation_agent.business import BusinessDataClassifier, BusinessPostconditionVerifier
+from web_operation_agent.business.runtime import BusinessDataClassifier, BusinessPostconditionVerifier
 
 
 def assert_adapter_contract(case, adapter: ApplicationAdapter) -> BoundApplication:

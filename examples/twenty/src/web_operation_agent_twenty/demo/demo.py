@@ -26,7 +26,7 @@ from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.identity import PrincipalContext
 from web_operation_agent.live import LiveConversationRunner, LiveProductSession, LiveTurnOutcome
 from web_operation_agent.modeling.client import ChatModel, SpendMeter, load_env
-from web_operation_agent.mutation import SQLiteMutationJournal
+from web_operation_agent.business.mutation import SQLiteMutationJournal
 from web_operation_agent.privacy import redact_sensitive_assignments, redact_session_handoffs
 from web_operation_agent.product import AgentTurnConfig, AgentTurnExecution, AgentTurnExecutor
 from web_operation_agent_twenty.adapter import TwentyApplicationAdapter

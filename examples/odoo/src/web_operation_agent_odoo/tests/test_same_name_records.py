@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import unittest
 
-from web_operation_agent.business import BusinessToolRequestError
+from web_operation_agent.business.runtime import BusinessToolRequestError
 from web_operation_agent_odoo.tests.test_adapter import _customers, _FakeOdoo
 
 TWINS = [("P75 Twin Traders", "twin.denver@p75.example.test"),

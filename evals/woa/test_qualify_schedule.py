@@ -407,7 +407,7 @@ class ScheduleDriverQualificationTests(unittest.TestCase):
             self._drive(max_trials=1, start_index=len(outcomes))
 
     def test_identity_failure_seals_the_batch_as_a_credential_fault(self):
-        from web_operation_agent.business import BusinessToolIdentityError
+        from web_operation_agent.business.runtime import BusinessToolIdentityError
 
         broken = SyntheticTwentyAdapter(
             origin=ORIGIN, runtime=synthetic_business_runtime(self.harness.executor),

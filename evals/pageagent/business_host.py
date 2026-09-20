@@ -8,7 +8,7 @@ import re
 import threading
 from typing import Any
 
-from web_operation_agent.business import (
+from web_operation_agent.business.runtime import (
     BusinessMutationIndeterminate, BusinessMutationProposal, BusinessToolError,
     BusinessToolRuntime,
 )

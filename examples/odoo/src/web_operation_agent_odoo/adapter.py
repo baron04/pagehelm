@@ -39,7 +39,7 @@ from web_operation_agent.application import (APPLICATION_ADAPTER_VERSION,
                                              MutationReconciliation,
                                              ResultPostconditionVerifier,
                                              SourceCapability)
-from web_operation_agent.business import (BusinessMutationIndeterminate,
+from web_operation_agent.business.runtime import (BusinessMutationIndeterminate,
                                           BusinessMutationRefusedError,
                                           BusinessSelectionOption,
                                           BusinessMutationSpec, BusinessSkill,
@@ -56,7 +56,7 @@ from web_operation_agent.business import (BusinessMutationIndeterminate,
 from web_operation_agent.identity import (IdentityAssertion, OperationContext,
                                           PrincipalContext, PrincipalError,
                                           bind_matching_identity)
-from web_operation_agent.mutation import MutationJournal
+from web_operation_agent.business.mutation import MutationJournal
 
 from .route import ODOO_ROUTE_PORT, ODOO_SOURCE_SCOPE
 from .sourcemap import OdooCompiler, odoo_source_tree

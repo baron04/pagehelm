@@ -25,7 +25,7 @@ from web_operation_agent.application import bind_application
 from web_operation_agent.durable import (SQLitePrincipalRevocations, SQLiteSessionStore)
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.live import LiveConversationRunner, LiveProductServer, LiveProductSession
-from web_operation_agent.mutation import SQLiteMutationJournal
+from web_operation_agent.business.mutation import SQLiteMutationJournal
 from web_operation_agent.modeling.client import (KeyedLimitedChat, KeyedProviderAdmission,
                                        ProviderRuntimeGuard)
 from web_operation_agent.product import AgentTurnConfig, AgentTurnExecutor

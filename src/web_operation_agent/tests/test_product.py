@@ -21,7 +21,7 @@ from web_operation_agent.application import (APPLICATION_ADAPTER_VERSION,
                                              ResultPostconditionVerifier,
                                              bind_application)
 from web_operation_agent.answering import StructuredQueryAnswer
-from web_operation_agent.business import (BusinessSelectionOption, BusinessSkill,
+from web_operation_agent.business.runtime import (BusinessSelectionOption, BusinessSkill,
                                           BusinessToolPermissionError, BusinessToolResult,
                                           BusinessToolRuntime)
 from web_operation_agent.conversation import ConversationState
@@ -29,7 +29,7 @@ from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.evidence import Origin, RecordEvidence
 from web_operation_agent.identity import PrincipalContext
 from web_operation_agent.modeling.client import ProviderError
-from web_operation_agent.mutation import SQLiteMutationJournal
+from web_operation_agent.business.mutation import SQLiteMutationJournal
 from web_operation_agent.session import NO_LAB
 from web_operation_agent.product import (
     AgentTurnConfig,

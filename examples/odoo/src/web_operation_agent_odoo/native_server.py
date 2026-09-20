@@ -28,7 +28,7 @@ from web_operation_agent.live import (LiveConversationRunner, LiveProductCapacit
 from web_operation_agent.modeling.client import (ChatModel, KeyedLimitedChat,
                                        KeyedProviderAdmission, ProviderRuntimeGuard,
                                        SpendMeter, load_env)
-from web_operation_agent.mutation import SQLiteMutationJournal
+from web_operation_agent.business.mutation import SQLiteMutationJournal
 from web_operation_agent.modeling.observability import ObservedChat, RuntimeObservability
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.product import AgentTurnExecutor

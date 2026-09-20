@@ -15,12 +15,12 @@ from examples.contacts.adapter import MinimalContactsAdapter
 from examples.contacts.demo import (DemoConfig, ScriptedDemoChat, WRITE_WALKTHROUGH,
                                     _confirm_navigation_in_page, run_demo)
 from web_operation_agent.application import bind_application
-from web_operation_agent.business import (BusinessMutationIndeterminate,
+from web_operation_agent.business.runtime import (BusinessMutationIndeterminate,
                                           BusinessToolError)
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.identity import PrincipalError
 from web_operation_agent.live import LiveConversationRunner, LiveProductSession
-from web_operation_agent.mutation import MemoryMutationJournal, SQLiteMutationJournal
+from web_operation_agent.business.mutation import MemoryMutationJournal, SQLiteMutationJournal
 from web_operation_agent.product import AgentTurnConfig, AgentTurnExecutor
 from web_operation_agent.tests.adapter_contract import assert_adapter_contract
 
@@ -955,7 +955,7 @@ class TheApplicationsOwnAuthority(unittest.TestCase):
 
     def test_a_read_only_actor_binds_with_only_the_scope_the_application_grants(self):
         from examples.contacts.app import ACTORS_BY_ID
-        from web_operation_agent.business import BusinessToolPermissionError
+        from web_operation_agent.business.runtime import BusinessToolPermissionError
         reader = ACTORS_BY_ID[_READ_ONLY]
         with MinimalContactsApplication() as application:
             adapter = MinimalContactsAdapter(
@@ -978,7 +978,7 @@ class TheApplicationsOwnAuthority(unittest.TestCase):
 
     def test_the_application_refuses_a_read_to_an_actor_it_grants_nothing(self):
         from examples.contacts.app import ACTORS_BY_ID
-        from web_operation_agent.business import BusinessToolPermissionError
+        from web_operation_agent.business.runtime import BusinessToolPermissionError
         from web_operation_agent.identity import PrincipalError
         nobody = ACTORS_BY_ID["hedy-lamarr"]
         with MinimalContactsApplication() as application:

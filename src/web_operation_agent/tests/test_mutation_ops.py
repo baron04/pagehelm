@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from web_operation_agent.mutation import SQLiteMutationJournal, MutationJournalError
-from web_operation_agent.mutation_ops import main
+from web_operation_agent.business.mutation import SQLiteMutationJournal, MutationJournalError
+from web_operation_agent.business.operations import main
 
 
 class MutationOpsTests(unittest.TestCase):
@@ -55,7 +55,7 @@ class MutationOpsTests(unittest.TestCase):
         from types import SimpleNamespace
         from unittest.mock import Mock
         from web_operation_agent.tests.test_identity import principal
-        from web_operation_agent.mutation_ops import reconcile
+        from web_operation_agent.business.operations import reconcile
         from web_operation_agent.application import MutationReconciliation
         import time
         p = principal(issued_at=int(time.time() * 1000),

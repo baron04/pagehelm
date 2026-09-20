@@ -13,8 +13,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from web_operation_agent.mutation import SQLiteMutationJournal
-from web_operation_agent.mutation_ops import unresolved_report
+from web_operation_agent.business.mutation import SQLiteMutationJournal
+from web_operation_agent.business.operations import unresolved_report
 
 from web_operation_agent_odoo.demo import settle
 
@@ -78,7 +78,7 @@ class WhatResolvingRequires(unittest.TestCase):
 
     def test_resolving_without_a_stopped_writer_is_refused(self):
         """A timed-out request may still be executing; nothing here can observe that."""
-        from web_operation_agent.mutation import MutationJournalError
+        from web_operation_agent.business.mutation import MutationJournalError
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _journal(root)
@@ -108,7 +108,7 @@ class WhatResolvingRequires(unittest.TestCase):
             self.assertEqual(plan["dispatches"], 0, "settling is not writing")
             self.assertEqual(journal.unresolved(), ())
             # And it cannot be settled twice: the state is no longer unresolved.
-            from web_operation_agent.mutation import MutationJournalError
+            from web_operation_agent.business.mutation import MutationJournalError
             with self.assertRaises(MutationJournalError):
                 self._resolve(root)
 

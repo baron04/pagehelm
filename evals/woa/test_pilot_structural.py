@@ -26,7 +26,7 @@ from evals.woa.pilot_structural import (DEFAULT_BUNDLE, DIMENSIONS, NOT_YET_PROD
 from evals.woa.structural_apparatus import (CompanyStore, CursorCompanyPageModel, MAX_ROWS,
                                             PAGE_SIZE, ScanningCompanyExecutor,
                                             structural_business_runtime, structural_companies)
-from web_operation_agent.business import BusinessMutationIndeterminate
+from web_operation_agent.business.runtime import BusinessMutationIndeterminate
 
 
 class ADimensionThisRunCannotObserveIsNamedRatherThanDropped(unittest.TestCase):

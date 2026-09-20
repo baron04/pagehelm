@@ -34,7 +34,7 @@ from typing import Any
 from web_operation_agent.answering import StructuredQueryAnswer
 from web_operation_agent.application import (DeclaredDataClassifier, DeclaredRoutePort,
                                              ResultPostconditionVerifier)
-from web_operation_agent.business import (BusinessMutationIndeterminate,
+from web_operation_agent.business.runtime import (BusinessMutationIndeterminate,
                                           BusinessMutationSpec, BusinessSkill,
                                           BusinessToolRequestError, BusinessToolResult,
                                           BusinessToolRuntime)

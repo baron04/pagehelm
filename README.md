@@ -72,8 +72,8 @@ The main reusable boundaries are:
 | `web_operation_agent.browser` | Defines the structural browser executor and typed transport outcomes; it contains no browser engine. |
 | `web_operation_agent.remote` | Defines the capability-bound remote browser channel and client. |
 | `web_operation_agent.embedded_gateway` | Serves the embedded runtime, authenticated SSE/HTTP endpoints, and content-free liveness/readiness probes. |
-| `web_operation_agent.business` | Loads Skills and mediates typed read and mutation tools. |
-| `web_operation_agent.mutation` | Atomically records single-use mutation intent and terminal outcome in memory or SQLite. |
+| `web_operation_agent.business.runtime` | Loads Skills and mediates typed read and mutation tools. |
+| `web_operation_agent.business.mutation` | Atomically records single-use mutation intent and terminal outcome in memory or SQLite. |
 | `web_operation_agent.modeling.egress` | Enforces and audits the model-provider data boundary without storing request content. |
 | `web_operation_agent.session` | Implements the bounded server-side agent loop. |
 | `web_operation_agent.modeling.observability` | Converts redacted ledger events into content-free OTLP traces, metrics, and operational alerts without changing task outcomes. |

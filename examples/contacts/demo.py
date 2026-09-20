@@ -32,7 +32,7 @@ from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.identity import bind_matching_identity
 from web_operation_agent.live import LiveConversationRunner, LiveProductSession
 from web_operation_agent.modeling.client import ChatModel, ProviderError, SpendMeter, load_env
-from web_operation_agent.mutation import MemoryMutationJournal
+from web_operation_agent.business.mutation import MemoryMutationJournal
 from web_operation_agent.product import AgentTurnConfig, AgentTurnExecution, AgentTurnExecutor
 
 _MODEL_ENV_KEYS = (

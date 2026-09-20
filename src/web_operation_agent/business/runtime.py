@@ -18,20 +18,20 @@ from pathlib import Path
 from typing import Callable, Protocol, runtime_checkable
 from urllib.parse import urlsplit
 
-from .answering import StructuredQueryAnswer
-from .business_errors import (BusinessMutationBlockedError, BusinessMutationIndeterminate,
-                              BusinessMutationRefusedError, BusinessToolAuthenticationError,
-                              BusinessToolContractError, BusinessToolDispatchError,
-                              BusinessToolError, BusinessToolIdentityError,
-                              BusinessToolPermissionError, BusinessToolRequestError,
-                              BusinessToolUnavailableError)
-from .business_text import (_trigger_matches, business_text_key, normalize_business_text,
-                            trigger_requests_action)
-from .evidence import RecordEvidence
-from .identity import OperationContext, PrincipalError
+from ..answering import StructuredQueryAnswer
+from .errors import (BusinessMutationBlockedError, BusinessMutationIndeterminate,
+                     BusinessMutationRefusedError, BusinessToolAuthenticationError,
+                     BusinessToolContractError, BusinessToolDispatchError,
+                     BusinessToolError, BusinessToolIdentityError,
+                     BusinessToolPermissionError, BusinessToolRequestError,
+                     BusinessToolUnavailableError)
+from .text import (_trigger_matches, business_text_key, normalize_business_text,
+                   trigger_requests_action)
+from ..evidence import RecordEvidence
+from ..identity import OperationContext, PrincipalError
 from .mutation import (MemoryMutationJournal, MutationClaimError, MutationJournal,
                        MutationJournalDurability, MutationJournalError)
-from .schemas import BROWSER_ACTIONS
+from ..schemas import BROWSER_ACTIONS
 
 
 _SKILL_ID = re.compile(r"^[a-z][a-z0-9_.-]{2,79}$")

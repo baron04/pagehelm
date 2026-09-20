@@ -8,7 +8,7 @@ under stays in core, tested against a synthetic executor.
 """
 import unittest
 
-from web_operation_agent.business import BusinessToolError
+from web_operation_agent.business.runtime import BusinessToolError
 
 from web_operation_agent_twenty.adapter import TwentyBusinessToolExecutor
 

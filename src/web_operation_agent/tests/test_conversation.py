@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from web_operation_agent.business import BusinessToolResult
+from web_operation_agent.business.runtime import BusinessToolResult
 from web_operation_agent.conversation import (ConversationState, SQLiteConversationState,
                                               prune_sqlite_conversations)
 

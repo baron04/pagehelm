@@ -25,7 +25,7 @@ from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from web_operation_agent.answering import StructuredQueryAnswer
-from web_operation_agent.business import (BusinessMutationIndeterminate,
+from web_operation_agent.business.runtime import (BusinessMutationIndeterminate,
                                           BusinessMutationSpec, BusinessSkill,
                                           BusinessToolAuthenticationError,
                                           BusinessToolContractError,
@@ -48,7 +48,7 @@ from web_operation_agent.application import (
 )
 from web_operation_agent.identity import (IdentityAssertion, OperationContext,
                                           PrincipalContext, bind_matching_identity)
-from web_operation_agent.mutation import MutationJournal
+from web_operation_agent.business.mutation import MutationJournal
 
 try:
     import fcntl
