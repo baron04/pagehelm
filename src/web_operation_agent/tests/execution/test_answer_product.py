@@ -7,11 +7,12 @@ from unittest.mock import patch
 
 from web_operation_agent.execution import product, turn
 from web_operation_agent.business.runtime import BusinessToolRuntime
-from web_operation_agent.embedded_agent import ReadOnlyControl
+from web_operation_agent.business.control import ReadOnlyControl
 from web_operation_agent.answer.evidence import Origin, QueryEvidence, RecordEvidence
 from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnExecutor, AgentTurnStatus
-from web_operation_agent.tests.business.support import _Chat, _ProjectedExecutor, _skill
+from web_operation_agent.tests.support.business import _Chat, _ProjectedExecutor, _skill
 from web_operation_agent.tests.execution.product_support import _Channel, _RemoteBrowser
+from web_operation_agent.tests.support.answer import _answer
 
 
 class _EvidenceExecutor(_ProjectedExecutor):
@@ -26,12 +27,6 @@ class _EvidenceExecutor(_ProjectedExecutor):
             RecordEvidence("record#2", origin, "company/1", "name", "company name", True,
                            "Acme", "text"),
         ))
-
-
-def _answer(kind, ref, **extra):
-    return {"outcome": "answered", "answer": {
-        "version": 1, "coverage": "complete",
-        "conclusions": [{"kind": kind, "evidence_ref": ref, **extra}]}}
 
 
 class DefaultProductAnswerPath(unittest.TestCase):

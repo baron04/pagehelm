@@ -5,11 +5,10 @@ Synthetic in-memory faults drive the real session. No real duplicate write is cl
 import unittest
 
 from web_operation_agent.schemas import ElementRef
-from web_operation_agent.tests.execution.test_session import _Chat, _Control
-from web_operation_agent.tests.business.test_write_semantics import (
-    _Browser, _run, PERMIT, REFUSAL, SUBMIT, FINISH,
+from web_operation_agent.tests.support.write_semantics import (
+    FINISH, PERMIT, REFUSAL, SUBMIT, _Browser, _Chat, _Control, _run,
 )
-from web_operation_agent.tests.session_fixture import SessionFixture
+from web_operation_agent.tests.support.session_fixture import SessionFixture
 
 
 class LateDecisions(unittest.TestCase):

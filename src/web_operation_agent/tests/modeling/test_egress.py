@@ -8,7 +8,7 @@ from pathlib import Path
 from web_operation_agent.modeling.egress import (AuditedChat, ProviderEgressError,
                                          ProviderEgressPolicy)
 from web_operation_agent.state.ledger import SessionLedger
-from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
+from web_operation_agent.tests.support.chat_port_contract import CancellableChatDouble
 
 
 class ProviderEgressPolicyTests(unittest.TestCase):

@@ -1,53 +1,27 @@
 """Business Skill loading and read-only runtime-tool transitions."""
-from __future__ import annotations
-
 import hashlib
 import json
 import tempfile
-import time
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 
 from web_operation_agent.answer.answering import StructuredQueryAnswer
 from web_operation_agent.business.runtime import (
-    APPLICATION_SAVES_ON_LEAVE,
     BusinessMutationBlockedError, BusinessMutationIndeterminate,
-    BusinessMutationRefusedError, BusinessMutationSpec,
-    BusinessSelectionOption,
-    BusinessSkill, Citation, FormDraft, FormDraftField,
-    BusinessToolContractError, BusinessToolDispatchError, BusinessToolError,
-    BusinessToolIdentityError,
+    BusinessSelectionOption, BusinessSkill, BusinessToolContractError,
+    BusinessToolError, BusinessToolIdentityError,
     BusinessToolPermissionError, BusinessToolRequestError, BusinessToolResult,
-    BusinessToolRuntime, BusinessToolUnavailableError,
+    BusinessToolRuntime, BusinessToolUnavailableError, Citation,
 )
 from web_operation_agent.composition.ports import ResultPostconditionVerifier
-from web_operation_agent.embedded_agent import ReadOnlyControl
+from web_operation_agent.business.control import ReadOnlyControl
 from web_operation_agent.answer.evidence import Origin, QueryEvidence, RecordEvidence
 from web_operation_agent.state.ledger import SessionLedger
-from web_operation_agent.state.identity import OperationContext, PrincipalContext
 from web_operation_agent.business.mutation import MemoryMutationJournal, MutationJournalError
-from web_operation_agent.schemas import ActionReceipt, ElementRef, PageObservation
-from web_operation_agent.execution.session import (CAPABILITY_GAP_TERMINAL,
-                                        ServerAgentSession, TaskSpec)
-from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
-
-
-SCHEMA = {"type": "function", "function": {
-    "name": "query_companies", "description": "Read companies.",
-    "parameters": {"type": "object", "properties": {},
-                   "additionalProperties": False}}}
-WRITE_SCHEMA = {"type": "function", "function": {
-    "name": "create_company", "description": "Create one company.",
-    "parameters": {"type": "object", "properties": {
-        "name": {"type": "string"}}, "required": ["name"],
-        "additionalProperties": False}}}
-
-
-
-from web_operation_agent.tests.business.support import (
+from web_operation_agent.execution.session import ServerAgentSession, TaskSpec
+from web_operation_agent.tests.support.business import (
     SCHEMA, WRITE_SCHEMA, _Browser, _Chat, _Executor, _MutationExecutor,
-    _ProjectedExecutor, _observation, _operation_context, _skill, _write_skill,
+    _observation, _operation_context, _skill, _write_skill,
 )
 
 

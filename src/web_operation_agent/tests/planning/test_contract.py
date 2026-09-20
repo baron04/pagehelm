@@ -11,23 +11,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from web_operation_agent.planning.contract import (ContractPlanner, PlanningFailed,
-                                                    _segment_from_template, validate_contract)
+from web_operation_agent.planning.contract import ContractPlanner, PlanningFailed, validate_contract
 from web_operation_agent.planning.retrieval import EvidenceBundle, SourceRetriever
 from web_operation_agent.schemas import OperationContract
-from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
-from web_operation_agent.tests.route_fixture import FIXTURE_ROUTE_PORT
-from web_operation_agent.tests.source_fixture import fixture_source_map
-
-TASK = "The tray in bay four needs a new cultivar sprouted into it."
-#: The fixtures here are relation triples, not one application's descriptors, so the
-#: segment comes from the synthetic route grammar. A core module that only works against
-#: OFBiz's `control` segment fails against this one.
-SEGMENT = _segment_from_template(FIXTURE_ROUTE_PORT.contract_route_template)
-
-
-def _map(tmp: Path):
-    return fixture_source_map(tmp)
+from web_operation_agent.tests.support.planning import SEGMENT, TASK, _map, _StubModel
 
 
 def _key_supporting(source_map, bundle, identity: str) -> str:
@@ -36,29 +23,6 @@ def _key_supporting(source_map, bundle, identity: str) -> str:
     index = SupportIndex(source_map, segment=SEGMENT)
     return next(key for key in sorted(bundle.citation_keys)
                 if identity in index.about(key))
-
-
-class _StubModel(CancellableChatDouble):
-    """Answers with whatever the test queued. Records what it was asked."""
-
-    def __init__(self, replies):
-        self.replies = list(replies)
-        self.calls = []
-        self.budgets = []
-
-        class _Meter:
-            def report(self):
-                return {"provider_calls": 0}
-        self.meter = _Meter()
-
-    def complete(self, messages, tools, run_id, max_tokens=None, options=None, timeout_s=None):
-        self.calls.append([dict(m) for m in messages])
-        self.max_tokens = max_tokens
-        self.budgets.append(max_tokens)
-        reply = self.replies.pop(0)
-        if isinstance(reply, dict):
-            return {"content": "", "finish_reason": "stop", "reasoning": "", **reply}
-        return {"content": reply, "finish_reason": "stop", "reasoning": ""}
 
 
 class Retrieval(unittest.TestCase):

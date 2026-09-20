@@ -7,13 +7,14 @@ tests use synthetic faults and perform no real application write.
 """
 import unittest
 
-from web_operation_agent.controlplane import ControlPlaneClient
-from web_operation_agent.grounding import (WRITE_MIXED, WRITE_NONE, WRITE_PERMITTED,
-                                           WRITE_REFUSED, WRITE_UNKNOWN)
-
-PERMIT = {"event": "permit_consumed", "webapp": "ordermgr", "uri": "addShippingAddress"}
-REFUSAL = {"event": "write_blocked", "webapp": "ordermgr", "uri": "updateOrderContactMech"}
-ALLOWED = {"event": "allowed", "webapp": "common-js", "uri": "SetTimeZoneFromBrowser"}
+from web_operation_agent.business.controlplane import ControlPlaneClient
+from web_operation_agent.execution.grounding import (
+    WRITE_MIXED, WRITE_NONE, WRITE_PERMITTED, WRITE_REFUSED, WRITE_UNKNOWN,
+)
+from web_operation_agent.tests.support.write_semantics import (
+    ALLOWED, CONTRACT, FINISH, PERMIT, REFUSAL, SUBMIT,
+    _Browser, _Chat, _Control, _DeadControl, _page, _plan_state, _run,
+)
 
 
 class OneWindowOneMeaning(unittest.TestCase):
@@ -92,98 +93,14 @@ if __name__ == "__main__":
 
 
 # -- the real loop -----------------------------------------------------------------------
-import tempfile                                                              # noqa: E402
-from pathlib import Path                                                     # noqa: E402
-
-from web_operation_agent.transport import TransportError                       # noqa: E402
-from web_operation_agent.controlplane import ControlPlaneError               # noqa: E402
-from web_operation_agent.grounding import PlanState                          # noqa: E402
-from web_operation_agent.tests.route_fixture import (                # noqa: E402
-    FIXTURE_ROUTE_PORT, fixture_route_identity)
-from web_operation_agent.state.ledger import SessionLedger                         # noqa: E402
-from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionReceipt,     # noqa: E402
-                                         ElementRef, OperationContract, PageObservation)
-from web_operation_agent.execution.session import (LabApparatus, ServerAgentSession,
-                                         TaskSpec)         # noqa: E402
-from web_operation_agent.tests.execution.test_session import _Chat, _Control           # noqa: E402
-from web_operation_agent.tests.chat_port_contract import (                   # noqa: E402
-    CancellableChatDouble)
-from web_operation_agent.tests.session_fixture import SessionFixture
-
-CONTRACT = OperationContract.from_json({
-    "schema_version": 1, "task_ref": "T", "summary": "add the address",
-    "steps": [{"intent": "open the order", "webapp": "ordermgr", "request": "orderview",
-               "landmark": "Order", "citations": ["a.xml:1-2"]}],
-    "mutation": {"webapp": "ordermgr", "request": "addShippingAddress",
-                 "citations": ["a.xml:1-2"]},
-    "citations": ["a.xml:1-2"]})
-
-
-def _plan_state(value):
-    return PlanState.of(value, route_identity=fixture_route_identity)
-
-
-def _page(url="http://app/ordermgr/do/orderview", title="Order"):
-    return PageObservation(schema_version=SCHEMA_VERSIONS["PageObservation"], epoch=1, url=url,
-                           title=title, landmarks=[title],
-                           elements=[ElementRef("e1", "button", "Save", "button", 1)],
-                           messages=[])
-
-
-class _Browser:
-    """Scripted receipts, so a timeout or a lost transport can be produced exactly."""
-
-    def __init__(self, receipts):
-        self.script = list(receipts)
-        self.done = []
-
-    def observe(self):
-        return _page()
-
-    def execute(self, action, args=None, expect_navigation=False):
-        self.done.append((action, args))
-        spec = self.script.pop(0) if self.script else {}
-        if spec.get("raise"):
-            raise TransportError("browser process ended while awaiting 'receipt'")
-        return ActionReceipt(schema_version=SCHEMA_VERSIONS["ActionReceipt"],
-                             command_id=f"c{len(self.done)}", action=action,
-                             args_echo=dict(args or {}), ok=spec.get("ok", True),
-                             error_code=spec.get("error_code", ""),
-                             error_detail=spec.get("error_detail", ""),
-                             url_before="http://app/a", url_after="http://app/b",
-                             navigated=spec.get("navigated", True), observation=_page())
-
-    def console(self):
-        return []
-
-    def close(self):
-        pass
-
-
-class _DeadControl(_Control):
-    """Readable for the run's setup, then gone -- the case where nothing can be proved."""
-
-    def outcome(self):
-        raise ControlPlaneError("gateway unreachable")
-
-
-def _run(chat, browser, control):
-    with tempfile.TemporaryDirectory() as tmp:
-        s = ServerAgentSession(
-            task=TaskSpec(task_ref="T", prompt="change the delivery address"),
-            lab=LabApparatus(arm="S"), chat=chat, browser=browser, control=control,
-            ledger=SessionLedger(Path(tmp) / "l.jsonl", "r1"),
-            step_budget=6, wall_budget_s=120, run_id="r1",
-            application_routes=FIXTURE_ROUTE_PORT)
-        s.contract = CONTRACT
-        s.contract_source = "compiled"
-        s.plan_state = _plan_state(CONTRACT)
-        s.entry_observation = browser.pages[0] if hasattr(browser, "pages") else _page()
-        return s.run(), s
-
-
-SUBMIT = ("click", {"ref": "e1", "expect_navigation": True})
-FINISH = ("finish", {"done": True, "why": "saved the address"})
+from web_operation_agent.execution.session import (                         # noqa: E402
+    LabApparatus, ServerAgentSession, TaskSpec,
+)
+from web_operation_agent.tests.support.chat_port_contract import (          # noqa: E402
+    CancellableChatDouble,
+)
+from web_operation_agent.tests.support.route_fixture import FIXTURE_ROUTE_PORT  # noqa: E402
+from web_operation_agent.tests.support.session_fixture import SessionFixture    # noqa: E402
 
 
 class PermitThenReceiptTimeout(unittest.TestCase):

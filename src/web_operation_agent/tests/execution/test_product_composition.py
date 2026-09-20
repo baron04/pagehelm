@@ -29,7 +29,7 @@ from web_operation_agent.business.runtime import (BusinessSelectionOption, Busin
                                           BusinessToolPermissionError, BusinessToolResult,
                                           BusinessToolRuntime)
 from web_operation_agent.state.conversation import ConversationState
-from web_operation_agent.embedded_agent import ReadOnlyControl
+from web_operation_agent.business.control import ReadOnlyControl
 from web_operation_agent.answer.evidence import Origin, RecordEvidence
 from web_operation_agent.state.identity import PrincipalContext
 from web_operation_agent.modeling.client import ProviderError
@@ -45,7 +45,7 @@ from web_operation_agent.execution.product import (
 )
 from web_operation_agent.transport import RemoteSessionClosed
 from web_operation_agent.schemas import ApprovalDecision, ObservationEnvelope
-from web_operation_agent.tests.business.support import (
+from web_operation_agent.tests.support.business import (
     _Browser,
     _Chat,
     _Executor,
@@ -54,9 +54,9 @@ from web_operation_agent.tests.business.support import (
     _skill,
     _write_skill,
 )
-from web_operation_agent.tests.route_fixture import (FIXTURE_APPLICATION_ID,
+from web_operation_agent.tests.support.route_fixture import (FIXTURE_APPLICATION_ID,
                                                      FIXTURE_ROUTE_PORT, fixture_route)
-from web_operation_agent.tests.test_application import _InvoiceAdapter
+from web_operation_agent.tests.support.application import _InvoiceAdapter
 
 
 from web_operation_agent.tests.execution.product_support import (
@@ -375,7 +375,7 @@ class DeploymentSourceCapabilityReachesTheProductTurn(unittest.TestCase):
 
     def _capability(self, root: Path, *, runtime_source: bool):
         from web_operation_agent.composition.sources import SourceCapability
-        from web_operation_agent.tests.source_fixture import fixture_source_map
+        from web_operation_agent.tests.support.source_fixture import fixture_source_map
 
         return SourceCapability(source_map=fixture_source_map(root),
                                 runtime_source=runtime_source,

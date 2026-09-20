@@ -54,7 +54,7 @@ class MutationOpsTests(unittest.TestCase):
     def test_read_only_reconcile_checks_original_identity_before_adapter(self):
         from types import SimpleNamespace
         from unittest.mock import Mock
-        from web_operation_agent.tests.test_identity import principal
+        from web_operation_agent.tests.support.identity import principal
         from web_operation_agent.business.operations import reconcile
         from web_operation_agent.composition.ports import MutationReconciliation
         import time

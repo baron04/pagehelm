@@ -16,13 +16,14 @@ from pathlib import Path
 from web_operation_agent import schemas as S
 from web_operation_agent.business.runtime import FormDraft, FormDraftField
 from web_operation_agent.state.ledger import SessionLedger
-from web_operation_agent.panel_view import panel_contract
+from web_operation_agent.transport.panel_view import panel_contract
 from web_operation_agent.schemas import ActionReceipt
 from web_operation_agent.execution.session import NavigationPlan, ServerAgentSession, TaskSpec
 from web_operation_agent.execution.business_tools import apply_form_draft
-from web_operation_agent.tests.route_fixture import FIXTURE_ROUTE_PORT
-from web_operation_agent.tests.execution.test_session import (ApplicationIssuedFormPrefill, _Browser,
-                                                    _Chat, _Control, _obs)
+from web_operation_agent.tests.support.route_fixture import FIXTURE_ROUTE_PORT
+from web_operation_agent.tests.support.execution import (
+    _Browser, _Chat, _Control, _obs, form_page,
+)
 
 
 @dataclass
@@ -168,7 +169,7 @@ class TheSessionAsksBeforeLeavingThePage(unittest.TestCase):
 
     def test_opening_the_form_for_a_prefill_is_a_switch_too(self):
         with tempfile.TemporaryDirectory() as tmp:
-            form = ApplicationIssuedFormPrefill._form
+            form = form_page
             for decision, dispatched in (("approved", ["goto", "fill"]), ("expired", [])):
                 with self.subTest(decision=decision):
                     person = _Person(decision)

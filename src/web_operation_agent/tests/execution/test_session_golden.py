@@ -13,7 +13,7 @@ whole audit ledger, and the terminal `RunResult`. The recording lives in
 
 Re-record deliberately, never reflexively:
 
-    python -m web_operation_agent.tests.test_session_golden --record
+    python -m web_operation_agent.tests.execution.test_session_golden --record
 
 and read the diff. A diff that nobody can explain in one sentence is a defect, not a
 re-record.
@@ -39,8 +39,8 @@ from web_operation_agent.execution import loop as loop_module
 from web_operation_agent.execution import session as session_module
 from web_operation_agent.execution import context as context_module
 from web_operation_agent.state.ledger import SessionLedger
-from web_operation_agent.tests import golden_session
-from web_operation_agent.tests.golden_session import SCENARIOS, tool_surface_compositions
+from web_operation_agent.tests.support import golden_session
+from web_operation_agent.tests.support.golden_session import SCENARIOS, tool_surface_compositions
 
 
 GOLDEN = Path(__file__).resolve().parents[1] / "golden" / "session_behavior.json"

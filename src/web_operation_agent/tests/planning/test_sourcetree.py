@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from web_operation_agent.sourcetree import AccessDenied, SourceTree, _glob_match
+from web_operation_agent.planning.sourcetree import AccessDenied, SourceTree, _glob_match
 
 
 def _tree(tmp: Path, policy_overrides=None) -> SourceTree:

@@ -8,14 +8,14 @@ from unittest.mock import patch
 from web_operation_agent.execution import product, turn
 from web_operation_agent.answer.answer_protocol import compute, submit
 from web_operation_agent.answer.answer_view import render_payload
-from web_operation_agent.embedded_agent import ReadOnlyControl
+from web_operation_agent.business.control import ReadOnlyControl
 from web_operation_agent.answer.evidence import TurnEvidence
 from web_operation_agent.answer.page_answer import collect, MAX_PAGE_ITEMS
 from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnExecutor, AgentTurnStatus
 from web_operation_agent.schemas import ElementRef, PageObservation
-from web_operation_agent.tests.execution.test_answer_product import _answer
-from web_operation_agent.tests.business.support import _Chat
+from web_operation_agent.tests.support.business import _Chat
 from web_operation_agent.tests.execution.product_support import _Channel, _RemoteBrowser
+from web_operation_agent.tests.support.answer import _answer
 
 
 def page(epoch=2):

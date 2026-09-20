@@ -1,6 +1,6 @@
 import unittest
 
-from web_operation_agent.xmlscan import XMLScanError, parse
+from web_operation_agent.planning.xmlscan import XMLScanError, parse
 
 
 class Parsing(unittest.TestCase):

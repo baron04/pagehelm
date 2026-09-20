@@ -6,14 +6,9 @@ from web_operation_agent.schemas import (SCHEMA_VERSIONS, ElementRef, OperationC
                                          PageObservation)
 from web_operation_agent.execution.session import _render_contract, _render_observation, _trim
 from web_operation_agent.execution.business_tools import apply_form_draft
-from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
-
-
-def _obs(epoch=1, url="http://app/x"):
-    return PageObservation(schema_version=SCHEMA_VERSIONS["PageObservation"], epoch=epoch,
-                           url=url, title="T", landmarks=["Head"],
-                           elements=[ElementRef("e1", "link", "Go", "a", epoch,
-                                                {"href": "/y"})])
+from web_operation_agent.tests.support.execution import (
+    _Browser, _Chat, _Control, _obs, _page, _plan_state, _session, form_page,
+)
 
 
 class ContextTrimming(unittest.TestCase):
@@ -124,10 +119,14 @@ class LedgerContents(unittest.TestCase):
     def test_the_contract_the_agent_was_given_is_recorded_in_full(self):
         """A digest cannot answer 'what was this agent told?', and the provider is not
         reproducible, so the contract itself has to be in the trail."""
-        import inspect
-        from web_operation_agent.execution.lifecycle import SessionLifecycle
-        src = inspect.getsource(SessionLifecycle._plan)
-        self.assertIn("contract=self.contract.to_json()", src)
+        with tempfile.TemporaryDirectory() as tmp:
+            session = _session(
+                tmp, _Chat([]), _Browser([_page(1)]), _Control([[]]),
+            )
+            session._plan()
+            events = session.ledger.of_kind("contract_ready")
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]["contract"], session.contract.to_json())
 
 
 # --------------------------------------------------------------------------------------
@@ -136,45 +135,16 @@ class LedgerContents(unittest.TestCase):
 import tempfile
 from pathlib import Path
 
-from web_operation_agent.controlplane import ControlPlaneError
-from web_operation_agent.grounding import PlanState
-from web_operation_agent.tests.route_fixture import (FIXTURE_ROUTE_PORT,
-                                                     fixture_route_identity)
-from web_operation_agent.tests.knowledge_fixture import (FixtureKnowledgeRouter,
+from web_operation_agent.business.controlplane import ControlPlaneError
+from web_operation_agent.tests.support.route_fixture import FIXTURE_ROUTE_PORT
+from web_operation_agent.tests.support.knowledge_fixture import (FixtureKnowledgeRouter,
                                                          FixtureSkill)
 from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.business.runtime import FormDraft, FormDraftField
-from web_operation_agent.schemas import ActionReceipt, OperationContract, empty_contract
+from web_operation_agent.schemas import OperationContract, empty_contract
 from web_operation_agent.execution.session import (AGENT_SYSTEM, SCOPE_FIRST_SYSTEM,
                                          LabApparatus, ServerAgentSession, TaskSpec,
                                          _PLAN_MARK)
-
-
-def _plan_state(value):
-    return PlanState.of(value, route_identity=fixture_route_identity)
-
-
-class _Chat(CancellableChatDouble):
-    def __init__(self, calls):
-        self.script = list(calls)
-        self.seen = []
-        self.timeouts = []
-
-        class _M:
-            def report(self):
-                return {"provider_calls": 0, "cost_cny": 0.0}
-        self.meter = _M()
-
-    def complete(self, messages, tools, run_id, max_tokens=None, options=None, timeout_s=None):
-        self.seen.append([dict(m) for m in messages])
-        self.timeouts.append(timeout_s)
-        if not self.script:
-            return {"tool_calls": [{"id": "z", "function": {"name": "finish",
-                                                            "arguments": '{"done": false, "why": "out of script"}'}}]}
-        name, args = self.script.pop(0)
-        import json as _j
-        return {"tool_calls": [{"id": str(len(self.seen)),
-                                "function": {"name": name, "arguments": _j.dumps(args)}}]}
 
 
 class _MultiThenFinishChat(_Chat):
@@ -196,82 +166,8 @@ class _MultiThenFinishChat(_Chat):
         ]}
 
 
-class _Browser:
-    def __init__(self, pages):
-        self.pages = list(pages)
-        self.done = []
-
-    def observe(self):
-        return self.pages[0]
-
-    def execute(self, action, args=None, expect_navigation=False):
-        obs = self.pages[min(len(self.done) + 1, len(self.pages) - 1)]
-        self.done.append((action, args))
-        return ActionReceipt(schema_version=1, command_id=f"c{len(self.done)}", action=action,
-                             args_echo=dict(args or {}), ok=True, url_before=self.pages[0].url,
-                             url_after=obs.url, navigated=True, observation=obs)
-
-    def console(self):
-        return []
-
-    def close(self):
-        pass
-
-
-class _Control:
-    """Scripted decision windows, one per action."""
-
-    def __init__(self, windows, unreadable_after=None):
-        self.windows = list(windows)
-        self.unreadable_after = unreadable_after
-        self.reads = 0
-        self._events = []
-        self.begun = []
-        self.ended = []
-
-    def since(self, seen):
-        self.reads += 1
-        if self.unreadable_after is not None and self.reads > self.unreadable_after:
-            raise ControlPlaneError("gateway unreachable")
-        window = self.windows.pop(0) if self.windows else []
-        self._events += window
-        return self._events[seen:], len(self._events)
-
-    @staticmethod
-    def outcome_of(events):
-        from web_operation_agent.controlplane import ControlPlaneClient
-        return ControlPlaneClient.outcome_of(events)
-
-    def outcome(self):
-        out = self.outcome_of(self._events)
-        return {"permit_consumed": out["permitted"], "write_blocked": out["refused"],
-                "consumed_requests": out["permitted_requests"],
-                "blocked_requests": out["refused_requests"], "trace_events": len(self._events)}
-
-    def begin_run(self, run_id):
-        self.begun.append(run_id)
-
-    def end_run(self, run_id):
-        self.ended.append(run_id)
-
-
 BLOCKED = [{"event": "write_blocked", "webapp": "accounting", "uri": "SomeRequest"}]
 CONSUMED = [{"event": "permit_consumed", "webapp": "accounting", "uri": "SomeRequest"}]
-
-
-def _session(tmp, chat, browser, control, contract=None):
-    session = ServerAgentSession(
-        task=TaskSpec(task_ref="T", prompt="do the thing"), lab=LabApparatus(arm="S"),
-        chat=chat, browser=browser, control=control,
-        ledger=SessionLedger(Path(tmp) / "l.jsonl", "r1"),
-        step_budget=6, wall_budget_s=120, run_id="r1",
-        application_routes=FIXTURE_ROUTE_PORT)
-    if contract is not None:
-        session.contract = contract
-        session.contract_source = "compiled"
-        session.plan_state = _plan_state(contract)
-    session.entry_observation = browser.pages[0]
-    return session
 
 
 class ControlRunLifecycle(unittest.TestCase):
@@ -709,29 +605,11 @@ class WithdrawnPlanLeavesTheContext(unittest.TestCase):
                                   if str(m.get("content", "")).startswith(_PLAN_MARK)])
 
 
-def _page(epoch, url="http://app/accounting/do/main", title="Accounting Manager"):
-    return PageObservation(schema_version=1, epoch=epoch, url=url, title=title,
-                           landmarks=[title], elements=[ElementRef("e1", "link", "Go", "a", epoch)])
-
-
 class ApplicationIssuedFormPrefill(unittest.TestCase):
-    @staticmethod
-    def _form(epoch):
-        return PageObservation(
-            schema_version=1, epoch=epoch,
-            url="http://app/accounting/do/createCustomer", title="New customer",
-            landmarks=["New customer"], elements=[
-                ElementRef("e2", "textbox", "Customer name", "input", epoch,
-                           {"field": "name"}),
-                ElementRef("e3", "textbox", "Email", "input", epoch,
-                           {"field": "email", "type": "email"}),
-                ElementRef("e4", "button", "Save", "button", epoch),
-            ])
-
     def test_only_the_adapter_values_are_filled_and_submit_is_never_dispatched(self):
         with tempfile.TemporaryDirectory() as tmp:
             browser = _Browser([
-                _page(1), self._form(2), self._form(3), self._form(4)])
+                _page(1), form_page(2), form_page(3), form_page(4)])
             session = ServerAgentSession(
                 task=TaskSpec("T", "填写客户但不要提交"), chat=_Chat([]),
                 browser=browser, control=_Control([[], [], []]),
@@ -760,7 +638,7 @@ class ApplicationIssuedFormPrefill(unittest.TestCase):
 
     def test_a_missing_or_ambiguous_field_is_refused_before_fill(self):
         with tempfile.TemporaryDirectory() as tmp:
-            ambiguous = self._form(1)
+            ambiguous = form_page(1)
             ambiguous.elements.append(ElementRef(
                 "e9", "textbox", "Other email", "input", 1,
                 {"field": "email", "type": "email"}))
@@ -964,13 +842,32 @@ class TheScopeReachesThePlannerToo(unittest.TestCase):
         self.assertEqual(TaskSpec(task_ref="T", prompt="apply it").public_text(), "apply it")
 
     def test_the_planner_is_given_the_scope_not_just_the_prompt(self):
-        import inspect
-        from web_operation_agent.execution.session import ServerAgentSession
-        src = inspect.getsource(ServerAgentSession._plan)
-        self.assertIn("self.task.public_text()", src,
-                      "a contract built without the boundary routed its write across it")
-        self.assertIn("page=self.entry_observation", src,
-                      "the planner must see the same entry page as the acting agent")
+        from unittest.mock import patch
+
+        seen = {}
+
+        class Planner:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def plan(self, task_ref, task, bundle, run_id, *, page):
+                seen.update(task_ref=task_ref, task=task, page=page)
+                return empty_contract(task_ref), 1
+
+        with tempfile.TemporaryDirectory() as tmp:
+            entry = _page(1)
+            session = ServerAgentSession(
+                task=TaskSpec("T", "apply it", supported_scope="only the widget side"),
+                lab=LabApparatus(plan_from_page=True), chat=_Chat([]),
+                browser=_Browser([entry]), control=_Control([[]]),
+                ledger=SessionLedger(Path(tmp) / "planner.jsonl", "planner"),
+            )
+            session.entry_observation = entry
+            with patch("web_operation_agent.execution.lifecycle.ContractPlanner", Planner):
+                session._plan()
+
+        self.assertEqual(seen["task"], session.task.public_text())
+        self.assertIs(seen["page"], entry)
 
 
 class APlanWhoseWriteIsAuthorisedPauses(unittest.TestCase):
@@ -993,7 +890,7 @@ class APlanWhoseWriteIsAuthorisedPauses(unittest.TestCase):
             self.assertNotIn("served its purpose", last)
 
     def test_pausing_is_not_a_refutation(self):
-        from web_operation_agent.grounding import PlanState
+        from web_operation_agent.execution.grounding import PlanState
         st = _plan_state(CONTRACT)
         st.pause_for_confirmation("the write it led to was authorised")
         self.assertEqual(st.counts()["refuted"], 0)

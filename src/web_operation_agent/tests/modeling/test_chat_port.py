@@ -16,7 +16,7 @@ from pathlib import Path
 
 from web_operation_agent.modeling import client as M
 from web_operation_agent.modeling.egress import AuditedChat
-from web_operation_agent.tests.chat_port_contract import MESSAGES, ChatPortContract
+from web_operation_agent.tests.support.chat_port_contract import MESSAGES, ChatPortContract
 
 
 REPLY = {"id": "x", "object": "chat.completion",

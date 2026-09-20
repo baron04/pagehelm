@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from web_operation_agent.modeling import client as M
-from web_operation_agent.tests.session_fixture import SessionFixture
+from web_operation_agent.tests.support.session_fixture import SessionFixture
 
 
 class Policy(unittest.TestCase):
@@ -680,19 +680,19 @@ class WhatTheAgentIsToldAfterAWrite(unittest.TestCase):
             fixture.close()
 
     def test_a_permitted_write_offers_the_choice_of_stopping(self):
-        from web_operation_agent.grounding import WRITE_PERMITTED
+        from web_operation_agent.execution.grounding import WRITE_PERMITTED
         text = self._rendered(WRITE_PERMITTED)
         self.assertIn("call finish", text)
 
     def test_it_no_longer_states_the_write_as_a_fact(self):
         """A consumed permit must not be described as a saved application change."""
-        from web_operation_agent.grounding import WRITE_PERMITTED
+        from web_operation_agent.execution.grounding import WRITE_PERMITTED
         low = self._rendered(WRITE_PERMITTED).lower()
         self.assertNotIn("wrote to the application", low)
         self.assertIn("does not establish that it was sent or saved", low)
 
     def test_a_refused_write_is_not_invited_to_finish(self):
-        from web_operation_agent.grounding import WRITE_REFUSED
+        from web_operation_agent.execution.grounding import WRITE_REFUSED
         text = self._rendered(WRITE_REFUSED)
         self.assertIn("That request was not forwarded", text)
         self.assertNotIn("call finish", text)
@@ -701,8 +701,9 @@ class WhatTheAgentIsToldAfterAWrite(unittest.TestCase):
 class SessionRecoveryIsVisible(unittest.TestCase):
     def test_the_action_ledger_carries_it_per_action(self):
         from dataclasses import replace
-        from web_operation_agent.tests.execution.test_session import (_Browser, _Chat, _Control,
-                                                            _obs, _session)
+        from web_operation_agent.tests.support.execution import (
+            _Browser, _Chat, _Control, _obs, _session,
+        )
 
         class ReloginBrowser(_Browser):
             def execute(self, action, args=None, expect_navigation=False):
