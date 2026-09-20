@@ -7,7 +7,7 @@ that raised `AttributeError` on the first model call.
 """
 import unittest
 
-from web_operation_agent.model import require_chat_port
+from web_operation_agent.modeling.client import require_chat_port
 from web_operation_agent.tests.chat_port_contract import MESSAGES, ChatPortContract
 
 from evals.woa.scripted import ScriptedWoaChat
@@ -27,7 +27,7 @@ class ScriptedWoaChatContract(ChatPortContract, unittest.TestCase):
 
 class TheDoubleDoesNotBorrowTheConcreteProvider(unittest.TestCase):
     def test_it_is_not_a_chatmodel_subclass(self):
-        from web_operation_agent.model import ChatModel
+        from web_operation_agent.modeling.client import ChatModel
 
         self.assertNotIsInstance(ScriptedWoaChat(_replies()), ChatModel)
 

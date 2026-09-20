@@ -47,7 +47,7 @@ from evals.woa.pilot_paired_synthetic import DEFAULT_BUNDLE, SCRIPTED_MODEL, Pil
 from evals.woa.qualify_schedule import DEVELOPMENT_TASKSET as _COMPANIES_TASKSET
 from evals.woa.scripted import ScriptedWoaChat, SimulatedRuntime
 from evals.woa.twenty_runner import WoaTwentyConfig
-from web_operation_agent.model import ChatModel, SpendMeter
+from web_operation_agent.modeling.client import ChatModel, SpendMeter
 
 
 PILOT_VERSION = 1

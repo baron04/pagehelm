@@ -34,11 +34,11 @@ from typing import Any, Callable
 
 from web_operation_agent import python_is_supported, supported_python_text
 from web_operation_agent.application import bind_application
-from web_operation_agent.egress import ProviderEgressPolicy
+from web_operation_agent.modeling.egress import ProviderEgressPolicy
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.identity import PrincipalContext
 from web_operation_agent.live import LiveConversationRunner, LiveProductSession
-from web_operation_agent.model import ChatModel, ProviderError, SpendMeter, load_env
+from web_operation_agent.modeling.client import ChatModel, ProviderError, SpendMeter, load_env
 from web_operation_agent.mutation import SQLiteMutationJournal
 from web_operation_agent.product import (AgentTurnExecution,
                                          AgentTurnExecutor)

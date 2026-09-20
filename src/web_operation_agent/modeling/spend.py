@@ -40,7 +40,7 @@ def reported_model_string(value: object) -> str | None:
 #: Per-model prices, per million tokens. Registered rather than assumed: a wrong price does
 #: not fail, it quietly mis-states the running total. A model with no entry therefore raises
 #: instead of guessing, and adding one requires an explicit dated price entry.
-PRICES = json.loads((Path(__file__).parent / "policies" / "prices.json").read_text())
+PRICES = json.loads((Path(__file__).parents[1] / "policies" / "prices.json").read_text())
 
 
 class UnpricedModel(ProviderError):

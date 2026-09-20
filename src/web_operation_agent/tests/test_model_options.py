@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
-from web_operation_agent import model as M
+from web_operation_agent.modeling import client as M
 from web_operation_agent.tests.session_fixture import SessionFixture
 
 
@@ -40,7 +40,8 @@ class Policy(unittest.TestCase):
                 M.MODEL_OPTIONS["m-x"] = saved
 
     def test_every_entry_is_an_object_and_the_file_documents_itself(self):
-        raw = json.loads((Path(M.__file__).parent / "policies" / "model_options.json").read_text())
+        raw = json.loads(
+            (Path(M.__file__).parents[1] / "policies" / "model_options.json").read_text())
         self.assertIn("_why_thinking_budget", raw)
         self.assertIn("_why_parallel_tool_calls", raw)
         for name, opts in raw.items():

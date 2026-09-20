@@ -415,7 +415,7 @@ while IFS= read -r value; do live_values+=("${value}"); done < <(
   "${PYTHON}" -c '
 import os, sys
 from pathlib import Path
-from web_operation_agent.model import load_env
+from web_operation_agent.modeling.client import load_env
 root = Path(sys.argv[1])
 configured = os.environ.get("WOA_MODEL_ENV", "").strip()
 loaded = load_env(Path(configured).expanduser() if configured else root / ".env")
@@ -479,7 +479,7 @@ while IFS= read -r value; do odoo_source+=("${value}"); done < <(
   "${PYTHON}" -c '
 import os, sys
 from pathlib import Path
-from web_operation_agent.model import load_env
+from web_operation_agent.modeling.client import load_env
 root = Path(sys.argv[1])
 configured = os.environ.get("WOA_MODEL_ENV", "").strip()
 loaded = load_env(Path(configured).expanduser() if configured else root / ".env")
@@ -494,7 +494,7 @@ while IFS= read -r value; do odoo_fixture+=("${value}"); done < <(
   "${PYTHON}" -c '
 import os, sys
 from pathlib import Path
-from web_operation_agent.model import load_env
+from web_operation_agent.modeling.client import load_env
 root = Path(sys.argv[1])
 configured = os.environ.get("WOA_MODEL_ENV", "").strip()
 loaded = load_env(Path(configured).expanduser() if configured else root / ".env")
@@ -508,7 +508,7 @@ while IFS= read -r value; do odoo_values+=("${value}"); done < <(
   "${PYTHON}" -c '
 import os, sys
 from pathlib import Path
-from web_operation_agent.model import load_env
+from web_operation_agent.modeling.client import load_env
 root = Path(sys.argv[1])
 configured = os.environ.get("WOA_MODEL_ENV", "").strip()
 loaded = load_env(Path(configured).expanduser() if configured else root / ".env")

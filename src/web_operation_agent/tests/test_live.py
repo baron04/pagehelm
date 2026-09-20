@@ -13,7 +13,7 @@ from web_operation_agent.live import (LiveConversationRunner, LiveProductServer,
                                       LiveProductSession, render_live_replay)
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.identity import PrincipalContext
-from web_operation_agent.model import ProviderError
+from web_operation_agent.modeling.client import ProviderError
 from web_operation_agent.product import (AgentTurnConfig, AgentTurnError,
                                          AgentTurnErrorCode, AgentTurnExecutor,
                                          AgentTurnStatus)

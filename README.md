@@ -74,9 +74,9 @@ The main reusable boundaries are:
 | `web_operation_agent.embedded_gateway` | Serves the embedded runtime, authenticated SSE/HTTP endpoints, and content-free liveness/readiness probes. |
 | `web_operation_agent.business` | Loads Skills and mediates typed read and mutation tools. |
 | `web_operation_agent.mutation` | Atomically records single-use mutation intent and terminal outcome in memory or SQLite. |
-| `web_operation_agent.egress` | Enforces and audits the model-provider data boundary without storing request content. |
+| `web_operation_agent.modeling.egress` | Enforces and audits the model-provider data boundary without storing request content. |
 | `web_operation_agent.session` | Implements the bounded server-side agent loop. |
-| `web_operation_agent.observability` | Converts redacted ledger events into content-free OTLP traces, metrics, and operational alerts without changing task outcomes. |
+| `web_operation_agent.modeling.observability` | Converts redacted ledger events into content-free OTLP traces, metrics, and operational alerts without changing task outcomes. |
 
 Every application-specific adapter ships as its own separate distribution rather than living in the core package above: [`web-operation-agent-odoo`](examples/odoo) provides `OdooApplicationAdapter` and the Odoo source compiler, [`web-operation-agent-twenty`](examples/twenty) provides `TwentyApplicationAdapter`, and [`web-operation-agent-ofbiz`](examples/ofbiz) provides the Apache OFBiz route grammar, source compiler and App Skill provider. The core package has no application-specific code, and `scripts/check_core_boundary.py` asserts that it imports no application distribution anywhere, tests included; a new application implements the same ports these three do.
 

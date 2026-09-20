@@ -18,7 +18,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from evals.pageagent.scripted import SCRIPTED_MODEL, SESSION_COOKIE, ScriptedMeter
-from web_operation_agent.model import ProviderError
+from web_operation_agent.modeling.client import ProviderError
 from web_operation_agent.privacy import (
     SENSITIVE_CREDENTIAL_NAME, SESSION_HANDOFF_QUERY_KEYS, redact_sensitive_assignments,
     redact_session_handoffs,

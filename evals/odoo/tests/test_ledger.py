@@ -463,7 +463,7 @@ class MandatorySealTests(unittest.TestCase):
         The rule is now written once, in the product; the apparatus reads it rather than
         restating it. The table walks the boundary in both directions through both callers, so
         a second definition written anywhere on either side fails here rather than in a batch."""
-        from web_operation_agent.model import SpendMeter, reported_model_string
+        from web_operation_agent.modeling.client import SpendMeter, reported_model_string
         from evals.pageagent import host as pageagent_host
         from evals.twenty import records as twenty_records
 

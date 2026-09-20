@@ -100,8 +100,9 @@ def _canonical_model_string(item: Any) -> bool:
 
     This evaluator foundation does not import the product it judges (test_boundary), so the
     form is required here structurally rather than read from
-    ``web_operation_agent.model.reported_model_string``: a string, already stripped, one to
-    120 characters, no control character. The two are held equal on the boundary table in
+    ``web_operation_agent.modeling.client.reported_model_string``: a string, already
+    stripped, one to 120 characters, no control character. The two are held equal on the
+    boundary table in
     ``evals/odoo/tests/test_ledger.py``. Records are compared on this list, and a padded
     spelling of a model another record holds bare would read as a different model.
 

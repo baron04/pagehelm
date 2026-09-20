@@ -465,7 +465,7 @@ def mutation_stack(ctx: Context) -> Stack:
 
 def spend_ledger_fingerprints() -> dict[str, str | None]:
     """The project's two spend ledgers, so a run can show it wrote to neither."""
-    from web_operation_agent.model import DEFAULT_LEDGER
+    from web_operation_agent.modeling.client import DEFAULT_LEDGER
 
     ledgers = {"default": Path(os.environ.get("WOA_SPEND_LEDGER") or DEFAULT_LEDGER),
                "acceptance": REPOSITORY / ".artifacts" / "acceptance" / "spend.jsonl"}

@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 
 from .chat import require_chat_port
-from .privacy import SessionHandoffPolicy, has_unredacted_sensitive_assignment
+from ..privacy import SessionHandoffPolicy, has_unredacted_sensitive_assignment
 
 
 class ProviderEgressError(ValueError):

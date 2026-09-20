@@ -21,15 +21,15 @@ from web_operation_agent.conversation import (SQLiteConversationState,
 from web_operation_agent.durable import (SQLiteExpiringNonceStore,
                                          SQLitePrincipalRevocations,
                                          SQLiteSessionStore)
-from web_operation_agent.egress import ProviderEgressPolicy
+from web_operation_agent.modeling.egress import ProviderEgressPolicy
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.live import (LiveConversationRunner, LiveProductCapacityError,
                                       LiveProductServer, LiveProductSession)
-from web_operation_agent.model import (ChatModel, KeyedLimitedChat,
+from web_operation_agent.modeling.client import (ChatModel, KeyedLimitedChat,
                                        KeyedProviderAdmission, ProviderRuntimeGuard,
                                        SpendMeter, load_env)
 from web_operation_agent.mutation import SQLiteMutationJournal
-from web_operation_agent.observability import ObservedChat, RuntimeObservability
+from web_operation_agent.modeling.observability import ObservedChat, RuntimeObservability
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.product import AgentTurnExecutor
 

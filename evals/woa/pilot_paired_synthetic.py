@@ -45,7 +45,7 @@ from evals.woa.qualify_schedule import (
 )
 from evals.woa.scripted import ScriptedWoaChat, SimulatedRuntime, SyntheticPageModel
 from evals.woa.twenty_runner import WoaTwentyConfig
-from web_operation_agent.model import ChatModel, SpendMeter
+from web_operation_agent.modeling.client import ChatModel, SpendMeter
 
 
 PILOT_VERSION = 1

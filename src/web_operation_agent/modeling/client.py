@@ -17,13 +17,13 @@ from pathlib import Path
 
 from .chat import (ChatPort, KeyedLimitedChat, KeyedProviderAdmission,
                    _ConcreteChatProvider, require_chat_port)
-from .durable import SQLiteProviderQuota
+from ..durable import SQLiteProviderQuota
 from .egress import DEFAULT_PROVIDER_EGRESS_POLICY, ProviderEgressPolicy
 from .provider import ProviderError, ProviderOutcome, ProviderRuntimeGuard
 from .spend import (DEFAULT_LEDGER, PRICES, BudgetExhausted, SpendMeter, UnpricedModel,
                     cost_with, price_for, reported_model_string)
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def load_env(path: str | Path | None = None) -> dict:
@@ -61,7 +61,8 @@ def _provider_http_error_code(status: int) -> str:
 #: Extra request-body fields per model, keyed by the model's own name. See the file's own
 #: `_why_thinking_budget` note for the rationale. Keyed by model rather than branched on in
 #: code so changing model is a policy edit and an unknown model receives no unsupported fields.
-MODEL_OPTIONS = json.loads((Path(__file__).parent / "policies" / "model_options.json").read_text())
+MODEL_OPTIONS = json.loads(
+    (Path(__file__).parents[1] / "policies" / "model_options.json").read_text())
 
 #: Fields the caller owns; a policy may never reach in and rewrite the request itself.
 _RESERVED_BODY = (

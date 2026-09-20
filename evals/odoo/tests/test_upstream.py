@@ -10,7 +10,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from web_operation_agent.model import cost_with, price_for
+from web_operation_agent.modeling.client import cost_with, price_for
 
 from evals.odoo import gateway, ledger
 from evals.odoo.tests.test_ledger import DIGEST, header, slots

@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from web_operation_agent.egress import (AuditedChat, ProviderEgressError,
+from web_operation_agent.modeling.egress import (AuditedChat, ProviderEgressError,
                                          ProviderEgressPolicy)
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.tests.chat_port_contract import CancellableChatDouble

@@ -9,8 +9,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from web_operation_agent.ledger import SessionLedger
-from web_operation_agent.model import KeyedLimitedChat, KeyedProviderAdmission
-from web_operation_agent.observability import ObservedChat, RuntimeObservability
+from web_operation_agent.modeling.client import KeyedLimitedChat, KeyedProviderAdmission
+from web_operation_agent.modeling.observability import ObservedChat, RuntimeObservability
 
 
 class _Response:

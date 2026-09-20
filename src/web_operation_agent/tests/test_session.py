@@ -307,7 +307,7 @@ class ControlRunLifecycle(unittest.TestCase):
         self.assertEqual(control.ended, ["r1"])
 
     def test_provider_failure_records_safe_correlation_fields(self):
-        from web_operation_agent.model import ProviderError
+        from web_operation_agent.modeling.client import ProviderError
 
         class FailedChat(_Chat):
             def complete(self, *args, **kwargs):

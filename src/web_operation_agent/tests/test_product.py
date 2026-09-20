@@ -28,7 +28,7 @@ from web_operation_agent.conversation import ConversationState
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.evidence import Origin, RecordEvidence
 from web_operation_agent.identity import PrincipalContext
-from web_operation_agent.model import ProviderError
+from web_operation_agent.modeling.client import ProviderError
 from web_operation_agent.mutation import SQLiteMutationJournal
 from web_operation_agent.session import NO_LAB
 from web_operation_agent.product import (
@@ -1729,7 +1729,7 @@ class ApplicationEgressVocabulary(unittest.TestCase):
         self.assertIsNotNone(self._executor(self._adapter(()), chat))
 
     def test_composition_fails_when_the_policy_has_not_been_told(self):
-        from web_operation_agent.egress import ProviderEgressPolicy
+        from web_operation_agent.modeling.egress import ProviderEgressPolicy
 
         class _ChatWithEgress(_Chat):
             egress_policy = ProviderEgressPolicy()
@@ -1738,7 +1738,7 @@ class ApplicationEgressVocabulary(unittest.TestCase):
             self._executor(self._adapter({"session_id"}), _ChatWithEgress([]))
 
     def test_composition_succeeds_once_the_policy_covers_the_declaration(self):
-        from web_operation_agent.egress import ProviderEgressPolicy
+        from web_operation_agent.modeling.egress import ProviderEgressPolicy
 
         class _ChatWithEgress(_Chat):
             egress_policy = ProviderEgressPolicy(
@@ -1943,7 +1943,7 @@ class _FixtureGrammarAdapter:
 class _FixtureGrammarChat(_Chat):
     """The egress policy the assembly gate requires for this adapter's session vocabulary."""
 
-    from web_operation_agent.egress import ProviderEgressPolicy as _Policy
+    from web_operation_agent.modeling.egress import ProviderEgressPolicy as _Policy
 
     egress_policy = _Policy(
         session_handoff_keys=FIXTURE_ROUTE_PORT.session_handoff_query_keys)

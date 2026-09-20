@@ -8,7 +8,7 @@ import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 
-from web_operation_agent.model import ProviderError, require_chat_port
+from web_operation_agent.modeling.client import ProviderError, require_chat_port
 from examples.contacts.app import (DEMO_API_TOKEN, DEMO_SESSION_COOKIE,
                                    DEMO_SESSION_VALUE, MinimalContactsApplication)
 from examples.contacts.adapter import MinimalContactsAdapter

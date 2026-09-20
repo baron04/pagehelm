@@ -427,7 +427,7 @@ def _reported_model(value: Any) -> str | None:
     restating it: a second definition here once recorded as good a padded answer the product
     could not spend against.
     """
-    from web_operation_agent.model import reported_model_string
+    from web_operation_agent.modeling.client import reported_model_string
 
     return reported_model_string(value)
 
@@ -463,7 +463,7 @@ class UpstreamBackend(Backend):
     def __init__(self, *, base_url: str, key_file: str | Path, requested_model: str,
                  spend_ledger: str | Path, batch_id: str, provider: str = "p74-evaluation",
                  timeout_s: float = 180.0):
-        from web_operation_agent.model import SpendMeter, price_for
+        from web_operation_agent.modeling.client import SpendMeter, price_for
 
         self.base_url = _provider_base_url(base_url)
         key = read_evaluation_key(key_file)

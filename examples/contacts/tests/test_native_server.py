@@ -20,7 +20,7 @@ from examples.contacts.server import (
     NativeServerConfig,
 )
 from web_operation_agent.identity import PrincipalRevokedError
-from web_operation_agent.model import (KeyedLimitedChat, KeyedProviderAdmission,
+from web_operation_agent.modeling.client import (KeyedLimitedChat, KeyedProviderAdmission,
                                        ProviderError, ProviderOutcome,
                                        ProviderRuntimeGuard)
 from web_operation_agent.operations import create_state_backup, restore_state_backup

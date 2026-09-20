@@ -12,7 +12,7 @@ into a real case in the product tree and in `evals/woa` keeps one definition of 
 """
 from __future__ import annotations
 
-from web_operation_agent.model import ProviderError, require_chat_port
+from web_operation_agent.modeling.client import ProviderError, require_chat_port
 
 MESSAGES = [{"role": "user", "content": "contract"}]
 

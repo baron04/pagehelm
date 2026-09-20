@@ -18,7 +18,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1]))
 
-from web_operation_agent.model import DEFAULT_LEDGER      # noqa: E402
+from web_operation_agent.modeling.client import DEFAULT_LEDGER      # noqa: E402
 
 
 def fingerprint(path: str) -> str:

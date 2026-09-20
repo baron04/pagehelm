@@ -17,7 +17,7 @@ from evals.woa.breadth_scripted import (SyntheticBreadthExecutor, SyntheticBread
 from evals.woa.pilot_breadth import (DEVELOPMENT_TASKSET, _MODEL_KEYS,
                                      _REQUIRED_MODEL_KEYS, _environment, run_pilot)
 from evals.woa.scripted import SimulatedRuntime
-from web_operation_agent.model import ChatModel, SpendMeter
+from web_operation_agent.modeling.client import ChatModel, SpendMeter
 
 
 ORIGIN = "http://127.0.0.1:3020"

@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from web_operation_agent.model import (PRICES, BudgetExhausted, SpendMeter, UnpricedModel,
+from web_operation_agent.modeling.client import (PRICES, BudgetExhausted, SpendMeter, UnpricedModel,
                                        cost_with, load_env)
 
 #: The rate these tests meter at. Named here rather than defaulted inside `SpendMeter`, so a
@@ -38,7 +38,7 @@ class PriceAgreement(unittest.TestCase):
                              PRICES["qwen3.8-flash"]["input_per_m"])
 
     def test_every_registered_price_records_where_it_came_from(self):
-        from web_operation_agent.model import PRICES
+        from web_operation_agent.modeling.client import PRICES
         for model, entry in PRICES.items():
             if model.startswith("_"):
                 continue
@@ -47,7 +47,7 @@ class PriceAgreement(unittest.TestCase):
                 self.assertIn(field, entry, f"{model} is missing {field}")
 
     def test_an_unregistered_model_refuses_rather_than_guessing(self):
-        from web_operation_agent.model import UnpricedModel, price_for
+        from web_operation_agent.modeling.client import UnpricedModel, price_for
         with self.assertRaises(UnpricedModel) as caught:
             price_for("some-model-nobody-registered")
         self.assertIn("prices.json", str(caught.exception),
@@ -230,7 +230,7 @@ class Ledger(unittest.TestCase):
             os.environ.pop("WOA_SPEND_LEDGER")
 
     def test_the_default_ledger_has_a_product_owned_name(self):
-        from web_operation_agent.model import DEFAULT_LEDGER
+        from web_operation_agent.modeling.client import DEFAULT_LEDGER
         self.assertTrue(DEFAULT_LEDGER.endswith("web-operation-agent/model-spend.jsonl"))
 
 
@@ -257,14 +257,14 @@ class TheClientIsNotTiedToOneProvider(unittest.TestCase):
            "AGENT_OPENAI_API_KEY": "k", "AGENT_OPENAI_MODEL": "qwen3.8-flash"}
 
     def _chat(self, **over):
-        from web_operation_agent.model import ChatModel
+        from web_operation_agent.modeling.client import ChatModel
         with tempfile.TemporaryDirectory() as d:
             meter = SpendMeter(ledger=Path(d) / "s.jsonl")
             return ChatModel(meter, env={**self.ENV, **over})
 
     def test_no_vendor_name_is_hardcoded_as_a_default(self):
         import inspect
-        from web_operation_agent import model as m
+        from web_operation_agent.modeling import client as m
         sig = inspect.signature(m.ChatModel.__init__)
         self.assertIsNone(sig.parameters["provider"].default,
                           "a vendor name as a default is a coupling waiting to go stale")
@@ -279,7 +279,7 @@ class TheClientIsNotTiedToOneProvider(unittest.TestCase):
         self.assertTrue(self._chat(AGENT_OPENAI_BASE_URL="http://localhost:8080/v1").provider)
 
     def test_remote_provider_requires_https_and_rejects_url_credentials(self):
-        from web_operation_agent.model import ProviderError
+        from web_operation_agent.modeling.client import ProviderError
         for value in (
                 "http://provider.example/v1",
                 "https://user:secret@provider.example/v1",
@@ -292,7 +292,7 @@ class TheClientIsNotTiedToOneProvider(unittest.TestCase):
 
     def test_an_unpriced_model_is_refused_at_construction(self):
         """Better to stop before the first call than to book the run at the wrong rates."""
-        from web_operation_agent.model import UnpricedModel
+        from web_operation_agent.modeling.client import UnpricedModel
         with self.assertRaises(UnpricedModel):
             self._chat(AGENT_OPENAI_MODEL="a-model-with-no-price")
 
@@ -304,7 +304,7 @@ class TheClientIsNotTiedToOneProvider(unittest.TestCase):
         Reading it as a fallback is the failure this project keeps removing: an environment
         nobody updated would keep working while naming something else.
         """
-        from web_operation_agent.model import ProviderError
+        from web_operation_agent.modeling.client import ProviderError
         env = {name: value for name, value in self.ENV.items()
                if name != "AGENT_OPENAI_MODEL"}
         env["AGENT_OPENAI_MODEL_PRO"] = "qwen3.8-flash"
@@ -312,7 +312,7 @@ class TheClientIsNotTiedToOneProvider(unittest.TestCase):
             self._chat(**env, AGENT_OPENAI_MODEL="")
 
     def test_the_meter_is_given_the_price_of_the_model_actually_in_use(self):
-        from web_operation_agent.model import PRICES
+        from web_operation_agent.modeling.client import PRICES
         chat = self._chat()
         self.assertEqual(chat.meter.price, PRICES["qwen3.8-flash"])
 
@@ -325,7 +325,7 @@ class ProviderSignalsReachTheCaller(unittest.TestCase):
         import io
         import urllib.request
         from unittest import mock
-        from web_operation_agent.model import ChatModel
+        from web_operation_agent.modeling.client import ChatModel
         with tempfile.TemporaryDirectory() as d:
             chat = ChatModel(SpendMeter(ledger=Path(d) / "s.jsonl"),
                              env=TheClientIsNotTiedToOneProvider.ENV)
@@ -358,7 +358,7 @@ class ProviderSignalsReachTheCaller(unittest.TestCase):
         import io
         import urllib.request
         from unittest import mock
-        from web_operation_agent.model import (MAX_PROVIDER_RESPONSE_BYTES, ChatModel,
+        from web_operation_agent.modeling.client import (MAX_PROVIDER_RESPONSE_BYTES, ChatModel,
                                                 ProviderError)
         with tempfile.TemporaryDirectory() as directory:
             chat = ChatModel(
@@ -376,7 +376,7 @@ class ProviderSignalsReachTheCaller(unittest.TestCase):
         import urllib.error
         import urllib.request
         from unittest import mock
-        from web_operation_agent.model import ChatModel, ProviderError
+        from web_operation_agent.modeling.client import ChatModel, ProviderError
         with tempfile.TemporaryDirectory() as directory:
             chat = ChatModel(
                 SpendMeter(ledger=Path(directory) / "spend.jsonl"),
@@ -450,7 +450,7 @@ class TheReportedLedgerPathCarriesNoMachine(unittest.TestCase):
 
     def test_a_path_under_home_is_reported_relative_to_it(self):
         import os
-        from web_operation_agent.model import SpendMeter
+        from web_operation_agent.modeling.client import SpendMeter
         m = SpendMeter(ledger=os.path.expanduser("~/.cache/woa-test-display/x.jsonl"))
         reported = m.report()["ledger"]
         self.assertTrue(reported.startswith("~/"), reported)
@@ -458,14 +458,14 @@ class TheReportedLedgerPathCarriesNoMachine(unittest.TestCase):
 
     def test_a_path_outside_home_is_left_alone(self):
         import tempfile
-        from web_operation_agent.model import SpendMeter
+        from web_operation_agent.modeling.client import SpendMeter
         with tempfile.TemporaryDirectory(dir="/tmp") as d:
             m = SpendMeter(ledger=f"{d}/x.jsonl")
             self.assertEqual(m.report()["ledger"], f"{d}/x.jsonl")
 
     def test_the_file_actually_used_is_unchanged(self):
         import os
-        from web_operation_agent.model import SpendMeter
+        from web_operation_agent.modeling.client import SpendMeter
         p = os.path.expanduser("~/.cache/woa-test-display/y.jsonl")
         m = SpendMeter(ledger=p)
         self.assertEqual(str(m.ledger), p, "only the reported name changes, not the target")

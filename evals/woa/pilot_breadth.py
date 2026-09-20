@@ -21,7 +21,7 @@ from evals.twenty.evaluator import digest_json
 from evals.twenty.fixture import TwentyPostgresFixture, atomic_write_json, utc_now
 from evals.woa.browser_host import playwright_runtime_factory, sample_visible_page
 from evals.woa.twenty_runner import WoaTwentyConfig, run_breadth_case
-from web_operation_agent.model import ChatModel, SpendMeter, load_env
+from web_operation_agent.modeling.client import ChatModel, SpendMeter, load_env
 from web_operation_agent_twenty.adapter import TwentyApplicationAdapter
 
 

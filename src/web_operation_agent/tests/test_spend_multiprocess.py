@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from web_operation_agent.model import BudgetExhausted, SpendMeter
+from web_operation_agent.modeling.client import BudgetExhausted, SpendMeter
 
 
 USAGE = {"prompt_tokens": 1_000_000, "completion_tokens": 0, "total_tokens": 1_000_000}

@@ -101,7 +101,7 @@ class BatchPaths:
         return self.private_dir / "qualification"
 
     def spend(self) -> Path:
-        from web_operation_agent.model import DEFAULT_LEDGER
+        from web_operation_agent.modeling.client import DEFAULT_LEDGER
 
         return Path(self.spend_ledger or os.environ.get("WOA_SPEND_LEDGER") or DEFAULT_LEDGER)
 

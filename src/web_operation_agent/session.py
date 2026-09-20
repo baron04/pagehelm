@@ -45,17 +45,17 @@ from .business_text import trigger_requests_action
 from .contract import (ContractPlanner, EvidenceBundle, PlanningFailed, SourceRetriever,
                        _segment_from_template, expand_terms)
 from .controlplane import ControlPlaneClient, ControlPlaneError
-from .egress import AuditedChat, ProviderEgressError
+from .modeling.egress import AuditedChat, ProviderEgressError
 from .grounding import (NOT_APPLICABLE, REFUTED, WRITE_PERMITTED, WRITE_REFUSED,
                         WRITE_UNKNOWN, PlanState, opaque_route_identity)
 from .identity import PrincipalContext
 from .knowledge import ApplicationKnowledgePort
 from .ledger import SessionLedger
-from .provider import ProviderError
+from .modeling.provider import ProviderError
 from .privacy import (SessionHandoffPolicy, redact_sensitive_assignments,
                       safe_tool_arguments as _safe)
 from .routes import Router, candidate_url, observation_is_at_route
-from .spend import BudgetExhausted
+from .modeling.spend import BudgetExhausted
 from .turnwatch import ProgressFeed, RepeatGuard
 from .turn_answer import AnswerState, TurnAnswer
 from .writes import PRE_DISPATCH_ERRORS, WRITE_CAPABLE, WatchState, WriteWatch

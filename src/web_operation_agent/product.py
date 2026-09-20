@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 from .application import BoundApplication, SourceCapability
 from .answering import render_structured_query_answer
 from .answer_view import render_payload, render_sources
-from .chat import require_chat_port
+from .modeling.chat import require_chat_port
 from .panel_view import describe_step, panel_limits, step_facts
 from .browser import TransportError
 from .business import BusinessToolResult, BusinessToolRuntime
