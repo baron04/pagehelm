@@ -103,10 +103,10 @@ button:disabled { cursor: not-allowed; }
 .woa-launcher__nub {
   position: absolute; top: 0; right: 0;
   min-width: 16px; height: 16px; padding: 0 4px;
-  border-radius: 99px;
+  border-radius: var(--woa-radius-pill);
   background: var(--woa-accent);
   color: var(--woa-accent-ink);
-  font-size: 10px; font-weight: 600; line-height: 16px;
+  font-size: var(--woa-font-size-micro); font-weight: 600; line-height: 16px;
   text-align: center;
   box-shadow: 0 0 0 2px var(--woa-bg);
 }
@@ -119,7 +119,7 @@ button:disabled { cursor: not-allowed; }
   display: flex;
   flex-direction: column;
   min-width: 320px; min-height: 360px;
-  border-radius: 13px;
+  border-radius: var(--woa-radius-window);
   background: var(--woa-bg);
   overflow: hidden;
   box-shadow:
@@ -154,14 +154,14 @@ button:disabled { cursor: not-allowed; }
 .woa-handle[data-handle='n']::after,
 .woa-handle[data-handle='s']::after {
   left: 50%; transform: translateX(-50%);
-  width: 60px; height: 3px; border-radius: 99px;
+  width: 60px; height: 3px; border-radius: var(--woa-radius-pill);
 }
 .woa-handle[data-handle='n']::after { top: 2px; }
 .woa-handle[data-handle='s']::after { bottom: 2px; }
 .woa-handle[data-handle='w']::after,
 .woa-handle[data-handle='e']::after {
   top: 50%; transform: translateY(-50%);
-  height: 60px; width: 3px; border-radius: 99px;
+  height: 60px; width: 3px; border-radius: var(--woa-radius-pill);
 }
 .woa-handle[data-handle='w']::after { left: 2px; }
 .woa-handle[data-handle='e']::after { right: 2px; }
@@ -183,7 +183,7 @@ button:disabled { cursor: not-allowed; }
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 7px 0 11px;
+  padding: 0 8px 0 12px;
   cursor: grab;
   background: linear-gradient(180deg, var(--woa-surface), var(--woa-bg));
   border-bottom: 1px solid var(--woa-line);
@@ -191,9 +191,9 @@ button:disabled { cursor: not-allowed; }
 }
 .woa-window[data-dragging='move'] .woa-titlebar { cursor: grabbing; }
 
-.woa-brand { display: flex; align-items: center; gap: 7px; margin-right: auto; }
+.woa-brand { display: flex; align-items: center; gap: 8px; margin-right: auto; }
 .woa-brand__word {
-  font-size: 10.5px;
+  font-size: var(--woa-font-size-micro);
   font-weight: 600;
   letter-spacing: 0.115em;
   color: var(--woa-ink-muted);
@@ -202,9 +202,9 @@ button:disabled { cursor: not-allowed; }
 .woa-mark { color: var(--woa-ink); }
 
 .woa-icon-button {
-  width: 25px; height: 25px;
+  width: 24px; height: 24px;
   display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 7px;
+  border-radius: var(--woa-radius-control);
   color: var(--woa-ink-faint);
   flex: none;
 }
@@ -224,7 +224,7 @@ button:disabled { cursor: not-allowed; }
   overflow-y: auto;
   overflow-x: hidden;
   overflow-anchor: auto;
-  padding: 15px 13px 4px;
+  padding: 16px 12px 4px;
 }
 /* The transcript remains keyboard-scrollable, but a saturated ring around the entire
    reading area looks like an application error. Use the same quiet boundary as the rest
@@ -266,35 +266,35 @@ button:disabled { cursor: not-allowed; }
   background: var(--woa-line-strong);
   border: 2px solid transparent;
   background-clip: content-box;
-  border-radius: 99px;
+  border-radius: var(--woa-radius-pill);
 }
 
-.woa-turns { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 15px; }
+.woa-turns { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 16px; }
 /* Settled turns are skipped by layout and paint when off screen, but stay in the DOM so
    find-in-page, screen readers and select-all keep working. */
 .woa-turn[data-settled] { content-visibility: auto; contain-intrinsic-size: auto 180px; }
-.woa-turn { display: flex; flex-direction: column; gap: 9px; }
+.woa-turn { display: flex; flex-direction: column; gap: 8px; }
 
 .woa-user {
   align-self: flex-end;
   max-width: 86%;
   margin: 0;
-  padding: 7px 11px;
-  border-radius: 11px 11px 3px 11px;
+  padding: 8px 12px;
+  border-radius: var(--woa-radius-card) var(--woa-radius-card) var(--woa-radius-inline);
   background: var(--woa-accent-soft);
   box-shadow: inset 0 0 0 1px var(--woa-line);
   overflow-wrap: anywhere;
 }
 
-.woa-agent { display: flex; flex-direction: column; gap: 9px; }
+.woa-agent { display: flex; flex-direction: column; gap: 8px; }
 
 /* A boundary the server drew: everything above it is still readable, and no longer
    context for the model. */
-.woa-pending { display: flex; flex-direction: column; gap: 5px; margin-top: 15px; }
+.woa-pending { display: flex; flex-direction: column; gap: 4px; margin-top: 16px; }
 .woa-sending, .woa-undelivered {
   align-self: flex-end;
-  display: inline-flex; align-items: center; gap: 5px;
-  font-size: 11px;
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: var(--woa-font-size-meta);
   color: var(--woa-ink-faint);
 }
 .woa-undelivered { color: var(--woa-danger); }
@@ -308,18 +308,18 @@ button:disabled { cursor: not-allowed; }
   left: 50%;
   transform: translateX(-50%);
   z-index: 1;
-  display: inline-flex; align-items: center; gap: 5px;
-  height: 25px; padding: 0 11px;
-  border-radius: 99px;
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 24px; padding: 0 12px;
+  border-radius: var(--woa-radius-pill);
   background: var(--woa-surface-raised);
   color: var(--woa-ink);
-  font-size: 11.5px;
+  font-size: var(--woa-font-size-meta);
   box-shadow: var(--woa-shadow-2), inset 0 0 0 1px var(--woa-line-strong);
 }
 
 .woa-skeleton { display: flex; flex-direction: column; gap: 10px; padding: 4px 0 12px; }
 .woa-skeleton i {
-  display: block; height: 9px; border-radius: 5px;
+  display: block; height: 8px; border-radius: var(--woa-radius-control);
   background: var(--woa-surface-muted);
   animation: woa-sheen 1.5s ease-in-out infinite;
 }
@@ -360,7 +360,7 @@ button:disabled { cursor: not-allowed; }
   grid-template-columns: 16px 1fr;
   column-gap: 8px;
   align-items: start;
-  font-size: 12px;
+  font-size: var(--woa-font-size-small);
   color: var(--woa-ink-muted);
   position: relative;
 }
@@ -381,7 +381,7 @@ button:disabled { cursor: not-allowed; }
 .woa-step__line {
   display: flex; align-items: baseline; gap: 8px;
   inline-size: 100%;
-  padding-block: 5px;
+  padding-block: 4px;
   text-align: start;
   color: inherit;
   min-width: 0;
@@ -391,12 +391,12 @@ button.woa-step__line:hover { color: var(--woa-ink); }
 button.woa-step__line:focus-visible {
   outline: none;
   box-shadow: inset 0 0 0 1px var(--woa-line-strong);
-  border-radius: 6px;
+  border-radius: var(--woa-radius-control);
 }
 .woa-step__text { min-width: 0; overflow-wrap: anywhere; }
 .woa-step__elapsed {
   margin-inline-start: auto;
-  font-size: 11px;
+  font-size: var(--woa-font-size-meta);
   color: var(--woa-ink-faint);
   font-variant-numeric: tabular-nums;
   flex: none;
@@ -404,28 +404,28 @@ button.woa-step__line:focus-visible {
 .woa-step__detail {
   grid-column: 2;
   margin: 2px 0 6px;
-  padding: 7px 9px;
-  border-radius: 8px;
+  padding: 8px;
+  border-radius: var(--woa-radius-card);
   background: var(--woa-surface);
   box-shadow: inset 0 0 0 1px var(--woa-line);
   display: grid;
   grid-template-columns: auto 1fr;
   column-gap: 8px;
-  row-gap: 3px;
-  font-size: 11.5px;
+  row-gap: 4px;
+  font-size: var(--woa-font-size-meta);
 }
 .woa-step__detail dt { color: var(--woa-ink-faint); }
 .woa-step__detail dd { margin: 0; overflow-wrap: anywhere; }
-.woa-step__detail code { font-size: 11px; }
+.woa-step__detail code { font-size: var(--woa-font-size-meta); }
 .woa-took {
   margin: 2px 0 0 24px;
-  font-size: 11.5px;
+  font-size: var(--woa-font-size-meta);
   color: var(--woa-ink-faint);
   font-variant-numeric: tabular-nums;
 }
 
 .woa-spinner {
-  width: 11px; height: 11px; flex: none;
+  width: 12px; height: 12px; flex: none;
   border-radius: 50%;
   border: 1.6px solid var(--woa-line-strong);
   border-top-color: var(--woa-accent);
@@ -443,7 +443,7 @@ button.woa-step__line:focus-visible {
   color: var(--woa-ink-muted);
   overflow-wrap: anywhere;
 }
-.woa-answer-sources > summary { cursor: pointer; padding-block: 5px; }
+.woa-answer-sources > summary { cursor: pointer; padding-block: 4px; }
 .woa-answer-sources[open] > summary { margin-block-end: 8px; }
 .woa-answer-sources > .woa-md {
   border-inline-start: 2px solid var(--woa-line);
@@ -451,10 +451,10 @@ button.woa-step__line:focus-visible {
 }
 .woa-md { display: flex; flex-direction: column; gap: 8px; overflow-wrap: anywhere; }
 .woa-md p, .woa-md h2, .woa-md h3, .woa-md blockquote, .woa-md ul, .woa-md ol { margin: 0; }
-.woa-md h2 { font-size: 14px; font-weight: 600; }
-.woa-md h3 { font-size: 13px; font-weight: 600; }
+.woa-md h2 { font-size: var(--woa-font-size-title); font-weight: 600; }
+.woa-md h3 { font-size: var(--woa-font-size); font-weight: 600; }
 /* Wide enough for a two-digit marker: at 18px, item 10 onwards lost its first glyph. */
-.woa-md__list { padding-inline-start: 26px; display: flex; flex-direction: column; gap: 3px; }
+.woa-md__list { padding-inline-start: 24px; display: flex; flex-direction: column; gap: 4px; }
 .woa-md__list li::marker { color: var(--woa-ink-faint); font-variant-numeric: tabular-nums; }
 .woa-md blockquote {
   padding-inline-start: 10px;
@@ -464,9 +464,9 @@ button.woa-step__line:focus-visible {
 .woa-md hr { border: 0; border-top: 1px solid var(--woa-line); margin: 2px 0; }
 .woa-md__code {
   font-family: var(--woa-mono-stack);
-  font-size: 11.5px;
+  font-size: var(--woa-font-size-meta);
   padding: 1px 4px;
-  border-radius: 4px;
+  border-radius: var(--woa-radius-inline);
   background: var(--woa-surface-muted);
 }
 .woa-md__inert { color: var(--woa-ink); text-decoration: underline dotted var(--woa-line-strong); }
@@ -483,22 +483,22 @@ button.woa-step__line:focus-visible {
 
 .woa-md__tablewrap {
   overflow-x: auto;
-  border-radius: 8px;
+  border-radius: var(--woa-radius-card);
   box-shadow: inset 0 0 0 1px var(--woa-line);
 }
-.woa-md table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.woa-md table { width: 100%; border-collapse: collapse; font-size: var(--woa-font-size-meta); }
 .woa-md th {
   text-align: left;
   font-weight: 500;
-  font-size: 10.5px;
+  font-size: var(--woa-font-size-micro);
   color: var(--woa-ink-faint);
   background: var(--woa-surface);
-  padding: 6px 9px;
+  padding: 6px 8px;
   white-space: nowrap;
   border-bottom: 1px solid var(--woa-line);
 }
 .woa-md td {
-  padding: 6px 9px;
+  padding: 6px 8px;
   white-space: nowrap;
   border-bottom: 1px solid var(--woa-line);
   font-variant-numeric: tabular-nums;
@@ -508,16 +508,16 @@ button.woa-step__line:focus-visible {
 
 .woa-md__block {
   margin: 0;
-  border-radius: 8px;
+  border-radius: var(--woa-radius-card);
   overflow: hidden;
   background: var(--woa-surface-muted);
   box-shadow: inset 0 0 0 1px var(--woa-line);
 }
 .woa-md__block header {
-  display: flex; align-items: center; gap: 7px;
-  padding: 5px 9px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 8px;
   font-family: var(--woa-mono-stack);
-  font-size: 10.5px;
+  font-size: var(--woa-font-size-micro);
   color: var(--woa-ink-faint);
   border-bottom: 1px solid var(--woa-line);
 }
@@ -530,33 +530,33 @@ button.woa-step__line:focus-visible {
 .woa-md__copy:hover { color: var(--woa-ink); }
 .woa-md__block pre {
   margin: 0;
-  padding: 8px 9px;
+  padding: 8px;
   font-family: var(--woa-mono-stack);
-  font-size: 11px;
+  font-size: var(--woa-font-size-meta);
   line-height: 1.6;
   overflow-x: auto;
 }
 .woa-md__more {
   width: 100%;
   padding: 6px;
-  font-size: 11.5px;
+  font-size: var(--woa-font-size-meta);
   color: var(--woa-accent);
   border-top: 1px solid var(--woa-line);
 }
 
 /* ─────────────────────────────────────────────── outcome cards */
 .woa-outcome {
-  border-radius: 9px;
-  padding: 10px 11px;
+  border-radius: var(--woa-radius-card);
+  padding: 10px 12px;
   display: flex; flex-direction: column; gap: 6px;
   box-shadow: inset 0 0 0 1px var(--woa-line);
 }
 .woa-outcome h3 {
   margin: 0;
-  display: flex; align-items: center; gap: 7px;
-  font-size: 12.5px; font-weight: 600;
+  display: flex; align-items: center; gap: 8px;
+  font-size: var(--woa-font-size-small); font-weight: 600;
 }
-.woa-outcome p { margin: 0; color: var(--woa-ink-muted); font-size: 12.5px; }
+.woa-outcome p { margin: 0; color: var(--woa-ink-muted); font-size: var(--woa-font-size-small); }
 .woa-outcome[data-kind='indeterminate'] { background: var(--woa-warning-soft); }
 .woa-outcome[data-kind='indeterminate'] h3 { color: var(--woa-warning); }
 .woa-outcome[data-kind='refused'] { background: var(--woa-danger-soft); }
@@ -570,7 +570,7 @@ button.woa-step__line:focus-visible {
      answering a confirmation could no longer read what led to it. One box scrolls now, and
      the card is the last thing in it. */
   margin: 6px 0 4px;
-  border-radius: 10px;
+  border-radius: var(--woa-radius-panel);
   background: var(--woa-surface-raised);
   /* A real border, not an inset shadow: an inset shadow is painted beneath the card's
      children, so the answers pinned to its foot covered the edge beside and below them.
@@ -587,40 +587,40 @@ button.woa-step__line:focus-visible {
   to { opacity: 1; transform: none; }
 }
 .woa-approval__edge { display: block; height: 2px; background: var(--woa-warning); }
-.woa-approval__inner { padding: 12px 13px 13px; }
+.woa-approval__inner { padding: 12px; }
 
 .woa-approval h2 {
   margin: 0;
-  display: flex; align-items: center; gap: 7px;
-  font-size: 13.5px; font-weight: 600;
+  display: flex; align-items: center; gap: 8px;
+  font-size: var(--woa-font-size); font-weight: 600;
   letter-spacing: -0.006em;
 }
 .woa-approval h2 > svg { color: var(--woa-warning); flex: none; }
 .woa-approval__time {
   margin-left: auto;
   display: inline-flex; align-items: center; gap: 4px;
-  font-weight: 450; font-size: 11px;
+  font-weight: 500; font-size: var(--woa-font-size-meta);
   color: var(--woa-ink-faint);
   font-variant-numeric: tabular-nums;
 }
 .woa-approval__time[data-urgent] { color: var(--woa-warning); }
 
 .woa-approval__label {
-  margin: 13px 0 4px;
-  font-size: 10.5px;
+  margin: 12px 0 4px;
+  font-size: var(--woa-font-size-micro);
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--woa-ink-faint);
 }
 .woa-approval__effect {
   margin: 0;
-  font-size: 13.5px; font-weight: 600; line-height: 1.45;
+  font-size: var(--woa-font-size); font-weight: 600; line-height: var(--woa-line-height);
   overflow-wrap: anywhere;
 }
 .woa-approval__targets {
   list-style: none; margin: 0; padding: 0;
   display: flex; flex-direction: column; gap: 1px;
-  border-radius: 7px;
+  border-radius: var(--woa-radius-control);
   overflow: hidden;
   background: var(--woa-line);
   box-shadow: inset 0 0 0 1px var(--woa-line);
@@ -628,7 +628,7 @@ button.woa-step__line:focus-visible {
 /* Record identifiers, not prose: a monospaced stack is harder to pass a sentence off as. */
 .woa-approval__targets li {
   font-family: var(--woa-mono-stack);
-  font-size: 11px;
+  font-size: var(--woa-font-size-meta);
   letter-spacing: -0.01em;
   padding: 6px 8px;
   background: var(--woa-surface-muted);
@@ -636,15 +636,15 @@ button.woa-step__line:focus-visible {
 }
 .woa-approval__fine {
   margin: 12px 0 0;
-  padding-top: 9px;
+  padding-top: 10px;
   border-top: 1px solid var(--woa-line);
-  font-size: 11px; line-height: 1.55;
+  font-size: var(--woa-font-size-meta); line-height: var(--woa-line-height);
   color: var(--woa-ink-faint);
 }
 .woa-approval__blocked {
-  margin: 11px 0 0;
-  display: flex; gap: 7px; align-items: flex-start;
-  font-size: 11.5px; line-height: 1.5;
+  margin: 12px 0 0;
+  display: flex; gap: 8px; align-items: flex-start;
+  font-size: var(--woa-font-size-meta); line-height: var(--woa-line-height);
   color: var(--woa-warning);
 }
 .woa-approval__blocked svg { flex: none; margin-top: 1px; }
@@ -655,7 +655,7 @@ button.woa-step__line:focus-visible {
      answers stay pinned at its foot. Focusing the first one then has nothing to scroll
      to, so the heading and the time left are not pushed out of view to reach it. */
   position: sticky; bottom: 0;
-  margin: 11px -13px -13px; padding: 10px 13px 13px;
+  margin: 12px -12px -12px; padding: 10px 12px 12px;
   background: var(--woa-surface-raised);
 }
 .woa-approval__spacer { flex: 1; }
@@ -663,11 +663,11 @@ button.woa-step__line:focus-visible {
 .woa-btn {
   display: inline-flex; align-items: center; justify-content: center;
   gap: 6px;
-  height: 31px;
+  height: 32px;
   padding: 0 14px;
-  border-radius: 8px;
+  border-radius: var(--woa-radius-card);
   font-weight: 500;
-  font-size: 12.5px;
+  font-size: var(--woa-font-size-small);
   white-space: nowrap;
 }
 .woa-btn--primary {
@@ -683,9 +683,9 @@ button.woa-step__line:focus-visible {
 /* ─────────────────────────────────────────────── inline error */
 .woa-inline-error {
   flex: none;
-  display: flex; align-items: center; gap: 7px;
-  padding: 7px 13px;
-  font-size: 12px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px;
+  font-size: var(--woa-font-size-small);
   color: var(--woa-ink-muted);
   background: var(--woa-surface);
   border-top: 1px solid var(--woa-line);
@@ -703,14 +703,14 @@ button.woa-step__line:focus-visible {
 /* ─────────────────────────────────────────────── composer */
 .woa-composer {
   flex: none;
-  padding: 9px 11px 11px;
+  padding: 8px 12px 12px;
   background: var(--woa-surface);
   border-top: 1px solid var(--woa-line);
 }
 .woa-field {
-  display: flex; align-items: flex-end; gap: 7px;
-  padding: 6px 6px 6px 11px;
-  border-radius: 10px;
+  display: flex; align-items: flex-end; gap: 8px;
+  padding: 6px 6px 6px 12px;
+  border-radius: var(--woa-radius-panel);
   background: var(--woa-bg);
   box-shadow: inset 0 0 0 1px var(--woa-line-strong);
   transition: box-shadow var(--woa-motion-fast) var(--woa-motion-easing);
@@ -731,7 +731,7 @@ button.woa-step__line:focus-visible {
   color: var(--woa-ink);
   font: inherit;
   letter-spacing: inherit;
-  line-height: 1.5;
+  line-height: var(--woa-line-height);
 }
 .woa-field textarea:focus { outline: none; }
 .woa-field textarea::placeholder { color: var(--woa-ink-faint); }
@@ -740,10 +740,10 @@ button.woa-step__line:focus-visible {
 .woa-field textarea:disabled { color: var(--woa-ink-faint); max-height: 42px; }
 
 .woa-send {
-  width: 27px; height: 27px;
+  width: 28px; height: 28px;
   flex: none;
   display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 8px;
+  border-radius: var(--woa-radius-card);
   background: var(--woa-accent);
   color: var(--woa-accent-ink);
   box-shadow: 0 1px 1.5px rgba(20, 23, 28, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.16);
@@ -760,30 +760,30 @@ button.woa-step__line:focus-visible {
 }
 .woa-composer__limit {
   margin: 6px 2px 0;
-  font-size: 11px;
+  font-size: var(--woa-font-size-meta);
   color: var(--woa-warning);
   font-variant-numeric: tabular-nums;
 }
 
 /* ─────────────────────────────────────────────── empty state */
-.woa-empty { display: flex; flex-direction: column; gap: 9px; padding: 20px 2px 6px; }
+.woa-empty { display: flex; flex-direction: column; gap: 8px; padding: 20px 2px 6px; }
 .woa-empty[data-compact] { padding: 6px 2px 0; }
 .woa-empty__hero {
-  width: 38px; height: 38px;
+  width: 40px; height: 40px;
   display: flex; align-items: center; justify-content: center;
-  border-radius: 11px;
+  border-radius: var(--woa-radius-panel);
   background: var(--woa-surface-muted);
   box-shadow: inset 0 0 0 1px var(--woa-line), inset 0 1px 0 rgba(255, 255, 255, 0.6);
 }
-.woa-empty h3 { margin: 3px 0 0; font-size: 15px; font-weight: 600; letter-spacing: -0.015em; }
-.woa-empty p { margin: 0; color: var(--woa-ink-muted); font-size: 12.5px; }
-.woa-suggestions { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.woa-empty h3 { margin: 4px 0 0; font-size: var(--woa-font-size-title); font-weight: 600; letter-spacing: -0.015em; }
+.woa-empty p { margin: 0; color: var(--woa-ink-muted); font-size: var(--woa-font-size-small); }
+.woa-suggestions { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .woa-suggestions button {
   width: 100%;
-  display: flex; align-items: center; gap: 9px;
+  display: flex; align-items: center; gap: 8px;
   padding: 8px 10px;
-  border-radius: 8px;
-  font-size: 12.5px;
+  border-radius: var(--woa-radius-card);
+  font-size: var(--woa-font-size-small);
   text-align: left;
   background: var(--woa-surface);
   box-shadow: inset 0 0 0 1px var(--woa-line);
@@ -796,7 +796,7 @@ button.woa-step__line:focus-visible {
 .woa-suggestions__kind {
   margin-left: auto;
   font-family: var(--woa-mono-stack);
-  font-size: 10px;
+  font-size: var(--woa-font-size-micro);
   color: var(--woa-ink-faint);
 }
 
@@ -808,10 +808,10 @@ button.woa-step__line:focus-visible {
   pointer-events: auto;
   display: flex; align-items: flex-start; gap: 8px;
   padding: 10px 12px;
-  border-radius: 11px;
+  border-radius: var(--woa-radius-panel);
   background: var(--woa-bg);
   color: var(--woa-ink);
-  font-size: 12.5px; line-height: 1.5;
+  font-size: var(--woa-font-size-small); line-height: var(--woa-line-height);
   box-shadow: 0 0 0 1px var(--woa-line-strong), var(--woa-shadow-2);
 }
 .woa-fatal > svg { flex: none; margin-top: 2px; color: var(--woa-warning); }

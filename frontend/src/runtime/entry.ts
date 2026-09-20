@@ -92,7 +92,7 @@ const STYLE = `
   }
   .note p { margin: 0 }
   .note button {
-    margin-top: 8px; font: inherit; padding: 4px 10px; border-radius: 7px; cursor: pointer;
+    margin-top: 8px; font: inherit; padding: 4px 10px; border-radius: 6px; cursor: pointer;
     border: 1px solid ${LIGHT.lineStrong}; background: ${LIGHT.button}; color: inherit;
   }
   .note button[hidden] { display: none }
