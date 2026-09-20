@@ -1,6 +1,7 @@
 import {RotateCcw, TriangleAlert, WifiOff} from 'lucide-react'
 import type {Labels, PanelConfiguration, PanelLimits} from '../contract/panel'
 import type {HostNotice} from '../bridge/host'
+import {iconProps} from './icon'
 
 /**
  * Not a card, and not one fixed place either: a failure is shown where the thing that
@@ -30,11 +31,11 @@ export function InlineError({notice, configuration, labels, limits, onRetry, off
   return (
     <div className="woa-inline-error" role="status" data-code={notice.code}
          data-terminal={terminal ? 'true' : undefined}>
-      <Icon size={14} strokeWidth={1.7} aria-hidden="true" />
+      <Icon {...iconProps(14)} />
       <span className="woa-inline-error__text">{message}</span>
       {notice.retryable && !terminal && (
         <button type="button" className="woa-inline-error__retry" onClick={onRetry}>
-          <RotateCcw size={12} strokeWidth={1.9} aria-hidden="true" />
+          <RotateCcw {...iconProps(12)} />
           {labels.retry}
         </button>
       )}

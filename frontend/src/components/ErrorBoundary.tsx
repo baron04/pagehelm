@@ -1,5 +1,6 @@
 import {Component, type ErrorInfo, type ReactNode} from 'react'
 import {TriangleAlert} from 'lucide-react'
+import {iconProps} from './icon'
 
 /**
  * Where every panel failure ends.
@@ -42,7 +43,7 @@ export function PanelFailure({text, reloadLabel}: {
 }): React.JSX.Element {
   return (
     <div className="woa-fatal" role="status">
-      <TriangleAlert size={14} strokeWidth={1.7} aria-hidden="true" />
+      <TriangleAlert {...iconProps(14)} />
       <span>{text}</span>
       <button type="button" onClick={() => {
         try {

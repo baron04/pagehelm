@@ -6,6 +6,7 @@ import type {Labels, PanelLimits, TimelineEntry} from '../contract/panel'
 import type {PanelSnapshot} from '../bridge/host'
 import {Answer} from './Answer'
 import {guarded} from './ErrorBoundary'
+import {iconProps} from './icon'
 
 /** Inside this many pixels of the floor counts as "at the newest line". */
 const NEAR_BOTTOM = 28
@@ -110,10 +111,10 @@ function statusOf(turn: Turn, index: number): NodeStatus {
 function NodeMark({status}: {status: NodeStatus}): React.JSX.Element {
   if (status === 'running') return <span className="woa-spinner" aria-hidden="true" />
   if (status === 'waiting') {
-    return <ShieldQuestion size={14} strokeWidth={1.8} aria-hidden="true" />
+    return <ShieldQuestion {...iconProps(14)} />
   }
-  if (status === 'failed') return <CircleX size={14} strokeWidth={1.8} aria-hidden="true" />
-  return <CircleCheck size={14} strokeWidth={1.8} aria-hidden="true" />
+  if (status === 'failed') return <CircleX {...iconProps(14)} />
+  return <CircleCheck {...iconProps(14)} />
 }
 
 /** One node of the timeline: what happened, how long it took, and -- opened -- with what. */
@@ -216,7 +217,7 @@ function Outcome({entry, labels, limits, live, allowedOrigins}: {
   const Icon = kind === 'indeterminate' ? AlertTriangle : CircleAlert
   return (
     <section className="woa-outcome" data-kind={kind}>
-      <h3><Icon size={14} strokeWidth={1.7} aria-hidden="true" />
+      <h3><Icon {...iconProps(14)} />
         {kind === 'indeterminate' ? labels.statusIndeterminate : labels.statusRefused}</h3>
       <p>{entry.text.slice(0, limits.result_max_chars)}</p>
     </section>
@@ -388,13 +389,13 @@ export function Thread(props: ThreadProps): React.JSX.Element {
           {snapshot.optimistic.failed
             ? (
               <span className="woa-undelivered">
-                <CircleAlert size={12} strokeWidth={1.8} aria-hidden="true" />
+                <CircleAlert {...iconProps(12)} />
                 {labels.undelivered} · <button type="button" onClick={onRetry}>{labels.retry}</button>
               </span>
             )
             : (
               <span className="woa-sending">
-                <CircleCheck size={12} strokeWidth={1.8} aria-hidden="true" />
+                <CircleCheck {...iconProps(12)} />
                 {labels.statusQueued}
               </span>
             )}
@@ -406,7 +407,7 @@ export function Thread(props: ThreadProps): React.JSX.Element {
     </div>
     {detached && (
       <button type="button" className="woa-jump" onClick={pin}>
-        <ArrowDown size={12} strokeWidth={1.9} aria-hidden="true" />
+        <ArrowDown {...iconProps(12)} />
         {labels.jumpLatest}{unseen > 0 ? ` · ${unseen}` : ''}
       </button>
     )}

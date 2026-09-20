@@ -2,6 +2,7 @@ import {useEffect, useRef, useState} from 'react'
 import {ShieldAlert, Clock, TriangleAlert} from 'lucide-react'
 import {declinable, type ApprovalRequest, type Labels, type PanelLimits} from '../contract/panel'
 import {useVisibilityGate} from '../state/visibility'
+import {iconProps} from './icon'
 
 function remaining(expiresAt: number): string {
   const left = Math.max(0, expiresAt - Date.now())
@@ -107,13 +108,13 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
       <span className="woa-approval__edge" aria-hidden="true" />
       <div className="woa-approval__inner">
         <h2 id={titleId}>
-          <ShieldAlert size={15} strokeWidth={1.7} aria-hidden="true" />
+          <ShieldAlert {...iconProps(14)} />
           {canDecline ? labels.approvalTitle : labels.navigationTitle}
           {/* Named, because a bare mm:ss next to a running assistant reads as how long
               it has been working. This is how long the confirmation can still be
               answered; after it, nothing is executed and the request is made again. */}
           <span className="woa-approval__time" data-urgent={urgent ? 'true' : undefined}>
-            <Clock size={11} strokeWidth={1.8} aria-hidden="true" />
+            <Clock {...iconProps(12)} />
             {labels.approvalValidFor} {countdown}
           </span>
         </h2>
@@ -130,14 +131,14 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
         {expired
           ? (
             <p className="woa-approval__blocked" data-expired="true">
-              <TriangleAlert size={14} strokeWidth={1.7} aria-hidden="true" />
+              <TriangleAlert {...iconProps(14)} />
               <span>{labels.approvalExpired}</span>
             </p>
           )
           : blocked
           ? (
             <p className="woa-approval__blocked">
-              <TriangleAlert size={14} strokeWidth={1.7} aria-hidden="true" />
+              <TriangleAlert {...iconProps(14)} />
               <span>{labels.approvalObscured}</span>
             </p>
           )

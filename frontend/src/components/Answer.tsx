@@ -4,6 +4,7 @@ import type {Block, Inline} from '../markdown/parse'
 import {countCharacters, parseMarkdown} from '../markdown/parse'
 import type {Labels} from '../contract/panel'
 import {useReveal} from '../state/typewriter'
+import {iconProps} from './icon'
 
 /** A budget that walks the tree once per render, revealing a prefix of the visible text. */
 class Budget {
@@ -74,8 +75,8 @@ function CodeBlock({block, labels}: {block: Extract<Block, {type: 'code'}>; labe
           }).catch(() => setCopied(false))
         }}>
           {copied
-            ? <Check size={12} strokeWidth={1.9} aria-hidden="true" />
-            : <Copy size={12} strokeWidth={1.7} aria-hidden="true" />}
+            ? <Check {...iconProps(12)} />
+            : <Copy {...iconProps(12)} />}
           {copied ? labels.copied : labels.copy}
         </button>
       </header>

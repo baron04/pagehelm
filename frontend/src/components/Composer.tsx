@@ -1,6 +1,7 @@
 import {useEffect, useLayoutEffect, useRef, useState} from 'react'
 import {ArrowUp, Square} from 'lucide-react'
 import type {Labels, PanelLimits} from '../contract/panel'
+import {iconProps} from './icon'
 
 export interface ComposerProps {
   labels: Labels
@@ -89,14 +90,14 @@ export function Composer(props: ComposerProps): React.JSX.Element {
           ? (
             <button type="button" className="woa-send" data-stop="true"
                     aria-label={labels.stop} disabled={stopping} onClick={props.onCancel}>
-              <Square size={13} strokeWidth={2} aria-hidden="true" />
+              <Square {...iconProps(14, 1.2)} />
             </button>
           )
           : (
             <button type="submit" className="woa-send" aria-label={labels.send}
                     data-off={disabled || !draft.trim() ? 'true' : undefined}
                     disabled={disabled || !draft.trim()}>
-              <ArrowUp size={14} strokeWidth={2} aria-hidden="true" />
+              <ArrowUp {...iconProps(14, 1.2)} />
             </button>
           )}
       </div>

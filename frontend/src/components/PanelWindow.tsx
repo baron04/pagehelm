@@ -7,6 +7,7 @@ import {loadOpen, useWindowGeometry, type Handle} from '../state/geometry'
 import {ApprovalCard} from './ApprovalCard'
 import {Composer} from './Composer'
 import {EmptyState} from './EmptyState'
+import {iconProps} from './icon'
 import {InlineError} from './InlineError'
 import {Launcher, launcherStateFor} from './Launcher'
 import {Mark} from './Mark'
@@ -157,14 +158,14 @@ export function PanelWindow({host, allowedOrigins}: {
           <span className="woa-brand__word">{labels.product}</span></span>
         <button type="button" className="woa-icon-button" aria-label={labels.newChat}
                 onClick={newConversation}>
-          <Plus size={15} strokeWidth={1.6} aria-hidden="true" />
+          <Plus {...iconProps(14)} />
         </button>
         <button type="button" className="woa-icon-button" aria-label={labels.collapse}
                 onClick={() => {
                   setOpen(false)
                   setUnread(0)
                 }}>
-          <X size={15} strokeWidth={1.7} aria-hidden="true" />
+          <X {...iconProps(14)} />
         </button>
       </header>
 

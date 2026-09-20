@@ -1,5 +1,6 @@
 import {ListOrdered, Plus, Search} from 'lucide-react'
 import type {Labels, Suggestion} from '../contract/panel'
+import {iconProps} from './icon'
 import {Mark} from './Mark'
 
 /**
@@ -34,7 +35,7 @@ export function EmptyState({labels, suggestions, onPick, compact}: {
           return (
             <li key={item.text}>
               <button type="button" onClick={() => onPick(item.text)}>
-                <Icon size={13} strokeWidth={1.7} aria-hidden="true" />
+                <Icon {...iconProps(14)} />
                 <span>{item.text}</span>
                 <span className="woa-suggestions__kind">{item.kind}</span>
               </button>
