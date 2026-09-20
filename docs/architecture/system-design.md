@@ -368,6 +368,7 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 ## 13. 代码导航
 
 - 单轮产品边界：[product.py](../../src/web_operation_agent/execution/product.py)
+- 单轮绑定、会话构造与终态结算：[turn.py](../../src/web_operation_agent/execution/turn.py)
 - 多轮会话与本地产品宿主：[live.py](../../src/web_operation_agent/live.py)
 - 有界对话引用状态：[conversation.py](../../src/web_operation_agent/conversation.py)
 - 单 Agent ReAct 循环：[session.py](../../src/web_operation_agent/execution/session.py)

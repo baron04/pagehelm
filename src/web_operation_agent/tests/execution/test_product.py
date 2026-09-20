@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from web_operation_agent.execution import product
+from web_operation_agent.execution import product, turn
 from web_operation_agent.application import (APPLICATION_ADAPTER_VERSION,
                                              AnonymousIdentityPort,
                                              ApplicationDescriptor,
@@ -364,7 +364,7 @@ class AgentTurnBoundaryTests(unittest.TestCase):
         channel = _Channel()
         with tempfile.TemporaryDirectory() as tmp:
             executor = self._executor(Path(tmp), channel)
-            with patch.object(product, "RemoteBrowserClient", _PageChangingBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _PageChangingBrowser):
                 with self.assertRaises(AgentTurnError) as caught:
                     executor.run_once(_message())
             events = [json.loads(line) for line in
@@ -421,7 +421,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                     allocated_messages.append(message) or "turn-read-001"),
                 answer_renderer=render_answer,
             )
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 execution = executor.run_once(_message())
 
             self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
@@ -484,7 +484,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 run_id_factory=lambda _message: "turn-fast-navigation",
             )
 
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 execution = executor.execute({
                     "message_id": "message-1",
                     "text": "打开公司 Acme",
@@ -531,7 +531,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 run_id_factory=lambda _message: "turn-route-context-navigation",
             )
 
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 execution = executor.execute({
                     "message_id": "message-1", "text": "打开 Acme",
                     "page_url": "http://app.test/companies",
@@ -578,7 +578,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 run_id_factory=lambda _message: "turn-fallback-navigation",
             )
 
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 execution = executor.execute({
                     "message_id": "message-1", "text": "打开 Acme",
                     "page_url": "http://app.test/companies",
@@ -616,7 +616,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 run_id_factory=lambda _message: "turn-navigation-and-answer",
             )
 
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 execution = executor.execute({
                     "message_id": "message-1",
                     "text": "打开公司 Acme，并告诉我域名",
@@ -659,7 +659,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 run_id_factory=lambda _message: "turn-redirected-navigation",
             )
 
-            with patch.object(product, "RemoteBrowserClient", RedirectedBrowser):
+            with patch.object(turn, "RemoteBrowserClient", RedirectedBrowser):
                 execution = executor.execute({
                     "message_id": "message-1", "text": "打开公司 Acme",
                     "page_url": "http://app.test/companies",
@@ -747,7 +747,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 run_id_factory=lambda _message: "turn-related-record-navigation",
             )
 
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 execution = executor.execute({
                     "message_id": "message-1", "text": "打开订单 SO-1 对应的公司页面",
                     "page_url": "http://app.test/companies",
@@ -788,7 +788,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 control=ReadOnlyControl(),
                 run_id_factory=lambda _message: "turn-long-answer-001",
             )
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 execution = executor.run_once(_message())
 
             self.assertEqual(execution.user_answer, long_answer)
@@ -843,7 +843,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 answer_renderer=lambda _context: (
                     custom_renderer_calls.append(True) or "untrusted replacement"),
             )
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 execution = executor.run_once(_message())
 
             self.assertIn("Acme", execution.user_answer)
@@ -1017,7 +1017,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 business_tools=BusinessToolRuntime((skill,), OneReadThenRefusal()),
                 control=ReadOnlyControl(),
                 run_id_factory=lambda _message: "permission-partial-001")
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 execution = executor.run_once({
                     **_message(), "text": "先列出公司，再读取无权访问的详情。"})
 
@@ -1085,7 +1085,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 run_id_factory=lambda message: f"turn-{message.message_id}",
                 conversation_state=state,
             )
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 first = executor.execute({
                     "message_id": "message-1",
                     "text": "Which companies are available?",
@@ -1135,7 +1135,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 run_id_factory=lambda message: f"turn-{message.message_id}",
                 conversation_state=state,
             )
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 first = executor.execute({
                     "message_id": "message-1", "text": "Open Acme",
                     "page_url": "http://app.test/companies",
@@ -1222,7 +1222,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 run_id_factory=lambda _message: "choice-turn",
                 conversation_state=state,
             )
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 result = executor.execute(_message())
 
             self.assertEqual(result.status, AgentTurnStatus.NEEDS_INPUT)
@@ -1264,7 +1264,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 chat=chat, business_tools=None, control=ReadOnlyControl(),
                 run_id_factory=lambda _message: "fabricated-choice-turn",
             )
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 result = executor.execute(_message())
 
             self.assertEqual(result.status, AgentTurnStatus.REFUSED)
@@ -1287,7 +1287,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 chat=chat, business_tools=None, control=ReadOnlyControl(),
                 run_id_factory=lambda _message: "no-progress-turn",
             )
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 result = executor.execute(_message())
                 browser = _RemoteBrowser.instances[-1]
 
@@ -1333,7 +1333,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 business_tools=tools, control=ReadOnlyControl(),
                 run_id_factory=lambda _message: "turn-principal-bound",
             )
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 result = executor.run_once(_message())
 
             self.assertEqual(result.status, AgentTurnStatus.FINISHED)
@@ -1367,7 +1367,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 run_id_factory=lambda _message: "turn-captured-ledger",
                 ledger_factory=ledger_factory,
             )
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 execution = executor.run_once(_message())
 
             self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
@@ -1409,7 +1409,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 "text": "Create company Acme",
                 "page_url": "http://app.test/companies",
             }
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 execution = executor.run_once(message)
 
             self.assertEqual(execution.status, AgentTurnStatus.CANCELLED)
@@ -1435,7 +1435,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 chat=chat, business_tools=None, control=ReadOnlyControl(),
                 run_id_factory=lambda _message: "turn-user-cancelled",
             )
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 execution = executor.run_once(_message())
 
             self.assertEqual(execution.status, AgentTurnStatus.CANCELLED)
@@ -1489,7 +1489,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 run_id_factory=lambda _message: "turn-cancel-provider",
             )
             outcome = []
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 worker = threading.Thread(
                     target=lambda: outcome.append(executor.run_once(_message())))
                 worker.start()
@@ -1539,7 +1539,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 control=ReadOnlyControl(),
                 run_id_factory=lambda _message: "turn-provider-failed",
             )
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 execution = executor.run_once(_message())
 
             self.assertEqual(execution.status, AgentTurnStatus.FAILED)
@@ -1572,7 +1572,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 chat=chat, business_tools=tools, control=ReadOnlyControl(),
                 run_id_factory=lambda _message: "turn-write-indeterminate",
             )
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 execution = executor.run_once({
                     "message_id": "message-write",
                     "text": "Create company Acme",
@@ -1605,7 +1605,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 control=ReadOnlyControl(),
                 run_id_factory=lambda _message: "turn-write-disabled",
             )
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 execution = executor.run_once({
                     "message_id": "message-write-disabled",
                     "text": "Create company Acme",
@@ -1637,7 +1637,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 control=ReadOnlyControl(),
                 run_id_factory=lambda _message: "turn-closed-after-finish",
             )
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 execution = executor.run_once(_message())
 
             self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
@@ -1658,7 +1658,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 control=ReadOnlyControl(),
                 run_id_factory=lambda _message: "turn-broken-delivery",
             )
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 execution = executor.run_once(_message())
 
             self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
@@ -1682,7 +1682,7 @@ class AgentTurnExecutorTests(unittest.TestCase):
                 answer_renderer=lambda _context: (_ for _ in ()).throw(
                     RuntimeError("presentation unavailable")),
             )
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 execution = executor.run_once(_message())
 
             self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
@@ -1764,7 +1764,7 @@ class LabApparatusNeverReachesTheProduct(unittest.TestCase):
 
     def _recorded_keywords(self) -> dict:
         recorded = {}
-        real = product.ServerAgentSession
+        real = turn.ServerAgentSession
 
         class _Recording(real):
             def __init__(self, **kwargs):
@@ -1788,8 +1788,8 @@ class LabApparatusNeverReachesTheProduct(unittest.TestCase):
                 control=ReadOnlyControl(),
                 run_id_factory=lambda message: "turn-lab-apparatus",
             )
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser), \
-                    patch.object(product, "ServerAgentSession", _Recording):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser), \
+                    patch.object(turn, "ServerAgentSession", _Recording):
                 # Only the composition matters here; whether this synthetic turn reaches a
                 # terminal result is a different test's subject.
                 try:
@@ -1831,7 +1831,7 @@ class EntryScopesReachTheProductTurn(unittest.TestCase):
         from web_operation_agent.schemas import ElementRef, PageObservation
 
         recorded = {}
-        real = product.ServerAgentSession
+        real = turn.ServerAgentSession
 
         class _Recording(real):
             def adopt_entry(self, obs):
@@ -1864,8 +1864,8 @@ class EntryScopesReachTheProductTurn(unittest.TestCase):
                 control=ReadOnlyControl(),
                 run_id_factory=lambda message: "turn-entry-scopes",
             )
-            with patch.object(product, "RemoteBrowserClient", _EntryLinkBrowser), \
-                    patch.object(product, "ServerAgentSession", _Recording):
+            with patch.object(turn, "RemoteBrowserClient", _EntryLinkBrowser), \
+                    patch.object(turn, "ServerAgentSession", _Recording):
                 try:
                     executor.run_once(_message())
                 except product.AgentTurnError:
@@ -1967,7 +1967,7 @@ class DeploymentSourceCapabilityReachesTheProductTurn(unittest.TestCase):
     def _turn(self, capability):
         """Run one product turn under `capability` and return (session kwargs, tool surface)."""
         recorded = {}
-        real = product.ServerAgentSession
+        real = turn.ServerAgentSession
 
         class _Recording(real):
             def __init__(self, **kwargs):
@@ -1992,8 +1992,8 @@ class DeploymentSourceCapabilityReachesTheProductTurn(unittest.TestCase):
                 control=ReadOnlyControl(),
                 run_id_factory=lambda message: "turn-source-capability",
             )
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser), \
-                    patch.object(product, "ServerAgentSession", _Recording):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser), \
+                    patch.object(turn, "ServerAgentSession", _Recording):
                 try:
                     executor.run_once(
                         _message(page_url="https://fixture.test/greenhouse/do/main"))

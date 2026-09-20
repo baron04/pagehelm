@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from web_operation_agent.execution import product
+from web_operation_agent.execution import product, turn
 from web_operation_agent.answer_protocol import compute, submit
 from web_operation_agent.answer_view import render_payload
 from web_operation_agent.embedded_agent import ReadOnlyControl
@@ -94,7 +94,7 @@ class DefaultPageAnswerPath(unittest.TestCase):
                 channel=_Channel(), chat=chat, control=ReadOnlyControl(),
                 run_id_factory=lambda message: "page-run",
                 config=AgentTurnConfig(supported_scope="Read the page.", ledger_path=Path(tmp)/"run.jsonl"))
-            with patch.object(product, "RemoteBrowserClient", browser):
+            with patch.object(turn, "RemoteBrowserClient", browser):
                 result = executor.run_once({"message_id": "page-answer", "text": "页面上的电话是什么？",
                                             "page_url": "http://app.test/companies"})
         return result, chat

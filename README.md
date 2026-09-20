@@ -68,7 +68,8 @@ The main reusable boundaries are:
 | Module | Responsibility |
 | --- | --- |
 | `web_operation_agent.application` | Validates a versioned application descriptor and executable identity, route, data-classification, mutation-postcondition, and reconciliation ports. |
-| `web_operation_agent.execution.product` | Binds a validated application and one user message to the latest observation, then runs one application-neutral agent turn. |
+| `web_operation_agent.execution.product` | Defines the versioned turn message, configuration, result, status, and neutral answer contract. |
+| `web_operation_agent.execution.turn` | Binds a validated application and one user message to the latest observation, runs one application-neutral Agent turn, then settles and publishes it. |
 | `web_operation_agent.conversation` | Retains bounded, redacted reference context across turns without granting current facts or routes. |
 | `web_operation_agent.live` | Owns the gateway and sequential conversation lifecycle. |
 | `web_operation_agent.browser` | Defines the structural browser executor and typed transport outcomes; it contains no browser engine. |

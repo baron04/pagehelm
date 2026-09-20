@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from web_operation_agent.execution import product
+from web_operation_agent.execution import product, turn
 from web_operation_agent.business.runtime import BusinessToolRuntime
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.evidence import Origin, QueryEvidence, RecordEvidence
@@ -48,7 +48,7 @@ class DefaultProductAnswerPath(unittest.TestCase):
                                        ledger_path=root / "run.jsonl",
                                        plain_business_answer_min_page_actions=0),
                 control=ReadOnlyControl(), run_id_factory=lambda message: "answer-run", **kwargs)
-            with patch.object(product, "RemoteBrowserClient", _RemoteBrowser):
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 result = executor.run_once({"message_id": "answer-task", "text": "公司金额合计多少？",
                                             "page_url": "http://app.test/companies"})
             return result, chat
