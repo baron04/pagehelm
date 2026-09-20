@@ -50,7 +50,8 @@ from .grounding import (NOT_APPLICABLE, REFUTED, WRITE_PERMITTED, WRITE_REFUSED,
 from .identity import PrincipalContext
 from .knowledge import ApplicationKnowledgePort
 from .ledger import SessionLedger
-from .model import BudgetExhausted, ProviderError
+from .model import BudgetExhausted
+from .provider import ProviderError
 from .privacy import (SessionHandoffPolicy, redact_sensitive_assignments,
                       safe_tool_arguments as _safe)
 from .routes import Router, candidate_url, observation_is_at_route
