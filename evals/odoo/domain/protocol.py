@@ -312,7 +312,9 @@ APPARATUS_MODULES = {
     "tasks_and_fixture": ["evals/odoo/domain/tasks.py", "evals/odoo/domain/population.py",
                           "evals/odoo/fixture/odoo_seed.py", "evals/odoo/provision.py",
                           "evals/odoo/fixture/manifest.py", "evals/odoo/judging/leakcheck.py"],
-    "statistics_and_report": ["evals/odoo/reporting/stats.py", "evals/odoo/reporting/report.py"],
+    "statistics_and_report": ["evals/odoo/reporting/stats.py",
+                              "evals/odoo/reporting/report.py",
+                              "evals/odoo/reporting/report_validation.py"],
     "entry": ["evals/odoo/batch.py", "evals/odoo/execution/harness.py"],
 }
 def arm_capability_digest(arm: str) -> str:
