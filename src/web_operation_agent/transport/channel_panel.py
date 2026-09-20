@@ -19,6 +19,7 @@ class ChannelPanel:
             "protocol": contract["protocol"],
             "limits": panel_limits(),
             "labels": dict(contract["label_keys"]),
+            "suggestions": _copy_json(contract["suggestions"]),
             "notices": dict(contract["notices"]),
             "panel_states": dict(contract["panel_states"]),
             "progress_states": _copy_json(contract["progress_states"]),

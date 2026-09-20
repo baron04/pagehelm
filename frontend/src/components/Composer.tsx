@@ -100,7 +100,11 @@ export function Composer(props: ComposerProps): React.JSX.Element {
             </button>
           )}
       </div>
-      {atLimit && <p className="woa-composer__limit">{limits.composer_max_chars}</p>}
+      {/* The words are the server's, the number is the server's bound, read at the place
+          it applies: a bare "2000" in warning orange explained nothing. */}
+      {atLimit && <p className="woa-composer__limit">
+        {labels.composerAtLimit} · {limits.composer_max_chars}
+      </p>}
     </form>
   )
 }

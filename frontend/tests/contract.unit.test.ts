@@ -31,6 +31,15 @@ describe('the contract is the server\'s, not a copy', () => {
     expect(isPanelState('invented')).toBe(false)
     expect(() => statusLabelKey('invented' as never)).toThrow()
   })
+
+  it('offers the server\'s suggestions, and gives the composer limit words', () => {
+    expect(DEFAULT_CONFIGURATION.suggestions.length).toBeGreaterThan(0)
+    for (const item of DEFAULT_CONFIGURATION.suggestions) {
+      expect(item.text.trim()).toBeTruthy()
+      expect(item.kind.trim()).toBeTruthy()
+    }
+    expect(DEFAULT_CONFIGURATION.labels.composerAtLimit).toBeTruthy()
+  })
 })
 
 describe('the host contract is checked where it is assembled', () => {

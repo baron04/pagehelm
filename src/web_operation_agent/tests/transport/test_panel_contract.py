@@ -75,6 +75,21 @@ class PanelContractTests(unittest.TestCase):
             self.assertIn(mapping["panel_state"], contract["panel_states"], name)
         self.assertGreater(contract["layout"]["overlay_z_index"], 2_147_483_640)
 
+    def test_the_empty_state_offers_only_promises_the_server_owns(self):
+        """The suggestion chips are capability disclosure; they live here, not in a component.
+
+        Each text must also fit the bound a typed goal is clipped to -- picking a chip
+        should never land in the composer already truncated.
+        """
+        contract = panel_contract()
+        suggestions = contract["suggestions"]
+        self.assertTrue(suggestions)
+        maximum = contract["limits"]["goal_max_chars"]
+        for item in suggestions:
+            self.assertTrue(str(item.get("text", "")).strip(), item)
+            self.assertTrue(str(item.get("kind", "")).strip(), item)
+            self.assertLessEqual(len(item["text"]), maximum, item["text"])
+
     def test_session_lifecycle_metadata_is_not_rendered_as_an_empty_turn(self):
         payload = {"state": "session_recovered", "message": "会话已重新连接"}
         self.assertIsNone(project_event(_event("progress", payload), at=123))
@@ -210,6 +225,7 @@ class PanelContractTests(unittest.TestCase):
         contract = panel_contract()
         self.assertEqual(configuration["limits"], contract["limits"])
         self.assertEqual(configuration["labels"], contract["label_keys"])
+        self.assertEqual(configuration["suggestions"], contract["suggestions"])
         self.assertEqual(configuration["notices"], contract["notices"])
         self.assertEqual(configuration["progress_states"], contract["progress_states"])
         self.assertEqual(configuration["layout"], contract["layout"])

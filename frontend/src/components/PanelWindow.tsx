@@ -24,7 +24,8 @@ export function PanelWindow({host, allowedOrigins}: {
   allowedOrigins: readonly string[]
 }): React.JSX.Element {
   const snapshot = useHostSnapshot(host)
-  const {labels, limits, approval_visibility: visibility} = host.configuration
+  const {labels, limits, suggestions,
+    approval_visibility: visibility} = host.configuration
   const [open, setOpenState] = useState(loadOpen)
   const [draft, setDraft] = useState('')
   const [unread, setUnread] = useState(0)
@@ -175,7 +176,7 @@ export function PanelWindow({host, allowedOrigins}: {
                               visibility={visibility} busy={deciding}
                               onDecide={decide} onRefused={() => undefined} />
               )}>
-        <EmptyState labels={labels} onPick={setDraft} />
+        <EmptyState labels={labels} suggestions={suggestions} onPick={setDraft} />
       </Thread>
 
       {(snapshot.notice ?? panelFailure) && (

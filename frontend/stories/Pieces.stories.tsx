@@ -51,7 +51,8 @@ export const ConfirmationNarrow = {
 export const Default = {
   render: () => frame(
     <div style={{padding: '0 13px'}}>
-      <EmptyState labels={labels} onPick={() => undefined} />
+      <EmptyState labels={labels} suggestions={configuration.suggestions}
+                  onPick={() => undefined} />
     </div>),
 }
 

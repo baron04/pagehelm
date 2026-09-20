@@ -118,6 +118,7 @@
     "expandAll": "展开全部",
     "composerBlockedByApproval": "确认后才能提交新目标",
     "composerClosed": "会话已结束",
+    "composerAtLimit": "已达输入上限",
     "undelivered": "未送达",
     "statusConnecting": "正在连接",
     "statusReady": "已就绪",
@@ -136,6 +137,11 @@
     "statusEnded": "已结束",
     "statusReplaced": "已由另一页面接管"
   },
+  "suggestions": [
+    {"text": "列出所有待开票的销售订单", "kind": "列举"},
+    {"text": "Acme 有哪些草稿报价单", "kind": "条件查询"},
+    {"text": "把报价单 S00002 确认成销售订单", "kind": "写入"}
+  ],
   "notices": {
     "backpressure": "当前任务较多，请稍后重试。",
     "session_closed": "与助手的连接已断开，正在重新连接。",

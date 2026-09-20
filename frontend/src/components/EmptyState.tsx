@@ -1,23 +1,25 @@
 import {ListOrdered, Plus, Search} from 'lucide-react'
-import type {Labels} from '../contract/panel'
+import type {Labels, Suggestion} from '../contract/panel'
 import {Mark} from './Mark'
 
 /**
  * The default state is also the only capability disclosure this product gets. The three
  * suggestions are the workflow kinds the live gate actually qualifies -- enumerate, filter,
- * write -- so nothing here promises something the agent has not been shown to do.
+ * write -- so nothing here promises something the agent has not been shown to do. That is
+ * why they arrive on the configuration (`contract["suggestions"]`): the promise itself is
+ * the server's, and this file may not invent a fourth.
+ *
+ * What is local here is only which glyph decorates which row -- an icon is not a string
+ * anyone reads aloud.
  *
  * Picking one fills the composer. It never submits: a write is not something to start with
  * a single stray click.
  */
-const SUGGESTIONS = [
-  {icon: ListOrdered, text: '列出所有待开票的销售订单', kind: '列举'},
-  {icon: Search, text: 'Acme 有哪些草稿报价单', kind: '条件查询'},
-  {icon: Plus, text: '把报价单 S00002 确认成销售订单', kind: '写入'},
-] as const
+const SUGGESTION_ICONS = [ListOrdered, Search, Plus]
 
-export function EmptyState({labels, onPick, compact}: {
+export function EmptyState({labels, suggestions, onPick, compact}: {
   labels: Labels
+  suggestions: readonly Suggestion[]
   onPick: (text: string) => void
   compact?: boolean
 }): React.JSX.Element {
@@ -27,15 +29,18 @@ export function EmptyState({labels, onPick, compact}: {
       <h3>{labels.emptyGreeting}</h3>
       {!compact && <p>{labels.emptyDetail}</p>}
       <ul className="woa-suggestions">
-        {SUGGESTIONS.map(item => (
-          <li key={item.text}>
-            <button type="button" onClick={() => onPick(item.text)}>
-              <item.icon size={13} strokeWidth={1.7} aria-hidden="true" />
-              <span>{item.text}</span>
-              <span className="woa-suggestions__kind">{item.kind}</span>
-            </button>
-          </li>
-        ))}
+        {suggestions.map((item, index) => {
+          const Icon = SUGGESTION_ICONS[index] ?? Search
+          return (
+            <li key={item.text}>
+              <button type="button" onClick={() => onPick(item.text)}>
+                <Icon size={13} strokeWidth={1.7} aria-hidden="true" />
+                <span>{item.text}</span>
+                <span className="woa-suggestions__kind">{item.kind}</span>
+              </button>
+            </li>
+          )
+        })}
       </ul>
     </div>
   )
