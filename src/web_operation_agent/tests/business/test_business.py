@@ -612,7 +612,7 @@ class SkillCitations(unittest.TestCase):
         distribution installed, which is the boundary `check_core_boundary.py` guards. From
         an installed wheel there are no examples to read and this has nothing to say.
         """
-        root = Path(__file__).resolve().parents[3] / "examples"
+        root = Path(__file__).resolve().parents[4] / "examples"
         if not root.is_dir():
             self.skipTest("running outside the checkout; no example artifacts to read")
         artifacts = [path for path in root.rglob("skills/*.json")

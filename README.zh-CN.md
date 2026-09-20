@@ -116,6 +116,8 @@ python src/web_operation_agent/tests/run_all.py
 
 测试入口使用 Python `unittest` 自动发现，并防止测试数据写入真实模型费用账本。浏览器测试会在缺少 Chromium 时跳过。依赖上游 PageController 的测试只有在 `WOA_PAGE_CONTROLLER_MODULE` 指向已安装模块时才会运行，否则会跳过。核心测试套件不 import 任何应用 distribution：它的路由、知识与源码夹具都是合成的，且刻意采用既不是 Odoo 也不是 OFBiz 的路由语法——一个假设了某个应用 URL 写法的核心模块会在那里失败。每个应用 distribution 自己负责自己行为的测试，并作为独立门禁运行。
 
+各层自有测试按软件包结构放在 `tests/modeling/`、`tests/planning/`、`tests/business/` 和 `tests/execution/`；跨层合同与共享 fixture 保留在 tests 根目录。自动发现与 `-k` 模式会递归进入这些 package。
+
 通过同一受保护入口只运行一个测试模块：
 
 ```bash

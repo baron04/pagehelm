@@ -41,7 +41,7 @@ from web_operation_agent.execution.product import (
 )
 from web_operation_agent.remote import RemoteSessionClosed
 from web_operation_agent.schemas import ApprovalDecision, ObservationEnvelope
-from web_operation_agent.tests.test_business import (
+from web_operation_agent.tests.business.test_business import (
     _Browser,
     _Chat,
     _Executor,

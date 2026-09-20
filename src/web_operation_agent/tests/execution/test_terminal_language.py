@@ -12,7 +12,7 @@ import unittest
 
 from web_operation_agent.execution import product
 from web_operation_agent.execution.product import AgentTurnMessage
-from web_operation_agent.tests.test_product import _message
+from web_operation_agent.tests.execution.test_product import _message
 
 
 def _answer(reason: str, text: str) -> str:

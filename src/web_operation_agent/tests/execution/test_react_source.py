@@ -16,8 +16,8 @@ from web_operation_agent.tests.route_fixture import (FIXTURE_ROUTE_PORT,
 from web_operation_agent.privacy import (SESSION_HANDOFF_QUERY_KEYS,
                                          SessionHandoffPolicy)
 from web_operation_agent.execution.routes import candidate_url
-from web_operation_agent.tests.test_contract import _map
-from web_operation_agent.tests.test_session import _Chat, _Control, _Browser, _obs
+from web_operation_agent.tests.planning.test_contract import _map
+from web_operation_agent.tests.execution.test_session import _Chat, _Control, _Browser, _obs
 
 
 def _candidate_url(candidate, bindings):
@@ -492,7 +492,7 @@ class SourceAffordanceLoop(unittest.TestCase):
             self.assertIn("safe relative", error)
 
     def test_source_map_can_feed_affordances_without_compiling_the_contract(self):
-        from web_operation_agent.tests.test_contract import _StubModel
+        from web_operation_agent.tests.planning.test_contract import _StubModel
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

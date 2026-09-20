@@ -116,6 +116,8 @@ python src/web_operation_agent/tests/run_all.py
 
 The test runner uses Python `unittest` discovery and guards the real model-spend ledger from test writes. Browser-backed tests skip when Chromium is absent. Tests that exercise the upstream PageController run only when `WOA_PAGE_CONTROLLER_MODULE` names an installed module; otherwise they skip. The core suite imports no application distribution: its route, knowledge and source fixtures are synthetic and use a route grammar that is deliberately neither Odoo's nor OFBiz's, so a core module that assumed one application's URL syntax fails there. Each application distribution owns the tests of its own behaviour and runs as its own gate.
 
+Layer-owned tests mirror the package under `tests/modeling/`, `tests/planning/`, `tests/business/`, and `tests/execution/`; cross-layer contracts and shared fixtures remain at the test root. Discovery and `-k` patterns recurse through those packages.
+
 To run one test module through the same guarded runner:
 
 ```bash

@@ -105,7 +105,7 @@ from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionReceipt,     # n
                                          ElementRef, OperationContract, PageObservation)
 from web_operation_agent.execution.session import (LabApparatus, ServerAgentSession,
                                          TaskSpec)         # noqa: E402
-from web_operation_agent.tests.test_session import _Chat, _Control           # noqa: E402
+from web_operation_agent.tests.execution.test_session import _Chat, _Control           # noqa: E402
 from web_operation_agent.tests.chat_port_contract import (                   # noqa: E402
     CancellableChatDouble)
 from web_operation_agent.tests.session_fixture import SessionFixture

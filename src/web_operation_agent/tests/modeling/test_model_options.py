@@ -701,7 +701,7 @@ class WhatTheAgentIsToldAfterAWrite(unittest.TestCase):
 class SessionRecoveryIsVisible(unittest.TestCase):
     def test_the_action_ledger_carries_it_per_action(self):
         from dataclasses import replace
-        from web_operation_agent.tests.test_session import (_Browser, _Chat, _Control,
+        from web_operation_agent.tests.execution.test_session import (_Browser, _Chat, _Control,
                                                             _obs, _session)
 
         class ReloginBrowser(_Browser):

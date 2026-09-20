@@ -41,7 +41,7 @@ from web_operation_agent.tests import golden_session
 from web_operation_agent.tests.golden_session import SCENARIOS, tool_surface_compositions
 
 
-GOLDEN = Path(__file__).resolve().parent / "golden" / "session_behavior.json"
+GOLDEN = Path(__file__).resolve().parents[1] / "golden" / "session_behavior.json"
 
 #: Wall-clock and provider-timing fields. They are behaviour, but not *reproducible*
 #: behaviour, and a gold standard that is red at random teaches a team to stop reading it.

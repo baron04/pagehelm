@@ -161,7 +161,7 @@ class ARefusalNamesWhatWasRefused(unittest.TestCase):
     def test_a_refused_read_is_named_in_the_answer(self):
         from web_operation_agent.execution.product import AgentAnswerContext, AgentTurnMessage, RunResult
         from web_operation_agent.execution.product import render_neutral_user_answer
-        from web_operation_agent.tests.test_product import _message
+        from web_operation_agent.tests.execution.test_product import _message
         answer = render_neutral_user_answer(AgentAnswerContext(
             message=AgentTurnMessage.from_wire({**_message(), "text": "它有哪些销售订单？"}),
             agent=RunResult(run_id="run", task_ref="task", arm="U",
