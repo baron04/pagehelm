@@ -28,7 +28,7 @@ from web_operation_agent.live import LiveConversationRunner, LiveProductServer, 
 from web_operation_agent.business.mutation import SQLiteMutationJournal
 from web_operation_agent.modeling.client import (KeyedLimitedChat, KeyedProviderAdmission,
                                        ProviderRuntimeGuard)
-from web_operation_agent.product import AgentTurnConfig, AgentTurnExecutor
+from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnExecutor
 
 
 @dataclass(frozen=True, slots=True)

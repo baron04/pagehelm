@@ -28,38 +28,38 @@ from typing import Callable
 from urllib.parse import urlencode, urljoin, urlsplit
 from zoneinfo import ZoneInfo
 
-from .application import ApplicationRoutePort, SourceCapability
-from . import answer_protocol
-from . import page_answer
-from .business.approvals import ApprovalWatch, NavigationPlan
-from .answer_view import (capability_gap_answer, render_payload, unavailable_answer,
+from ..application import ApplicationRoutePort, SourceCapability
+from .. import answer_protocol
+from .. import page_answer
+from ..business.approvals import ApprovalWatch, NavigationPlan
+from ..answer_view import (capability_gap_answer, render_payload, unavailable_answer,
                           withdrawn_answer)
-from .affordance import SourceAffordance, resolve_source_affordances
-from .browser import BrowserExecutor, TransportError, TurnCancelled
-from .business.runtime import (BUSINESS_SKILL_MATCHER_VERSION, BusinessSkillSelection,
+from ..affordance import SourceAffordance, resolve_source_affordances
+from ..browser import BrowserExecutor, TransportError, TurnCancelled
+from ..business.runtime import (BUSINESS_SKILL_MATCHER_VERSION, BusinessSkillSelection,
                                FormDraft, BusinessToolRuntime)
-from .business.errors import (BusinessMutationBlockedError, BusinessMutationIndeterminate,
+from ..business.errors import (BusinessMutationBlockedError, BusinessMutationIndeterminate,
                               BusinessMutationRefusedError, BusinessToolError,
                               BusinessToolPermissionError)
-from .business.text import trigger_requests_action
-from .planning.contract import (ContractPlanner, PlanningFailed, _segment_from_template,
+from ..business.text import trigger_requests_action
+from ..planning.contract import (ContractPlanner, PlanningFailed, _segment_from_template,
                                 expand_terms)
-from .planning.retrieval import EvidenceBundle, SourceRetriever
-from .controlplane import ControlPlaneClient, ControlPlaneError
-from .modeling.egress import AuditedChat, ProviderEgressError
-from .grounding import (NOT_APPLICABLE, REFUTED, WRITE_PERMITTED, WRITE_REFUSED,
+from ..planning.retrieval import EvidenceBundle, SourceRetriever
+from ..controlplane import ControlPlaneClient, ControlPlaneError
+from ..modeling.egress import AuditedChat, ProviderEgressError
+from ..grounding import (NOT_APPLICABLE, REFUTED, WRITE_PERMITTED, WRITE_REFUSED,
                         WRITE_UNKNOWN, PlanState, opaque_route_identity)
-from .identity import PrincipalContext
-from .planning.knowledge import ApplicationKnowledgePort
-from .ledger import SessionLedger
-from .modeling.provider import ProviderError
-from .privacy import (SessionHandoffPolicy, redact_sensitive_assignments,
+from ..identity import PrincipalContext
+from ..planning.knowledge import ApplicationKnowledgePort
+from ..ledger import SessionLedger
+from ..modeling.provider import ProviderError
+from ..privacy import (SessionHandoffPolicy, redact_sensitive_assignments,
                       safe_tool_arguments as _safe)
 from .routes import Router, candidate_url, observation_is_at_route
-from .modeling.spend import BudgetExhausted
+from ..modeling.spend import BudgetExhausted
 from .turnwatch import ProgressFeed, RepeatGuard
 from .turn_answer import AnswerState, TurnAnswer
-from .business.writes import PRE_DISPATCH_ERRORS, WRITE_CAPABLE, WatchState, WriteWatch
+from ..business.writes import PRE_DISPATCH_ERRORS, WRITE_CAPABLE, WatchState, WriteWatch
 from .prompts import (
     AGENT_SYSTEM, APPLICATION_ENTRY_SYSTEM, APPLICATION_ENTRY_TOOL, ASK_USER_TOOL,
     BUSINESS_SKILL_SYSTEM, CAPABILITY_SYSTEM, CAPABILITY_TOOL,
@@ -69,9 +69,9 @@ from .prompts import (
     SOURCE_CANDIDATE_TOOL, SOURCE_NAV_TOOL, SOURCE_TOOL, TOOL_SCHEMAS, WITHDRAW_TOOL,
     _CAPABILITY_QUESTION, _NAVIGATION_EXTRA_GOAL, _NAVIGATION_ONLY, _PLAN_PREAMBLE,
     _REFERENCE_FOLLOWUP)
-from .schemas import (BROWSER_ACTIONS, ActionReceipt, ControlPlan, OperationContract,
+from ..schemas import (BROWSER_ACTIONS, ActionReceipt, ControlPlan, OperationContract,
                       PageObservation, digest, empty_contract)
-from .evidence import CapabilityEvidence, EvidenceUnknown, Origin, TurnEvidence
+from ..evidence import CapabilityEvidence, EvidenceUnknown, Origin, TurnEvidence
 
 #: Describe a plan by its actual origin. A page-only plan must never be presented to the model
 #: as source-derived, because that would change the information available to that mode.

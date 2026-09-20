@@ -16,20 +16,20 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit
 
-from .application import BoundApplication, SourceCapability
-from .answering import render_structured_query_answer
-from .answer_view import render_payload, render_sources
-from .modeling.chat import require_chat_port
-from .panel_view import describe_step, panel_limits, step_facts
-from .browser import TransportError
-from .business.runtime import BusinessToolResult, BusinessToolRuntime
-from .conversation import ConversationState
-from .embedded_agent import ApprovalGate, ApprovalGrant
-from .identity import OperationContext, PrincipalError
-from .ledger import SessionLedger
-from .business.mutation import MutationJournalDurability
-from .privacy import redact_sensitive_assignments, redact_session_handoffs
-from .remote import (RemoteBrowserClient, RemoteProtocolError,
+from ..application import BoundApplication, SourceCapability
+from ..answering import render_structured_query_answer
+from ..answer_view import render_payload, render_sources
+from ..modeling.chat import require_chat_port
+from ..panel_view import describe_step, panel_limits, step_facts
+from ..browser import TransportError
+from ..business.runtime import BusinessToolResult, BusinessToolRuntime
+from ..conversation import ConversationState
+from ..embedded_agent import ApprovalGate, ApprovalGrant
+from ..identity import OperationContext, PrincipalError
+from ..ledger import SessionLedger
+from ..business.mutation import MutationJournalDurability
+from ..privacy import redact_sensitive_assignments, redact_session_handoffs
+from ..remote import (RemoteBrowserClient, RemoteProtocolError,
                      RemoteSessionChannel, ensure_safe_browser_payload)
 from .session import RunResult, ServerAgentSession, TaskSpec
 

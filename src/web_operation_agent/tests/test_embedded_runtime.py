@@ -17,7 +17,7 @@ from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.remote import (RemoteBrowserClient, RemoteSessionChannel,
                                         RemoteSessionRegistry)
 from web_operation_agent.schemas import ApprovalRequest
-from web_operation_agent.session import LabApparatus, ServerAgentSession, TaskSpec
+from web_operation_agent.execution.session import LabApparatus, ServerAgentSession, TaskSpec
 from web_operation_agent.tests.test_session import _Chat, _Control
 
 

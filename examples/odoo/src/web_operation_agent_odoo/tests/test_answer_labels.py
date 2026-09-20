@@ -18,7 +18,7 @@ from web_operation_agent.business.runtime import BusinessToolRuntime
 from web_operation_agent.identity import PrincipalContext
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.business.mutation import MemoryMutationJournal
-from web_operation_agent.session import ServerAgentSession, TaskSpec
+from web_operation_agent.execution.session import ServerAgentSession, TaskSpec
 from web_operation_agent_odoo.adapter import ANSWER_LABELS_ZH, OdooApplicationAdapter
 from web_operation_agent_odoo.tests.test_adapter import (
     BASE, ReadOnlyControl, _FakeOdoo, _key_file, _ProductRoutingBrowser, _ProductRoutingChat,
@@ -159,8 +159,8 @@ class ARefusalNamesWhatWasRefused(unittest.TestCase):
                 self.assertIn(tool, ANSWER_LABELS_ZH)
 
     def test_a_refused_read_is_named_in_the_answer(self):
-        from web_operation_agent.product import AgentAnswerContext, AgentTurnMessage, RunResult
-        from web_operation_agent.product import render_neutral_user_answer
+        from web_operation_agent.execution.product import AgentAnswerContext, AgentTurnMessage, RunResult
+        from web_operation_agent.execution.product import render_neutral_user_answer
         from web_operation_agent.tests.test_product import _message
         answer = render_neutral_user_answer(AgentAnswerContext(
             message=AgentTurnMessage.from_wire({**_message(), "text": "它有哪些销售订单？"}),

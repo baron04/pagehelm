@@ -4,7 +4,7 @@ from __future__ import annotations
 import unittest
 
 from web_operation_agent.schemas import PageObservation
-from web_operation_agent.turnwatch import ProgressFeed, RepeatGuard
+from web_operation_agent.execution.turnwatch import ProgressFeed, RepeatGuard
 
 
 def _page(url: str = "https://app.test/orders", epoch: int = 1,

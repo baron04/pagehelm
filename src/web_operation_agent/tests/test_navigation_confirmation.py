@@ -18,7 +18,7 @@ from web_operation_agent.business.runtime import FormDraft, FormDraftField
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.panel_view import panel_contract
 from web_operation_agent.schemas import ActionReceipt
-from web_operation_agent.session import NavigationPlan, ServerAgentSession, TaskSpec
+from web_operation_agent.execution.session import NavigationPlan, ServerAgentSession, TaskSpec
 from web_operation_agent.tests.route_fixture import FIXTURE_ROUTE_PORT
 from web_operation_agent.tests.test_session import (ApplicationIssuedFormPrefill, _Browser,
                                                     _Chat, _Control, _obs)

@@ -254,7 +254,7 @@ class SourceCapabilityTests(unittest.TestCase):
         session now accepts only the whole value, so there is nothing to pick from.
         """
         import inspect
-        from web_operation_agent.session import ServerAgentSession
+        from web_operation_agent.execution.session import ServerAgentSession
         accepted = set(inspect.signature(ServerAgentSession.__init__).parameters)
         self.assertIn("source", accepted)
         self.assertEqual(accepted & set(SourceCapability.none().session_kwargs()), set())

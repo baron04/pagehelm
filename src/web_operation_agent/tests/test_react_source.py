@@ -9,13 +9,13 @@ from web_operation_agent.affordance import (AffordanceParameter,
                                              resolve_source_affordances)
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.schemas import empty_contract
-from web_operation_agent.session import (LabApparatus, SCOPE_FIRST_SYSTEM,
+from web_operation_agent.execution.session import (LabApparatus, SCOPE_FIRST_SYSTEM,
                                          ServerAgentSession, TaskSpec)
 from web_operation_agent.tests.route_fixture import (FIXTURE_ROUTE_PORT,
                                                      fixture_route_identity)
 from web_operation_agent.privacy import (SESSION_HANDOFF_QUERY_KEYS,
                                          SessionHandoffPolicy)
-from web_operation_agent.routes import candidate_url
+from web_operation_agent.execution.routes import candidate_url
 from web_operation_agent.tests.test_contract import _map
 from web_operation_agent.tests.test_session import _Chat, _Control, _Browser, _obs
 

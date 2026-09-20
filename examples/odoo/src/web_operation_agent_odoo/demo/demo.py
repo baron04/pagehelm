@@ -40,7 +40,7 @@ from web_operation_agent.identity import PrincipalContext
 from web_operation_agent.live import LiveConversationRunner, LiveProductSession
 from web_operation_agent.modeling.client import ChatModel, ProviderError, SpendMeter, load_env
 from web_operation_agent.business.mutation import SQLiteMutationJournal
-from web_operation_agent.product import (AgentTurnExecution,
+from web_operation_agent.execution.product import (AgentTurnExecution,
                                          AgentTurnExecutor)
 
 from ..adapter import OdooApplicationAdapter

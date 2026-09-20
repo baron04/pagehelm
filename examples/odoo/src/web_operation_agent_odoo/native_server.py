@@ -31,7 +31,7 @@ from web_operation_agent.modeling.client import (ChatModel, KeyedLimitedChat,
 from web_operation_agent.business.mutation import SQLiteMutationJournal
 from web_operation_agent.modeling.observability import ObservedChat, RuntimeObservability
 from web_operation_agent.ledger import SessionLedger
-from web_operation_agent.product import AgentTurnExecutor
+from web_operation_agent.execution.product import AgentTurnExecutor
 
 from .turn import odoo_turn_config
 from web_operation_agent.remote import RemoteProtocolError

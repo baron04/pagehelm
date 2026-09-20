@@ -14,7 +14,7 @@ from web_operation_agent.privacy import (
     redact_sensitive_assignments,
     redact_session_handoffs,
 )
-from web_operation_agent.session import _safe
+from web_operation_agent.execution.session import _safe
 
 
 class SessionHandoffPrivacy(unittest.TestCase):

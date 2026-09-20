@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from web_operation_agent import product
+from web_operation_agent.execution import product
 from web_operation_agent.application import (APPLICATION_ADAPTER_VERSION,
                                              AnonymousIdentityPort,
                                              ApplicationDescriptor,
@@ -30,8 +30,8 @@ from web_operation_agent.evidence import Origin, RecordEvidence
 from web_operation_agent.identity import PrincipalContext
 from web_operation_agent.modeling.client import ProviderError
 from web_operation_agent.business.mutation import SQLiteMutationJournal
-from web_operation_agent.session import NO_LAB
-from web_operation_agent.product import (
+from web_operation_agent.execution.session import NO_LAB
+from web_operation_agent.execution.product import (
     AgentTurnConfig,
     AgentTurnError,
     AgentTurnErrorCode,

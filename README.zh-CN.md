@@ -59,7 +59,7 @@ flowchart LR
 
 服务端持有模型访问、规划、知识、会话策略、授权状态和审计数据。浏览器只接收仅限当前会话的能力凭据、固定的通用动作和用户可见的确认请求，不接收模型密钥、源码索引、隐藏写权限或 evaluator。
 
-Python 软件包也按这些服务端边界组织：`modeling/` 负责 provider 访问与费用核算，`planning/` 负责合同、可选知识和从源码派生的 Skill，`business/` 负责 typed tool、确认与写入结算。会话执行器只组合这些层，不再持有它们的实现。
+Python 软件包也按这些服务端边界组织：`modeling/` 负责 provider 访问与费用核算，`planning/` 负责合同、可选知识和从源码派生的 Skill，`business/` 负责 typed tool、确认与写入结算，`execution/` 则用这些层组合一次有界的产品 turn 与 Agent session。
 
 运行时事实的优先级高于 Skill、源码、文档和 API schema。知识来源可以提出路由或工具调用建议，最终以当前页面和应用响应为准。
 
@@ -68,7 +68,7 @@ Python 软件包也按这些服务端边界组织：`modeling/` 负责 provider 
 | 模块 | 职责 |
 | --- | --- |
 | `web_operation_agent.application` | 校验版本化应用描述，以及可执行的身份、路由、数据分类、mutation 后置条件与核对端口。 |
-| `web_operation_agent.product` | 把已校验的应用和一条用户消息绑定到最新页面观察，并执行一次与具体应用无关的 Agent turn。 |
+| `web_operation_agent.execution.product` | 把已校验的应用和一条用户消息绑定到最新页面观察，并执行一次与具体应用无关的 Agent turn。 |
 | `web_operation_agent.conversation` | 在多轮之间保留有界、脱敏的引用上下文，不把历史事实或路由当成当前权限。 |
 | `web_operation_agent.live` | 管理网关和顺序执行的会话生命周期。 |
 | `web_operation_agent.browser` | 定义结构化浏览器执行协议和类型化传输结果，不包含浏览器引擎。 |
@@ -80,7 +80,7 @@ Python 软件包也按这些服务端边界组织：`modeling/` 负责 provider 
 | `web_operation_agent.planning.retrieval` | 从编译后的 source map 中确定性地选择有界且带引用的证据。 |
 | `web_operation_agent.planning.contract` | 把源码证据与最新页面观察编译成经过校验的 operation contract。 |
 | `web_operation_agent.planning.source_skill` | 从版本绑定的 source map 编译可审查的应用 Skill。 |
-| `web_operation_agent.session` | 实现有步数和时间限制的服务端 Agent 循环。 |
+| `web_operation_agent.execution.session` | 实现有步数和时间限制的服务端 Agent 循环。 |
 | `web_operation_agent.modeling.observability` | 把脱敏账本事件转换为无业务内容的 OTLP trace、metric 和运维告警，不改变任务结果。 |
 
 每个应用专有 Adapter 都以独立 distribution 发布，不放在上面的核心包里：[`web-operation-agent-odoo`](examples/odoo) 提供 `OdooApplicationAdapter` 和 Odoo 源码编译器，[`web-operation-agent-twenty`](examples/twenty) 提供 `TwentyApplicationAdapter`，[`web-operation-agent-ofbiz`](examples/ofbiz) 提供 Apache OFBiz 的路由语法、源码编译器和 App Skill provider。核心包不含任何应用专有代码，`scripts/check_core_boundary.py` 断言核心（含测试）不 import 任何应用 distribution；接入新应用时实现的是这三者同样实现的端口。

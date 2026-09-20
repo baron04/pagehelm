@@ -19,7 +19,7 @@ from .durable import SQLiteSessionStore
 from .embedded_gateway import EmbeddedGateway
 from .identity import PrincipalContext
 from .privacy import redact_sensitive_assignments, redact_session_handoffs
-from .product import AgentTurnError
+from .execution.product import AgentTurnError
 from .remote import (RemoteSessionChannel, RemoteSessionClosed, RemoteSessionLimits,
                      RemoteSessionRegistry, SessionGrant)
 from .traceview import build_trace_case, render_trace_html, write_trace_bundle

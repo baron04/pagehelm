@@ -21,7 +21,7 @@ from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.identity import PrincipalError
 from web_operation_agent.live import LiveConversationRunner, LiveProductSession
 from web_operation_agent.business.mutation import MemoryMutationJournal, SQLiteMutationJournal
-from web_operation_agent.product import AgentTurnConfig, AgentTurnExecutor
+from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnExecutor
 from web_operation_agent.tests.adapter_contract import assert_adapter_contract
 
 

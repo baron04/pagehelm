@@ -13,7 +13,7 @@ import tempfile
 from pathlib import Path
 
 from web_operation_agent.ledger import SessionLedger
-from web_operation_agent.session import ServerAgentSession, TaskSpec
+from web_operation_agent.execution.session import ServerAgentSession, TaskSpec
 from web_operation_agent.tests.test_session import _Browser, _Chat, _Control, _obs
 
 

@@ -8,7 +8,7 @@ class TerminalReasonContract(unittest.TestCase):
 
     def test_every_reason_the_runner_emits_is_classified(self):
         from web_operation_agent.business.approvals import ApprovalWatch
-        from web_operation_agent.session import ServerAgentSession
+        from web_operation_agent.execution.session import ServerAgentSession
         emitted = _reasons_emitted_by(ServerAgentSession, ApprovalWatch)
         self.assertTrue(emitted, "could not find any terminal reason in the runner source")
         S.assert_terminal_reason_contract(emitted, set(S.SCORABLE_TERMINAL_REASONS))

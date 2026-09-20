@@ -17,7 +17,7 @@ from web_operation_agent.panel_view import (collapse_timeline, describe_action, 
                                             label_keys, panel_contract, panel_limits,
                                             project_event, project_history_record,
                                             token_custom_properties)
-from web_operation_agent.product import AgentTurnStatus
+from web_operation_agent.execution.product import AgentTurnStatus
 from web_operation_agent.remote import RemoteSessionChannel
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionCommand,
                                          ActionEnvelope, TaskEvent)
@@ -128,7 +128,7 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn("1. London", entry["text"])
 
     def test_panel_capacity_accepts_the_largest_supported_product_answer(self):
-        from web_operation_agent.product import AgentTurnConfig
+        from web_operation_agent.execution.product import AgentTurnConfig
         config = AgentTurnConfig(supported_scope="read", ledger_path=Path("unused.jsonl"),
                                  max_user_answer_chars=panel_limits()["result_max_chars"])
         text = "x" * (config.max_user_answer_chars - 20) + "\nEND OF ANSWER"

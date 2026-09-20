@@ -5,13 +5,13 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from web_operation_agent import product
+from web_operation_agent.execution import product
 from web_operation_agent.answer_protocol import compute, submit
 from web_operation_agent.answer_view import render_payload
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.evidence import TurnEvidence
 from web_operation_agent.page_answer import collect, MAX_PAGE_ITEMS
-from web_operation_agent.product import AgentTurnConfig, AgentTurnExecutor, AgentTurnStatus
+from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnExecutor, AgentTurnStatus
 from web_operation_agent.schemas import ElementRef, PageObservation
 from web_operation_agent.tests.test_answer_product import _answer
 from web_operation_agent.tests.test_business import _Chat

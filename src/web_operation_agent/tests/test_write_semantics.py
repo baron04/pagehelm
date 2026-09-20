@@ -53,7 +53,7 @@ class WhatTheModelIsTold(unittest.TestCase):
     def _rendered(self, state, ok=True, error_code=""):
         from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionReceipt, ElementRef,
                                                  PageObservation)
-        from web_operation_agent.session import ServerAgentSession
+        from web_operation_agent.execution.session import ServerAgentSession
         obs = PageObservation(schema_version=SCHEMA_VERSIONS["PageObservation"], epoch=1,
                               url="http://app/x", title="T", landmarks=[],
                               elements=[ElementRef("e1", "link", "L", "a", 1)], messages=[])
@@ -103,7 +103,7 @@ from web_operation_agent.tests.route_fixture import (                # noqa: E40
 from web_operation_agent.ledger import SessionLedger                         # noqa: E402
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionReceipt,     # noqa: E402
                                          ElementRef, OperationContract, PageObservation)
-from web_operation_agent.session import (LabApparatus, ServerAgentSession,
+from web_operation_agent.execution.session import (LabApparatus, ServerAgentSession,
                                          TaskSpec)         # noqa: E402
 from web_operation_agent.tests.test_session import _Chat, _Control           # noqa: E402
 from web_operation_agent.tests.chat_port_contract import (                   # noqa: E402
@@ -289,7 +289,7 @@ class WhatTheRunSaysAboutTheAgentsClaim(unittest.TestCase):
     def test_authorisation_counts_alone_cannot_confirm_success(self):
         """Counts cannot confirm a save. Future same-actor UI verification is allowed;
         the hidden evaluator remains outside the product boundary."""
-        from web_operation_agent.session import ServerAgentSession
+        from web_operation_agent.execution.session import ServerAgentSession
         s = object.__new__(ServerAgentSession)
         seen = set()
         for done in (True, False):
@@ -305,7 +305,7 @@ class ThePageOnlyArmIsNotToldItHasSource(unittest.TestCase):
     treatment inside its own prompt."""
 
     def _preamble(self, source):
-        from web_operation_agent.session import ServerAgentSession, _PLAN_MARK
+        from web_operation_agent.execution.session import ServerAgentSession, _PLAN_MARK
         s = object.__new__(ServerAgentSession)
         s.contract_source = source
         s.contract = CONTRACT
@@ -334,7 +334,7 @@ class TheEvidenceThePlannerHadIsRecorded(unittest.TestCase):
         """Drives the real planning stage and reads the ledger it wrote."""
         import json as _json
         from web_operation_agent.planning.retrieval import EvidenceBundle
-        from web_operation_agent.session import ServerAgentSession
+        from web_operation_agent.execution.session import ServerAgentSession
 
         class _PlanChat(CancellableChatDouble):
             def __init__(self):

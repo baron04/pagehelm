@@ -18,7 +18,7 @@ from pathlib import Path
 from web_operation_agent.business.runtime import BusinessToolPermissionError
 from web_operation_agent.identity import PrincipalContext
 from web_operation_agent.ledger import SessionLedger
-from web_operation_agent.session import ServerAgentSession, TaskSpec
+from web_operation_agent.execution.session import ServerAgentSession, TaskSpec
 from web_operation_agent_odoo.adapter import OdooApplicationAdapter
 from web_operation_agent_odoo.tests.test_adapter import (
     BASE, ReadOnlyControl, _customers, _FakeOdoo, _key_file, _orders,

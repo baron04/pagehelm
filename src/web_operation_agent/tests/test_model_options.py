@@ -664,7 +664,7 @@ class WhatTheAgentIsToldAfterAWrite(unittest.TestCase):
     """After a write is permitted, the agent may stop and verify instead of submitting again."""
 
     def _rendered(self, state):
-        from web_operation_agent.session import ServerAgentSession, _render_observation
+        from web_operation_agent.execution.session import ServerAgentSession, _render_observation
         from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionReceipt, ElementRef,
                                                  PageObservation)
         obs = PageObservation(schema_version=SCHEMA_VERSIONS["PageObservation"], epoch=1,

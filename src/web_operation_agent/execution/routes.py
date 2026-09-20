@@ -12,10 +12,10 @@ from dataclasses import dataclass, field
 from functools import partial
 from urllib.parse import quote, urlencode, urljoin, urlsplit
 
-from .affordance import SourceAffordance
-from .privacy import SessionHandoffPolicy, safe_tool_arguments
-from .schemas import PageObservation
-from .grounding import opaque_route_identity
+from ..affordance import SourceAffordance
+from ..privacy import SessionHandoffPolicy, safe_tool_arguments
+from ..schemas import PageObservation
+from ..grounding import opaque_route_identity
 
 def candidate_url(candidate: SourceAffordance, bindings, *,
                    route_identity=opaque_route_identity,

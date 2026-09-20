@@ -14,7 +14,7 @@ from web_operation_agent.live import (LiveConversationRunner, LiveProductServer,
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.identity import PrincipalContext
 from web_operation_agent.modeling.client import ProviderError
-from web_operation_agent.product import (AgentTurnConfig, AgentTurnError,
+from web_operation_agent.execution.product import (AgentTurnConfig, AgentTurnError,
                                          AgentTurnErrorCode, AgentTurnExecutor,
                                          AgentTurnStatus)
 from web_operation_agent.remote import (RemoteProtocolError, RemoteSessionClosed,

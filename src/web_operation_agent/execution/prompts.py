@@ -1,4 +1,4 @@
-"""What the model is told: the system prompts, and the tools it may call.
+"""What the execution layer tells the model: prompts and callable tool schemas.
 
 Every one of these is a product decision about how the agent behaves, and they were 300
 lines at the top of the session module, in front of the code that runs a turn. A session

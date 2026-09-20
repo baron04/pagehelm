@@ -28,7 +28,7 @@ from web_operation_agent.live import LiveConversationRunner, LiveProductSession,
 from web_operation_agent.modeling.client import ChatModel, SpendMeter, load_env
 from web_operation_agent.business.mutation import SQLiteMutationJournal
 from web_operation_agent.privacy import redact_sensitive_assignments, redact_session_handoffs
-from web_operation_agent.product import AgentTurnConfig, AgentTurnExecution, AgentTurnExecutor
+from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnExecution, AgentTurnExecutor
 from web_operation_agent_twenty.adapter import TwentyApplicationAdapter
 from web_operation_agent.application import bind_application
 

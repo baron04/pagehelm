@@ -27,7 +27,7 @@ from web_operation_agent.identity import IdentityAssertion, PrincipalError
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.business.mutation import MemoryMutationJournal
 from web_operation_agent.schemas import ActionReceipt, PageObservation
-from web_operation_agent.session import ServerAgentSession, TaskSpec
+from web_operation_agent.execution.session import ServerAgentSession, TaskSpec
 from web_operation_agent.tests.adapter_contract import assert_adapter_contract
 from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
 

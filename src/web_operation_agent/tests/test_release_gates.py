@@ -151,7 +151,7 @@ class TheCoreBoundaryGateCatchesWhatItNames(unittest.TestCase):
 
     def test_an_application_route_in_core_execution_logic_is_caught(self):
         with _Copy(*self.FILES) as root:
-            target = root / "src/web_operation_agent/session.py"
+            target = root / "src/web_operation_agent/execution/session.py"
             target.write_text(target.read_text().replace(
                 "class ServerAgentSession",
                 'ODOO_ROUTE = "/odoo/customers"\n\n\nclass ServerAgentSession', 1))
@@ -161,7 +161,7 @@ class TheCoreBoundaryGateCatchesWhatItNames(unittest.TestCase):
 
     def test_core_importing_the_evaluation_harness_is_caught(self):
         with _Copy(*self.FILES) as root:
-            target = root / "src/web_operation_agent/session.py"
+            target = root / "src/web_operation_agent/execution/session.py"
             target.write_text("from evals.twenty import protocol  # noqa\n"
                               + target.read_text())
             done = _run("check_core_boundary.py", cwd=root)

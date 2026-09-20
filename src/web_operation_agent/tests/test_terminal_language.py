@@ -10,8 +10,8 @@ from __future__ import annotations
 import re
 import unittest
 
-from web_operation_agent import product
-from web_operation_agent.product import AgentTurnMessage
+from web_operation_agent.execution import product
+from web_operation_agent.execution.product import AgentTurnMessage
 from web_operation_agent.tests.test_product import _message
 
 

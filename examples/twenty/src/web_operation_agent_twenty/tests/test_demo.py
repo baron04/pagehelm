@@ -17,9 +17,9 @@ EXAMPLE_ROOT = Path(__file__).resolve().parents[3]
 from web_operation_agent_twenty.demo import demo, login, preflight
 from web_operation_agent.identity import PrincipalContext
 from web_operation_agent.live import LiveConversationRunner, LiveTurnOutcome
-from web_operation_agent.product import (AgentTurnExecution, AgentTurnMessage,
+from web_operation_agent.execution.product import (AgentTurnExecution, AgentTurnMessage,
                                          AgentTurnStatus)
-from web_operation_agent.session import RunResult
+from web_operation_agent.execution.session import RunResult
 from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
 
 

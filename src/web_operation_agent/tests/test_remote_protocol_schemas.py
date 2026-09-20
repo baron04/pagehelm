@@ -308,7 +308,7 @@ class ActionResults(unittest.TestCase):
                 S.ActionResultEnvelope.from_json(invalid)
 
     def test_remote_pre_dispatch_rejections_stay_retryable_agent_feedback(self):
-        from web_operation_agent.session import ServerAgentSession
+        from web_operation_agent.execution.session import ServerAgentSession
         codes = {
             "deadline_expired", "stale_observation", "capability_refused", "runtime_replaced",
         }

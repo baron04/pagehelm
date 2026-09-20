@@ -25,7 +25,7 @@ from evals.twenty.evidence import (
 )
 from evals.twenty.outcomes import classify_woa_outcome
 from web_operation_agent import __version__ as _PRODUCT_VERSION
-from web_operation_agent.product import AgentTurnExecution
+from web_operation_agent.execution.product import AgentTurnExecution
 
 
 RUNNER_VERSION = 1

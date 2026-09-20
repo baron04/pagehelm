@@ -59,7 +59,7 @@ flowchart LR
 
 The server owns model access, planning, knowledge, session policy, authorization state, and audit data. The browser receives only a session-scoped capability, fixed generic actions, and user-visible approval requests. It does not receive model credentials, source indexes, hidden write permissions, or evaluators.
 
-The Python package mirrors those server boundaries: `modeling/` owns provider access and spend accounting, `planning/` owns contracts, optional knowledge and source-derived Skills, and `business/` owns typed tools, approvals and write settlement. The session executor composes these layers instead of owning their implementation.
+The Python package mirrors those server boundaries: `modeling/` owns provider access and spend accounting, `planning/` owns contracts, optional knowledge and source-derived Skills, `business/` owns typed tools, approvals and write settlement, and `execution/` composes one bounded product turn and Agent session from those layers.
 
 Fresh runtime facts take precedence over Skills, source code, documentation, and API schemas. Those knowledge sources can propose a route or tool call, but the current page and application response determine what is actually true.
 
@@ -68,7 +68,7 @@ The main reusable boundaries are:
 | Module | Responsibility |
 | --- | --- |
 | `web_operation_agent.application` | Validates a versioned application descriptor and executable identity, route, data-classification, mutation-postcondition, and reconciliation ports. |
-| `web_operation_agent.product` | Binds a validated application and one user message to the latest observation, then runs one application-neutral agent turn. |
+| `web_operation_agent.execution.product` | Binds a validated application and one user message to the latest observation, then runs one application-neutral agent turn. |
 | `web_operation_agent.conversation` | Retains bounded, redacted reference context across turns without granting current facts or routes. |
 | `web_operation_agent.live` | Owns the gateway and sequential conversation lifecycle. |
 | `web_operation_agent.browser` | Defines the structural browser executor and typed transport outcomes; it contains no browser engine. |
@@ -80,7 +80,7 @@ The main reusable boundaries are:
 | `web_operation_agent.planning.contract` | Compiles source evidence and a fresh page observation into a checked operation contract. |
 | `web_operation_agent.planning.source_skill` | Compiles reviewable application Skills from version-bound source maps. |
 | `web_operation_agent.modeling.egress` | Enforces and audits the model-provider data boundary without storing request content. |
-| `web_operation_agent.session` | Implements the bounded server-side agent loop. |
+| `web_operation_agent.execution.session` | Implements the bounded server-side agent loop. |
 | `web_operation_agent.modeling.observability` | Converts redacted ledger events into content-free OTLP traces, metrics, and operational alerts without changing task outcomes. |
 
 Every application-specific adapter ships as its own separate distribution rather than living in the core package above: [`web-operation-agent-odoo`](examples/odoo) provides `OdooApplicationAdapter` and the Odoo source compiler, [`web-operation-agent-twenty`](examples/twenty) provides `TwentyApplicationAdapter`, and [`web-operation-agent-ofbiz`](examples/ofbiz) provides the Apache OFBiz route grammar, source compiler and App Skill provider. The core package has no application-specific code, and `scripts/check_core_boundary.py` asserts that it imports no application distribution anywhere, tests included; a new application implements the same ports these three do.

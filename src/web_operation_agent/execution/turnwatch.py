@@ -10,7 +10,7 @@ import hashlib
 import json
 from collections.abc import Callable
 
-from .schemas import PageObservation
+from ..schemas import PageObservation
 
 
 class ProgressFeed:

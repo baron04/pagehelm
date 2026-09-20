@@ -28,7 +28,7 @@ from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.identity import OperationContext, PrincipalContext
 from web_operation_agent.business.mutation import MemoryMutationJournal, MutationJournalError
 from web_operation_agent.schemas import ActionReceipt, ElementRef, PageObservation
-from web_operation_agent.session import (CAPABILITY_GAP_TERMINAL,
+from web_operation_agent.execution.session import (CAPABILITY_GAP_TERMINAL,
                                         ServerAgentSession, TaskSpec)
 from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
 

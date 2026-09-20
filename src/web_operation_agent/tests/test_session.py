@@ -4,7 +4,7 @@ import unittest
 
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ElementRef, OperationContract,
                                          PageObservation)
-from web_operation_agent.session import _render_contract, _render_observation, _trim
+from web_operation_agent.execution.session import _render_contract, _render_observation, _trim
 from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
 
 
@@ -124,7 +124,7 @@ class LedgerContents(unittest.TestCase):
         """A digest cannot answer 'what was this agent told?', and the provider is not
         reproducible, so the contract itself has to be in the trail."""
         import inspect
-        from web_operation_agent.session import ServerAgentSession
+        from web_operation_agent.execution.session import ServerAgentSession
         src = inspect.getsource(ServerAgentSession)
         self.assertIn("contract=self.contract.to_json()", src)
 
@@ -144,7 +144,7 @@ from web_operation_agent.tests.knowledge_fixture import (FixtureKnowledgeRouter,
 from web_operation_agent.ledger import SessionLedger
 from web_operation_agent.business.runtime import FormDraft, FormDraftField
 from web_operation_agent.schemas import ActionReceipt, OperationContract, empty_contract
-from web_operation_agent.session import (AGENT_SYSTEM, SCOPE_FIRST_SYSTEM,
+from web_operation_agent.execution.session import (AGENT_SYSTEM, SCOPE_FIRST_SYSTEM,
                                          LabApparatus, ServerAgentSession, TaskSpec,
                                          _PLAN_MARK)
 
@@ -964,7 +964,7 @@ class TheScopeReachesThePlannerToo(unittest.TestCase):
 
     def test_the_planner_is_given_the_scope_not_just_the_prompt(self):
         import inspect
-        from web_operation_agent.session import ServerAgentSession
+        from web_operation_agent.execution.session import ServerAgentSession
         src = inspect.getsource(ServerAgentSession._plan)
         self.assertIn("self.task.public_text()", src,
                       "a contract built without the boundary routed its write across it")

@@ -12,8 +12,8 @@ from evals.woa.assembler import (
 )
 from web_operation_agent.answering import StructuredQueryAnswer
 from web_operation_agent.business.runtime import BusinessToolResult
-from web_operation_agent.product import AgentTurnExecution, AgentTurnMessage, AgentTurnStatus
-from web_operation_agent.session import RunResult
+from web_operation_agent.execution.product import AgentTurnExecution, AgentTurnMessage, AgentTurnStatus
+from web_operation_agent.execution.session import RunResult
 
 
 COMPANY = {
