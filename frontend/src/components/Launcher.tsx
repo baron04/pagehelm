@@ -6,6 +6,9 @@ export type LauncherState = 'idle' | 'working' | 'awaiting' | 'closed'
 export function launcherStateFor(state: PanelState, pendingApproval: boolean): LauncherState {
   if (pendingApproval) return 'awaiting'
   if (state === 'ended' || state === 'replaced') return 'closed'
+  // A clarification is a question that reached the launcher. It gets the same ring a
+  // confirmation does, because it asks the same thing of the person: answer it here.
+  if (state === 'needs_input') return 'awaiting'
   if (['queued', 'observing', 'acting', 'stopping'].includes(state)) return 'working'
   return 'idle'
 }

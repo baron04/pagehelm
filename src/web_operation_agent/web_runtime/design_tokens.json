@@ -55,6 +55,8 @@
       "warning-soft": "#fffaeb",
       "warning-ink": "#ffffff",
       "overlay": "rgba(16, 18, 23, 0.32)",
+      "sheen-edge": "rgba(255, 255, 255, 0.55)",
+      "sheen-fill": "rgba(255, 255, 255, 0.16)",
       "shadow-1": "0 1px 2px rgba(16, 18, 23, 0.06)",
       "shadow-2": "0 8px 24px rgba(16, 18, 23, 0.10)"
     },
@@ -85,6 +87,8 @@
       "warning-soft": "#2a1f0b",
       "warning-ink": "#1a1205",
       "overlay": "rgba(0, 0, 0, 0.55)",
+      "sheen-edge": "rgba(255, 255, 255, 0.08)",
+      "sheen-fill": "rgba(255, 255, 255, 0.05)",
       "shadow-1": "0 1px 2px rgba(0, 0, 0, 0.5)",
       "shadow-2": "0 8px 24px rgba(0, 0, 0, 0.55)"
     }

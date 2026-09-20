@@ -76,6 +76,12 @@ button:disabled { cursor: not-allowed; }
   pointer-events: auto;
   border-radius: 50%;
   padding: 0;
+  animation: woa-pop-in var(--woa-motion-fast) var(--woa-motion-easing);
+}
+/* Both halves of the swap announce themselves; neither blinks into place. What leaves
+   does so at once -- the collapse is the person's own action and wants no ceremony. */
+@keyframes woa-pop-in {
+  from { opacity: 0; transform: scale(0.8); }
 }
 
 .woa-launcher__disc {
@@ -126,6 +132,13 @@ button:disabled { cursor: not-allowed; }
     0 0 0 1px var(--woa-line-strong),
     0 1px 2px rgba(20, 23, 28, 0.06),
     0 28px 64px rgba(20, 23, 28, 0.2);
+  /* The window grows from the corner the launcher stands in, so opening reads as the
+     disc unfolding rather than an unrelated box arriving. */
+  transform-origin: bottom right;
+  animation: woa-window-in var(--woa-motion-base) var(--woa-motion-easing);
+}
+@keyframes woa-window-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.97); }
 }
 .woa-window[data-dragging] { user-select: none; }
 
@@ -187,7 +200,7 @@ button:disabled { cursor: not-allowed; }
   cursor: grab;
   background: linear-gradient(180deg, var(--woa-surface), var(--woa-bg));
   border-bottom: 1px solid var(--woa-line);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  box-shadow: inset 0 1px 0 var(--woa-sheen-edge);
 }
 .woa-window[data-dragging='move'] .woa-titlebar { cursor: grabbing; }
 
@@ -499,9 +512,11 @@ button.woa-step__line:focus-visible {
 }
 .woa-md td {
   padding: 6px 8px;
-  white-space: nowrap;
   border-bottom: 1px solid var(--woa-line);
   font-variant-numeric: tabular-nums;
+  /* Cells wrap: a long value is content, and pushing it into sideways scroll made the
+     reader miss that the row beside it had more columns. Headers keep their line. */
+  overflow-wrap: anywhere;
 }
 .woa-md tr:last-child td { border-bottom: 0; }
 .woa-md [data-align='right'] { text-align: right; }
@@ -579,7 +594,6 @@ button.woa-step__line:focus-visible {
   border-top-width: 0;
   box-shadow: var(--woa-shadow-2);
   overflow: hidden;
-  min-height: 180px;
   animation: woa-rise var(--woa-motion-base) var(--woa-motion-easing);
 }
 @keyframes woa-rise {
@@ -673,7 +687,7 @@ button.woa-step__line:focus-visible {
 .woa-btn--primary {
   background: var(--woa-accent);
   color: var(--woa-accent-ink);
-  box-shadow: 0 1px 1.5px rgba(20, 23, 28, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  box-shadow: 0 1px 1.5px rgba(20, 23, 28, 0.2), inset 0 1px 0 var(--woa-sheen-fill);
 }
 .woa-btn--primary:hover:not(:disabled) { background: var(--woa-accent-hover); }
 .woa-btn--ghost { color: var(--woa-ink-muted); }
@@ -746,7 +760,7 @@ button.woa-step__line:focus-visible {
   border-radius: var(--woa-radius-card);
   background: var(--woa-accent);
   color: var(--woa-accent-ink);
-  box-shadow: 0 1px 1.5px rgba(20, 23, 28, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  box-shadow: 0 1px 1.5px rgba(20, 23, 28, 0.2), inset 0 1px 0 var(--woa-sheen-fill);
 }
 .woa-send[data-off] {
   background: var(--woa-surface-muted);
@@ -760,8 +774,13 @@ button.woa-step__line:focus-visible {
 }
 .woa-composer__limit {
   margin: 6px 2px 0;
-  font-size: var(--woa-font-size-meta);
+  display: inline-flex; align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--woa-radius-pill);
+  background: var(--woa-warning-soft);
   color: var(--woa-warning);
+  font-size: var(--woa-font-size-meta);
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
 
@@ -773,7 +792,7 @@ button.woa-step__line:focus-visible {
   display: flex; align-items: center; justify-content: center;
   border-radius: var(--woa-radius-panel);
   background: var(--woa-surface-muted);
-  box-shadow: inset 0 0 0 1px var(--woa-line), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  box-shadow: inset 0 0 0 1px var(--woa-line), inset 0 1px 0 var(--woa-sheen-edge);
 }
 .woa-empty h3 { margin: 4px 0 0; font-size: var(--woa-font-size-title); font-weight: 600; letter-spacing: -0.015em; }
 .woa-empty p { margin: 0; color: var(--woa-ink-muted); font-size: var(--woa-font-size-small); }
