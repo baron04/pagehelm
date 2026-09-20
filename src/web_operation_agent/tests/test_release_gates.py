@@ -40,6 +40,31 @@ def _run(script: str, *args, cwd: Path) -> subprocess.CompletedProcess:
                           cwd=str(cwd), capture_output=True, text=True, timeout=300)
 
 
+class TheLocalEnvironmentTemplateIsSafeAndUseful(unittest.TestCase):
+    def setUp(self):
+        lines = (ROOT / ".env.example").read_text(encoding="utf-8").splitlines()
+        pairs = [line.split("=", 1) for line in lines
+                 if line.strip() and not line.lstrip().startswith("#")]
+        self.values = dict(pairs)
+        self.assertEqual(len(self.values), len(pairs), "duplicate environment setting")
+
+    def test_it_documents_the_minimum_model_and_odoo_configuration(self):
+        expected = {
+            "AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY", "AGENT_OPENAI_MODEL",
+            "WOA_ODOO_BASE_URL", "WOA_ODOO_API_KEY_FILE", "WOA_ODOO_STORAGE_STATE",
+            "WOA_ODOO_PAGE_CONTROLLER_MODULE",
+        }
+        self.assertFalse(expected - self.values.keys())
+        self.assertFalse(any(self.values[name] for name in expected),
+                         "copying the template must not enable a live service")
+
+    def test_it_contains_neither_a_credential_nor_a_retired_integration(self):
+        self.assertEqual(self.values["AGENT_OPENAI_API_KEY"], "")
+        self.assertFalse(any(name.startswith("WOA_TWENTY_") for name in self.values))
+        text = (ROOT / ".env.example").read_text(encoding="utf-8")
+        self.assertNotRegex(text, r"/(Users|home)/[^/]+/")
+
+
 class _Copy:
     """A throwaway tree carrying the files one gate reads, and nothing else."""
 

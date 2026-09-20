@@ -84,6 +84,16 @@ PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 python -m pip install --editable .
 python -m pip install --no-deps --editable examples/odoo
 ```
 
+需要模型的本地运行可复制精简配置模板，并且只填写实际使用的部分：
+
+```bash
+cp .env.example .env
+```
+
+`.env` 已被 Git 忽略，用于当前 checkout 的本地配置；`.env.example` 不含任何凭据。
+Odoo 装置的 `provision` 命令会打印准确的 Odoo 配置值。脚本模式无需模型配置，源码和
+可恢复装置两组配置也都是可选的。
+
 运行核心测试：
 
 ```bash

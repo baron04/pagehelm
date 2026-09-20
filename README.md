@@ -92,6 +92,18 @@ PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 python -m pip install --editable .
 python -m pip install --no-deps --editable examples/odoo
 ```
 
+For model-backed local runs, copy the short configuration template and fill in only the
+sections you use:
+
+```bash
+cp .env.example .env
+```
+
+`.env` is ignored by Git and is the local checkout's configuration; `.env.example` contains
+no credentials. The Odoo fixture's `provision` command prints the exact Odoo values to use.
+Scripted runs need no model settings, and the source and resettable-fixture sections are
+optional.
+
 Run the core suite:
 
 ```bash
