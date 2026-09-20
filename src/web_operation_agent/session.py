@@ -42,14 +42,14 @@ from .business.errors import (BusinessMutationBlockedError, BusinessMutationInde
                               BusinessMutationRefusedError, BusinessToolError,
                               BusinessToolPermissionError)
 from .business.text import trigger_requests_action
-from .contract import (ContractPlanner, EvidenceBundle, PlanningFailed, SourceRetriever,
+from .planning.contract import (ContractPlanner, EvidenceBundle, PlanningFailed, SourceRetriever,
                        _segment_from_template, expand_terms)
 from .controlplane import ControlPlaneClient, ControlPlaneError
 from .modeling.egress import AuditedChat, ProviderEgressError
 from .grounding import (NOT_APPLICABLE, REFUTED, WRITE_PERMITTED, WRITE_REFUSED,
                         WRITE_UNKNOWN, PlanState, opaque_route_identity)
 from .identity import PrincipalContext
-from .knowledge import ApplicationKnowledgePort
+from .planning.knowledge import ApplicationKnowledgePort
 from .ledger import SessionLedger
 from .modeling.provider import ProviderError
 from .privacy import (SessionHandoffPolicy, redact_sensitive_assignments,

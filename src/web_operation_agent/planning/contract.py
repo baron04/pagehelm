@@ -27,9 +27,9 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .schemas import (SCHEMA_VERSIONS, ContractStep, EvidenceRef, MutationSignature,
-                      OperationContract, PageObservation, SchemaError, SourceMap,
-                      SourceRelation)
+from ..schemas import (SCHEMA_VERSIONS, ContractStep, EvidenceRef, MutationSignature,
+                       OperationContract, PageObservation, SchemaError, SourceMap,
+                       SourceRelation)
 
 STOPWORDS = frozenset("""
 a an the and or but of to for from with without on in into at by as is are was were be been

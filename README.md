@@ -59,6 +59,8 @@ flowchart LR
 
 The server owns model access, planning, knowledge, session policy, authorization state, and audit data. The browser receives only a session-scoped capability, fixed generic actions, and user-visible approval requests. It does not receive model credentials, source indexes, hidden write permissions, or evaluators.
 
+The Python package mirrors those server boundaries: `modeling/` owns provider access and spend accounting, `planning/` owns contracts, optional knowledge and source-derived Skills, and `business/` owns typed tools, approvals and write settlement. The session executor composes these layers instead of owning their implementation.
+
 Fresh runtime facts take precedence over Skills, source code, documentation, and API schemas. Those knowledge sources can propose a route or tool call, but the current page and application response determine what is actually true.
 
 The main reusable boundaries are:
@@ -74,6 +76,8 @@ The main reusable boundaries are:
 | `web_operation_agent.embedded_gateway` | Serves the embedded runtime, authenticated SSE/HTTP endpoints, and content-free liveness/readiness probes. |
 | `web_operation_agent.business.runtime` | Loads Skills and mediates typed read and mutation tools. |
 | `web_operation_agent.business.mutation` | Atomically records single-use mutation intent and terminal outcome in memory or SQLite. |
+| `web_operation_agent.planning.contract` | Retrieves bounded source evidence and compiles a checked operation contract. |
+| `web_operation_agent.planning.source_skill` | Compiles reviewable application Skills from version-bound source maps. |
 | `web_operation_agent.modeling.egress` | Enforces and audits the model-provider data boundary without storing request content. |
 | `web_operation_agent.session` | Implements the bounded server-side agent loop. |
 | `web_operation_agent.modeling.observability` | Converts redacted ledger events into content-free OTLP traces, metrics, and operational alerts without changing task outcomes. |

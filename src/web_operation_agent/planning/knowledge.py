@@ -1,4 +1,4 @@
-"""Application-neutral contract for optional server-side navigation knowledge."""
+"""Application-neutral port for optional server-side navigation knowledge."""
 from __future__ import annotations
 
 from typing import Protocol, runtime_checkable

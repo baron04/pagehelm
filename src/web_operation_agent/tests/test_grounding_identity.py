@@ -193,14 +193,14 @@ class WebappIdentityInCitations(unittest.TestCase):
                                         (20, 22))])
 
     def test_its_own_applications_evidence_supports_it(self):
-        from web_operation_agent.contract import SupportIndex, _segment_from_template
+        from web_operation_agent.planning.contract import SupportIndex, _segment_from_template
         idx = SupportIndex(self._map(),
                            segment=_segment_from_template(FIXTURE_ROUTE_PORT.contract_route_template))
         self.assertTrue(idx.supports([_key(idx, "beta")], "edit", "beta"))
 
     def test_a_citation_about_another_application_does_not_support_the_step(self):
         """Request identity includes the application when names overlap."""
-        from web_operation_agent.contract import SupportIndex, _segment_from_template
+        from web_operation_agent.planning.contract import SupportIndex, _segment_from_template
         idx = SupportIndex(self._map(),
                            segment=_segment_from_template(FIXTURE_ROUTE_PORT.contract_route_template))
         self.assertFalse(idx.supports([_key(idx, "alpha")], "edit", "beta"),

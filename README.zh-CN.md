@@ -59,6 +59,8 @@ flowchart LR
 
 服务端持有模型访问、规划、知识、会话策略、授权状态和审计数据。浏览器只接收仅限当前会话的能力凭据、固定的通用动作和用户可见的确认请求，不接收模型密钥、源码索引、隐藏写权限或 evaluator。
 
+Python 软件包也按这些服务端边界组织：`modeling/` 负责 provider 访问与费用核算，`planning/` 负责合同、可选知识和从源码派生的 Skill，`business/` 负责 typed tool、确认与写入结算。会话执行器只组合这些层，不再持有它们的实现。
+
 运行时事实的优先级高于 Skill、源码、文档和 API schema。知识来源可以提出路由或工具调用建议，最终以当前页面和应用响应为准。
 
 主要复用边界如下：
@@ -75,6 +77,8 @@ flowchart LR
 | `web_operation_agent.business.runtime` | 加载 Skill，并代理类型化的读取和写入工具。 |
 | `web_operation_agent.modeling.egress` | 执行模型 provider 数据边界，并在不保存请求内容的前提下生成审计记录。 |
 | `web_operation_agent.business.mutation` | 在内存或 SQLite 中原子记录一次性 mutation intent 与终态。 |
+| `web_operation_agent.planning.contract` | 检索有界源码证据，并编译经过校验的 operation contract。 |
+| `web_operation_agent.planning.source_skill` | 从版本绑定的 source map 编译可审查的应用 Skill。 |
 | `web_operation_agent.session` | 实现有步数和时间限制的服务端 Agent 循环。 |
 | `web_operation_agent.modeling.observability` | 把脱敏账本事件转换为无业务内容的 OTLP trace、metric 和运维告警，不改变任务结果。 |
 

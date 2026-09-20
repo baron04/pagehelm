@@ -45,7 +45,7 @@ from importlib import resources
 from pathlib import Path
 
 from web_operation_agent.business.runtime import BusinessSkill
-from web_operation_agent.source_skill import BusinessSkillCompiler
+from web_operation_agent.planning.source_skill import BusinessSkillCompiler
 
 from ..route import ODOO_ROUTE_PORT, ODOO_SOURCE_SCOPE
 from ..skill_sources import SKILL_SOURCES

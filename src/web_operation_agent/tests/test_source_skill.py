@@ -7,7 +7,7 @@ from pathlib import Path
 
 from web_operation_agent.tests.route_fixture import FIXTURE_ROUTE_PORT
 from web_operation_agent.schemas import EvidenceRef, SourceMap, SourceRelation
-from web_operation_agent.source_skill import (SourceEvidenceProvider as _SourceEvidenceProvider,
+from web_operation_agent.planning.source_skill import (SourceEvidenceProvider as _SourceEvidenceProvider,
                                                SourceSkillBootstrapper as _SourceSkillBootstrapper,
                                                humanize)
 
@@ -134,7 +134,7 @@ if __name__ == "__main__":
 
 
 from web_operation_agent.business.runtime import BusinessSkill                      # noqa: E402
-from web_operation_agent.source_skill import BusinessSkillCompiler          # noqa: E402
+from web_operation_agent.planning.source_skill import BusinessSkillCompiler          # noqa: E402
 from web_operation_agent.tests.source_fixture import fixture_source_map     # noqa: E402
 
 

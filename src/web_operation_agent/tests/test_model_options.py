@@ -636,14 +636,14 @@ class ProviderRuntimeProtection(unittest.TestCase):
 
 class PlannerAllowance(unittest.TestCase):
     def test_the_planner_asks_for_a_multiple_of_what_the_model_declares(self):
-        from web_operation_agent.contract import PLANNER_THINKING_FACTOR, thinking_options
+        from web_operation_agent.planning.contract import PLANNER_THINKING_FACTOR, thinking_options
         c = _Recorder("qwen3.8-flash")
         base = c.options["thinking_budget"]
         self.assertEqual(thinking_options(c, PLANNER_THINKING_FACTOR),
                          {"thinking_budget": base * PLANNER_THINKING_FACTOR})
 
     def test_it_grows_with_the_answer_budget(self):
-        from web_operation_agent.contract import thinking_options
+        from web_operation_agent.planning.contract import thinking_options
         c = _Recorder("qwen3.8-flash")
         first = thinking_options(c, 4 * 2 ** 0)["thinking_budget"]
         second = thinking_options(c, 4 * 2 ** 1)["thinking_budget"]
@@ -651,7 +651,7 @@ class PlannerAllowance(unittest.TestCase):
 
     def test_a_model_with_no_such_knob_is_asked_for_nothing(self):
         """Otherwise switching provider would start posting a field it never advertised."""
-        from web_operation_agent.contract import thinking_options
+        from web_operation_agent.planning.contract import thinking_options
         self.assertIsNone(thinking_options(_Recorder("some-model-we-have-never-run"), 4))
         self.assertIsNone(thinking_options(object(), 4))
 

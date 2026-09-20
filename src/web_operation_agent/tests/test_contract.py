@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from web_operation_agent.contract import (ContractPlanner, PlanningFailed, SourceRetriever,
+from web_operation_agent.planning.contract import (ContractPlanner, PlanningFailed, SourceRetriever,
                                           _segment_from_template, validate_contract)
 from web_operation_agent.schemas import OperationContract
 from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
@@ -31,7 +31,7 @@ def _map(tmp: Path):
 
 def _key_supporting(source_map, bundle, identity: str) -> str:
     """One bundle citation the support index attributes to `identity`."""
-    from web_operation_agent.contract import SupportIndex
+    from web_operation_agent.planning.contract import SupportIndex
     index = SupportIndex(source_map, segment=SEGMENT)
     return next(key for key in sorted(bundle.citation_keys)
                 if identity in index.about(key))
@@ -158,7 +158,7 @@ class Validation(unittest.TestCase):
     def test_a_request_that_does_not_exist_is_not_fatal_but_is_pruned(self):
         """It cannot be checked, so it must not reach the agent -- but the rest of the
         contract still can. See `Pruning`."""
-        from web_operation_agent.contract import prune_contract
+        from web_operation_agent.planning.contract import prune_contract
         c = self._contract(mutation={"webapp": "glasshouse", "request": "harvestEverything",
                                      "citations": [self.good_key]})
         self.assertEqual(validate_contract(c, self.bundle, self.map), [])
@@ -236,7 +236,7 @@ if __name__ == "__main__":
 
 class Normalisation(unittest.TestCase):
     def test_the_servlet_prefix_is_stripped(self):
-        from web_operation_agent.contract import normalise_request
+        from web_operation_agent.planning.contract import normalise_request
         for spelling in ("/accounting/do/findPayments",
                          "accounting/do/findPayments",
                          "http://localhost:18080/accounting/do/findPayments",
@@ -247,13 +247,13 @@ class Normalisation(unittest.TestCase):
                              f"{spelling!r} should normalise to the bare request name")
 
     def test_a_multi_segment_request_name_survives(self):
-        from web_operation_agent.contract import normalise_request
+        from web_operation_agent.planning.contract import normalise_request
         self.assertEqual(
             normalise_request("workeffort", "/workeffort/do/WorkEffortPartyAssigns/create", segment=SEGMENT),
             "WorkEffortPartyAssigns/create")
 
     def test_a_bare_name_is_left_alone(self):
-        from web_operation_agent.contract import normalise_request
+        from web_operation_agent.planning.contract import normalise_request
         self.assertEqual(normalise_request("accounting", "createPaymentApplication", segment=SEGMENT),
                          "createPaymentApplication")
 
@@ -277,7 +277,7 @@ class Pruning(unittest.TestCase):
              "mutation": mutation, "citations": [self.key]})
 
     def test_a_move_the_deployment_does_not_have_becomes_an_unknown(self):
-        from web_operation_agent.contract import prune_contract
+        from web_operation_agent.planning.contract import prune_contract
         c = self._contract([
             {"intent": "real", "webapp": "glasshouse", "request": "sproutSeedling",
              "citations": [self.key]},
@@ -289,7 +289,7 @@ class Pruning(unittest.TestCase):
         self.assertIn("harvestEverything", pruned.unknowns[0])
 
     def test_an_invented_write_endpoint_is_removed_not_offered(self):
-        from web_operation_agent.contract import prune_contract
+        from web_operation_agent.planning.contract import prune_contract
         c = self._contract([], {"webapp": "glasshouse", "request": "nope",
                                 "citations": [self.key]})
         pruned, dropped = prune_contract(c, self.map, segment=SEGMENT)
@@ -301,7 +301,7 @@ class Pruning(unittest.TestCase):
 
         The citation must still be about it -- existing and being cited for are two questions.
         """
-        from web_operation_agent.contract import SupportIndex, prune_contract
+        from web_operation_agent.planning.contract import SupportIndex, prune_contract
         index = SupportIndex(self.map, segment=SEGMENT)
         key = next(k for k in self.map.evidence_index()
                    if "beacon/lampschedule/create" in index.about(k))
@@ -351,7 +351,7 @@ class PlannerBudget(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_the_planner_asks_for_more_room_than_one_tool_call(self):
-        from web_operation_agent.contract import PLANNER_START_TOKENS
+        from web_operation_agent.planning.contract import PLANNER_START_TOKENS
         model = _StubModel([
             '{"task_ref":"T","summary":"s","steps":[{"intent":"go","webapp":"glasshouse",'
             f'"request":"sproutSeedling","citations":["{self.key}"]}}],"citations":["{self.key}"]}}'])
@@ -360,7 +360,7 @@ class PlannerBudget(unittest.TestCase):
         self.assertGreater(PLANNER_START_TOKENS, 2048)
 
     def test_the_webapp_named_twice_is_still_one_request(self):
-        from web_operation_agent.contract import normalise_request
+        from web_operation_agent.planning.contract import normalise_request
         self.assertEqual(normalise_request("accounting", "accounting/createPaymentApplication", segment=SEGMENT),
                          "createPaymentApplication")
         self.assertEqual(normalise_request("workeffort", "workeffort/WorkEffortPartyAssigns/create", segment=SEGMENT),
@@ -383,7 +383,7 @@ class CitationNormalisation(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_the_brackets_the_facts_are_printed_in_are_stripped(self):
-        from web_operation_agent.contract import normalise_citation
+        from web_operation_agent.planning.contract import normalise_citation
         for spelling in (f"[{self.key}]", f" [{self.key}] ", f"`{self.key}`", self.key):
             self.assertEqual(normalise_citation(spelling), self.key)
 
@@ -460,7 +460,7 @@ class ReasoningEatsTheBudget(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_reasoning_and_answer_are_told_apart(self):
-        from web_operation_agent.contract import split_reasoning
+        from web_operation_agent.planning.contract import split_reasoning
         t, a = split_reasoning("<think>hmm {x}</think>\n{\"a\": 1}")
         self.assertEqual(t, "<think>hmm {x}</think>")
         self.assertEqual(a, '{"a": 1}')
@@ -517,33 +517,33 @@ class ReasoningIsRecognisedWhoeverProducedIt(unittest.TestCase):
     code path of their own here."""
 
     def test_every_inline_tag_convention_is_stripped(self):
-        from web_operation_agent.contract import REASONING_TAGS, split_reasoning
+        from web_operation_agent.planning.contract import REASONING_TAGS, split_reasoning
         for tag in REASONING_TAGS:
             t, a = split_reasoning(f"<{tag}>weighing {{options}}</{tag}>\n{{\"a\": 1}}")
             self.assertIn("weighing", t, tag)
             self.assertEqual(a, '{"a": 1}', tag)
 
     def test_tag_attributes_and_casing_do_not_defeat_it(self):
-        from web_operation_agent.contract import split_reasoning
+        from web_operation_agent.planning.contract import split_reasoning
         t, a = split_reasoning('<Think depth="3">hmm {x}</Think>\n{"a": 1}')
         self.assertIn("hmm", t)
         self.assertEqual(a, '{"a": 1}')
 
     def test_reasoning_returned_out_of_band_is_counted_as_reasoning(self):
         """Some endpoints put it in its own field and leave content clean."""
-        from web_operation_agent.contract import split_reasoning
+        from web_operation_agent.planning.contract import split_reasoning
         t, a = split_reasoning('{"a": 1}', out_of_band="deliberating at length")
         self.assertIn("deliberating", t)
         self.assertEqual(a, '{"a": 1}')
 
     def test_an_out_of_band_thought_with_no_content_is_starvation(self):
-        from web_operation_agent.contract import split_reasoning
+        from web_operation_agent.planning.contract import split_reasoning
         t, a = split_reasoning("", out_of_band="thought hard, said nothing")
         self.assertTrue(t)
         self.assertEqual(a, "")
 
     def test_an_answer_with_no_reasoning_is_left_alone(self):
-        from web_operation_agent.contract import split_reasoning
+        from web_operation_agent.planning.contract import split_reasoning
         t, a = split_reasoning('{"a": 1}')
         self.assertEqual(t, "")
         self.assertEqual(a, '{"a": 1}')
@@ -559,7 +559,7 @@ class CitationsMustBeAboutWhatTheyBack(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.map = _map(Path(self.tmp.name))
         self.bundle = SourceRetriever(self.map).retrieve("T", TASK)
-        from web_operation_agent.contract import SupportIndex
+        from web_operation_agent.planning.contract import SupportIndex
         self.index = SupportIndex(self.map, segment=SEGMENT)
         # The index is keyed by the full `webapp/request`: two applications can both declare
         # `edit`, and a bare name cannot tell their evidence apart.
@@ -579,7 +579,7 @@ class CitationsMustBeAboutWhatTheyBack(unittest.TestCase):
              "mutation": mutation, "citations": [self.about_sprout]})
 
     def test_a_step_cited_with_evidence_about_another_request_is_dropped(self):
-        from web_operation_agent.contract import prune_contract
+        from web_operation_agent.planning.contract import prune_contract
         c = self._contract([{"intent": "sprout it", "webapp": "glasshouse",
                              "request": "sproutSeedling", "citations": [self.about_other]}])
         pruned, dropped = prune_contract(c, self.map, segment=SEGMENT)
@@ -590,7 +590,7 @@ class CitationsMustBeAboutWhatTheyBack(unittest.TestCase):
         self.assertIn(dropped[0], pruned.unknowns[0])
 
     def test_the_same_step_cited_properly_is_kept(self):
-        from web_operation_agent.contract import prune_contract
+        from web_operation_agent.planning.contract import prune_contract
         c = self._contract([{"intent": "sprout it", "webapp": "glasshouse",
                              "request": "sproutSeedling", "citations": [self.about_sprout]}])
         pruned, dropped = prune_contract(c, self.map, segment=SEGMENT)
@@ -598,7 +598,7 @@ class CitationsMustBeAboutWhatTheyBack(unittest.TestCase):
         self.assertEqual(len(pruned.steps), 1)
 
     def test_an_unsupported_write_endpoint_is_removed(self):
-        from web_operation_agent.contract import prune_contract
+        from web_operation_agent.planning.contract import prune_contract
         c = self._contract([], {"webapp": "glasshouse", "request": "sproutSeedling",
                                 "citations": [self.about_other]})
         pruned, dropped = prune_contract(c, self.map, segment=SEGMENT)
@@ -614,7 +614,7 @@ class CitationsMustBeAboutWhatTheyBack(unittest.TestCase):
 
     def test_servlet_paths_and_bare_names_compare_equal(self):
         """Inter-app menu links carry /webapp/do/name; ordinary ones carry the name."""
-        from web_operation_agent.contract import bare_request
+        from web_operation_agent.planning.contract import bare_request
         for spelling in ("/accounting/do/findPayments", "accounting/do/findPayments",
                          "http://host:8080/ap/do/findPayments", "findPayments?x=1"):
             self.assertEqual(bare_request(spelling, segment=SEGMENT), "findPayments", spelling)
@@ -630,7 +630,7 @@ class TheTwoArmsShareEverythingButTheEvidence(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.map = _map(Path(self.tmp.name))
         self.bundle = SourceRetriever(self.map).retrieve("T", TASK)
-        from web_operation_agent.contract import EvidenceBundle, SupportIndex
+        from web_operation_agent.planning.contract import EvidenceBundle, SupportIndex
         self.empty = EvidenceBundle(task_ref="T")
         index = SupportIndex(self.map, segment=SEGMENT)
         # A citation the bundle really contains and that is really about the step it backs;
@@ -645,7 +645,7 @@ class TheTwoArmsShareEverythingButTheEvidence(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_the_instructions_differ_only_where_the_manipulation_is(self):
-        from web_operation_agent.contract import PLANNER_SYSTEM, PLANNER_SYSTEM_PAGE_ONLY
+        from web_operation_agent.planning.contract import PLANNER_SYSTEM, PLANNER_SYSTEM_PAGE_ONLY
         a, b = PLANNER_SYSTEM.splitlines(), PLANNER_SYSTEM_PAGE_ONLY.splitlines()
         self.assertEqual(len(a), len(b))
         differing = [i for i, (x, y) in enumerate(zip(a, b)) if x != y]
@@ -683,7 +683,7 @@ class TheTwoArmsShareEverythingButTheEvidence(unittest.TestCase):
     def test_the_page_only_arm_is_not_filtered_by_the_source_map(self):
         """Pruning against the descriptors is a use of source evidence and belongs to the arm
         that has it; applying it here would hand the control arm the manipulated variable."""
-        from web_operation_agent.contract import prune_contract
+        from web_operation_agent.planning.contract import prune_contract
         invented = ('{"task_ref":"T","summary":"s","steps":[{"intent":"go",'
                     '"webapp":"glasshouse","request":"harvestEverything","citations":[]}],'
                     '"citations":[]}')

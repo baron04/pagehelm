@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from web_operation_agent.contract import ContractPlanner, SourceRetriever, _segment_from_template
+from web_operation_agent.planning.contract import ContractPlanner, SourceRetriever, _segment_from_template
 from web_operation_agent.sourcetree import SourceTree
 from web_operation_agent.tests.chat_port_contract import CancellableChatDouble
 
