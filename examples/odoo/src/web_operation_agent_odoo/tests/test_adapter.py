@@ -253,7 +253,8 @@ class OdooRefusalsAreTypedByWhoRefused(unittest.TestCase):
                 return payload
 
         executor = _FakeOdoo({})
-        with patch("web_operation_agent_odoo.adapter.urlopen", return_value=_Response()):
+        with patch("web_operation_agent_odoo.server.transport.urlopen",
+                   return_value=_Response()):
             with self.assertRaises(BusinessToolError) as raised:
                 OdooBusinessToolExecutor._rpc(executor, {"service": "object"})
         self.assertNotIn("private record detail", str(raised.exception))
@@ -272,7 +273,7 @@ class OdooRefusalsAreTypedByWhoRefused(unittest.TestCase):
 
     def test_mutation_transport_loss_is_typed_as_an_unknown_dispatch(self):
         executor = _FakeOdoo({})
-        with patch("web_operation_agent_odoo.adapter.urlopen",
+        with patch("web_operation_agent_odoo.server.transport.urlopen",
                    side_effect=TimeoutError("lost response")):
             with self.assertRaises(BusinessToolDispatchError):
                 OdooBusinessToolExecutor._rpc(

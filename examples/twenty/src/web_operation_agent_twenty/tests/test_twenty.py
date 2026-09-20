@@ -233,7 +233,8 @@ class TwentyNormalizationTests(unittest.TestCase):
         }}).encode())
         executor = TwentyBusinessToolExecutor(
             base_url="http://127.0.0.1:3000", tokens=Tokens())
-        with patch("web_operation_agent_twenty.adapter.urlopen", return_value=response) as opened:
+        with patch("web_operation_agent_twenty.server.transport.urlopen",
+                   return_value=response) as opened:
             identity = executor.resolve_delegated_identity(now_ms=1_000_000)
 
         request = opened.call_args.args[0]
@@ -277,7 +278,7 @@ class TwentyNormalizationTests(unittest.TestCase):
         }}).encode())
         executor = TwentyBusinessToolExecutor(
             base_url="http://127.0.0.1:3000", tokens=Tokens())
-        with patch("web_operation_agent_twenty.adapter.urlopen",
+        with patch("web_operation_agent_twenty.server.transport.urlopen",
                    side_effect=[expired, success]) as opened:
             identity = executor.resolve_delegated_identity(now_ms=1_000_000)
 
@@ -350,7 +351,7 @@ class TwentyPageSessionIdentityTests(unittest.TestCase):
                 base_url="http://127.0.0.1:3000",
                 storage_state=json.loads(state.read_text()),
             ).binding_digest(now_ms=1_000_000)
-            with patch("web_operation_agent_twenty.adapter.HTTPConnection", Connection):
+            with patch("web_operation_agent_twenty.server.identity.HTTPConnection", Connection):
                 identity = resolver.resolve(lifetime_s=60, now_ms=1_000_000)
 
         connection = Connection.instance
@@ -533,7 +534,7 @@ class TwentyPaginationTests(unittest.TestCase):
                         "pageInfo": {"hasNextPage": True,
                                      "endCursor": "same-cursor"}}
 
-        with patch("web_operation_agent_twenty.adapter._COMPANY_PAGE_SIZE", 2):
+        with patch("web_operation_agent_twenty.server.transport._COMPANY_PAGE_SIZE", 2):
             result = FixtureTwenty().execute("query_companies", {"limit": 5})
 
         completeness = result.content["completeness"]
@@ -566,8 +567,8 @@ class TwentyPaginationTests(unittest.TestCase):
                                      "endCursor": f"cursor-{self.page}"}}
 
         executor = FixtureTwenty()
-        with patch("web_operation_agent_twenty.adapter._COMPANY_PAGE_SIZE", 2), \
-                patch("web_operation_agent_twenty.adapter._MAX_COMPANY_PAGES", 2):
+        with patch("web_operation_agent_twenty.server.transport._COMPANY_PAGE_SIZE", 2), \
+                patch("web_operation_agent_twenty.server.transport._MAX_COMPANY_PAGES", 2):
             result = executor.execute("query_companies", {"limit": 5})
             self.assertEqual(
                 result.content["completeness"]["incomplete_reason"],
@@ -655,7 +656,7 @@ class TwentyPermissionRefusalTests(unittest.TestCase):
         for code, expected in ((403, BusinessToolPermissionError),
                                (401, BusinessToolAuthenticationError),
                                (500, BusinessToolUnavailableError)):
-            with self.subTest(code), patch("web_operation_agent_twenty.adapter.urlopen",
+            with self.subTest(code), patch("web_operation_agent_twenty.server.transport.urlopen",
                                            side_effect=self._refused(code)):
                 with self.assertRaises(expected) as raised:
                     executor._authorized_json("/rest/companies", "token")
@@ -666,16 +667,16 @@ class TwentyPermissionRefusalTests(unittest.TestCase):
 
     def test_a_refused_mutation_is_definite_and_other_client_errors_are_unchanged(self):
         executor = self._executor(allow_mutations=True)
-        with patch("web_operation_agent_twenty.adapter.urlopen",
+        with patch("web_operation_agent_twenty.server.transport.urlopen",
                    side_effect=self._refused(403)):
             with self.assertRaises(BusinessToolPermissionError):
                 executor._authorized_mutation_json("/rest/companies", "token", {})
-        with patch("web_operation_agent_twenty.adapter.urlopen",
+        with patch("web_operation_agent_twenty.server.transport.urlopen",
                    side_effect=self._refused(422)):
             with self.assertRaises(BusinessToolError) as raised:
                 executor._authorized_mutation_json("/rest/companies", "token", {})
             self.assertNotIsInstance(raised.exception, BusinessToolPermissionError)
-        with patch("web_operation_agent_twenty.adapter.urlopen",
+        with patch("web_operation_agent_twenty.server.transport.urlopen",
                    side_effect=self._refused(502)):
             with self.assertRaises(BusinessMutationIndeterminate):
                 executor._authorized_mutation_json("/rest/companies", "token", {})
@@ -696,7 +697,7 @@ class TwentyPermissionRefusalTests(unittest.TestCase):
 
         created = Created(json.dumps({"data": {"createCompany": {"id": record_id}}}).encode())
         with patch.object(executor, "_assert_no_duplicate"), \
-                patch("web_operation_agent_twenty.adapter.urlopen",
+                patch("web_operation_agent_twenty.server.transport.urlopen",
                       side_effect=[created, self._refused(403)]):
             with self.assertRaises(BusinessMutationIndeterminate) as raised:
                 executor.execute_mutation(
@@ -749,7 +750,8 @@ class TwentyOAuthRefreshTests(unittest.TestCase):
                 except BaseException as exc:  # pragma: no cover - asserted below
                     errors.append(exc)
 
-            with patch("web_operation_agent_twenty.adapter.urlopen", side_effect=open_refresh):
+            with patch("web_operation_agent_twenty.server.identity.urlopen",
+                       side_effect=open_refresh):
                 threads = [threading.Thread(target=worker) for _ in range(8)]
                 for thread in threads:
                     thread.start()
