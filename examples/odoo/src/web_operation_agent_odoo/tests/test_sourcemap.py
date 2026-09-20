@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from web_operation_agent.application import SourceCompiler
+from web_operation_agent.composition.sources import SourceCompiler
 from web_operation_agent.affordance import resolve_source_affordances
 from web_operation_agent.sourcetree import SourceTree
 

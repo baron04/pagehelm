@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from web_operation_agent.state.store import SQLiteSessionStore
 from web_operation_agent.business.mutation import SQLiteMutationJournal
-from web_operation_agent.operations import (
+from web_operation_agent.composition.operations import (
     OperationalStateError,
     create_state_backup,
     inspect_mutation_journal,
@@ -110,7 +110,7 @@ class OperationalBackupTests(unittest.TestCase):
             root = Path(temporary)
             sessions, mutations = self._state(root)
             destination = root / "backup"
-            with patch("web_operation_agent.operations._online_copy",
+            with patch("web_operation_agent.composition.operations._online_copy",
                        side_effect=OperationalStateError("injected")):
                 with self.assertRaisesRegex(OperationalStateError, "injected"):
                     create_state_backup({"sessions": sessions, "mutations": mutations},

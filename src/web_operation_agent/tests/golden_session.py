@@ -38,7 +38,7 @@ from types import SimpleNamespace
 from typing import Callable
 
 from web_operation_agent.answer.answering import StructuredQueryAnswer
-from web_operation_agent.application import SourceCapability
+from web_operation_agent.composition.sources import SourceCapability
 from web_operation_agent.business.runtime import (BusinessMutationIndeterminate,
                                           BusinessMutationSpec, BusinessSkill,
                                           BusinessToolError, BusinessToolResult,

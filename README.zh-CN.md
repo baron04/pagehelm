@@ -67,14 +67,12 @@ Python 软件包也按这些服务端边界组织：`modeling/` 负责 provider 
 
 | 模块 | 职责 |
 | --- | --- |
-| `web_operation_agent.application` | 校验版本化应用描述，以及可执行的身份、路由、数据分类、mutation 后置条件与核对端口。 |
+| `web_operation_agent.composition` | 校验版本化应用描述、可执行的身份、路由、数据分类、mutation 后置条件与核对端口，并在一次绑定检查点中把它们交付给 release。 |
 | `web_operation_agent.execution.product` | 定义版本化 turn message、配置、结果、状态和中性回答合同。 |
 | `web_operation_agent.execution.turn` | 把已校验的应用和一条用户消息绑定到最新页面观察，执行一次与具体应用无关的 Agent turn，再结算并发布结果。 |
 | `web_operation_agent.state.conversation` | 在多轮之间保留有界、脱敏的引用上下文，不把历史事实或路由当成当前权限。 |
-| `web_operation_agent.live` | 管理网关和顺序执行的会话生命周期。 |
-| `web_operation_agent.browser` | 定义结构化浏览器执行协议和类型化传输结果，不包含浏览器引擎。 |
-| `web_operation_agent.remote` | 定义受能力凭据约束的远程浏览器通道和客户端。 |
-| `web_operation_agent.embedded_gateway` | 提供页面 Runtime、带认证的 SSE/HTTP 端点，以及不含业务内容的存活与就绪探针。 |
+| `web_operation_agent.composition.live` | 管理网关和顺序执行的会话生命周期。 |
+| `web_operation_agent.transport` | 定义结构化浏览器执行协议和类型化传输结果、受能力凭据约束的远程浏览器通道与注册表，以及提供页面 Runtime、带认证 SSE/HTTP 端点和无业务内容探针的内嵌网关。 |
 | `web_operation_agent.business.runtime` | 加载 Skill，并代理类型化的读取和写入工具。 |
 | `web_operation_agent.modeling.egress` | 执行模型 provider 数据边界，并在不保存请求内容的前提下生成审计记录。 |
 | `web_operation_agent.business.mutation` | 在内存或 SQLite 中原子记录一次性 mutation intent 与终态。 |

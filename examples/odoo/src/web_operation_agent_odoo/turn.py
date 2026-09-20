@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from web_operation_agent.application import SourceCapability
+from web_operation_agent.composition.sources import SourceCapability
 from web_operation_agent.execution.product import AgentTurnConfig
 
 #: Page actions this deployment does not offer: Odoo is driven through its typed API, and

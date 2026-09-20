@@ -15,7 +15,7 @@ route is the part that actually varies.
 """
 from __future__ import annotations
 
-from web_operation_agent.application import DeclaredRoutePort
+from web_operation_agent.composition.ports import DeclaredRoutePort
 
 
 #: Odoo 18 keeps the session in an HttpOnly cookie and accepts no header or query carrier

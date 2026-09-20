@@ -12,7 +12,7 @@ import dataclasses
 import unittest
 from pathlib import Path
 
-from web_operation_agent.application import SourceCapability
+from web_operation_agent.composition.sources import SourceCapability
 from web_operation_agent_odoo.turn import odoo_turn_config
 
 

@@ -4,16 +4,20 @@ import hashlib
 import json
 import unittest
 
-from web_operation_agent.application import (APPLICATION_ADAPTER_VERSION,
-                                              AnonymousIdentityPort,
-                                              ApplicationDescriptor,
-                                              ApplicationPorts,
-                                              ConservativeMutationReconciler,
-                                              DeclaredDataClassifier,
-                                              DeclaredRoutePort,
-                                              ResultPostconditionVerifier,
-                                              SourceCapability,
-                                              bind_application)
+from web_operation_agent.composition.binding import bind_application
+from web_operation_agent.composition.descriptor import (
+    APPLICATION_ADAPTER_VERSION,
+    ApplicationDescriptor,
+)
+from web_operation_agent.composition.ports import (
+    AnonymousIdentityPort,
+    ApplicationPorts,
+    ConservativeMutationReconciler,
+    DeclaredDataClassifier,
+    DeclaredRoutePort,
+    ResultPostconditionVerifier,
+)
+from web_operation_agent.composition.sources import SourceCapability
 from web_operation_agent.business.runtime import (BusinessSkill, BusinessToolContractError,
                                           BusinessToolResult, BusinessToolRuntime)
 

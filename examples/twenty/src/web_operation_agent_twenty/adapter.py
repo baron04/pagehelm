@@ -38,13 +38,15 @@ from web_operation_agent.business.runtime import (BusinessMutationIndeterminate,
                                           BusinessToolRuntime,
                                           BusinessToolUnavailableError,
                                           business_text_key, normalize_business_text)
-from web_operation_agent.application import (
+from web_operation_agent.composition.descriptor import (
     APPLICATION_ADAPTER_VERSION,
     ApplicationDescriptor,
+)
+from web_operation_agent.composition.ports import (
     ApplicationPorts,
+    DeclaredDataClassifier,
     DeclaredRoutePort,
     MutationReconciliation,
-    DeclaredDataClassifier,
     ResultPostconditionVerifier,
 )
 from web_operation_agent.state.identity import (IdentityAssertion, OperationContext,

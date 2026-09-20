@@ -14,7 +14,7 @@ from enum import Enum
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from ..application import SourceCapability
+from ..composition.sources import SourceCapability
 from ..answer.answering import render_structured_query_answer
 from ..answer.answer_view import render_payload
 from ..business.runtime import BusinessToolResult

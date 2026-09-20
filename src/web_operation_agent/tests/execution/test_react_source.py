@@ -4,7 +4,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
-from web_operation_agent.application import SourceCapability
+from web_operation_agent.composition.sources import SourceCapability
 from web_operation_agent.affordance import (AffordanceParameter,
                                              resolve_source_affordances)
 from web_operation_agent.state.ledger import SessionLedger

@@ -22,7 +22,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from ..application import BoundApplication
+from ..composition.binding import BoundApplication
 from ..state.identity import PrincipalContext
 from .mutation import MutationJournalError, SQLiteMutationJournal
 

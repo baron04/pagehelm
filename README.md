@@ -67,14 +67,12 @@ The main reusable boundaries are:
 
 | Module | Responsibility |
 | --- | --- |
-| `web_operation_agent.application` | Validates a versioned application descriptor and executable identity, route, data-classification, mutation-postcondition, and reconciliation ports. |
+| `web_operation_agent.composition` | Validates a versioned application descriptor, the executable identity, route, data-classification, mutation-postcondition and reconciliation ports, and the one binding checkpoint that joins them to a release. |
 | `web_operation_agent.execution.product` | Defines the versioned turn message, configuration, result, status, and neutral answer contract. |
 | `web_operation_agent.execution.turn` | Binds a validated application and one user message to the latest observation, runs one application-neutral Agent turn, then settles and publishes it. |
 | `web_operation_agent.state.conversation` | Retains bounded, redacted reference context across turns without granting current facts or routes. |
-| `web_operation_agent.live` | Owns the gateway and sequential conversation lifecycle. |
-| `web_operation_agent.browser` | Defines the structural browser executor and typed transport outcomes; it contains no browser engine. |
-| `web_operation_agent.remote` | Defines the capability-bound remote browser channel and client. |
-| `web_operation_agent.embedded_gateway` | Serves the embedded runtime, authenticated SSE/HTTP endpoints, and content-free liveness/readiness probes. |
+| `web_operation_agent.composition.live` | Owns the gateway and sequential conversation lifecycle. |
+| `web_operation_agent.transport` | Defines the structural browser executor and typed transport outcomes, the capability-bound remote channel and registry, and the embedded gateway serving the runtime, authenticated SSE/HTTP endpoints and content-free probes. |
 | `web_operation_agent.business.runtime` | Loads Skills and mediates typed read and mutation tools. |
 | `web_operation_agent.business.mutation` | Atomically records single-use mutation intent and terminal outcome in memory or SQLite. |
 | `web_operation_agent.planning.retrieval` | Deterministically selects bounded, cited evidence from a compiled source map. |

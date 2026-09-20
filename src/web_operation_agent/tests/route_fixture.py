@@ -12,7 +12,7 @@ works against all three is not encoding any one application's syntax.
 """
 from __future__ import annotations
 
-from web_operation_agent.application import DeclaredRoutePort
+from web_operation_agent.composition.ports import DeclaredRoutePort
 
 
 #: The one synthetic application every core route test speaks about.

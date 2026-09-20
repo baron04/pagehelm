@@ -14,12 +14,12 @@ from examples.contacts.app import (DEMO_API_TOKEN, DEMO_SESSION_COOKIE,
 from examples.contacts.adapter import MinimalContactsAdapter
 from examples.contacts.demo import (DemoConfig, ScriptedDemoChat, WRITE_WALKTHROUGH,
                                     _confirm_navigation_in_page, run_demo)
-from web_operation_agent.application import bind_application
+from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.business.runtime import (BusinessMutationIndeterminate,
                                           BusinessToolError)
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.state.identity import PrincipalError
-from web_operation_agent.live import LiveConversationRunner, LiveProductSession
+from web_operation_agent.composition.live import LiveConversationRunner, LiveProductSession
 from web_operation_agent.business.mutation import MemoryMutationJournal, SQLiteMutationJournal
 from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnExecutor
 from web_operation_agent.tests.adapter_contract import assert_adapter_contract

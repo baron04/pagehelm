@@ -26,7 +26,8 @@ from evals.woa.assembler import (
 from evals.twenty.breadth_taskset import validate_breadth_execution_case
 from evals.woa.breadth_assembler import assemble_woa_breadth_run
 from evals.woa.scripted import RecordingBusinessRuntime
-from web_operation_agent.application import SourceCapability, bind_application
+from web_operation_agent.composition.binding import bind_application
+from web_operation_agent.composition.sources import SourceCapability
 from web_operation_agent.business.runtime import BusinessToolError
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.state.identity import PrincipalError

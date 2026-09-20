@@ -37,7 +37,7 @@ from evals.twenty.outcomes import (
     classify_host_errors as _classify_host_errors,
     provider_apparatus_code as _provider_apparatus_code,
 )
-from web_operation_agent.application import bind_application
+from web_operation_agent.composition.binding import bind_application
 from evals.twenty.breadth_taskset import validate_breadth_execution_case
 from web_operation_agent.business.runtime import BusinessToolError
 from web_operation_agent.state.identity import OperationContext, PrincipalError

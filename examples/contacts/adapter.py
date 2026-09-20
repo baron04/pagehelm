@@ -40,10 +40,17 @@ import urllib.request
 from pathlib import Path
 from datetime import datetime, timezone
 
-from web_operation_agent.application import (
-    APPLICATION_ADAPTER_VERSION, ApplicationDescriptor, ApplicationPorts,
-    DeclaredDataClassifier, DeclaredRoutePort, MutationReconciliation,
-    ResultPostconditionVerifier)
+from web_operation_agent.composition.descriptor import (
+    APPLICATION_ADAPTER_VERSION,
+    ApplicationDescriptor,
+)
+from web_operation_agent.composition.ports import (
+    ApplicationPorts,
+    DeclaredDataClassifier,
+    DeclaredRoutePort,
+    MutationReconciliation,
+    ResultPostconditionVerifier,
+)
 from web_operation_agent.business.runtime import (
     BusinessMutationIndeterminate,
     BusinessMutationSpec,

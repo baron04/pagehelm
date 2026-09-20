@@ -18,7 +18,7 @@ from web_operation_agent.business.runtime import (BusinessToolAuthenticationErro
                                           BusinessToolPermissionError,
                                           BusinessToolUnavailableError)
 
-from web_operation_agent.application import bind_application
+from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.business.runtime import (BusinessMutationIndeterminate,
                                           BusinessMutationRefusedError,
                                           BusinessToolError, BusinessToolRequestError)

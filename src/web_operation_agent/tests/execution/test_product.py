@@ -12,14 +12,18 @@ from pathlib import Path
 from unittest.mock import patch
 
 from web_operation_agent.execution import product, turn
-from web_operation_agent.application import (APPLICATION_ADAPTER_VERSION,
-                                             AnonymousIdentityPort,
-                                             ApplicationDescriptor,
-                                             ApplicationPorts,
-                                             ConservativeMutationReconciler,
-                                             DeclaredDataClassifier,
-                                             ResultPostconditionVerifier,
-                                             bind_application)
+from web_operation_agent.composition.binding import bind_application
+from web_operation_agent.composition.descriptor import (
+    APPLICATION_ADAPTER_VERSION,
+    ApplicationDescriptor,
+)
+from web_operation_agent.composition.ports import (
+    AnonymousIdentityPort,
+    ApplicationPorts,
+    ConservativeMutationReconciler,
+    DeclaredDataClassifier,
+    ResultPostconditionVerifier,
+)
 from web_operation_agent.answer.answering import StructuredQueryAnswer
 from web_operation_agent.business.runtime import (BusinessSelectionOption, BusinessSkill,
                                           BusinessToolPermissionError, BusinessToolResult,
@@ -2003,7 +2007,7 @@ class DeploymentSourceCapabilityReachesTheProductTurn(unittest.TestCase):
         return recorded, chat.tool_names[0]
 
     def _capability(self, root: Path, *, runtime_source: bool):
-        from web_operation_agent.application import SourceCapability
+        from web_operation_agent.composition.sources import SourceCapability
         from web_operation_agent.tests.source_fixture import fixture_source_map
 
         return SourceCapability(source_map=fixture_source_map(root),
@@ -2045,7 +2049,7 @@ class DeploymentSourceCapabilityReachesTheProductTurn(unittest.TestCase):
                                    "source_contract", "runtime_source"}, set())
 
     def test_an_incoherent_capability_is_refused_in_one_place(self):
-        from web_operation_agent.application import SourceCapability
+        from web_operation_agent.composition.sources import SourceCapability
 
         with self.assertRaisesRegex(ValueError, "version-bound SourceMap"):
             SourceCapability(runtime_source=True)

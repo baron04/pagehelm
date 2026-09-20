@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from unittest import mock
 
-from web_operation_agent.live import (LiveConversationRunner, LiveProductServer,
+from web_operation_agent.composition.live import (LiveConversationRunner, LiveProductServer,
                                       LiveProductSession, render_live_replay)
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.state.identity import PrincipalContext
@@ -549,7 +549,7 @@ class LiveProductSessionTests(unittest.TestCase):
             # browser activity.
             first.channel.validate_live()
             self.assertEqual(first.channel.last_client_activity_ms, activity_ms)
-            with mock.patch("web_operation_agent.live.time.time",
+            with mock.patch("web_operation_agent.composition.live.time.time",
                             return_value=(activity_ms + 30_000) / 1000):
                 self.assertEqual(server.session_count, 0)
             replacement = server.create_session(

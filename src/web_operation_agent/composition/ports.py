@@ -1,4 +1,10 @@
-"""Versioned boundary between the generic Agent host and one web application."""
+"""The five executable ports a session may demand of an application, and their defaults.
+
+Identity, routes, data classification, mutation postconditions and reconciliation are the
+application-specific contracts behind which the generic Agent acts; ``ApplicationPorts``
+bundles the five so a binding can check them once. The ``Declared*`` and ``Result*``
+classes are the adapter-owned bounded declarations the core itself ships.
+"""
 from __future__ import annotations
 
 import re
@@ -6,100 +12,15 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 from urllib.parse import parse_qsl, urljoin, urlsplit
 
-from .business.runtime import (BusinessDataClassifier, BusinessPostconditionVerifier,
+from ..business.runtime import (BusinessDataClassifier, BusinessPostconditionVerifier,
                                BusinessRouteValidator, BusinessToolResult,
-                               BusinessToolRuntime, MutationPostcondition)
-from .state.identity import IdentityAssertion, PrincipalContext, PrincipalError
-from .origins import normalize_origin
-from .schemas import SourceMap
+                               MutationPostcondition)
+from ..state.identity import IdentityAssertion, PrincipalContext, PrincipalError
+from .descriptor import _APPLICATION_ID
 
 
-APPLICATION_ADAPTER_VERSION = 2
-_APPLICATION_ID = re.compile(r"[a-z][a-z0-9.-]{2,79}\Z")
-_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _PORT_NAME = re.compile(r"[a-z][a-z0-9_.-]{1,63}\Z")
 _SAFE_ROUTE = re.compile(r"^/[^\\\x00-\x20\x7f]*$")
-
-
-def _origin(value: object) -> str:
-    """The application's own origin: the strict form, and plain HTTP only on loopback."""
-    return normalize_origin(value, name="application origin",
-                            require_secure_unless_loopback=True)
-
-
-@dataclass(frozen=True)
-class ApplicationDescriptor:
-    """Immutable, non-secret facts used to bind an adapter to a product session."""
-
-    schema_version: int
-    application_id: str
-    display_name: str
-    origin: str
-    navigation_mode: str
-    page_controller_module: str
-    catalog_sha256: str
-
-    def __post_init__(self) -> None:
-        if self.schema_version != APPLICATION_ADAPTER_VERSION:
-            raise ValueError("application descriptor version is unsupported")
-        if not isinstance(self.application_id, str) \
-                or not _APPLICATION_ID.fullmatch(self.application_id):
-            raise ValueError("application_id is invalid")
-        if not isinstance(self.display_name, str) or not self.display_name.strip() \
-                or len(self.display_name.strip()) > 100:
-            raise ValueError("application display_name is invalid")
-        normalized_origin = _origin(self.origin)
-        if self.navigation_mode not in {"document", "spa"}:
-            raise ValueError("application navigation_mode is invalid")
-        if not isinstance(self.page_controller_module, str):
-            raise ValueError("page_controller_module must be a URL")
-        module = urlsplit(self.page_controller_module)
-        module_origin = _origin(f"{module.scheme}://{module.netloc}") \
-            if module.scheme and module.netloc else ""
-        if (module_origin != normalized_origin or not module.path.startswith("/")
-                or module.username is not None or module.password is not None
-                or module.query or module.fragment):
-            raise ValueError("page_controller_module must be a same-origin URL")
-        if not isinstance(self.catalog_sha256, str) \
-                or not _SHA256.fullmatch(self.catalog_sha256):
-            raise ValueError("catalog_sha256 is invalid")
-        object.__setattr__(self, "display_name", self.display_name.strip())
-        object.__setattr__(self, "origin", normalized_origin)
-
-    def to_json(self) -> dict:
-        return {
-            "schema_version": self.schema_version,
-            "application_id": self.application_id,
-            "display_name": self.display_name,
-            "origin": self.origin,
-            "navigation_mode": self.navigation_mode,
-            "page_controller_module": self.page_controller_module,
-            "catalog_sha256": self.catalog_sha256,
-        }
-
-    def validate_page_controller(self, value: str) -> str:
-        """Validate a deployment-selected controller against this application origin."""
-        if not isinstance(value, str):
-            raise ValueError("page_controller_module must be a URL")
-        module = urlsplit(value)
-        module_origin = _origin(f"{module.scheme}://{module.netloc}") \
-            if module.scheme and module.netloc else ""
-        if (module_origin != self.origin or not module.path.startswith("/")
-                or module.username is not None or module.password is not None
-                or module.query or module.fragment):
-            raise ValueError("page_controller_module must be a same-origin URL")
-        return value
-
-    def owns_url(self, value: str) -> bool:
-        """Return whether a browser URL belongs to the descriptor's exact web origin."""
-        if not isinstance(value, str):
-            return False
-        parsed = urlsplit(value)
-        try:
-            candidate = _origin(f"{parsed.scheme}://{parsed.netloc}")
-        except ValueError:
-            return False
-        return candidate == self.origin
 
 
 @runtime_checkable
@@ -450,132 +371,3 @@ class ApplicationPorts:
         )
         if not all(checks):
             raise TypeError("application ports do not implement the required contracts")
-
-
-@runtime_checkable
-class SourceCompiler(Protocol):
-    """Read one application's own declarative configuration into a cited ``SourceMap``.
-
-    Unlike the five ``ApplicationPorts``, a compiler has no place in a live session: it runs
-    offline, once per deployment release, against a version-bound source tree, and its output
-    -- a ``SourceMap`` of ``SourceRelation`` triples, each carrying a checkable citation -- is
-    what a session is later handed as ``source_map``. Every application distribution that
-    offers source-backed knowledge implements this against its own declarative shape (OFBiz's
-    ``web_operation_agent_ofbiz.OFBizCompiler`` reads XML controller and widget descriptors);
-    the core Agent never reads application source itself.
-    """
-
-    def compile(self) -> SourceMap: ...
-
-
-@dataclass(frozen=True, slots=True)
-class SourceCapability:
-    """What one deployment's compiled source lets a session do, as one value.
-
-    Four session settings have always moved together and have always had one real owner --
-    whether this deployment has a compiled, version-bound ``SourceMap`` for the release it
-    is pointed at. Leaving them as four independent constructor flags invited a composition
-    to enable source-armed planning with no map, or to ship a map nothing consumes; it also
-    left them looking like experiment knobs, which two of their neighbours genuinely are.
-
-    A distribution that implements ``SourceCompiler`` builds this once per release and hands
-    it to the composition; a distribution without one returns ``SourceCapability.none()``.
-    """
-
-    source_map: SourceMap | None = None
-    source_contract: bool = False
-    runtime_source: bool = False
-    source_affordance_mode: str = "off"
-
-    def __post_init__(self) -> None:
-        if self.source_map is not None and not isinstance(self.source_map, SourceMap):
-            raise TypeError("source_map must be a SourceMap or None")
-        for name in ("source_contract", "runtime_source"):
-            if not isinstance(getattr(self, name), bool):
-                raise ValueError(f"{name} must be a boolean")
-        if self.source_affordance_mode not in {"off", "empty", "auto"}:
-            raise ValueError("source_affordance_mode must be off, empty or auto")
-        wants_source = (self.source_contract or self.runtime_source
-                        or self.source_affordance_mode == "auto")
-        if wants_source and self.source_map is None:
-            raise ValueError("source-backed settings require a version-bound SourceMap")
-
-    @staticmethod
-    def none() -> "SourceCapability":
-        """The capability of a deployment whose application ships no source compiler."""
-        return SourceCapability()
-
-    def session_kwargs(self) -> dict:
-        """The exact keywords a session takes, so a composition cannot pick three of four."""
-        return {
-            "source_map": self.source_map,
-            "source_contract": self.source_contract,
-            "runtime_source": self.runtime_source,
-            "source_affordance_mode": self.source_affordance_mode,
-        }
-
-
-@runtime_checkable
-class ApplicationAdapter(Protocol):
-    """Minimum application-specific surface consumed by the generic composition."""
-
-    @property
-    def descriptor(self) -> ApplicationDescriptor: ...
-
-    @property
-    def business_tools(self) -> BusinessToolRuntime: ...
-
-    @property
-    def ports(self) -> ApplicationPorts: ...
-
-    def health(self) -> dict: ...
-
-
-@dataclass(frozen=True)
-class BoundApplication:
-    descriptor: ApplicationDescriptor
-    business_tools: BusinessToolRuntime
-    catalog: dict
-    ports: ApplicationPorts
-
-
-def bind_application(adapter: ApplicationAdapter) -> BoundApplication:
-    """Validate an adapter once before any user task reaches the Agent loop."""
-    if not isinstance(adapter, ApplicationAdapter):
-        raise TypeError("application adapter does not implement the required protocol")
-    descriptor = adapter.descriptor
-    if not isinstance(descriptor, ApplicationDescriptor):
-        raise TypeError("application adapter descriptor is invalid")
-    tools = adapter.business_tools
-    if not isinstance(tools, BusinessToolRuntime):
-        raise TypeError("application adapter business_tools is invalid")
-    if tools.application_id and tools.application_id != descriptor.application_id:
-        raise ValueError("application descriptor and business tools use different identities")
-    if descriptor.catalog_sha256 != tools.catalog_sha256:
-        raise ValueError("application descriptor is stale for its Skill and tool catalog")
-    ports = adapter.ports
-    if not isinstance(ports, ApplicationPorts):
-        raise TypeError("application adapter ports are invalid")
-    if ports.routes.application_id != descriptor.application_id:
-        raise ValueError("route port belongs to another application")
-    if ports.data.tool_names != tools.tool_names:
-        raise ValueError("data port must classify every business tool")
-    if ports.postconditions.supported_tools != tools.mutation_tool_names:
-        raise ValueError("postcondition port must verify every mutation tool")
-    if ports.reconciliation.supported_tools != tools.mutation_tool_names:
-        raise ValueError("reconciliation port must cover every mutation tool")
-    declared_scopes = frozenset(scope for scope in tools.required_scopes.values() if scope)
-    if ports.identity.required_scopes != declared_scopes:
-        raise ValueError("identity port scopes differ from the business tool catalog")
-    if tools.data_classifier is not ports.data:
-        raise ValueError("business runtime is not bound to the adapter data port")
-    if tools.postcondition_verifier is not ports.postconditions:
-        raise ValueError("business runtime is not bound to the adapter postcondition port")
-    if tools.route_validator is not ports.routes:
-        raise ValueError("business runtime is not bound to the adapter route port")
-    return BoundApplication(
-        descriptor=descriptor,
-        business_tools=tools,
-        catalog=tools.catalog_manifest,
-        ports=ports,
-    )

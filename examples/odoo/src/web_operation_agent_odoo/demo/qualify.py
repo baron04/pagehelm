@@ -25,7 +25,7 @@ import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
-from web_operation_agent.application import bind_application
+from web_operation_agent.composition.binding import bind_application
 
 from ..adapter import COLLECTIONS, OdooApplicationAdapter
 from ..sourcemap import OdooCompiler, odoo_source_tree

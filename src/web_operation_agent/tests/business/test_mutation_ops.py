@@ -56,7 +56,7 @@ class MutationOpsTests(unittest.TestCase):
         from unittest.mock import Mock
         from web_operation_agent.tests.test_identity import principal
         from web_operation_agent.business.operations import reconcile
-        from web_operation_agent.application import MutationReconciliation
+        from web_operation_agent.composition.ports import MutationReconciliation
         import time
         p = principal(issued_at=int(time.time() * 1000),
                       expires_at=int(time.time() * 1000) + 60_000)

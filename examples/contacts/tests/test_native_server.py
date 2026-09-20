@@ -23,7 +23,7 @@ from web_operation_agent.state.identity import PrincipalRevokedError
 from web_operation_agent.modeling.client import (KeyedLimitedChat, KeyedProviderAdmission,
                                        ProviderError, ProviderOutcome,
                                        ProviderRuntimeGuard)
-from web_operation_agent.operations import create_state_backup, restore_state_backup
+from web_operation_agent.composition.operations import create_state_backup, restore_state_backup
 from web_operation_agent.transport import RemoteProtocolError
 
 

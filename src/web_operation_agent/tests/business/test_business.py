@@ -21,7 +21,7 @@ from web_operation_agent.business.runtime import (
     BusinessToolPermissionError, BusinessToolRequestError, BusinessToolResult,
     BusinessToolRuntime, BusinessToolUnavailableError,
 )
-from web_operation_agent.application import ResultPostconditionVerifier
+from web_operation_agent.composition.ports import ResultPostconditionVerifier
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.answer.evidence import Origin, QueryEvidence, RecordEvidence
 from web_operation_agent.state.ledger import SessionLedger

@@ -11,7 +11,7 @@ import time
 from typing import Callable
 from urllib.parse import urlsplit
 
-from ..application import BoundApplication
+from ..composition.binding import BoundApplication
 from ..answer.answering import render_structured_query_answer
 from ..answer.answer_view import render_sources
 from ..transport.browser import RemoteBrowserClient, TransportError

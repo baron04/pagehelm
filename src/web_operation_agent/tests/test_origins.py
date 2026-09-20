@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import unittest
 
-from web_operation_agent.application import APPLICATION_ADAPTER_VERSION, ApplicationDescriptor
+from web_operation_agent.composition.descriptor import (
+    APPLICATION_ADAPTER_VERSION,
+    ApplicationDescriptor,
+)
 from web_operation_agent.origins import (MAX_ORIGIN_LENGTH, OriginError, normalize_origin,
                                          origin_of)
 from web_operation_agent.schemas import ClientHello, SchemaError

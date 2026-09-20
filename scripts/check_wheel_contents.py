@@ -15,9 +15,11 @@ DISTRIBUTIONS = {
     "web-operation-agent (core)": {
         "glob": "dist/*.whl",
         "required": [
-            "web_operation_agent/durable.py",
+            "web_operation_agent/state/store.py",
+            "web_operation_agent/transport/registry.py",
             "web_operation_agent/business/operations.py",
-            "web_operation_agent/application.py",
+            "web_operation_agent/composition/binding.py",
+            "web_operation_agent/composition/ports.py",
             "web_operation_agent/sourcetree.py",
             "web_operation_agent/xmlscan.py",
             "web_operation_agent/policies/model_options.json",

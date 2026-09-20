@@ -1,13 +1,15 @@
 """Reusable assertions for every in-repository Application Adapter."""
 from __future__ import annotations
 
-from web_operation_agent.application import (
+from web_operation_agent.composition.binding import (
     ApplicationAdapter,
+    bind_application,
+    BoundApplication,
+)
+from web_operation_agent.composition.ports import (
     ApplicationIdentityPort,
     ApplicationMutationReconciler,
     ApplicationRoutePort,
-    BoundApplication,
-    bind_application,
 )
 from web_operation_agent.business.runtime import BusinessDataClassifier, BusinessPostconditionVerifier
 

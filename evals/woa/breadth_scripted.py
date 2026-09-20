@@ -6,8 +6,11 @@ import json
 import uuid
 from typing import Any
 
-from web_operation_agent.application import (DeclaredDataClassifier, DeclaredRoutePort,
-                                             ResultPostconditionVerifier)
+from web_operation_agent.composition.ports import (
+    DeclaredDataClassifier,
+    DeclaredRoutePort,
+    ResultPostconditionVerifier,
+)
 from web_operation_agent.answer.answering import StructuredQueryAnswer
 from web_operation_agent.business.runtime import (BusinessSkill, BusinessToolRequestError,
                                            BusinessToolResult, BusinessToolRuntime)

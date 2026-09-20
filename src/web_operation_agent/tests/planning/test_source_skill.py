@@ -195,7 +195,7 @@ class DraftingFromSource(unittest.TestCase):
         application's own tool-route contract can tell those apart, so the compiler asks it
         rather than deciding with a pattern of its own.
         """
-        from web_operation_agent.application import DeclaredRoutePort
+        from web_operation_agent.composition.ports import DeclaredRoutePort
         single_segment_only = DeclaredRoutePort(
             application_id="fixture.app",
             tool_route_patterns=(r"/[A-Za-z0-9_]+/do/[A-Za-z0-9_]+",),

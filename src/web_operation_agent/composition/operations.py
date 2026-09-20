@@ -273,7 +273,7 @@ def restore_state_backup(bundle: str | Path, destination: str | Path, *,
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python -m web_operation_agent.operations")
+    parser = argparse.ArgumentParser(prog="python -m web_operation_agent.composition.operations")
     commands = parser.add_subparsers(dest="command", required=True)
     backup = commands.add_parser("backup", help="create a consistent operational backup")
     backup.add_argument("--sessions", required=True)

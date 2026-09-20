@@ -8,7 +8,7 @@ from web_operation_agent.state import (
     SQLiteProviderQuota,
     SQLiteSessionStore,
 )
-from web_operation_agent.live import LiveProductServer
+from web_operation_agent.composition.live import LiveProductServer
 
 store = SQLiteSessionStore("private/sessions.sqlite3")
 server = LiveProductServer(durable_store=store)
@@ -33,17 +33,17 @@ Inactive session histories can be removed with `store.prune(older_than_ms=...)`,
 Do not copy a live SQLite database with `cp`: committed pages may still be in its WAL. The operations command uses SQLite's online backup API, checks every snapshot, writes a content-digest manifest without host paths, and publishes the directory atomically.
 
 ```bash
-python -m web_operation_agent.operations backup \
+python -m web_operation_agent.composition.operations backup \
   --sessions private/sessions.sqlite3 \
   --mutations private/mutations.sqlite3 \
   --destination backups/2026-09-14
-python -m web_operation_agent.operations verify backups/2026-09-14
+python -m web_operation_agent.composition.operations verify backups/2026-09-14
 ```
 
 Restore always targets a new directory. Stop and isolate all writers first, then make that fact explicit:
 
 ```bash
-python -m web_operation_agent.operations restore backups/2026-09-14 \
+python -m web_operation_agent.composition.operations restore backups/2026-09-14 \
   --destination recovery/2026-09-14 \
   --writer-isolated
 ```

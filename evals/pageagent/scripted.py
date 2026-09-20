@@ -17,13 +17,15 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
-from web_operation_agent.application import (
+from web_operation_agent.composition.descriptor import (
     APPLICATION_ADAPTER_VERSION,
     ApplicationDescriptor,
+)
+from web_operation_agent.composition.ports import (
     ApplicationPorts,
-    DeclaredRoutePort,
     ConservativeMutationReconciler,
     DeclaredDataClassifier,
+    DeclaredRoutePort,
     ResultPostconditionVerifier,
 )
 from web_operation_agent.answer.answering import StructuredQueryAnswer

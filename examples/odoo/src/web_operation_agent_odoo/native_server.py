@@ -15,14 +15,14 @@ from dataclasses import dataclass, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from web_operation_agent.application import bind_application
+from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.state.conversation import (SQLiteConversationState,
                                                prune_sqlite_conversations)
 from web_operation_agent.state import (SQLiteExpiringNonceStore,
                                       SQLitePrincipalRevocations, SQLiteSessionStore)
 from web_operation_agent.modeling.egress import ProviderEgressPolicy
 from web_operation_agent.embedded_agent import ReadOnlyControl
-from web_operation_agent.live import (LiveConversationRunner, LiveProductCapacityError,
+from web_operation_agent.composition.live import (LiveConversationRunner, LiveProductCapacityError,
                                       LiveProductServer, LiveProductSession)
 from web_operation_agent.modeling.client import (ChatModel, KeyedLimitedChat,
                                        KeyedProviderAdmission, ProviderRuntimeGuard,

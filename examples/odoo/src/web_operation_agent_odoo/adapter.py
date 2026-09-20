@@ -34,12 +34,17 @@ from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from web_operation_agent.answer.answering import StructuredQueryAnswer
-from web_operation_agent.application import (APPLICATION_ADAPTER_VERSION,
-                                             ApplicationDescriptor, ApplicationPorts,
-                                             DeclaredDataClassifier,
-                                             MutationReconciliation,
-                                             ResultPostconditionVerifier,
-                                             SourceCapability)
+from web_operation_agent.composition.descriptor import (
+    APPLICATION_ADAPTER_VERSION,
+    ApplicationDescriptor,
+)
+from web_operation_agent.composition.ports import (
+    ApplicationPorts,
+    DeclaredDataClassifier,
+    MutationReconciliation,
+    ResultPostconditionVerifier,
+)
+from web_operation_agent.composition.sources import SourceCapability
 from web_operation_agent.business.runtime import (BusinessMutationIndeterminate,
                                           BusinessMutationRefusedError,
                                           BusinessSelectionOption,

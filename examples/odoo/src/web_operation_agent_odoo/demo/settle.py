@@ -37,7 +37,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from web_operation_agent.application import bind_application
+from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.business.mutation import MutationJournalError, SQLiteMutationJournal
 from web_operation_agent.business.operations import reconcile, unresolved_report
 

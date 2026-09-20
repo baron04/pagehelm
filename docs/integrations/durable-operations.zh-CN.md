@@ -8,7 +8,7 @@ from web_operation_agent.state import (
     SQLiteProviderQuota,
     SQLiteSessionStore,
 )
-from web_operation_agent.live import LiveProductServer
+from web_operation_agent.composition.live import LiveProductServer
 
 store = SQLiteSessionStore("private/sessions.sqlite3")
 server = LiveProductServer(durable_store=store)
@@ -33,17 +33,17 @@ Provider quota 是按服务端指定 scope 共享的滚动请求额度。同一 
 不要用 `cp` 复制正在工作的 SQLite 数据库：已提交页面可能仍在 WAL 中。运维命令使用 SQLite 在线备份 API，检查每份快照，生成不含主机路径的内容摘要清单，并以原子目录切换发布备份。
 
 ```bash
-python -m web_operation_agent.operations backup \
+python -m web_operation_agent.composition.operations backup \
   --sessions private/sessions.sqlite3 \
   --mutations private/mutations.sqlite3 \
   --destination backups/2026-09-14
-python -m web_operation_agent.operations verify backups/2026-09-14
+python -m web_operation_agent.composition.operations verify backups/2026-09-14
 ```
 
 恢复只能写入新目录。先停止并隔离所有 writer，再明确声明该条件：
 
 ```bash
-python -m web_operation_agent.operations restore backups/2026-09-14 \
+python -m web_operation_agent.composition.operations restore backups/2026-09-14 \
   --destination recovery/2026-09-14 \
   --writer-isolated
 ```

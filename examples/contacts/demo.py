@@ -27,10 +27,10 @@ from examples.contacts.adapter import MinimalContactsAdapter
 from examples.contacts.app import (ACTORS_BY_ID, DEMO_SESSION_COOKIE,
                                    MinimalContactsApplication)
 from web_operation_agent import python_is_supported, supported_python_text
-from web_operation_agent.application import bind_application
+from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.embedded_agent import ReadOnlyControl
 from web_operation_agent.state.identity import bind_matching_identity
-from web_operation_agent.live import LiveConversationRunner, LiveProductSession
+from web_operation_agent.composition.live import LiveConversationRunner, LiveProductSession
 from web_operation_agent.modeling.client import ChatModel, ProviderError, SpendMeter, load_env
 from web_operation_agent.business.mutation import MemoryMutationJournal
 from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnExecution, AgentTurnExecutor

@@ -11,7 +11,7 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..application import ApplicationRoutePort
+from ..composition.ports import ApplicationRoutePort
 from ..business.runtime import BusinessSkill, Citation
 from ..schemas import SourceMap, SourceRelation
 

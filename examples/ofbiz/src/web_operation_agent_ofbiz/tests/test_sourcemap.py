@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from web_operation_agent.application import SourceCompiler
+from web_operation_agent.composition.sources import SourceCompiler
 from web_operation_agent.sourcetree import SourceTree
 from web_operation_agent_ofbiz.sourcemap import OFBizCompiler
 

@@ -15,15 +15,15 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Protocol, cast
 
-from .state.store import SQLiteSessionStore
-from .transport.gateway import EmbeddedGateway
-from .state.identity import PrincipalContext
-from .privacy import redact_sensitive_assignments, redact_session_handoffs
-from .execution.product import AgentTurnError
-from .transport.channel import RemoteSessionChannel, RemoteSessionLimits, SessionGrant
-from .transport.protocol import RemoteSessionClosed
-from .transport.registry import RemoteSessionRegistry
-from .traceview import build_trace_case, render_trace_html, write_trace_bundle
+from ..state.store import SQLiteSessionStore
+from ..transport.gateway import EmbeddedGateway
+from ..state.identity import PrincipalContext
+from ..privacy import redact_sensitive_assignments, redact_session_handoffs
+from ..execution.product import AgentTurnError
+from ..transport.channel import RemoteSessionChannel, RemoteSessionLimits, SessionGrant
+from ..transport.protocol import RemoteSessionClosed
+from ..transport.registry import RemoteSessionRegistry
+from ..traceview import build_trace_case, render_trace_html, write_trace_bundle
 
 #: How long an idle event request is held open before it returns "nothing yet".
 #:

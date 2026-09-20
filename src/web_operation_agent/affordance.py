@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Iterable
 from urllib.parse import urlsplit
 
-from .application import ApplicationRoutePort
+from .composition.ports import ApplicationRoutePort
 from .schemas import SourceMap, SourceRelation, canonical_json
 
 

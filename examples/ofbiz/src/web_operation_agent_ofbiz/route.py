@@ -1,7 +1,7 @@
 """Apache OFBiz route semantics for the optional legacy source integration."""
 from __future__ import annotations
 
-from web_operation_agent.application import DeclaredRoutePort
+from web_operation_agent.composition.ports import DeclaredRoutePort
 
 
 OFBIZ_ROUTE_PORT = DeclaredRoutePort(

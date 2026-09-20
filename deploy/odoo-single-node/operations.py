@@ -164,7 +164,7 @@ def _unresolved_mutations(path: Path) -> int:
 def _live_unresolved_mutations(env: dict[str, str]) -> int:
     output = _compose(
         env, "run", "--rm", "--no-deps", "--entrypoint", "python", "agent",
-        "-m", "web_operation_agent.operations", "inspect", "--mutations",
+        "-m", "web_operation_agent.composition.operations", "inspect", "--mutations",
         "/var/lib/woa/mutation-journal.sqlite3")
     try:
         payload = json.loads(output.decode("utf-8").strip().splitlines()[-1])
@@ -268,7 +268,7 @@ def backup(*, project: str, destination: str | Path) -> dict:
         _compose(
             env, "run", "--rm", "--no-deps", "--entrypoint", "bash",
             "-v", f"{agent}:/backup", "agent",
-            "-lc", "python -m web_operation_agent.operations backup "
+            "-lc", "python -m web_operation_agent.composition.operations backup "
             "--sessions /var/lib/woa/session-store.sqlite3 "
             "--mutations /var/lib/woa/mutation-journal.sqlite3 "
             "--conversations /var/lib/woa/conversation-state.sqlite3 "
@@ -336,7 +336,7 @@ def _core_restore_script(backup: str, state: str) -> str:
         f"rm -rf {stage} {core} && mkdir -p {core} && "
         f"find {backup}/agent-state -maxdepth 1 -type f ! -name agent-ledgers.tar.gz "
         f"-exec cp -p {{}} {core}/ \\; && "
-        f"python -m web_operation_agent.operations restore {core} "
+        f"python -m web_operation_agent.composition.operations restore {core} "
         f"--destination {stage} --writer-isolated && "
         f"rm -rf {core}")
 

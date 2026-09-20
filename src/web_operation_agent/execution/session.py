@@ -25,7 +25,8 @@ import uuid
 from typing import Callable
 from zoneinfo import ZoneInfo
 
-from ..application import ApplicationRoutePort, SourceCapability
+from ..composition.ports import ApplicationRoutePort
+from ..composition.sources import SourceCapability
 from ..answer import answer_protocol
 from ..business.approvals import ApprovalWatch, NavigationPlan
 from ..answer.answer_view import (capability_gap_answer, render_payload, unavailable_answer,
