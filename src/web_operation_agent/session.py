@@ -44,7 +44,7 @@ from .contract import (ContractPlanner, EvidenceBundle, PlanningFailed, SourceRe
                        _segment_from_template, expand_terms)
 from .controlplane import ControlPlaneClient, ControlPlaneError
 from .egress import AuditedChat, ProviderEgressError
-from .grounding import (NOT_APPLICABLE, REFUTED, WRITE_MIXED, WRITE_PERMITTED, WRITE_REFUSED,
+from .grounding import (NOT_APPLICABLE, REFUTED, WRITE_PERMITTED, WRITE_REFUSED,
                         WRITE_UNKNOWN, PlanState, opaque_route_identity)
 from .identity import OperationContext, PrincipalContext
 from .knowledge import ApplicationKnowledgePort
@@ -54,6 +54,7 @@ from .privacy import (SessionHandoffPolicy, redact_sensitive_assignments,
                       safe_tool_arguments as _safe)
 from .routes import Router, candidate_url, observation_is_at_route
 from .turnwatch import ProgressFeed, RepeatGuard
+from .writes import PRE_DISPATCH_ERRORS, WRITE_CAPABLE, WatchState, WriteWatch
 from .prompts import (
     AGENT_SYSTEM, APPLICATION_ENTRY_SYSTEM, APPLICATION_ENTRY_TOOL, ASK_USER_TOOL,
     BUSINESS_SKILL_SYSTEM, CAPABILITY_SYSTEM, CAPABILITY_TOOL,
@@ -782,18 +783,9 @@ class ServerAgentSession:
         #: The plan and what the run has learned about it. Replaced by `plan()`.
         self.plan_state: PlanState = PlanState.of(
             self.contract, route_identity=self._contract_route_identity)
-        #: How much of the control plane's decision log this session has already read.
-        self._control_seen = 0
-        self._control_started = False
+        self._writes = WriteWatch(control=control, ledger=ledger, run_id=self.run_id)
         #: Set once the agent has been told a write of its own did not execute.
         self._challenged_false_success = False
-        self.write_refusals = 0
-        self.writes_permitted = 0
-        # Permission is not an application acknowledgement. This survives observations,
-        # context trimming and all exits. There is no runtime business verifier yet.
-        self.pending_write = False
-        self._uncertain_write = ""
-        self._awaiting_control = False
         self._browser_attempts = 0
         #: Source-contract scopes declared by the Adapter and observed on the entry page.
         #: Empty until `observe_entry()` has run, which is why planning happens after it.
@@ -952,7 +944,7 @@ class ServerAgentSession:
     def _settle_confirmed_navigation(self, receipt: ActionReceipt) -> None:
         """A dispatch that reached the page uses the confirmation up; one refused before
         dispatch leaves it for the retry of the same switch."""
-        if receipt.error_code not in self.PRE_DISPATCH_ERRORS:
+        if receipt.error_code not in PRE_DISPATCH_ERRORS:
             self._confirmed_navigation = ""
 
     def _plan(self) -> OperationContract:
@@ -1002,7 +994,7 @@ class ServerAgentSession:
         return self.contract
 
     def install_control_plan(self, plan: ControlPlan) -> None:
-        self._begin_control()
+        self._writes.begin_control()
         try:
             installed = self.control.install(plan)
             # Redacted on purpose: the ledger proves a plan existed and was stable, and reveals
@@ -1010,37 +1002,12 @@ class ServerAgentSession:
             self.ledger.append("control_plan_installed", plan=plan.redacted(),
                                tickets_installed=len(installed))
         except Exception:
-            self._end_control()
+            self._writes.end_control()
             raise
-
-    def _begin_control(self) -> None:
-        if self._control_started:
-            return
-        self.control.begin_run(self.run_id)
-        self._control_started = True
-        self.ledger.append("control_run_started")
-
-    def _end_control(self) -> ControlPlaneError | None:
-        if not self._control_started:
-            return None
-        end_run = getattr(self.control, "end_run", None)
-        if not callable(end_run):
-            self._control_started = False
-            return None
-        try:
-            end_run(self.run_id)
-            self._control_started = False
-            self.ledger.append("control_run_released")
-            return None
-        except Exception as exc:
-            self.ledger.append(
-                "control_run_release_failed", error_type=type(exc).__name__)
-            return (exc if isinstance(exc, ControlPlaneError)
-                    else ControlPlaneError("control run release failed"))
 
     def close(self) -> None:
         """Release external run-scoped resources when execution never reached ``run``."""
-        self._end_control()
+        self._writes.end_control()
 
     def _cancel_requested(self) -> bool:
         try:
@@ -1055,7 +1022,7 @@ class ServerAgentSession:
         try:
             return self._run()
         finally:
-            self._end_control()
+            self._writes.end_control()
 
     # -- one tool, one place ------------------------------------------------------------
     def _handle_named_tool(self, turn: "_Turn", call: dict, name: str,
@@ -1106,12 +1073,12 @@ class ServerAgentSession:
             return _Next(self._finish(turn.result, turn.started_at,
                                       self._transport_terminal("observe"), str(e),
                                       steps=turn.step))
-        write = self._write_outcome(receipt, turn.step)
+        write = self._writes.write_outcome(receipt, turn.step)
         self.ledger.append("action_receipt", step=turn.step, tool="observe",
                            command_id=receipt.command_id, after_tool="lookup_source",
                            ok=receipt.ok, error_code=receipt.error_code,
                            write=write["state"], write_attribution="unattributed")
-        reason, detail = self._settle_write(write)
+        reason, detail = self._writes.settle_write(write)
         if reason:
             return _Next(self._finish(turn.result, turn.started_at, reason, detail,
                                       steps=turn.step))
@@ -1429,7 +1396,7 @@ class ServerAgentSession:
                 return _Next(self._finish(result, t0,
                                     self._transport_terminal("observe", may_write=False),
                                     str(e), steps=step))
-            write = self._write_outcome(receipt, step, action_may_write=False)
+            write = self._writes.write_outcome(receipt, step, action_may_write=False)
             observed_epoch = (receipt.observation.epoch
                               if receipt.observation is not None else None)
             fresh_observation = bool(
@@ -1447,7 +1414,7 @@ class ServerAgentSession:
                                page_epoch_before=prior_epoch,
                                observation_epoch=observed_epoch,
                                fresh_observation=fresh_observation)
-            reason, detail = self._settle_write(write)
+            reason, detail = self._writes.settle_write(write)
             if reason:
                 return _Next(self._finish(result, t0, reason, detail, steps=step))
             if not fresh_observation:
@@ -1582,7 +1549,7 @@ class ServerAgentSession:
                                    url=str(url or "")[:500], page_url=obs.url)
                 return self._resume(turn, messages, obs, successful_business_tools)
 
-        action_may_write = name in self.WRITE_CAPABLE and not source_route_read_only
+        action_may_write = name in WRITE_CAPABLE and not source_route_read_only
         if self.pending_write and action_may_write:
             return _Next(self._finish(result, t0, "indeterminate_write",
                                 "another potentially writing action was requested while a "
@@ -1605,7 +1572,7 @@ class ServerAgentSession:
         prior_page_epoch = obs.epoch
         try:
             self._browser_attempts += 1
-            self._awaiting_control = action_may_write
+            self._writes.expect_decision(action_may_write)
             preserve_completed_write = bool(
                 self._answer_action_receipt is not None
                 and self._answer_action_receipt["kind"] == "mutation"
@@ -1628,7 +1595,8 @@ class ServerAgentSession:
             self._settle_confirmed_navigation(receipt)
         if name != "observe" and receipt.error_code != "stale_observation":
             self.page_actions += 1
-        write = self._write_outcome(receipt, step, action_may_write=action_may_write)
+        write = self._writes.write_outcome(
+            receipt, step, action_may_write=action_may_write)
         self.ledger.append("action_receipt", step=step, tool=receipt.action,
                            command_id=receipt.command_id, write_attribution="unattributed",
                            ok=receipt.ok, error_code=receipt.error_code,
@@ -1645,7 +1613,7 @@ class ServerAgentSession:
             # invalidating the observation identity. The rejected command was never
             # dispatched, so let the next ReAct decision retry against the fresh fact.
             self._repeats.reset()
-        reason, detail = self._settle_write(write)
+        reason, detail = self._writes.settle_write(write)
         if reason:
             return _Next(self._finish(result, t0, reason, detail, steps=step))
         if receipt.observation is not None:
@@ -1979,9 +1947,9 @@ class ServerAgentSession:
                     result, t0, "indeterminate_write",
                     "business mutation completed but fresh page observation failed: "
                     + str(exc), steps=step))
-            # Deliberately not `_settle_write`: the typed acknowledgement and the
+            # Deliberately not `WriteWatch.settle_write`: the typed acknowledgement and the
             # durable journal already agree this mutation completed, so stashing
-            # `_uncertain_write` here would downgrade a known write to an unknown
+            # `uncertain_write` here would downgrade a known write to an unknown
             # one and invite reconciliation for something already settled.
             if write["state"] in (WRITE_UNKNOWN, "control_error"):
                 reason = ("indeterminate_write" if write["state"] == WRITE_UNKNOWN
@@ -2157,7 +2125,7 @@ class ServerAgentSession:
                 self._settle_confirmed_navigation(receipt)
                 if receipt.error_code != "stale_observation":
                     self.page_actions += 1
-                write = self._write_outcome(
+                write = self._writes.write_outcome(
                     receipt, step, action_may_write=False)
                 self.ledger.append(
                     "action_receipt", step=step, tool=receipt.action,
@@ -2172,7 +2140,7 @@ class ServerAgentSession:
                     # replacement observation. Repeating the decision against that
                     # observation is recovery, not a no-progress loop.
                     self._repeats.reset()
-                reason, detail = self._settle_write(write)
+                reason, detail = self._writes.settle_write(write)
                 if reason:
                     return _Next(self._finish(result, t0, reason, detail, steps=step))
                 if receipt.observation is not None:
@@ -2281,7 +2249,7 @@ class ServerAgentSession:
                            contract_source=self.contract_source,
                            citations=len(self.contract.cited_keys()))
         try:
-            self._begin_control()
+            self._writes.begin_control()
         except ControlPlaneError as exc:
             return self._finish(result, t0, "control_plane_error", str(exc))
         if self._cancel_requested():
@@ -2322,7 +2290,7 @@ class ServerAgentSession:
                     {"role": "user", "content": self._opening(obs)}]
         self._sync_plan_message(messages)
         try:
-            _, self._control_seen = self.control.since(0)
+            self._writes.start_observing()
         except ControlPlaneError as e:
             return self._finish(result, t0, "control_plane_error", str(e))
         step = 0
@@ -2551,12 +2519,12 @@ class ServerAgentSession:
             # command or a completion claim; a trace window is not command correlation.
             if self._browser_attempts:
                 try:
-                    self._refresh_control()
+                    self._writes.refresh_control()
                 except ControlPlaneError as e:
                     return self._finish(result, t0, "control_plane_error", str(e), steps=step)
-                if self._uncertain_write:
+                if self._writes.uncertain_write:
                     return self._finish(result, t0, "indeterminate_write",
-                                        self._uncertain_write, steps=step)
+                                        self._writes.uncertain_write, steps=step)
 
             handled = self._handle_named_tool(turn, call, name, args)
             if handled is not None:
@@ -2747,28 +2715,6 @@ class ServerAgentSession:
 
 
 
-    def _settle_write(self, write: dict) -> tuple[str, str]:
-        """Decide, in one place, whether an observed write state ends the run.
-
-        Eight copies of this test lived in `_run`, and each had to remember to stash
-        `_uncertain_write` before returning. A copy that forgets does not fail a test; it
-        silently drops the strongest evidence the run had about a write that may have
-        landed, which is the failure this project cares about most. Seven are now this
-        method; the eighth is the completed typed mutation, which stays different on
-        purpose and says so where it sits.
-
-        Returns an empty reason when the step may continue.
-        """
-        state = write["state"]
-        if state == WRITE_UNKNOWN:
-            # Permission is not an acknowledgement. This survives observations, trimming
-            # and every exit, and `finish` merges it into the mutation journal.
-            self._uncertain_write = write["detail"]
-            return "indeterminate_write", write["detail"]
-        if state == "control_error":
-            return "control_plane_error", write["detail"]
-        return "", ""
-
     def _refuse_before_dispatch(self, tool: str, explanation: str, *,
                                 obs: PageObservation, step: int,
                                 no_fresh_detail: str) -> "_StepEnd":
@@ -2787,7 +2733,7 @@ class ServerAgentSession:
         except TransportError as exc:
             return _StepEnd(reason=self._transport_terminal("observe", may_write=False),
                             detail=str(exc))
-        reason, detail = self._settle_write(write)
+        reason, detail = self._writes.settle_write(write)
         if reason:
             return _StepEnd(reason=reason, detail=detail)
         if not fresh:
@@ -2806,7 +2752,7 @@ class ServerAgentSession:
         prior_epoch = obs.epoch
         self._browser_attempts += 1
         receipt = self.browser.execute("observe", {})
-        write = self._write_outcome(receipt, step, action_may_write=False)
+        write = self._writes.write_outcome(receipt, step, action_may_write=False)
         observed_epoch = receipt.observation.epoch if receipt.observation is not None else None
         fresh = bool(receipt.action == "observe" and receipt.ok
                      and receipt.observation is not None and observed_epoch > prior_epoch)
@@ -2831,7 +2777,7 @@ class ServerAgentSession:
         prior_epoch = obs.epoch
         self._browser_attempts += 1
         receipt = self.browser.execute("observe", {})
-        write = self._write_outcome(receipt, step, action_may_write=False)
+        write = self._writes.write_outcome(receipt, step, action_may_write=False)
         observed_epoch = receipt.observation.epoch if receipt.observation is not None else None
         fresh = bool(receipt.action == "observe" and receipt.ok
                      and receipt.observation is not None and observed_epoch > prior_epoch)
@@ -2883,7 +2829,7 @@ class ServerAgentSession:
                 self._settle_confirmed_navigation(receipt)
             if action != "observe":
                 self.page_actions += 1
-            write = self._write_outcome(receipt, step, action_may_write=False)
+            write = self._writes.write_outcome(receipt, step, action_may_write=False)
             self.ledger.append(
                 "form_prefill_action", step=step, tool=action,
                 command_id=receipt.command_id, field=field,
@@ -2895,7 +2841,7 @@ class ServerAgentSession:
                                    if receipt.observation is not None else None),
                 side_effect_possible=False, persisted=False, submitted=False,
                 write=write["state"])
-            terminal, detail = self._settle_write(write)
+            terminal, detail = self._writes.settle_write(write)
             if terminal:
                 return receipt.observation or before, terminal, detail
             last_code = str(receipt.error_code or "")
@@ -3012,77 +2958,6 @@ class ServerAgentSession:
                            **bundle.stats)
         return bundle
 
-    def _write_outcome(self, receipt: ActionReceipt, step: int,
-                       *, action_may_write: bool | None = None) -> dict:
-        """Read decisions observed after a receipt, without assigning their cause.
-
-        An empty trace does not prove a failed click never dispatched. A permit may arrive
-        later, so ambiguous dispatch failures stop immediately, even with no event yet.
-        """
-        if action_may_write is None:
-            action_may_write = receipt.action in self.WRITE_CAPABLE
-        try:
-            events, self._control_seen = self.control.since(self._control_seen)
-        except ControlPlaneError as e:
-            state = WRITE_UNKNOWN if self.pending_write or self._awaiting_control else "control_error"
-            return {"state": state, "detail": f"control plane unreadable: {e}"[:300],
-                    "permitted": 0, "refused": 0, "refused_requests": []}
-        self._awaiting_control = False
-        out = ControlPlaneClient.outcome_of(events)
-        was_pending = self.pending_write
-        self.writes_permitted += out["permitted"]
-        self.write_refusals += out["refused"]
-        self.pending_write |= bool(out["permitted"])
-        detail = ""
-        if out["state"] == WRITE_MIXED or (was_pending and out["refused"]):
-            detail = ("authorised and refused requests were observed before the pending write "
-                      "was confirmed; a partial change cannot be excluded")
-        elif out["permitted"] and not action_may_write:
-            detail = "late write permission observed after a non-dispatching action; cause unknown"
-        elif not receipt.ok and (self.pending_write or (
-                action_may_write and receipt.error_code not in self.PRE_DISPATCH_ERRORS)):
-            detail = ("a potentially writing action lost its result; an empty decision window "
-                      "does not prove non-dispatch and retry is unsafe")
-        self.ledger.append("write_outcome", step=step,
-                           observed_after_command_id=receipt.command_id,
-                           attribution="unattributed", **out, detail=detail)
-        if detail:
-            return {**out, "state": WRITE_UNKNOWN, "detail": detail}
-        if out["refused"]:
-            self.ledger.append("write_refused", step=step, attribution="unattributed",
-                               refusals=out["refused"])
-        if out["permitted"]:
-            self.ledger.append("write_permitted", step=step, attribution="unattributed")
-        return {**out, "detail": ""}
-
-    def _refresh_control(self) -> dict:
-        """Reconcile cumulative decisions before dispatch and on every terminal path.
-
-        A newly delivered permit has no matching acknowledgement here. Record that gap;
-        never attach it to the next click, observation, or finish. No finite trace poll
-        proves that all delayed requests have completed.
-        """
-        out = self.control.outcome()
-        permits = int(out.get("permit_consumed") or 0)
-        refusals = int(out.get("write_blocked") or 0)
-        seen = int(out.get("trace_events") or 0)
-        if permits < self.writes_permitted or refusals < self.write_refusals or seen < self._control_seen:
-            raise ControlPlaneError("control trace rewound within the run")
-        new_permits, new_refusals = permits - self.writes_permitted, refusals - self.write_refusals
-        if new_permits or (self.pending_write and new_refusals):
-            self._uncertain_write = (
-                "late authorised/refused decisions arrived without a correlated write result; "
-                "a partial or unknown change cannot be excluded")
-        if new_permits or new_refusals:
-            self.ledger.append("write_reconciled", attribution="unattributed",
-                               new_permits=new_permits, new_refusals=new_refusals,
-                               consumed_requests=out.get("consumed_requests", []),
-                               blocked_requests=out.get("blocked_requests", []))
-        self.pending_write |= bool(permits)
-        self.writes_permitted, self.write_refusals = permits, refusals
-        self._control_seen = seen
-        return out
-
     def _ground(self, obs: PageObservation, receipt: ActionReceipt, write_state: str,
                 refused_requests: list[str] | None = None) -> str:
         """Judge the current step, and say something only when there is something to say."""
@@ -3180,27 +3055,13 @@ class ServerAgentSession:
             return None
         return _PLAN_MARK + "\n\n".join(parts)
 
-    # Some applications permit writes through navigation routes. Only observation and
-    # waiting avoid a new application action; an onchange may write during fill.
-    WRITE_CAPABLE = frozenset({"click", "submit", "fill", "select", "goto", "back"})
-    # These worker errors are raised before invoking the action. Locator timeouts and
-    # origin_refused are excluded: either may occur after dispatch/navigation began.
-    #: Failures that prove the browser never acted, so nothing can have been written. The
-    #: absent one decides a question the carry-over left open (F4): `navigation_timeout`
-    #: stays *out*, because the runtime executes the command and only then waits for the
-    #: navigation -- by the time it times out, the click has reached the page and may have
-    #: fired a request nobody can see. Ending such a run as indeterminate is correct, and
-    #: weakening it so a mispredicted `expect_navigation` reads as harmless would trade the
-    #: project's central guarantee for a cosmetic one.
-    #:
-    #: The cost is that a wrong prediction ends a run, which is a prompt problem, not a
-    #: receipt problem: the tool descriptions now say when the flag is needed (only for
-    #: script-driven navigation, since a native link is recognised without it) and what it
-    #: costs when the prediction is wrong.
-    PRE_DISPATCH_ERRORS = frozenset({
-        "stale_ref", "unknown_ref", "bad_arguments", "no_such_action",
-        "deadline_expired", "stale_observation", "capability_refused", "runtime_replaced",
-    })
+    # Kept as class aliases because the remote-protocol schema test treats these as the
+    # session's public safety vocabulary. Settlement itself lives in ``WriteWatch``.
+    WRITE_CAPABLE = WRITE_CAPABLE
+    PRE_DISPATCH_ERRORS = PRE_DISPATCH_ERRORS
+    pending_write = WatchState("pending_write", False)
+    writes_permitted = WatchState("writes_permitted", 0)
+    write_refusals = WatchState("write_refusals", 0)
 
     def _success_claim(self, done: bool) -> str:
         """Authorisation counts alone cannot confirm a business postcondition.
@@ -3217,7 +3078,7 @@ class ServerAgentSession:
     def _transport_terminal(self, action: str = "", *, may_write: bool | None = None) -> str:
         # A readable empty trace is not evidence that a lost click never dispatched, and
         # observing after a permit does not clear the earlier unconfirmed write.
-        action_may_write = action in self.WRITE_CAPABLE if may_write is None else may_write
+        action_may_write = action in WRITE_CAPABLE if may_write is None else may_write
         if self._cancel_requested() and not self.pending_write and not action_may_write:
             return "user_cancelled"
         return ("indeterminate_write" if self.pending_write or action_may_write
@@ -3533,18 +3394,20 @@ class ServerAgentSession:
             # continued past the refusal, saying which operation this account was refused.
             reason, detail = "permission_denied", self._refused_detail or detail
         try:
-            result.control = self._refresh_control()
+            result.control = self._writes.refresh_control()
         except ControlPlaneError as e:
             result.control = {"error": str(e)}
-            if self.pending_write or self._awaiting_control:
-                self._uncertain_write = "control evidence unavailable while a write is unresolved"
-            elif reason not in ("transport_error", "indeterminate_write"):
+            write_unresolved = self.pending_write or self._writes.awaiting_control
+            self._writes.mark_control_unavailable()
+            if (not write_unresolved
+                    and reason not in ("transport_error", "indeterminate_write")):
                 reason, detail = "control_plane_error", str(e)
-        if self._uncertain_write:
-            reason, detail = "indeterminate_write", self._uncertain_write
-        release_error = self._end_control()
+        if self._writes.uncertain_write:
+            reason, detail = "indeterminate_write", self._writes.uncertain_write
+        release_error = self._writes.end_control()
         if release_error is not None:
-            if self.pending_write or self._awaiting_control or self.writes_permitted:
+            if (self.pending_write or self._writes.awaiting_control
+                    or self.writes_permitted):
                 reason = "indeterminate_write"
                 detail = "control cleanup failed after a write decision"
             elif reason not in ("transport_error", "indeterminate_write"):

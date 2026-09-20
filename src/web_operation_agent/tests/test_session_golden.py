@@ -322,17 +322,17 @@ class GoldenIsChangeSensitive(unittest.TestCase):
             golden_session.ScriptedBrowser.execute = original
 
     def test_a_changed_write_settlement_is_detected(self):
-        original = session_module.ServerAgentSession._write_outcome
+        original = session_module.WriteWatch.write_outcome
 
         def never_refused(self, receipt, step, **kwargs):
             outcome = original(self, receipt, step, **kwargs)
             return {**outcome, "state": session_module.WRITE_NONE}
 
-        session_module.ServerAgentSession._write_outcome = never_refused
+        session_module.WriteWatch.write_outcome = never_refused
         try:
             self.assertDetects("gateway_refused_the_write", "a changed write settlement")
         finally:
-            session_module.ServerAgentSession._write_outcome = original
+            session_module.WriteWatch.write_outcome = original
 
 
 if __name__ == "__main__":
