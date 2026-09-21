@@ -46,6 +46,7 @@ class NativeServerConfig:
     session_lease_ms: int = 5_000
     max_active_requests: int = 3
     max_active_requests_per_actor: int = 2
+    adversarial_form_fixture: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "state_dir", Path(self.state_dir).expanduser())
@@ -69,6 +70,8 @@ class NativeServerConfig:
                 "max_active_requests_per_actor cannot exceed max_active_requests")
         if self.max_sessions_per_actor > self.max_sessions:
             raise ValueError("max_sessions_per_actor cannot exceed max_sessions")
+        if not isinstance(self.adversarial_form_fixture, bool):
+            raise ValueError("adversarial_form_fixture must be a boolean")
         if (isinstance(self.browser_idle_timeout_s, bool)
                 or not isinstance(self.browser_idle_timeout_s, int)
                 or not 30 <= self.browser_idle_timeout_s <= 86_400):
@@ -81,7 +84,9 @@ class NativeContactsHost:
     def __init__(self, config: NativeServerConfig):
         self.config = config
         config.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.application = MinimalContactsApplication(port=config.port)
+        self.application = MinimalContactsApplication(
+            port=config.port,
+            adversarial_form_fixture=config.adversarial_form_fixture)
         self.session_store = SQLiteSessionStore(
             config.state_dir / "session-store.sqlite3",
             lease_ms=config.session_lease_ms)

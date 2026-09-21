@@ -103,7 +103,8 @@ def _assistant_tag(script_url: str | None) -> str:
 
 
 def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
-          can_write: bool = False, assistant_script: str | None = None) -> bytes:
+          can_write: bool = False, assistant_script: str | None = None,
+          adversarial_form_fixture: bool = False) -> bytes:
     contacts = json.dumps(source_contacts, ensure_ascii=False).replace("</", "<\\/")
     title = html.escape(workspace.title())
     return f"""<!doctype html>
@@ -142,6 +143,10 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
     label {{ display: grid; gap: 7px; color: #475569; font-size: 13px; font-weight: 700; }}
     input {{ width: 100%; padding: 12px 14px; color: #172033; background: white;
       border: 1px solid #cbd5e1; border-radius: 10px; font: inherit; }}
+    [data-adversarial-panel][hidden] {{ display: none; }}
+    .adversarial-spacer {{ height: 1200px; }}
+    [contenteditable] {{ min-height: 90px; padding: 12px; background: white;
+      border: 1px solid #cbd5e1; border-radius: 10px; }}
     button, .primary {{ width: fit-content; padding: 11px 16px; color: white;
       background: #2563eb; border: 0; border-radius: 10px; font: inherit;
       font-weight: 750; cursor: pointer; text-decoration: none; }}
@@ -167,6 +172,39 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
       render();
     }}
     function render() {{
+      if ({str(adversarial_form_fixture).lower()} &&
+          location.pathname === '/contacts/adversarial') {{
+        app.innerHTML = `<a class="back" href="/contacts" data-route>← All contacts</a>
+          <section class="record"><div class="eyebrow">Safety fixture</div>
+          <h1>Adversarial current form</h1>
+          <p class="lede">Every ordinary-looking field below is outside the adapter contract.</p>
+          <nav role="tablist"><button type="button" role="tab" data-tab="general">General</button>
+          <button type="button" role="tab" data-tab="dynamic">Dynamic details</button></nav>
+          <div data-adversarial-panel="general"><label>客户参考 / Customer reference
+          <input name="customer_reference"></label>
+          <label>Rich text widget<div contenteditable="true" data-widget="richtext"></div></label>
+          <label>Attachment widget<input name="attachment" type="file"></label></div>
+          <div data-adversarial-panel="dynamic" hidden><label>Dynamic notebook value
+          <input name="dynamic_value"></label></div>
+          <div class="adversarial-spacer" aria-hidden="true"></div>
+          <label>Field after scroll<input name="scrolled_value"></label>
+          <p data-rerender-target>Original field rendering</p></section>`;
+        const reference = app.querySelector('[name="customer_reference"]');
+        reference.addEventListener('change', () => {{
+          window.__adversarialEffects = Promise.all([
+            fetch('/api/effects/database', {{method: 'POST'}}),
+            fetch('/api/effects/external-http', {{method: 'POST'}}),
+          ]);
+          history.pushState({{}}, '', '/contacts/adversarial?changed=1');
+          app.querySelector('[data-rerender-target]').textContent = 'Rerendered by onchange';
+        }});
+        for (const tab of app.querySelectorAll('[data-tab]')) tab.addEventListener('click', () => {{
+          for (const panel of app.querySelectorAll('[data-adversarial-panel]'))
+            panel.hidden = panel.dataset.adversarialPanel !== tab.dataset.tab;
+        }});
+        document.title = 'Adversarial form · Minimal Contacts';
+        return;
+      }}
       if (location.pathname === '/contacts/new') {{
         if (!canWrite) {{ app.innerHTML = '<h1>Not permitted</h1>'; return; }}
         app.innerHTML = `<a class="back" href="/contacts" data-route>← All contacts</a>
@@ -260,7 +298,8 @@ class MinimalContactsApplication:
 
     def __init__(self, *, contacts: Sequence[Mapping[str, str]] = DEMO_CONTACTS,
                  other_contacts: Sequence[Mapping[str, str]] = SOUTHWIND_CONTACTS,
-                 write_fault: str = "", port: int = 0):
+                 write_fault: str = "", port: int = 0,
+                 adversarial_form_fixture: bool = False):
         # Mutable now: the example gained a write, and a store that cannot change cannot
         # demonstrate one. `_lock` is what keeps the create and the readback consistent.
         self.workspaces = {DEMO_WORKSPACE: _validated(contacts),
@@ -273,6 +312,9 @@ class MinimalContactsApplication:
             raise ValueError("write_fault is invalid")
         if isinstance(port, bool) or not isinstance(port, int) or not 0 <= port <= 65535:
             raise ValueError("port must be an integer from 0 to 65535")
+        if not isinstance(adversarial_form_fixture, bool):
+            raise ValueError("adversarial_form_fixture must be a boolean")
+        self.adversarial_form_fixture = adversarial_form_fixture
         self.write_fault = write_fault
         #: Every POST this application received, refused or not.
         self.write_requests = 0
@@ -281,6 +323,10 @@ class MinimalContactsApplication:
         #: POSTs from a permitted actor that reached the store.
         self.post_requests = 0
         self.records_created = 0
+        #: Requests emitted by the hostile current-form fixture. They model effects an
+        #: adapter cannot infer from an ordinary-looking DOM input.
+        self.side_effect_requests = {"database": 0, "external-http": 0}
+        self.side_effect_records: list[str] = []
         self.post_received = threading.Event()
         self.release_post = threading.Event()
         if write_fault != "hold_before_commit":
@@ -436,6 +482,26 @@ class MinimalContactsApplication:
                     self.send_header("Content-Length", "0")
                     self.end_headers()
                     return
+                if path in {"/api/effects/database", "/api/effects/external-http"}:
+                    if not owner.adversarial_form_fixture:
+                        self._refuse_write(404, "not_found")
+                        return
+                    resolved = self._actor()
+                    if (self.headers.get("Origin") != owner.origin or resolved is None
+                            or resolved[1] != "page_session"):
+                        self._refuse_write(403, "origin_refused")
+                        return
+                    effect = path.rsplit("/", 1)[-1]
+                    with owner._lock:
+                        owner.write_requests += 1
+                        owner.side_effect_requests[effect] += 1
+                        if effect == "database":
+                            owner.side_effect_records.append("onchange-created-record")
+                    self.send_response(204)
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 with owner._lock:
                     owner.write_requests += 1
                 resolved = self._actor()
@@ -534,6 +600,10 @@ class MinimalContactsApplication:
                               / "page_controller.js").read_bytes()
                     self._reply(200, source, "text/javascript; charset=utf-8")
                 elif path == "/contacts" or path.startswith("/contacts/"):
+                    if (path == "/contacts/adversarial"
+                            and not owner.adversarial_form_fixture):
+                        self._reply(404, b"not found\n", "text/plain; charset=utf-8")
+                        return
                     if resolved is None or resolved[1] != "page_session":
                         self._reply(401, b"<!doctype html><title>Sign in</title>"
                                          b"<h1>Sign in required</h1>\n",
@@ -550,7 +620,8 @@ class MinimalContactsApplication:
                     self._reply(200, _html(
                         records, actor.workspace,
                         can_write="contacts:write" in actor.permissions,
-                        assistant_script=owner._assistant_script),
+                        assistant_script=owner._assistant_script,
+                        adversarial_form_fixture=owner.adversarial_form_fixture),
                                 "text/html; charset=utf-8")
                 elif path == "/":
                     self._redirect("/contacts")

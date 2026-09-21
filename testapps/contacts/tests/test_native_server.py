@@ -254,7 +254,58 @@ class _GenericFormChat:
                 "scripted_decisions": self.calls, "cost_cny": 0.0}
 
 
+class _NoUnreviewedFormChat:
+    """Try the generic form contract once, then stop when the adapter declines the page."""
+
+    model = "scripted/unreviewed-form-refusal"
+
+    def __init__(self):
+        self.calls = 0
+
+    def complete(self, messages, tools, run_id, max_tokens=None, options=None,
+                 timeout_s=None):
+        self.calls += 1
+        if self.calls == 1:
+            name = "describe_form"
+            arguments = {"field_query": "customer reference"}
+        else:
+            name = "finish"
+            arguments = {"done": False, "why": "The application did not attest this form."}
+        return {"tool_calls": [{"id": f"unreviewed-form-{self.calls}", "function": {
+            "name": name, "arguments": json.dumps(arguments)}}]}
+
+    def complete_cancellable(self, messages, tools, run_id, *, cancelled, **kwargs):
+        if cancelled():
+            raise ProviderError(
+                "synthetic provider request cancelled", code="provider_cancelled",
+                retryable=False)
+        return self.complete(messages, tools, run_id, **kwargs)
+
+    def usage(self):
+        return {"mode": "scripted_apparatus", "provider_calls": 0,
+                "scripted_decisions": self.calls, "cost_cny": 0.0}
+
+
 class NativeContactsHostTests(unittest.TestCase):
+    def test_adversarial_form_fixture_is_disabled_by_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = NativeServerConfig(Path(directory), port=0, scripted=True)
+            self.assertFalse(config.adversarial_form_fixture)
+            with NativeContactsHost(config) as host:
+                with self.assertRaises(urllib.error.HTTPError) as caught:
+                    urllib.request.urlopen(
+                        host.origin + "/contacts/adversarial", timeout=5)
+                self.assertEqual(caught.exception.code, 404)
+                self.assertEqual(host.application.side_effect_records, [])
+                self.assertEqual(
+                    host.application.side_effect_requests,
+                    {"database": 0, "external-http": 0})
+
+        with self.assertRaisesRegex(
+                ValueError, "adversarial_form_fixture must be a boolean"):
+            NativeServerConfig(
+                Path("unused"), adversarial_form_fixture=1)  # type: ignore[arg-type]
+
     def test_reference_admission_refuses_a_fourth_session_for_one_actor(self):
         with tempfile.TemporaryDirectory() as directory, NativeContactsHost(
                 NativeServerConfig(Path(directory), port=0, scripted=True,
@@ -630,6 +681,84 @@ class NativeContactsBrowserTests(unittest.TestCase):
                         row.get("event") == "business_skill_loaded" for row in events))
                     self.assertEqual(sum(
                         row.get("event") == "form_prefill_completed" for row in events), 1)
+                finally:
+                    browser.close()
+
+    def test_unreviewed_onchange_form_is_not_exposed_to_generic_prefill(self):
+        """P8.6d: DOM similarity cannot grant authority over application events."""
+        from playwright.sync_api import sync_playwright
+
+        chat = _NoUnreviewedFormChat()
+        with tempfile.TemporaryDirectory() as directory, patch(
+                "testapps.contacts.server._chat", return_value=(chat, None)), \
+                NativeContactsHost(NativeServerConfig(
+                    Path(directory), port=0, scripted=False,
+                    adversarial_form_fixture=True)) as host:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                try:
+                    page = browser.new_page(viewport={"width": 1280, "height": 720})
+                    page.goto(host.origin + "/demo/login/ada-lovelace",
+                              wait_until="domcontentloaded", timeout=30_000)
+                    page.goto(host.origin + "/contacts/adversarial",
+                              wait_until="domcontentloaded", timeout=30_000)
+                    page.evaluate(
+                        "async () => { await window.__WOA_RUNTIME_READY__; return true; }")
+                    self.assertEqual(page.get_by_role("tab").count(), 2)
+                    self.assertEqual(page.locator('[name="scrolled_value"]').count(), 1)
+                    self.assertIn(
+                        "客户参考 / Customer reference", page.locator("body").inner_text())
+                    self.assertEqual(
+                        page.locator('[contenteditable][data-widget="richtext"]').count(), 1)
+
+                    # Establish the counterfactual: an ordinary input/change sequence on
+                    # this page really does write, issue an HTTP effect, change route and
+                    # rerender a field. This is application behavior, not hypothetical prose.
+                    reference = page.locator('[name="customer_reference"]')
+                    reference.fill("counterfactual")
+                    reference.blur()
+                    page.wait_for_function(
+                        "() => location.search === '?changed=1' && "
+                        "document.querySelector('[data-rerender-target]').textContent.includes('Rerendered')")
+                    page.evaluate("() => window.__adversarialEffects")
+                    self.assertEqual(
+                        host.application.side_effect_requests,
+                        {"database": 1, "external-http": 1})
+                    self.assertEqual(
+                        host.application.side_effect_records,
+                        ["onchange-created-record"])
+
+                    # Reset only the synthetic counters, reload the same page, then ask the
+                    # product. The adapter does not attest this route, so no fill/select is
+                    # ever dispatched despite the textbox, tab, multilingual label, scroll
+                    # target and rich widget all being present in the DOM.
+                    host.application.side_effect_requests = {
+                        "database": 0, "external-http": 0}
+                    host.application.side_effect_records = []
+                    host.application.write_requests = 0
+                    page.goto(host.origin + "/contacts/adversarial",
+                              wait_until="domcontentloaded", timeout=30_000)
+                    page.evaluate(
+                        "async () => { await window.__WOA_RUNTIME_READY__; return true; }")
+                    session = next(iter(host._sessions.values()))[0]
+                    page.evaluate(
+                        "task => window.__WOA_RUNTIME_READY__.then(r => r.submitTask(task))",
+                        "Fill the customer reference, but do not save.")
+                    outcome = session.runner.next_outcome(timeout_s=20)
+
+                    self.assertEqual(outcome.result.terminal_reason, "agent_refused")
+                    self.assertEqual(reference.count(), 1)
+                    self.assertEqual(
+                        host.application.side_effect_requests,
+                        {"database": 0, "external-http": 0})
+                    self.assertEqual(host.application.side_effect_records, [])
+                    self.assertEqual(host.application.write_requests, 0)
+                    self.assertEqual(page.url, host.origin + "/contacts/adversarial")
+                    self.assertEqual(
+                        page.locator('[data-rerender-target]').inner_text(),
+                        "Original field rendering")
+                    self.assertEqual(
+                        page.locator('[name="customer_reference"]').input_value(), "")
                 finally:
                     browser.close()
 

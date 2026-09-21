@@ -458,7 +458,10 @@ def _operation_probe(task_id: str):
           save_dialog_open: Boolean(document.querySelector('.modal.show'))
         })""",
         "draft-ten-percent-markup": """() => ({
-          rule_dialog_open: Boolean(document.querySelector('.modal.show')),
+          rule_dialog_open: [...document.querySelectorAll('.modal')].some(e => {
+            const box = e.getBoundingClientRect();
+            return box.width > 0 && box.height > 0 && Boolean(e.querySelector('[name="price_discount"] input'));
+          }),
           discount_value: document.querySelector('.modal [name="price_discount"] input')?.value || ''
         })""",
         "route-exact-count-to-api": """() => ({
