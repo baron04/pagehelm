@@ -1,12 +1,12 @@
 # Integrating an application
 
-An Application Adapter connects one first-party web application to the generic server Agent. The adapter owns application facts and permissions; it does not own the ReAct loop. A new adapter supplies a versioned descriptor, typed business Skills and tools, five executable ports, and a health check. `bind_application()` validates the complete composition before a user task can reach the browser or model.
+An Application Adapter connects one first-party web application to the generic server Agent. The adapter owns application facts and permissions; it does not own the ReAct loop. A new adapter supplies a versioned descriptor, typed business Skills and tools, executable ports, and a health check. `bind_application()` validates the complete composition before a user task can reach the browser or model.
 
 ## Required components
 
 `ApplicationDescriptor` declares the application ID, exact web origin, navigation mode, same-origin PageController module URL, and SHA-256 of the current Skill/tool catalog. Construct the descriptor after the `BusinessToolRuntime`, using `business_tools.catalog_sha256`. A changed Skill or schema then makes a stale deployment fail during composition.
 
-`ApplicationPorts` contains identity, route, data-classification, mutation-postcondition, and reconciliation ports. The data port must classify every typed tool. The postcondition and reconciliation ports must cover every write tool. The identity scopes must equal the non-empty scopes declared by the tool runtime. The runtime and `ApplicationPorts` must use the same route, data, and postcondition objects.
+`ApplicationPorts` contains identity, route, optional current-form, data-classification, mutation-postcondition, and reconciliation ports. The data port must classify every typed tool. The postcondition and reconciliation ports must cover every write tool. The identity scopes must equal the union of non-empty tool-runtime scopes and form-port scopes. The runtime and `ApplicationPorts` must use the same route, data, and postcondition objects.
 
 `BusinessToolRuntime` exposes current application data through fixed JSON schemas. Keep credentials and arbitrary HTTP construction inside the application executor. A Skill explains when and how to call these tools; it is not evidence that a current record exists. Each returned route must appear verbatim in the result content and pass the adapter route port before the Agent can use it.
 
@@ -57,9 +57,33 @@ After one acknowledged dispatch, the postcondition port decides whether the muta
 
 ## Transient form handoff
 
-Form prefill is an optional typed-tool result, not another application port and not general browser authority. An adapter may return a `FormDraft` only after it has validated the exact route, semantic field identifiers, control roles and values. The result content must contain those bindings exactly, and the route must also be one of that result's allowed routes. Enable application with `AgentTurnConfig.allow_form_prefill=True`; the model then receives only a no-argument `prefill_form` tool while the one-turn draft exists.
+Form prefill is optional and is not general browser authority. A dedicated typed tool may
+still return a `FormDraft` for a specialized workflow. For a no-Skill fallback, implement
+`ApplicationFormPort`: `describe_form` returns actor-scoped writable field metadata for the
+current route, and `prepare_form` validates selected values and returns the exact draft.
+Enable it with `AgentTurnConfig.allow_form_prefill=True`.
+
+The generic `describe_form` tool intersects the adapter descriptor with the latest viewport
+observation; metadata-only, DOM-only, duplicated and credential-shaped fields disappear. It
+returns short-lived opaque form and field IDs, not native field names or selectors.
+`prepare_form` re-fetches both sources, rejects stale IDs and values that do not match the
+portable field type or declared choice, and refuses a draft that adds fields or changes the
+route or persistence contract. The no-argument `prefill_form` appears only while that exact
+server-retained draft exists. Form scopes are checked before adapter metadata is read, and an
+actor missing them does not receive the generic form tools.
 
 The server consumes the draft once, resolves every field uniquely from a fresh page observation, fills or selects the adapter-issued value, and stops before click or submit. The adapter is asserting that editing these fields persists nothing by itself. Do not issue a draft for onchange handlers that write, forms that save as they are edited, credential fields, uploads, or any control whose edit can persist or trigger an external effect; use the ordinary confirmed mutation path for those cases. A form the application saves when its page is left (Odoo 18 does) is acceptable only because the assistant asks before it leaves any page and the prefill answer tells the user that leaving may save or discard the input. Test the claim against the deployed application, including a post-run API or database check that no record was created.
+
+Source lookup can explain a field, validation rule, or workflow before preparation, but may
+not create a form ID, field ID, selector, scope, value, or write permission. The current page
+and current application metadata are the execution authorities. When adopting the generic
+surface, run the shared `assert_current_form_contract` against this adapter and a real browser
+gate; an adapter-only unit result does not establish end-to-end form accuracy.
+
+The Odoo reference translation is deliberately off by default. Construct its adapter with
+`allow_generic_forms=True` only in an environment whose deployed modules have passed that
+browser and no-write qualification; its `fields_get` metadata cannot by itself prove that a
+custom `onchange` handler has no persistent or external side effect.
 
 ## Composition and qualification
 

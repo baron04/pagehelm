@@ -179,6 +179,10 @@ def describe_step(facts: dict) -> str:
             return "正在选择操作方式"
         if tool == "compute":
             return "正在计算"
+        if tool == "describe_form":
+            return "正在核对当前表单"
+        if tool == "prepare_form":
+            return "正在准备表单内容"
         if facts.get("mutation"):
             return "正在准备这次更改"
         return "正在读取业务数据"

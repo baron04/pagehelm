@@ -70,9 +70,23 @@ export class Page {
 
   click(ref: unknown): Promise<unknown> { return this.controller.clickElement(refIndex(ref)) }
   input(ref: unknown, text: string): Promise<unknown> {
+    const element = this.element(ref)
+    if (!element || element.isConnected === false) {
+      throw new Error('bad_arguments: fill target is no longer on the page')
+    }
+    if (element.disabled || element.readOnly) {
+      throw new Error('bad_arguments: fill target is disabled or read-only')
+    }
     return this.controller.inputText(refIndex(ref), text)
   }
   select(ref: unknown, text: string): Promise<unknown> {
+    const element = this.element(ref)
+    if (!element || element.isConnected === false) {
+      throw new Error('bad_arguments: select target is no longer on the page')
+    }
+    if (element.disabled || element.readOnly) {
+      throw new Error('bad_arguments: select target is disabled or read-only')
+    }
     return this.controller.selectOption(refIndex(ref), text)
   }
   scroll(down: boolean, pages: number): Promise<unknown> {

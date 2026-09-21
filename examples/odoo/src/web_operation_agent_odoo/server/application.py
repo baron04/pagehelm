@@ -10,6 +10,7 @@ from web_operation_agent.business.mutation import MutationJournal
 from web_operation_agent.business.entities import (DESCRIBE_ENTITY_TOOL,
                                                    DISCOVER_ENTITIES_TOOL,
                                                    QUERY_ENTITY_RECORDS_TOOL)
+from web_operation_agent.business.forms import NoApplicationForms
 from web_operation_agent.business.runtime import (BusinessSkill,
                                                   BusinessToolContractError,
                                                   BusinessToolRuntime,
@@ -37,6 +38,7 @@ from ..sourcemap import OdooCompiler, module_of, odoo_source_tree
 from .executor import OdooBusinessToolExecutor
 from .descriptors import OdooRuntimeDescriptorReader
 from .identity import OdooApiKeyStore, OdooPageSessionIdentityResolver
+from .generic_forms import OdooFormPort
 from .specs import (ANSWER_LABELS_ZH, APPLICATION_ID, ARCHIVE_CUSTOMER_TOOL,
                     COLLECTIONS, CREATE_CUSTOMER_TOOL, MUTATION_SPECS, MUTATION_TOOLS,
                     PREPARE_CUSTOMER_EDIT_TOOL, PREPARE_CUSTOMER_FORM_TOOL,
@@ -155,6 +157,7 @@ class OdooApplicationAdapter:
 
     def __init__(self, *, base_url: str, api_key_path: str | Path,
                  allow_mutations: bool = False,
+                 allow_generic_forms: bool = False,
                  mutation_journal: MutationJournal | None = None,
                  page_controller_module: str | None = None,
                  timeout_s: float = 20,
@@ -162,6 +165,8 @@ class OdooApplicationAdapter:
                  allow_private_http: bool = False):
         if not isinstance(allow_mutations, bool):
             raise ValueError("allow_mutations must be a boolean")
+        if not isinstance(allow_generic_forms, bool):
+            raise ValueError("allow_generic_forms must be a boolean")
         if allow_mutations and mutation_journal is None:
             raise ValueError("allow_mutations=True requires an explicit mutation journal")
         self.origin = _validated_origin(public_origin or base_url)
@@ -238,12 +243,20 @@ class OdooApplicationAdapter:
             withheld_skills=tuple(withheld),
             answer_labels={"zh": ANSWER_LABELS_ZH})
         self._executor = executor
+        # `fields_get` cannot establish that deployment-specific onchange code is inert.
+        # Keep the broad no-Skill form surface explicitly opt-in until the live P8.6
+        # qualification checks the deployed modules. Dedicated typed form tools are
+        # unaffected and continue to use the existing prefill path.
+        forms = OdooFormPort(executor) if allow_generic_forms else NoApplicationForms()
         self.ports = ApplicationPorts(
-            identity=_OdooIdentityPort(executor, frozenset(required_scopes.values())),
+            identity=_OdooIdentityPort(
+                executor,
+                frozenset(required_scopes.values()) | forms.required_scopes),
             routes=routes,
             postconditions=postconditions,
             reconciliation=_OdooMutationReconciler(executor, allow_mutations),
             data=data,
+            forms=forms,
         )
         self.descriptor = ApplicationDescriptor(
             schema_version=APPLICATION_ADAPTER_VERSION,

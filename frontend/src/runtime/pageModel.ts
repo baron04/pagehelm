@@ -212,6 +212,11 @@ export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
     if (!['textbox', 'combobox', 'select'].includes(item.role)) continue
     try {
       const element = getByIndex(selectorMap, refIndex(item.ref))
+      // These are live DOM facts rather than hints parsed from PageController's text.
+      // They let the server omit an unavailable field up front; Page.input/select still
+      // recheck the live element at execution time because the DOM may change afterwards.
+      if (element?.disabled) item.attrs.disabled = 'true'
+      if (element?.readOnly) item.attrs.readonly = 'true'
       const owner = typeof element?.closest === 'function' ? element.closest('[name]') : null
       const rawField = explicitAttribute(owner || element, 'name')
       if (rawField !== null && /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/.test(rawField)

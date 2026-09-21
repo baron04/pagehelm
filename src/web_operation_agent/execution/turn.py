@@ -17,6 +17,7 @@ from ..answer.answer_view import render_sources
 from ..transport.browser import RemoteBrowserClient, TransportError
 from ..business.mutation import MutationJournalDurability
 from ..business.runtime import BusinessToolRuntime
+from ..business.forms import NoApplicationForms
 from ..state.conversation import ConversationState
 from ..business.control import ApprovalGate, ApprovalGrant
 from ..state.identity import OperationContext, PrincipalError
@@ -347,6 +348,15 @@ class AgentTurnExecutor:
             allow_application_entry=self.config.allow_application_entry,
             application_routes=(
                 self.application.ports.routes if self.application is not None else None),
+            application_forms=(
+                self.application.ports.forms
+                if (self.application is not None
+                    and not isinstance(self.application.ports.forms, NoApplicationForms)
+                    and (not self.application.ports.forms.required_scopes
+                         or (principal is not None
+                             and self.application.ports.forms.required_scopes
+                             <= frozenset(principal.scopes))))
+                else None),
             cancelled=lambda: self.channel.message_cancelled(turn_message.message_id),
             principal=principal,
             session_id=(self.channel.session_id if principal is not None else ""),

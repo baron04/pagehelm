@@ -20,6 +20,10 @@ from .entities import (DESCRIBE_ENTITY_SCHEMA, DESCRIBE_ENTITY_TOOL,
                        EntityCatalog, EntityCell, EntityChoice, EntityDescriptor,
                        EntityField, EntityFilter, EntityPageHint, EntityQuery,
                        EntityQueryPage, EntityReadPort, EntityReadTools, EntityRecord)
+from .forms import (ApplicationFormDescriptor, ApplicationFormField, ApplicationFormPort,
+                    ApplicationFormTools, ApplicationFormValue, DESCRIBE_FORM_SCHEMA,
+                    DESCRIBE_FORM_TOOL, FORM_TOOL_SCHEMAS, FORM_TOOLS, FormChoice,
+                    NoApplicationForms, PREPARE_FORM_SCHEMA, PREPARE_FORM_TOOL)
 from .tools import (APPLICATION_SAVES_ON_LEAVE, BUSINESS_SKILL_MATCHER_VERSION,
                     FORM_PERSISTENCE, TRANSIENT_UNTIL_SUBMIT,
                     BusinessDataClassifier, BusinessMutationProposal,

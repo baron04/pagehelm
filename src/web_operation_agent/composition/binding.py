@@ -1,7 +1,7 @@
 """Binding an adapter to a release, once, before any user task reaches the Agent loop.
 
 ``bind_application`` is the single checkpoint that says a descriptor, a tool catalog and
-the five ports describe the same application; the generic composition consumes adapters
+the application ports describe the same application; the generic composition consumes adapters
 through ``ApplicationAdapter`` and receives a ``BoundApplication``.
 """
 from __future__ import annotations
@@ -63,7 +63,8 @@ def bind_application(adapter: ApplicationAdapter) -> BoundApplication:
         raise ValueError("postcondition port must verify every mutation tool")
     if ports.reconciliation.supported_tools != tools.mutation_tool_names:
         raise ValueError("reconciliation port must cover every mutation tool")
-    declared_scopes = frozenset(scope for scope in tools.required_scopes.values() if scope)
+    declared_scopes = frozenset(scope for scope in tools.required_scopes.values() if scope) \
+        | ports.forms.required_scopes
     if ports.identity.required_scopes != declared_scopes:
         raise ValueError("identity port scopes differ from the business tool catalog")
     if tools.data_classifier is not ports.data:

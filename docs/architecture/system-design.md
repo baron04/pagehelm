@@ -201,9 +201,9 @@ Application Adapter 是应用专有事实进入通用 Agent 的组合边界。�
 - 委托用户的凭据读取和刷新；
 - Business Skill 目录；
 - 带固定 schema 的业务 API executor；
-- 身份绑定、工具路由、结果数据分类、mutation 后置条件和不确定写入核对端口。
+- 身份绑定、工具路由、当前表单、结果数据分类、mutation 后置条件和不确定写入核对端口。
 
-每个 Adapter 必须先通过版本化 `ApplicationDescriptor` 和 `ApplicationPorts` 绑定。Descriptor 固定应用 ID、Origin、导航模式、同源 PageController URL，以及当前 Skill/tool catalog 的 SHA-256。Ports 是会被产品路径实际调用的合同：Identity Port 校验 principal，Route Port 限定 typed tool 可授权的页面路径，Data Port 为结果附加应用声明的数据类别，Postcondition Port 在确认写入后决定能否记录为 completed，Reconciliation Port 为历史不确定写入提供只读核对边界。会话组合在接收用户任务前重新计算 catalog 摘要，并检查端口覆盖所有工具、scope 和 mutation；Descriptor、catalog、端口或运行时接线不一致时拒绝启动。自然语言目标不经过应用专有的正则分类器或有限意图枚举。目标先由通用匹配器按 Skill 自己声明的触发词选出候选，这一步会以 `business_skill_candidates` 记账并标出是否用了兜底；匹配为空时退回一个有界的、按能力挑选的候选集，因此一种没被触发词覆盖的说法不会静默地让某项能力从工具面消失。其余交给通用 Agent，由候选 Skill、typed tool 和页面观察逐步收敛。
+每个 Adapter 必须先通过版本化 `ApplicationDescriptor` 和 `ApplicationPorts` 绑定。Descriptor 固定应用 ID、Origin、导航模式、同源 PageController URL，以及当前 Skill/tool catalog 的 SHA-256。Ports 是会被产品路径实际调用的合同：Identity Port 校验 principal，Route Port 限定 typed tool 可授权的页面路径，Form Port 把 actor-scoped 应用元数据翻译成当前表单描述，Data Port 为结果附加应用声明的数据类别，Postcondition Port 在确认写入后决定能否记录为 completed，Reconciliation Port 为历史不确定写入提供只读核对边界。会话组合在接收用户任务前重新计算 catalog 摘要，并检查端口覆盖所有工具、scope 和 mutation；Descriptor、catalog、端口或运行时接线不一致时拒绝启动。自然语言目标不经过应用专有的正则分类器或有限意图枚举。目标先由通用匹配器按 Skill 自己声明的触发词选出候选，这一步会以 `business_skill_candidates` 记账并标出是否用了兜底；匹配为空时退回一个有界的、按能力挑选的候选集，因此一种没被触发词覆盖的说法不会静默地让某项能力从工具面消失。其余交给通用 Agent，由候选 Skill、typed tool 和页面观察逐步收敛。
 
 #### 通用能力准入规则
 
@@ -220,7 +220,8 @@ GraphQL type 或窗口 action 翻译成共同的 entity、field、operation 和 
 原型抽成 `EntityReadPort` 与 `EntityReadTools`：Agent 只见
 `discover_entities`、`describe_entity`、`query_entity_records` 和不透明 binding。Odoo
 Adapter 翻译 ORM/action/`fields_get`/domain，合成 Contacts Adapter 则翻译 REST list 与本地
-过滤；两者运行同一黑盒合同测试。继续做通用表单、聚合或其它实体操作时仍须复用这条准入门。
+过滤；两者运行同一黑盒合同测试。P8.6 又以同一方式抽取通用当前表单合同，并由这两个
+Adapter 的不同翻译实现运行同一黑盒合同；继续做聚合或其它实体操作时仍须复用这条准入门。
 
 #### 按意图组装上下文
 
@@ -283,7 +284,31 @@ endpoint、方法、domain、selector 或 caller-defined order。
 
 
 
-### 6.4 App Skill 与源码 Provider
+### 6.4 通用当前表单
+
+无匹配 Skill 时，表单操作也不能退化成模型猜 selector。Adapter 的可选 Form Port 先从应用
+自己的运行时元数据生成 actor-scoped、可写的字段描述；`describe_form` 再把它与最新页面观察
+中带语义字段名的当前视口控件求交集。元数据里存在但页面没有的字段、页面出现但 Adapter 未
+声明的字段、重复或凭据形态字段都不可操作。返回模型的 form/field ID 是服务端 HMAC 绑定，
+覆盖 application、actor、URL、observation epoch/content digest 和整份表单元数据；原生字段名
+与 DOM ref 不进入模型参数。
+
+`prepare_form` 每次重新读取元数据和页面交集，拒绝过期 ID、重复字段、非法类型/selection 值，
+并要求 Adapter 返回的 `FormDraft` 不能增加未选择字段、改换 route 或扩大持久化语义。草稿只
+保存在服务端；已有 `prefill_form` 按最新观察重新解析每个准确语义字段，遇到 stale observation
+会有界地重新观察，完成后立即结束 turn。它从不调用 submit 或 click。当前只支持文本、邮箱、
+URL、电话、整数、数值、日期、时间以及经过声明的原生 select；checkbox、附件、富文本、关系
+autocomplete 不在通用合同内。合同还要求 Adapter 排除会持久化或产生外部副作用的 onchange；
+但 Odoo 的 `fields_get` 本身不能证明某个字段没有这类自定义 onchange，因此当前 Odoo Form Port
+只能作为实验性翻译，必须通过部署版本的真实浏览器与写后检查后才能开放为生产默认能力。
+
+部署源码与这里是互补关系，而非选一个：Agent 可以先用带引证源码解释字段、拒绝条件或流程，
+再以当前页面与运行时元数据决定实际能填什么。源码不能铸造 form/field ID、selector、scope、
+用户值或写许可。Form Port 是可选的；没有仓库、没有 Form Port 或 actor 缺少其 scope 时，普通
+页面/API 能力仍照常工作。Odoo Adapter 用当前 action catalog 与 `fields_get` 翻译标量 create
+字段；Contacts Adapter 用 REST 应用自己的字段声明翻译同一合同，核心不含两者的专有概念。
+
+### 6.5 App Skill 与源码 Provider
 
 App Skill 适合描述当前菜单不可见、但已审核的只读页面入口。路由模板和 provenance 留在服务端；Agent 只拿到有限的 Skill 卡片，通过当前页面的真实应用入口进入目标应用，再由服务端验证参数并组装同源只读路径。
 
@@ -412,7 +437,10 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 - 旧外部页面控制网关仍是全局状态，当前客户端只能通过跨进程独占和双边界 reset 安全地串行运行；网关原生的租户/会话/轮次隔离与崩溃后 TTL 尚未实现。
 - 浏览器 sessionStorage 可以处理同一标签页内的刷新恢复，不能替代服务端持久幂等存储。
 - 模型调用、页面动作和确认有局部超时；provider 排队和 socket 调用共用剩余 deadline，并受进程内并发槽与瞬时故障短路保护。消息级取消已覆盖审批、业务工具和未认领页面动作；provider 请求的主动中断、跨进程取消、分布式租户配额和完整资源回收仍不完整。
-- 目前只有一个业务 Adapter；通用读取扩大了 Odoo 的只读发现面，但没有证明其它企业应用可直接复用，也没有覆盖通用表单写入。
+- 通用实体读取和当前表单合同已在 Odoo 与结构不同的 Contacts REST Adapter 上执行同一黑盒
+  合同，但这只证明接口与安全边界可移植，不是跨企业应用的操作成功率证明。通用表单目前只
+  覆盖当前视口的安全标量控件，并且只预填、不提交；复杂控件、onchange 副作用、动态 notebook
+  和真实 Odoo 无专用 Skill 表单的端到端成功率仍需独立资格门。
 - 源码能力默认关闭；显式配置后，结构关系与通用代码块使用本地词项排序，Git 历史使用独立
   的类型化查询。英文源码对中文意图的端到端召回仍依赖 Agent 生成合适英文检索词；当前没有
   本地 embedding、跨语言召回或最终回答正确率基准。源码也不能说明 Studio/租户配置后的当前
@@ -434,7 +462,9 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 4. 把 Application Adapter 抽成稳定 SDK，增加契约测试、能力声明、统一错误语义和同身份验证接口。
 5. 在已接入的源码规则、通用仓库检索与 Git 历史之上评测中文/同义表达召回；只有冻结任务上
    的词法基线低于门槛时才加入本地 embedding、AST 或 LSP，并继续保留逐类 provenance。
-6. 为页面写入补齐通用的提案、网络侧许可、动作关联和写后验证合同，再按证据决定可开放的动作面。
+6. 为通用表单建立无模型的真实浏览器门和冻结任务集，分别测字段发现、预填准确率、动态
+   onchange、复杂控件、延迟与误提交；再为页面写入补齐提案、网络侧许可、动作关联和写后
+   验证合同，按证据决定可开放的动作面。
 7. 在核心协议稳定后，评估更强隔离的页面执行端；嵌入面板与浏览器扩展可以共享协议，但需要不同的信任模型。
 8. 建立开发集、冻结测试集和强基线，分别测量页面执行、Skill/API、源码开关、写入安全、恢复能力、延迟和成本。
 
@@ -446,6 +476,7 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 - 有界对话引用状态：[conversation.py](../../src/web_operation_agent/state/conversation.py)
 - 单 Agent ReAct 循环：[session.py](../../src/web_operation_agent/execution/session.py)
 - Business Skill 与业务工具合同：[runtime.py](../../src/web_operation_agent/business/runtime.py)
+- 通用当前表单合同：[forms.py](../../src/web_operation_agent/business/forms.py)
 - 公开 Application Adapter 参考：[examples/odoo/](../../examples/odoo/README.md)
 - Embedded Gateway：[gateway.py](../../src/web_operation_agent/transport/gateway.py)
 - 浏览器端入口 `assistant.js`（启动监督者 + Runtime，构建源在 [frontend/src/runtime/](../../frontend/src/runtime/)）：[boot.ts](../../frontend/src/runtime/boot.ts)、[runtime.ts](../../frontend/src/runtime/runtime.ts)

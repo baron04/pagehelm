@@ -2,7 +2,7 @@
 
 This distribution owns everything Odoo-specific: the web-client route grammar, the
 compiler that turns Odoo's own module XML and model Python into a cited ``SourceMap``, and
-the application adapter that implements the five ``ApplicationPorts`` against Odoo's
+the application adapter that implements the ``ApplicationPorts`` against Odoo's
 delegated JSON-RPC API. The core package imports none of it.
 """
 from .route import (ODOO_ROUTE_PORT, ODOO_SESSION_HANDOFF_KEYS, ODOO_SOURCE_SCOPE,

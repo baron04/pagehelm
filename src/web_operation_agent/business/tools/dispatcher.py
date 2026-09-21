@@ -73,7 +73,8 @@ class BusinessToolRuntime:
             if skill.read_only and any(effects[name] == "write" for name in skill.tool_names):
                 raise ValueError("read-only Business Skills may not declare write tools")
         callable_tools = (set(schemas) | set(BROWSER_ACTIONS)
-                          | {"finish", "load_skill", "prefill_form"})
+                          | {"finish", "load_skill", "describe_form", "prepare_form",
+                             "prefill_form"})
         for skill in skills:
             references = {
                 match.group(1) for instruction in skill.instructions

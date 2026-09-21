@@ -1,9 +1,9 @@
-"""The five executable ports a session may demand of an application, and their defaults.
+"""The executable ports a session may demand of an application, and their defaults.
 
-Identity, routes, data classification, mutation postconditions and reconciliation are the
-application-specific contracts behind which the generic Agent acts; ``ApplicationPorts``
-bundles the five so a binding can check them once. The ``Declared*`` and ``Result*``
-classes are the adapter-owned bounded declarations the core itself ships.
+Identity, routes, current forms, data classification, mutation postconditions and
+reconciliation are the application-specific contracts behind which the generic Agent acts;
+``ApplicationPorts`` bundles them so a binding can check them once. The ``Declared*`` and
+``Result*`` classes are the adapter-owned bounded declarations the core itself ships.
 """
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from urllib.parse import parse_qsl, urljoin, urlsplit
 from ..business.runtime import (BusinessDataClassifier, BusinessPostconditionVerifier,
                                BusinessRouteValidator, BusinessToolResult,
                                MutationPostcondition)
+from ..business.forms import ApplicationFormPort, NoApplicationForms
 from ..state.identity import IdentityAssertion, PrincipalContext, PrincipalError
 from .descriptor import _APPLICATION_ID
 
@@ -360,6 +361,7 @@ class ApplicationPorts:
     postconditions: BusinessPostconditionVerifier
     reconciliation: ApplicationMutationReconciler
     data: BusinessDataClassifier
+    forms: ApplicationFormPort = NoApplicationForms()
 
     def __post_init__(self) -> None:
         checks = (
@@ -368,6 +370,7 @@ class ApplicationPorts:
             isinstance(self.postconditions, BusinessPostconditionVerifier),
             isinstance(self.reconciliation, ApplicationMutationReconciler),
             isinstance(self.data, BusinessDataClassifier),
+            isinstance(self.forms, ApplicationFormPort),
         )
         if not all(checks):
             raise TypeError("application ports do not implement the required contracts")

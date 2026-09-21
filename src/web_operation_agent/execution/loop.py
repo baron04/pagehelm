@@ -20,11 +20,12 @@ from ..modeling.provider import ProviderError
 from ..modeling.spend import BudgetExhausted
 from ..privacy import safe_tool_arguments as _safe
 from .business_tools import business_tool, load_skill, prefill_form
+from .form_tools import describe_form, prepare_form
 from .knowledge_tools import ask_user_tool, lookup_source_history_tool, lookup_source_tool
 from .page_actions import take_page_action
 from .prompts import (AGENT_SYSTEM, APPLICATION_ENTRY_SYSTEM, BUSINESS_SKILL_SYSTEM,
                       CAPABILITY_SYSTEM, CLARIFICATION_SYSTEM, CONVERSATION_SYSTEM,
-                      REACT_SOURCE_SYSTEM, SCOPE_FIRST_SYSTEM, SKILL_SYSTEM,
+                      FORM_SYSTEM, REACT_SOURCE_SYSTEM, SCOPE_FIRST_SYSTEM, SKILL_SYSTEM,
                       SOURCE_AFFORDANCE_SYSTEM, _assistant_call, _tool_result, _trim)
 from .runstate import RunResult, _Next, _Turn
 
@@ -51,6 +52,9 @@ def named_tools(session):
         available["load_skill"] = partial(load_skill, session)
     if session.allow_form_prefill:
         available["prefill_form"] = partial(prefill_form, session)
+        if session._application_form_tools is not None:
+            available["describe_form"] = partial(describe_form, session)
+            available["prepare_form"] = partial(prepare_form, session)
     if session._answers_pending_question:
         available["withdraw_request"] = session._tool_withdraw_request
     if session.evidence.has_application_evidence():
@@ -101,6 +105,8 @@ def run_loop(session) -> RunResult:
         system += "\n" + APPLICATION_ENTRY_SYSTEM
     if session._task_business_skills:
         system += "\n" + BUSINESS_SKILL_SYSTEM
+    if session.allow_form_prefill and session._application_form_tools is not None:
+        system += "\n" + FORM_SYSTEM
     if session._conversation_context_selected:
         system += "\n" + CONVERSATION_SYSTEM
     if session.allow_clarification:

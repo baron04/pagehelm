@@ -9,7 +9,7 @@ Its files mirror the responsibilities a real integration implements:
 | File | What it is | Do you write this? |
 |---|---|---|
 | [`app.py`](app.py) | The synthetic Contacts application: a list page, a record page per contact, a typed read and write API, two credentials, users with different permissions, two workspaces that repeat contact names, and the same-origin PageController the SPI requires a host to serve | **No** — your application already exists. This file exists so the example runs with nothing provisioned |
-| [`adapter.py`](adapter.py) | All five ports — identity, routes, postconditions, reconciliation, data classification — plus one dedicated read, one write, and a REST/list implementation of the application-neutral entity-read contract | See the Odoo adapter for the supported reference |
+| [`adapter.py`](adapter.py) | Identity, routes, current forms, postconditions, reconciliation and data classification, plus one dedicated read, one write, and REST/list implementations of the application-neutral entity-read and current-form contracts | See the Odoo adapter for the supported reference |
 | [`skills/`](skills/) | One Skill artifact per capability: when the tool applies, and the instructions the model follows when it does | Test fixtures only |
 | [`demo.py`](demo.py) | A Playwright-driven qualification composition for repeatable browser tests | **No** — it proves the chain but is not the product host |
 | [`server.py`](server.py) | The ordinary-browser composition: application login, server-side identity binding, durable session/journal state, shared gateway, and ReAct executor | Test host |
@@ -34,6 +34,13 @@ REST endpoint and applies the bounded AND filter, stable sort, count, and pagina
 the adapter instead of translating to an ORM query. Both adapters call the same reusable
 `assert_entity_read_contract`; this remains internal qualification, not a second public
 reference integration.
+
+It is also the second qualification target for `ApplicationFormPort`: the Contacts adapter
+declares its own two create fields while Odoo translates its actor-scoped action catalog and
+`fields_get`. Both run `assert_current_form_contract`; neither exposes a native field name or
+DOM selector to the Agent. The test application also serves a writer-only `/contacts/new`
+screen so the real-browser qualification can prove prefill stops before the human-owned
+submit endpoint.
 
 To use the product as an ordinary signed-in user, without Playwright or browser injection:
 

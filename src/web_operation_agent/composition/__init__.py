@@ -1,6 +1,6 @@
 """The composition boundary: what a releasable application is, and what a session may demand.
 
-``descriptor`` holds the versioned facts of one release, ``ports`` the five executable
+``descriptor`` holds the versioned facts of one release, ``ports`` the executable
 contracts, ``sources`` the offline-compiled knowledge a deployment may arm sessions
 with, and ``binding`` the single checkpoint that validates the whole boundary before a
 user task reaches the Agent loop. ``live`` runs the product lifecycle built on that
@@ -13,10 +13,12 @@ from .ports import (AnonymousIdentityPort, ApplicationIdentityPort,
                     ApplicationMutationReconciler, ApplicationPorts, ApplicationRoutePort,
                     ConservativeMutationReconciler, DeclaredDataClassifier,
                     DeclaredRoutePort, MutationReconciliation, ResultPostconditionVerifier)
+from ..business.forms import ApplicationFormPort, NoApplicationForms
 from .sources import SourceCapability, SourceCompiler
 
 __all__ = ["APPLICATION_ADAPTER_VERSION", "AnonymousIdentityPort",
-           "ApplicationAdapter", "ApplicationDescriptor", "ApplicationIdentityPort",
+           "ApplicationAdapter", "ApplicationDescriptor", "ApplicationFormPort",
+           "ApplicationIdentityPort", "NoApplicationForms",
            "ApplicationMutationReconciler", "ApplicationPorts", "ApplicationRoutePort",
            "BoundApplication", "ConservativeMutationReconciler", "DeclaredDataClassifier",
            "DeclaredRoutePort", "MutationReconciliation", "ResultPostconditionVerifier",

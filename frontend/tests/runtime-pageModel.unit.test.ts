@@ -178,4 +178,16 @@ describe('hydrateFormFacts adds a bounded application field identifier', () => {
     hydrateFormFacts(elements, {}, () => element, redactor)
     expect(elements[0]?.attrs.field).toBeUndefined()
   })
+
+  it('reports disabled and read-only state from the live control', () => {
+    const elements = elementsFrom('[0]<input type=text name=company />', 1, redactor)
+    elements[0]!.role = 'textbox'
+    const element = {name: 'company', disabled: true, readOnly: true, closest: () => null}
+
+    hydrateFormFacts(elements, {}, () => element, redactor)
+
+    expect(elements[0]?.attrs).toMatchObject({
+      field: 'company', disabled: 'true', readonly: 'true',
+    })
+  })
 })

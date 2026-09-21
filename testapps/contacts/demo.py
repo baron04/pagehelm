@@ -491,6 +491,7 @@ def run_demo(config: DemoConfig) -> dict:
                     plain_business_answer_min_page_actions=0,
                     max_user_answer_chars=8_000,
                     require_identity=True,
+                    allow_form_prefill=True,
                     allow_business_mutations=config.allow_mutations,
                     # A synthetic application with an in-memory journal is not a
                     # deployment, and saying so is what keeps the production profile's

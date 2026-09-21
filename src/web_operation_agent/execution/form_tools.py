@@ -2,13 +2,82 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 
 from ..transport.browser import TransportError, TurnCancelled
+from ..business.errors import BusinessToolError, BusinessToolPermissionError
 from ..business.runtime import FormDraft
 from ..schemas import PageObservation
 from .routes import observation_is_at_route
 from .runstate import _Next, _Turn
+
+
+def _form_identity(session, step: int, tool: str) -> tuple[object, dict]:
+    context = session._approvals.context(step, tool)
+    return context, context.audit_projection() if context is not None else {}
+
+
+def describe_form(session, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
+    """Describe only the writable fields proven by both the page and the adapter."""
+    session._form_draft = None
+    context, identity = _form_identity(session, turn.step, name)
+    try:
+        content = session._application_form_tools.describe(
+            turn.obs, args, context=context)
+    except BusinessToolPermissionError as exc:
+        return _Next(session._permission_denied(
+            turn.result, turn.started_at, turn.step, name, exc,
+            dispatched=exc.layer == "application", identity=identity,
+            event="application_form_permission_denied"))
+    except BusinessToolError as exc:
+        session.ledger.append(
+            "application_form_refused", step=turn.step, tool=name,
+            error_type=type(exc).__name__, detail=str(exc)[:500],
+            dispatched=False, side_effect_possible=False, identity=identity)
+        return session._reply(turn, call, "FORM DESCRIPTION REFUSED: " + str(exc)[:500])
+    encoded = json.dumps(content, ensure_ascii=False, sort_keys=True,
+                         separators=(",", ":"), allow_nan=False)
+    session.ledger.append(
+        "application_form_described", step=turn.step, tool=name,
+        result_digest=hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+        form_available=bool(content.get("form_available")),
+        returned_fields=int(content.get("returned_field_count", 0)),
+        side_effect_possible=False, identity=identity)
+    return session._reply(
+        turn, call, "CURRENT FORM DESCRIPTOR (runtime fact; opaque bindings):\n" + encoded)
+
+
+def prepare_form(session, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
+    """Mint one exact adapter-validated draft from fresh opaque form bindings."""
+    session._form_draft = None
+    context, identity = _form_identity(session, turn.step, name)
+    try:
+        draft, content = session._application_form_tools.prepare(
+            turn.obs, args, context=context)
+    except BusinessToolPermissionError as exc:
+        return _Next(session._permission_denied(
+            turn.result, turn.started_at, turn.step, name, exc,
+            dispatched=exc.layer == "application", identity=identity,
+            event="application_form_permission_denied"))
+    except BusinessToolError as exc:
+        session.ledger.append(
+            "application_form_refused", step=turn.step, tool=name,
+            error_type=type(exc).__name__, detail=str(exc)[:500],
+            dispatched=False, side_effect_possible=False, identity=identity)
+        return session._reply(turn, call, "FORM PREPARATION REFUSED: " + str(exc)[:500])
+    session._form_draft = draft
+    encoded = json.dumps(content, ensure_ascii=False, sort_keys=True,
+                         separators=(",", ":"), allow_nan=False)
+    session.ledger.append(
+        "application_form_prepared", step=turn.step, tool=name,
+        draft_digest=draft.content_digest, field_count=len(draft.fields),
+        persistence=draft.persistence, side_effect_possible=False,
+        submitted=False, persisted=False, identity=identity)
+    return session._reply(
+        turn, call, "APPLICATION FORM DRAFT READY:\n" + encoded
+        + "\nCall prefill_form with no arguments. The server retains the exact route, "
+          "native fields and values; nothing has been typed or submitted yet.")
 
 
 def prefill_form(session, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":

@@ -455,7 +455,7 @@ class TheWriteWalkthroughInARealBrowser(unittest.TestCase):
 
 
 class TheWriteChainAnAuthorCopies(unittest.TestCase):
-    """All five ports on a template a person is meant to read, then imitate.
+    """All application ports on a template a person is meant to read, then imitate.
 
     An example with only a read left every author to invent the hard half for themselves.
     Each test here is one step of the chain and the specific failure it exists to prevent.
@@ -473,7 +473,7 @@ class TheWriteChainAnAuthorCopies(unittest.TestCase):
             f"{DEMO_SESSION_COOKIE}={DEMO_SESSION_VALUE}")
         return adapter.ports.identity.bind(page, delegation_id="contacts-test")
 
-    def test_all_five_ports_are_the_applications_own(self):
+    def test_all_ports_are_the_applications_own(self):
         """A stock implementation in a port is a decision; an author should see which."""
         with MinimalContactsApplication() as application:
             adapter, bound = self._composed(application)
@@ -483,6 +483,7 @@ class TheWriteChainAnAuthorCopies(unittest.TestCase):
             self.assertEqual(ports.postconditions.supported_tools, {"create_contact"})
             self.assertEqual(ports.reconciliation.supported_tools, {"create_contact"})
             self.assertIn("create_contact", ports.data.tool_names)
+            self.assertEqual(ports.forms.required_scopes, {"contacts:write"})
 
     def test_the_two_credentials_have_to_name_the_same_actor(self):
         with MinimalContactsApplication() as application:
@@ -961,13 +962,16 @@ class TheApplicationsOwnAuthorityInARealBrowser(unittest.TestCase):
 class TheApplicationsOwnAuthority(unittest.TestCase):
     """The same two boundaries without a browser: the application, then the adapter."""
 
-    def _request(self, application, method, path, *, token="", cookie="", body=None):
+    def _request(self, application, method, path, *, token="", cookie="", body=None,
+                 origin=""):
         import urllib.error
         headers = {"Content-Type": "application/json"}
         if token:
             headers["Authorization"] = f"Bearer {token}"
         if cookie:
             headers["Cookie"] = f"{DEMO_SESSION_COOKIE}={cookie}"
+        if origin:
+            headers["Origin"] = origin
         request = urllib.request.Request(
             application.origin + path,
             json.dumps(body).encode() if body is not None else None, headers, method=method)
@@ -992,6 +996,23 @@ class TheApplicationsOwnAuthority(unittest.TestCase):
             self.assertEqual(application.refused_writes, 2)
             self.assertEqual(application.post_requests, 0)
             self.assertEqual(len(application.contacts), 3)
+
+    def test_the_human_form_endpoint_requires_same_origin_and_application_write_access(self):
+        from testapps.contacts.app import ACTORS_BY_ID, DEMO_SESSION_VALUE
+        reader = ACTORS_BY_ID[_READ_ONLY]
+        body = {"name": "Margaret Hamilton", "email": "margaret@example.test"}
+        with MinimalContactsApplication() as application:
+            self.assertEqual(self._request(
+                application, "POST", "/api/browser/contacts",
+                cookie=DEMO_SESSION_VALUE, body=body)[0], 403)
+            self.assertEqual(self._request(
+                application, "POST", "/api/browser/contacts",
+                cookie=reader.session, origin=application.origin, body=body)[0], 403)
+            status, payload = self._request(
+                application, "POST", "/api/browser/contacts",
+                cookie=DEMO_SESSION_VALUE, origin=application.origin, body=body)
+            self.assertEqual(status, 201)
+            self.assertEqual(json.loads(payload)["contact"]["name"], "Margaret Hamilton")
 
     def test_a_read_only_actor_binds_with_only_the_scope_the_application_grants(self):
         from testapps.contacts.app import ACTORS_BY_ID

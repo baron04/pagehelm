@@ -212,6 +212,48 @@ class _ProviderFailureThenScripted:
             max_tokens=max_tokens, options=options, timeout_s=timeout_s)
 
 
+class _GenericFormChat:
+    """Resolve the server-issued opaque IDs; never call a model provider."""
+
+    model = "scripted/generic-current-form"
+
+    def __init__(self):
+        self.calls = 0
+        self.seen = []
+
+    def complete(self, messages, tools, run_id, max_tokens=None, options=None,
+                 timeout_s=None):
+        self.calls += 1
+        self.seen.append({tool["function"]["name"] for tool in (tools or [])})
+        if self.calls == 1:
+            name, arguments = "describe_form", {"field_query": "name email"}
+        elif self.calls == 2:
+            descriptor = json.loads(messages[-1]["content"].split("\n", 1)[1])
+            fields = {item["label"]: item["field_id"] for item in descriptor["fields"]}
+            name, arguments = "prepare_form", {
+                "form_id": descriptor["form_id"],
+                "values": [
+                    {"field_id": fields["Name"], "value": "Margaret Hamilton"},
+                    {"field_id": fields["Email"], "value": "margaret@example.test"},
+                ],
+            }
+        else:
+            name, arguments = "prefill_form", {}
+        return {"tool_calls": [{"id": f"generic-form-{self.calls}", "function": {
+            "name": name, "arguments": json.dumps(arguments)}}]}
+
+    def complete_cancellable(self, messages, tools, run_id, *, cancelled, **kwargs):
+        if cancelled():
+            raise ProviderError(
+                "synthetic provider request cancelled", code="provider_cancelled",
+                retryable=False)
+        return self.complete(messages, tools, run_id, **kwargs)
+
+    def usage(self):
+        return {"mode": "scripted_apparatus", "provider_calls": 0,
+                "scripted_decisions": self.calls, "cost_cny": 0.0}
+
+
 class NativeContactsHostTests(unittest.TestCase):
     def test_reference_admission_refuses_a_fourth_session_for_one_actor(self):
         with tempfile.TemporaryDirectory() as directory, NativeContactsHost(
@@ -540,6 +582,54 @@ class NativeContactsBrowserTests(unittest.TestCase):
                     self.assertEqual(host.server.session_count, 1)
                     self.assertEqual(
                         len(list((Path(directory) / "runs").glob("*/audit.jsonl"))), 1)
+                finally:
+                    browser.close()
+
+    def test_generic_form_prefills_a_real_page_without_a_skill_or_submit(self):
+        """P8.6: runtime DOM plus adapter metadata, with no provider or form Skill."""
+        from playwright.sync_api import sync_playwright
+
+        chat = _GenericFormChat()
+        with tempfile.TemporaryDirectory() as directory, patch(
+                "testapps.contacts.server._chat", return_value=(chat, None)), \
+                NativeContactsHost(NativeServerConfig(
+                    Path(directory), port=0, scripted=False)) as host:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                try:
+                    page = browser.new_page(viewport={"width": 1280, "height": 900})
+                    page.goto(host.origin + "/demo/login/ada-lovelace",
+                              wait_until="domcontentloaded", timeout=30_000)
+                    page.evaluate(
+                        "async () => { await window.__WOA_RUNTIME_READY__; return true; }")
+                    page.get_by_role("link", name="New contact").click()
+                    page.wait_for_url("**/contacts/new", timeout=10_000)
+                    session = next(iter(host._sessions.values()))[0]
+
+                    page.evaluate(
+                        "task => window.__WOA_RUNTIME_READY__.then(r => r.submitTask(task))",
+                        "Fill the name and email shown in my request, but do not save.")
+                    outcome = session.runner.next_outcome(timeout_s=20)
+
+                    self.assertEqual(outcome.result.terminal_reason, "agent_finished")
+                    self.assertEqual(page.locator('input[name="name"]').input_value(),
+                                     "Margaret Hamilton")
+                    self.assertEqual(page.locator('input[name="email"]').input_value(),
+                                     "margaret@example.test")
+                    self.assertEqual(host.application.write_requests, 0)
+                    self.assertEqual(host.application.records_created, 0)
+                    self.assertIn("describe_form", chat.seen[0])
+                    self.assertIn("prepare_form", chat.seen[0])
+                    self.assertNotIn("prefill_form", chat.seen[0])
+                    self.assertIn("prefill_form", chat.seen[2])
+                    events = [
+                        row for path in (Path(directory) / "runs").glob("*/audit.jsonl")
+                        for row in map(json.loads, path.read_text().splitlines())
+                    ]
+                    self.assertFalse(any(
+                        row.get("event") == "business_skill_loaded" for row in events))
+                    self.assertEqual(sum(
+                        row.get("event") == "form_prefill_completed" for row in events), 1)
                 finally:
                     browser.close()
 

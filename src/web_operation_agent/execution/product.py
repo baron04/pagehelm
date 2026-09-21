@@ -130,7 +130,8 @@ class AgentTurnConfig:
     allow_application_entry: bool = False
     allow_business_mutations: bool = False
     allow_clarification: bool = True
-    #: Permit only application-issued, transient-until-submit form drafts. Direct model
+    #: Permit application-issued form drafts and, when the adapter installs its optional
+    #: form port, the generic current-page describe/prepare flow. Direct model
     #: fill/select/submit policy remains independent and may stay disabled.
     allow_form_prefill: bool = False
     #: Let a deployment remove model-only bookends from pure read navigation. The session

@@ -55,7 +55,7 @@ _MAX_SELECTION = 50
 _MAX_VALUE_CHARS = 300
 
 
-def _model_allowed(name: str) -> bool:
+def odoo_model_allowed(name: str) -> bool:
     folded = name.casefold()
     parts = frozenset(folded.split("."))
     return not folded.startswith(_DENIED_MODEL_PREFIXES) and not parts & _DENIED_MODEL_PARTS
@@ -130,13 +130,13 @@ class OdooEntityReadPort:
         catalog = OdooRuntimeDescriptorReader(self._client).catalog()
         actions_by_model = {}
         for action in catalog.actions:
-            if action.readable and action.model and _model_allowed(action.model):
+            if action.readable and action.model and odoo_model_allowed(action.model):
                 actions_by_model.setdefault(action.model, []).append(action)
         entities = []
         for model in catalog.models:
             actions = actions_by_model.get(model.model)
             if (not actions or model.transient or "read" not in model.operations
-                    or not _model_allowed(model.model)):
+                    or not odoo_model_allowed(model.model)):
                 continue
             ordered = tuple(sorted(actions, key=lambda item: item.action_id))
             entities.append(EntityDescriptor(
@@ -250,4 +250,4 @@ class OdooEntityReadPort:
         )
 
 
-__all__ = ["OdooEntityReadPort"]
+__all__ = ["OdooEntityReadPort", "odoo_model_allowed"]

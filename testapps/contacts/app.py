@@ -103,7 +103,7 @@ def _assistant_tag(script_url: str | None) -> str:
 
 
 def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
-          assistant_script: str | None = None) -> bytes:
+          can_write: bool = False, assistant_script: str | None = None) -> bytes:
     contacts = json.dumps(source_contacts, ensure_ascii=False).replace("</", "<\\/")
     title = html.escape(workspace.title())
     return f"""<!doctype html>
@@ -138,6 +138,14 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
     dt {{ margin-top: 22px; color: #64748b; font-size: 12px; font-weight: 750;
       letter-spacing: .09em; text-transform: uppercase; }}
     dd {{ margin: 7px 0 0; font-size: 18px; }}
+    form {{ display: grid; gap: 18px; margin-top: 24px; }}
+    label {{ display: grid; gap: 7px; color: #475569; font-size: 13px; font-weight: 700; }}
+    input {{ width: 100%; padding: 12px 14px; color: #172033; background: white;
+      border: 1px solid #cbd5e1; border-radius: 10px; font: inherit; }}
+    button, .primary {{ width: fit-content; padding: 11px 16px; color: white;
+      background: #2563eb; border: 0; border-radius: 10px; font: inherit;
+      font-weight: 750; cursor: pointer; text-decoration: none; }}
+    .status {{ min-height: 22px; color: #b91c1c; }}
   </style>
 </head>
 <body>
@@ -148,6 +156,7 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
     // captured at load is how a single-page app comes to show a record it was told about
     // but has never fetched -- which is exactly what a freshly created contact is.
     let contacts = {contacts};
+    const canWrite = {str(bool(can_write)).lower()};
     const app = document.querySelector('#app');
     async function refresh() {{
       try {{
@@ -158,6 +167,19 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
       render();
     }}
     function render() {{
+      if (location.pathname === '/contacts/new') {{
+        if (!canWrite) {{ app.innerHTML = '<h1>Not permitted</h1>'; return; }}
+        app.innerHTML = `<a class="back" href="/contacts" data-route>← All contacts</a>
+          <section class="record"><div class="eyebrow">Contact record</div>
+          <h1>New contact</h1><p class="lede">Review the values before you save.</p>
+          <form id="contact-create"><label>Name<input name="name" autocomplete="name"
+            required maxlength="120"></label><label>Email<input name="email" type="email"
+            autocomplete="email" required maxlength="200"></label>
+            <button type="submit">Save contact</button><p class="status" role="status"></p>
+          </form></section>`;
+        document.title = 'New contact · Minimal Contacts';
+        return;
+      }}
       const match = /^\\/contacts\\/([^/]+)$/.exec(location.pathname);
       if (match) {{
         const contact = contacts.find(item => item.id === match[1]);
@@ -171,7 +193,9 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
       }}
       app.innerHTML = `<div class="eyebrow">Developer demo</div><h1>Contacts</h1>
         <p class="lede">A small first-party app whose current records come from a typed API.
-        Ask the embedded assistant to list a contact or open a record.</p><section class="grid">${{
+        Ask the embedded assistant to list a contact or open a record.</p>${{
+          canWrite ? '<a class="primary" href="/contacts/new" data-route>New contact</a>' : ''
+        }}<section class="grid" style="margin-top: 20px">${{
           contacts.map(item => `<a class="card" href="/contacts/${{item.id}}" data-route>
             <span class="name">${{item.name}}</span><span class="email">${{item.email}}</span></a>`).join('')
         }}</section>`;
@@ -182,6 +206,24 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
       const link = event.target.closest('a[data-route]');
       if (!link) return;
       event.preventDefault(); history.pushState({{}}, '', link.href); refresh();
+    }});
+    addEventListener('submit', async event => {{
+      if (event.target.id !== 'contact-create') return;
+      event.preventDefault();
+      const form = event.target;
+      const status = form.querySelector('[role="status"]');
+      const payload = Object.fromEntries(new FormData(form));
+      try {{
+        const response = await fetch('/api/browser/contacts', {{
+          method: 'POST', headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify(payload),
+        }});
+        const result = await response.json();
+        if (!response.ok || !result.contact) throw new Error(result.error || 'save_failed');
+        contacts.push(result.contact);
+        history.replaceState({{}}, '', `/contacts/${{result.contact.id}}`);
+        await refresh();
+      }} catch (error) {{ status.textContent = `Could not save: ${{error.message}}`; }}
     }});
     render();
   </script>
@@ -290,6 +332,49 @@ class MinimalContactsApplication:
                     owner.refused_writes += 1
                 self._reply(status, _json_bytes({"error": error}), "application/json")
 
+            def _create_contact(self, actor: DemoActor) -> None:
+                """Apply the application's own validation and uniqueness rule once."""
+                with owner._lock:
+                    owner.post_requests += 1
+                owner.post_received.set()
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    payload = json.loads(self.rfile.read(min(length, 64 * 1024)) or b"{}")
+                except (ValueError, OSError):
+                    self._reply(400, _json_bytes({"error": "invalid_json"}),
+                                "application/json")
+                    return
+                name = str(payload.get("name") or "").strip()
+                email = str(payload.get("email") or "").strip().casefold()
+                if not name or not email or set(payload) != {"name", "email"}:
+                    self._reply(400, _json_bytes({"error": "name_and_email_required"}),
+                                "application/json")
+                    return
+                if not owner.release_post.wait(timeout=10):
+                    self._reply(503, _json_bytes({"error": "write_hold_timeout"}),
+                                "application/json")
+                    return
+                with owner._lock:
+                    store = owner.workspaces[actor.workspace]
+                    identifier = urllib.parse.quote(
+                        name.casefold().replace(" ", "-"), safe="")
+                    if any(item["id"] == identifier for item in store):
+                        self._reply(409, _json_bytes({"error": "already_exists"}),
+                                    "application/json")
+                        return
+                    record = {"id": identifier, "name": name, "email": email}
+                    store.append(record)
+                    owner.records_created += 1
+                if owner.write_fault == "drop_response":
+                    self.close_connection = True
+                    try:
+                        self.connection.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
+                    self.connection.close()
+                    return
+                self._reply(201, _json_bytes({"contact": record}), "application/json")
+
             def do_POST(self):
                 path = urllib.parse.urlsplit(self.path).path
                 if path == "/woa/bootstrap":
@@ -354,6 +439,20 @@ class MinimalContactsApplication:
                 with owner._lock:
                     owner.write_requests += 1
                 resolved = self._actor()
+                if path == "/api/browser/contacts":
+                    # This is the human-owned form endpoint, separate from the delegated
+                    # Agent API below. Same-origin JSON plus SameSite cookie prevents a
+                    # cross-site form from submitting it; prefill_form never calls submit.
+                    if (self.headers.get("Origin") != owner.origin or resolved is None
+                            or resolved[1] != "page_session"):
+                        self._refuse_write(403, "origin_refused")
+                        return
+                    actor = resolved[0]
+                    if "contacts:write" not in actor.permissions:
+                        self._refuse_write(403, "forbidden")
+                        return
+                    self._create_contact(actor)
+                    return
                 if path != "/api/contacts":
                     self._refuse_write(404, "not_found")
                     return
@@ -369,50 +468,7 @@ class MinimalContactsApplication:
                     # integration decided before sending the request.
                     self._refuse_write(403, "forbidden")
                     return
-                with owner._lock:
-                    owner.post_requests += 1
-                owner.post_received.set()
-                try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(min(length, 64 * 1024)) or b"{}")
-                except (ValueError, OSError):
-                    self._reply(400, _json_bytes({"error": "invalid_json"}),
-                                "application/json")
-                    return
-                name = str(payload.get("name") or "").strip()
-                email = str(payload.get("email") or "").strip().casefold()
-                if not name or not email or set(payload) != {"name", "email"}:
-                    self._reply(400, _json_bytes({"error": "name_and_email_required"}),
-                                "application/json")
-                    return
-                if not owner.release_post.wait(timeout=10):
-                    self._reply(503, _json_bytes({"error": "write_hold_timeout"}),
-                                "application/json")
-                    return
-                with owner._lock:
-                    store = owner.workspaces[actor.workspace]
-                    identifier = urllib.parse.quote(
-                        name.casefold().replace(" ", "-"), safe="")
-                    # Uniqueness is the workspace's, like every other rule about its records.
-                    if any(item["id"] == identifier for item in store):
-                        self._reply(409, _json_bytes({"error": "already_exists"}),
-                                    "application/json")
-                        return
-                    record = {"id": identifier, "name": name, "email": email}
-                    store.append(record)
-                    owner.records_created += 1
-                if owner.write_fault == "drop_response":
-                    # The application committed, then the transport disappeared before an
-                    # acknowledgement.  This is deliberately a broken HTTP exchange: the
-                    # adapter must report an unknown outcome and must never retry it.
-                    self.close_connection = True
-                    try:
-                        self.connection.shutdown(socket.SHUT_RDWR)
-                    except OSError:
-                        pass
-                    self.connection.close()
-                    return
-                self._reply(201, _json_bytes({"contact": record}), "application/json")
+                self._create_contact(actor)
 
             def do_GET(self):
                 path = urllib.parse.urlsplit(self.path).path
@@ -493,6 +549,7 @@ class MinimalContactsApplication:
                         records = [dict(item) for item in owner.workspaces[actor.workspace]]
                     self._reply(200, _html(
                         records, actor.workspace,
+                        can_write="contacts:write" in actor.permissions,
                         assistant_script=owner._assistant_script),
                                 "text/html; charset=utf-8")
                 elif path == "/":

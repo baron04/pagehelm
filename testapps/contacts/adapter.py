@@ -1,7 +1,7 @@
 """The part a real integration writes: ports, typed tools, and Skill artifacts.
 
-This is the file to copy. It implements all five of what `ApplicationPorts` asks for --
-identity, route validation, postconditions, reconciliation and data classification -- and
+This is the file to copy. It implements the ports `ApplicationPorts` asks for -- identity,
+route validation, current forms, postconditions, reconciliation and data classification -- and
 exposes one read and one write over the application's own data, each with the Skill that
 tells the model when it applies.
 
@@ -64,6 +64,13 @@ from web_operation_agent.business.runtime import (
     business_text_key,
     normalize_business_text,
 )
+from web_operation_agent.business.forms import (
+    ApplicationFormDescriptor,
+    ApplicationFormField,
+    ApplicationFormValue,
+)
+from web_operation_agent.business.tools.contracts import FormDraft, FormDraftField
+from web_operation_agent.business.errors import BusinessToolRequestError
 from web_operation_agent.business.entities import (
     DESCRIBE_ENTITY_TOOL,
     DISCOVER_ENTITIES_TOOL,
@@ -99,6 +106,10 @@ SCOPES = {
     **{name: "contacts:read" for name in ENTITY_READ_TOOLS},
     CREATE_CONTACT: "contacts:write",
 }
+# The application already owns this permission.  Prefilling does not persist, but the form
+# is useful only to an actor who may finish the create themselves; inventing a framework
+# scope would bypass the application's authority vocabulary.
+GENERIC_FORM_SCOPE = "contacts:write"
 _READ_SCHEMA = {
     "type": "function",
     "function": {
@@ -467,6 +478,59 @@ class _ContactsEntityReadPort:
         )
 
 
+class _ContactsFormPort:
+    """Translate the synthetic app's create page to the generic current-form contract.
+
+    This intentionally shares no implementation with Odoo.  It proves the core contract
+    needs only application metadata plus the current page, not an ORM or a particular web
+    framework.
+    """
+
+    required_scopes = frozenset({GENERIC_FORM_SCOPE})
+
+    def __init__(self, executor: _ContactsToolExecutor):
+        self._executor = executor
+
+    def describe_form(self, observation, *, context=None):
+        if urllib.parse.urlsplit(observation.url).path != "/contacts/new":
+            return None
+        return ApplicationFormDescriptor(
+            reference="contacts-create-v1",
+            title="New contact",
+            route="/contacts/new",
+            fields=(
+                ApplicationFormField(
+                    "name", "Name", controls=("textbox",), required=True),
+                ApplicationFormField(
+                    "email", "Email", kind="email", controls=("textbox",),
+                    required=True),
+            ),
+            scope="fields writable by the current actor on the new-contact page",
+        )
+
+    def prepare_form(self, form, values: tuple[ApplicationFormValue, ...], *,
+                     context=None) -> FormDraft:
+        raw = {item.field.reference: item.value for item in values}
+        try:
+            normalized = {
+                **raw,
+                **({"name": normalize_business_text(
+                    raw["name"], field="contact name", maximum=120)}
+                   if "name" in raw else {}),
+                **({"email": raw["email"].strip().casefold()}
+                   if "email" in raw else {}),
+            }
+        except BusinessToolError as exc:
+            raise BusinessToolRequestError(str(exc)) from exc
+        return FormDraft(
+            route=form.route,
+            fields=tuple(FormDraftField(
+                item.field.reference, item.field.label,
+                normalized[item.field.reference], item.control)
+                for item in values),
+        )
+
+
 class _ContactsIdentityPort:
     """Two credentials, resolved independently, that have to agree.
 
@@ -607,7 +671,7 @@ class MinimalContactsAdapter:
             if allow_mutations else ())
         routes = DeclaredRoutePort(
             application_id=APPLICATION_ID,
-            tool_route_patterns=(r"/contacts/[a-z0-9-]+",),
+            tool_route_patterns=(r"/contacts/new", r"/contacts/[a-z0-9-]+"),
         )
         self.business_tools = BusinessToolRuntime(
             tuple(skills), executor, application_id=APPLICATION_ID,
@@ -616,15 +680,18 @@ class MinimalContactsAdapter:
             mutation_journal=mutation_journal,
             data_classifier=data, postcondition_verifier=postconditions,
             route_validator=routes)
+        forms = _ContactsFormPort(executor)
         self.identity = _ContactsIdentityPort(
             origin, api_token=api_token,
-            scopes=frozenset(self.business_tools.required_scopes.values()))
+            scopes=(frozenset(self.business_tools.required_scopes.values())
+                    | forms.required_scopes))
         self.ports = ApplicationPorts(
             identity=self.identity,
             routes=routes,
             postconditions=postconditions,
             reconciliation=_ContactsReconciler(executor, allow_mutations),
             data=data,
+            forms=forms,
         )
         self.descriptor = ApplicationDescriptor(
             schema_version=APPLICATION_ADAPTER_VERSION,

@@ -1,12 +1,12 @@
 # 应用接入指南
 
-Application Adapter 把一个第一方 Web 应用接入通用服务端 Agent。Adapter 负责应用事实和权限，不负责 ReAct 循环。一个新 Adapter 需要提供版本化描述、类型化 Business Skill 与工具、五个可执行端口和健康检查。`bind_application()` 会在用户任务到达浏览器或模型前校验整个组合。
+Application Adapter 把一个第一方 Web 应用接入通用服务端 Agent。Adapter 负责应用事实和权限，不负责 ReAct 循环。一个新 Adapter 需要提供版本化描述、类型化 Business Skill 与工具、可执行端口和健康检查。`bind_application()` 会在用户任务到达浏览器或模型前校验整个组合。
 
 ## 必需组件
 
 `ApplicationDescriptor` 声明应用 ID、准确 Web Origin、导航模式、同源 PageController 模块 URL，以及当前 Skill/tool catalog 的 SHA-256。先构造 `BusinessToolRuntime`，再用 `business_tools.catalog_sha256` 构造 Descriptor。这样 Skill 或 schema 发生变化时，陈旧部署会在组合阶段失败。
 
-`ApplicationPorts` 包含身份、路由、数据分类、mutation 后置条件和核对端口。数据端口必须覆盖每个 typed tool，后置条件与核对端口必须覆盖每个写工具，身份 scope 必须等于工具运行时声明的所有非空 scope。运行时与 `ApplicationPorts` 必须使用相同的路由、数据和后置条件对象。
+`ApplicationPorts` 包含身份、路由、可选当前表单、数据分类、mutation 后置条件和核对端口。数据端口必须覆盖每个 typed tool，后置条件与核对端口必须覆盖每个写工具，身份 scope 必须等于工具运行时所有非空 scope 与表单端口 scope 的并集。运行时与 `ApplicationPorts` 必须使用相同的路由、数据和后置条件对象。
 
 `BusinessToolRuntime` 通过固定 JSON schema 暴露当前应用数据。凭据和任意 HTTP 构造应保留在应用 executor 内。Skill 说明何时及如何调用工具，但不能证明当前记录存在。返回的每条路由必须原样出现在结果内容中，并在 Agent 使用前通过 Adapter 路由端口校验。
 
@@ -54,9 +54,28 @@ Adapter 与 turn policy 默认都关闭写入。启用写入的 Adapter 在生�
 
 ## 临时表单交接
 
-表单预填是一种可选的类型化工具结果，不是另一个应用端口，也不是通用的浏览器权限。Adapter 只有在校验过确切路由、语义字段标识、控件角色和取值之后，才能返回 `FormDraft`。结果内容必须原样包含这些绑定，路由也必须在该结果允许的路由之内。用 `AgentTurnConfig.allow_form_prefill=True` 启用；草稿存在的这一轮里，模型只会拿到一个无参数的 `prefill_form` 工具。
+表单预填是可选能力，不是通用的浏览器权限。专用 typed tool 仍可为特定流程返回
+`FormDraft`。作为无 Skill 兜底时，由 Adapter 实现 `ApplicationFormPort`：`describe_form`
+返回当前路由下同 actor 的可写字段元数据，`prepare_form` 校验选定值并返回准确草稿。用
+`AgentTurnConfig.allow_form_prefill=True` 启用。
+
+通用 `describe_form` 只取 Adapter 描述与最新视口观察的交集；只存在于元数据、只存在于
+DOM、重复出现以及凭据形态的字段都会消失。它返回短期不透明 form/field ID，而不是原生字段名
+或 selector。`prepare_form` 会重新读取两侧事实，拒绝过期 ID、不符合可移植字段类型或声明
+choice 的值，并拒绝增加字段、改变路由或持久化合同的草稿。只有服务端保存这份准确草稿时，
+无参数 `prefill_form` 才会出现。表单 scope 在读取 Adapter 元数据之前检查；缺少 scope 的 actor
+拿不到通用表单工具。
 
 服务端只消费一次草稿，从最新的页面观察中唯一地解析每个字段，填写或选择 Adapter 签发的值，在点击或提交之前停下。Adapter 由此断言：编辑这些字段本身不会保存任何东西。会写入的 onchange、边编辑边保存的表单、凭据字段、上传，以及任何编辑后可能持久化或触发外部效果的控件，都不能签发草稿，应走常规的确认写入路径。应用在离开页面时保存的表单（Odoo 18 就是这样）之所以可以用，只是因为助手离开任何页面之前都会先问，预填完成的回答也会告诉用户离开时内容可能被保存或丢弃。要在部署的应用上验证这一断言，包括运行结束后用 API 或数据库确认没有创建记录。
+
+源码检索可以在准备表单前解释字段、校验规则或流程，但不能创建 form ID、field ID、
+selector、scope、取值或写权限；当前页面与当前应用元数据才是执行依据。接入通用表单时，要在
+该 Adapter 上运行共享的 `assert_current_form_contract`，还要通过真实浏览器门；只有 Adapter
+单元测试不能证明端到端表单准确率。
+
+Odoo 参考翻译特意默认关闭。只有部署模块通过上述浏览器与无写入资格门后，才用
+`allow_generic_forms=True` 构造它的 Adapter；`fields_get` 本身不能证明自定义 `onchange`
+没有持久化或外部副作用。
 
 ## 组合与资格验证
 

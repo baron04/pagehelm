@@ -28,6 +28,15 @@ agent.
   AND-only filter AST and pagination bounds; the contract requires stable adapter-owned
   ordering and exact counts. Odoo and the structurally different synthetic Contacts REST
   adapter run the same contract tests.
+- An optional application-neutral current-form contract supports a no-Skill fallback for
+  safe scalar form filling. `describe_form` intersects the latest viewport controls with
+  actor-scoped adapter metadata and returns only short-lived opaque IDs; `prepare_form`
+  rechecks both sides and retains the exact native bindings on the server; `prefill_form`
+  types that draft and ends the turn without clicking or submitting. Odoo and Contacts
+  translate different metadata sources to the same contract. Source lookup may explain a
+  field or rule, but it cannot create a field, selector, permission, or value.
+  The Odoo reference translation is experimental and remains an explicit adapter opt-in
+  until the deployed modules pass browser and no-write qualification.
 - Turn context is assembled by source role: the current page is the live grounding baseline;
   bounded conversation history is included for referential or clarification follow-ups;
   Skills are selected from the current task; and deployment source remains a lazy cited

@@ -23,6 +23,7 @@ from web_operation_agent.business.runtime import (BusinessMutationIndeterminate,
                                           BusinessMutationRefusedError,
                                           BusinessToolError, BusinessToolRequestError)
 from web_operation_agent.business.control import ReadOnlyControl
+from web_operation_agent.business.forms import NoApplicationForms
 from web_operation_agent.state.identity import IdentityAssertion, PrincipalError
 from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.business.mutation import MemoryMutationJournal
@@ -332,6 +333,19 @@ class AdapterContract(unittest.TestCase):
                           "query_customers", "query_entity_records", "query_products",
                           "query_quotations", "query_sale_orders"])
         self.assertEqual(bound.business_tools.mutation_tool_names, frozenset())
+        self.assertIsInstance(bound.ports.forms, NoApplicationForms)
+
+    def test_generic_forms_are_an_explicit_experimental_adapter_capability(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            adapter = OdooApplicationAdapter(
+                base_url=BASE, api_key_path=_key_file(Path(tmp)),
+                allow_generic_forms=True)
+            bound = assert_adapter_contract(self, adapter)
+
+        self.assertEqual(bound.ports.forms.required_scopes,
+                         {"generic_forms:prepare"})
+        self.assertIn("generic_forms:prepare",
+                      bound.ports.identity.required_scopes)
 
     def test_a_mutation_adapter_satisfies_the_shared_contract(self):
         with tempfile.TemporaryDirectory() as tmp:

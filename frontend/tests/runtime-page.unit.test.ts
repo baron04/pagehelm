@@ -56,3 +56,23 @@ describe('Page.describe bounds an observation before it crosses the browser boun
     expect(reading.observation.truncated).toBe(true)
   })
 })
+
+describe('Page refuses controls that are not writable at execution time', () => {
+  it('does not pass a disabled input to PageController', async () => {
+    const api = controller()
+    const page = new Page(api, () => ({tagName: 'INPUT', disabled: true}), createRedactor())
+
+    expect(() => page.input('e1', 'NovaForge')).toThrow(/disabled or read-only/)
+    expect(api.inputText).not.toHaveBeenCalled()
+  })
+
+  it('does not pass a read-only select or a missing control to PageController', async () => {
+    const api = controller()
+    const readOnly = new Page(api, () => ({tagName: 'SELECT', readOnly: true}), createRedactor())
+    const missing = new Page(api, () => null, createRedactor())
+
+    expect(() => readOnly.select('e2', 'active')).toThrow(/disabled or read-only/)
+    expect(() => missing.select('e3', 'active')).toThrow(/no longer on the page/)
+    expect(api.selectOption).not.toHaveBeenCalled()
+  })
+})

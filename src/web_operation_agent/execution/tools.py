@@ -8,6 +8,7 @@ surface separate first prevents their availability rules from being duplicated a
 from __future__ import annotations
 
 from ..answer import answer_protocol, page_answer
+from ..business.forms import FORM_TOOL_SCHEMAS
 from .knowledge_tools import capability_check_available
 from .prompts import (APPLICATION_ENTRY_TOOL, ASK_USER_TOOL, CAPABILITY_TOOL,
                       LOAD_SKILL_TOOL, SOURCE_CANDIDATE_TOOL, SOURCE_NAV_TOOL,
@@ -56,6 +57,8 @@ class ToolSurface:
                     or session._loaded_business_skill_ids != session._task_business_skill_ids):
                 tools += [LOAD_SKILL_TOOL]
             tools += session.business_tools.schemas_for(session._loaded_business_skill_ids)
+        if session.allow_form_prefill and session._application_form_tools is not None:
+            tools += list(FORM_TOOL_SCHEMAS)
         if session.allow_form_prefill and session._form_draft is not None:
             tools += [PREFILL_FORM_TOOL]
         return tools

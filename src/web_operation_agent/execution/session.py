@@ -35,6 +35,7 @@ from ..planning.affordance import SourceAffordance, resolve_source_affordances
 from ..transport.browser import BrowserExecutor
 from ..business.runtime import (BUSINESS_SKILL_MATCHER_VERSION, BusinessSkillSelection,
                                FormDraft, BusinessToolRuntime)
+from ..business.forms import ApplicationFormPort, ApplicationFormTools
 from ..business.errors import BusinessToolPermissionError
 from ..business.text import trigger_requests_action
 from ..planning.contract import (ContractPlanner, PlanningFailed, _segment_from_template,
@@ -154,6 +155,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                  navigation_confirmation=None,
                  allow_clarification: bool = False,
                  allow_form_prefill: bool = False,
+                 application_forms: ApplicationFormPort | None = None,
                  deterministic_read_navigation: bool = False,
                  plain_business_answer_min_page_actions: int | None = None,
                  max_agent_said_chars: int = 500,
@@ -212,6 +214,9 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
             raise ValueError("cancelled must be callable or None")
         if not isinstance(allow_form_prefill, bool):
             raise ValueError("allow_form_prefill must be a boolean")
+        if application_forms is not None and not isinstance(
+                application_forms, ApplicationFormPort):
+            raise TypeError("application_forms must implement ApplicationFormPort or be None")
         if principal is not None and not isinstance(principal, PrincipalContext):
             raise ValueError("principal must be a PrincipalContext or None")
         if principal is not None and (not session_id or not turn_id):
@@ -253,9 +258,11 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         source_routes_enabled = bool(
             runtime_source or source_affordance_mode == "auto" or source_contract)
         if application_routes is None and (
-                source_routes_enabled or knowledge_router is not None or allow_application_entry):
+                source_routes_enabled or knowledge_router is not None or allow_application_entry
+                or application_forms is not None):
             raise ValueError(
-                "source navigation and application entry require an application route port")
+                "source navigation, application entry and forms require an application "
+                "route port")
         self.application_routes = application_routes
         # The static baseline in `privacy.py` knows no application's session parameters.
         # Widening it here is what keeps an adapter's own secret out of the audit ledger.
@@ -315,6 +322,10 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
             raise ValueError("deterministic_read_navigation must be a boolean")
         self.allow_clarification = allow_clarification
         self.allow_form_prefill = allow_form_prefill
+        self._application_form_tools = (
+            ApplicationFormTools(
+                application_forms, application_id=application_routes.application_id)
+            if application_forms is not None else None)
         self.deterministic_read_navigation = deterministic_read_navigation
         current_navigation_only = _is_navigation_only(task.prompt)
         self._navigation_only = current_navigation_only
@@ -459,6 +470,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                 "finish", "ask_user", "compute", "load_skill", "lookup_source", "open_source_route",
                 "open_source_candidate", "open_skill_route", "enter_skill_app",
                 "enter_application", "prefill_form",
+                "describe_form", "prepare_form",
             }
             collisions = business_tools.tool_names & reserved
             if collisions:

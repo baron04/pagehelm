@@ -22,6 +22,13 @@ Web Operation Agent 是一个 alpha 阶段的框架，用于在第一方 Web 应
   ORM、REST、OpenAPI 或其它原生元数据翻译到合同之后。核心校验仅 AND 的过滤 AST 与分页
   上限；合同要求 Adapter 提供稳定排序和准确计数。Odoo 与结构不同的合成 Contacts REST
   Adapter 运行同一组合同测试。
+- 可选的应用无关当前表单合同为无 Skill 场景提供安全的标量字段预填兜底。
+  `describe_form` 只取最新视口控件与同 actor Adapter 元数据的交集，并返回短期不透明 ID；
+  `prepare_form` 重新核对两侧事实，把准确的原生绑定只保留在服务端；`prefill_form` 按草稿
+  填写后立即结束，绝不点击或提交。Odoo 与 Contacts 把不同元数据来源翻译到同一合同。
+  源码检索可以解释字段或规则，但不能凭空增加字段、selector、权限或值。
+  Odoo 参考翻译仍是实验能力，必须由 Adapter 显式开启，并先在实际部署模块上通过浏览器与
+  无写入资格门。
 - Turn 按来源职责组装上下文：当前页面是实时 grounding 基线；只有指代性后续或待澄清回复
   才带入有界对话历史；Skill 按当前任务选择；部署源码保持惰性的、带引证的查询，而不是
   整库注入。
