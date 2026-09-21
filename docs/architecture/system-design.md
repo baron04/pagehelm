@@ -203,6 +203,21 @@ Application Adapter 是应用专有事实进入通用 Agent 的组合边界。�
 
 每个 Adapter 必须先通过版本化 `ApplicationDescriptor` 和 `ApplicationPorts` 绑定。Descriptor 固定应用 ID、Origin、导航模式、同源 PageController URL，以及当前 Skill/tool catalog 的 SHA-256。Ports 是会被产品路径实际调用的合同：Identity Port 校验 principal，Route Port 限定 typed tool 可授权的页面路径，Data Port 为结果附加应用声明的数据类别，Postcondition Port 在确认写入后决定能否记录为 completed，Reconciliation Port 为历史不确定写入提供只读核对边界。会话组合在接收用户任务前重新计算 catalog 摘要，并检查端口覆盖所有工具、scope 和 mutation；Descriptor、catalog、端口或运行时接线不一致时拒绝启动。自然语言目标不经过应用专有的正则分类器或有限意图枚举。目标先由通用匹配器按 Skill 自己声明的触发词选出候选，这一步会以 `business_skill_candidates` 记账并标出是否用了兜底；匹配为空时退回一个有界的、按能力挑选的候选集，因此一种没被触发词覆盖的说法不会静默地让某项能力从工具面消失。其余交给通用 Agent，由候选 Skill、typed tool 和页面观察逐步收敛。
 
+#### 通用能力准入规则
+
+应用可以有专用 Adapter、Skill、源码抽取器、元数据翻译、鉴权和后置条件核验；Agent 能力
+本身不能因此变成某个应用的另一层 SDK。新增的 Agent-facing tool schema、prompt contract、
+状态转换和核心策略不得包含应用模型名、框架 RPC 形状或应用专有意图。允许先在一个 Adapter
+中做有测量结果的原型，但继续扩展前必须把稳定部分抽成应用无关合同，并用第二个结构不同的
+Adapter 或测试应用运行同一工具面和核心测试。只有第一个 Adapter 通过不能证明能力通用。
+
+框架专有的解析并不违反这条边界：例如一个 Adapter 可以把 ORM model、OpenAPI resource、
+GraphQL type 或窗口 action 翻译成共同的 entity、field、operation 和 page descriptor；核心只
+消费这些有限 descriptor 和 opaque binding，不知道它们来自哪个框架。反方向则不允许：核心
+不得为了一个框架增加专用模型发现、RPC 参数或页面规则。Phase 8 已完成的 Odoo 三段读取是
+验证这一模式可行的首个 Adapter 原型；在通用表单、聚合或更多查询能力建立于其上之前，必须
+先完成合同抽取和第二 Adapter 证明。
+
 
 ### 6.2 Business Skill
 
@@ -233,7 +248,7 @@ Skill 不保存当前业务数据或凭据。Agent 只能先从当前任务匹�
 
 如果一次 turn 在成功读取 typed tool 后直接返回答案，且该结果带有 `StructuredQueryAnswer`，产品层会忽略模型对业务事实的转述，并用结构化投影生成用户可见答案。完整性说明排在记录之前；答案长度不足以容纳全部记录时只在记录边界截断，并明确写出展示数量。结构化投影也进入公开 `AgentTurnExecution` 摘要，Session Ledger 记录投影摘要、返回数、展示数和是否展示截断，不记录另一份原始结果。用于定位记录后继续导航的查询不触发该替换，最终打开页面的说明仍由 Agent 给出。
 
-Odoo 的通用读取仍是 typed tool，不是 `model/method/args` 逃生口。Agent 先搜索同 actor 的
+当前 Odoo 原型的通用读取仍是 typed tool，不是 `model/method/args` 逃生口。Agent 先搜索同 actor 的
 可读菜单目录，得到与目录摘要绑定的不透明候选 ID；再用候选 ID 取得经过字段类型和敏感名
 过滤的 `fields_get` 描述；最后只能提交当前不透明字段 ID、受限操作符和 AND 条件。服务端
 固定 `id asc`、20 行页上限和有界 offset，同时执行 `search_count(domain)`、
@@ -368,7 +383,7 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 2. 将现有短期 principal/operation 绑定接入可信应用登录会话，补充组织策略、持久撤销和跨进程强制执行。
 3. 将 Conversation Host 迁移到有租约、取消、deadline、背压和故障隔离的 worker 执行模型。
 4. 把 Application Adapter 抽成稳定 SDK，增加契约测试、能力声明、统一错误语义和同身份验证接口。
-5. 将已接入的源码规则与后续产品文档统一为可开关 Provider，保留运行时事实优先和版本 provenance。
+5. 将已接入的源码规则、通用仓库检索、Git 历史和后续产品文档统一为可开关 Provider，保留运行时事实优先、部署版本绑定和逐类 provenance；框架抽取器只向核心输出应用无关事实。
 6. 为页面写入补齐通用的提案、网络侧许可、动作关联和写后验证合同，再按证据决定可开放的动作面。
 7. 在核心协议稳定后，评估更强隔离的页面执行端；嵌入面板与浏览器扩展可以共享协议，但需要不同的信任模型。
 8. 建立开发集、冻结测试集和强基线，分别测量页面执行、Skill/API、源码开关、写入安全、恢复能力、延迟和成本。

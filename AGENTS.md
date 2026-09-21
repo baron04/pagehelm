@@ -14,6 +14,7 @@ Read `README.md`, then inspect the modules and tests that define the behavior yo
 - Feed each tool result and fresh page observation back to the same server-side agent before the next decision.
 - Prefer current runtime facts over Skills, source code, documentation, and API schemas.
 - Keep application-specific behavior behind adapters, Skills, typed tools, and application-owned verification. The core turn executor and live session host must remain application-neutral.
+- Do not add an Agent-facing capability whose tool schema, prompt contract, control flow, or core policy assumes one application. A single adapter may host a measured prototype, but before that capability is treated as product architecture or extended further, extract an application-neutral contract and prove it with a second structurally different adapter or test application. Framework-specific source extractors, metadata translation, authorization, and verification remain in the application distribution.
 - Source retrieval is optional. Do not make access to an application repository a prerequisite for ordinary browser or API operation.
 - Reuse established browser automation components when possible. Do not build a new general browser harness or orchestration platform without evidence that the existing boundaries cannot support the requirement.
 - Add architectural complexity only when a measured product need justifies it.
