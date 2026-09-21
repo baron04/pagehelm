@@ -120,6 +120,11 @@ run_gate "ordinary-browser host (offline)" 1 "${PYTHON}" -m unittest \
 run_gate "odoo example suite" 1 "${PYTHON}" -m unittest discover \
   -s examples/odoo/src/web_operation_agent_odoo/tests \
   -t examples/odoo/src
+# P8 source qualification stays model-free.  The full 40-task run needs a deployment-owned
+# extracted source tree and is therefore an operated gate; these tests keep the frozen
+# manifest, citation drift probe, and cross-release diff apparatus in every repository run.
+run_gate "Odoo source qualification apparatus (offline)" 1 "${PYTHON}" -m unittest discover \
+  -s evals/odoo_source/tests -t .
 # Citation resolution needs the deployed release's source, so the authoritative run of it is
 # the live gate's `every_skill_citation_resolves_in_this_release`, not a skippable test.
 # The P7.4 Odoo apparatus: ledger, outcome axes, gateway, task sets and seals, evaluator
