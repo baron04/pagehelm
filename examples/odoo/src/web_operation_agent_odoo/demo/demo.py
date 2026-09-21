@@ -748,7 +748,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-env")
     parser.add_argument("--model")
     parser.add_argument("--allow-mutations", action="store_true",
-                        help="offer the three typed write tools. Every write still needs a "
+                        help="offer the four typed write tools. Every write still needs a "
                              "fresh approval clicked in the page, and a durable journal is "
                              "required, so this opens the approval card rather than the "
                              "writes themselves")

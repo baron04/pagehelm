@@ -111,6 +111,12 @@ describe('PanelHost.applyTimeline merges by event id and is idempotent', () => {
     expect(host.snapshot().entries).toHaveLength(budget)
     expect(host.snapshot().entries[0]?.id).toBe(`e5`)
   })
+
+  it('shows sequence-zero history recovered after a server restart', () => {
+    const host = new PanelHost({configuration: DEFAULT_CONFIGURATION, actions: actions()})
+    host.applyTimeline({entries: [entry({id: 'h00000001', sequence: 0, replayed: true})]})
+    expect(host.snapshot().entries.map(item => item.id)).toEqual(['h00000001'])
+  })
 })
 
 describe('PanelHost.clearTimeline raises a floor instead of erasing server history', () => {
@@ -120,6 +126,15 @@ describe('PanelHost.clearTimeline raises a floor instead of erasing server histo
     host.clearTimeline()
     expect(host.snapshot().entries).toHaveLength(0)
     host.applyTimeline({entries: [entry({id: 'e1', sequence: 1})]})
+    expect(host.snapshot().entries).toHaveLength(0)
+  })
+
+  it('does not bring recovered history back after starting a new conversation', () => {
+    const host = new PanelHost({configuration: DEFAULT_CONFIGURATION, actions: actions()})
+    const recovered = entry({id: 'h00000001', sequence: 0, replayed: true})
+    host.applyTimeline({entries: [recovered]})
+    host.clearTimeline()
+    host.applyTimeline({entries: [recovered]})
     expect(host.snapshot().entries).toHaveLength(0)
   })
 })

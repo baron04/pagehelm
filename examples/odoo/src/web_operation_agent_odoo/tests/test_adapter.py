@@ -215,6 +215,13 @@ class _FakeOdoo(OdooBusinessToolExecutor):
             self.created.append(record)
             rows.append(record)
             return record["id"]
+        if method == "write":
+            wanted = set(args[0])
+            values = args[1]
+            for row in rows:
+                if row["id"] in wanted:
+                    row.update(values)
+            return True
         raise AssertionError(f"unexpected call {model}.{method}")
 
     @staticmethod
@@ -307,7 +314,7 @@ def _invoiceable_orders(rows):
 
 def _customers(rows):
     return [{"id": index, "name": name, "email": email, "city": "Paris",
-             "country_id": [1, "France"], "customer_rank": 1}
+             "country_id": [1, "France"], "customer_rank": 1, "active": True}
             for index, (name, email) in enumerate(rows, start=10)]
 
 
@@ -332,7 +339,8 @@ class AdapterContract(unittest.TestCase):
                 allow_mutations=True, mutation_journal=MemoryMutationJournal())
             bound = assert_adapter_contract(self, adapter)
         self.assertEqual(bound.business_tools.mutation_tool_names,
-                         {"create_customer", "confirm_quotation", "invoice_sale_order"})
+                         {"archive_customer", "create_customer", "confirm_quotation",
+                          "invoice_sale_order"})
         for scope in ("customers:write", "sale_orders:write", "invoices:write"):
             self.assertIn(scope, bound.ports.identity.required_scopes)
 
@@ -572,6 +580,44 @@ class AdapterContract(unittest.TestCase):
             OdooBusinessToolExecutor._normalize_customer(
                 {"name": "abc", "email": "test@com"})
 
+    def test_customer_edit_accepts_natural_object_before_verb_wording(self):
+        """Chinese commonly puts the field before 改成; that is still an edit request."""
+        with tempfile.TemporaryDirectory() as tmp:
+            adapter = OdooApplicationAdapter(
+                base_url=BASE, api_key_path=_key_file(Path(tmp)),
+                allow_mutations=True, mutation_journal=MemoryMutationJournal())
+
+        for task in (
+                "把它的电话改成 +1 512 555 0199",
+                "把 P75 Twin Traders 的邮箱改成 austin@example.test",
+                "将这个客户的名称改成 P75 Twin Traders Austin"):
+            with self.subTest(task=task):
+                selection = adapter.business_tools.select(
+                    task, allow_mutations=True,
+                    trusted_entry_path="/odoo/customers/13")
+                self.assertIn("odoo.sales.customers-edit", selection.trigger_matches)
+                self.assertIn("odoo.sales.customers-edit", selection.candidate_ids)
+                self.assertEqual(
+                    adapter.business_tools.resolve_capability(
+                        task, allow_mutations=True),
+                    ("odoo.sales.customers-edit",))
+
+    def test_customer_archive_selects_the_typed_write_skill(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            adapter = OdooApplicationAdapter(
+                base_url=BASE, api_key_path=_key_file(Path(tmp)),
+                allow_mutations=True, mutation_journal=MemoryMutationJournal())
+
+            selection = adapter.business_tools.select(
+                "归档客户 P75 Harbor Lights", allow_mutations=True,
+                trusted_entry_path="/odoo/customers")
+
+            self.assertIn("odoo.sales.customers-archive", selection.candidate_ids)
+            self.assertEqual(
+                adapter.business_tools.resolve_capability(
+                    "归档客户 P75 Harbor Lights", allow_mutations=True),
+                ("odoo.sales.customers-archive",))
+
     def test_customer_invoice_wording_selects_the_mutation_skill_directly(self):
         with tempfile.TemporaryDirectory() as tmp:
             adapter = OdooApplicationAdapter(
@@ -798,7 +844,8 @@ class TheOneWrite(unittest.TestCase):
         offered = {schema["function"]["name"] for schema in executor.tool_schemas()}
         self.assertEqual(
             {spec.name for spec in MUTATION_SPECS},
-            {"create_customer", "confirm_quotation", "invoice_sale_order"})
+            {"archive_customer", "create_customer", "confirm_quotation",
+             "invoice_sale_order"})
         for spec in MUTATION_SPECS:
             with self.subTest(tool=spec.name):
                 self.assertIn(spec.name, offered)
@@ -842,6 +889,32 @@ class TheOneWrite(unittest.TestCase):
         reads = [call for call in executor.calls if call[1] == "read"]
         self.assertEqual(len(reads), 1)
         self.assertEqual(executor.mutation_calls, [("res.partner", "create")])
+
+    def test_an_archive_names_the_exact_customer_and_verifies_it_is_inactive(self):
+        executor = self._executor([("P75 Harbor Lights", "harbor@example.test")])
+
+        proposal = executor.prepare_mutation("archive_customer", {"record_id": 10})
+        self.assertEqual(proposal.args, {"record_id": 10})
+        self.assertEqual(
+            proposal.targets,
+            ("客户：P75 Harbor Lights", "记录 ID：10", "邮箱：harbor@example.test"))
+
+        result = executor.execute_mutation("archive_customer", {"record_id": 10})
+        self.assertTrue(result.content["archived"])
+        self.assertTrue(result.content["readback_verified"])
+        self.assertFalse(executor.tables["res.partner"][0]["active"])
+        self.assertEqual(result.allowed_routes, ("/odoo/customers",))
+        self.assertEqual(executor.mutation_calls, [("res.partner", "write")])
+
+    def test_an_already_archived_customer_is_refused_before_dispatch(self):
+        executor = self._executor([("P75 Harbor Lights", "harbor@example.test")])
+        executor.tables["res.partner"][0]["active"] = False
+
+        with self.assertRaises(BusinessMutationRefusedError) as raised:
+            executor.prepare_mutation("archive_customer", {"record_id": 10})
+
+        self.assertEqual(raised.exception.reason, "already_archived")
+        self.assertEqual(executor.mutation_calls, [])
 
     def test_a_readback_that_does_not_match_is_indeterminate_not_success(self):
         class Drifting(_FakeOdoo):

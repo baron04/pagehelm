@@ -370,9 +370,8 @@ class PanelUITests(_PanelBrowser):
         self.assertEqual(self.calls(page)[0][2], "denied")
         self.assertEqual(self.errors, [])
 
-    def test_a_page_switch_card_has_one_control_and_escape_does_not_decline(self):
-        """The assistant asks before it leaves the page. The card offers the confirmation
-        and nothing else: a person who does not want to leave stops the task."""
+    def test_a_page_switch_card_has_one_control_and_locks_an_empty_composer(self):
+        """With no earlier draft, navigation waits for its one affirmative answer."""
         labels = panel_contract()["label_keys"]
         page = self.open(_snapshot())
         self.raise_approval(page, kind="navigation", effect="离开当前页面，打开另一个页面",
@@ -390,12 +389,27 @@ class PanelUITests(_PanelBrowser):
             ".activeElement.getAttribute('data-testid')")
         self.assertEqual(focused, "woa-approve")
         page.keyboard.press("Escape")
-        page.keyboard.press("Tab")
-        self.assertEqual(self.calls(page), [], "neither key may answer a page switch")
-        page.wait_for_timeout(700)
-        page.get_by_test_id("woa-approve").click()
-        self.assertEqual([(call[0], call[2]) for call in self.calls(page)],
-                         [("decide", "approved")])
+        self.assertEqual(self.calls(page), [])
+        self.assertFalse(page.locator("#woa-composer-input").is_enabled())
+        self.assertEqual(self.errors, [])
+
+    def test_a_draft_that_predates_navigation_can_replace_the_waiting_turn(self):
+        """Sending the preserved draft asks the Runtime to cancel then replace the turn."""
+        page = self.open(_snapshot())
+        page.locator(".woa-launcher").click()
+        composer = page.locator("#woa-composer-input")
+        composer.fill("改问：Azure Interior 的电话是多少？")
+        page.evaluate("""() => window.__setSnapshot({connection:{
+          state:'acting',busy:true,stopping:false,online:true}})""")
+        self.raise_approval(
+            page, kind="navigation", effect="离开当前页面，打开另一个页面",
+            targets=["将打开：/odoo/customers/13", "你的请求：打开 azur"])
+
+        self.assertTrue(composer.is_enabled())
+        composer.press("Enter")
+        self.assertEqual(self.calls(page), [
+            ["submit", "改问：Azure Interior 的电话是多少？"],
+        ])
         self.assertEqual(self.errors, [])
 
     def test_the_approval_card_stays_usable_at_320_by_480(self):

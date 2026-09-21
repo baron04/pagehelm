@@ -7,6 +7,7 @@ export interface ComposerProps {
   labels: Labels
   limits: PanelLimits
   busy: boolean
+  canReplace: boolean
   stopping: boolean
   disabled: boolean
   placeholder: string
@@ -17,7 +18,7 @@ export interface ComposerProps {
 }
 
 export function Composer(props: ComposerProps): React.JSX.Element {
-  const {labels, limits, busy, stopping, disabled, placeholder, draft, onDraft} = props
+  const {labels, limits, busy, canReplace, stopping, disabled, placeholder, draft, onDraft} = props
   const input = useRef<HTMLTextAreaElement>(null)
   const [focused, setFocused] = useState(false)
   const [atLimit, setAtLimit] = useState(false)
@@ -51,7 +52,7 @@ export function Composer(props: ComposerProps): React.JSX.Element {
 
   const send = () => {
     const text = draft.trim()
-    if (!text || busy || disabled) return
+    if (!text || disabled || (busy && !canReplace)) return
     props.onSubmit(text)
   }
 
@@ -86,7 +87,7 @@ export function Composer(props: ComposerProps): React.JSX.Element {
         />
         {/* Kept for screen readers only: the visible hint was noise for everyone else. */}
         <span className="woa-sr" id="woa-composer-hint">{labels.keyHint}</span>
-        {busy
+        {busy && !canReplace
           ? (
             <button type="button" className="woa-send" data-stop="true"
                     aria-label={labels.stop} disabled={stopping} onClick={props.onCancel}>

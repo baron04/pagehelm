@@ -25,6 +25,7 @@ from __future__ import annotations
 #: skill_id -> (subject, model methods quoted by the Skill)
 SKILL_SOURCES: dict[str, tuple[str, tuple[str, ...]]] = {
     "odoo.sales.customer-invoices-query": ("odoo/customer-invoices", ()),
+    "odoo.sales.customers-archive": ("odoo/customers", ()),
     "odoo.sales.customers-create": ("odoo/customers", ("res.partner.create",)),
     "odoo.sales.customers-draft": ("odoo/customers", ()),
     "odoo.sales.customers-edit": ("odoo/customers", ()),

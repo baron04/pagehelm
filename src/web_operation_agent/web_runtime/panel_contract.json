@@ -93,7 +93,7 @@
     "approvalObscured": "确认卡当前不完全可见，无法确认。请移开遮挡内容或把窗口拉大后重试。",
     "navigationTitle": "打开页面前请确认",
     "navigationConfirm": "打开",
-    "navigationHint": "助手要离开当前页面。页面上还没有保存的内容可能会被应用自动保存，也可能丢失。不想离开就点“停止”。",
+    "navigationHint": "助手要离开当前页面。页面上还没有保存的内容可能会被应用自动保存，也可能丢失。如果输入框里已有其他问题，可以发送它来中断这次操作。",
     "retry": "重试",
     "dismiss": "关闭提示",
     "panelFailed": "助手界面出错了。刷新页面可以恢复，应用本身不受影响。",
@@ -205,8 +205,8 @@
   "approval_kinds": {
     "comment": [
       "What a confirmation card asks. A write authorises one exact change and can be",
-      "declined; a navigation asks before the assistant leaves the current page and has",
-      "only the confirmation -- a person who does not want it stops the task."
+      "declined. A navigation has one affirmative action; a pre-existing draft can replace",
+      "the waiting turn, while an empty composer remains locked."
     ],
     "write": {"declinable": true},
     "navigation": {"declinable": false}

@@ -99,6 +99,8 @@ export class EmbeddedWebRuntime {
   private stopListening: Cancel[] = []
   private redactorInstance: Redactor | null = null
   private clientInstance: SessionClient | null = null
+  /** A message the person sent in place of an unanswered confirmation. */
+  private replacementText = ''
 
   constructor(config: RuntimeConfig) {
     if (!config?.endpoint || !config?.sessionId || !config?.clientToken) {
@@ -310,7 +312,7 @@ export class EmbeddedWebRuntime {
     this.panelHost = new PanelHost({
       configuration: this.panelConfiguration,
       actions: {
-        submit: text => { detach('submit', this.submitTask(text)) },
+        submit: text => { detach('submit', this.submitOrReplaceTask(text)) },
         cancel: () => { detach('cancel', this.cancelTask()) },
         decide: (approvalId, decision) => {
           const request = this.panelHost?.snapshot().pendingApproval
@@ -449,6 +451,25 @@ export class EmbeddedWebRuntime {
   }
 
   // -- the person's intents ---------------------------------------------------------------
+
+  async submitOrReplaceTask(text: string): Promise<JsonObject> {
+    const goal = String(text || '').trim()
+    if (!goal || goal.length > 2000) throw new Error('task must contain 1-2000 characters')
+    if (!this.stored.taskInFlight) return this.submitTask(goal)
+
+    // The composer exposes this only when an unanswered card arrived after the person had
+    // already written a draft. Queue the new intent first, then cancel the old turn. The
+    // terminal progress event drains the queue; the server therefore never has two active
+    // messages, and the unanswered approval can never authorize the replacement.
+    this.replacementText = goal
+    try {
+      await this.cancelTask()
+    } catch (error) {
+      this.replacementText = ''
+      throw error
+    }
+    return {replacement_queued: true}
+  }
 
   async submitTask(text: string): Promise<JsonObject> {
     if (this.stopped) throw new Error('embedded runtime is stopped')
@@ -681,6 +702,13 @@ export class EmbeddedWebRuntime {
     this._save()
     this.panelHost?.setConnection({busy: false, stopping: false})
     this.panelHost?.clearOptimisticOnce(turnId)
+    const replacement = this.replacementText
+    this.replacementText = ''
+    if (replacement && !this.stopped) {
+      soon('submit replacement', () => {
+        if (!this.stopped) detach('submit replacement', this.submitTask(replacement))
+      })
+    }
   }
 
   // -- observing the page ------------------------------------------------------------------

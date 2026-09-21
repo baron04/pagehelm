@@ -18,8 +18,9 @@ from web_operation_agent.business.runtime import (BusinessMutationIndeterminate,
                                                   normalize_business_text)
 from web_operation_agent.state.identity import OperationContext
 
-from .specs import (APPLICATION_ID, CONFIRM_QUOTATION_TOOL, CREATE_CUSTOMER_TOOL,
-                    INVOICE_SALE_ORDER_TOOL, MUTATION_SPECS, REGULAR_INVOICE,
+from .specs import (APPLICATION_ID, ARCHIVE_CUSTOMER_TOOL, CONFIRM_QUOTATION_TOOL,
+                    CREATE_CUSTOMER_TOOL, INVOICE_SALE_ORDER_TOOL, MUTATION_SPECS,
+                    REGULAR_INVOICE,
                     _CUSTOMERS, _EMAIL, _INVOICES, _MUTATION_BY_TOOL, _ORDERS,
                     _QUOTATIONS)
 
@@ -55,6 +56,37 @@ class OdooMutationTools:
                 raise BusinessMutationRefusedError(
                     "a customer with the same name or email already exists",
                     reason="duplicate")
+
+    @staticmethod
+    def _customer_record_id(args: dict) -> int:
+        if not isinstance(args, dict) or set(args) != {"record_id"}:
+            raise BusinessToolRequestError("archive_customer requires only record_id")
+        record_id = args.get("record_id")
+        if isinstance(record_id, bool) or not isinstance(record_id, int) or record_id <= 0:
+            raise BusinessToolRequestError("customer record_id must be a positive integer")
+        return record_id
+
+    def _active_customer(self, record_id: int) -> dict:
+        rows = self.call(
+            "res.partner", "read", [[record_id]],
+            {"fields": ["name", "email", "active", "customer_rank"],
+             "context": {"active_test": False}})
+        if not isinstance(rows, list):
+            raise BusinessToolContractError("Odoo returned an invalid customer read")
+        if len(rows) != 1 or not isinstance(rows[0], dict):
+            raise BusinessMutationRefusedError(
+                "the customer is not available to the delegated user",
+                reason="customer_unavailable")
+        row = rows[0]
+        if not row.get("customer_rank"):
+            raise BusinessMutationRefusedError(
+                "the selected contact is not an Odoo customer",
+                reason="customer_unavailable", subject=self._label(row, "name"))
+        if row.get("active") is not True:
+            raise BusinessMutationRefusedError(
+                "the selected customer is already archived",
+                reason="already_archived", subject=self._label(row, "name"))
+        return row
 
     # -- the two order-lifecycle writes -------------------------------------------------
     @staticmethod
@@ -148,6 +180,22 @@ class OdooMutationTools:
             reconcile_key=normalized["name"].casefold(),
             effect="在 Odoo 中创建 1 个客户",
             targets=(f"客户：{normalized['name']}", f"邮箱：{normalized['email']}"),
+        )
+
+    def _prepare_archive_customer(self, args: dict,
+                                  context: OperationContext | None) -> BusinessMutationSpec:
+        record_id = self._customer_record_id(args)
+        customer = self._active_customer(record_id)
+        name = self._label(customer, "name")
+        email = self._label(customer, "email")
+        targets = (f"客户：{name}", f"记录 ID：{record_id}")
+        if email:
+            targets += (f"邮箱：{email}",)
+        return BusinessMutationSpec(
+            args={"record_id": record_id},
+            reconcile_key=str(record_id),
+            effect="在 Odoo 中归档 1 个客户",
+            targets=targets,
         )
 
     def _confirm_quotation(self, reference: str,
@@ -323,6 +371,54 @@ class OdooMutationTools:
                                      context: OperationContext | None) -> BusinessToolResult:
         return self._invoice_sale_order(
             self._reference(INVOICE_SALE_ORDER_TOOL, args), context)
+
+    def _dispatch_archive_customer(self, args: dict,
+                                   context: OperationContext | None) -> BusinessToolResult:
+        record_id = self._customer_record_id(args)
+        customer = self._active_customer(record_id)
+        name = self._label(customer, "name")
+        acknowledged = self.call(
+            "res.partner", "write", [[record_id], {"active": False}], mutation=True)
+        if acknowledged is not True:
+            raise BusinessMutationIndeterminate(
+                "Odoo did not acknowledge the customer archive",
+                phase="acknowledgement", record_id=str(record_id))
+        try:
+            rows = self.call(
+                "res.partner", "read", [[record_id]],
+                {"fields": ["name", "email", "active", "customer_rank"],
+                 "context": {"active_test": False}})
+        except BusinessToolError as exc:
+            raise BusinessMutationIndeterminate(
+                "the Odoo customer was archived but same-user readback failed",
+                phase="readback", record_id=str(record_id)) from exc
+        if (not isinstance(rows, list) or len(rows) != 1
+                or not isinstance(rows[0], dict)):
+            raise BusinessMutationIndeterminate(
+                "the Odoo customer was archived but same-user readback was malformed",
+                phase="readback", record_id=str(record_id))
+        actual = rows[0]
+        if (self._label(actual, "name") != name
+                or actual.get("active") is not False):
+            raise BusinessMutationIndeterminate(
+                "the Odoo customer archive did not read back as inactive",
+                phase="readback", record_id=str(record_id))
+        observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        return BusinessToolResult(
+            content={
+                "archived": True, "readback_verified": True,
+                "customer": {"id": record_id, "name": name, "active": False},
+                "collection_ui_path": _CUSTOMERS.route,
+                "scope": _CUSTOMERS.scope, "observed_at": observed_at,
+            },
+            audit={
+                "application": APPLICATION_ID, "operation": ARCHIVE_CUSTOMER_TOOL,
+                "model": "res.partner", "records_written": 1,
+                "readback_verified": True, "scope": _CUSTOMERS.scope,
+                "observed_at": observed_at, **self._identity_audit(context),
+            },
+            allowed_routes=(_CUSTOMERS.route,),
+        )
 
     def _dispatch_create_customer(self, args: dict,
                                   context: OperationContext | None) -> BusinessToolResult:

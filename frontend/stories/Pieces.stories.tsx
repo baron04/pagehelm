@@ -58,14 +58,16 @@ export const Default = {
 
 export const ComposerIdle = {
   render: () => frame(
-    <Composer labels={labels} limits={limits} busy={false} stopping={false} disabled={false}
+    <Composer labels={labels} limits={limits} busy={false} canReplace={false}
+              stopping={false} disabled={false}
               placeholder={labels.placeholder} draft="" onDraft={() => undefined}
               onSubmit={() => undefined} onCancel={() => undefined} />),
 }
 
 export const ComposerRunning = {
   render: () => frame(
-    <Composer labels={labels} limits={limits} busy stopping={false} disabled={false}
+    <Composer labels={labels} limits={limits} busy canReplace={false}
+              stopping={false} disabled={false}
               placeholder={labels.placeholder} draft="" onDraft={() => undefined}
               onSubmit={() => undefined} onCancel={() => undefined} />),
 }

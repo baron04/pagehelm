@@ -120,7 +120,7 @@ PYTHONPATH=src:examples/odoo/src:. \
 
 ## Odoo 参考实现
 
-Adapter 提供五个有界读取和三个可选写入，覆盖客户、产品、销售订单、报价单和客户发票。
+Adapter 提供五个有界读取和四个可选写入，覆盖客户、产品、销售订单、报价单和客户发票。
 它把 Odoo 的 HttpOnly 浏览器 session 与单独委托的逐用户 API key 绑定；只有两者指向同一
 数据库、公司和 actor 才建立会话。读取报告完整性，写入执行应用拥有的重复检查与回读。
 

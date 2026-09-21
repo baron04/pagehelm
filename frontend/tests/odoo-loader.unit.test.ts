@@ -19,7 +19,7 @@ describe('the Odoo-owned assistant shell', () => {
     document.head.append(tag)
 
     class Sheet {
-      replaceSync(_css: string) {}
+      replaceSync(css: string) { void css }
     }
     vi.stubGlobal('CSSStyleSheet', Sheet)
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', {status: 404})))

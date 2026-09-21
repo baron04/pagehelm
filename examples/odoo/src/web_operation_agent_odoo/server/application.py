@@ -28,8 +28,8 @@ from ..route import ODOO_ROUTE_PORT, ODOO_SOURCE_SCOPE
 from ..sourcemap import OdooCompiler, odoo_source_tree
 from .executor import OdooBusinessToolExecutor
 from .identity import OdooApiKeyStore, OdooPageSessionIdentityResolver
-from .specs import (ANSWER_LABELS_ZH, APPLICATION_ID, COLLECTIONS,
-                    CREATE_CUSTOMER_TOOL, MUTATION_SPECS, MUTATION_TOOLS,
+from .specs import (ANSWER_LABELS_ZH, APPLICATION_ID, ARCHIVE_CUSTOMER_TOOL,
+                    COLLECTIONS, CREATE_CUSTOMER_TOOL, MUTATION_SPECS, MUTATION_TOOLS,
                     PREPARE_CUSTOMER_EDIT_TOOL, PREPARE_CUSTOMER_FORM_TOOL,
                     _CUSTOMERS, _MAX_RESPONSE_BYTES, _READ_SKILLS, _WRITE_SKILLS,
                     _packaged_skill, _validated_origin)
@@ -88,6 +88,8 @@ class _OdooMutationReconciler:
             raise PrincipalError("reconciliation delegated identity changed")
         if name == CREATE_CUSTOMER_TOOL:
             reason = self._customer_evidence(business_key)
+        elif name == ARCHIVE_CUSTOMER_TOOL:
+            reason = self._customer_archive_evidence(business_key)
         else:
             reason = self._order_evidence(name, business_key)
         return MutationReconciliation(
@@ -104,6 +106,18 @@ class _OdooMutationReconciler:
                    and self._executor._label(row, "email").casefold() == args["email"]]
         return (f"Current matching records: {len(matches)}; complete scan: "
                 f"{scan['complete'] and len(rows) == total}.")
+
+    def _customer_archive_evidence(self, business_key) -> str:
+        record_id = self._executor._customer_record_id(business_key)
+        rows = self._executor.call(
+            "res.partner", "read", [[record_id]],
+            {"fields": ["name", "active"], "context": {"active_test": False}})
+        if not isinstance(rows, list):
+            raise BusinessToolContractError("Odoo returned an invalid reconciliation read")
+        if len(rows) != 1 or not isinstance(rows[0], dict):
+            return f"Customer record {record_id} is not currently readable."
+        return (f"Customer record {record_id} ({self._executor._label(rows[0], 'name')!r}) "
+                f"currently has active={rows[0].get('active')!r}.")
 
     def _order_evidence(self, name: str, business_key) -> str:
         """For both order writes the evidence is the order's own current state.

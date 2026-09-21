@@ -3,7 +3,7 @@ import {Plus, X} from 'lucide-react'
 import {toneOf} from '../contract/panel'
 import type {HostNotice, PanelHost} from '../bridge/host'
 import {useHostSnapshot} from '../state/useHost'
-import {loadOpen, useWindowGeometry, type Handle} from '../state/geometry'
+import {loadOpen, rememberOpen, useWindowGeometry, type Handle} from '../state/geometry'
 import {ApprovalCard} from './ApprovalCard'
 import {Composer} from './Composer'
 import {EmptyState} from './EmptyState'
@@ -59,7 +59,10 @@ export function PanelWindow({host, allowedOrigins}: {
   const retrySubmit = useCallback(() => call(() => host.retrySubmit()), [call, host])
   const cancel = useCallback(() => call(() => host.cancel()), [call, host])
   const reload = useCallback(() => call(() => host.reload()), [call, host])
-  const setOpen = useCallback((value: boolean) => setOpenState(value), [])
+  const setOpen = useCallback((value: boolean) => {
+    rememberOpen(value)
+    setOpenState(value)
+  }, [])
 
   const pending = snapshot.pendingApproval
   // A card past its deadline still shows what was asked, and blocks nothing: the runtime
@@ -76,6 +79,10 @@ export function PanelWindow({host, allowedOrigins}: {
     return () => window.clearInterval(timer)
   }, [pending])
   const blocking = pending !== null && approvalLive
+  // A draft written before the card arrived remains an intentional escape hatch. An empty
+  // composer stays locked, but sending the preserved draft replaces the waiting turn: the
+  // Runtime cancels that turn before it submits the new message.
+  const canReplace = blocking && pending?.kind === 'navigation' && draft.trim().length > 0
   // A pending confirmation outranks whatever the connection is doing: it is the only
   // thing on screen that needs an answer.
   const state = blocking ? 'awaiting_confirmation' : snapshot.connection.state
@@ -187,8 +194,9 @@ export function PanelWindow({host, allowedOrigins}: {
       )}
 
       <Composer labels={labels} limits={limits}
-                busy={snapshot.connection.busy} stopping={snapshot.connection.stopping}
-                disabled={closed || blocking}
+                busy={snapshot.connection.busy} canReplace={canReplace}
+                stopping={snapshot.connection.stopping}
+                disabled={closed || (blocking && !canReplace)}
                 placeholder={placeholder} draft={draft} onDraft={setDraft}
                 onSubmit={submit} onCancel={cancel} />
     </section>

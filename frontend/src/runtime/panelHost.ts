@@ -122,6 +122,8 @@ export class PanelHost implements PanelHostContract {
   private readonly byId = new Map<string, TimelineEntry>()
   /** Sequence below which projected entries belong to a conversation the user ended. */
   private floor = 0
+  /** Recovered entries use sequence zero because they belong to an earlier incarnation. */
+  private recoveredHistoryVisible = true
 
   constructor({configuration, actions}: {configuration: PanelConfiguration; actions: PanelActions}) {
     if (!configuration || typeof configuration.protocol !== 'number') {
@@ -161,8 +163,8 @@ export class PanelHost implements PanelHostContract {
   applyTimeline(page: Partial<TimelinePage> | null | undefined,
                 {prepend = false}: {prepend?: boolean} = {}): void {
     const incoming = Array.isArray(page?.entries) ? page.entries : []
-    const fresh = incoming.filter(
-      entry => !this.byId.has(entry.id) && entry.sequence > this.floor)
+    const fresh = incoming.filter(entry => !this.byId.has(entry.id) && (
+      entry.replayed ? this.recoveredHistoryVisible : entry.sequence > this.floor))
     for (const entry of fresh) this.byId.set(entry.id, entry)
     let entries = this.state.entries
     if (fresh.length) {
@@ -204,6 +206,7 @@ export class PanelHost implements PanelHostContract {
   clearTimeline(): void {
     const latest = this.state.entries.at(-1)
     this.floor = Math.max(this.floor, latest ? latest.sequence : 0)
+    this.recoveredHistoryVisible = false
     this.byId.clear()
     this.commit({entries: [], hasOlder: false, loadingOlder: false, optimistic: null})
   }

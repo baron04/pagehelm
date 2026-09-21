@@ -233,6 +233,10 @@ class OrdinaryBrowserHostContract(unittest.TestCase):
             api_key_path=key,
             page_controller_module=(
                 "http://127.0.0.1:18069/woa_runtime/static/src/page-controller.js"))
+        # This fixture replaces Odoo identity lookup and must not retain another hidden
+        # dependency on a server that happens to be listening on the conventional port.
+        # Session construction asks the adapter for the signed-in user's time zone.
+        adapter.business_tools._executor.time_zone = lambda: "UTC"
         principal = PrincipalContext(
             schema_version=1, application_id="odoo", tenant_id="trial",
             workspace_id="7", actor_id="42", delegation_id="test-delegation",

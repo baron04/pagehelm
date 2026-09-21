@@ -72,6 +72,7 @@ def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: d
                 "user explicitly asked to open a record or collection.")
             projection = tool_result.query_answer
             if (projection.complete and projection.matched_count == 0
+                    and len(session._task_business_skills) == 1
                     and all(skill.read_only
                             for skill in session._task_business_skills)
                     and len(recorded_evidence) == 1):

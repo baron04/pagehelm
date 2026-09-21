@@ -18,7 +18,8 @@ class PackagedSkills(unittest.TestCase):
         skills = packaged_skills()
         self.assertEqual(
             sorted(skill.skill_id for skill in skills),
-            ["odoo.sales.customer-invoices-query", "odoo.sales.customers-create",
+            ["odoo.sales.customer-invoices-query", "odoo.sales.customers-archive",
+             "odoo.sales.customers-create",
              "odoo.sales.customers-draft", "odoo.sales.customers-edit",
              "odoo.sales.customers-query",
              "odoo.sales.products-query",

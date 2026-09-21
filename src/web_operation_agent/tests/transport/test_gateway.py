@@ -145,7 +145,10 @@ class GatewayTests(unittest.TestCase):
         status, headers, body = self.request("GET", "/v1/runtime/assistant.js")
         if status == 200:
             self.assertEqual(headers["Access-Control-Allow-Origin"], "*")
-            self.assertIn(b"class EmbeddedWebRuntime", body)
+            # The Runtime is part of the bundle's public export. Do not couple this gate to
+            # the bundler's equivalent spelling (`class X` versus `var X = class`): Vite 8
+            # deliberately changed that printer detail without changing the module API.
+            self.assertIn(b"EmbeddedWebRuntime", body)
             self.assertNotIn(b"OPENAI_API_KEY", body)
             self.assertNotIn(b"ControlPlan", body)
         else:

@@ -49,7 +49,7 @@ const ANSWER = `已扫完全部 12 条，命中 3 条。
 这三张都处于 \`to invoice\` 状态。`
 
 export type Scenario =
-  | 'read' | 'write' | 'refused' | 'indeterminate'
+  | 'read' | 'write' | 'navigation' | 'refused' | 'indeterminate'
   | 'reconnecting' | 'offline' | 'disconnect' | 'undelivered'
   | 'many' | 'older' | 'longtext' | 'clear'
 
@@ -126,6 +126,27 @@ export function createDevHost(): DevHost {
     })
   }
 
+  async function runNavigation(goal: string): Promise<void> {
+    nextTurn()
+    commit({connection: {...state.connection, busy: true, state: 'observing'}})
+    push(entry('goal', goal), entry('action', '已找到唯一客户 Azure Interior', {tone: 'active'}))
+    pendingWrite = {
+      schema_version: 1,
+      approval_id: `approval-${sequence}`,
+      effect: '离开当前页面，打开另一个页面',
+      targets: ['将打开：/odoo/customers/13', `你的请求：${goal}`],
+      expires_at: Date.now() + 120_000,
+      principal_digest: '',
+      turn_id: state.entries.at(-1)?.turn_id ?? 'turn-1',
+      operation_id: `operation-${sequence}`,
+      kind: 'navigation',
+    }
+    commit({
+      pendingApproval: pendingWrite,
+      connection: {...state.connection, state: 'awaiting_confirmation'},
+    })
+  }
+
   async function settleWrite(decision: 'approved' | 'denied'): Promise<void> {
     commit({
       pendingApproval: null,
@@ -155,6 +176,19 @@ export function createDevHost(): DevHost {
     },
     submit(text) {
       commit({optimistic: {turnId: `turn-${turn + 1}`, text, failed: false}})
+      if (state.pendingApproval) {
+        commit({connection: {...state.connection, stopping: true, state: 'stopping'}})
+        window.setTimeout(() => {
+          push(entry('result', '已中断上一项操作，没有打开页面。', {
+            tone: 'neutral', panel_state: 'cancelled', authored: 'server',
+          }))
+          commit({pendingApproval: null,
+                  connection: {...state.connection, busy: false, stopping: false,
+                               state: 'cancelled'}})
+          void runRead(text)
+        }, 500)
+        return
+      }
       const write = /确认|开票|新建|创建|删除/.test(text)
       void (write ? runWrite(text) : runRead(text))
     },
@@ -209,6 +243,9 @@ export function createDevHost(): DevHost {
           return
         case 'write':
           void runWrite('把 Acme Corporation 的报价单 S00002 确认成销售订单')
+          return
+        case 'navigation':
+          void runNavigation('打开 Azure Interior')
           return
         case 'refused':
           nextTurn()

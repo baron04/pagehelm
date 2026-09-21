@@ -28,8 +28,8 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
   const [countdown, setCountdown] = useState(() => remaining(approval.expires_at))
   const [expired, setExpired] = useState(() => approval.expires_at <= Date.now())
   const [blocked, setBlocked] = useState(false)
-  // A navigation card asks before the assistant leaves the page and has one button: the
-  // person who does not want to leave stops the task, as with anything else in flight.
+  // A write can be declined. A navigation card deliberately has only its affirmative
+  // action; a draft that predates the card can replace the waiting turn from the composer.
   const canDecline = declinable(approval.kind)
   const gate = useVisibilityGate({
     minVisibleRatio: visibility.min_visible_ratio,

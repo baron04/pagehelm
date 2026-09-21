@@ -205,6 +205,26 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
                                url=str(url or "")[:500], page_url=obs.url)
             return session._resume(turn, messages, obs, successful_business_tools)
 
+    # A matched typed mutation is the authoritative path for this request. Letting the
+    # model open a related record before it calls that tool produces a navigation card in
+    # place of the mutation's own pre-dispatch decision (J3.09 did this for an order with
+    # nothing to invoice). A completed mutation may still open the exact route its result
+    # returned; an integration with no matching mutation capability is unaffected.
+    if (name == "goto" and source_route_read_only
+            and session._explicit_mutation_intent
+            and session._approvals.business_counts["mutation_completed"] == 0):
+        session.ledger.append(
+            "explicit_mutation_navigation_rejected", step=step,
+            url_digest=hashlib.sha256(str(args.get("url") or "").encode()).hexdigest(),
+            dispatched=False, side_effect_possible=False)
+        messages += [_assistant_call(call), _tool_result(
+            call, "This request matched an installed typed mutation. Do not navigate to "
+                  "the related record as a substitute. Call that mutation tool so its "
+                  "authoritative pre-dispatch check can either propose the exact change "
+                  "or refuse it without asking the user to confirm.")]
+        messages = _trim(messages, session.keep_observations)
+        return session._resume(turn, messages, obs, successful_business_tools)
+
     action_may_write = name in WRITE_CAPABLE and not source_route_read_only
     if session.pending_write and action_may_write:
         return _Next(session._finish(result, t0, "indeterminate_write",

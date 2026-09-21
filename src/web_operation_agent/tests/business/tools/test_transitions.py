@@ -937,6 +937,69 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertEqual(len(rejected), 1)
             self.assertEqual(rejected[0]["error_code"], "business_unavailable")
 
+    def test_a_typed_mutation_preflight_cannot_be_replaced_by_navigation(self):
+        class RoutedMutationExecutor(_MutationExecutor):
+            @staticmethod
+            def tool_schemas():
+                return (SCHEMA, WRITE_SCHEMA)
+
+            @staticmethod
+            def tool_effects():
+                return {"query_companies": "read", "create_company": "write"}
+
+            @staticmethod
+            def execute(name, args, *, context=None):
+                return _ProjectedExecutor.execute(name, args, context=context)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "create-skill.json"
+            path.write_text(json.dumps({
+                "schema_version": 1,
+                "skill_id": "fixture.companies-create",
+                "title": "Create company",
+                "intent": "Create one company after checking duplicates.",
+                "triggers": ["create company", "创建公司"],
+                "instructions": ["Query, then call create_company."],
+                "tool_names": ["query_companies", "create_company"],
+                "provenance": ["src:fixture@v1:companies.json#create"],
+                "read_only": False,
+            }) + "\n")
+            skill = BusinessSkill.load(path)
+            executor = RoutedMutationExecutor()
+            runtime = BusinessToolRuntime(
+                (skill,), executor, mutation_journal=MemoryMutationJournal())
+            browser = _Browser()
+            ledger = SessionLedger(root / "session.jsonl", "mutation-before-route")
+
+            def deny(proposal):
+                return SimpleNamespace(
+                    approval_id="approval-1", decision="denied",
+                    plan_digest=proposal.content_digest)
+
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="Create company Acme.",
+                              supported_scope="Create exactly one company."),
+                chat=_Chat([
+                    ("load_skill", {"skill_id": skill.skill_id}),
+                    ("query_companies", {}),
+                    ("goto", {"url": "/object/company/company-1"}),
+                    ("create_company", {"name": "Acme"}),
+                ]),
+                browser=browser, control=ReadOnlyControl(), ledger=ledger,
+                step_budget=5, wall_budget_s=30, run_id="mutation-before-route",
+                business_tools=runtime, business_mutation_approval=deny,
+                navigation_confirmation=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                    AssertionError("navigation confirmation must not be requested")))
+            session.entry_observation = _observation(1)
+            session.plan()
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "approval_denied")
+            self.assertEqual(browser.actions, [])
+            self.assertEqual(
+                len(ledger.of_kind("explicit_mutation_navigation_rejected")), 1)
+
     def test_exact_tool_result_route_can_open_a_record_read_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill = _skill(Path(tmp) / "skill.json")

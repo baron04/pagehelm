@@ -1,5 +1,7 @@
 import {describe, expect, it, vi} from 'vitest'
-import {MIN_HEIGHT, MIN_WIDTH, clamp, defaultGeometry} from '../src/state/geometry'
+import {
+  MIN_HEIGHT, MIN_WIDTH, clamp, defaultGeometry, loadOpen, rememberOpen,
+} from '../src/state/geometry'
 
 function withViewport(width: number, height: number, run: () => void) {
   const original = {width: window.innerWidth, height: window.innerHeight}
@@ -12,6 +14,16 @@ function withViewport(width: number, height: number, run: () => void) {
     vi.stubGlobal('innerHeight', original.height)
   }
 }
+
+describe('the open window survives only a same-document Runtime replacement', () => {
+  it('remembers the state in module memory', () => {
+    rememberOpen(false)
+    expect(loadOpen()).toBe(false)
+    rememberOpen(true)
+    expect(loadOpen()).toBe(true)
+    rememberOpen(false)
+  })
+})
 
 describe('the window stays reachable', () => {
   it('pulls a window that would hang off the edge back inside', () => {

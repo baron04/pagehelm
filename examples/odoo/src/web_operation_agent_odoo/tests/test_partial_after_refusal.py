@@ -38,14 +38,17 @@ class _RefusesOrders(_FakeOdoo):
         return super().call(model, method, args, kwargs, mutation=mutation)
 
 
-def _session(script: list, *, page_answer_evidence: bool = False):
+def _session(script: list, *, page_answer_evidence: bool = False,
+             refuse_orders: bool = True):
     tmp = tempfile.TemporaryDirectory()
     root = Path(tmp.name)
     adapter = OdooApplicationAdapter(base_url=BASE, api_key_path=_key_file(root))
     customers = _customers([("Azure Interior", "azure@example.test")])
     customers[0]["phone"] = "+1 510 555 0102"
-    adapter.business_tools._executor = _RefusesOrders(
-        {"res.partner": customers, "sale.order": _orders(2)})
+    executor = (_RefusesOrders if refuse_orders else _FakeOdoo)
+    adapter.business_tools._executor = executor(
+        {"res.partner": customers,
+         "sale.order": _orders(2) if refuse_orders else []})
     now = int(time.time() * 1000)
     principal = PrincipalContext(
         schema_version=1, application_id="odoo", tenant_id="trial", workspace_id="7",
@@ -105,6 +108,27 @@ class TheAnswerKeepsWhatThisAccountMayRead(unittest.TestCase):
 
         self.assertEqual(result.verified_answer["coverage"], "partial")
         self.assertIn("当前账号没有读取销售订单的权限", result.agent_said)
+
+    def test_an_empty_first_half_does_not_end_a_multi_part_question(self):
+        """The empty-query shortcut is valid only when the question selected one read.
+
+        It ended J4.03 after an empty sales-order read, before the customer read could
+        answer the phone half, and exposed the internal collection name ``sale_orders``.
+        """
+        result, _rows = _session([
+            ("load_skill", {"skill_id": "odoo.sales.sale-orders-query"}),
+            ("query_sale_orders", {"limit": 50}),
+            ("load_skill", {"skill_id": "odoo.sales.customers-query"}),
+            ("query_customers", {"name_contains": "Azure Interior", "limit": 5}),
+            ("finish", {"outcome": "answered", "answer": {
+                "version": 1, "coverage": "complete",
+                "conclusions": [{"kind": "field_value",
+                                 "evidence_ref": "call4-record#3"}]}}),
+        ], refuse_orders=False)
+
+        self.assertEqual(result.terminal_reason, "agent_finished")
+        self.assertIn("+1 510 555 0102", result.agent_said)
+        self.assertNotIn("sale_orders", result.agent_said)
 
     def test_the_page_is_no_longer_an_accepted_source_of_facts(self):
         result, rows = _session(_READ_THEN_REFUSED + [

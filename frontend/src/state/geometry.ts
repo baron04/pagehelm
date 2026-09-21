@@ -37,8 +37,20 @@ export interface Geometry {
  * nothing. What actually needs attention says so on its own -- the launcher carries the
  * working and awaiting states, and a confirmation opens the window by itself.
  */
+let openInThisDocument = false
+
 export function loadOpen(): boolean {
-  return false
+  return openInThisDocument
+}
+
+/** Remember a person's choice only while this document lives.
+
+An Agent restart replaces the Runtime inside the same Odoo document and should restore the
+window the person was using. A browser refresh evaluates this module again and deliberately
+returns to closed, preserving the ordinary page-load behaviour described above.
+*/
+export function rememberOpen(value: boolean): void {
+  openInThisDocument = Boolean(value)
 }
 
 function viewport(): {width: number; height: number} {

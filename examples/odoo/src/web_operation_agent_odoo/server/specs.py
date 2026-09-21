@@ -25,6 +25,7 @@ _READ_SKILLS = ("sale-orders-query.json", "customers-query.json", "customers-dra
                 "products-query.json", "quotations-query.json",
                 "customer-invoices-query.json")
 _WRITE_SKILLS = ("customers-create.json", "customers-edit.json",
+                 "customers-archive.json",
                  "sale-orders-confirm.json", "sale-orders-invoice.json")
 
 
@@ -226,6 +227,7 @@ ANSWER_LABELS_ZH = {
     "query_sale_orders": "读取销售订单", "query_quotations": "读取报价单",
     "query_customers": "读取客户", "query_products": "读取产品",
     "query_customer_invoices": "读取客户发票", "create_customer": "创建客户",
+    "archive_customer": "归档客户",
     "confirm_quotation": "确认报价单", "invoice_sale_order": "为销售订单开票",
     "prepare_customer_form": "预填客户表单",
     "state=posted": "已过账", "invoice_status=to invoice": "待开票",
@@ -234,6 +236,7 @@ ANSWER_LABELS_ZH = {
     "type=combo": "组合",
 }
 CREATE_CUSTOMER_TOOL = "create_customer"
+ARCHIVE_CUSTOMER_TOOL = "archive_customer"
 PREPARE_CUSTOMER_FORM_TOOL = "prepare_customer_form"
 PREPARE_CUSTOMER_EDIT_TOOL = "prepare_customer_edit_form"
 CONFIRM_QUOTATION_TOOL = "confirm_quotation"
@@ -329,6 +332,32 @@ CREATE_CUSTOMER_SCHEMA = {
                           )},
             },
             "required": ["name", "email"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+ARCHIVE_CUSTOMER_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": ARCHIVE_CUSTOMER_TOOL,
+        "description": (
+            "Propose archiving exactly one active Odoo customer for explicit user "
+            "confirmation. Supply the exact record_id returned by query_customers. The "
+            "server reads the customer again before writing and verifies it is inactive."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "record_id": {
+                    "type": "integer", "minimum": 1,
+                    "description": (
+                        "Exact res.partner id returned by query_customers in this task; "
+                        "never infer an id from a name."
+                    ),
+                },
+            },
+            "required": ["record_id"],
             "additionalProperties": False,
         },
     },
@@ -461,6 +490,12 @@ MUTATION_SPECS = (
     _MutationToolSpec(
         CREATE_CUSTOMER_TOOL, CREATE_CUSTOMER_SCHEMA,
         "_prepare_create_customer", "_dispatch_create_customer",
+        "customers:write", "customers:read",
+        ("business.customer", "business.identifier", "application.route",
+         "business.mutation_result")),
+    _MutationToolSpec(
+        ARCHIVE_CUSTOMER_TOOL, ARCHIVE_CUSTOMER_SCHEMA,
+        "_prepare_archive_customer", "_dispatch_archive_customer",
         "customers:write", "customers:read",
         ("business.customer", "business.identifier", "application.route",
          "business.mutation_result")),

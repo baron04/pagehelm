@@ -102,8 +102,8 @@ bytes it contains are a redistribution, and these are the components inside them
 
 | Component | Locked version | License | Source | Use |
 | --- | ---: | --- | --- | --- |
-| [React](https://github.com/facebook/react) | 19.0.0 | MIT | npm | The panel's rendering runtime; `react-dom` and its `scheduler` are compiled in with it |
-| [react-dom](https://github.com/facebook/react) | 19.0.0 | MIT | npm | DOM renderer for the panel's Shadow DOM root |
+| [React](https://github.com/facebook/react) | 19.3.0 | MIT | npm | The panel's rendering runtime; `react-dom` and its `scheduler` are compiled in with it |
+| [react-dom](https://github.com/facebook/react) | 19.3.0 | MIT | npm | DOM renderer for the panel's Shadow DOM root |
 | [lucide-react](https://github.com/lucide-icons/lucide) | 0.475.0 | ISC | npm | The icons the panel draws |
 
 Each of these emits its own `@license` banner into the bundle, so the notices travel

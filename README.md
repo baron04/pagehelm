@@ -131,7 +131,7 @@ PYTHONPATH=src:examples/odoo/src:. \
 
 ## Odoo reference integration
 
-The adapter provides five bounded reads and three opt-in writes covering customers, products,
+The adapter provides five bounded reads and four opt-in writes covering customers, products,
 sales orders, quotations, and customer invoices. It binds Odoo's HttpOnly browser session to
 a separately delegated per-user API key and refuses the composition unless both identify the
 same database, company, and actor. Reads report completeness; writes perform application-owned

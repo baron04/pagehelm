@@ -156,7 +156,9 @@ rather than fact.
 | `query_quotations` | `sale.order` | draft and sent quotations | `/odoo/sales` |
 | `query_customer_invoices` | `account.move` | customer invoices, excluding credit notes | `/odoo/customer-invoices` |
 | `prepare_customer_form` | `res.partner` | exact customer form draft; transient until user submission | `/odoo/customers/new` |
+| `prepare_customer_edit_form` | `res.partner` | exact existing-customer fields; confirmed before Odoo can autosave | `/odoo/customers/<id>` |
 | `create_customer` | `res.partner` | one customer, opt-in | `/odoo/customers/<id>` |
+| `archive_customer` | `res.partner` | one active customer, opt-in | `/odoo/customers` |
 | `confirm_quotation` | `sale.order` | one quotation, opt-in | `/odoo/orders/<id>` |
 | `invoice_sale_order` | `sale.advance.payment.inv` | one regular invoice workflow, opt-in | `/odoo/customer-invoices/<id>` |
 
@@ -262,10 +264,11 @@ Things worth trying, in the order that shows the most:
 | `打开 Acme Corporation 的客户记录` | It queries first and navigates to the exact route the tool returned. It cannot invent a URL |
 | `填写客户名称 NovaForge Labs 和邮箱 ops@novaforge.example，但不要提交` | The server opens the new-customer form, fills only those two application-issued bindings, then stops with Save still under your control |
 | `把报价单 S00002 确认掉` | **The approval card appears and waits for you.** Read the effect and the target, then click it — or dismiss it and watch the write not happen |
-| `删除客户 Acme Corporation` | Refused — there is no delete tool on the surface, so the refusal is the product's rather than the model's good manners — but it opens that customer's record first and says the deletion has to be made by hand there |
+| `归档客户 Acme Corporation` | It queries the exact active customer first, then shows an approval card; after approval it verifies the record is inactive and does not try to open the archived record |
+| `删除客户 Acme Corporation` | Refused — archive is reversible and explicitly supported, while permanent deletion is not on the tool surface |
 | `把报价单 S00001 也确认掉`, then ask again | The second identical request meets the journal, not the application |
 
-`--allow-mutations` offers the three typed write tools. It does not make writes automatic:
+`--allow-mutations` offers the four typed write tools. It does not make writes automatic:
 each one still needs a fresh approval clicked in the page, and composition refuses to enable
 them at all without a durable journal.
 
