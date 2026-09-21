@@ -87,7 +87,25 @@ export class Page {
     if (element.disabled || element.readOnly) {
       throw new Error('bad_arguments: select target is disabled or read-only')
     }
-    return this.controller.selectOption(refIndex(ref), text)
+    if (String(element.tagName || '').toLowerCase() !== 'select' || !element.options) {
+      throw new Error('bad_arguments: select target is not a native select')
+    }
+    // The application contract uses stable option values. PageController 1.12.4 selects
+    // by visible option text, so resolve that text from the same live element immediately
+    // before dispatch. Require one value and one label: duplicate labels would let its
+    // first-match behavior choose a different application value.
+    const options = Array.from(element.options)
+    const matching = options.filter(option => String(option.value ?? '') === text)
+    const option = matching[0]
+    if (matching.length !== 1 || !option || option.disabled) {
+      throw new Error('bad_arguments: select value is absent, ambiguous, or disabled')
+    }
+    const label = String(option.textContent ?? '').trim()
+    if (!label || options.filter(option =>
+      String(option.textContent ?? '').trim() === label).length !== 1) {
+      throw new Error('bad_arguments: select label is absent or ambiguous')
+    }
+    return this.controller.selectOption(refIndex(ref), label)
   }
   scroll(down: boolean, pages: number): Promise<unknown> {
     return this.controller.scroll({down, numPages: pages})

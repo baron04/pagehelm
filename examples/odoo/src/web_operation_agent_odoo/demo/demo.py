@@ -31,6 +31,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 from web_operation_agent import python_is_supported, supported_python_text
 from web_operation_agent.composition.binding import bind_application
@@ -160,6 +161,18 @@ class OdooDemoConfig:
     #: Confirm each page switch the panel asks about, as the person who asked for the page
     #: would. Only with `scripted`: a person running the demo confirms it themselves.
     confirm_navigation_in_page: bool = False
+    #: Experimental P8.6 surface. Production adapters keep it off until their deployed
+    #: modules have passed the model-free form qualification.
+    allow_generic_forms: bool = False
+    #: Qualification-only TLS seam for a loopback gateway whose private CA is not installed
+    #: in Chromium. The caller must enforce loopback; ordinary demos keep verification on.
+    browser_ignore_https_errors: bool = False
+    #: A dynamic no-provider script may consume server-minted opaque IDs. Fixed walkthroughs
+    #: continue to use `scripted_replies`; this seam is not exposed by the demo CLI.
+    scripted_chat_factory: Callable[[ProviderEgressPolicy], ScriptedOdooChat] | None = None
+    #: Hidden evaluator run after the last turn while the page is still alive. Its result is
+    #: an artifact projection, never Agent context.
+    final_page_probe: Callable[[Any], dict] | None = None
 
     def __post_init__(self) -> None:
         for name in ("api_key_path", "storage_state_path", "output_dir"):
@@ -182,6 +195,24 @@ class OdooDemoConfig:
                 "in-page approval only applies to a scripted mutation walkthrough")
         if self.confirm_navigation_in_page and not self.scripted:
             raise ValueError("in-page page-switch confirmation only applies to a scripted run")
+        if self.scripted_chat_factory is not None and not self.scripted:
+            raise ValueError("a scripted chat factory requires scripted mode")
+        if self.scripted_chat_factory is not None and not callable(
+                self.scripted_chat_factory):
+            raise TypeError("scripted_chat_factory must be callable")
+        if self.final_page_probe is not None and not callable(self.final_page_probe):
+            raise TypeError("final_page_probe must be callable")
+        if self.final_page_probe is not None and not self.scripted:
+            raise ValueError("a final page probe requires scripted qualification mode")
+        if (not isinstance(self.allow_generic_forms, bool)
+                or not isinstance(self.browser_ignore_https_errors, bool)):
+            raise ValueError("demo form and TLS flags must be booleans")
+        if self.browser_ignore_https_errors and not self.scripted:
+            raise ValueError("ignoring browser HTTPS errors requires scripted qualification")
+        if self.browser_ignore_https_errors and urlsplit(self.base_url).hostname not in {
+                "127.0.0.1", "::1", "localhost"}:
+            raise ValueError(
+                "ignoring browser HTTPS errors is restricted to a loopback qualification")
         if self.scripted and self.tasks:
             raise ValueError("scripted mode runs one fixed walkthrough and takes no --task")
         if self.headless and not (self.tasks or self.scripted):
@@ -197,6 +228,11 @@ def _chat(config: OdooDemoConfig, run_dir: Path, adapter: OdooApplicationAdapter
     egress = ProviderEgressPolicy(
         session_handoff_keys=adapter.ports.routes.session_handoff_query_keys)
     if config.scripted:
+        if config.scripted_chat_factory is not None:
+            chat = config.scripted_chat_factory(egress)
+            if not isinstance(chat, ScriptedOdooChat):
+                raise TypeError("scripted_chat_factory must return ScriptedOdooChat")
+            return chat, None
         return ScriptedOdooChat(config.scripted_replies, egress_policy=egress), None
     # The same file the rest of the configuration comes from, unless one was named. A
     # provider credential that had to be exported by hand while every other setting came
@@ -455,18 +491,20 @@ def _run_browser(config: OdooDemoConfig, live: LiveProductSession,
                  adapter: OdooApplicationAdapter, expected_binding: str,
                  shots: Path,
                  turn_boundary_hook: Callable[[int, dict], None] | None = None,
-                 ) -> tuple[list[dict], str, str, list[str], int]:
+                 ) -> tuple[list[dict], str, str, list[str], int, dict]:
     from playwright.sync_api import Error as PlaywrightError, sync_playwright
 
     records: list[dict] = []
     taken: list[str] = []
     document_loads = 0
     last_url = last_text = ""
+    final_probe: dict = {}
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=config.headless)
         try:
             context = browser.new_context(
                 storage_state=str(config.storage_state_path),
+                ignore_https_errors=config.browser_ignore_https_errors,
                 viewport={"width": 1440, "height": 1000})
             try:
                 context.add_init_script(script=live.bootstrap_script)
@@ -571,11 +609,20 @@ def _run_browser(config: OdooDemoConfig, live: LiveProductSession,
                     if not page.is_closed():
                         last_url = page.evaluate("() => location.href")
                         last_text = page.locator("body").inner_text()[:20_000]
+                if config.final_page_probe is not None and not page.is_closed():
+                    candidate = config.final_page_probe(page)
+                    if not isinstance(candidate, dict):
+                        raise TypeError("final_page_probe must return a JSON object")
+                    # Refuse a projection that cannot be persisted exactly. This evaluator
+                    # is hidden from the Agent, but its artifact still needs a stable shape.
+                    final_probe = json.loads(json.dumps(
+                        candidate, ensure_ascii=False, sort_keys=True,
+                        separators=(",", ":"), allow_nan=False))
             finally:
                 context.close()
         finally:
             browser.close()
-    return records, last_url, last_text, taken, document_loads
+    return records, last_url, last_text, taken, document_loads, final_probe
 
 
 def run_demo(config: OdooDemoConfig, *,
@@ -591,6 +638,7 @@ def run_demo(config: OdooDemoConfig, *,
     adapter = OdooApplicationAdapter(
         base_url=config.base_url, api_key_path=config.api_key_path,
         page_controller_module=config.page_controller_module,
+        allow_generic_forms=config.allow_generic_forms,
         allow_mutations=config.allow_mutations, mutation_journal=journal)
     bound = bind_application(adapter)
     health = adapter.health()
@@ -636,7 +684,7 @@ def run_demo(config: OdooDemoConfig, *,
         principal=principal,
     ).start()
     try:
-        records, last_url, last_text, taken, document_loads = _run_browser(
+        records, last_url, last_text, taken, document_loads, final_probe = _run_browser(
             config, live, holder["conversation"], adapter=adapter,
             expected_binding=expected_binding, shots=run_dir / "screens",
             turn_boundary_hook=turn_boundary_hook)
@@ -674,6 +722,7 @@ def run_demo(config: OdooDemoConfig, *,
         "screenshots": list(taken),
         "document_loads": document_loads,
         "document_reloads_after_entry": max(0, document_loads - 1),
+        "final_page_probe": final_probe,
         "audit_projection": _audit_projection(run_dir / "audit.jsonl"),
         "turns": records,
         "last_url": last_url,

@@ -75,4 +75,39 @@ describe('Page refuses controls that are not writable at execution time', () => 
     expect(() => missing.select('e3', 'active')).toThrow(/no longer on the page/)
     expect(api.selectOption).not.toHaveBeenCalled()
   })
+
+  it('translates an application option value to PageController visible text', async () => {
+    const api = controller()
+    const page = new Page(api, () => ({
+      tagName: 'SELECT', isConnected: true,
+      options: [
+        {value: 'order', textContent: 'Ordered quantities'},
+        {value: 'delivery', textContent: 'Delivered quantities'},
+      ],
+    }), createRedactor())
+
+    await page.select('e4', 'delivery')
+
+    expect(api.selectOption).toHaveBeenCalledWith(4, 'Delivered quantities')
+  })
+
+  it('refuses absent, disabled, and duplicate-label option values before dispatch', () => {
+    const api = controller()
+    const absent = new Page(api, () => ({
+      tagName: 'SELECT', options: [{value: 'active', textContent: 'Active'}],
+    }), createRedactor())
+    const disabled = new Page(api, () => ({
+      tagName: 'SELECT', options: [{value: 'archived', textContent: 'Archived', disabled: true}],
+    }), createRedactor())
+    const duplicate = new Page(api, () => ({
+      tagName: 'SELECT', options: [
+        {value: 'one', textContent: 'Same'}, {value: 'two', textContent: 'Same'},
+      ],
+    }), createRedactor())
+
+    expect(() => absent.select('e5', 'missing')).toThrow(/absent, ambiguous, or disabled/)
+    expect(() => disabled.select('e5', 'archived')).toThrow(/absent, ambiguous, or disabled/)
+    expect(() => duplicate.select('e5', 'two')).toThrow(/label is absent or ambiguous/)
+    expect(api.selectOption).not.toHaveBeenCalled()
+  })
 })

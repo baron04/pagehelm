@@ -24,6 +24,7 @@ from .test_generic_reads import _catalog, _fields
 class _Client:
     def __init__(self):
         self.catalog = _catalog()
+        self.fields = _fields()
         self.catalog["models"][0]["operations"] = ["create", "read", "write"]
         self.catalog["actions"][0]["route"] = "inventory/transfers"
         self.catalog["descriptor_digest"] = _catalog_digest(
@@ -36,7 +37,7 @@ class _Client:
         if (model, method) == ("woa.runtime.descriptor", "catalog"):
             return copy.deepcopy(self.catalog)
         if (model, method) == ("stock.picking", "fields_get"):
-            return copy.deepcopy(_fields())
+            return copy.deepcopy(self.fields)
         raise AssertionError((model, method, args, kwargs))
 
 
@@ -57,7 +58,8 @@ def _observation():
         schema_version=1, epoch=4,
         url="https://odoo.test/odoo/inventory/transfers/new",
         title="New transfer", landmarks=[], content="New transfer form", elements=[
-            ElementRef("e1", "textbox", "Reference", "input", 4, {"field": "name"}),
+            # Odoo uses a combobox role even for some scalar Char suggestion widgets.
+            ElementRef("e1", "combobox", "Reference", "input", 4, {"field": "name"}),
             ElementRef("e2", "textbox", "Scheduled Date", "input", 4,
                        {"field": "scheduled_date"}),
             # Relational controls are deliberately absent from the adapter descriptor.
@@ -92,6 +94,25 @@ class OdooGenericFormTests(unittest.TestCase):
         with self.assertRaises(BusinessToolPermissionError):
             tools.describe(_observation(), {}, context=_context(("unrelated:read",)))
         self.assertEqual(client.calls, [])
+
+    def test_selection_value_is_normalized_to_odoo_native_option_encoding(self):
+        client = _Client()
+        client.fields["state"]["readonly"] = False
+        observation = _observation()
+        observation.elements.append(
+            ElementRef("e4", "select", "Status", "select", 4, {"field": "state"}))
+        tools = ApplicationFormTools(
+            OdooFormPort(client), application_id="odoo", binding_secret=b"o" * 32)
+        described = tools.describe(observation, {"field_query": "Status"},
+                                   context=_context())
+        field = next(item for item in described["fields"] if item["label"] == "Status")
+
+        draft, _prepared = tools.prepare(observation, {
+            "form_id": described["form_id"],
+            "values": [{"field_id": field["field_id"], "value": "done"}],
+        }, context=_context())
+
+        self.assertEqual(draft.fields[0].value, '"done"')
 
 
 if __name__ == "__main__":

@@ -346,7 +346,25 @@ python -m web_operation_agent_odoo.demo.qualify \
   --output .artifacts/odoo/live-qualification.json
 ```
 
-`scripts/qualify.sh` runs it whenever `WOA_ODOO_BASE_URL`, `WOA_ODOO_API_KEY_FILE`,
+The experimental no-Skill form surface has a separate no-provider gate. It visits the real
+customer, product and quotation create pages, asks the actor-scoped metadata/page
+intersection for opaque bindings, prefills six scalar fields, and checks the live DOM plus
+before/after record counts without clicking Save:
+
+```bash
+python -m web_operation_agent_odoo.demo.form_qualify \
+  --api-key .private/odoo-api-key.json \
+  --storage-state .private/odoo-storage-state.json \
+  --output .artifacts/odoo/form-qualification.json
+```
+
+For an HTTPS loopback gateway whose private CA is not installed in Chromium, add
+`--ignore-browser-https-errors`; the command rejects that option for non-loopback hosts.
+The gate does not make `allow_generic_forms` a production default. It qualifies the pinned
+standard-module cases and the no-submit boundary, not arbitrary installed modules or custom
+`onchange` side effects.
+
+`scripts/qualify.sh` runs both live gates whenever `WOA_ODOO_BASE_URL`, `WOA_ODOO_API_KEY_FILE`,
 `WOA_ODOO_STORAGE_STATE` and `WOA_ODOO_PAGE_CONTROLLER_MODULE` are set; without them the gate
 reports BLOCKED, which is not a pass.
 

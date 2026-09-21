@@ -5,6 +5,7 @@ fields and a transient draft; it never sees a model name, action id or ``fields_
 """
 from __future__ import annotations
 
+import json
 from urllib.parse import urlsplit
 
 from web_operation_agent.business.entities import EntityDescriptor
@@ -63,7 +64,11 @@ class OdooFormPort:
             if field.readonly or field.reference == "id" or len(field.reference) > 80:
                 continue
             if field.kind == "text":
-                kind, controls = "text", ("textbox",)
+                # Odoo gives some scalar Char widgets (including res.partner.name) an
+                # ARIA combobox because they offer scalar suggestions. Relational fields
+                # have already been excluded by metadata kind, so accepting this role does
+                # not authorize relation/autocomplete selection.
+                kind, controls = "text", ("textbox", "combobox")
             elif field.kind in {"integer", "number", "date", "datetime"}:
                 kind, controls = field.kind, ("textbox",)
             elif field.kind == "choice" and field.choices and all(
@@ -98,12 +103,21 @@ class OdooFormPort:
 
     def prepare_form(self, form, values: tuple[ApplicationFormValue, ...], *,
                      context=None) -> FormDraft:
+        def browser_value(item: ApplicationFormValue) -> str:
+            value = item.value if item.field.kind == "text" else item.value.strip()
+            # Odoo 18's SelectionField renders native <option> values with
+            # JSON.stringify. The application value ``delivery`` is therefore the live DOM
+            # value ``"delivery"``. Keep that encoding inside the Odoo adapter; the core
+            # form contract and PageController remain application-neutral.
+            return (json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+                    if item.field.kind == "choice" else value)
+
         return FormDraft(
             route=form.route,
             fields=tuple(FormDraftField(
                 item.field.reference,
                 item.field.label,
-                item.value.strip() if item.field.kind != "text" else item.value,
+                browser_value(item),
                 item.control,
             ) for item in values),
         )

@@ -429,6 +429,22 @@ else
     record "live Odoo qualification" FAIL "see ${odoo_out}"
     failed+=("live Odoo qualification")
   fi
+  odoo_form_tls_args=()
+  if [[ "${WOA_ODOO_FORM_IGNORE_BROWSER_HTTPS_ERRORS:-0}" == "1" ]]; then
+    odoo_form_tls_args=(--ignore-browser-https-errors)
+  fi
+  if "${PYTHON}" -m web_operation_agent_odoo.demo.form_qualify \
+      --base-url "${odoo_values[0]}" --api-key "${odoo_values[1]}" \
+      --storage-state "${odoo_values[2]}" \
+      --page-controller-module "${odoo_values[3]}" \
+      "${odoo_form_tls_args[@]}" \
+      --output "${odoo_out}/odoo-form-live.json"; then
+    record "live Odoo form qualification" PASS \
+      "artifact ${odoo_out}/odoo-form-live.json"
+  else
+    record "live Odoo form qualification" FAIL "see ${odoo_out}"
+    failed+=("live Odoo form qualification")
+  fi
 fi
 
 # ---------------------------------------------------------------- summary

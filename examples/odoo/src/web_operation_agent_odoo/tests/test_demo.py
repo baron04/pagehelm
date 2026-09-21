@@ -13,7 +13,7 @@ import time
 import unittest
 from pathlib import Path
 
-from web_operation_agent_odoo.demo.demo import (_await_outcome, _capture,
+from web_operation_agent_odoo.demo.demo import (OdooDemoConfig, _await_outcome, _capture,
                                                 _notify_turn_boundary)
 
 
@@ -129,6 +129,39 @@ class TheFixtureHookRunsOnlyBetweenTurns(unittest.TestCase):
             lambda turn, record: calls.append((turn, record)),
             turn=2, total_turns=2, record={"status": "finished"})
         self.assertEqual(calls, [])
+
+
+class QualificationOnlyDemoSeamsFailClosed(unittest.TestCase):
+    def _config(self, **changes):
+        values = {
+            "base_url": "https://localhost:20443",
+            "api_key_path": Path("api-key.json"),
+            "storage_state_path": Path("state.json"),
+            "page_controller_module": "https://localhost:20443/controller.js",
+            "scripted": True,
+        }
+        values.update(changes)
+        return OdooDemoConfig(**values)
+
+    def test_private_ca_bypass_is_limited_to_loopback(self):
+        self._config(browser_ignore_https_errors=True)
+        with self.assertRaisesRegex(ValueError, "loopback qualification"):
+            self._config(base_url="https://odoo.example.test",
+                         browser_ignore_https_errors=True)
+
+    def test_dynamic_chat_factory_requires_scripted_mode(self):
+        with self.assertRaisesRegex(ValueError, "requires scripted mode"):
+            self._config(scripted=False, scripted_chat_factory=lambda _policy: object())
+
+    def test_final_probe_must_be_callable(self):
+        with self.assertRaisesRegex(TypeError, "final_page_probe"):
+            self._config(final_page_probe={})
+
+    def test_probe_and_tls_bypass_are_not_available_to_provider_runs(self):
+        with self.assertRaisesRegex(ValueError, "scripted qualification mode"):
+            self._config(scripted=False, final_page_probe=lambda _page: {})
+        with self.assertRaisesRegex(ValueError, "scripted qualification"):
+            self._config(scripted=False, browser_ignore_https_errors=True)
 
 
 if __name__ == "__main__":

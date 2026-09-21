@@ -35,8 +35,9 @@ agent.
   types that draft and ends the turn without clicking or submitting. Odoo and Contacts
   translate different metadata sources to the same contract. Source lookup may explain a
   field or rule, but it cannot create a field, selector, permission, or value.
-  The Odoo reference translation is experimental and remains an explicit adapter opt-in
-  until the deployed modules pass browser and no-write qualification.
+  The Odoo reference translation is experimental and remains an explicit adapter opt-in.
+  Its three-case standard-module browser gate passes with zero submitted or created records,
+  but that does not establish that arbitrary deployment-specific `onchange` code is inert.
 - Turn context is assembled by source role: the current page is the live grounding baseline;
   bounded conversation history is included for referential or clarification follow-ups;
   Skills are selected from the current task; and deployment source remains a lazy cited

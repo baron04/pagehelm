@@ -62,6 +62,7 @@ DISTRIBUTIONS = {
             "web_operation_agent_odoo/adapter.py",
             "web_operation_agent_odoo/sourcemap.py",
             "web_operation_agent_odoo/server/generic_forms.py",
+            "web_operation_agent_odoo/demo/form_qualify.py",
             "web_operation_agent_odoo/policies/odoo.json",
             "web_operation_agent_odoo/skills/sale-orders-query.json",
             "web_operation_agent_odoo/skills/customers-query.json",
