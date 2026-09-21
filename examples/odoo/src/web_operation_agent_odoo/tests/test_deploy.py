@@ -80,7 +80,7 @@ class OnlyFirstPartyBootstrapCodeIsCommitted(unittest.TestCase):
         script = template.find("xpath/script")
         self.assertEqual(script.attrib, {
             "type": "module",
-            "src": "/woa_runtime/static/src/loader.js?v=1.3",
+            "src": "/woa_runtime/static/src/loader.js?v=1.4",
             "data-woa-runtime": "/assistant/v1/runtime/assistant.js",
             "data-woa-identity": "/woa/session-assertion",
             "data-woa-bootstrap": "/assistant/bootstrap",

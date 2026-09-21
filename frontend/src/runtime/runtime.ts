@@ -41,15 +41,6 @@ const CAPABILITIES = [
   'page.goto', 'page.back', 'page.scroll', 'page.wait',
 ]
 
-/**
- * How long the server may stay unreachable before this session counts as lost. Across
- * origins, a session the server no longer has looks exactly like an outage: its CORS answer
- * goes with it, so the browser reports a network failure instead of `unknown_session`, and a
- * Runtime that only ever retried would say "reconnecting" forever. Past this, it stops and
- * its supervisor asks the application for a new session, whose answer is always readable.
- */
-export const LOST_AFTER_MS = 30_000
-
 /** Used where a Runtime was assembled without its constructor -- in conformance tests. */
 const defaultRedactor = createRedactor()
 
@@ -222,6 +213,7 @@ export class EmbeddedWebRuntime {
       this._panelState(verdict.state)
       this.panelHost?.raise(verdict.code, {retryable: false})
     } else {
+      this._panelState(verdict.state)
       this.panelHost?.raise(String(failure?.code || fallback), {retryable: true})
     }
     return verdict
@@ -359,15 +351,6 @@ export class EmbeddedWebRuntime {
       return
     }
     this.cancelExpiry = later('session expiry', delay, () => this._expire(code))
-  }
-
-  /** Whether the server has been unreachable since `since` for long enough to give up here. */
-  _lost(since: number): boolean {
-    if (!since || Date.now() - since < LOST_AFTER_MS) return false
-    this.endState = 'lost'
-    this.stopped = true
-    this.eventAbortController?.abort()
-    return true
   }
 
   _expire(code: string): void {
@@ -593,21 +576,17 @@ export class EmbeddedWebRuntime {
 
   async _eventLoop(): Promise<void> {
     let backoff = 0
-    let failingSince = 0
     while (!this.stopped) {
       const abortController = new AbortController()
       this.eventAbortController = abortController
       try {
         const stream = await this.client.events(this.stored.lastEventId, abortController.signal)
         backoff = 0
-        failingSince = 0
         this.panelHost?.clearNotice()
         await this._readEventStream(stream)
       } catch (error) {
         if (this.stopped) return
         if (this._raise(error, 'reconnecting').terminal) return
-        failingSince ||= Date.now()
-        if (this._lost(failingSince)) return
         backoff = backoffAfter(backoff)
         await sleep(backoff)
       } finally {
@@ -978,14 +957,12 @@ export class EmbeddedWebRuntime {
 
   async _retryCachedResult(): Promise<boolean> {
     let backoff = 0
-    const failingSince = Date.now()
     while (!this.stopped && this.stored.cachedResult) {
       try {
         await this._sendResult(this.stored.cachedResult)
         return true
       } catch (error) {
         if (this._raise(error, 'reconnecting').terminal) return false
-        if (this._lost(failingSince)) return false
         await sleep(backoff)
         backoff = backoffAfter(backoff)
       }
@@ -998,7 +975,6 @@ export class EmbeddedWebRuntime {
     // The cached result can describe the document that just navigated away. Refresh the
     // selector map and server observation before consuming another action here.
     let backoff = 0
-    const failingSince = Date.now()
     while (!this.stopped) {
       try {
         const observation = await this.observe(this.stored.inFlight?.action_id || '')
@@ -1008,7 +984,6 @@ export class EmbeddedWebRuntime {
         return
       } catch (error) {
         if (this._raise(error, 'reconnecting').terminal) return
-        if (this._lost(failingSince)) return
         await sleep(backoff)
         backoff = backoffAfter(backoff)
       }

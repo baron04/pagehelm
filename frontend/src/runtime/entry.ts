@@ -190,7 +190,9 @@ export function standingEntry(doc: Document = document, text: EntryText = ENTRY_
       view.entry.dataset.state = 'unavailable'
       view.badge.setAttribute('aria-label', text.label_unavailable)
       view.sentence.textContent = failureSentence(failure, text)
-      view.note.hidden = false
+      // A connection failure must not open a card over the host application. The standing
+      // launcher remains available and carries the warning dot; its existing click handler
+      // reveals this explanation when the person chooses to open the assistant.
       view.again.hidden = false
       view.again.disabled = false
     },

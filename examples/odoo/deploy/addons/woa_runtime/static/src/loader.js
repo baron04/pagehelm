@@ -95,6 +95,8 @@
   let stopped = false;
   let attempt = 0;
   let pending = 0;
+  // Retry for as long as this page exists. The interval is capped so a long outage does not
+  // turn every open tab into a request storm, but there is deliberately no give-up timer.
   const delays = [1000, 3000, 8000];
   const ready = () => document.getElementById("woa-assistant-root")
     || document.getElementById("woa-assistant-entry");
@@ -135,12 +137,13 @@
       message.textContent = "助手正在初始化…";
     } catch (error) {
       message.textContent = await explain(error);
-      panel.hidden = false;
       retry.hidden = false;
       retry.disabled = false;
-      const delay = delays[attempt];
+      // Do not open the error card over the application. The launcher is always present;
+      // the person sees the explanation only after choosing to open the assistant.
+      const delay = delays[Math.min(attempt, delays.length - 1)];
       attempt += 1;
-      if (delay !== undefined) pending = window.setTimeout(contained(start), delay);
+      pending = window.setTimeout(contained(start), delay);
     }
   };
   retry.addEventListener("click", contained(() => { attempt = 0; return start(); }));

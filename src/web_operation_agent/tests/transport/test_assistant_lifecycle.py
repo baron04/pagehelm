@@ -211,10 +211,18 @@ class TheAssistantIsNeverSilentAndNeverLoud(unittest.TestCase):
         return page.evaluate("""() => document.getElementById('woa-assistant-entry')
           .shadowRoot.querySelector('.note p').textContent""")
 
+    def entry_note_hidden(self, page) -> bool:
+        return page.evaluate("""() => document.getElementById('woa-assistant-entry')
+          .shadowRoot.querySelector('.note').hidden""")
+
     def test_a_refused_bootstrap_leaves_an_entry_that_says_why(self):
         self.host.statuses = [403]
         page, errors = self.open()
         self.assertEqual(self.entry_sentence(page), "当前账号未获授权使用助手（403）。")
+        self.assertTrue(self.entry_note_hidden(page))
+        page.evaluate("""() => document.getElementById('woa-assistant-entry')
+          .shadowRoot.querySelector('.badge').click()""")
+        self.assertFalse(self.entry_note_hidden(page))
         # Nothing another attempt could fix is retried on its own.
         page.wait_for_timeout(2500)
         self.assertEqual(self.host.sessions, [])
@@ -245,25 +253,27 @@ class TheAssistantIsNeverSilentAndNeverLoud(unittest.TestCase):
         self.watch_presence(page, 1)
         self.assert_quiet(page, errors)
 
-    def test_across_origins_a_session_that_cannot_be_read_is_given_up_and_replaced(self):
+    def test_across_origins_a_network_fault_never_times_the_connection_out(self):
         """The gateway on another origin: a retired session's answer carries no CORS header,
-        so the browser sees an outage, not `unknown_session`. The Runtime gives the session
-        up after `LOST_AFTER_MS` rather than saying "reconnecting" forever."""
+        so the browser sees an outage, not `unknown_session`. A network fault must keep the
+        existing panel and reconnect loop alive past the former thirty-second cutoff."""
         self.host.close()
         self.host = self.make_host(same_origin=False)
         page, errors = self.open()
         self.launcher(page).wait_for(timeout=15_000)
         page.wait_for_timeout(10_500)
         self.host.registry.retire(self.host.sessions[0], "session_closed")
-        page.wait_for_function(
-            "() => window.__WOA_ASSISTANT__?.state?.kind === 'running'"
-            " && window.__WOA_ASSISTANT__.state.runtime.sessionId === 'lifecycle-2'",
-            timeout=60_000)
+        page.wait_for_timeout(32_000)
+        self.assertEqual(len(self.host.sessions), 1)
+        self.assertEqual(page.evaluate("() => window.__WOA_ASSISTANT__.state.kind"), "running")
+        self.assertEqual(page.evaluate(
+            "() => window.__WOA_ASSISTANT__.state.runtime.panelHost.snapshot().connection.state"),
+            "reconnecting")
         self.watch_presence(page, 1)
         self.assert_quiet(page, errors)
 
-    def test_a_session_that_never_holds_is_not_retried_in_a_loop(self):
-        """Every new session ends as soon as it starts: bounded, then the person decides."""
+    def test_a_session_that_never_holds_keeps_a_capped_retry_cadence(self):
+        """Every new session ends at once: retries continue, but the delay stays bounded."""
         page, errors = self.open()
         self.launcher(page).wait_for(timeout=15_000)
         stop = threading.Event()
@@ -277,13 +287,15 @@ class TheAssistantIsNeverSilentAndNeverLoud(unittest.TestCase):
         reaper = threading.Thread(target=retire_every_session, daemon=True)
         reaper.start()
         self.addCleanup(stop.set)
-        page.wait_for_function(
-            "() => window.__WOA_ASSISTANT__?.state?.kind === 'unavailable'", timeout=40_000)
+        deadline = time.monotonic() + 40
+        while len(self.host.sessions) <= 4 and time.monotonic() < deadline:
+            time.sleep(0.2)
+        self.assertGreater(len(self.host.sessions), 4)
         count = len(self.host.sessions)
-        page.wait_for_timeout(3000)
-        self.assertEqual(len(self.host.sessions), count, "the supervisor kept reconnecting")
-        self.assertLessEqual(count, 5)
-        self.assertIn("可以点重试", self.entry_sentence(page))
+        page.wait_for_timeout(9000)
+        self.assertGreater(len(self.host.sessions), count)
+        self.assertLessEqual(len(self.host.sessions), count + 2)
+        self.assertIn("正在重试", self.entry_sentence(page))
         self.assert_quiet(page, errors)
 
     def test_a_session_another_page_took_over_is_left_to_that_page(self):

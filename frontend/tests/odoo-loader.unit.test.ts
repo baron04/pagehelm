@@ -12,7 +12,7 @@ afterEach(() => {
 })
 
 describe('the Odoo-owned assistant shell', () => {
-  it('keeps an entry and opens an error panel when assistant.js is missing', async () => {
+  it('keeps an entry collapsed until the person opens a missing-runtime error', async () => {
     const tag = document.createElement('script')
     tag.dataset.woaRuntime = '/assistant/v1/runtime/assistant.js'
     tag.dataset.woaBootstrap = '/assistant/bootstrap'
@@ -30,8 +30,10 @@ describe('the Odoo-owned assistant shell', () => {
     await vi.waitFor(() => {
       const host = document.getElementById('woa-assistant-bootstrap-shell')
       expect(host).not.toBeNull()
-      expect(host!.shadowRoot!.querySelector<HTMLElement>('.panel')!.hidden).toBe(false)
+      expect(host!.shadowRoot!.querySelector<HTMLElement>('.panel')!.hidden).toBe(true)
       expect(host!.shadowRoot!.querySelector('.message')!.textContent).toContain('HTTP 404')
+      host!.shadowRoot!.querySelector<HTMLButtonElement>('.launcher')!.click()
+      expect(host!.shadowRoot!.querySelector<HTMLElement>('.panel')!.hidden).toBe(false)
     })
   })
 })

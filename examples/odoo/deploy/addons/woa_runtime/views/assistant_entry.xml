@@ -11,7 +11,7 @@
     -->
     <template id="assistant_entry" inherit_id="web.webclient_bootstrap" name="Web Operation Agent assistant">
         <xpath expr="//t[@t-set='head_web']" position="inside">
-            <script type="module" src="/woa_runtime/static/src/loader.js?v=1.3"
+            <script type="module" src="/woa_runtime/static/src/loader.js?v=1.4"
                     data-woa-runtime="/assistant/v1/runtime/assistant.js"
                     data-woa-identity="/woa/session-assertion"
                     data-woa-bootstrap="/assistant/bootstrap"/>

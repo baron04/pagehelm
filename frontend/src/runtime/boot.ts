@@ -17,7 +17,7 @@ import {ENTRY_TEXT, standingEntry, type StandingEntry} from './entry'
 import {startEmbeddedRuntime} from './runtime'
 import type {RuntimeConfig} from './types'
 
-/** A short, bounded ladder: a restarted agent is back within seconds; past it, the person decides. */
+/** A capped ladder: connection faults retry for the life of the page without request storms. */
 export const RETRY_MS: readonly number[] = [1000, 3000, 8000]
 /** How long the first attempt may take before the entry says the assistant is on its way. */
 export const CONNECTING_GRACE_MS = 800
@@ -25,8 +25,8 @@ export const CONNECTING_GRACE_MS = 800
 export const RENEW_RETRY_MS = 5000
 /**
  * A session that ends sooner than this after it started did not really start. Reconnecting
- * at once would turn a session that is refused every time into a loop against the server,
- * so it climbs the same bounded ladder as a failed start.
+ * at once would turn a session that is refused every time into a request storm against the
+ * server, so it climbs the same capped retry ladder as a failed start.
  */
 export const STABLE_MS = 10_000
 
@@ -211,13 +211,16 @@ export class Supervisor {
   private failed(failure: BootFailure, attempt: number): void {
     report('start', failure)
     this.cancel('grace')
-    const retrying = !failure.final && attempt < RETRY_MS.length
+    // Authentication and authorization refusals need a new sign-in or grant. Everything
+    // else keeps trying for as long as the page exists; a transient outage must not make the
+    // assistant disappear or require the person to keep pressing Retry.
+    const retrying = !failure.final
     this.current = retrying
       ? {kind: 'retrying', attempt: attempt + 1, failure}
       : {kind: 'unavailable', failure}
     this.deps.entry.unavailable({status: failure.status, retrying}, () => this.retry())
-    const delay = RETRY_MS[attempt]
-    if (retrying && delay !== undefined) {
+    const delay = RETRY_MS[Math.min(attempt, RETRY_MS.length - 1)] ?? 1000
+    if (retrying) {
       this.pending = later('retry', delay, () => this.start(attempt + 1))
     }
   }

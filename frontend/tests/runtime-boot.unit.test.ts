@@ -128,7 +128,7 @@ describe('starting', () => {
 })
 
 describe('failing', () => {
-  it('climbs a bounded ladder, saying so each time, then waits for the person', async () => {
+  it('climbs a capped ladder and keeps retrying for the life of the page', async () => {
     const src = source([new BootFailure('down', 503)])
     const h = harness(src)
     h.supervisor.start()
@@ -136,10 +136,10 @@ describe('failing', () => {
     expect(h.supervisor.state).toMatchObject({kind: 'retrying', attempt: 1})
     for (const delay of RETRY_MS) await vi.advanceTimersByTimeAsync(delay)
     expect(src.calls).toBe(RETRY_MS.length + 1)
-    expect(h.supervisor.state.kind).toBe('unavailable')
-    expect(h.entry.log.at(-1)).toBe('unavailable:503:false')
-    await vi.advanceTimersByTimeAsync(60_000)
-    expect(src.calls).toBe(RETRY_MS.length + 1)
+    expect(h.supervisor.state.kind).toBe('retrying')
+    expect(h.entry.log.at(-1)).toBe('unavailable:503:true')
+    await vi.advanceTimersByTimeAsync(RETRY_MS.at(-1)!)
+    expect(src.calls).toBe(RETRY_MS.length + 2)
   })
 
   it('does not retry on its own what another attempt cannot fix', async () => {
@@ -197,7 +197,7 @@ describe('when the session ends under the page', () => {
     expect(h.supervisor.state.kind).toBe('running')
   })
 
-  it('does not loop against a server that ends every session as soon as it starts', async () => {
+  it('keeps a capped reconnect cadence when every session ends as soon as it starts', async () => {
     const src = source([{config: config()}])
     const runtimes = Array.from({length: 10}, () => new FakeRuntime())
     const h = harness(src, [...runtimes])
@@ -208,9 +208,11 @@ describe('when the session ends under the page', () => {
       await flush()
       await vi.advanceTimersByTimeAsync(10_000)
     }
-    expect(h.started).toHaveLength(RETRY_MS.length + 1)
-    expect(h.supervisor.state.kind).toBe('unavailable')
-    expect(h.entry.log.at(-1)).toBe('unavailable:null:false')
+    expect(h.started.length).toBeGreaterThan(RETRY_MS.length)
+    h.started.at(-1)?.end('error')
+    await flush()
+    expect(h.supervisor.state.kind).toBe('retrying')
+    expect(h.entry.log.at(-1)).toBe('unavailable:null:true')
   })
 
   it('reconnects at once again after a session that ran long enough to be trusted', async () => {
