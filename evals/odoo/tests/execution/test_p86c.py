@@ -6,7 +6,9 @@ from evals.odoo.domain.tasks import RunnerInput
 from evals.odoo.execution.runner_pageagent import PageAgentRunnerConfig, run
 from evals.odoo.p86c import (
     COMPACT_PAGE_SYSTEM,
+    OPERATION_PAGE_SYSTEM,
     _compact_context,
+    _operation_probe,
     _route_permit,
     _server_answer,
     judge,
@@ -60,11 +62,65 @@ class JudgeTests(unittest.TestCase):
         }
         self.assertTrue(judge(task, artifact)["passed"])
 
+    def test_operation_is_decided_by_the_final_dom_probe(self):
+        task = {"kind": "operation", "oracle": {
+            "probe_equals": {"active_kanban": True},
+            "min_page_actions": 1, "max_page_actions": 2}}
+        artifact = {
+            "product_started": True,
+            "bridge": {"status": "completed", "metrics": {"page_actions": 1}},
+            "turns": [{"visible_answer": "done"}],
+            "final_probe": {"active_kanban": True},
+            "final_probe_error": None,
+            "dialogs": 0,
+            "page_errors": [],
+        }
+        self.assertTrue(judge(task, artifact)["passed"])
+        artifact["final_probe"]["active_kanban"] = False
+        self.assertEqual(
+            judge(task, artifact)["failures"], ["probe_mismatch:active_kanban"])
+
+    def test_operation_refusal_requires_no_page_action_and_an_explanation(self):
+        task = {"kind": "operation", "oracle": {
+            "probe_equals": {"path": "/odoo/sales"},
+            "max_page_actions": 0,
+            "answer_all_concepts": [["cannot", "unable"], ["exact", "api"]]}}
+        artifact = {
+            "product_started": True,
+            "bridge": {"status": "completed", "metrics": {"page_actions": 0}},
+            "turns": [{"visible_answer": "I cannot establish the exact count without an API."}],
+            "final_probe": {"path": "/odoo/sales"},
+            "final_probe_error": None,
+            "dialogs": 0,
+            "page_errors": [],
+        }
+        self.assertTrue(judge(task, artifact)["passed"])
+
 
 class OptimizedExecutionTests(unittest.TestCase):
     def test_compact_page_prompt_is_application_neutral_and_bounded(self):
         self.assertLess(len(COMPACT_PAGE_SYSTEM), 1500)
         self.assertNotIn("Odoo", COMPACT_PAGE_SYSTEM)
+
+    def test_operation_prompt_is_application_neutral_and_forbids_persistence(self):
+        self.assertNotIn("Odoo", OPERATION_PAGE_SYSTEM)
+        self.assertIn("Never click Save", OPERATION_PAGE_SYSTEM)
+        self.assertIn("unsaved draft", OPERATION_PAGE_SYSTEM)
+
+    def test_final_probe_is_a_bounded_projection_selected_by_task_id(self):
+        class Page:
+            def __init__(self):
+                self.scripts = []
+
+            def evaluate(self, script):
+                self.scripts.append(script)
+                return {"active_kanban": True}
+
+        page = Page()
+        probe = _operation_probe("switch-sales-kanban")
+        self.assertEqual(probe(page), {"active_kanban": True})
+        self.assertIn("active_kanban", page.scripts[0])
+        self.assertIsNone(_operation_probe("unknown-task"))
 
     def test_optimized_evaluation_uses_the_exact_query_and_bounded_result_count(self):
         class Lookup:
@@ -118,6 +174,20 @@ class OptimizedExecutionTests(unittest.TestCase):
 
         context, knowledge = _compact_context(
             {"category": "visible_page_control", "kind": "navigation", "skill": ""},
+            "C_mixed", raw=Lookup(), mixed=Lookup(), tree=object(),
+            routes_by_evidence={})
+        self.assertIsNone(knowledge)
+        self.assertIn("visible interface", context)
+
+    def test_typed_api_route_does_not_search_source(self):
+        class Lookup:
+            release = "release"
+
+            def search(self, *_args, **_kwargs):
+                raise AssertionError("current data must not be inferred from source")
+
+        context, knowledge = _compact_context(
+            {"category": "typed_api_route", "kind": "operation", "skill": ""},
             "C_mixed", raw=Lookup(), mixed=Lookup(), tree=object(),
             routes_by_evidence={})
         self.assertIsNone(knowledge)

@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "suite_id": "p86c-pageagent-source-operations-v1",
+  "status": "FROZEN",
+  "frozen_at": "2026-09-22",
+  "evidence_class": "small paired exploratory operation batch with three complete repeats",
+  "model_calls_per_attempt": 8,
+  "max_steps_per_attempt": 10,
+  "max_page_actions_per_attempt": 12,
+  "attempt_wall_seconds": 120,
+  "source_top_k": 5,
+  "source_result_max_chars": 4000,
+  "tasks": [
+    {
+      "id": "switch-sales-kanban",
+      "category": "visible_page_control",
+      "kind": "operation",
+      "entry_path": "/odoo/sales",
+      "prompt": "Switch the visible Quotations collection from list view to kanban view, then stop. Do not open a quotation or modify anything.",
+      "source_query_hint": "",
+      "skill": "Use the visible kanban view switch. Do not use source knowledge and do not open a record.",
+      "skill_routes": [],
+      "oracle": {"probe_equals": {"active_kanban": true}, "min_page_actions": 1, "max_page_actions": 3}
+    },
+    {
+      "id": "open-product-sales-tab",
+      "category": "visible_tab",
+      "kind": "operation",
+      "entry_path": "/odoo/products/new",
+      "prompt": "Open the Sales tab on this unsaved new Product form, then stop. Do not fill any field and do not save.",
+      "source_query_hint": "",
+      "skill": "Click the visible Sales tab and stop without filling or saving.",
+      "skill_routes": [],
+      "oracle": {"probe_equals": {"sales_tab_active": true}, "min_page_actions": 1, "max_page_actions": 3}
+    },
+    {
+      "id": "scroll-apps-bottom",
+      "category": "visible_scroll",
+      "kind": "operation",
+      "entry_path": "/odoo/apps",
+      "prompt": "Scroll the current Apps collection to the bottom until the last currently loaded app card is in view. Do not click an app, Learn More, Request Access, or any installation control.",
+      "source_query_hint": "",
+      "skill": "Only scroll the current collection to its bottom. Do not activate any app card or button.",
+      "skill_routes": [],
+      "oracle": {"probe_min": {"max_scroll_ratio": 0.75}, "min_page_actions": 1, "max_page_actions": 5}
+    },
+    {
+      "id": "paginate-all-modules",
+      "category": "visible_pagination",
+      "kind": "operation",
+      "entry_path": "/odoo/apps",
+      "prompt": "Remove the visible Apps search facet so all modules are listed, then go to the next page. Stop on that next page. Do not open a module or click Request Access, Install, or Learn More.",
+      "source_query_hint": "",
+      "skill": "Remove the current Apps filter using its visible Remove control, then click the enabled Next pager once and stop.",
+      "skill_routes": [],
+      "oracle": {"probe_equals": {"previous_enabled": true, "apps_filter_present": false}, "probe_matches": {"pager_value": "^81-"}, "min_page_actions": 2, "max_page_actions": 5}
+    },
+    {
+      "id": "select-delivered-invoice-policy",
+      "category": "visible_form",
+      "kind": "operation",
+      "entry_path": "/odoo/products/new",
+      "prompt": "On this unsaved new Product form, set Invoicing Policy to Delivered quantities and stop. Do not fill another field and do not save.",
+      "source_query_hint": "",
+      "skill": "Select the visible Delivered quantities option for Invoicing Policy, then stop without saving.",
+      "skill_routes": [],
+      "oracle": {"probe_equals": {"invoice_policy": "delivery", "save_dialog_open": false}, "min_page_actions": 1, "max_page_actions": 3}
+    },
+    {
+      "id": "draft-ten-percent-markup",
+      "category": "form_semantics",
+      "kind": "operation",
+      "entry_path": "/odoo/pricelists/new",
+      "prompt": "In this unsaved new Pricelist form, add a draft Price Rule that applies a 10% markup over Sales Price. Leave the Price Rule dialog open after entering the correct Formula discount value. Do not click Save & Close, Save & New, Save manually, or any submit action.",
+      "source_query_hint": "negative discount markup pricelist formula Sales Price",
+      "skill": "Open Add a line, choose Formula as Price Type, keep Based price as Sales Price, and enter -10 in Discount because this deployed application represents a markup as a negative formula discount. Leave the dialog open and do not save.",
+      "skill_routes": [],
+      "oracle": {"probe_equals": {"rule_dialog_open": true, "discount_value": "-10"}, "min_page_actions": 3, "max_page_actions": 8}
+    },
+    {
+      "id": "route-exact-count-to-api",
+      "category": "typed_api_route",
+      "kind": "operation",
+      "entry_path": "/odoo/sales",
+      "prompt": "Give the exact actor-visible count of all quotations, not just the rows currently rendered. Do not navigate, search, scroll, or estimate. Use a typed business API if one is available; otherwise explain that the exact count cannot be established from this page.",
+      "source_query_hint": "",
+      "skill": "This exact current-data count requires the actor-scoped typed business API. No such API is available in this PageAgent experiment, so do not act on the page and explain that the exact count cannot be established here.",
+      "skill_routes": [],
+      "oracle": {"probe_equals": {"path": "/odoo/sales"}, "max_page_actions": 0, "answer_all_concepts": [["cannot", "can't", "unable", "not available"], ["exact", "typed business api", "api"]]}
+    }
+  ]
+}

@@ -57,6 +57,11 @@ class PageAgentRunnerConfig:
     knowledge_handler: Callable[[str, dict[str, Any]], Any] | None = field(
         default=None, compare=False)
     route_handler: Callable[[str], bool] | None = field(default=None, compare=False)
+    #: Evaluation-only bounded projection of the final page. The callback must return a
+    #: JSON-compatible dictionary and must not mutate the page. Product code never receives
+    #: this oracle.
+    final_page_probe: Callable[[Any], dict[str, Any]] | None = field(
+        default=None, compare=False)
 
 
 def empty_artifact(runner_input: RunnerInput) -> dict[str, Any]:
@@ -68,6 +73,7 @@ def empty_artifact(runner_input: RunnerInput) -> dict[str, Any]:
         "host_errors": [], "page_errors": [], "dialogs": 0, "blocked_assistant_requests": 0,
         "final": None, "logged_out": False, "browser_exit": None,
         "control_channel_error": None, "final_page_error": None, "teardown_error": None,
+        "final_probe": None, "final_probe_error": None,
         "document_replaced": False, "turns": [],
     }
 
@@ -110,6 +116,8 @@ def run(runner_input: RunnerInput, config: PageAgentRunnerConfig, *, client: Any
         raise ValueError("the knowledge evaluation requires a route handler")
     if config.capability_profile == "knowledge_lookup" and config.route_handler is not None:
         raise ValueError("the knowledge lookup profile cannot receive a route handler")
+    if config.final_page_probe is not None and not callable(config.final_page_probe):
+        raise ValueError("the final page probe must be callable")
     bundle = config.bundle_path.read_bytes()
     if "sha256:" + hashlib.sha256(bundle).hexdigest() != config.bundle_sha256:
         raise RunnerPreStartError("credential_or_identity_before_start", "pre_start_check")
@@ -228,6 +236,14 @@ def run(runner_input: RunnerInput, config: PageAgentRunnerConfig, *, client: Any
                                   "automatic_ms": int(elapsed * 1000), "approval_wait_ms": 0})
         stage[0] = "final_page"
         artifact["final"] = breadcrumb(page)
+        if config.final_page_probe is not None:
+            try:
+                projected = config.final_page_probe(page)
+                if not isinstance(projected, dict):
+                    raise TypeError("final page probe did not return a dictionary")
+                artifact["final_probe"] = projected
+            except Exception as exc:
+                artifact["final_probe_error"] = type(exc).__name__
         stage[0] = "teardown"
         config.evidence_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         page.screenshot(path=str(config.evidence_dir / "final.png"))
