@@ -240,7 +240,8 @@ odoo = OdooApplicationAdapter(base_url="http://127.0.0.1:8069",
                               api_key_path=root / "odoo-key.json")
 assert odoo.business_tools.tool_names == frozenset(
     {"query_sale_orders", "query_quotations", "query_customers", "query_products",
-     "query_customer_invoices", "prepare_customer_form"})
+     "query_customer_invoices", "prepare_customer_form", "discover_odoo_models",
+     "describe_odoo_model", "query_odoo_records"})
 assert odoo.business_tools.mutation_tool_names == frozenset()
 # The packaged write Skills have to be present in the wheel too, or a mutation-enabled
 # deployment fails at composition time with a missing package-data entry -- exactly the
@@ -250,7 +251,7 @@ writing = OdooApplicationAdapter(
     base_url="http://127.0.0.1:8069", api_key_path=root / "odoo-key.json",
     allow_mutations=True, mutation_journal=_Journal(root / "odoo-mutations.sqlite3"))
 assert writing.business_tools.mutation_tool_names == frozenset(
-    {"create_customer", "confirm_quotation", "invoice_sale_order"})
+    {"create_customer", "archive_customer", "confirm_quotation", "invoice_sale_order"})
 assert odoo.source_capability().session_kwargs()["source_affordance_mode"] == "off"
 assert isinstance(odoo.source_capability(), SourceCapability)
 print("the Odoo distribution installs on top of core and composes outside the checkout")

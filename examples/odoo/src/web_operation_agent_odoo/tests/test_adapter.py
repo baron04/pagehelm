@@ -327,9 +327,10 @@ class AdapterContract(unittest.TestCase):
         self.assertEqual(bound.descriptor.application_id, APPLICATION_ID)
         self.assertEqual(bound.descriptor.navigation_mode, "spa")
         self.assertEqual(sorted(bound.business_tools.tool_names),
-                         ["prepare_customer_form", "query_customer_invoices",
-                          "query_customers", "query_products", "query_quotations",
-                          "query_sale_orders"])
+                         ["describe_odoo_model", "discover_odoo_models",
+                          "prepare_customer_form", "query_customer_invoices",
+                          "query_customers", "query_odoo_records", "query_products",
+                          "query_quotations", "query_sale_orders"])
         self.assertEqual(bound.business_tools.mutation_tool_names, frozenset())
 
     def test_a_mutation_adapter_satisfies_the_shared_contract(self):

@@ -18,7 +18,8 @@ class PackagedSkills(unittest.TestCase):
         skills = packaged_skills()
         self.assertEqual(
             sorted(skill.skill_id for skill in skills),
-            ["odoo.sales.customer-invoices-query", "odoo.sales.customers-archive",
+            ["odoo.runtime.records-query",
+             "odoo.sales.customer-invoices-query", "odoo.sales.customers-archive",
              "odoo.sales.customers-create",
              "odoo.sales.customers-draft", "odoo.sales.customers-edit",
              "odoo.sales.customers-query",
@@ -61,9 +62,12 @@ class DraftingSourcesStayWithTheSkills(unittest.TestCase):
     no entry cannot be repaired, and an entry with no Skill is a name nobody maintains.
     """
 
-    def test_the_two_sets_are_the_same_set(self):
-        self.assertEqual(sorted(SKILL_SOURCES),
-                         sorted(skill.skill_id for skill in packaged_skills()))
+    def test_every_source_derived_skill_has_a_declared_drafting_source(self):
+        source_skills = {
+            skill.skill_id for skill in packaged_skills()
+            if any(Citation.parse(item).kind == "src" for item in skill.provenance)
+        }
+        self.assertEqual(set(SKILL_SOURCES), source_skills)
 
     def test_every_declared_subject_is_this_application_s_source_scope(self):
         from web_operation_agent_odoo.route import ODOO_SOURCE_SCOPE

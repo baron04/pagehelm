@@ -23,7 +23,7 @@ _SESSION_COOKIE = "session_id"
 #: Skill, which is a fact no reader could see and a fifth entry would have broken.
 _READ_SKILLS = ("sale-orders-query.json", "customers-query.json", "customers-draft.json",
                 "products-query.json", "quotations-query.json",
-                "customer-invoices-query.json")
+                "customer-invoices-query.json", "runtime-records-query.json")
 _WRITE_SKILLS = ("customers-create.json", "customers-edit.json",
                  "customers-archive.json",
                  "sale-orders-confirm.json", "sale-orders-invoice.json")

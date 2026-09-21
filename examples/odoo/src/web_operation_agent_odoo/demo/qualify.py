@@ -22,10 +22,12 @@ import hashlib
 import json
 import sys
 import tempfile
+import time
 from collections.abc import Sequence
 from pathlib import Path
 
 from web_operation_agent.composition.binding import bind_application
+from web_operation_agent.state.identity import OperationContext
 
 from ..adapter import COLLECTIONS, OdooApplicationAdapter
 from ..sourcemap import OdooCompiler, odoo_source_tree
@@ -57,6 +59,108 @@ def fixture_state(adapter: OdooApplicationAdapter) -> dict:
                                for row in sorted(rows, key=lambda item: item["id"])]),
         }
     return state
+
+
+def generic_read_probe(adapter: OdooApplicationAdapter,
+                       storage_state_path: str | Path) -> dict:
+    """Exercise discovery, description and a non-empty unskilled read without a model.
+
+    The persisted result is deliberately aggregate-only: the tool really reads journal
+    items and constructs field-level evidence, while the qualification artifact records no
+    business values or opaque bindings.  The browser session and delegated API key are
+    matched first, and the core runtime enforces the narrow generic-read scope on each call.
+    """
+    started = time.perf_counter()
+    try:
+        principal = adapter.bind_browser_session(
+            storage_state_path,
+            delegation_id="odoo-generic-read-qualification",
+            scopes=("generic_records:read",),
+        )
+        runtime = adapter.business_tools
+        skill_id = "odoo.runtime.records-query"
+        skill, reason = runtime.load(skill_id, {skill_id})
+        if skill is None or reason:
+            raise RuntimeError("generic read Skill was not loadable")
+        loaded = {skill_id}
+        operation_number = 0
+
+        def execute(name: str, args: dict):
+            nonlocal operation_number
+            operation_number += 1
+            now_ms = int(time.time() * 1000)
+            context = OperationContext.create(
+                principal,
+                session_id="odoo-generic-qualification",
+                turn_id="generic-read-probe",
+                operation_id=f"generic-read-{operation_number}",
+                deadline_ms=min(principal.expires_at, now_ms + 60_000),
+                now_ms=now_ms,
+            )
+            return runtime.execute(name, args, loaded, context=context)
+
+        discovery = execute("discover_odoo_models", {
+            "query": "Journal Items", "limit": 10,
+        })
+        candidate = next(
+            (item for item in discovery.content["candidates"]
+             if item["label"].casefold() == "journal item"),
+            None,
+        )
+        if candidate is None:
+            raise RuntimeError("the Journal Item candidate was not discovered")
+        description = execute("describe_odoo_model", {
+            "candidate_id": candidate["candidate_id"],
+            "field_query": "date account debit credit",
+            "limit": 8,
+        })
+        fields = description.content["fields"][:4]
+        if not fields:
+            raise RuntimeError("the Journal Item candidate had no safe matching fields")
+        query = execute("query_odoo_records", {
+            "candidate_id": candidate["candidate_id"],
+            "field_ids": [field["field_id"] for field in fields],
+            "limit": 5,
+        })
+        completeness = query.content["completeness"]
+        record_evidence = sum(
+            1 for item in query.evidence if item.evidence_id.startswith("record#"))
+        query_evidence = sum(
+            1 for item in query.evidence if item.evidence_id.startswith("query#"))
+        identity_bound = all(
+            result.audit.get("identity_binding") == "principal_bound"
+            for result in (discovery, description, query)
+        )
+        passed = (
+            completeness["returned_count"] > 0
+            and completeness["matching_count_exact"] is True
+            and query.content["source_total"] >= completeness["matched_count"]
+            and query_evidence == 1
+            and record_evidence == completeness["returned_count"] * len(fields)
+            and query.query_answer is not None
+            and identity_bound
+            and query.data_classes == (
+                "business.generic_record", "business.identifier")
+        )
+        return {
+            "passed": passed,
+            "candidate_label": candidate["label"],
+            "described_field_labels": [field["label"] for field in fields],
+            "returned_count": completeness["returned_count"],
+            "matched_count": completeness["matched_count"],
+            "source_total": query.content["source_total"],
+            "result_truncated": completeness["result_truncated"],
+            "query_evidence_count": query_evidence,
+            "record_evidence_count": record_evidence,
+            "identity_bound": identity_bound,
+            "elapsed_ms": round((time.perf_counter() - started) * 1_000, 3),
+        }
+    except Exception as exc:  # the gate reports a failed measurement without leaking data
+        return {
+            "passed": False,
+            "failure_type": type(exc).__name__,
+            "elapsed_ms": round((time.perf_counter() - started) * 1_000, 3),
+        }
 
 
 #: The six workflow kinds G3 set out to cover, one scripted case each. The scripts are
@@ -499,6 +603,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             started_on == baseline or restored_cleanly)
 
     read_only_before = fixture_state(adapter)
+    generic_read = generic_read_probe(adapter, args.storage_state)
+    generic_read["read_only_kept"] = fixture_state(adapter) == read_only_before
     case_order = cases_for(args.source_root)
     with tempfile.TemporaryDirectory() as tmp:
         results = []
@@ -570,6 +676,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "the_refusal_never_reached_an_approval": all(
             row["approval_requested"] == 0 and row["mutations_completed"] == 0
             for row in refusal_cases),
+        "generic_unskilled_read_is_actor_bound_cited_and_non_empty": (
+            generic_read["passed"] and generic_read["read_only_kept"]),
         **fixture_checks,
     }
     # Both directions, in the deployment itself: with a compiled source root every turn is
@@ -618,6 +726,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "tool_names": sorted(bound.business_tools.tool_names),
         "case_count": len(results),
         "case_checks": {row["case"]: row for row in results},
+        "generic_read_probe": generic_read,
         "fixture_baseline_digest": _digest(read_only_before),
         "fixture_restore": {key: value for key, value in restored.items()
                             if key != "changed_tables"},

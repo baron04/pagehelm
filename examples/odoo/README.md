@@ -21,8 +21,9 @@ Read this integration in dependency order instead of starting from the demo:
 
 1. `adapter.py` assembles the application contract and keeps the core application-neutral.
 2. `server/specs.py` defines the public tool schemas and scopes.
-3. `server/reads.py` and `server/mutations.py` implement bounded reads, guarded writes, and
-   application-owned verification.
+3. `server/reads.py`, `server/generic_reads.py`, and `server/mutations.py` implement bounded
+   domain reads, catalog-bound generic reads, guarded writes, and application-owned
+   verification.
 4. `server/identity.py`, `route.py`, and `server/transport.py` bind the browser actor, allowed
    navigation, and Odoo JSON-RPC boundary.
 5. `skills/` contains the auditable business instructions paired with those tools.
@@ -117,9 +118,27 @@ release with the installed-module digest. The capability goes into the turn as o
 source answer quotes the cited bytes rather than trusting the model's paraphrase.
 
 The same add-on exposes a bounded actor-scoped model/action catalog. It derives actions only
-from the current user's filtered menu tree and reports model-level access, but reads no
-business records. It is Phase 8 discovery infrastructure, not yet a generic model-facing
-query tool and never mutation authority.
+from the current user's filtered menu tree and reports model-level access; catalog generation
+itself reads no business records and never grants mutation authority. The generic read path
+uses that catalog in three server-validated steps:
+
+1. `discover_odoo_models` searches readable, action-backed, non-transient business models and
+   returns catalog-bound opaque candidate IDs, not technical model names;
+2. `describe_odoo_model` resolves one current candidate, calls `fields_get` under the same
+   delegated actor, removes sensitive names and unbounded relation/binary/HTML fields, and
+   returns opaque field IDs;
+3. `query_odoo_records` accepts only those current IDs, at most eight AND conditions and
+   eight projected fields, a 20-row page and a bounded offset. It fixes ordering to `id asc`,
+   runs exact matching and actor-visible total counts, and returns query plus field-level
+   record evidence.
+
+The action is a discovery hint, not a query scope: its dynamic domain/context is never
+evaluated by this path. A generic query therefore covers the actor-visible model rows named in
+the result, not necessarily the rows shown by one menu action. Catalog changes make old
+candidate IDs stale; `fields_get` changes make old field IDs fail. Raw model names, method
+names, arbitrary domains, OR/NOT expressions, caller-controlled ordering, grouping, writes,
+transient models, settings/users/messages/attachments, and unbounded fields are not accepted.
+Domain-specific typed tools remain preferable when their narrower business semantics apply.
 
 ## Keeping Skills current
 
@@ -162,6 +181,9 @@ rather than fact.
 | `query_products` | `product.template` | saleable products | `/odoo/products` |
 | `query_quotations` | `sale.order` | draft and sent quotations | `/odoo/sales` |
 | `query_customer_invoices` | `account.move` | customer invoices, excluding credit notes | `/odoo/customer-invoices` |
+| `discover_odoo_models` | opaque catalog candidate | current actor's readable, menu-backed non-sensitive models | — |
+| `describe_odoo_model` | opaque catalog candidate | safe `fields_get` projection under the current actor | — |
+| `query_odoo_records` | opaque catalog candidate | bounded actor-visible model rows; exact counts; fixed order | — |
 | `prepare_customer_form` | `res.partner` | exact customer form draft; transient until user submission | `/odoo/customers/new` |
 | `prepare_customer_edit_form` | `res.partner` | exact existing-customer fields; confirmed before Odoo can autosave | `/odoo/customers/<id>` |
 | `create_customer` | `res.partner` | one customer, opt-in | `/odoo/customers/<id>` |
@@ -300,7 +322,10 @@ and set `AGENT_OPENAI_BASE_URL`, `AGENT_OPENAI_API_KEY` and `AGENT_OPENAI_MODEL`
 with one.
 
 The gate version writes a schema-fixed artifact of counts, digests and booleans, and checks
-that the fixture is byte-identical before and after:
+that the fixture is byte-identical before and after. It also runs a zero-model generic-read
+probe against Journal Items: browser/API identities are bound, only `generic_records:read` is
+granted, and the artifact retains counts, evidence cardinality and latency rather than record
+values:
 
 ```bash
 python -m web_operation_agent_odoo.demo.qualify \

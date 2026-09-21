@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "skill_id": "odoo.runtime.records-query",
+  "title": "Discover and query current Odoo records",
+  "intent": "Read an Odoo business entity that has no dedicated typed query Skill, using the signed-in user's current menu and field metadata.",
+  "triggers": [
+    "通用 Odoo 查询",
+    "运行时记录发现",
+    "generic Odoo query",
+    "runtime record discovery"
+  ],
+  "instructions": [
+    "Use this only when no dedicated typed read Skill covers the requested entity. Dedicated tools carry narrower business meaning and remain preferable.",
+    "Call discover_odoo_models with the user's entity or page words. It searches only the current actor's readable menu-backed catalog and returns opaque candidate IDs; never invent or pass an Odoo model name.",
+    "If several candidates are plausible, ask the user to choose. Otherwise call describe_odoo_model with the selected candidate ID and a field_query naming the fields or filter concepts needed.",
+    "Call query_odoo_records only with candidate and field IDs returned by those current metadata calls. Filters are combined by AND, use declared selection values rather than labels, and ordering is fixed to id ascending.",
+    "The result reports exact matching count, actor-visible source total, offset, returned count, scope and collection time. State limits explicitly; a page of records is not the whole matching set unless completeness says so.",
+    "Do not use this metadata path for writes, secrets, configuration, messages, attachments, users, access control, transient models or fields the descriptor omitted.",
+    "Use current typed evidence for the answer. Source code may explain a rule, but it never replaces this actor-scoped read for current data or permissions."
+  ],
+  "tool_names": [
+    "discover_odoo_models",
+    "describe_odoo_model",
+    "query_odoo_records"
+  ],
+  "provenance": [
+    "api:odoo@18.0:/jsonrpc#object.execute_kw"
+  ],
+  "read_only": true
+}

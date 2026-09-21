@@ -19,6 +19,10 @@ agent.
   enabled, a deployment-bound local source compiler can answer rule questions with exact
   file, line, release, and byte-digest provenance. Source retrieval remains optional and is
   never a prerequisite for ordinary browser or API operation.
+- The Odoo adapter can discover a current actor's readable, menu-backed business models and
+  perform a bounded generic read without adding one Skill per model. The Agent receives only
+  catalog-bound opaque model and field IDs; the server resolves them through `fields_get`,
+  validates an AND-only filter AST, fixes ordering and pagination, and reports exact counts.
 - Browser actions are checked against the current observation and application route policy.
   Page switches require a visible confirmation.
 - Writes are disabled by default. Core turn configuration initially disables every browser
@@ -135,18 +139,21 @@ PYTHONPATH=src:examples/odoo/src:. \
 
 ## Odoo reference integration
 
-The adapter provides five bounded reads and four opt-in writes covering customers, products,
-sales orders, quotations, and customer invoices. It binds Odoo's HttpOnly browser session to
-a separately delegated per-user API key and refuses the composition unless both identify the
-same database, company, and actor. Reads report completeness; writes perform application-owned
-duplicate checks and readback.
+The adapter provides five domain-specific bounded reads, a generic read fallback, and four
+opt-in writes. The domain-specific tools cover customers, products, sales orders, quotations,
+and customer invoices. It binds Odoo's HttpOnly browser session to a separately delegated
+per-user API key and refuses the composition unless both identify the same database, company,
+and actor. Reads report completeness; writes perform application-owned duplicate checks and
+readback.
 
 The adapter includes versioned Skills and an optional source compiler for Odoo menus, actions,
 views, fields, method documentation, and user-visible refusal conditions. Compilation is
 restricted to modules installed in the running deployment, and source answers quote cited
 bytes from that release. Runtime facts remain authoritative when source or documentation
-disagrees. The installed add-on also exposes a bounded actor-scoped model/action catalog as
-the foundation for broader read discovery; that catalog is not yet a generic query tool.
+disagrees. The installed add-on also exposes a bounded actor-scoped model/action catalog.
+Three read-only tools use it to discover an opaque model candidate, describe safe fields, and
+query current records under the same delegated actor. This is not arbitrary Odoo RPC and does
+not authorize writes.
 
 Provision the disposable local fixture from a checkout:
 

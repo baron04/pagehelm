@@ -4,6 +4,8 @@ from __future__ import annotations
 import threading
 
 from .identity import OdooApiKeyStore
+from .generic_reads import (GENERIC_READ_SCHEMAS, GENERIC_READ_TOOLS,
+                            OdooGenericReadTools)
 from .mutations import OdooMutationTools
 from .reads import OdooReadTools
 from .specs import (COLLECTIONS, MUTATION_SPECS, MUTATION_TOOLS,
@@ -13,7 +15,8 @@ from .specs import (COLLECTIONS, MUTATION_SPECS, MUTATION_TOOLS,
 from .transport import OdooRpcClient
 
 
-class OdooBusinessToolExecutor(OdooReadTools, OdooMutationTools, OdooRpcClient):
+class OdooBusinessToolExecutor(OdooGenericReadTools, OdooReadTools,
+                               OdooMutationTools, OdooRpcClient):
     """Typed reads, transient form preparation and guarded writes over delegated JSON-RPC."""
 
     def __init__(self, *, base_url: str, keys: OdooApiKeyStore, timeout_s: float = 20,
@@ -33,11 +36,12 @@ class OdooBusinessToolExecutor(OdooReadTools, OdooMutationTools, OdooRpcClient):
     def tool_schemas(self) -> tuple[dict, ...]:
         reads = tuple(QUERY_SCHEMAS[collection.tool] for collection in COLLECTIONS)
         writes = tuple(spec.schema for spec in MUTATION_SPECS)
-        return reads + (PREPARE_CUSTOMER_FORM_SCHEMA,) + (
+        return reads + GENERIC_READ_SCHEMAS + (PREPARE_CUSTOMER_FORM_SCHEMA,) + (
             (PREPARE_CUSTOMER_EDIT_SCHEMA,) + writes if self.allow_mutations else ())
 
     def tool_effects(self) -> dict[str, str]:
         effects = {collection.tool: "read" for collection in COLLECTIONS}
+        effects.update({name: "read" for name in GENERIC_READ_TOOLS})
         effects[PREPARE_CUSTOMER_FORM_TOOL] = "read"
         if self.allow_mutations:
             # Preparing an edit reads the record and types into the page; the application,
@@ -45,3 +49,8 @@ class OdooBusinessToolExecutor(OdooReadTools, OdooMutationTools, OdooRpcClient):
             effects[PREPARE_CUSTOMER_EDIT_TOOL] = "read"
             effects.update({tool: "write" for tool in MUTATION_TOOLS})
         return effects
+
+    def execute(self, name: str, args: dict, *, context=None):
+        if name in GENERIC_READ_TOOLS:
+            return self.execute_generic(name, args, context=context)
+        return OdooReadTools.execute(self, name, args, context=context)

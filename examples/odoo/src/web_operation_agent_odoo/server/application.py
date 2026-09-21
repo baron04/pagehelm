@@ -29,6 +29,8 @@ from ..route import ODOO_ROUTE_PORT, ODOO_SOURCE_SCOPE
 from ..sourcemap import OdooCompiler, odoo_source_tree
 from .executor import OdooBusinessToolExecutor
 from .descriptors import OdooRuntimeDescriptorReader
+from .generic_reads import (DESCRIBE_MODEL_TOOL, DISCOVER_MODELS_TOOL,
+                            QUERY_RECORDS_TOOL)
 from .identity import OdooApiKeyStore, OdooPageSessionIdentityResolver
 from .specs import (ANSWER_LABELS_ZH, APPLICATION_ID, ARCHIVE_CUSTOMER_TOOL,
                     COLLECTIONS, CREATE_CUSTOMER_TOOL, MUTATION_SPECS, MUTATION_TOOLS,
@@ -184,6 +186,11 @@ class OdooApplicationAdapter:
                            "query_products": "products:read",
                            "query_quotations": "sale_orders:read",
                            "query_customer_invoices": "invoices:read"}
+        required_scopes.update({
+            DISCOVER_MODELS_TOOL: "generic_records:read",
+            DESCRIBE_MODEL_TOOL: "generic_records:read",
+            QUERY_RECORDS_TOOL: "generic_records:read",
+        })
         required_scopes[PREPARE_CUSTOMER_FORM_TOOL] = "customers:read"
         if allow_mutations:
             # It stages a change to an existing customer, so it needs the same scope a
@@ -197,6 +204,11 @@ class OdooApplicationAdapter:
         declarations.append((
             PREPARE_CUSTOMER_FORM_TOOL,
             ("business.customer", "application.route", "business.form_draft")))
+        declarations.extend((
+            (DISCOVER_MODELS_TOOL, ("application.metadata",)),
+            (DESCRIBE_MODEL_TOOL, ("application.metadata",)),
+            (QUERY_RECORDS_TOOL, ("business.generic_record", "business.identifier")),
+        ))
         if allow_mutations:
             declarations.append((
                 PREPARE_CUSTOMER_EDIT_TOOL,
