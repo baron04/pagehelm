@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "suite_id": "p86c-pageagent-source-v1",
+  "status": "FROZEN",
+  "frozen_at": "2026-09-21",
+  "evidence_class": "small paired early-decision batch; not a general reliability estimate",
+  "model_calls_per_attempt": 10,
+  "attempt_wall_seconds": 120,
+  "source_top_k": 20,
+  "source_result_max_chars": 12000,
+  "tasks": [
+    {
+      "id": "hidden-analytic-items",
+      "category": "hidden_entry",
+      "kind": "navigation",
+      "entry_path": "/odoo",
+      "prompt": "Open the Analytic Items page that lists costs and revenues for margin analysis. Do not open an individual record and do not modify anything.",
+      "source_query_hint": "analytic items costs revenues margins",
+      "skill": "The requested read-only screen is Analytic Items. Its exact application path is /odoo/action-analytic.account_analytic_line_action_entries. Open that collection and stop without opening a record.",
+      "skill_routes": [
+        "/odoo/action-analytic.account_analytic_line_action_entries"
+      ],
+      "oracle": {
+        "breadcrumb_contains": "Analytic Items"
+      }
+    },
+    {
+      "id": "field-negative-discount",
+      "category": "field_semantics",
+      "kind": "answer",
+      "entry_path": "/odoo",
+      "prompt": "In this deployed application, what does a negative discount in a pricelist formula mean? Answer briefly and do not modify anything.",
+      "source_query_hint": "negative discount means markup price rule",
+      "skill": "For a pricelist formula, a negative discount means a markup: it increases the price rather than reducing it.",
+      "skill_routes": [],
+      "oracle": {
+        "all_concepts": [
+          ["negative discount"],
+          ["markup", "mark-up", "increase"]
+        ]
+      }
+    },
+    {
+      "id": "guard-confirm-without-product",
+      "category": "refusal_precondition",
+      "kind": "answer",
+      "entry_path": "/odoo",
+      "prompt": "Why can this deployed version refuse to confirm a quotation when one line has no product? State the exact kind of line that triggers the refusal and the relevant exception. Do not modify anything.",
+      "source_query_hint": "confirm quotation each normal line needs product",
+      "skill": "Confirmation is refused when any ordinary order line has no product. A section or note line (a line with display_type) does not trigger it, and a down-payment line is also excluded. The rule is implemented by sale.order._confirmation_error_message.",
+      "skill_routes": [],
+      "oracle": {
+        "all_concepts": [
+          ["product"],
+          ["line"],
+          ["confirm", "confirmation"],
+          ["ordinary", "normal", "display_type", "section", "note"],
+          ["down payment", "down-payment", "downpayment"]
+        ]
+      }
+    },
+    {
+      "id": "release-sale-order-states",
+      "category": "current_release_behavior",
+      "kind": "answer",
+      "entry_path": "/odoo",
+      "prompt": "List the selectable sales order Status values in this deployed version. Is locking a fifth Status value? Do not modify anything.",
+      "source_query_hint": "sale order states quotation sent sales order cancelled locked separate",
+      "skill": "The selectable Status values are Quotation, Quotation Sent, Sales Order, and Cancelled. Locking is separate behavior and is not a fifth value of the Status selection.",
+      "skill_routes": [],
+      "oracle": {
+        "all_concepts": [
+          ["quotation"],
+          ["quotation sent"],
+          ["sales order"],
+          ["cancelled", "canceled"],
+          ["lock", "locking", "locked"],
+          ["separate", "not a fifth", "not fifth", "isn't a fifth", "is not a status"]
+        ]
+      }
+    },
+    {
+      "id": "release-invoice-payment-status",
+      "category": "current_release_behavior",
+      "kind": "answer",
+      "entry_path": "/odoo",
+      "prompt": "List every selectable invoice Payment Status value declared by this deployed version. Do not modify anything.",
+      "source_query_hint": "invoice payment status not paid partial reversed blocked legacy",
+      "skill": "The Payment Status selection declares: Not Paid, In Payment, Paid, Partially Paid, Reversed, Blocked, and Invoicing App Legacy.",
+      "skill_routes": [],
+      "oracle": {
+        "all_concepts": [
+          ["not paid"],
+          ["in payment"],
+          ["paid"],
+          ["partially paid", "partial"],
+          ["reversed"],
+          ["blocked"],
+          ["invoicing app legacy", "invoicing legacy", "legacy"]
+        ]
+      }
+    },
+    {
+      "id": "release-order-invoice-status",
+      "category": "current_release_behavior",
+      "kind": "answer",
+      "entry_path": "/odoo",
+      "prompt": "List every selectable sales order Invoice Status value declared by this deployed version. Do not modify anything.",
+      "source_query_hint": "sales order invoice status upselling nothing to invoice",
+      "skill": "The sales order Invoice Status selection declares: Upselling Opportunity, Fully Invoiced, To Invoice, and Nothing to Invoice.",
+      "skill_routes": [],
+      "oracle": {
+        "all_concepts": [
+          ["upselling opportunity", "upselling"],
+          ["fully invoiced"],
+          ["to invoice"],
+          ["nothing to invoice"]
+        ]
+      }
+    },
+    {
+      "id": "control-open-products",
+      "category": "visible_page_control",
+      "kind": "navigation",
+      "entry_path": "/odoo",
+      "prompt": "Open the Products page using the visible application interface. Do not open an individual product and do not modify anything.",
+      "source_query_hint": "products page product variants sales",
+      "skill": "Use the visible Odoo application interface to open the Products collection, then stop without opening a product.",
+      "skill_routes": [],
+      "oracle": {
+        "breadcrumb_contains": "Products"
+      }
+    }
+  ]
+}

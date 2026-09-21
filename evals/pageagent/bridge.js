@@ -157,8 +157,31 @@ function compileTools(specifications, capabilityProfile, runToken, navigationMod
         if (permit.allowed !== true || permit.route !== selected) throw new Error('route was not authorized')
         signal.throwIfAborted()
         if (navigationMode !== 'spa') throw new Error('route bridge currently requires SPA navigation')
-        history.pushState({}, '', selected)
-        window.dispatchEvent(new PopStateEvent('popstate'))
+        const state = { woaNavigation: true }
+        history.pushState(state, '', selected)
+        window.dispatchEvent(new PopStateEvent('popstate', { state: history.state ?? state }))
+        return JSON.stringify({ opened: true, route: selected })
+      },
+    })
+  }
+  if (capabilityProfile === 'knowledge_evaluation') {
+    result.open_known_route = tool({
+      description: 'Open only an exact same-origin read-only route established by the trusted knowledge available in this run. Other routes are rejected.',
+      inputSchema: z.strictObject({ route: z.string().min(1).max(1000) }),
+      execute: async ({ route }, { signal }) => {
+        signal.throwIfAborted()
+        if (metrics.page_actions >= maxPageActions) throw new Error('page-action budget is exhausted')
+        const selected = safeRelativeRoute(route)
+        const invoke = globalThis.__WOA_PAGEAGENT_OPEN_ROUTE__
+        if (typeof invoke !== 'function') throw new Error('route bridge is unavailable')
+        const permit = await invoke({ run_token: runToken, route: selected })
+        exactObject(permit, ['allowed', 'route'], 'route permit')
+        if (permit.allowed !== true || permit.route !== selected) throw new Error('route was not established by trusted knowledge')
+        signal.throwIfAborted()
+        if (navigationMode !== 'spa') throw new Error('route bridge currently requires SPA navigation')
+        const state = { woaNavigation: true }
+        history.pushState(state, '', selected)
+        window.dispatchEvent(new PopStateEvent('popstate', { state: history.state ?? state }))
         return JSON.stringify({ opened: true, route: selected })
       },
     })
@@ -198,7 +221,7 @@ async function execute(config) {
   const navigationMode = config.navigation_mode
   if (!['document', 'spa'].includes(navigationMode)) throw new Error('navigation_mode is unsupported')
   const capabilityProfile = config.capability_profile
-  if (!['browser_only', 'skill_api'].includes(capabilityProfile)) throw new Error('capability_profile is unsupported')
+  if (!['browser_only', 'knowledge_lookup', 'knowledge_evaluation', 'skill_api'].includes(capabilityProfile)) throw new Error('capability_profile is unsupported')
   const instructions = config.instructions === '' ? '' : boundedString(config.instructions, 'instructions', 100000)
   const runToken = boundedString(config.run_token, 'run_token', 128)
   const requestOptions = exactObject(config.request_options, ['temperature', 'top_p', 'max_completion_tokens', 'parallel_tool_calls'], 'request_options')

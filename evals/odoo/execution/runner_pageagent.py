@@ -1,12 +1,16 @@
-"""Real-Chromium runner for the official PageAgent browser-only arm on Odoo.
+"""Real-Chromium runner for controlled PageAgent arms on Odoo.
 
-PageAgent signs in as the same synthetic actor on the same Odoo, but receives no Skill, no
-business API and no WOA assistant: the addon's assertion and assistant endpoints are refused
-in this browser context, and the runner verifies that no assistant mounted before PageAgent
-starts. The pinned bundle is injected after the page loads and its provider calls go through the
-same evaluation gateway as WOA's. Its final answer is the ``done`` action's text, returned through
-the bridge: PageAgent does not render it in the page, so unlike WOA's answer it is not what a
-user sees by default, and the two arms' answers reach the evaluator through different channels.
+PageAgent signs in as the same synthetic actor on the same Odoo, but receives no WOA assistant:
+the addon's assertion and assistant endpoints are refused in this browser context, and the
+runner verifies that no assistant mounted before PageAgent starts. The default browser-only
+profile receives no Skill or business API. Evaluation-only profiles may add bounded read-only
+knowledge tools, task instructions, and a fail-closed route authority so paired experiments can
+vary the knowledge source without changing the browser implementation.
+
+The pinned bundle is injected after the page loads and its provider calls go through the same
+evaluation gateway as WOA's. Its final answer is the ``done`` action's text, returned through the
+bridge: PageAgent does not render it in the page, so unlike WOA's answer it is not what a user
+sees by default, and the two arms' answers reach the evaluator through different channels.
 
 The arm is single-turn and read-only by construction; the schedule admits it only to the
 preregistered read and navigation subset.
@@ -16,7 +20,8 @@ from __future__ import annotations
 import hashlib
 import secrets
 import time
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +50,12 @@ class PageAgentRunnerConfig:
     attempt_wall_s: float = 300
     viewport: tuple[int, int] = (1440, 1000)
     headless: bool = True
+    capability_profile: str = "browser_only"
+    knowledge_instructions: str = ""
+    knowledge_tools: tuple[dict[str, Any], ...] = ()
+    knowledge_handler: Callable[[str, dict[str, Any]], Any] | None = field(
+        default=None, compare=False)
+    route_handler: Callable[[str], bool] | None = field(default=None, compare=False)
 
 
 def empty_artifact(runner_input: RunnerInput) -> dict[str, Any]:
@@ -84,7 +95,20 @@ def record_proxy_failure(artifact: dict[str, Any], exc: BaseException, *,
 def run(runner_input: RunnerInput, config: PageAgentRunnerConfig, *, client: Any,
         contract: PageAgentProviderContract, run_id: str, playwright: Any) -> dict[str, Any]:
     if len(runner_input.messages) != 1:
-        raise ValueError("the browser-only arm runs single-turn tasks only")
+        raise ValueError("the PageAgent arm runs single-turn tasks only")
+    if bool(config.knowledge_tools) != callable(config.knowledge_handler):
+        raise ValueError("knowledge tools and their handler must be configured together")
+    if config.capability_profile not in {
+            "browser_only", "knowledge_lookup", "knowledge_evaluation"}:
+        raise ValueError("the PageAgent runner capability profile is unsupported")
+    if config.capability_profile == "browser_only" and (
+            config.knowledge_tools or config.route_handler is not None):
+        raise ValueError("browser-only PageAgent cannot receive knowledge capabilities")
+    if config.capability_profile == "knowledge_evaluation" and not callable(
+            config.route_handler):
+        raise ValueError("the knowledge evaluation requires a route handler")
+    if config.capability_profile == "knowledge_lookup" and config.route_handler is not None:
+        raise ValueError("the knowledge lookup profile cannot receive a route handler")
     bundle = config.bundle_path.read_bytes()
     if "sha256:" + hashlib.sha256(bundle).hexdigest() != config.bundle_sha256:
         raise RunnerPreStartError("credential_or_identity_before_start", "pre_start_check")
@@ -125,6 +149,28 @@ def run(runner_input: RunnerInput, config: PageAgentRunnerConfig, *, client: Any
                                          "last_error_code"))
                 raise
 
+        def knowledge_tool(payload: Any) -> Any:
+            if (not isinstance(payload, dict)
+                    or set(payload) != {"run_token", "name", "args"}
+                    or not secrets.compare_digest(str(payload.get("run_token") or ""), token)
+                    or payload.get("name") not in {
+                        item.get("name") for item in config.knowledge_tools
+                    }
+                    or not isinstance(payload.get("args"), dict)
+                    or config.knowledge_handler is None):
+                raise PageAgentHostError("tool_contract")
+            return config.knowledge_handler(payload["name"], payload["args"])
+
+        def open_route(payload: Any) -> dict[str, Any]:
+            valid = (isinstance(payload, dict)
+                     and set(payload) == {"run_token", "route"}
+                     and secrets.compare_digest(str(payload.get("run_token") or ""), token)
+                     and isinstance(payload.get("route"), str)
+                     and config.route_handler is not None)
+            route = payload.get("route", "") if isinstance(payload, dict) else ""
+            allowed = bool(valid and config.route_handler(route))
+            return {"allowed": allowed, "route": route if allowed else ""}
+
         try:
             login(page, config, runner_input.actor)
             if runner_input.entry_path:
@@ -136,6 +182,10 @@ def run(runner_input: RunnerInput, config: PageAgentRunnerConfig, *, client: Any
                 raise RunnerPreStartError("credential_or_identity_before_start",
                                           "pre_start_check")
             page.expose_function("__WOA_PAGEAGENT_PROVIDER_FETCH__", provider_fetch)
+            if config.knowledge_tools:
+                page.expose_function("__WOA_PAGEAGENT_BUSINESS_TOOL__", knowledge_tool)
+            if config.route_handler is not None:
+                page.expose_function("__WOA_PAGEAGENT_OPEN_ROUTE__", open_route)
             page.add_script_tag(content=bundle.decode("utf-8"))
         except RunnerPreStartError:
             raise
@@ -151,7 +201,9 @@ def run(runner_input: RunnerInput, config: PageAgentRunnerConfig, *, client: Any
             "max_steps": config.max_steps, "max_page_actions": config.max_page_actions,
             "wall_ms": int(min(config.wall_time_s, config.attempt_wall_s) * 1000),
             "navigation_mode": "spa",
-            "capability_profile": "browser_only", "instructions": "", "tools": [],
+            "capability_profile": config.capability_profile,
+            "instructions": config.knowledge_instructions,
+            "tools": list(config.knowledge_tools),
             "run_token": token, "request_options": contract.bridge_request_options(),
         }
         try:
