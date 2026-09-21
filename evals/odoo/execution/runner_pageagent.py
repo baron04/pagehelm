@@ -51,6 +51,7 @@ class PageAgentRunnerConfig:
     viewport: tuple[int, int] = (1440, 1000)
     headless: bool = True
     capability_profile: str = "browser_only"
+    system_prompt: str = ""
     knowledge_instructions: str = ""
     knowledge_tools: tuple[dict[str, Any], ...] = ()
     knowledge_handler: Callable[[str, dict[str, Any]], Any] | None = field(
@@ -202,6 +203,7 @@ def run(runner_input: RunnerInput, config: PageAgentRunnerConfig, *, client: Any
             "wall_ms": int(min(config.wall_time_s, config.attempt_wall_s) * 1000),
             "navigation_mode": "spa",
             "capability_profile": config.capability_profile,
+            "system_prompt": config.system_prompt,
             "instructions": config.knowledge_instructions,
             "tools": list(config.knowledge_tools),
             "run_token": token, "request_options": contract.bridge_request_options(),

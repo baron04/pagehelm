@@ -210,7 +210,7 @@ function providerFetch(runToken, metrics) {
 }
 
 async function execute(config) {
-  exactObject(config, ['prompt', 'model', 'language', 'max_steps', 'max_page_actions', 'wall_ms', 'navigation_mode', 'capability_profile', 'instructions', 'tools', 'run_token', 'request_options'], 'baseline config')
+  exactObject(config, ['prompt', 'model', 'language', 'max_steps', 'max_page_actions', 'wall_ms', 'navigation_mode', 'capability_profile', 'system_prompt', 'instructions', 'tools', 'run_token', 'request_options'], 'baseline config')
   const prompt = boundedString(config.prompt, 'prompt', 20000)
   const model = boundedString(config.model, 'model', 120)
   const language = config.language
@@ -222,6 +222,7 @@ async function execute(config) {
   if (!['document', 'spa'].includes(navigationMode)) throw new Error('navigation_mode is unsupported')
   const capabilityProfile = config.capability_profile
   if (!['browser_only', 'knowledge_lookup', 'knowledge_evaluation', 'skill_api'].includes(capabilityProfile)) throw new Error('capability_profile is unsupported')
+  const systemPrompt = config.system_prompt === '' ? '' : boundedString(config.system_prompt, 'system_prompt', 30000)
   const instructions = config.instructions === '' ? '' : boundedString(config.instructions, 'instructions', 100000)
   const runToken = boundedString(config.run_token, 'run_token', 128)
   const requestOptions = exactObject(config.request_options, ['temperature', 'top_p', 'max_completion_tokens', 'parallel_tool_calls'], 'request_options')
@@ -242,6 +243,7 @@ async function execute(config) {
     maxRetries: 0,
     stepDelay: 0,
     customTools,
+    customSystemPrompt: systemPrompt || undefined,
     instructions: instructions ? { system: instructions } : undefined,
     experimentalScriptExecutionTool: false,
     experimentalLlmsTxt: false,

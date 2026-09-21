@@ -1,9 +1,18 @@
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from evals.odoo.domain.tasks import RunnerInput
 from evals.odoo.execution.runner_pageagent import PageAgentRunnerConfig, run
-from evals.odoo.p86c import _route_permit, judge
+from evals.odoo.p86c import (
+    COMPACT_PAGE_SYSTEM,
+    _compact_context,
+    _retrieval_query,
+    _rerank_source_hits,
+    _route_permit,
+    _server_answer,
+    judge,
+)
 
 
 class RoutePermitTests(unittest.TestCase):
@@ -42,6 +51,82 @@ class JudgeTests(unittest.TestCase):
             "page_errors": [],
         }
         self.assertEqual(judge(task, artifact)["failures"], ["wrong_breadcrumb"])
+
+    def test_server_answer_does_not_require_a_browser_artifact(self):
+        task = {"kind": "answer", "oracle": {
+            "all_concepts": [["not paid"], ["paid"]]}}
+        artifact = {
+            "execution": "server_answer",
+            "status": "completed",
+            "answer": "The values include Not Paid and Paid.",
+        }
+        self.assertTrue(judge(task, artifact)["passed"])
+
+
+class OptimizedExecutionTests(unittest.TestCase):
+    def test_compact_page_prompt_is_application_neutral_and_bounded(self):
+        self.assertLess(len(COMPACT_PAGE_SYSTEM), 1500)
+        self.assertNotIn("Odoo", COMPACT_PAGE_SYSTEM)
+
+    def test_retrieval_query_adds_only_generic_label_and_shape_terms(self):
+        query = _retrieval_query(
+            "List every selectable invoice Payment Status value in this version.")
+        self.assertIn("payment_status", query)
+        self.assertIn("selection", query)
+        self.assertNotIn("not_paid", query)
+
+    def test_reranker_prefers_exact_structured_selection_label(self):
+        hits = [
+            SimpleNamespace(
+                fact_type="static_declaration",
+                text="field sale.order.invoice_status (Selection): string=Invoice Status"),
+            SimpleNamespace(
+                fact_type="implementation",
+                text="payment status implementation details"),
+            SimpleNamespace(
+                fact_type="static_declaration",
+                text="field account.move.payment_state (Selection): string=Payment Status"),
+        ]
+        ranked = _rerank_source_hits(
+            "List every selectable invoice Payment Status value. payment_status selection",
+            hits)
+        self.assertIs(ranked[0], hits[2])
+
+    def test_server_answer_uses_one_small_completion_and_server_citations(self):
+        class Client:
+            def __init__(self):
+                self.calls = []
+
+            def complete(self, messages, tools, run_id, **kwargs):
+                self.calls.append((messages, tools, run_id, kwargs))
+                return {"content": "A negative discount is a markup."}
+
+        client = Client()
+        task = {"prompt": "What does a negative discount mean?"}
+        knowledge = SimpleNamespace(calls=[{
+            "citations": ["addons/example/models/item.py:10-12"]}])
+        artifact = _server_answer(
+            task, "C_mixed", "bounded fact", knowledge,
+            client=client, run_id="run-1", timeout_s=20)
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(client.calls[0][1], None)
+        self.assertEqual(client.calls[0][3]["max_tokens"], 768)
+        self.assertEqual(client.calls[0][3]["options"], {"thinking_budget": 256})
+        self.assertIn("addons/example/models/item.py:10-12", artifact["answer"])
+
+    def test_visible_page_control_does_not_trigger_source_retrieval(self):
+        class Lookup:
+            release = "release"
+
+            def search(self, *_args, **_kwargs):
+                raise AssertionError("visible control must not search source")
+
+        context, knowledge = _compact_context(
+            {"category": "visible_page_control", "kind": "navigation", "skill": ""},
+            "C_mixed", raw=Lookup(), mixed=Lookup(), tree=object(),
+            routes_by_evidence={})
+        self.assertIsNone(knowledge)
+        self.assertIn("visible interface", context)
 
 
 class RunnerKnowledgeProfileTests(unittest.TestCase):
