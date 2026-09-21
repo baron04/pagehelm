@@ -19,7 +19,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import urlsplit
 
 from evals.odoo.domain.tasks import RunnerInput
@@ -154,8 +154,6 @@ class KnowledgeSession:
     routes_by_evidence: dict[str, str]
     top_k: int
     max_chars: int
-    candidate_k: int | None = None
-    rerank: Callable[[str, list[Any]], list[Any]] | None = None
     allowed_routes: set[str] = field(default_factory=set)
     calls: list[dict[str, Any]] = field(default_factory=list)
 
@@ -166,11 +164,7 @@ class KnowledgeSession:
         if not isinstance(query, str) or not query.strip() or len(query) > 1000:
             raise ValueError("query must be a non-empty string of at most 1000 characters")
         started = time.perf_counter()
-        hits = list(self.lookup.search(
-            query.strip(), limit=self.candidate_k or self.top_k, route=_compose_route))
-        if self.rerank is not None:
-            hits = self.rerank(query.strip(), hits)
-        hits = hits[:self.top_k]
+        hits = self.lookup.search(query.strip(), limit=self.top_k, route=_compose_route)
         rows: list[dict[str, Any]] = []
         verified = True
         for rank, hit in enumerate(hits, 1):
@@ -238,51 +232,6 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text.casefold().replace("‑", "-")).strip()
 
 
-def _retrieval_query(prompt: str) -> str:
-    """Add syntax-shaped terms without injecting application-specific answer words."""
-    additions: list[str] = []
-    for phrase in re.findall(r"\b[A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*)+\b", prompt):
-        identifier = "_".join(phrase.casefold().split())
-        if identifier not in additions:
-            additions.append(identifier)
-    normalized = prompt.casefold()
-    if any(term in normalized for term in ("selectable", "selection", "list every")):
-        additions.append("selection")
-    if any(term in normalized for term in ("open the", "page", "screen")):
-        additions.extend(("action", "menu", "view"))
-    return " ".join((prompt, *additions))
-
-
-def _rerank_source_hits(query: str, hits: list[Any]) -> list[Any]:
-    """Prefer exact user-facing labels and structured facts without app vocabulary."""
-    labels = [phrase.casefold() for phrase in re.findall(
-        r"\b[A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*)+\b", query)]
-    wants_selection = any(term in query.casefold() for term in (
-        "selectable", "selection", "list every"))
-
-    def score(indexed: tuple[int, Any]) -> tuple[int, int]:
-        index, hit = indexed
-        text = _normalize(str(hit.text))
-        value = 0
-        for label in labels:
-            if f"string={label}" in text:
-                value += 20
-            elif label in text:
-                value += 8
-            if label.replace(" ", "_") in text:
-                value += 4
-        if hit.fact_type == "static_declaration":
-            value += 3
-        if wants_selection and "(selection)" in text:
-            value += 12
-        if wants_selection and text.startswith("field "):
-            value += 4
-        return value, -index
-
-    return [hit for _index, hit in sorted(
-        enumerate(hits), key=score, reverse=True)]
-
-
 def judge(task: dict[str, Any], artifact: dict[str, Any]) -> dict[str, Any]:
     answer = ""
     failures: list[str] = []
@@ -342,9 +291,8 @@ def _compact_context(task: dict[str, Any], arm: str, *, raw: SourceLookup,
     top_k = 1 if task.get("kind") == "navigation" else PERFORMANCE_SOURCE_TOP_K
     session = KnowledgeSession(
         lookup, tree, routes_by_evidence if arm == "C_mixed" else {},
-        top_k, PERFORMANCE_SOURCE_MAX_CHARS,
-        candidate_k=20, rerank=_rerank_source_hits)
-    evidence = session.handle("lookup_source", {"query": _retrieval_query(task["prompt"])})
+        top_k, PERFORMANCE_SOURCE_MAX_CHARS)
+    evidence = session.handle("lookup_source", {"query": task["prompt"]})
     return "Deployed-source evidence:\n" + json.dumps(
         evidence, ensure_ascii=False, sort_keys=True, separators=(",", ":")), session
 

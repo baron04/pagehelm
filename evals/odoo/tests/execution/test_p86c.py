@@ -7,8 +7,6 @@ from evals.odoo.execution.runner_pageagent import PageAgentRunnerConfig, run
 from evals.odoo.p86c import (
     COMPACT_PAGE_SYSTEM,
     _compact_context,
-    _retrieval_query,
-    _rerank_source_hits,
     _route_permit,
     _server_answer,
     judge,
@@ -68,29 +66,26 @@ class OptimizedExecutionTests(unittest.TestCase):
         self.assertLess(len(COMPACT_PAGE_SYSTEM), 1500)
         self.assertNotIn("Odoo", COMPACT_PAGE_SYSTEM)
 
-    def test_retrieval_query_adds_only_generic_label_and_shape_terms(self):
-        query = _retrieval_query(
-            "List every selectable invoice Payment Status value in this version.")
-        self.assertIn("payment_status", query)
-        self.assertIn("selection", query)
-        self.assertNotIn("not_paid", query)
+    def test_optimized_evaluation_uses_the_exact_query_and_bounded_result_count(self):
+        class Lookup:
+            release = "release"
 
-    def test_reranker_prefers_exact_structured_selection_label(self):
-        hits = [
-            SimpleNamespace(
-                fact_type="static_declaration",
-                text="field sale.order.invoice_status (Selection): string=Invoice Status"),
-            SimpleNamespace(
-                fact_type="implementation",
-                text="payment status implementation details"),
-            SimpleNamespace(
-                fact_type="static_declaration",
-                text="field account.move.payment_state (Selection): string=Payment Status"),
-        ]
-        ranked = _rerank_source_hits(
-            "List every selectable invoice Payment Status value. payment_status selection",
-            hits)
-        self.assertIs(ranked[0], hits[2])
+            def __init__(self):
+                self.calls = []
+
+            def search(self, query, *, limit=8, route=None):
+                self.calls.append((query, limit, route))
+                return ()
+
+        raw = Lookup()
+        context, knowledge = _compact_context(
+            {"category": "field_semantics", "kind": "answer", "skill": "",
+             "prompt": "List Payment Status values."},
+            "B_raw", raw=raw, mixed=Lookup(), tree=object(), routes_by_evidence={})
+        self.assertIsNotNone(knowledge)
+        self.assertIn("Deployed-source evidence", context)
+        self.assertEqual(raw.calls[0][0], "List Payment Status values.")
+        self.assertEqual(raw.calls[0][1], 5)
 
     def test_server_answer_uses_one_small_completion_and_server_citations(self):
         class Client:
