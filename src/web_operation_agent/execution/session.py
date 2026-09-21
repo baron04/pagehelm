@@ -62,12 +62,12 @@ from .context import (RENDER_ELEMENTS, SessionContext, _PLAN_MARK,
 from .lifecycle import SessionLifecycle
 from .runstate import (CAPABILITY_GAP_TERMINAL, LabApparatus, NO_LAB, RunResult,
                        TaskSpec, _Next, _Turn)
-from ..business.writes import PRE_DISPATCH_ERRORS, WRITE_CAPABLE, WatchState, WriteWatch
+from ..business.writes import PRE_DISPATCH_ERRORS, WatchState, WriteWatch
 from .prompts import (AGENT_SYSTEM, SCOPE_FIRST_SYSTEM, TOOL_SCHEMAS, _CAPABILITY_QUESTION,
                       _NAVIGATION_EXTRA_GOAL, _NAVIGATION_ONLY, _PLAN_PREAMBLE,
                       _REFERENCE_FOLLOWUP, _assistant_call, _tool_result, _trim)
 from ..schemas import (BROWSER_ACTIONS, ActionReceipt, ControlPlan, OperationContract,
-                      PageObservation, digest, empty_contract)
+                       PageObservation, digest, empty_contract)
 from ..answer.evidence import EvidenceUnknown
 
 #: Describe a plan by its actual origin. A page-only plan must never be presented to the model

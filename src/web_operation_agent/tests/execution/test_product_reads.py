@@ -44,7 +44,8 @@ from web_operation_agent.execution.product import (
     AgentTurnStatus,
 )
 from web_operation_agent.transport import RemoteSessionClosed
-from web_operation_agent.schemas import ApprovalDecision, ObservationEnvelope
+from web_operation_agent.schemas import (POTENTIALLY_WRITING_ACTIONS, ApprovalDecision,
+                                         ObservationEnvelope)
 from web_operation_agent.tests.support.business import (
     _Browser,
     _Chat,
@@ -63,6 +64,9 @@ from web_operation_agent.tests.execution.product_support import (
     _BrokenAfterRunChannel, _Channel, _ClosingAfterRunChannel, _PageChangingBrowser,
     _RemoteBrowser, _message, _principal,
 )
+
+
+READ_ONLY_NAVIGATION_POLICY = POTENTIALLY_WRITING_ACTIONS - {"goto"}
 
 
 class ProductReadAndNavigationTests(unittest.TestCase):
@@ -158,6 +162,7 @@ class ProductReadAndNavigationTests(unittest.TestCase):
                     supported_scope="Read and open one company.",
                     ledger_path=root / "session.jsonl",
                     deterministic_read_navigation=True,
+                    disabled_actions=READ_ONLY_NAVIGATION_POLICY,
                 ),
                 chat=chat,
                 business_tools=BusinessToolRuntime((skill,), _Executor()),
@@ -207,6 +212,7 @@ class ProductReadAndNavigationTests(unittest.TestCase):
                     supported_scope="Read and open one company.",
                     ledger_path=root / "session.jsonl",
                     deterministic_read_navigation=True,
+                    disabled_actions=READ_ONLY_NAVIGATION_POLICY,
                 ),
                 chat=chat, business_tools=runtime, control=ReadOnlyControl(),
                 run_id_factory=lambda _message: "turn-route-context-navigation",
@@ -252,6 +258,7 @@ class ProductReadAndNavigationTests(unittest.TestCase):
                     supported_scope="Read and open one company.",
                     ledger_path=root / "session.jsonl",
                     deterministic_read_navigation=True,
+                    disabled_actions=READ_ONLY_NAVIGATION_POLICY,
                 ),
                 chat=chat,
                 business_tools=BusinessToolRuntime((skill,), _Executor()),
@@ -290,6 +297,7 @@ class ProductReadAndNavigationTests(unittest.TestCase):
                     ledger_path=root / "session.jsonl",
                     deterministic_read_navigation=True,
                     plain_business_answer_min_page_actions=0,
+                    disabled_actions=READ_ONLY_NAVIGATION_POLICY,
                 ),
                 chat=chat,
                 business_tools=BusinessToolRuntime((skill,), _Executor()),
@@ -333,6 +341,7 @@ class ProductReadAndNavigationTests(unittest.TestCase):
                     ledger_path=root / "session.jsonl",
                     deterministic_read_navigation=True,
                     plain_business_answer_min_page_actions=0,
+                    disabled_actions=READ_ONLY_NAVIGATION_POLICY,
                 ),
                 chat=chat,
                 business_tools=BusinessToolRuntime((skill,), _Executor()),
@@ -420,6 +429,7 @@ class ProductReadAndNavigationTests(unittest.TestCase):
                     ledger_path=root / "session.jsonl",
                     deterministic_read_navigation=True,
                     plain_business_answer_min_page_actions=0,
+                    disabled_actions=READ_ONLY_NAVIGATION_POLICY,
                 ),
                 chat=chat,
                 business_tools=BusinessToolRuntime((orders, companies),

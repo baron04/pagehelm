@@ -18,6 +18,7 @@ from ..composition.sources import SourceCapability
 from ..answer.answering import render_structured_query_answer
 from ..answer.answer_view import render_payload
 from ..business.runtime import BusinessToolResult
+from ..schemas import BROWSER_ACTIONS, POTENTIALLY_WRITING_ACTIONS
 from ..transport.panel_view import panel_limits
 from ..transport.protocol import RemoteProtocolError, ensure_safe_browser_payload
 from .session import RunResult
@@ -111,7 +112,9 @@ class AgentTurnConfig:
     step_budget: int = 8
     wall_budget_s: int = 240
     transport_timeout_s: float = 60.0
-    disabled_actions: frozenset[str] = frozenset()
+    # Fail closed for every browser action that can initiate an application write. An
+    # integration opts into a reviewed subset by supplying its complete disabled set.
+    disabled_actions: frozenset[str] = POTENTIALLY_WRITING_ACTIONS
     scope_first_policy: bool = True
     page_answer_evidence: bool = True
     #: How many pre-dispatch action-policy refusals a turn survives. The product already
@@ -189,6 +192,12 @@ class AgentTurnConfig:
         if not isinstance(self.disabled_actions, frozenset) \
                 or any(not isinstance(item, str) for item in self.disabled_actions):
             raise ValueError("disabled_actions must be a frozenset of tool names")
+        unknown_disabled = self.disabled_actions - BROWSER_ACTIONS
+        if unknown_disabled:
+            raise ValueError(
+                f"disabled actions are not browser tools: {sorted(unknown_disabled)}")
+        if "observe" in self.disabled_actions:
+            raise ValueError("observe cannot be disabled: policy refusals need a fresh page")
         if not isinstance(self.source, SourceCapability):
             raise TypeError("source must be a SourceCapability")
         if self.deployment_profile not in {"production", "test"}:

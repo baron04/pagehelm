@@ -10,8 +10,9 @@ from .terminal import (INDETERMINATE_TERMINAL_REASONS, INVALIDATING_TERMINAL_REA
                        assert_terminal_reason_contract, classify_terminal)
 from .planning import (RELATION_KINDS, ContractStep, EvidenceRef, MutationSignature,
                        OperationContract, SourceMap, SourceRelation, empty_contract)
-from .browser import (BROWSER_ACTIONS, RECEIPT_ERRORS, ActionCommand, ActionReceipt,
-                      ElementRef, PageObservation)
+from .browser import (BROWSER_ACTIONS, INTRINSICALLY_READ_ONLY_ACTIONS,
+                      POTENTIALLY_WRITING_ACTIONS, RECEIPT_ERRORS, ActionCommand,
+                      ActionReceipt, ElementRef, PageObservation)
 from .protocol import (ACTION_RESULT_ERRORS, ACTION_RESULT_STATUSES, APPROVAL_KINDS,
                        TASK_EVENT_KINDS, ActionEnvelope, ActionResultEnvelope,
                        ApprovalDecision, ApprovalRequest, CancellationRequest, ClientHello,

@@ -10,12 +10,8 @@ from __future__ import annotations
 from .controlplane import ControlPlaneClient, ControlPlaneError
 from ..execution.grounding import WRITE_MIXED, WRITE_UNKNOWN
 from ..state.ledger import SessionLedger
-from ..schemas import ActionReceipt
+from ..schemas import ActionReceipt, POTENTIALLY_WRITING_ACTIONS
 
-
-# Some applications write during navigation or onchange.  Only observation and waiting are
-# intrinsically non-writing browser actions.
-WRITE_CAPABLE = frozenset({"click", "submit", "fill", "select", "goto", "back"})
 
 # Worker failures that prove the action did not reach the page.  In particular,
 # ``navigation_timeout`` stays out: the click may already have fired a request while the
@@ -111,7 +107,7 @@ class WriteWatch:
         later, so ambiguous dispatch failures stop immediately, even with no event yet.
         """
         if action_may_write is None:
-            action_may_write = receipt.action in WRITE_CAPABLE
+            action_may_write = receipt.action in POTENTIALLY_WRITING_ACTIONS
         try:
             events, self.control_seen = self.control.since(self.control_seen)
         except ControlPlaneError as exc:

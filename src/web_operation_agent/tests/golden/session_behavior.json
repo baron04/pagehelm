@@ -2055,9 +2055,10 @@
         },
         {
           "event": "business_route_opened",
+          "route_intent": "read_only",
           "run_id": "business_read_then_open_the_authorised_route",
           "seq": 12,
-          "side_effect_possible": false,
+          "side_effect_possible": true,
           "step": 3,
           "url_digest": "428bdb4b4cdf633234ec56c963d641984997e5c88b2421eb820bda521d51e7f1"
         },

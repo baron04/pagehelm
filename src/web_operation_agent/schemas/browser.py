@@ -15,6 +15,13 @@ BROWSER_ACTIONS = frozenset({
     "observe", "goto", "click", "fill", "select", "submit", "back", "wait_for",
 })
 
+# Only these two actions are intrinsically unable to initiate an application request that
+# changes state. Navigation is deliberately included in the complement: a GET, route
+# transition or onchange handler can write in legacy applications. Product policy and the
+# write witness import this one set so they cannot silently disagree.
+INTRINSICALLY_READ_ONLY_ACTIONS = frozenset({"observe", "wait_for"})
+POTENTIALLY_WRITING_ACTIONS = BROWSER_ACTIONS - INTRINSICALLY_READ_ONLY_ACTIONS
+
 
 @dataclass(frozen=True)
 class ActionCommand:

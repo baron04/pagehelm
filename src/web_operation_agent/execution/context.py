@@ -6,10 +6,11 @@ import json
 from zoneinfo import ZoneInfo
 
 from ..planning.affordance import SourceAffordance, resolve_source_affordances
-from ..business.writes import PRE_DISPATCH_ERRORS, WRITE_CAPABLE, WatchState
+from ..business.writes import PRE_DISPATCH_ERRORS, WatchState
 from .grounding import NOT_APPLICABLE, REFUTED, WRITE_PERMITTED, WRITE_REFUSED
 from ..planning.retrieval import EvidenceBundle
-from ..schemas import ActionReceipt, OperationContract, PageObservation
+from ..schemas import (POTENTIALLY_WRITING_ACTIONS, ActionReceipt, OperationContract,
+                       PageObservation)
 from . import knowledge_tools
 from .business_tools import render_business_skills
 from .prompts import _PLAN_PREAMBLE
@@ -111,7 +112,7 @@ class SessionContext:
 
     # Kept as class aliases because the remote-protocol schema test treats these as the
     # session's public safety vocabulary. Settlement itself lives in ``WriteWatch``.
-    WRITE_CAPABLE = WRITE_CAPABLE
+    WRITE_CAPABLE = POTENTIALLY_WRITING_ACTIONS
     PRE_DISPATCH_ERRORS = PRE_DISPATCH_ERRORS
     latest_business_tool_result = AnswerState("latest_business_tool_result")
     evidence = AnswerState("evidence")
@@ -147,7 +148,8 @@ class SessionContext:
     def _transport_terminal(self, action: str = "", *, may_write: bool | None = None) -> str:
         # A readable empty trace is not evidence that a lost click never dispatched, and
         # observing after a permit does not clear the earlier unconfirmed write.
-        action_may_write = action in WRITE_CAPABLE if may_write is None else may_write
+        action_may_write = (action in POTENTIALLY_WRITING_ACTIONS
+                            if may_write is None else may_write)
         if self._cancel_requested() and not self.pending_write and not action_may_write:
             return "user_cancelled"
         return ("indeterminate_write" if self.pending_write or action_may_write

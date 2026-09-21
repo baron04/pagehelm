@@ -14,10 +14,10 @@ from urllib.parse import urljoin, urlsplit
 from ..answer import answer_protocol, page_answer
 from ..answer.evidence import EvidenceUnknown
 from ..transport.browser import TransportError, TurnCancelled
-from ..business.writes import WRITE_CAPABLE
 from .grounding import WRITE_PERMITTED
 from ..privacy import redact_sensitive_assignments, safe_tool_arguments as _safe
-from ..schemas import BROWSER_ACTIONS, ActionReceipt, PageObservation
+from ..schemas import (BROWSER_ACTIONS, POTENTIALLY_WRITING_ACTIONS, ActionReceipt,
+                       PageObservation)
 from .knowledge_tools import capability_check_available, capability_check_feedback
 from .prompts import _assistant_call, _tool_result, _trim
 from .runstate import _Next, _StepEnd, _Turn
@@ -148,8 +148,10 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
                                url=str(url or "")[:500])
             return session._resume(turn, messages, obs, successful_business_tools)
         source_route_citations = sorted(citations)
-        session.ledger.append("source_route_opened", step=step, url=str(url)[:500],
-                           citations=source_route_citations)
+        session.ledger.append(
+            "source_route_opened", step=step, url=str(url)[:500],
+            citations=source_route_citations, route_intent="read_only",
+            side_effect_possible=True)
         source_route_read_only = True
         name, args = "goto", {"url": url}
 
@@ -195,7 +197,7 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
             session.ledger.append(
                 "business_route_opened", step=step,
                 url_digest=hashlib.sha256(url.encode()).hexdigest(),
-                side_effect_possible=False)
+                route_intent="read_only", side_effect_possible=True)
         elif not isinstance(url, str) or not _page_link_allows(url, obs):
             messages += [_assistant_call(call), _tool_result(
                 call, "Direct navigation is allowed only to an exact link on the "
@@ -225,7 +227,10 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
         messages = _trim(messages, session.keep_observations)
         return session._resume(turn, messages, obs, successful_business_tools)
 
-    action_may_write = name in WRITE_CAPABLE and not source_route_read_only
+    # A route can be read-only in business intent and still cause an application request
+    # with side effects. Route provenance constrains where navigation may go; it never
+    # downgrades transport write risk or bypasses the control witness.
+    action_may_write = name in POTENTIALLY_WRITING_ACTIONS
     if session.pending_write and action_may_write:
         return _Next(session._finish(result, t0, "indeterminate_write",
                             "another potentially writing action was requested while a "

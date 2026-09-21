@@ -226,7 +226,7 @@ class RuntimeSourceLoop(unittest.TestCase):
                 self.assertEqual([a for a, _ in browser.done], ["observe"])
                 self.assertEqual(len(session.ledger.of_kind("source_route_rejected")), 1)
 
-    def test_cited_view_route_can_verify_after_a_write_without_dispatching_another_write(self):
+    def test_cited_view_route_cannot_bypass_an_unconfirmed_write(self):
         permit = {"event": "permit_consumed", "webapp": "glasshouse",
                   "uri": "updateTray"}
         with tempfile.TemporaryDirectory() as tmp:
@@ -247,9 +247,9 @@ class RuntimeSourceLoop(unittest.TestCase):
                                         runtime_source=True))
             session.entry_observation = _obs(1)
             result = session.run()
-            self.assertEqual(result.terminal_reason, "agent_refused")
-            self.assertEqual([a for a, _ in browser.done], ["click", "observe", "goto"])
-            self.assertEqual(result.page_actions, 2)
+            self.assertEqual(result.terminal_reason, "indeterminate_write")
+            self.assertEqual([a for a, _ in browser.done], ["click", "observe"])
+            self.assertEqual(result.page_actions, 1)
             self.assertEqual(result.spend["provider_calls"], 0)
 
     def test_generic_goto_cannot_invent_a_route_absent_from_the_page(self):

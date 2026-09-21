@@ -220,5 +220,40 @@ class SQLiteMutationJournalTests(MutationJournalContract, unittest.TestCase):
         self.assertEqual(journal.get(PROPOSAL).state, "dispatching")
 
 
+class MutationJournalBackendParity(unittest.TestCase):
+    """Ambiguous refusals must resolve to the same typed reason on both backends."""
+
+    def _reasons_with_key_collision(self, journal):
+        key = "d" * 64
+        blocker = "e" * 64
+        journal.register(blocker, CONTEXT, expires_at=4_000, now_ms=1_000,
+                         business_key=key)
+        journal.claim(blocker, CONTEXT, now_ms=1_001)
+        journal.register(PROPOSAL, CONTEXT, expires_at=2_000, now_ms=1_000,
+                         business_key=key)
+        reasons = []
+        for context, now in (("f" * 64, 1_002), (CONTEXT, 2_000), (CONTEXT, 1_002)):
+            with self.assertRaises(MutationClaimError) as refusal:
+                journal.claim(PROPOSAL, context, now_ms=now)
+            reasons.append((refusal.exception.reason, refusal.exception.state))
+        return reasons
+
+    def test_claim_precondition_priority_is_identical(self):
+        with tempfile.TemporaryDirectory() as directory:
+            journals = (
+                MemoryMutationJournal(),
+                SQLiteMutationJournal(Path(directory) / "parity.sqlite3"),
+            )
+            outcomes = [self._reasons_with_key_collision(journal)
+                        for journal in journals]
+
+        self.assertEqual(outcomes[0], outcomes[1])
+        self.assertEqual(outcomes[0], [
+            ("context_mismatch", ""),
+            ("expired", ""),
+            ("business_key_unresolved", ""),
+        ])
+
+
 if __name__ == "__main__":
     unittest.main()

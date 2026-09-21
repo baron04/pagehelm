@@ -12,6 +12,7 @@ import tempfile
 from pathlib import Path
 
 from web_operation_agent.execution.product import AgentTurnConfig
+from web_operation_agent.schemas import POTENTIALLY_WRITING_ACTIONS
 from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.execution.session import LabApparatus, TOOL_SCHEMAS, ServerAgentSession, TaskSpec
 from web_operation_agent.tests.support.execution import _Browser, _Chat, _Control, _obs
@@ -64,6 +65,13 @@ class TheRecoveryBudgetLetsTheRefusalReachTheModel(unittest.TestCase):
         return AgentTurnConfig(
             supported_scope="read", ledger_path=Path(self.directory.name) / "audit.jsonl",
             **changes)
+
+    def test_product_policy_fails_closed_for_every_potentially_writing_action(self):
+        self.assertEqual(
+            self._config().disabled_actions, POTENTIALLY_WRITING_ACTIONS)
+        self.assertEqual(self._config(disabled_actions=frozenset()).disabled_actions,
+                         frozenset())
+
     def test_the_default_survives_a_refusal(self):
         self.assertGreater(self._config().policy_block_limit, 1)
 

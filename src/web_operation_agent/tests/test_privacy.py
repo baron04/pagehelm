@@ -8,6 +8,7 @@ from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.privacy import (
     SESSION_HANDOFF_KEYS,
     SESSION_HANDOFF_QUERY_KEYS,
+    SENSITIVE_CREDENTIAL_NAME,
     SessionHandoffPolicy,
     has_unredacted_sensitive_assignment,
     has_unredacted_session_handoff,
@@ -15,6 +16,28 @@ from web_operation_agent.privacy import (
     redact_session_handoffs,
 )
 from web_operation_agent.execution.session import _safe
+
+
+SHARED_REDACTION_CASES = json.loads(
+    (Path(__file__).parent / "golden" / "redaction_cases.json").read_text())
+
+
+class BrowserServerRedactionParity(unittest.TestCase):
+    """The Python boundary consumes the same security corpus as the TypeScript Runtime."""
+
+    def test_shared_string_and_name_vocabulary(self):
+        policy = SessionHandoffPolicy.extending(
+            SHARED_REDACTION_CASES["extra_keys"])
+        for case in SHARED_REDACTION_CASES["string_cases"]:
+            with self.subTest(case=case["name"]):
+                cleaned = redact_sensitive_assignments(policy.redact(case["input"]))
+                self.assertEqual(cleaned, case["expected"])
+        for case in SHARED_REDACTION_CASES["name_cases"]:
+            with self.subTest(name=case["input"]):
+                sensitive = bool(
+                    SENSITIVE_CREDENTIAL_NAME.search(case["input"])
+                    or case["input"].casefold() in policy.query_keys)
+                self.assertEqual(sensitive, case["sensitive"])
 
 
 class SessionHandoffPrivacy(unittest.TestCase):

@@ -10,6 +10,7 @@ from web_operation_agent.business.runtime import BusinessToolRuntime
 from web_operation_agent.business.control import ReadOnlyControl
 from web_operation_agent.answer.evidence import Origin, QueryEvidence, RecordEvidence
 from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnExecutor, AgentTurnStatus
+from web_operation_agent.schemas import POTENTIALLY_WRITING_ACTIONS
 from web_operation_agent.tests.support.business import _Chat, _ProjectedExecutor, _skill
 from web_operation_agent.tests.execution.product_support import _Channel, _RemoteBrowser
 from web_operation_agent.tests.support.answer import _answer
@@ -41,7 +42,9 @@ class DefaultProductAnswerPath(unittest.TestCase):
                 channel=_Channel(), chat=chat, business_tools=tools,
                 config=AgentTurnConfig(supported_scope="Read companies.",
                                        ledger_path=root / "run.jsonl",
-                                       plain_business_answer_min_page_actions=0),
+                                       plain_business_answer_min_page_actions=0,
+                                       disabled_actions=(
+                                           POTENTIALLY_WRITING_ACTIONS - {"goto"})),
                 control=ReadOnlyControl(), run_id_factory=lambda message: "answer-run", **kwargs)
             with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
                 result = executor.run_once({"message_id": "answer-task", "text": "公司金额合计多少？",

@@ -1,0 +1,49 @@
+{
+  "extra_keys": ["externalLoginKey", "tenantSessionKey"],
+  "string_cases": [
+    {
+      "name": "generic query credential",
+      "input": "https://app.test/login?password=hunter2&ok=1",
+      "expected": "https://app.test/login?password=[redacted]&ok=1"
+    },
+    {
+      "name": "generic access token",
+      "input": "/callback?access_token=TOPSECRET&next=1",
+      "expected": "/callback?access_token=[redacted]&next=1"
+    },
+    {
+      "name": "repeatedly encoded assignment",
+      "input": "/callback?access_token%253Dabc%2526next=1",
+      "expected": "/callback?access_token%253D[redacted]%2526next=1"
+    },
+    {
+      "name": "encoded credential key",
+      "input": "https://app.test/x?%70assword=secret",
+      "expected": "[redacted]"
+    },
+    {
+      "name": "baseline session handoff",
+      "input": "/sso?externalLoginKey=abc123&next=1",
+      "expected": "/sso?externalLoginKey=[redacted]&next=1"
+    },
+    {
+      "name": "adapter session handoff",
+      "input": "/sso?tenantSessionKey=abc123&next=1",
+      "expected": "/sso?tenantSessionKey=[redacted]&next=1"
+    },
+    {
+      "name": "ordinary business URL",
+      "input": "https://app.test/companies?stage=won&sort=name",
+      "expected": "https://app.test/companies?stage=won&sort=name"
+    }
+  ],
+  "name_cases": [
+    {"input": "password", "sensitive": true},
+    {"input": "apiKey", "sensitive": true},
+    {"input": "refresh_token", "sensitive": true},
+    {"input": "authorizationHeader", "sensitive": true},
+    {"input": "tenantSessionKey", "sensitive": true},
+    {"input": "customer_id", "sensitive": false},
+    {"input": "tokenLabel", "sensitive": true}
+  ]
+}

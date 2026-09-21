@@ -1,5 +1,19 @@
 import {describe, expect, it} from 'vitest'
 import {createRedactor, sensitiveQueryKeys} from '../src/runtime/redaction'
+import sharedCases from '../../src/web_operation_agent/tests/golden/redaction_cases.json'
+
+describe('browser and server redaction share one security corpus', () => {
+  const redactor = createRedactor(sharedCases.extra_keys)
+
+  it('agrees on string redaction and sensitive field names', () => {
+    for (const testCase of sharedCases.string_cases) {
+      expect(redactor.redactString(testCase.input), testCase.name).toBe(testCase.expected)
+    }
+    for (const testCase of sharedCases.name_cases) {
+      expect(redactor.isSensitiveName(testCase.input), testCase.input).toBe(testCase.sensitive)
+    }
+  })
+})
 
 describe('sensitiveQueryKeys validates a deployment extra list', () => {
   it('accepts safe names and rejects anything else', () => {

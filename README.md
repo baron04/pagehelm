@@ -19,8 +19,10 @@ agent.
   is optional and never a prerequisite for ordinary browser or API operation.
 - Browser actions are checked against the current observation and application route policy.
   Page switches require a visible confirmation.
-- Writes are disabled by default. An enabled write binds its exact effect and targets to a
-  fresh one-use approval, dispatches at most once, and is verified through the application.
+- Writes are disabled by default. Core turn configuration initially disables every browser
+  action that can initiate an application write, including navigation; an adapter must
+  explicitly opt into its reviewed subset. An enabled write binds its exact effect and
+  targets to a fresh one-use approval, dispatches at most once, and is verified through the application.
   A timed-out or otherwise uncertain write is recorded as `indeterminate` and never retried
   automatically.
 - A short-lived actor/tenant/workspace principal can be bound to the browser capability,

@@ -74,7 +74,7 @@ flowchart TB
     Evaluator[隐藏 Evaluator] -.执行结束后只读.-> Truth[隔离的业务真值]
 ```
 
-浏览器到服务端的页面观察、动作结果、用户消息和确认决定通过认证的 POST 返回；服务端到浏览器的动作与进度通过 SSE 事件发送。`LiveProductServer` 可以让多个隔离 session 共享一个有容量上限的 Gateway，并独立撤销 capability 和释放 channel 状态。当前 Gateway 只监听本机回环地址，状态仍在单进程内存中，因此它还不是生产网络入口。
+浏览器到服务端的页面观察、动作结果、用户消息和确认决定通过认证的 POST 返回；服务端到浏览器的动作与进度通过 SSE 事件发送。`LiveProductServer` 可以让多个隔离 session 共享一个有容量上限的 Gateway，并独立撤销 capability 和释放 channel 状态。Gateway 默认只监听本机回环地址；部署方只有同时显式开启 `allow_private_network_bind`、绑定 `0.0.0.0` 并提供 HTTPS `public_base_url` 时才能把它放到私网反向代理之后。这项逃生门不把 Gateway 变成可直接暴露的生产网络入口，状态仍在单进程内存中。
 
 ## 3. 组件职责
 
@@ -101,7 +101,7 @@ Runtime 运行在业务页面的同源脚本环境中。因此当前安全模型
 
 Gateway 为每个会话签发随机 capability，并绑定允许的页面 Origin。Registry 只保存 token 哈希，产品宿主在会话存续期间保留用于生成 bootstrap 的原始 grant。Runtime 建立连接后还会取得活动 lease；整页导航产生的新 Runtime 会替换旧 lease，旧页面不能继续提交观察或结果。共享 server 对活动 session 数量执行准入上限；关闭一个 session 会原子移除其 token 哈希与 channel，使旧 capability 立即失效而不影响其他 session。每个 session 默认最多存活一小时，并对事件、已接受消息、待处理消息、观察标识、动作、审批和 Runtime 实例分别设置硬上限。消息队列达到瞬时上限时返回可重试的 429；生命周期状态达到硬上限时保留最后一个 terminal 事件并关闭 session。无限等待消息的 Host 也会在 TTL 到达时被唤醒，因此空闲会话不会永久占用线程和准入名额。
 
-Gateway 在 loopback 管理面提供两个无凭据探针：`/healthz` 只证明 HTTP 进程仍在响应，`/readyz` 表示组合仍可处理工作。就绪响应经过固定 schema 投影，只允许协议版本、是否就绪、是否接受新 session、当前 session 数量、容量和 provider guard 的数值/布尔状态；不包含 session id、capability、Origin、用户输入、页面内容、应用数据或回调错误正文。Provider 电路打开时返回 503，但容量已满只会把 `accepting_sessions` 设为 false，现有 session 仍可由同一进程服务。回调异常、字段畸形或不一致会返回不含异常文本的 503。该管理面目前只绑定 loopback，尚未替代部署平台的认证监控、指标采集和告警。
+Gateway 在与业务端点相同的监听地址上提供两个无凭据探针：`/healthz` 只证明 HTTP 进程仍在响应，`/readyz` 表示组合仍可处理工作。默认监听为 loopback；启用上述私网绑定逃生门时，反向代理与网络策略也必须限制探针。就绪响应经过固定 schema 投影，只允许协议版本、是否就绪、是否接受新 session、当前 session 数量、容量和 provider guard 的数值/布尔状态；不包含 session id、capability、Origin、用户输入、页面内容、应用数据或回调错误正文。Provider 电路打开时返回 503，但容量已满只会把 `accepting_sessions` 设为 false，现有 session 仍可由同一进程服务。回调异常、字段畸形或不一致会返回不含异常文本的 503。这些探针尚未替代部署平台的认证监控、指标采集和告警。
 
 
 Remote Session 维护严格 schema 的消息、观察、动作、结果、确认和事件序列。每个页面动作必须：
@@ -246,7 +246,7 @@ App Skill 适合描述当前菜单不可见、但已审核的只读页面入口�
 
 ### 7.1 读取与导航
 
-只读任务可以在 turn 配置中禁用点击、填写、选择和提交，只开放观察及受限导航。页面策略拒绝发生在 dispatch 前；拒绝后通常会取得新观察，让 Agent 选择其他路径。
+Turn 配置默认关闭点击、填写、选择、提交、跳转和返回，只保留观察与等待。应用 Adapter 必须用完整的 `disabled_actions` 显式开放经过审查的子集；Odoo 只开放受限导航。页面策略拒绝发生在 dispatch 前；拒绝后通常会取得新观察，让 Agent 选择其他路径。
 
 业务读取必须经已加载 Skill 的 typed tool。它使用 Adapter 管理的委托身份，并把当前数据作为 ToolResult 返回。API 返回的页面路径只是后续导航能力，不自动证明用户目标已经完成。
 
@@ -271,11 +271,11 @@ Business Skill 候选只根据当前用户文本和受限的历史用户文本�
 
 ### 7.3 页面写入
 
-页面中的点击、填写、选择、提交、跳转和返回在部分旧式应用中都可能触发服务端写入，不能仅凭工具名称判断安全性。`ServerAgentSession` 能读取注入 control 的许可与拒绝事件，并在许可已消耗但结果未确认时停止后续潜在写入。
+页面中的点击、填写、选择、提交、跳转和返回在部分旧式应用中都可能触发服务端写入，不能仅凭工具名称判断安全性。路由被源码、Skill 或 typed ToolResult 声明为“只读”，只约束业务意图和允许到达的位置，不会降低这次浏览器导航的写入风险。上述动作统一进入 control 见证；结果丢失时按不确定写入结束，许可已消耗但结果未确认时也禁止后续潜在写入。
 
 仓库保留的旧 `ControlPlaneClient` 面向一个许可和 trace 均为全局状态的外部网关。客户端会在本机线程和进程间独占这个网关，在 run 开始前重置状态，将 `run_id` 附加到声明，并在读取最终 trace 后再次清空状态才释放租约。密钥只允许从不超过 4 KiB、非链接且不对 group/world 开放的普通文件读取；管理请求拒绝重定向和超限响应。结束清理失败会保留租约并使只读 run 失败，已出现写入决策的 run 则进入 `INDETERMINATE`。这是一条防止协作客户端串 run 的兼容边界，不支持并发页面写入，也不能代替网关内部的 tenant/session/turn/operation scope、TTL 和 replay protection。
 
-当前通用 Turn Executor 不根据自然语言自行生成或安装隐藏 ControlPlan。产品组合只有在外部控制层已经建立精确许可和网络侧 fail-closed 约束时，才能开放页面写动作；否则必须通过 `disabled_actions` 在 dispatch 前关闭这些动作。当前公司创建纵切采用受确认的服务端 API 写入，页面执行层只负责受限导航。
+当前通用 Turn Executor 不根据自然语言自行生成或安装隐藏 ControlPlan。核心 `AgentTurnConfig` 默认把全部潜在写页面动作放进 `disabled_actions`；产品组合只有在外部控制层已经建立精确许可和网络侧 fail-closed 约束，或 Adapter 明确证明所开放的是受限只读导航时，才能显式缩小该集合。当前公司创建纵切采用受确认的服务端 API 写入，页面执行层只负责 Odoo Adapter 显式开放的受限导航。
 
 ## 8. 状态与错误语义
 
@@ -330,8 +330,8 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 
 当前代码是一条可运行的本地产品纵切，距离工业级部署仍有明确差距：
 
-- 多个 session 可以共享一个 Gateway，并通过独立 capability 和 channel 隔离；TTL、队列背压和逐类硬配额已经限制单 session 资源占用，但 Remote Session registry、事件序列、消息队列和 lease 仍在单个 Python 进程内存中，进程重启后不能恢复会话。
-- Conversation Host 使用进程内线程、队列和有界引用上下文，没有加密的持久会话、外部任务队列、跨实例调度或服务级高可用。进程崩溃会丢失对话引用；当前同步 Python 调用栈也无法从 ReAct 中间步骤安全续跑。
+- 多个 session 可以共享一个 Gateway，并通过独立 capability 和 channel 隔离；TTL、队列背压和逐类硬配额已经限制单 session 资源占用。可选 `SQLiteSessionStore` 能在进程重启后恢复有界历史、消息去重墓碑与 session 所有权，但会重新签发 capability 和 lease，绝不恢复页面事实、审批、凭据或执行权限。Remote Session registry、实时事件序列、消息队列和活动 lease 仍在单个 Python 进程内存中。
+- Conversation Host 使用进程内线程、队列和有界引用上下文，没有外部任务队列、跨实例调度或服务级高可用。进程崩溃会中断当前任务；恢复的历史只能展示，当前同步 Python 调用栈无法从 ReAct 中间步骤续跑，也不会自动重跑已接受但中断的消息。
 - Session Ledger 是本机 append-only JSONL，逐条 flush 与 fsync；它不是集中式审计存储，也没有跨进程事务。
 - 旧外部页面控制网关仍是全局状态，当前客户端只能通过跨进程独占和双边界 reset 安全地串行运行；网关原生的租户/会话/轮次隔离与崩溃后 TTL 尚未实现。
 - 浏览器 sessionStorage 可以处理同一标签页内的刷新恢复，不能替代服务端持久幂等存储。
@@ -349,7 +349,7 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 
 以下内容是后续架构方向，不是当前已实现能力：
 
-1. 把 session、事件 cursor、动作 claim、确认和幂等结果迁移到可恢复的持久存储，同时保持现有 wire schema。
+1. 在现有持久 session 历史与 mutation journal 之上，把活动事件 cursor、动作 claim、确认和 worker 执行状态迁移到可恢复的存储，同时保持“恢复历史不恢复执行权限”和现有 wire schema。
 2. 将现有短期 principal/operation 绑定接入可信应用登录会话，补充组织策略、持久撤销和跨进程强制执行。
 3. 将 Conversation Host 迁移到有租约、取消、deadline、背压和故障隔离的 worker 执行模型。
 4. 把 Application Adapter 抽成稳定 SDK，增加契约测试、能力声明、统一错误语义和同身份验证接口。
