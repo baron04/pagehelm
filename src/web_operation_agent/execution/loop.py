@@ -100,7 +100,7 @@ def run_loop(session) -> RunResult:
         system += "\n" + APPLICATION_ENTRY_SYSTEM
     if session._task_business_skills:
         system += "\n" + BUSINESS_SKILL_SYSTEM
-    if session.conversation_context is not None:
+    if session._conversation_context_selected:
         system += "\n" + CONVERSATION_SYSTEM
     if session.allow_clarification:
         system += "\n" + CLARIFICATION_SYSTEM

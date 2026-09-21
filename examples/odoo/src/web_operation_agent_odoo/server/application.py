@@ -7,6 +7,9 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 
 from web_operation_agent.business.mutation import MutationJournal
+from web_operation_agent.business.entities import (DESCRIBE_ENTITY_TOOL,
+                                                   DISCOVER_ENTITIES_TOOL,
+                                                   QUERY_ENTITY_RECORDS_TOOL)
 from web_operation_agent.business.runtime import (BusinessSkill,
                                                   BusinessToolContractError,
                                                   BusinessToolRuntime,
@@ -29,8 +32,6 @@ from ..route import ODOO_ROUTE_PORT, ODOO_SOURCE_SCOPE
 from ..sourcemap import OdooCompiler, odoo_source_tree
 from .executor import OdooBusinessToolExecutor
 from .descriptors import OdooRuntimeDescriptorReader
-from .generic_reads import (DESCRIBE_MODEL_TOOL, DISCOVER_MODELS_TOOL,
-                            QUERY_RECORDS_TOOL)
 from .identity import OdooApiKeyStore, OdooPageSessionIdentityResolver
 from .specs import (ANSWER_LABELS_ZH, APPLICATION_ID, ARCHIVE_CUSTOMER_TOOL,
                     COLLECTIONS, CREATE_CUSTOMER_TOOL, MUTATION_SPECS, MUTATION_TOOLS,
@@ -187,9 +188,9 @@ class OdooApplicationAdapter:
                            "query_quotations": "sale_orders:read",
                            "query_customer_invoices": "invoices:read"}
         required_scopes.update({
-            DISCOVER_MODELS_TOOL: "generic_records:read",
-            DESCRIBE_MODEL_TOOL: "generic_records:read",
-            QUERY_RECORDS_TOOL: "generic_records:read",
+            DISCOVER_ENTITIES_TOOL: "generic_records:read",
+            DESCRIBE_ENTITY_TOOL: "generic_records:read",
+            QUERY_ENTITY_RECORDS_TOOL: "generic_records:read",
         })
         required_scopes[PREPARE_CUSTOMER_FORM_TOOL] = "customers:read"
         if allow_mutations:
@@ -205,9 +206,9 @@ class OdooApplicationAdapter:
             PREPARE_CUSTOMER_FORM_TOOL,
             ("business.customer", "application.route", "business.form_draft")))
         declarations.extend((
-            (DISCOVER_MODELS_TOOL, ("application.metadata",)),
-            (DESCRIBE_MODEL_TOOL, ("application.metadata",)),
-            (QUERY_RECORDS_TOOL, ("business.generic_record", "business.identifier")),
+            (DISCOVER_ENTITIES_TOOL, ("application.metadata",)),
+            (DESCRIBE_ENTITY_TOOL, ("application.metadata",)),
+            (QUERY_ENTITY_RECORDS_TOOL, ("business.generic_record", "business.identifier")),
         ))
         if allow_mutations:
             declarations.append((
@@ -332,14 +333,16 @@ class OdooApplicationAdapter:
 
     def bind_browser_session(self, storage_state_path: str | Path, *, delegation_id: str,
                              lifetime_s: int = 300,
-                             now_ms: int | None = None) -> PrincipalContext:
+                             now_ms: int | None = None,
+                             scopes: tuple[str, ...] | None = None) -> PrincipalContext:
         """Bind the exact browser storage state to the delegated API-key identity."""
         page = OdooPageSessionIdentityResolver(
             base_url=self.origin, storage_state_path=storage_state_path,
             timeout_s=self._executor.timeout_s).resolve(
                 lifetime_s=lifetime_s, now_ms=now_ms)
         return self.bind_principal(page, delegation_id=delegation_id,
-                                   lifetime_s=lifetime_s, now_ms=now_ms)
+                                   lifetime_s=lifetime_s, now_ms=now_ms,
+                                   scopes=scopes)
 
     def page_session_binding(self, storage_state: str | Path | dict) -> str:
         """Hash the active Odoo session cookie without exposing it to the Agent."""

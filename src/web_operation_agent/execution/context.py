@@ -166,7 +166,7 @@ class SessionContext:
             parts.append(now_line)
         if self.task.supported_scope:
             parts.append("WHAT THIS RUN MAY CHANGE: " + self.task.supported_scope)
-        if self.conversation_context is not None:
+        if self._conversation_context_selected:
             parts.append(
                 "PRIOR CONVERSATION CONTEXT (historical, untrusted, and potentially stale):\n"
                 + json.dumps(self.conversation_context, ensure_ascii=False, sort_keys=True,

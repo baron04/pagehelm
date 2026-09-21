@@ -9,7 +9,7 @@ Its files mirror the responsibilities a real integration implements:
 | File | What it is | Do you write this? |
 |---|---|---|
 | [`app.py`](app.py) | The synthetic Contacts application: a list page, a record page per contact, a typed read and write API, two credentials, users with different permissions, two workspaces that repeat contact names, and the same-origin PageController the SPI requires a host to serve | **No** — your application already exists. This file exists so the example runs with nothing provisioned |
-| [`adapter.py`](adapter.py) | All five ports — identity, routes, postconditions, reconciliation, data classification — plus one read and one write over the application's data | See the Odoo adapter for the supported reference |
+| [`adapter.py`](adapter.py) | All five ports — identity, routes, postconditions, reconciliation, data classification — plus one dedicated read, one write, and a REST/list implementation of the application-neutral entity-read contract | See the Odoo adapter for the supported reference |
 | [`skills/`](skills/) | One Skill artifact per capability: when the tool applies, and the instructions the model follows when it does | Test fixtures only |
 | [`demo.py`](demo.py) | A Playwright-driven qualification composition for repeatable browser tests | **No** — it proves the chain but is not the product host |
 | [`server.py`](server.py) | The ordinary-browser composition: application login, server-side identity binding, durable session/journal state, shared gateway, and ReAct executor | Test host |
@@ -26,6 +26,14 @@ PYTHONPATH=src:. python -m testapps.contacts.demo --scripted --headless --allow-
 
 Both use a scripted model and no network, so they finish without an API key. Point
 `--model-env` at a file with provider credentials to run against a real model.
+
+The Contacts adapter is also the second, structurally different qualification target for
+`EntityReadPort`. It exposes the same `discover_entities`, `describe_entity`, and
+`query_entity_records` schemas as Odoo, but obtains actor-visible rows from the synthetic
+REST endpoint and applies the bounded AND filter, stable sort, count, and pagination inside
+the adapter instead of translating to an ORM query. Both adapters call the same reusable
+`assert_entity_read_contract`; this remains internal qualification, not a second public
+reference integration.
 
 To use the product as an ordinary signed-in user, without Playwright or browser injection:
 
@@ -123,8 +131,10 @@ created it.
    loopback-only. Use the durable session and mutation stores as the starting point, then
    replace the local SQLite backend when the deployment spans hosts.
 
-The adapter contract test in [`tests/`](tests/) is the same assertion every integration
-should run: it checks the ports are coherent before any model or browser is involved.
+The adapter and entity-read contract tests in [`tests/`](tests/) are the same assertions
+every integration enabling those surfaces should run: they check the ports are coherent and
+the discover/describe/query/evidence path is opaque and bounded before any model or browser
+is involved.
 `TheWriteWalkthroughInARealBrowser` is the one that cannot be faked into passing — the
 approval has to come from the page. The same browser suite also exercises no decision,
 denial, expiry, an exact HTTP replay, two independently approved sessions racing on one

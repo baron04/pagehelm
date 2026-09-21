@@ -33,6 +33,7 @@ both do.
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import urllib.error
 import urllib.parse
@@ -63,6 +64,22 @@ from web_operation_agent.business.runtime import (
     business_text_key,
     normalize_business_text,
 )
+from web_operation_agent.business.entities import (
+    DESCRIBE_ENTITY_TOOL,
+    DISCOVER_ENTITIES_TOOL,
+    ENTITY_READ_SCHEMAS,
+    ENTITY_READ_TOOLS,
+    QUERY_ENTITY_RECORDS_TOOL,
+    EntityCatalog,
+    EntityCell,
+    EntityDescriptor,
+    EntityField,
+    EntityPageHint,
+    EntityQuery,
+    EntityQueryPage,
+    EntityReadTools,
+    EntityRecord,
+)
 from web_operation_agent.state.identity import (IdentityAssertion, PrincipalContext,
                                           PrincipalError, PRINCIPAL_CONTEXT_VERSION,
                                           bind_matching_identity)
@@ -77,7 +94,11 @@ APPLICATION_ID = "minimal.contacts"
 CREATE_CONTACT = "create_contact"
 #: What a write needs the principal to carry. Declared here because scopes are the
 #: application's vocabulary, not the framework's.
-SCOPES = {"list_contacts": "contacts:read", CREATE_CONTACT: "contacts:write"}
+SCOPES = {
+    "list_contacts": "contacts:read",
+    **{name: "contacts:read" for name in ENTITY_READ_TOOLS},
+    CREATE_CONTACT: "contacts:write",
+}
 _READ_SCHEMA = {
     "type": "function",
     "function": {
@@ -135,14 +156,18 @@ class _ContactsToolExecutor:
         self.allow_mutations = bool(allow_mutations)
         if self.allow_mutations and not api_token:
             raise ValueError("a write needs a delegated credential to write with")
+        self._entity_reads = EntityReadTools(
+            _ContactsEntityReadPort(self), application_id=APPLICATION_ID)
 
     def tool_schemas(self) -> tuple[dict, ...]:
         # A read-only composition does not merely refuse the write; it never offers it. A
         # tool in the surface that the run will always refuse just invites a wasted turn.
-        return (_READ_SCHEMA,) + ((_WRITE_SCHEMA,) if self.allow_mutations else ())
+        return (_READ_SCHEMA,) + ENTITY_READ_SCHEMAS + (
+            (_WRITE_SCHEMA,) if self.allow_mutations else ())
 
     def tool_effects(self) -> dict[str, str]:
         effects = {"list_contacts": "read"}
+        effects.update({name: "read" for name in ENTITY_READ_TOOLS})
         if self.allow_mutations:
             effects[CREATE_CONTACT] = "write"
         return effects
@@ -156,49 +181,21 @@ class _ContactsToolExecutor:
         return "contacts the delegated actor may read"
 
     def execute(self, name: str, args: dict, *, context=None) -> BusinessToolResult:
+        if name in ENTITY_READ_TOOLS:
+            return self._entity_reads.execute(name, args, context=context)
         if name != "list_contacts" or set(args) - {"name_contains"}:
             raise BusinessToolError("invalid contact query")
         query = args.get("name_contains", "")
         if (not isinstance(query, str) or len(query) > 120
                 or re.search(r"[\x00-\x1f\x7f]", query)):
             raise BusinessToolError("name_contains must be a string of at most 120 characters")
-        # Reads go out under the delegated actor too. What comes back is what the
-        # application lets that actor see, which is the only scope an answer may claim.
-        request = urllib.request.Request(
-            self.origin + "/api/contacts",
-            headers={"Authorization": f"Bearer {self._api_token}"})
-        try:
-            with urllib.request.urlopen(request, timeout=3) as response:
-                payload = json.load(response)
-        except urllib.error.HTTPError as exc:
-            if exc.code == 401:
-                raise BusinessToolAuthenticationError(
-                    "the delegated credential was refused") from exc
-            if exc.code == 403:
-                raise BusinessToolPermissionError(
-                    "the application does not let this actor read contacts") from exc
-            raise BusinessToolError("the contacts API is unavailable") from exc
-        except (OSError, ValueError, urllib.error.URLError) as exc:
-            raise BusinessToolError("the contacts API is unavailable") from exc
-        source = payload.get("contacts") if isinstance(payload, dict) else None
-        if not isinstance(source, list):
-            raise BusinessToolError("the contacts API returned an invalid document")
+        source = self._contact_rows()
         matched = []
-        identities = set()
         for raw in source:
-            if not isinstance(raw, dict) or set(raw) != {"id", "name", "email"}:
-                raise BusinessToolError("the contacts API returned an invalid record")
-            if (any(not isinstance(raw[key], str) for key in ("id", "name", "email"))
-                    or not re.fullmatch(r"[a-z0-9-]{1,120}", raw["id"])
-                    or raw["id"] in identities):
-                raise BusinessToolError("the contacts API returned an invalid record identity or field")
-            identities.add(raw["id"])
             if query and query.casefold() not in str(raw["name"]).casefold():
                 continue
             matched.append({
-                "id": str(raw["id"]),
-                "name": str(raw["name"]),
-                "email": str(raw["email"]),
+                **raw,
                 "ui_path": f"/contacts/{raw['id']}",
             })
         routes = tuple(item["ui_path"] for item in matched)
@@ -237,6 +234,48 @@ class _ContactsToolExecutor:
             allowed_routes=routes,
             evidence=tuple(evidence),
         )
+
+    def _contact_rows(self) -> list[dict]:
+        """Read and validate the complete actor-visible synthetic collection once."""
+        # Reads go out under the delegated actor too. What comes back is what the
+        # application lets that actor see, which is the only scope an answer may claim.
+        request = urllib.request.Request(
+            self.origin + "/api/contacts",
+            headers={"Authorization": f"Bearer {self._api_token}"})
+        try:
+            with urllib.request.urlopen(request, timeout=3) as response:
+                payload = json.load(response)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 401:
+                raise BusinessToolAuthenticationError(
+                    "the delegated credential was refused") from exc
+            if exc.code == 403:
+                raise BusinessToolPermissionError(
+                    "the application does not let this actor read contacts") from exc
+            raise BusinessToolError("the contacts API is unavailable") from exc
+        except (OSError, ValueError, urllib.error.URLError) as exc:
+            raise BusinessToolError("the contacts API is unavailable") from exc
+        source = payload.get("contacts") if isinstance(payload, dict) else None
+        if not isinstance(source, list):
+            raise BusinessToolError("the contacts API returned an invalid document")
+        if len(source) > 10_000:
+            raise BusinessToolError("the contacts API returned too many records")
+        rows = []
+        identities = set()
+        for raw in source:
+            if not isinstance(raw, dict) or set(raw) != {"id", "name", "email"}:
+                raise BusinessToolError("the contacts API returned an invalid record")
+            if (any(not isinstance(raw[key], str) for key in ("id", "name", "email"))
+                    or not re.fullmatch(r"[a-z0-9-]{1,120}", raw["id"])
+                    or raw["id"] in identities):
+                raise BusinessToolError("the contacts API returned an invalid record identity or field")
+            identities.add(raw["id"])
+            rows.append({
+                "id": str(raw["id"]),
+                "name": str(raw["name"]),
+                "email": str(raw["email"]),
+            })
+        return rows
 
     # -- the write -----------------------------------------------------------------------
     def _post(self, path: str, payload: dict) -> dict:
@@ -343,6 +382,88 @@ class _ContactsToolExecutor:
                 "records_created": 1, "readback_verified": True,
             },
             allowed_routes=(ui_path,),
+        )
+
+
+class _ContactsEntityReadPort:
+    """REST/list translation proving the entity contract is not tied to an ORM."""
+
+    _FIELDS = (
+        EntityField(reference="id", label="Identifier", kind="text"),
+        EntityField(reference="name", label="Name", kind="text"),
+        EntityField(reference="email", label="Email", kind="text"),
+    )
+
+    def __init__(self, executor: _ContactsToolExecutor):
+        self._executor = executor
+
+    @staticmethod
+    def _actor_binding(context) -> str:
+        principal = getattr(context, "principal", None)
+        return (principal.actor_authority_digest if principal is not None
+                else "unverified-synthetic-actor")
+
+    def catalog(self, *, context=None) -> EntityCatalog:
+        binding = hashlib.sha256(
+            ("minimal-contacts-entity-v1\0" + self._actor_binding(context)).encode("utf-8")
+        ).hexdigest()
+        return EntityCatalog(
+            binding_digest=binding,
+            entities=(EntityDescriptor(
+                reference="contacts",
+                label="Contacts",
+                search_text="contacts contact address book people person 联系人 通讯录 人员",
+                page_hints=(EntityPageHint(
+                    name="Contacts", breadcrumbs=("Contacts",), views=("list", "detail")),),
+            ),),
+            complete=True,
+            scope="current actor's readable entities in the synthetic workspace",
+        )
+
+    def fields(self, entity: EntityDescriptor, *, context=None) -> tuple[EntityField, ...]:
+        if entity.reference != "contacts":
+            raise BusinessToolError("the synthetic entity is no longer available")
+        return self._FIELDS
+
+    @staticmethod
+    def _matches(row: dict, condition) -> bool:
+        actual = row[condition.field.reference]
+        expected = condition.value
+        if condition.operator == "=":
+            return actual == expected
+        if condition.operator == "!=":
+            return actual != expected
+        if condition.operator == "contains":
+            return str(expected).casefold() in actual.casefold()
+        if condition.operator == "in":
+            return actual in expected
+        if condition.operator == "not_in":
+            return actual not in expected
+        raise BusinessToolError("the synthetic REST adapter cannot apply this filter")
+
+    def query(self, request: EntityQuery, *, context=None) -> EntityQueryPage:
+        if request.entity.reference != "contacts":
+            raise BusinessToolError("the synthetic entity is no longer available")
+        source = sorted(self._executor._contact_rows(), key=lambda row: row["id"])
+        matched = [row for row in source
+                   if all(self._matches(row, condition) for condition in request.filters)]
+        page = matched[request.offset:request.offset + request.limit]
+        records = tuple(EntityRecord(
+            reference=f"contact/{row['id']}",
+            display_id=row["id"],
+            cells=tuple(EntityCell(
+                field_reference=field.reference,
+                value=row[field.reference],
+            ) for field in request.fields),
+        ) for row in page)
+        return EntityQueryPage(
+            records=records,
+            matched_count=len(matched),
+            source_total=len(source),
+            source="delegated synthetic REST API (Contacts)",
+            scope=self._executor._scope(context) +
+                  f"; {len(request.filters)} AND filters; stable identity ascending",
+            consistency="one complete actor-visible REST list filtered and paged in the adapter",
         )
 
 
@@ -460,13 +581,19 @@ class MinimalContactsAdapter:
                  allow_mutations: bool = False, mutation_journal=None):
         if allow_mutations and mutation_journal is None:
             raise ValueError("allow_mutations=True requires an explicit mutation journal")
-        skills = [_skill("contacts-query.json")]
+        skills = [_skill("contacts-query.json"), _skill("runtime-records-query.json")]
         if allow_mutations:
             skills.append(_skill("contacts-create.json"))
         executor = _ContactsToolExecutor(origin, api_token=api_token,
                                          allow_mutations=allow_mutations)
         declarations = [("list_contacts", ("synthetic.contact", "business.identifier",
                                            "application.route"))]
+        declarations.extend((
+            (DISCOVER_ENTITIES_TOOL, ("application.metadata",)),
+            (DESCRIBE_ENTITY_TOOL, ("application.metadata",)),
+            (QUERY_ENTITY_RECORDS_TOOL,
+             ("business.generic_record", "business.identifier")),
+        ))
         if allow_mutations:
             declarations.append(
                 (CREATE_CONTACT, ("synthetic.contact", "business.identifier",

@@ -106,6 +106,32 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertTrue(event["fallback_used"])
             self.assertFalse(event["prior_user_context_used"])
 
+            opening = session._opening(_observation(1))
+            self.assertNotIn("PRIOR CONVERSATION CONTEXT", opening)
+            self.assertFalse(session._conversation_context_selected)
+
+    def test_referential_intent_selects_bounded_conversation_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = SessionLedger(Path(tmp) / "session.jsonl", "referential-context")
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="Open the second one.",
+                              supported_scope="Read the current page only."),
+                chat=_Chat([]), browser=_Browser(), control=ReadOnlyControl(),
+                ledger=ledger,
+                conversation_context={
+                    "schema_version": 1,
+                    "prior_turns": [{
+                        "message_id": "m1", "user": "Show the records.",
+                        "assistant": "First and Second.", "status": "finished",
+                    }],
+                },
+            )
+
+            opening = session._opening(_observation(1))
+            self.assertIn("PRIOR CONVERSATION CONTEXT", opening)
+            self.assertIn("First and Second", opening)
+            self.assertTrue(session._conversation_context_selected)
+
     def test_denied_server_mutation_is_terminal_and_never_executes(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill = _write_skill(Path(tmp) / "write-skill.json")

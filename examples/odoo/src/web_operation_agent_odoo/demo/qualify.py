@@ -99,7 +99,7 @@ def generic_read_probe(adapter: OdooApplicationAdapter,
             )
             return runtime.execute(name, args, loaded, context=context)
 
-        discovery = execute("discover_odoo_models", {
+        discovery = execute("discover_entities", {
             "query": "Journal Items", "limit": 10,
         })
         candidate = next(
@@ -109,16 +109,16 @@ def generic_read_probe(adapter: OdooApplicationAdapter,
         )
         if candidate is None:
             raise RuntimeError("the Journal Item candidate was not discovered")
-        description = execute("describe_odoo_model", {
-            "candidate_id": candidate["candidate_id"],
+        description = execute("describe_entity", {
+            "entity_id": candidate["entity_id"],
             "field_query": "date account debit credit",
             "limit": 8,
         })
         fields = description.content["fields"][:4]
         if not fields:
             raise RuntimeError("the Journal Item candidate had no safe matching fields")
-        query = execute("query_odoo_records", {
-            "candidate_id": candidate["candidate_id"],
+        query = execute("query_entity_records", {
+            "entity_id": candidate["entity_id"],
             "field_ids": [field["field_id"] for field in fields],
             "limit": 5,
         })

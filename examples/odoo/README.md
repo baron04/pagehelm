@@ -119,23 +119,24 @@ source answer quotes the cited bytes rather than trusting the model's paraphrase
 
 The same add-on exposes a bounded actor-scoped model/action catalog. It derives actions only
 from the current user's filtered menu tree and reports model-level access; catalog generation
-itself reads no business records and never grants mutation authority. The generic read path
-uses that catalog in three server-validated steps:
+itself reads no business records and never grants mutation authority. The Odoo adapter maps
+that framework-specific catalog into the core entity-read contract, whose same three schemas
+also run over the synthetic Contacts REST adapter:
 
-1. `discover_odoo_models` searches readable, action-backed, non-transient business models and
-   returns catalog-bound opaque candidate IDs, not technical model names;
-2. `describe_odoo_model` resolves one current candidate, calls `fields_get` under the same
-   delegated actor, removes sensitive names and unbounded relation/binary/HTML fields, and
-   returns opaque field IDs;
-3. `query_odoo_records` accepts only those current IDs, at most eight AND conditions and
-   eight projected fields, a 20-row page and a bounded offset. It fixes ordering to `id asc`,
-   runs exact matching and actor-visible total counts, and returns query plus field-level
-   record evidence.
+1. `discover_entities` searches readable, action-backed, non-transient business entities and
+   returns catalog-bound opaque entity IDs, not technical model names;
+2. `describe_entity` resolves one current entity; the Odoo adapter calls `fields_get` under
+   the same delegated actor, removes sensitive names and unbounded relation/binary/HTML fields,
+   then returns the core's opaque field IDs;
+3. `query_entity_records` accepts only those current IDs, at most eight AND conditions and
+   eight projected fields, a 20-row page and a bounded offset. The core fixes the limits; the
+   Odoo adapter translates generic operators, fixes ordering to `id asc`, runs exact matching
+   and actor-visible total counts, and returns query plus field-level record evidence.
 
 The action is a discovery hint, not a query scope: its dynamic domain/context is never
 evaluated by this path. A generic query therefore covers the actor-visible model rows named in
 the result, not necessarily the rows shown by one menu action. Catalog changes make old
-candidate IDs stale; `fields_get` changes make old field IDs fail. Raw model names, method
+entity IDs stale; `fields_get` changes make old field IDs fail. Raw model names, method
 names, arbitrary domains, OR/NOT expressions, caller-controlled ordering, grouping, writes,
 transient models, settings/users/messages/attachments, and unbounded fields are not accepted.
 Domain-specific typed tools remain preferable when their narrower business semantics apply.
@@ -181,9 +182,9 @@ rather than fact.
 | `query_products` | `product.template` | saleable products | `/odoo/products` |
 | `query_quotations` | `sale.order` | draft and sent quotations | `/odoo/sales` |
 | `query_customer_invoices` | `account.move` | customer invoices, excluding credit notes | `/odoo/customer-invoices` |
-| `discover_odoo_models` | opaque catalog candidate | current actor's readable, menu-backed non-sensitive models | — |
-| `describe_odoo_model` | opaque catalog candidate | safe `fields_get` projection under the current actor | — |
-| `query_odoo_records` | opaque catalog candidate | bounded actor-visible model rows; exact counts; fixed order | — |
+| `discover_entities` | opaque catalog entity | current actor's readable, menu-backed non-sensitive entities | — |
+| `describe_entity` | opaque catalog entity | safe `fields_get` translation under the current actor | — |
+| `query_entity_records` | opaque catalog entity | bounded actor-visible records; exact counts; fixed order | — |
 | `prepare_customer_form` | `res.partner` | exact customer form draft; transient until user submission | `/odoo/customers/new` |
 | `prepare_customer_edit_form` | `res.partner` | exact existing-customer fields; confirmed before Odoo can autosave | `/odoo/customers/<id>` |
 | `create_customer` | `res.partner` | one customer, opt-in | `/odoo/customers/<id>` |

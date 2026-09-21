@@ -39,16 +39,16 @@ class _ProbeRuntime:
         self.calls.append((name, args, loaded_ids, context))
         common = {"audit": {"identity_binding": "principal_bound"},
                   "data_classes": (), "evidence": (), "query_answer": None}
-        if name == "discover_odoo_models":
+        if name == "discover_entities":
             return SimpleNamespace(content={"candidates": [{
-                "candidate_id": "m_" + "1" * 32, "label": "Journal Item",
+                "entity_id": "entity_" + "1" * 32, "label": "Journal Item",
             }]}, **common)
-        if name == "describe_odoo_model":
+        if name == "describe_entity":
             return SimpleNamespace(content={"fields": [
-                {"field_id": "f_" + "2" * 32, "label": "Debit"},
-                {"field_id": "f_" + "3" * 32, "label": "Credit"},
+                {"field_id": "field_" + "2" * 32, "label": "Debit"},
+                {"field_id": "field_" + "3" * 32, "label": "Credit"},
             ]}, **common)
-        if name == "query_odoo_records":
+        if name == "query_entity_records":
             evidence = tuple(SimpleNamespace(evidence_id=value) for value in (
                 "query#1", "record#1", "record#2", "record#3", "record#4"))
             return SimpleNamespace(
@@ -89,7 +89,7 @@ class GenericReadProbeTests(unittest.TestCase):
         self.assertEqual(result["record_evidence_count"], 4)
         self.assertEqual(
             [name for name, _args, _loaded, _context in adapter.business_tools.calls],
-            ["discover_odoo_models", "describe_odoo_model", "query_odoo_records"],
+            ["discover_entities", "describe_entity", "query_entity_records"],
         )
         for _name, _args, loaded, context in adapter.business_tools.calls:
             self.assertEqual(loaded, {"odoo.runtime.records-query"})

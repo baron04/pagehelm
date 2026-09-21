@@ -10,6 +10,18 @@ Application Adapter 把一个第一方 Web 应用接入通用服务端 Agent。A
 
 `BusinessToolRuntime` 通过固定 JSON schema 暴露当前应用数据。凭据和任意 HTTP 构造应保留在应用 executor 内。Skill 说明何时及如何调用工具，但不能证明当前记录存在。返回的每条路由必须原样出现在结果内容中，并在 Agent 使用前通过 Adapter 路由端口校验。
 
+需要广覆盖读取时，实现可选、应用无关的 `EntityReadPort`，再与 `EntityReadTools` 组合。
+Agent-facing 工具面固定为 `discover_entities`、`describe_entity` 和
+`query_entity_records`。Adapter 把自己的 ORM model、REST collection、OpenAPI resource、
+GraphQL type 或其它元数据翻译成 `EntityCatalog`、`EntityDescriptor`、`EntityField` 与
+`EntityQueryPage`。原生资源名只作为 Adapter 内部引用；核心签发绑定 actor/catalog 的不透明
+实体和字段 ID。目录或字段描述发生漂移时旧 ID 自动失效。通用过滤只允许有界 AND、固定
+操作符、服务端固定排序、页大小和 offset，不能退化为任意 method、URL、SQL、domain 或请求体。
+
+Adapter 启用该工具面时必须运行 `assert_entity_read_contract`，并补充自己的鉴权和翻译测试。
+仓库目前对 Odoo ORM/RPC 翻译与结构不同的合成 Contacts REST/list 翻译运行同一黑盒断言；
+只有一个 Adapter 通过不能证明 Agent 能力通用。
+
 读工具的 `QueryEvidence` 决定回答能对返回的行说什么。`matched_count` 填范围内符合条件的记录数；只有应用确实数全了，才设 `count_exact=True`，这样一个只返回 20 行、共 72 条的列表会写"共 72 条，下面列出其中 20 条"。按名称搜索时，`looked_for` 填搜索的文字，`exact_matches` 填名称完全一致的条数，应用无法判断时留 `None`。只有完全一致的匹配才能让回答说"已存在该名称的记录"。
 
 证据用工具自己的字段名和范围说明，核验器也按这些原文核对。要在读者的语言里显示它们，给 `BusinessToolRuntime` 传 `answer_labels={"zh": {...}}`，键是证据里字段名和范围说明的原文；订单状态这类编码取值用 `字段=取值` 作键。标签只改变回答怎么显示，不改变回答断言的内容；回答依据保留原文。

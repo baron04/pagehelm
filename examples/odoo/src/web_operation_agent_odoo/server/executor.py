@@ -3,20 +3,22 @@ from __future__ import annotations
 
 import threading
 
+from web_operation_agent.business.entities import (ENTITY_READ_SCHEMAS,
+                                                   ENTITY_READ_TOOLS,
+                                                   EntityReadTools)
+
 from .identity import OdooApiKeyStore
-from .generic_reads import (GENERIC_READ_SCHEMAS, GENERIC_READ_TOOLS,
-                            OdooGenericReadTools)
+from .generic_reads import OdooEntityReadPort
 from .mutations import OdooMutationTools
 from .reads import OdooReadTools
-from .specs import (COLLECTIONS, MUTATION_SPECS, MUTATION_TOOLS,
+from .specs import (APPLICATION_ID, COLLECTIONS, MUTATION_SPECS, MUTATION_TOOLS,
                     PREPARE_CUSTOMER_EDIT_SCHEMA, PREPARE_CUSTOMER_EDIT_TOOL,
                     PREPARE_CUSTOMER_FORM_SCHEMA, PREPARE_CUSTOMER_FORM_TOOL,
                     QUERY_SCHEMAS, _validated_origin)
 from .transport import OdooRpcClient
 
 
-class OdooBusinessToolExecutor(OdooGenericReadTools, OdooReadTools,
-                               OdooMutationTools, OdooRpcClient):
+class OdooBusinessToolExecutor(OdooReadTools, OdooMutationTools, OdooRpcClient):
     """Typed reads, transient form preparation and guarded writes over delegated JSON-RPC."""
 
     def __init__(self, *, base_url: str, keys: OdooApiKeyStore, timeout_s: float = 20,
@@ -31,17 +33,19 @@ class OdooBusinessToolExecutor(OdooGenericReadTools, OdooReadTools,
         self._uid: int | None = None
         self._time_zone: str | None = None
         self._lock = threading.Lock()
+        self._entity_reads = EntityReadTools(
+            OdooEntityReadPort(self), application_id=APPLICATION_ID)
 
     # -- tool catalog -------------------------------------------------------------------
     def tool_schemas(self) -> tuple[dict, ...]:
         reads = tuple(QUERY_SCHEMAS[collection.tool] for collection in COLLECTIONS)
         writes = tuple(spec.schema for spec in MUTATION_SPECS)
-        return reads + GENERIC_READ_SCHEMAS + (PREPARE_CUSTOMER_FORM_SCHEMA,) + (
+        return reads + ENTITY_READ_SCHEMAS + (PREPARE_CUSTOMER_FORM_SCHEMA,) + (
             (PREPARE_CUSTOMER_EDIT_SCHEMA,) + writes if self.allow_mutations else ())
 
     def tool_effects(self) -> dict[str, str]:
         effects = {collection.tool: "read" for collection in COLLECTIONS}
-        effects.update({name: "read" for name in GENERIC_READ_TOOLS})
+        effects.update({name: "read" for name in ENTITY_READ_TOOLS})
         effects[PREPARE_CUSTOMER_FORM_TOOL] = "read"
         if self.allow_mutations:
             # Preparing an edit reads the record and types into the page; the application,
@@ -51,6 +55,6 @@ class OdooBusinessToolExecutor(OdooGenericReadTools, OdooReadTools,
         return effects
 
     def execute(self, name: str, args: dict, *, context=None):
-        if name in GENERIC_READ_TOOLS:
-            return self.execute_generic(name, args, context=context)
+        if name in ENTITY_READ_TOOLS:
+            return self._entity_reads.execute(name, args, context=context)
         return OdooReadTools.execute(self, name, args, context=context)

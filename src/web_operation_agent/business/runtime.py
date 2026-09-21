@@ -13,6 +13,13 @@ from .errors import (BusinessMutationBlockedError, BusinessMutationIndeterminate
                      BusinessToolUnavailableError)
 from .text import (business_text_key, normalize_business_text,
                    trigger_requests_action)
+from .entities import (DESCRIBE_ENTITY_SCHEMA, DESCRIBE_ENTITY_TOOL,
+                       DISCOVER_ENTITIES_SCHEMA, DISCOVER_ENTITIES_TOOL,
+                       ENTITY_READ_SCHEMAS, ENTITY_READ_TOOLS,
+                       QUERY_ENTITY_RECORDS_SCHEMA, QUERY_ENTITY_RECORDS_TOOL,
+                       EntityCatalog, EntityCell, EntityChoice, EntityDescriptor,
+                       EntityField, EntityFilter, EntityPageHint, EntityQuery,
+                       EntityQueryPage, EntityReadPort, EntityReadTools, EntityRecord)
 from .tools import (APPLICATION_SAVES_ON_LEAVE, BUSINESS_SKILL_MATCHER_VERSION,
                     FORM_PERSISTENCE, TRANSIENT_UNTIL_SUBMIT,
                     BusinessDataClassifier, BusinessMutationProposal,

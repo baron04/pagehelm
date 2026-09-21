@@ -19,10 +19,17 @@ agent.
   enabled, a deployment-bound local source compiler can answer rule questions with exact
   file, line, release, and byte-digest provenance. Source retrieval remains optional and is
   never a prerequisite for ordinary browser or API operation.
-- The Odoo adapter can discover a current actor's readable, menu-backed business models and
-  perform a bounded generic read without adding one Skill per model. The Agent receives only
-  catalog-bound opaque model and field IDs; the server resolves them through `fields_get`,
-  validates an AND-only filter AST, fixes ordering and pagination, and reports exact counts.
+- An application-neutral entity-read contract can discover a current actor's readable
+  business entities and perform bounded reads without adding one Skill per entity. The Agent
+  receives only catalog-bound opaque entity and field IDs; an adapter translates its ORM,
+  REST, OpenAPI, or other native metadata behind the contract. The core validates an
+  AND-only filter AST and pagination bounds; the contract requires stable adapter-owned
+  ordering and exact counts. Odoo and the structurally different synthetic Contacts REST
+  adapter run the same contract tests.
+- Turn context is assembled by source role: the current page is the live grounding baseline;
+  bounded conversation history is included for referential or clarification follow-ups;
+  Skills are selected from the current task; and deployment source remains a lazy cited
+  lookup instead of being injected wholesale.
 - Browser actions are checked against the current observation and application route policy.
   Page switches require a visible confirmation.
 - Writes are disabled by default. Core turn configuration initially disables every browser
@@ -150,10 +157,11 @@ The adapter includes versioned Skills and an optional source compiler for Odoo m
 views, fields, method documentation, and user-visible refusal conditions. Compilation is
 restricted to modules installed in the running deployment, and source answers quote cited
 bytes from that release. Runtime facts remain authoritative when source or documentation
-disagrees. The installed add-on also exposes a bounded actor-scoped model/action catalog.
-Three read-only tools use it to discover an opaque model candidate, describe safe fields, and
-query current records under the same delegated actor. This is not arbitrary Odoo RPC and does
-not authorize writes.
+disagrees. The installed add-on also exposes a bounded actor-scoped model/action catalog. The
+Odoo adapter translates it to the core `discover_entities`, `describe_entity`, and
+`query_entity_records` contract, then maps validated generic filters back to bounded Odoo
+reads under the same delegated actor. Native model names and RPC methods are never Agent
+arguments. This does not authorize writes.
 
 Provision the disposable local fixture from a checkout:
 

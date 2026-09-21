@@ -124,7 +124,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
       session do. A deployment does not pick its four settings by hand; they follow from
       whether the application distribution ships a `SourceCompiler` and whether that
       compiler ran for this release, which is why an adapter returns them as one value
-      (`OdooApplicationAdapter.source_capability`). Omitting it means no compiled source.
+      through its source capability. Omitting it means no compiled source.
     * **`lab`** -- a `LabApparatus`: settings that exist only so the comparison harness can
       define its arms, `oracle_contract` above all. `product.py` passes no `lab=`, and
       `test_product.LabApparatusNeverReachesTheProduct` keeps it that way by inspecting the
@@ -234,6 +234,16 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
             self.conversation_context = json.loads(encoded_conversation)
         else:
             self.conversation_context = None
+        # History is a possible context source, not a standing authority or a compulsory
+        # token cost. Include it only when the current wording refers backwards or the server
+        # is holding a clarification that this message may answer. The current page remains
+        # the runtime baseline; Skills are selected below; repository facts stay lazy behind
+        # lookup_source so no source bytes enter context before the intent needs them.
+        pending_conversation = (
+            (self.conversation_context or {}).get("pending_clarification") or {})
+        self._conversation_context_selected = bool(
+            self.conversation_context is not None
+            and (pending_conversation or _REFERENCE_FOLLOWUP.search(task.prompt)))
         if application_routes is not None and not isinstance(
                 application_routes, ApplicationRoutePort):
             raise TypeError("application_routes must implement ApplicationRoutePort or be None")

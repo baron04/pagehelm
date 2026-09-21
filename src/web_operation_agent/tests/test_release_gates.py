@@ -94,7 +94,11 @@ class TheDependencyGateChecksDigestsAndNotOnlyNames(unittest.TestCase):
     FILES = ("requirements.lock", "sbom.json", "THIRD_PARTY.md", "scripts/lock_and_sbom.py",
              "evals/pageagent/package-lock.json", "frontend/package-lock.json",
              # The checker also reconciles the pinned browser asset against the notice.
-             "src/web_operation_agent/policies/page_controller.json")
+             "src/web_operation_agent/policies/page_controller.json",
+             # The checker imports the release's supported-Python declaration. Keep the
+             # copied gate executable rather than accidentally importing a checkout next
+             # to the isolated fixture.
+             "src/web_operation_agent/__init__.py")
 
     def test_the_committed_inventory_agrees_with_itself(self):
         with _Copy(*self.FILES) as root:

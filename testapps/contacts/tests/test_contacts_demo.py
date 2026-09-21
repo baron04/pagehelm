@@ -511,7 +511,10 @@ class TheWriteChainAnAuthorCopies(unittest.TestCase):
     def test_a_read_only_composition_never_offers_the_write(self):
         with MinimalContactsApplication() as application:
             adapter, bound = self._composed(application, allow_mutations=False)
-            self.assertEqual(sorted(bound.business_tools.tool_names), ["list_contacts"])
+            self.assertEqual(sorted(bound.business_tools.tool_names), [
+                "describe_entity", "discover_entities", "list_contacts",
+                "query_entity_records",
+            ])
             self.assertEqual(bound.business_tools.mutation_tool_names, frozenset())
             self.assertEqual(bound.ports.postconditions.supported_tools, frozenset())
             self.assertEqual(bound.ports.reconciliation.supported_tools, frozenset())

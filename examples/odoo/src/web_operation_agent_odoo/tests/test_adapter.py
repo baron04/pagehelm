@@ -327,9 +327,9 @@ class AdapterContract(unittest.TestCase):
         self.assertEqual(bound.descriptor.application_id, APPLICATION_ID)
         self.assertEqual(bound.descriptor.navigation_mode, "spa")
         self.assertEqual(sorted(bound.business_tools.tool_names),
-                         ["describe_odoo_model", "discover_odoo_models",
+                         ["describe_entity", "discover_entities",
                           "prepare_customer_form", "query_customer_invoices",
-                          "query_customers", "query_odoo_records", "query_products",
+                          "query_customers", "query_entity_records", "query_products",
                           "query_quotations", "query_sale_orders"])
         self.assertEqual(bound.business_tools.mutation_tool_names, frozenset())
 
@@ -687,6 +687,30 @@ class AdapterContract(unittest.TestCase):
             adapter.bind_principal(
                 page, delegation_id="trial", lifetime_s=30,
                 now_ms=1001, scopes=("admin:all",))
+
+    def test_browser_session_binding_preserves_the_deployment_scope_subset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            adapter = OdooApplicationAdapter(
+                base_url=BASE, api_key_path=_key_file(Path(tmp)))
+            page = IdentityAssertion(
+                schema_version=1, source="page_session", application_id="odoo",
+                tenant_id="woa", workspace_id="2", actor_id="7",
+                issued_at=1000, expires_at=31_000)
+            delegated = IdentityAssertion(
+                schema_version=1, source="delegated_api", application_id="odoo",
+                tenant_id="woa", workspace_id="2", actor_id="7",
+                issued_at=1000, expires_at=31_000)
+            with patch(
+                    "web_operation_agent_odoo.server.application."
+                    "OdooPageSessionIdentityResolver.resolve",
+                    return_value=page), patch.object(
+                        adapter._executor, "resolve_delegated_identity",
+                        return_value=delegated):
+                principal = adapter.bind_browser_session(
+                    "unused.json", delegation_id="qualification", lifetime_s=30,
+                    now_ms=1001, scopes=("generic_records:read",))
+
+        self.assertEqual(principal.scopes, ("generic_records:read",))
 
     def test_private_rpc_http_requires_an_explicit_deployment_flag(self):
         with tempfile.TemporaryDirectory() as tmp:

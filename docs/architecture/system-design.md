@@ -182,7 +182,7 @@ ReAct 的价值在于让计划始终可撤回。源码或 Skill 提供的路线�
 | --- | --- | --- | --- |
 | 1 | 最新页面观察与动作回执 | 当前 URL、DOM、可见控件、动作是否得到页面 Runtime 回执 | 隐藏业务记录、数据库提交或未显示的权限 |
 | 2 | 同一委托用户的业务 API ToolResult / 写后回读 | 当前业务数据，以及适配器实际回读到的写入结果 | 浏览器当前视觉状态 |
-| 3 | 同一 actor 的运行时目录与 `fields_get` | 当前可发现的模型/action、字段描述和模型级操作 | 当前记录、action domain 的真实结果或写授权 |
+| 3 | 同一 actor 的运行时目录与 Adapter 元数据 | 当前可发现的实体、页面提示、字段描述和可读操作 | 当前记录、页面默认过滤的真实结果或写授权 |
 | 4 | 经审核的 Business Skill、App Skill 和产品文档 | 工具用途、槽位、只读路由、操作约束和来源 | 当前记录、当前权限或本次动作结果 |
 | 5 | 与部署版本绑定的源码证据 | 可能存在的路由、字段、处理器和服务关系 | 运行时数据、租户配置、功能开关和用户权限 |
 
@@ -214,9 +214,25 @@ Adapter 或测试应用运行同一工具面和核心测试。只有第一个 Ad
 框架专有的解析并不违反这条边界：例如一个 Adapter 可以把 ORM model、OpenAPI resource、
 GraphQL type 或窗口 action 翻译成共同的 entity、field、operation 和 page descriptor；核心只
 消费这些有限 descriptor 和 opaque binding，不知道它们来自哪个框架。反方向则不允许：核心
-不得为了一个框架增加专用模型发现、RPC 参数或页面规则。Phase 8 已完成的 Odoo 三段读取是
-验证这一模式可行的首个 Adapter 原型；在通用表单、聚合或更多查询能力建立于其上之前，必须
-先完成合同抽取和第二 Adapter 证明。
+不得为了一个框架增加专用模型发现、RPC 参数或页面规则。Phase 8 的 P8.4 已把首个 Adapter
+原型抽成 `EntityReadPort` 与 `EntityReadTools`：Agent 只见
+`discover_entities`、`describe_entity`、`query_entity_records` 和不透明 binding。Odoo
+Adapter 翻译 ORM/action/`fields_get`/domain，合成 Contacts Adapter 则翻译 REST list 与本地
+过滤；两者运行同一黑盒合同测试。继续做通用表单、聚合或其它实体操作时仍须复用这条准入门。
+
+#### 按意图组装上下文
+
+页面、对话历史、Skill 和部署代码库不是一个等价的大文本池，也不应全部预先塞给模型。每轮
+由服务端按来源职责组装：最新页面观察始终是实时 grounding 基线；只有当前措辞指向历史或
+正在回答服务端澄清时，才加入有界、已脱敏且明确标为可能陈旧的对话历史；App/Business
+Skill 根据当前用户意图选出有限候选，真正的 typed tool 仍需加载 Skill 后才出现；代码库只在
+部署启用 `SourceCapability` 时提供惰性的 `lookup_source`，收到具体查询后才把带 release、
+file:line 和字节哈希的片段加入本轮证据。任何来源都不能借由被选入上下文扩大工具 scope 或
+写授权。
+
+已有 `business_skill_candidates` 和 `runtime_source_retrieved` 分别记录 Skill 选择与真正发生的
+源码检索；未选择的对话和未查询的代码不复制进审计。后续若要统一评测上下文路由，先定义
+不含原文、业务值或源码字节的选择事件，再把它纳入 golden ledger，而不是临时增加日志。
 
 
 ### 6.2 Business Skill
@@ -248,14 +264,18 @@ Skill 不保存当前业务数据或凭据。Agent 只能先从当前任务匹�
 
 如果一次 turn 在成功读取 typed tool 后直接返回答案，且该结果带有 `StructuredQueryAnswer`，产品层会忽略模型对业务事实的转述，并用结构化投影生成用户可见答案。完整性说明排在记录之前；答案长度不足以容纳全部记录时只在记录边界截断，并明确写出展示数量。结构化投影也进入公开 `AgentTurnExecution` 摘要，Session Ledger 记录投影摘要、返回数、展示数和是否展示截断，不记录另一份原始结果。用于定位记录后继续导航的查询不触发该替换，最终打开页面的说明仍由 Agent 给出。
 
-当前 Odoo 原型的通用读取仍是 typed tool，不是 `model/method/args` 逃生口。Agent 先搜索同 actor 的
-可读菜单目录，得到与目录摘要绑定的不透明候选 ID；再用候选 ID 取得经过字段类型和敏感名
-过滤的 `fields_get` 描述；最后只能提交当前不透明字段 ID、受限操作符和 AND 条件。服务端
-固定 `id asc`、20 行页上限和有界 offset，同时执行 `search_count(domain)`、
-`search_count([])` 与 `search_read`，报告 actor、范围、准确匹配数、来源总数、采集时间和
-非快照一致性。目录变化会使旧候选失效，字段变化会使旧字段 ID 失效。action 的 domain 与
-context 只作为发现元数据保存，不在通用读取里执行，因此结果明确声明为模型范围，而不是
-某个页面范围。专用工具能表达更窄的业务语义时仍优先使用专用工具。
+通用实体读取仍是 typed tool，不是 `resource/method/payload` 逃生口。Agent 先搜索同 actor 的
+Adapter 目录，得到与目录摘要绑定的不透明实体 ID；再用实体 ID 取得经过类型和敏感名过滤的
+字段描述；最后只能提交当前不透明字段 ID、受限操作符和 AND 条件。核心固定 20 行页上限与
+有界 offset，并要求 Adapter 返回稳定排序、准确匹配数、来源总数、范围、采集时间和一致性
+说明。目录变化会使旧实体 ID 失效；任意字段描述变化会使该实体的旧字段 ID 全部失效。
+专用工具能表达更窄的业务语义时仍优先使用专用工具。
+
+Odoo 只在 Adapter 内把 generic `contains`/`not_in` 等操作符翻译为 domain，固定 `id asc`，
+执行 `search_count(domain)`、`search_count([])` 与 `search_read`；action domain/context 只作
+发现提示，不冒充查询范围。Contacts 测试 Adapter 不使用 ORM：它读取 actor-scoped REST list，
+在 Adapter 内执行相同 AND 过滤、稳定排序与分页。两种翻译都不能让 Agent 提交原生模型名、
+endpoint、方法、domain、selector 或 caller-defined order。
 
 
 

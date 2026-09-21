@@ -18,6 +18,7 @@ DISTRIBUTIONS = {
             "web_operation_agent/state/store.py",
             "web_operation_agent/transport/registry.py",
             "web_operation_agent/business/operations.py",
+            "web_operation_agent/business/entities.py",
             "web_operation_agent/composition/binding.py",
             "web_operation_agent/composition/ports.py",
             "web_operation_agent/sourcetree.py",
@@ -62,6 +63,7 @@ DISTRIBUTIONS = {
             "web_operation_agent_odoo/skills/sale-orders-query.json",
             "web_operation_agent_odoo/skills/customers-query.json",
             "web_operation_agent_odoo/skills/products-query.json",
+            "web_operation_agent_odoo/skills/runtime-records-query.json",
             "web_operation_agent_odoo/skills/customers-create.json",
         ],
         # The fixture provisioner reads a Compose file and an addon from a checkout. Shipping

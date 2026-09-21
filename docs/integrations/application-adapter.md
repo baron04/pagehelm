@@ -10,6 +10,21 @@ An Application Adapter connects one first-party web application to the generic s
 
 `BusinessToolRuntime` exposes current application data through fixed JSON schemas. Keep credentials and arbitrary HTTP construction inside the application executor. A Skill explains when and how to call these tools; it is not evidence that a current record exists. Each returned route must appear verbatim in the result content and pass the adapter route port before the Agent can use it.
 
+For broad read coverage, implement the optional application-neutral `EntityReadPort` and
+compose it with `EntityReadTools`. The Agent-facing surface is always
+`discover_entities`, `describe_entity`, and `query_entity_records`. The adapter translates
+its native ORM model, REST collection, OpenAPI resource, GraphQL type, or other metadata into
+`EntityCatalog`, `EntityDescriptor`, `EntityField`, and `EntityQueryPage`. Native resource
+names remain adapter-private references; the core mints actor/catalog-bound opaque entity and
+field IDs. Catalog or field-descriptor drift invalidates the old IDs. The generic filter is
+AND-only, bounded, uses fixed operators, and has server-fixed ordering, page size, and offset;
+it is not an arbitrary method, URL, SQL, domain, or request-body escape hatch.
+
+An adapter must run `assert_entity_read_contract` when it enables this surface, plus its own
+authorization and translation tests. This repository runs that same black-box assertion over
+the Odoo ORM/RPC translation and the structurally different synthetic Contacts REST/list
+translation. Passing only one adapter is not evidence that an Agent capability is generic.
+
 A read tool's `QueryEvidence` decides what an answer may say about the rows it returned. Set `matched_count` to the number of matching records in scope, and `count_exact=True` only when the application counted them all, so a list limited to 20 rows of 72 says "72 in total, 20 listed below". For a search by name, set `looked_for` to the searched text and `exact_matches` to how many matches carry exactly that name; leave it `None` when the application cannot tell. Only exact matches let an answer say that a record of that name exists.
 
 Evidence names fields and scopes the way the tools do, and that is what the verifier checks. To show them in the reader's language, pass `answer_labels={"zh": {...}}` to `BusinessToolRuntime`, keyed by the exact field names and scope strings the evidence carries, and by `field=value` for coded values such as an order state. Labels change only how an answer is rendered, never what it claims; the answer basis keeps the original terms.

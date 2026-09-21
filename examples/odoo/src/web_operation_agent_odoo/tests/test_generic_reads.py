@@ -4,21 +4,28 @@ from __future__ import annotations
 import copy
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 from web_operation_agent.business.runtime import (BusinessToolContractError,
+                                                  BusinessToolPermissionError,
                                                   BusinessToolRequestError)
+from web_operation_agent.business.entities import (
+    DESCRIBE_ENTITY_TOOL,
+    DISCOVER_ENTITIES_SCHEMA,
+    DISCOVER_ENTITIES_TOOL,
+    QUERY_ENTITY_RECORDS_SCHEMA,
+    QUERY_ENTITY_RECORDS_TOOL,
+    EntityReadTools,
+)
+from web_operation_agent.tests.support.entity_read_contract import (
+    assert_entity_read_contract,
+)
+from web_operation_agent.state.identity import OperationContext, PrincipalContext
 from web_operation_agent_odoo.server.application import OdooApplicationAdapter
 from web_operation_agent_odoo.server.descriptors import _catalog_digest
-from web_operation_agent_odoo.server.generic_reads import (
-    DESCRIBE_MODEL_TOOL,
-    DISCOVER_MODELS_SCHEMA,
-    DISCOVER_MODELS_TOOL,
-    QUERY_RECORDS_SCHEMA,
-    QUERY_RECORDS_TOOL,
-    OdooGenericReadTools,
-)
+from web_operation_agent_odoo.server.generic_reads import OdooEntityReadPort
 
 
 def _catalog():
@@ -85,7 +92,7 @@ def _fields():
     }
 
 
-class _FakeGeneric(OdooGenericReadTools):
+class _FakeClient:
     def __init__(self):
         self.catalog_payload = _catalog()
         self.calls = []
@@ -108,12 +115,13 @@ class _FakeGeneric(OdooGenericReadTools):
 
 class GenericDiscoveryTests(unittest.TestCase):
     def test_discovery_returns_only_action_backed_non_sensitive_non_transient_models(self):
-        executor = _FakeGeneric()
-        result = executor.execute_generic(
-            DISCOVER_MODELS_TOOL, {"query": "inventory transfers"})
+        client = _FakeClient()
+        executor = EntityReadTools(OdooEntityReadPort(client), application_id="odoo")
+        result = executor.execute(
+            DISCOVER_ENTITIES_TOOL, {"query": "inventory transfers"})
         self.assertEqual(result.content["returned_count"], 1)
         candidate = result.content["candidates"][0]
-        self.assertRegex(candidate["candidate_id"], r"^m_[0-9a-f]{32}$")
+        self.assertRegex(candidate["entity_id"], r"^entity_[0-9a-f]{32}$")
         self.assertEqual(candidate["label"], "Transfers")
         self.assertEqual(candidate["assistant_operations"], ["read"])
         encoded = json.dumps(result.content)
@@ -126,48 +134,60 @@ class GenericDiscoveryTests(unittest.TestCase):
             ("stock move", "Stock Move"),
         ):
             with self.subTest(query=denied_query):
-                denied = executor.execute_generic(
-                    DISCOVER_MODELS_TOOL, {"query": denied_query})
+                denied = executor.execute(
+                    DISCOVER_ENTITIES_TOOL, {"query": denied_query})
                 self.assertNotIn(
                     denied_label,
                     {item["label"] for item in denied.content["candidates"]},
                 )
 
     def test_schema_has_no_raw_model_or_method_argument(self):
-        discovery = DISCOVER_MODELS_SCHEMA["function"]["parameters"]["properties"]
-        query = QUERY_RECORDS_SCHEMA["function"]["parameters"]["properties"]
+        discovery = DISCOVER_ENTITIES_SCHEMA["function"]["parameters"]["properties"]
+        query = QUERY_ENTITY_RECORDS_SCHEMA["function"]["parameters"]["properties"]
         self.assertEqual(set(discovery), {"query", "limit"})
         self.assertEqual(
-            set(query), {"candidate_id", "field_ids", "filters", "limit", "offset"})
+            set(query), {"entity_id", "field_ids", "filters", "limit", "offset"})
         self.assertFalse({"model", "method", "domain", "order"} & set(query))
 
     def test_a_catalog_change_invalidates_an_old_candidate(self):
-        executor = _FakeGeneric()
-        discovered = executor.execute_generic(
-            DISCOVER_MODELS_TOOL, {"query": "transfers"})
-        candidate_id = discovered.content["candidates"][0]["candidate_id"]
-        executor.catalog_payload["actions"][0]["name"] = "Operations"
-        executor.catalog_payload["descriptor_digest"] = _catalog_digest(
-            executor.catalog_payload["models"], executor.catalog_payload["actions"],
-            executor.catalog_payload["omitted_models"],
-            executor.catalog_payload["omitted_actions"])
+        client = _FakeClient()
+        executor = EntityReadTools(OdooEntityReadPort(client), application_id="odoo")
+        discovered = executor.execute(
+            DISCOVER_ENTITIES_TOOL, {"query": "transfers"})
+        entity_id = discovered.content["candidates"][0]["entity_id"]
+        client.catalog_payload["actions"][0]["name"] = "Operations"
+        client.catalog_payload["descriptor_digest"] = _catalog_digest(
+            client.catalog_payload["models"], client.catalog_payload["actions"],
+            client.catalog_payload["omitted_models"],
+            client.catalog_payload["omitted_actions"])
         with self.assertRaisesRegex(BusinessToolRequestError, "absent or stale"):
-            executor.execute_generic(DESCRIBE_MODEL_TOOL, {"candidate_id": candidate_id})
+            executor.execute(DESCRIBE_ENTITY_TOOL, {"entity_id": entity_id})
 
 
 class GenericDescriptionAndQueryTests(unittest.TestCase):
     def setUp(self):
-        self.executor = _FakeGeneric()
-        discovery = self.executor.execute_generic(
-            DISCOVER_MODELS_TOOL, {"query": "transfers"})
-        self.candidate_id = discovery.content["candidates"][0]["candidate_id"]
+        self.client = _FakeClient()
+        self.executor = EntityReadTools(
+            OdooEntityReadPort(self.client), application_id="odoo")
+        discovery = self.executor.execute(
+            DISCOVER_ENTITIES_TOOL, {"query": "transfers"})
+        self.entity_id = discovery.content["candidates"][0]["entity_id"]
 
     def _description(self, field_query=""):
-        return self.executor.execute_generic(DESCRIBE_MODEL_TOOL, {
-            "candidate_id": self.candidate_id,
+        return self.executor.execute(DESCRIBE_ENTITY_TOOL, {
+            "entity_id": self.entity_id,
             **({"field_query": field_query} if field_query else {}),
             "limit": 40,
         })
+
+    def test_shared_application_neutral_contract(self):
+        assert_entity_read_contract(
+            self, self.executor,
+            query="inventory transfers", entity_label="Transfers",
+            field_label="Reference", filter_operator="contains",
+            filter_value="WH/OUT", expected_record_id="7",
+            expected_value="WH/OUT/00007",
+        )
 
     def test_fields_get_is_filtered_and_bound_to_opaque_field_ids(self):
         description = self._description()
@@ -175,7 +195,7 @@ class GenericDescriptionAndQueryTests(unittest.TestCase):
         self.assertEqual(
             {item["label"] for item in fields},
             {"ID", "Reference", "Status", "Scheduled Date", "Carrier"})
-        self.assertTrue(all(item["field_id"].startswith("f_") for item in fields))
+        self.assertTrue(all(item["field_id"].startswith("field_") for item in fields))
         encoded = json.dumps(description.content)
         self.assertNotIn("access_token", encoded)
         self.assertNotIn("Document", encoded)
@@ -183,21 +203,21 @@ class GenericDescriptionAndQueryTests(unittest.TestCase):
         self.assertNotIn("Integration Secret", encoded)
         self.assertIn(("stock.picking", "fields_get", [], {"attributes": [
             "string", "type", "required", "readonly", "searchable", "store", "selection",
-        ]}), self.executor.calls)
+        ]}), self.client.calls)
 
     def test_query_resolves_ids_server_side_and_reports_exact_scope_and_counts(self):
         description = self._description()
         by_label = {item["label"]: item["field_id"]
                     for item in description.content["fields"]}
-        result = self.executor.execute_generic(QUERY_RECORDS_TOOL, {
-            "candidate_id": self.candidate_id,
+        result = self.executor.execute(QUERY_ENTITY_RECORDS_TOOL, {
+            "entity_id": self.entity_id,
             "field_ids": [by_label["Reference"], by_label["Status"], by_label["Carrier"]],
             "filters": [{"field_id": by_label["Status"],
                          "operator": "=", "value": "done"}],
             "limit": 10,
         })
         self.assertEqual(result.content["records"], [{
-            "record_id": 7,
+            "record_id": "7",
             "values": [
                 {"field_id": by_label["Reference"], "label": "Reference",
                  "value": "WH/OUT/00007"},
@@ -213,7 +233,7 @@ class GenericDescriptionAndQueryTests(unittest.TestCase):
         self.assertEqual(result.query_answer.matched_count, 1)
         self.assertTrue(result.query_answer.complete)
         self.assertEqual(result.evidence[0].conditions, ("Status = 'done'",))
-        search = [call for call in self.executor.calls if call[1] == "search_read"]
+        search = [call for call in self.client.calls if call[1] == "search_read"]
         self.assertEqual(search, [("stock.picking", "search_read",
                                    [[["state", "=", "done"]]], {
                                        "fields": ["name", "state", "carrier_id"],
@@ -221,23 +241,23 @@ class GenericDescriptionAndQueryTests(unittest.TestCase):
                                    })])
 
     def test_raw_names_unknown_ids_and_invalid_operators_never_reach_a_data_read(self):
-        before = len([call for call in self.executor.calls if call[1].startswith("search")])
+        before = len([call for call in self.client.calls if call[1].startswith("search")])
         for args in (
-            {"candidate_id": "stock.picking", "field_ids": ["name"]},
-            {"candidate_id": self.candidate_id, "field_ids": ["f_" + "0" * 32]},
+            {"entity_id": "stock.picking", "field_ids": ["name"]},
+            {"entity_id": self.entity_id, "field_ids": ["field_" + "0" * 32]},
         ):
             with self.subTest(args=args):
                 with self.assertRaises(BusinessToolRequestError):
-                    self.executor.execute_generic(QUERY_RECORDS_TOOL, args)
-        after = len([call for call in self.executor.calls if call[1].startswith("search")])
+                    self.executor.execute(QUERY_ENTITY_RECORDS_TOOL, args)
+        after = len([call for call in self.client.calls if call[1].startswith("search")])
         self.assertEqual(before, after)
 
         description = self._description()
         reference = next(item["field_id"] for item in description.content["fields"]
                          if item["label"] == "Reference")
         with self.assertRaisesRegex(BusinessToolRequestError, "not allowed"):
-            self.executor.execute_generic(QUERY_RECORDS_TOOL, {
-                "candidate_id": self.candidate_id, "field_ids": [reference],
+            self.executor.execute(QUERY_ENTITY_RECORDS_TOOL, {
+                "entity_id": self.entity_id, "field_ids": [reference],
                 "filters": [{"field_id": reference, "operator": "child_of", "value": "x"}],
             })
 
@@ -245,7 +265,7 @@ class GenericDescriptionAndQueryTests(unittest.TestCase):
         description = self._description()
         by_label = {item["label"]: item["field_id"]
                     for item in description.content["fields"]}
-        original = self.executor.call
+        original = self.client.call
 
         for row, message in (
             ({"id": 7, "name": "WH/OUT/00007"}, "omitted"),
@@ -257,13 +277,13 @@ class GenericDescriptionAndQueryTests(unittest.TestCase):
                         return [returned]
                     return original(model, method, args, kwargs)
 
-                self.executor.call = bad_call
+                self.client.call = bad_call
                 with self.assertRaisesRegex(BusinessToolContractError, message):
-                    self.executor.execute_generic(QUERY_RECORDS_TOOL, {
-                        "candidate_id": self.candidate_id,
+                    self.executor.execute(QUERY_ENTITY_RECORDS_TOOL, {
+                        "entity_id": self.entity_id,
                         "field_ids": [by_label["Reference"], by_label["Carrier"]],
                     })
-                self.executor.call = original
+                self.client.call = original
 
 
 class GenericSkillRoutingTests(unittest.TestCase):
@@ -287,6 +307,27 @@ class GenericSkillRoutingTests(unittest.TestCase):
         dedicated = adapter.business_tools.select("show products", allow_mutations=False)
         self.assertFalse(dedicated.fallback_used)
         self.assertEqual(dedicated.candidate_ids, ("odoo.sales.products-query",))
+
+    def test_runtime_refuses_missing_scope_before_odoo_rpc(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            adapter = OdooApplicationAdapter(
+                base_url="http://127.0.0.1:8069",
+                api_key_path=self._key_file(Path(tmp)))
+        now = int(time.time() * 1_000)
+        principal = PrincipalContext(
+            schema_version=1, application_id="odoo", tenant_id="db",
+            workspace_id="company", actor_id="reader", delegation_id="delegation",
+            issued_at=now - 1_000, expires_at=now + 60_000,
+            scopes=("customers:read",),
+        )
+        context = OperationContext.create(
+            principal, session_id="session", turn_id="turn",
+            operation_id="discover", deadline_ms=now + 30_000, now_ms=now,
+        )
+        with self.assertRaises(BusinessToolPermissionError):
+            adapter.business_tools.execute(
+                "discover_entities", {"query": "transfers"},
+                {"odoo.runtime.records-query"}, context=context)
 
 
 if __name__ == "__main__":
