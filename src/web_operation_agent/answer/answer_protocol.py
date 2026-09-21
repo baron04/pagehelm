@@ -6,9 +6,11 @@ from dataclasses import asdict
 
 from .computation import COMPARISONS, ComputationRequest, run
 from .conclusion import (Aggregate, AnswerDraft, CapabilityGap, ConclusionRefused, FieldValue,
-                         NotFound, PageFact, Selection, SourceExcerpt, Undetermined, verify)
+                         NotFound, PageFact, Selection, SourceExcerpt, SourceHistory,
+                         Undetermined, verify)
 from .evidence import (CapabilityEvidence, ComputationEvidence, PageEvidence, QueryEvidence,
-                       RecordEvidence, SelectionEvidence, SourceEvidence, TurnEvidence)
+                       RecordEvidence, SelectionEvidence, SourceEvidence,
+                       SourceHistoryEvidence, TurnEvidence)
 
 MAX_INDEX_BYTES = 24 * 1024
 MAX_CONCLUSIONS = 50
@@ -24,7 +26,7 @@ CONCLUSION_KINDS = ("field_value", "selection", "aggregate", "not_found", "undet
 
 
 def answer_schema(*, source: bool = False) -> dict:
-    kinds = CONCLUSION_KINDS + (("source_excerpt",) if source else ())
+    kinds = CONCLUSION_KINDS + (("source_excerpt", "source_history") if source else ())
     return {
         "type": "object", "additionalProperties": False,
         "properties": {
@@ -118,11 +120,12 @@ expire at the next observation. They prove only that excerpt, never API data or 
 _CITES = {"field_value": "a record field", "selection": "a query or a selection",
           "aggregate": "a compute result, so call compute first",
           "page_observation": "a page observation", "not_found": "a query",
-          "capability_gap": "the capability check", "source_excerpt": "source lookup"}
+          "capability_gap": "the capability check", "source_excerpt": "source lookup",
+          "source_history": "source history lookup"}
 _KIND_OF = {RecordEvidence: "a record field", QueryEvidence: "a query",
             SelectionEvidence: "a selection", ComputationEvidence: "a compute result",
             PageEvidence: "a page observation", CapabilityEvidence: "a capability check",
-            SourceEvidence: "a source excerpt"}
+            SourceEvidence: "a source excerpt", SourceHistoryEvidence: "source history"}
 
 
 def _shape(value: object, allowed: set[str], required: set[str], where: str) -> dict:
@@ -217,6 +220,8 @@ def submit(turn: TurnEvidence, args: dict) -> dict | None:
             conclusions.append(CapabilityGap(ref))
         elif kind == "source_excerpt" and isinstance(item, SourceEvidence):
             conclusions.append(SourceExcerpt(ref))
+        elif kind == "source_history" and isinstance(item, SourceHistoryEvidence):
+            conclusions.append(SourceHistory(ref))
         elif kind == "undetermined":
             about = (f"{item.record_id}.{item.field_name}" if isinstance(item, RecordEvidence)
                      else item.collection if isinstance(item, QueryEvidence)

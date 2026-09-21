@@ -11,7 +11,8 @@ from ..answer import answer_protocol, page_answer
 from .knowledge_tools import capability_check_available
 from .prompts import (APPLICATION_ENTRY_TOOL, ASK_USER_TOOL, CAPABILITY_TOOL,
                       LOAD_SKILL_TOOL, SOURCE_CANDIDATE_TOOL, SOURCE_NAV_TOOL,
-                      SOURCE_TOOL, SKILL_APP_TOOL, SKILL_ROUTE_TOOL, TOOL_SCHEMAS,
+                      SOURCE_TOOL, SOURCE_HISTORY_TOOL, SKILL_APP_TOOL, SKILL_ROUTE_TOOL,
+                      TOOL_SCHEMAS,
                       WITHDRAW_TOOL, PREFILL_FORM_TOOL)
 
 
@@ -42,7 +43,8 @@ class ToolSurface:
             tools += [WITHDRAW_TOOL]
         if session.evidence.has_application_evidence():
             tools += [answer_protocol.COMPUTE_TOOL]
-        tools += [SOURCE_TOOL, SOURCE_NAV_TOOL] if session.runtime_source else []
+        tools += [SOURCE_TOOL, SOURCE_HISTORY_TOOL, SOURCE_NAV_TOOL] \
+            if session.runtime_source else []
         if session.source_affordance_mode in ("auto", "empty"):
             tools += [SOURCE_CANDIDATE_TOOL]
         if session.knowledge_router is not None:

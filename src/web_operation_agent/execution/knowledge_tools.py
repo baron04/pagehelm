@@ -12,7 +12,8 @@ import json
 import re
 import time
 
-from ..answer.evidence import CapabilityEvidence, Origin, SourceEvidence
+from ..answer.evidence import (CapabilityEvidence, Origin, SourceEvidence,
+                               SourceHistoryEvidence)
 from ..transport.browser import TransportError
 from ..planning.retrieval import EvidenceBundle
 from ..privacy import redact_sensitive_assignments
@@ -51,7 +52,8 @@ def _source_line(session, hit, query: str) -> str:
                           scope=f"the deployed release {reference.release}"),
             path=reference.path, start_line=reference.start_line,
             end_line=reference.end_line, release=reference.release,
-            sha256=reference.sha256, excerpt=reference.excerpt, summary=hit.text))
+            sha256=reference.sha256, excerpt=reference.excerpt, summary=hit.text,
+            fact_type=hit.fact_type))
         session._source_evidence_ids[reference.key] = ref
     session._answers.answer_mode = True
     return f"{ref} {hit.line}"
@@ -75,7 +77,7 @@ def lookup_source(session, query: str, obs: PageObservation) -> EvidenceBundle:
         raise ValueError("runtime source lookup has no retriever")
     started = time.monotonic()
     lookup = session.source.fact_lookup()
-    hits = (lookup.search(query, limit=8,
+    hits = (lookup.search(query, limit=10,
                           route=lambda identity: _source_route_path(session, identity))
             if lookup is not None else ())
     bundle = session._runtime_retriever.retrieve(
@@ -141,6 +143,102 @@ def lookup_source_tool(session, turn: "_Turn", call: dict, name: str, args: dict
                         or "No matching source evidence. Do not invent an answer.") +
                        "\n\n" + session._render(turn.obs, receipt, note, write,
                                               affordance_query=query))
+
+
+def _source_history_line(session, hit) -> str:
+    ref = session._source_history_evidence_ids.get(hit.key, "")
+    if not ref or ref not in session.evidence:
+        session._source_history_evidence_count += 1
+        ref = f"history#{session._source_history_evidence_count}"
+        session.evidence.record(SourceHistoryEvidence(
+            evidence_id=ref,
+            origin=Origin(kind="source", reference=f"lookup_source_history:{hit.kind}",
+                          observed_at=str(time.time()),
+                          scope=(f"local Git metadata at deployed commit "
+                                 f"{hit.deployed_commit}")),
+            release=hit.release, deployed_commit=hit.deployed_commit,
+            history_kind=hit.kind, statement=hit.statement, sha256=hit.digest,
+            path=hit.path, start_line=hit.start_line, end_line=hit.end_line,
+            commit=hit.commit))
+        session._source_history_evidence_ids[hit.key] = ref
+    session._answers.answer_mode = True
+    return f"{ref} [{hit.kind}] {hit.statement}"
+
+
+def lookup_source_history(session, kind: str, *, path: str = "", start_line: int = 0,
+                          end_line: int = 0, target_commit: str = "",
+                          limit: int = 8) -> str:
+    """Return bounded Git metadata or an explicit deployment-level unavailability."""
+    if not session.runtime_source:
+        raise ValueError("runtime source lookup is disabled")
+    history = session.source.history_lookup()
+    if history is None:
+        reason = session.source.history_unavailable_reason or "repository history is unavailable"
+        session.ledger.append("runtime_source_history_unavailable", reason=reason)
+        return "Source history unavailable: " + reason
+    started = time.monotonic()
+    hits = history.search(kind, path=path, start_line=start_line, end_line=end_line,
+                          target_commit=target_commit, limit=limit)
+    lines = [_source_history_line(session, hit) for hit in hits]
+    session.ledger.append(
+        "runtime_source_history_retrieved", kind=kind, path=path,
+        start_line=start_line, end_line=end_line, target_commit=target_commit,
+        deployed_commit=history.deployed_commit,
+        evidence=[hit.digest for hit in hits], facts_shown=len(hits),
+        latency_ms=round((time.monotonic() - started) * 1000, 1))
+    return "\n".join(lines) or "No matching source history. Do not invent an answer."
+
+
+def lookup_source_history_tool(session, turn: "_Turn", call: dict, name: str,
+                               args: dict) -> "_Next":
+    del name
+    try:
+        kind = args.get("kind")
+        if not isinstance(kind, str):
+            raise ValueError("kind is required")
+        path = args.get("path", "")
+        target = args.get("target_commit", "")
+        if not isinstance(path, str) or len(path) > 500:
+            raise ValueError("path must be a string of at most 500 characters")
+        if not isinstance(target, str) or len(target) > 64:
+            raise ValueError("target_commit must be a string of at most 64 characters")
+        start = args.get("start_line", 0)
+        end = args.get("end_line", 0)
+        if (isinstance(start, bool) or isinstance(end, bool)
+                or not isinstance(start, int) or not isinstance(end, int)
+                or start < 0 or end < 0):
+            raise ValueError("line numbers must be positive integers")
+        result = lookup_source_history(
+            session, kind, path=path, start_line=start, end_line=end,
+            target_commit=target)
+    except ValueError as exc:
+        return session._reply(turn, call, str(exc))
+    if session._cancel_requested():
+        return _Next(session._finish(
+            turn.result, turn.started_at, "user_cancelled",
+            "the user stopped this task after source history retrieval", steps=turn.step))
+    try:
+        receipt = session.browser.execute("observe", {})
+        session._browser_attempts += 1
+    except TransportError as exc:
+        return _Next(session._finish(turn.result, turn.started_at,
+                                  session._transport_terminal("observe"), str(exc),
+                                  steps=turn.step))
+    write = session._writes.write_outcome(receipt, turn.step)
+    session.ledger.append("action_receipt", step=turn.step, tool="observe",
+                       command_id=receipt.command_id, after_tool="lookup_source_history",
+                       ok=receipt.ok, error_code=receipt.error_code,
+                       write=write["state"], write_attribution="unattributed")
+    reason, detail = session._writes.settle_write(write)
+    if reason:
+        return _Next(session._finish(turn.result, turn.started_at, reason, detail,
+                                  steps=turn.step))
+    if receipt.observation is not None:
+        turn.obs = receipt.observation
+    note = session._ground(turn.obs, receipt, write["state"], write["refused_requests"])
+    return session._reply(
+        turn, call, "SOURCE HISTORY (prior; current runtime facts win):\n" + result
+        + "\n\n" + session._render(turn.obs, receipt, note, write))
 
 
 # -- capability check ------------------------------------------------------------

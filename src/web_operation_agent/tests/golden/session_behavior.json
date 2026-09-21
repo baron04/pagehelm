@@ -5862,8 +5862,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 7800,
-          "input_digest": "56c0cfe34cf3c2b32dd8b867a2a4124f9b312b1c8f09bce58bce1e5397c99e86",
+          "input_bytes": 9113,
+          "input_digest": "d28485af70664a048976ee4382f1d9f7f8e2958e9a8fdba8cec88a5da8066003",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -5872,7 +5872,7 @@
           "run_id": "runtime_source_lookup_returns_cited_evidence",
           "schema_version": 1,
           "seq": 4,
-          "tool_count": 11
+          "tool_count": 12
         },
         {
           "args": {
@@ -5953,8 +5953,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 12154,
-          "input_digest": "627767812c101645e29affacb9ae2efe330462f44814e7bf006deb851160ad8d",
+          "input_bytes": 13664,
+          "input_digest": "ad1ade25e8a9821592df511a47ba5f123eb51932c739b3adfb18ab113b528d1a",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -5965,7 +5965,7 @@
           "run_id": "runtime_source_lookup_returns_cited_evidence",
           "schema_version": 1,
           "seq": 9,
-          "tool_count": 11
+          "tool_count": 12
         },
         {
           "args": {
@@ -6001,7 +6001,7 @@
           "seq": 12
         },
         {
-          "agent_said": "**Rule in the source** (apps/greenhouse/glasshouse.decl:1-1):\n```\nroute findTrays handled by view-only, auth required\n```\n> source: a rule in the deployed release's code, not current data · v0 · lines sha256:a867c432897f5c7ecc7f68738df248d97885901687b79520e7b1a35374fd1b33\n\n> **Answered the part supported by current data**",
+          "agent_said": "**Rule in the source** (apps/greenhouse/glasshouse.decl:1-1):\n```\nroute findTrays handled by view-only, auth required\n```\n> source: a rule in the deployed release's code, not current data · v0 · lines sha256:a867c432897f5c7ecc7f68738df248d97885901687b79520e7b1a35374fd1b33 · static declaration; current effective permission still requires a same-actor runtime check\n\n> **Answered the part supported by current data**",
           "arm": "G",
           "business_answer_projected": false,
           "business_control": {
@@ -6024,7 +6024,7 @@
             "trace_events": 0,
             "write_blocked": 0
           },
-          "detail": "**Rule in the source** (apps/greenhouse/glasshouse.decl:1-1):\n```\nroute findTrays handled by view-only, auth required\n```\n> source: a rule in the deployed release's code, not current data · v0 · lines sha256:a867c432897f5c7ecc7f68738df248d97885901687b79520e7b1a35374fd1b33\n\n> **Answered the part supported by current data**",
+          "detail": "**Rule in the source** (apps/greenhouse/glasshouse.decl:1-1):\n```\nroute findTrays handled by view-only, auth required\n```\n> source: a rule in the deployed release's code, not current data · v0 · lines sha256:a867c432897f5c7ecc7f68738df248d97885901687b79520e7b1a35374fd1b33 · static declaration; current effective permission still requires a same-actor runtime check\n\n> **Answered the part supported by current data**",
           "event": "run_finished",
           "page_actions": 0,
           "plan_status": {},
@@ -6045,6 +6045,7 @@
               {
                 "citation": "apps/greenhouse/glasshouse.decl:1-1",
                 "excerpt": "route findTrays handled by view-only, auth required",
+                "fact_type": "static_declaration",
                 "kind": "source_excerpt",
                 "release": "v0",
                 "scope": "the deployed release v0",
@@ -6078,8 +6079,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION",
-          "system_chars": 3934,
-          "system_digest": "sha256:0ec64918f7355623b481788839717f40b3ab1f467d09386ec715aa237669d6ef",
+          "system_chars": 4505,
+          "system_digest": "sha256:1282f9a8e5836ab03faedb0037a568cbd4ee1d3ccb0015cd3d9e1724f6b00f65",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -6088,6 +6089,7 @@
             "finish",
             "goto",
             "lookup_source",
+            "lookup_source_history",
             "observe",
             "open_source_route",
             "select",
@@ -6096,8 +6098,8 @@
           ]
         },
         {
-          "system_chars": 3934,
-          "system_digest": "sha256:0ec64918f7355623b481788839717f40b3ab1f467d09386ec715aa237669d6ef",
+          "system_chars": 4505,
+          "system_digest": "sha256:1282f9a8e5836ab03faedb0037a568cbd4ee1d3ccb0015cd3d9e1724f6b00f65",
           "tool_results": [
             {
               "name": "lookup_source",
@@ -6111,6 +6113,7 @@
             "finish",
             "goto",
             "lookup_source",
+            "lookup_source_history",
             "observe",
             "open_source_route",
             "select",
@@ -6120,7 +6123,7 @@
         }
       ],
       "result": {
-        "agent_said": "**Rule in the source** (apps/greenhouse/glasshouse.decl:1-1):\n```\nroute findTrays handled by view-only, auth required\n```\n> source: a rule in the deployed release's code, not current data · v0 · lines sha256:a867c432897f5c7ecc7f68738df248d97885901687b79520e7b1a35374fd1b33\n\n> **Answered the part supported by current data**",
+        "agent_said": "**Rule in the source** (apps/greenhouse/glasshouse.decl:1-1):\n```\nroute findTrays handled by view-only, auth required\n```\n> source: a rule in the deployed release's code, not current data · v0 · lines sha256:a867c432897f5c7ecc7f68738df248d97885901687b79520e7b1a35374fd1b33 · static declaration; current effective permission still requires a same-actor runtime check\n\n> **Answered the part supported by current data**",
         "arm": "G",
         "business_answer_projected": false,
         "business_control": {
@@ -6143,7 +6146,7 @@
           "trace_events": 0,
           "write_blocked": 0
         },
-        "detail": "**Rule in the source** (apps/greenhouse/glasshouse.decl:1-1):\n```\nroute findTrays handled by view-only, auth required\n```\n> source: a rule in the deployed release's code, not current data · v0 · lines sha256:a867c432897f5c7ecc7f68738df248d97885901687b79520e7b1a35374fd1b33\n\n> **Answered the part supported by current data**",
+        "detail": "**Rule in the source** (apps/greenhouse/glasshouse.decl:1-1):\n```\nroute findTrays handled by view-only, auth required\n```\n> source: a rule in the deployed release's code, not current data · v0 · lines sha256:a867c432897f5c7ecc7f68738df248d97885901687b79520e7b1a35374fd1b33 · static declaration; current effective permission still requires a same-actor runtime check\n\n> **Answered the part supported by current data**",
         "page_actions": 0,
         "plan_status": {},
         "plan_withdrawn": false,
@@ -6162,6 +6165,7 @@
             {
               "citation": "apps/greenhouse/glasshouse.decl:1-1",
               "excerpt": "route findTrays handled by view-only, auth required",
+              "fact_type": "static_declaration",
               "kind": "source_excerpt",
               "release": "v0",
               "scope": "the deployed release v0",
@@ -9383,6 +9387,47 @@
             },
             "required": [
               "query"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "function"
+      },
+      {
+        "function": {
+          "description": "Read bounded local Git metadata for the deployed source commit. Distinguishes a CODEOWNERS declaration, line blame, commits touching one file, and bounded diffs between the deployed and a target commit. Git authorship is not current ownership and cannot explain why a live business event occurred.",
+          "name": "lookup_source_history",
+          "parameters": {
+            "additionalProperties": false,
+            "properties": {
+              "end_line": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "kind": {
+                "enum": [
+                  "owners",
+                  "blame",
+                  "commits",
+                  "changes"
+                ],
+                "type": "string"
+              },
+              "path": {
+                "maxLength": 500,
+                "type": "string"
+              },
+              "start_line": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "target_commit": {
+                "pattern": "^[0-9a-f]{40,64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
             ],
             "type": "object"
           }

@@ -581,9 +581,8 @@ BUSINESS_MODULES = ("sale_management", "account")
 #: upstream layout: `addons/` there holds both the community modules and `base`, while the
 #: compiler reads the upstream shape, so the extraction maps one onto the other.
 _IMAGE_PACKAGE = "/usr/lib/python3/dist-packages/odoo"
-#: Only the directories the compiler is allowed to read, so the extracted tree is a copy of
-#: what is compiled rather than 200 MB of everything. `policies/odoo.json` still applies on
-#: top of this at read time; this just avoids carrying what it would refuse anyway.
+#: Structured extractor directories. P8.5 additionally admits narrowly selected security
+#: declarations and authored static/src JS/XML below; policy still applies at read time.
 _SOURCE_SUBDIRS = ("views", "wizard", "report", "models")
 
 
@@ -607,7 +606,7 @@ def image_release() -> str:
 
 
 def extract_source_tree(*, source_root: Path) -> dict:
-    """Copy the compiler's reading material out of the image, and nothing else.
+    """Copy the source providers' allowlisted reading material out of the image.
 
     Streamed through `tar` rather than `docker cp` so the member list is filtered here: the
     result is a tree whose every file is one the compiler may read, which is also the tree a
@@ -619,7 +618,7 @@ def extract_source_tree(*, source_root: Path) -> dict:
     # is written against Odoo's upstream layout and the image ships the Debian one.
     destinations = {f"addons/{module}": f"addons/{module}" for module in SOURCE_MODULES}
     destinations["addons/base"] = "odoo/addons/base"
-    keep_suffixes = (".py", ".xml")
+    keep_suffixes = (".py", ".xml", ".js", ".csv")
 
     def destination_of(name: str) -> str:
         parts = Path(name).parts
@@ -627,8 +626,20 @@ def extract_source_tree(*, source_root: Path) -> dict:
             return ""
         prefix = "/".join(parts[:2])
         target = destinations.get(prefix)
-        # `<module>/__manifest__.py` plus the four directories the compiler reads.
-        if target is None or not (parts[2] == "__manifest__.py" or parts[2] in _SOURCE_SUBDIRS):
+        if target is None:
+            return ""
+        # High-precision compiler inputs plus the P8.5 raw-code surface.  Authored browser
+        # code is only static/src JS/XML; vendored libraries, built assets and frontend
+        # tests stay out.  Security contributes declarations, not arbitrary seed CSV data.
+        compiler_source = (parts[2] == "__manifest__.py"
+                           or (parts[2] in _SOURCE_SUBDIRS
+                               and name.endswith((".py", ".xml"))))
+        security_source = (parts[2] == "security" and (
+            name.endswith(".xml") or parts[-1] == "ir.model.access.csv"))
+        frontend_source = (parts[2:4] == ("static", "src")
+                           and name.endswith((".js", ".xml"))
+                           and "tests" not in parts[4:])
+        if not (compiler_source or security_source or frontend_source):
             return ""
         return "/".join((target, *parts[2:]))
 

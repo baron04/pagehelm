@@ -1,0 +1,49 @@
+[[component]]
+name = "invoice_gateway"
+maintainer = "revenue_platform"
+marker = "maintainer_alpha"
+
+[[component]]
+name = "ledger_export"
+maintainer = "audit_foundations"
+marker = "maintainer_bravo"
+
+[[component]]
+name = "period_close"
+maintainer = "accounting_core"
+marker = "maintainer_charlie"
+
+[[component]]
+name = "payment_refund"
+maintainer = "money_movement"
+marker = "maintainer_delta"
+
+[[component]]
+name = "payroll_bank"
+maintainer = "people_systems"
+marker = "maintainer_echo"
+
+[[component]]
+name = "hazard_shipping"
+maintainer = "logistics_safety"
+marker = "maintainer_foxtrot"
+
+[[component]]
+name = "customer_merge"
+maintainer = "identity_data"
+marker = "maintainer_golf"
+
+[[component]]
+name = "tax_engine"
+maintainer = "fiscal_platform"
+marker = "maintainer_hotel"
+
+[[component]]
+name = "project_archive"
+maintainer = "portfolio_tools"
+marker = "maintainer_india"
+
+[[component]]
+name = "incident_hold"
+maintainer = "trust_operations"
+marker = "maintainer_juliet"

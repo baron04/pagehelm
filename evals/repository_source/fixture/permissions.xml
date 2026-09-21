@@ -1,0 +1,12 @@
+<permissions>
+  <grant operation="approve invoice" role="billing_manager" marker="permission_alpha"/>
+  <grant operation="export ledger" role="audit_reader" marker="permission_bravo"/>
+  <grant operation="close period" role="finance_controller" marker="permission_charlie"/>
+  <grant operation="refund payment" role="refund_supervisor" marker="permission_delta"/>
+  <grant operation="view payroll" role="payroll_auditor" marker="permission_echo"/>
+  <grant operation="release shipment" role="warehouse_lead" marker="permission_foxtrot"/>
+  <grant operation="merge customer" role="data_steward" marker="permission_golf"/>
+  <grant operation="change tax rule" role="tax_administrator" marker="permission_hotel"/>
+  <grant operation="archive project" role="portfolio_owner" marker="permission_india"/>
+  <grant operation="read incident" role="security_analyst" marker="permission_juliet"/>
+</permissions>

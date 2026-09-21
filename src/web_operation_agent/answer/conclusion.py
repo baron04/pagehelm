@@ -22,7 +22,7 @@ from typing import Union
 
 from .evidence import (
     CapabilityEvidence, ComputationEvidence, EvidenceUnknown, PageEvidence, QueryEvidence,
-    RecordEvidence, SelectionEvidence, SourceEvidence, TurnEvidence,
+    RecordEvidence, SelectionEvidence, SourceEvidence, SourceHistoryEvidence, TurnEvidence,
 )
 
 #: How much of the question this answer covers. The model proposes one; the server may only
@@ -304,11 +304,26 @@ class SourceExcerpt:
         item = _one(turn, self.evidence_id, SourceEvidence, "a source excerpt")
         return {"kind": self.kind, "citation": item.citation, "release": item.release,
                 "sha256": item.sha256, "excerpt": item.excerpt, "scope": item.origin.scope,
-                "source_kind": "source"}
+                "source_kind": "source", "fact_type": item.fact_type}
+
+
+@dataclass(frozen=True, slots=True)
+class SourceHistory:
+    """A server-rendered fact from Git metadata bound to the deployment commit."""
+
+    evidence_id: str
+    kind = "source_history"
+
+    def verify(self, turn: TurnEvidence) -> dict:
+        item = _one(turn, self.evidence_id, SourceHistoryEvidence, "source history")
+        return {"kind": self.kind, "citation": item.citation, "release": item.release,
+                "deployed_commit": item.deployed_commit, "history_kind": item.history_kind,
+                "statement": item.statement, "sha256": item.sha256,
+                "scope": item.origin.scope, "source_kind": "source"}
 
 
 Conclusion = Union[FieldValue, Selection, Aggregate, NotFound, Undetermined, PageFact,
-                   CapabilityGap, SourceExcerpt]
+                   CapabilityGap, SourceExcerpt, SourceHistory]
 
 #: `action_succeeded` is deliberately absent. Whether a write happened already comes from the
 #: mutation journal's terminal state and a same-actor readback, and routing it through a

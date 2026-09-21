@@ -63,6 +63,15 @@ _XML_ID = re.compile(r"[A-Za-z0-9_.-]{1,120}\Z")
 #: compiler exists: without them a relation says a control exists but not when it appears.
 CONDITION_ATTRS = ("invisible", "readonly", "required", "column_invisible", "domain",
                    "context", "groups", "states", "confirm")
+
+
+def _compiler_source(path: str) -> bool:
+    """Only syntax this framework extractor understands, not the wider raw-code surface."""
+    parts = path.split("/")
+    return ((path.endswith(".xml") and any(name in parts for name in (
+                "views", "wizard", "report")))
+            or (path.endswith(".py") and any(name in parts for name in (
+                "models", "wizard"))))
 #: The elements Odoo renders as the structure of one view.
 ARCH_ROOTS = frozenset({"form", "list", "tree", "kanban", "search", "calendar", "graph",
                         "pivot", "activity"})
@@ -186,7 +195,7 @@ class OdooCompiler:
 
     # -- entry point --------------------------------------------------------------------
     def compile(self) -> SourceMap:
-        files = self.tree.files()
+        files = [name for name in self.tree.files() if _compiler_source(name)]
         if self.modules is not None:
             files = [name for name in files if module_of(name) in self.modules]
         for rel in (name for name in files if name.endswith(".xml")):

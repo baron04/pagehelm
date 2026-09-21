@@ -20,7 +20,7 @@ from ..modeling.provider import ProviderError
 from ..modeling.spend import BudgetExhausted
 from ..privacy import safe_tool_arguments as _safe
 from .business_tools import business_tool, load_skill, prefill_form
-from .knowledge_tools import ask_user_tool, lookup_source_tool
+from .knowledge_tools import ask_user_tool, lookup_source_history_tool, lookup_source_tool
 from .page_actions import take_page_action
 from .prompts import (AGENT_SYSTEM, APPLICATION_ENTRY_SYSTEM, BUSINESS_SKILL_SYSTEM,
                       CAPABILITY_SYSTEM, CLARIFICATION_SYSTEM, CONVERSATION_SYSTEM,
@@ -46,6 +46,7 @@ def named_tools(session):
     available: dict[str, Callable[["_Turn", dict, str, dict], "_Next"]] = {}
     if session.runtime_source:
         available["lookup_source"] = partial(lookup_source_tool, session)
+        available["lookup_source_history"] = partial(lookup_source_history_tool, session)
     if session._task_business_skills:
         available["load_skill"] = partial(load_skill, session)
     if session.allow_form_prefill:

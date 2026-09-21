@@ -16,9 +16,11 @@ agent.
 - A server-side ReAct loop receives every tool result and a fresh page observation before
   its next decision, with step, time, token, and provider-spend limits.
 - Application-owned Skills and typed tools provide current business facts. When explicitly
-  enabled, a deployment-bound local source compiler can answer rule questions with exact
-  file, line, release, and byte-digest provenance. Source retrieval remains optional and is
-  never a prerequisite for ordinary browser or API operation.
+  enabled, deployment-bound structured facts plus a language-neutral local code-block index
+  can answer source questions with exact file, line, release, and byte-digest provenance.
+  An optional local Git provider separately cites ownership, blame, commit, and version-diff
+  metadata bound to the deployed commit. Source retrieval remains optional and is never a
+  prerequisite for ordinary browser or API operation.
 - An application-neutral entity-read contract can discover a current actor's readable
   business entities and perform bounded reads without adding one Skill per entity. The Agent
   receives only catalog-bound opaque entity and field IDs; an adapter translates its ORM,
@@ -154,10 +156,13 @@ and actor. Reads report completeness; writes perform application-owned duplicate
 readback.
 
 The adapter includes versioned Skills and an optional source compiler for Odoo menus, actions,
-views, fields, method documentation, and user-visible refusal conditions. Compilation is
-restricted to modules installed in the running deployment, and source answers quote cited
-bytes from that release. Runtime facts remain authoritative when source or documentation
-disagrees. The installed add-on also exposes a bounded actor-scoped model/action catalog. The
+views, fields, method documentation, and user-visible refusal conditions. A generic raw-code
+index covers allowlisted Python, JavaScript, XML and access declarations alongside those
+compiled facts. Both are restricted to modules installed in the running deployment, and
+source answers quote cited bytes from that release. A full matching Git commit can optionally
+enable local history; an extracted image tree without `.git` reports history unavailable.
+Runtime facts remain authoritative when source or documentation disagrees. The installed
+add-on also exposes a bounded actor-scoped model/action catalog. The
 Odoo adapter translates it to the core `discover_entities`, `describe_entity`, and
 `query_entity_records` contract, then maps validated generic filters back to bounded Odoo
 reads under the same delegated actor. Native model names and RPC methods are never Agent

@@ -36,6 +36,10 @@ class SessionContext:
         """Public entry: local retrieval only. See knowledge_tools.lookup_source."""
         return knowledge_tools.lookup_source(self, query, obs)
 
+    def lookup_source_history(self, kind: str, **kwargs) -> str:
+        """Public entry for bounded, deployment-commit Git metadata lookup."""
+        return knowledge_tools.lookup_source_history(self, kind, **kwargs)
+
     def _ground(self, obs: PageObservation, receipt: ActionReceipt, write_state: str,
                 refused_requests: list[str] | None = None) -> str:
         """Judge the current step, and say something only when there is something to say."""
@@ -118,6 +122,8 @@ class SessionContext:
     evidence = AnswerState("evidence")
     _source_evidence_ids = AnswerState("source_evidence_ids")
     _source_evidence_count = AnswerState("source_evidence_count", 0)
+    _source_history_evidence_ids = AnswerState("source_history_evidence_ids")
+    _source_history_evidence_count = AnswerState("source_history_evidence_count", 0)
     _evidence_feedback = AnswerState("evidence_feedback", "")
     _capability_ref = AnswerState("capability_ref", "")
     _capability_withheld = AnswerState("capability_withheld", False)

@@ -184,7 +184,7 @@ ReAct 的价值在于让计划始终可撤回。源码或 Skill 提供的路线�
 | 2 | 同一委托用户的业务 API ToolResult / 写后回读 | 当前业务数据，以及适配器实际回读到的写入结果 | 浏览器当前视觉状态 |
 | 3 | 同一 actor 的运行时目录与 Adapter 元数据 | 当前可发现的实体、页面提示、字段描述和可读操作 | 当前记录、页面默认过滤的真实结果或写授权 |
 | 4 | 经审核的 Business Skill、App Skill 和产品文档 | 工具用途、槽位、只读路由、操作约束和来源 | 当前记录、当前权限或本次动作结果 |
-| 5 | 与部署版本绑定的源码证据 | 可能存在的路由、字段、处理器和服务关系 | 运行时数据、租户配置、功能开关和用户权限 |
+| 5 | 与部署版本绑定的源码与 Git 历史证据 | 静态声明、可能的代码路径、实现片段，以及提交/所有权记录 | 当前数据、当前有效权限、当前组织责任人或一次实际事件的原因 |
 
 当同一类事实冲突时，更新且更接近执行点的运行时事实优先。页面负责 UI 真值，业务 API 负责动态业务数据；二者不一致时，Agent 应停止做成功声明并通过新的观察或同用户回读消除冲突。
 
@@ -227,11 +227,13 @@ Adapter 翻译 ORM/action/`fields_get`/domain，合成 Contacts Adapter 则翻�
 正在回答服务端澄清时，才加入有界、已脱敏且明确标为可能陈旧的对话历史；App/Business
 Skill 根据当前用户意图选出有限候选，真正的 typed tool 仍需加载 Skill 后才出现；代码库只在
 部署启用 `SourceCapability` 时提供惰性的 `lookup_source`，收到具体查询后才把带 release、
-file:line 和字节哈希的片段加入本轮证据。任何来源都不能借由被选入上下文扩大工具 scope 或
-写授权。
+file:line 和字节哈希的片段加入本轮证据；只有提交历史问题才调用
+`lookup_source_history`，并且只加入绑定部署 commit 的 Git 元数据。任何来源都不能借由被选入
+上下文扩大工具 scope 或写授权。
 
-已有 `business_skill_candidates` 和 `runtime_source_retrieved` 分别记录 Skill 选择与真正发生的
-源码检索；未选择的对话和未查询的代码不复制进审计。后续若要统一评测上下文路由，先定义
+已有 `business_skill_candidates`、`runtime_source_retrieved` 与
+`runtime_source_history_retrieved` 分别记录 Skill 选择、真正发生的源码检索和 Git 元数据查询；
+未选择的对话和未查询的代码不复制进审计。后续若要统一评测上下文路由，先定义
 不含原文、业务值或源码字节的选择事件，再把它纳入 golden ledger，而不是临时增加日志。
 
 
@@ -283,9 +285,31 @@ endpoint、方法、domain、selector 或 caller-defined order。
 
 App Skill 适合描述当前菜单不可见、但已审核的只读页面入口。路由模板和 provenance 留在服务端；Agent 只拿到有限的 Skill 卡片，通过当前页面的真实应用入口进入目标应用，再由服务端验证参数并组装同源只读路径。
 
-源码 Provider 是另一种可选知识来源。现有 Session 支持基于版本绑定 SourceMap 的预先 contract、运行时查询和只读候选路由。每条证据携带发布标识、仓库相对路径、行范围和内容摘要。运行时查询会把命中的源码字节铸成当轮 `SourceEvidence`；最终答案只能引用该证据，由服务端逐字呈现，并明确标注“部署版本源码中的规则，不是当前数据”。源码内容始终是先验，不能代替页面观察、业务 API 或写后验证。
+源码 Provider 是另一种可选知识来源。现有 Session 把两个互补索引组合在同一
+`lookup_source` 后面：Adapter 的结构抽取器把它理解的权限声明、页面/路由、字段、拒绝条件、
+状态转换与 API schema 编译成通用 `SourceRelation`；应用无关的代码块索引再对 allowlist 内的
+Python、JavaScript、XML、YAML、SQL、Markdown 与配置文件做确定性 BM25 召回。后者不假装
+理解语义，只把结果标为 implementation。两条路径都绑定同一 release，并返回仓库相对路径、
+精确行范围和该范围的 SHA-256；命中的源码字节由 Session 铸成当轮 `SourceEvidence`，最终答案
+只能由服务端逐字呈现。
 
-应用无关的 `AgentTurnExecutor` 默认仍关闭源码。Odoo 组合只有在部署显式提供源码根与镜像 release 时才启用：addon 先给出实际安装模块清单，编译器排除未安装模块，并把模块摘要与构建 release 合成新的 release 绑定，再将完整 `SourceCapability` 交给 turn。应用不接入源码仍可使用页面和 Business Skill/API 主链路。
+`lookup_source_history` 是独立的可选 Provider。它只读取本地 Git，要求 allowlist 内的工作树
+字节与部署 commit 一致，并把 CODEOWNERS 声明、blame author、文件 commit author 与
+部署 commit 到目标 commit 的有界差异分别返回为 `SourceHistoryEvidence`。Git 元数据不冒充
+`file:line` 源码引证；没有 `.git` 或没有配置完整 commit id 时明确返回 unavailable。所有权声明、
+manifest maintainer、commit author 和当前组织责任人是四种不同事实，答案不能互相替代。
+
+源码证据还携带受服务器约束的事实类型：结构化声明是 `static_declaration`，拒绝分支是
+`possible_cause`，原始代码块是 `implementation`。当前有效权限必须由同 actor 运行时目录/API
+确认；“为什么这条订单实际被取消”之类的事件原因必须有同 actor 数据、日志或审计事件。
+源码只能列出可能路径。源码内容始终是不可信先验，不能授权页面或 API 工具，不能代替页面
+观察、业务 API、写后验证或一次性写确认。
+
+应用无关的 `AgentTurnExecutor` 默认仍关闭源码。Odoo 组合只有在部署显式提供源码根与镜像
+release 时才启用：addon 先给出实际安装模块清单，结构编译器和原始代码块索引都排除未安装
+模块，并把模块摘要与构建 release 合成新的 release 绑定，再将完整 `SourceCapability` 交给
+turn。Git 历史还需要可重放的本地仓库和完整部署 commit；容器里只提取源码而没有 `.git` 时，
+源码问答仍可用，历史问题明确不可答。应用不接入源码仍可使用页面和 Business Skill/API 主链路。
 
 同一 addon 还提供按当前 actor、公司和语言计算的有界 model/action 目录。目录生成只做
 capability discovery，不读取业务记录，也不授权写入；Odoo Adapter 的三段式通用读取工具
@@ -387,7 +411,10 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 - 浏览器 sessionStorage 可以处理同一标签页内的刷新恢复，不能替代服务端持久幂等存储。
 - 模型调用、页面动作和确认有局部超时；provider 排队和 socket 调用共用剩余 deadline，并受进程内并发槽与瞬时故障短路保护。消息级取消已覆盖审批、业务工具和未认领页面动作；provider 请求的主动中断、跨进程取消、分布式租户配额和完整资源回收仍不完整。
 - 目前只有一个业务 Adapter；通用读取扩大了 Odoo 的只读发现面，但没有证明其它企业应用可直接复用，也没有覆盖通用表单写入。
-- 源码能力默认关闭；Odoo 显式配置后可以检索并在答案中引用源码规则。当前通用实体解析只做本地词项匹配，英文目录对中文意图的端到端召回仍依赖 Agent 生成合适检索词；它不执行 action domain/context，不支持 OR/NOT、聚合或任意排序。
+- 源码能力默认关闭；显式配置后，结构关系与通用代码块使用本地词项排序，Git 历史使用独立
+  的类型化查询。英文源码对中文意图的端到端召回仍依赖 Agent 生成合适英文检索词；当前没有
+  本地 embedding、跨语言召回或最终回答正确率基准。源码也不能说明 Studio/租户配置后的当前
+  有效页面与权限，更不能单独解释某条业务记录的实际事件原因。
 - 页面内助手是一个独立的 React 19 项目（[frontend/](../../frontend/)），以 npm 入口挂进宿主页的 Shadow DOM。它是纯视图：不持会话、不发自己的请求、不存时间线——时间线是服务端把会话事件投影出来的，因此整页导航之后由服务端回放，而不是随旧文档一起丢掉。上限、文案、状态名与调色板全部来自服务端拥有的 `panel_contract.json` 与 `design_tokens.json`，面板自行声明任何一项都会被契约测试判红。
 
   面板与宿主页共用同一个 JavaScript realm（不用 iframe，2026-09-11 定）。代价写在 `SECURITY.md`：宿主页里的脚本可以完成一次审批；CSP 与 Trusted Types 是宿主页的响应头，面板按"永不需要放宽"来写并有回归测试（不用 `innerHTML`、不注入内联样式或脚本、样式走 `CSSStyleSheet.replaceSync`），但开不开由宿主页决定。确认卡仍然拒绝非真实手势、以及它无法证明当时可见的按下——这堵住的是视觉欺骗，不是伪造。
@@ -403,7 +430,8 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 2. 将现有短期 principal/operation 绑定接入可信应用登录会话，补充组织策略、持久撤销和跨进程强制执行。
 3. 将 Conversation Host 迁移到有租约、取消、deadline、背压和故障隔离的 worker 执行模型。
 4. 把 Application Adapter 抽成稳定 SDK，增加契约测试、能力声明、统一错误语义和同身份验证接口。
-5. 将已接入的源码规则、通用仓库检索、Git 历史和后续产品文档统一为可开关 Provider，保留运行时事实优先、部署版本绑定和逐类 provenance；框架抽取器只向核心输出应用无关事实。
+5. 在已接入的源码规则、通用仓库检索与 Git 历史之上评测中文/同义表达召回；只有冻结任务上
+   的词法基线低于门槛时才加入本地 embedding、AST 或 LSP，并继续保留逐类 provenance。
 6. 为页面写入补齐通用的提案、网络侧许可、动作关联和写后验证合同，再按证据决定可开放的动作面。
 7. 在核心协议稳定后，评估更强隔离的页面执行端；嵌入面板与浏览器扩展可以共享协议，但需要不同的信任模型。
 8. 建立开发集、冻结测试集和强基线，分别测量页面执行、Skill/API、源码开关、写入安全、恢复能力、延迟和成本。

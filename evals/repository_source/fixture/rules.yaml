@@ -1,0 +1,21 @@
+rules:
+  - marker: rule_alpha
+    invoice_due_date: "thirty days after posting"
+  - marker: rule_bravo
+    ledger_export_retention: "seven fiscal years"
+  - marker: rule_charlie
+    period_close_sequence: "reconcile suspense before locking"
+  - marker: rule_delta
+    refund_limit: "original captured amount"
+  - marker: rule_echo
+    payroll_cutoff: "two business days before payday"
+  - marker: rule_foxtrot
+    hazard_shipment: "certificate required before release"
+  - marker: rule_golf
+    customer_merge: "newest verified address wins"
+  - marker: rule_hotel
+    tax_rounding: "round per invoice line"
+  - marker: rule_india
+    project_archive: "all tasks closed or cancelled"
+  - marker: rule_juliet
+    incident_retention: "legal hold overrides deletion schedule"

@@ -25,11 +25,15 @@ from web_operation_agent.composition.ports import (
     ResultPostconditionVerifier,
 )
 from web_operation_agent.composition.sources import SourceCapability
+from web_operation_agent.planning.repository_source import (CombinedSourceLookup,
+                                                            RepositorySourceLookup)
+from web_operation_agent.planning.source_facts import CompiledSourceLookup
+from web_operation_agent.planning.source_history import GitSourceHistory
 from web_operation_agent.state.identity import (IdentityAssertion, PrincipalContext,
                                                 PrincipalError, bind_matching_identity)
 
 from ..route import ODOO_ROUTE_PORT, ODOO_SOURCE_SCOPE
-from ..sourcemap import OdooCompiler, odoo_source_tree
+from ..sourcemap import OdooCompiler, module_of, odoo_source_tree
 from .executor import OdooBusinessToolExecutor
 from .descriptors import OdooRuntimeDescriptorReader
 from .identity import OdooApiKeyStore, OdooPageSessionIdentityResolver
@@ -253,7 +257,8 @@ class OdooApplicationAdapter:
 
     def source_capability(self, source_root: str | Path | None = None, *,
                           release: str = "",
-                          attestation_id: str = "") -> SourceCapability:
+                          attestation_id: str = "",
+                          deployed_commit: str = "") -> SourceCapability:
         """Compile this deployment's Odoo source once and return what it enables.
 
         This is the adapter handing the composition a decision, not a deployment picking
@@ -274,9 +279,18 @@ class OdooApplicationAdapter:
             sort_keys=True, separators=(",", ":"), ensure_ascii=False,
         ).encode("utf-8")).hexdigest()
         tree = odoo_source_tree(source_root, release=release_binding)
+        installed_modules = frozenset(item.name for item in manifest.modules)
+        ownership_files = frozenset({"CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS"})
+
+        def deployed_path(path: str) -> bool:
+            return module_of(path) in installed_modules or path in ownership_files
+
         source_map = OdooCompiler(
             tree, attestation_id or f"odoo:{release_binding}",
-            modules=(item.name for item in manifest.modules)).compile()
+            modules=installed_modules).compile()
+        repository_lookup = RepositorySourceLookup(tree, path_filter=deployed_path)
+        history, history_reason = GitSourceHistory.optional(
+            tree, deployed_commit, path_filter=deployed_path)
         return SourceCapability(
             source_map=source_map,
             # Odoo's writes are button methods with no URL of their own, so the legacy
@@ -285,6 +299,10 @@ class OdooApplicationAdapter:
             source_contract=False,
             runtime_source=True,
             source_affordance_mode="auto",
+            lookup=CombinedSourceLookup(
+                CompiledSourceLookup(source_map), repository_lookup),
+            history=history,
+            history_unavailable_reason=history_reason,
         )
 
     @property

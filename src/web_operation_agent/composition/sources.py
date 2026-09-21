@@ -12,6 +12,7 @@ from typing import Protocol, runtime_checkable
 
 from ..schemas import SourceMap
 from ..planning.source_facts import CompiledSourceLookup, SourceLookup
+from ..planning.source_history import SourceHistoryLookup
 
 
 @runtime_checkable
@@ -50,6 +51,10 @@ class SourceCapability:
     #: Optional alternative local search over the same release. When absent, lookup uses
     #: the compiled map's deterministic rule index.
     lookup: SourceLookup | None = None
+    #: Optional local Git metadata bound to the same deployment release.  Its absence is
+    #: explicit because an extracted container tree commonly has no ``.git`` directory.
+    history: SourceHistoryLookup | None = None
+    history_unavailable_reason: str = "repository history is not configured"
 
     def __post_init__(self) -> None:
         if self.source_map is not None and not isinstance(self.source_map, SourceMap):
@@ -70,6 +75,17 @@ class SourceCapability:
                 raise ValueError("a source lookup is used only by runtime source lookup")
             if self.lookup.release != self.source_map.release:
                 raise ValueError("a source lookup must search the map's own release")
+        if not isinstance(self.history_unavailable_reason, str):
+            raise TypeError("history_unavailable_reason must be a string")
+        if self.history is not None:
+            if not isinstance(self.history, SourceHistoryLookup):
+                raise TypeError("history must implement SourceHistoryLookup")
+            if not self.runtime_source:
+                raise ValueError("source history is used only by runtime source lookup")
+            if self.history.release != self.source_map.release:
+                raise ValueError("source history must describe the map's own release")
+            if self.history_unavailable_reason:
+                object.__setattr__(self, "history_unavailable_reason", "")
 
     @staticmethod
     def none() -> "SourceCapability":
@@ -81,6 +97,10 @@ class SourceCapability:
         if self.lookup is not None:
             return self.lookup
         return CompiledSourceLookup(self.source_map) if self.source_map is not None else None
+
+    def history_lookup(self) -> SourceHistoryLookup | None:
+        """The deployment-bound Git provider, when the source extraction includes one."""
+        return self.history
 
     def control(self, *, lookup: SourceLookup | None = None) -> "SourceCapability":
         """Keep the interface and release, replacing compiled facts with an empty map."""

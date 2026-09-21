@@ -11,14 +11,15 @@ from web_operation_agent.answer import answer_protocol
 from web_operation_agent.answer.answer_view import render_payload
 from web_operation_agent.answer.conclusion import ConclusionRefused
 from web_operation_agent.answer.evidence import (Origin, QueryEvidence, SourceEvidence,
-                                                  TurnEvidence)
+                                                  SourceHistoryEvidence, TurnEvidence)
 from web_operation_agent.composition.sources import SourceCapability
-from web_operation_agent.execution.knowledge_tools import lookup_source
+from web_operation_agent.execution.knowledge_tools import lookup_source, lookup_source_history
 from web_operation_agent.execution.session import LabApparatus, ServerAgentSession, TaskSpec
 from web_operation_agent.planning.source_facts import (CompiledSourceLookup, SourceFact,
                                                        SourceFactIndex, SourceHit,
                                                        SourceLookup, _fit, fact_index,
                                                        fact_text, terms)
+from web_operation_agent.planning.source_history import SourceHistoryHit
 from web_operation_agent.schemas import EvidenceRef, SourceMap, SourceRelation
 from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.tests.support.execution import _Browser, _Chat, _Control, _obs
@@ -57,6 +58,21 @@ class _FixedLookup:
     def search(self, query, *, limit=8, route=None):
         return (SourceHit(evidence=self.evidence,
                           text="def sprout(tray): raise Refusal"),)
+
+
+class _FixedHistory:
+    def __init__(self, release: str):
+        self.release = release
+        self.deployed_commit = "b" * 40
+
+    def search(self, kind, **kwargs):
+        del kwargs
+        payload = dict(repository_id="fixture", release=self.release,
+                       deployed_commit=self.deployed_commit, kind=kind,
+                       statement="rules.py is attributed to Fixture Author in aaaaaaaaaaaa",
+                       digest="c" * 64, path="rules.py", start_line=3, end_line=3,
+                       commit="a" * 40)
+        return (SourceHistoryHit(**payload),)
 
 
 class RankingTests(unittest.TestCase):
@@ -159,6 +175,8 @@ class SourceAnswerTests(unittest.TestCase):
         self.assertNotIn("source_excerpt", json.dumps(answer_protocol.FINISH_ANSWER_TOOL))
         self.assertIn("source_excerpt",
                       json.dumps(answer_protocol.finish_answer_tool(source=True)))
+        self.assertIn("source_history",
+                      json.dumps(answer_protocol.finish_answer_tool(source=True)))
 
     def test_source_evidence_is_minted_by_the_session_not_an_adapter(self):
         turn = TurnEvidence()
@@ -208,6 +226,50 @@ class SourceAnswerTests(unittest.TestCase):
                 sha256="a" * 64, excerpt="x")
         with self.assertRaisesRegex(ValueError, "16 KiB"):
             _source_evidence(excerpt="x" * (16 * 1024 + 1))
+
+    def test_history_has_its_own_verified_answer_kind_and_limit(self):
+        turn = TurnEvidence()
+        turn.record(SourceHistoryEvidence(
+            evidence_id="history#1",
+            origin=Origin(kind="source", reference="lookup_source_history:blame",
+                          observed_at="1", scope="deployed commit " + "b" * 40),
+            release="v0", deployed_commit="b" * 40, history_kind="blame",
+            statement="rules.py:3 is attributed to Fixture Author in aaaaaaaaaaaa",
+            sha256="c" * 64, path="rules.py", start_line=3, end_line=3,
+            commit="a" * 40))
+        self.assertFalse(turn.has_application_evidence())
+        payload = answer_protocol.submit(turn, {"outcome": "answered", "answer": {
+            "version": 1, "coverage": "complete", "conclusions": [
+                {"kind": "source_history", "evidence_ref": "history#1"}]}})
+        text = render_payload(payload, user_text="谁改了这行？", max_chars=2000)
+        self.assertIn("部署版本的 Git 历史", text)
+        self.assertIn("不代表当前组织责任人", text)
+        self.assertIn("git:", text)
+
+    def test_runtime_history_is_evidence_or_explicitly_unavailable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_map = _with_guard(_map(root))
+            base = dict(
+                application_routes=FIXTURE_ROUTE_PORT,
+                task=TaskSpec("T", "Who changed the refusal?"),
+                lab=LabApparatus(arm="P"), chat=_Chat([]), browser=_Browser([_obs(1)]),
+                control=_Control([]), ledger=SessionLedger(root / "history.jsonl", "history"))
+            session = ServerAgentSession(**base, source=SourceCapability(
+                source_map=source_map, runtime_source=True,
+                history=_FixedHistory(source_map.release)))
+            result = lookup_source_history(
+                session, "blame", path="rules.py", start_line=3, end_line=3)
+            self.assertTrue(result.startswith("history#1 [blame]"))
+            self.assertIsInstance(session.evidence.get("history#1"), SourceHistoryEvidence)
+
+            unavailable = ServerAgentSession(**{**base,
+                "ledger": SessionLedger(root / "unavailable.jsonl", "unavailable")},
+                source=SourceCapability(source_map=source_map, runtime_source=True,
+                                        history_unavailable_reason="no .git in image"))
+            self.assertEqual(
+                "Source history unavailable: no .git in image",
+                lookup_source_history(unavailable, "commits", path="rules.py"))
 
     def test_runtime_lookup_mints_one_stable_reference_for_exact_source_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:

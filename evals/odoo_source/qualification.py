@@ -221,7 +221,9 @@ def qualify(source_root: Path, *, release: str, task_path: Path = TASK_SET) -> d
         reference.path for reference in evidence.values()
         if module_of(reference.path) not in task_set.modules or not tree.permits(reference.path)
     })
-    forbidden_segments = {"tests", "demo", "data", "security", "i18n", "secrets"}
+    # Authored access-control declarations are intentionally in the P8.5 source surface;
+    # they are static declarations, never proof of this actor's effective permission.
+    forbidden_segments = {"tests", "demo", "data", "i18n", "secrets"}
     excluded_path_violations = sorted({
         reference.path for reference in evidence.values()
         if forbidden_segments.intersection(Path(reference.path).parts)

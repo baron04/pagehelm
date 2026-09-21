@@ -1292,6 +1292,19 @@ class AdapterDeliveredSourceConfiguration(unittest.TestCase):
                 path = root / rel
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(body, encoding="utf-8")
+            frontend = root / "addons/greenhouse/static/src/audit_panel.js"
+            frontend.parent.mkdir(parents=True, exist_ok=True)
+            frontend.write_text(
+                "export const glacierAuditDrawer = 'review history';\n", encoding="utf-8")
+            access = root / "addons/greenhouse/security/ir.model.access.csv"
+            access.parent.mkdir(parents=True, exist_ok=True)
+            access.write_text(
+                "id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink\n"
+                "access_glacier,glacier,model_glacier,group_glacier_reader,1,0,0,0\n",
+                encoding="utf-8")
+            excluded = root / "addons/not_installed/models/private_rule.py"
+            excluded.parent.mkdir(parents=True, exist_ok=True)
+            excluded.write_text("uninstalledVolcanoMarker = True\n", encoding="utf-8")
             capability = self._adapter(tmp).source_capability(
                 root, release="18.0-fixture")
         self.assertTrue(capability.source_map.relations)
@@ -1302,6 +1315,14 @@ class AdapterDeliveredSourceConfiguration(unittest.TestCase):
             if relation.attrs.get("module")))
         self.assertEqual(capability.source_affordance_mode, "auto")
         self.assertTrue(capability.runtime_source)
+        lookup = capability.fact_lookup()
+        self.assertTrue(any(hit.evidence.path.endswith("audit_panel.js")
+                            for hit in lookup.search("glacier audit drawer")))
+        self.assertTrue(any(hit.evidence.path.endswith("ir.model.access.csv")
+                            for hit in lookup.search("glacier reader access")))
+        self.assertFalse(lookup.search("uninstalled volcano marker"))
+        self.assertIsNone(capability.history_lookup())
+        self.assertIn("commit", capability.history_unavailable_reason)
         # Odoo's writes are button methods with no route of their own, so the route-shaped
         # operation contract has nothing to plan over. Saying so is the point of the value.
         self.assertFalse(capability.source_contract)

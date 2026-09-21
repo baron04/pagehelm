@@ -2,7 +2,8 @@
 
 Odoo 18 support for [`web-operation-agent`](https://github.com/): the `/odoo/<path>` route
 grammar, a source compiler that reads Odoo's own module XML and model Python into a cited
-`SourceMap`, typed business tools over the delegated JSON-RPC API, and the deployment
+`SourceMap`, a generic allowlisted code-block index, typed business tools over the delegated
+JSON-RPC API, and the deployment
 composition that serves one turn against a live Odoo.
 
 This package contains no generic Agent code. It implements the core package's ports —
@@ -107,15 +108,25 @@ Source retrieval stays optional. `OdooApplicationAdapter.source_capability()` wi
 root returns "nothing", and the session runs on runtime facts alone.
 
 ```python
-capability = adapter.source_capability(source_root, release="18.0-20260908+…")
+capability = adapter.source_capability(
+    source_root, release="18.0-20260908+…", deployed_commit="<full commit id>")
 config = AgentTurnConfig(..., source=capability)
 ```
 
+`deployed_commit` is optional. It enables local `CODEOWNERS`, blame, file-commit and
+deployment-to-target diff metadata only when `source_root` is a Git worktree whose
+allowlisted bytes exactly match that commit. An image extraction has no `.git`; source
+answers still work and history lookup explicitly reports unavailable.
+
 The add-on supplies the running deployment's installed-module manifest before compilation.
-The map excludes modules that merely exist in the image, and its release combines the image
-release with the installed-module digest. The capability goes into the turn as one value;
-`lookup_source` ranks the compiled rule relations locally and mints turn-owned evidence, so a
-source answer quotes the cited bytes rather than trusting the model's paraphrase.
+The map and raw-code index exclude modules that merely exist in the image, and their release
+combines the image release with the installed-module digest. The capability goes into the
+turn as one value; `lookup_source` combines compiled rule relations with deterministic local
+BM25 over allowlisted Python, JavaScript, XML and access declarations. It mints turn-owned
+evidence, so a source answer quotes cited bytes rather than trusting the model's paraphrase.
+Raw blocks are labelled implementation, not current state. Static permission declarations
+still require an actor-scoped runtime check, and source cannot prove the cause of one actual
+record event.
 
 The same add-on exposes a bounded actor-scoped model/action catalog. It derives actions only
 from the current user's filtered menu tree and reports model-level access; catalog generation
@@ -230,7 +241,7 @@ its own when one of them is what you are debugging:
 | `assets` | Downloads the pinned PageController tarball, checks its npm integrity, extracts the three files a deployment serves and checks each one's sha256 |
 | `up` | Starts Compose and waits until Odoo answers, not until Compose returns |
 | `database` | Creates `woa_reference` from Odoo's own demo data, installs `sale_management`, `account` and the Runtime addon, then asks the running server for the asset and hashes what it actually served |
-| `source` | Copies the compiler's reading material out of the image — 570 files, the ten addons whose descriptors the packaged Skills cite |
+| `source` | Copies allowlisted structured and raw-code reading material out of the image for the ten source-qualified addons; excludes tests, demo/seed data, translations, secrets and vendored frontend libraries |
 | `credentials` | Mints an API key through the container's own Odoo shell and captures a browser session |
 | `baseline` | Records the snapshot the gate restores to |
 | `env` | Prints the configuration |
@@ -253,7 +264,7 @@ release and checked against
 [`policies/page_controller.json`](../../src/web_operation_agent/policies/page_controller.json),
 never tracked here. This repository serves that asset; it does not redistribute it, and a
 committed copy would drift from the pin without anyone noticing. The extracted Odoo source
-is not committed either — it is 570 files reproducible from the pinned image, and the
+is not committed either — it is reproducible from the pinned image, and the
 release string the compiler binds to is derived from that image's digest, so a fixture
 rebuilt on a newer `odoo:18` gets a different release and the citation gate notices.
 

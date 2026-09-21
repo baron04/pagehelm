@@ -140,6 +140,7 @@ class OdooDemoConfig:
     #: affordances on; without it the turn runs on runtime facts alone.
     source_root: Path | None = None
     source_release: str = ""
+    source_commit: str = ""
     #: The scripted walkthrough. A caller overrides both together -- a script that answers a
     #: different task than the one submitted is the one mistake this apparatus can make
     #: without any test noticing.
@@ -167,6 +168,8 @@ class OdooDemoConfig:
             object.__setattr__(self, "source_root", Path(self.source_root).expanduser())
             if not self.source_release:
                 raise ValueError("a source root must be bound to an exact release")
+        elif self.source_commit:
+            raise ValueError("a source commit requires a source root")
         if self.model_env is not None:
             object.__setattr__(self, "model_env", Path(self.model_env).expanduser())
         if self.mutation_journal_path is not None:
@@ -601,7 +604,8 @@ def run_demo(config: OdooDemoConfig, *,
     # One compile per deployment release, not per turn: the capability is a value, and the
     # four session settings it carries only make sense together.
     capability = adapter.source_capability(config.source_root,
-                                           release=config.source_release)
+                                           release=config.source_release,
+                                           deployed_commit=config.source_commit)
     chat, meter = _chat(config, run_dir, adapter)
     holder: dict[str, LiveConversationRunner] = {}
 
@@ -740,6 +744,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="an Odoo source tree matching the deployed release")
     parser.add_argument("--source-release", default=_env_default("WOA_ODOO_SOURCE_RELEASE"),
                         help="the exact release identity the source tree is bound to")
+    parser.add_argument("--source-commit", default=_env_default("WOA_ODOO_SOURCE_COMMIT"),
+                        help="optional Git commit matching the source tree, for local history")
     parser.add_argument("--scripted", action="store_true")
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--task", action="append", default=[])
@@ -775,6 +781,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             entry_path=args.entry_path,
             source_root=Path(args.source_root) if args.source_root else None,
             source_release=args.source_release,
+            source_commit=args.source_commit,
             scripted=args.scripted,
             headless=args.headless,
             allow_mutations=args.allow_mutations,

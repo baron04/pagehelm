@@ -38,6 +38,7 @@ _WORD = re.compile(r"[A-Za-z][A-Za-z0-9]*")
 _CAMEL = re.compile(r"[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[a-z0-9]+")
 _MAX_LINE_CHARS = 400
 _K1, _B = 1.2, 0.75
+SOURCE_FACT_TYPES = frozenset({"static_declaration", "possible_cause", "implementation"})
 
 
 def _stem(word: str) -> str:
@@ -219,6 +220,7 @@ class SourceHit:
     text: str
     verbatim: bool = False
     max_chars: int = _MAX_LINE_CHARS
+    fact_type: str = "static_declaration"
 
     def __post_init__(self) -> None:
         if not isinstance(self.evidence, EvidenceRef):
@@ -230,6 +232,8 @@ class SourceHit:
         if (isinstance(self.max_chars, bool) or not isinstance(self.max_chars, int)
                 or not 100 <= self.max_chars <= 4000):
             raise ValueError("max_chars must be from 100 to 4000")
+        if self.fact_type not in SOURCE_FACT_TYPES:
+            raise ValueError(f"fact_type must be one of {sorted(SOURCE_FACT_TYPES)}")
 
     @property
     def line(self) -> str:
@@ -269,7 +273,10 @@ class CompiledSourceLookup:
         facts = index.search(query, limit=limit)
         weights = index.weights(query)
         return tuple(SourceHit(evidence=fact.evidence,
-                               text=_fit(fact_text(fact, route=route), weights, fact.evidence))
+                               text=_fit(fact_text(fact, route=route), weights, fact.evidence),
+                               fact_type=("possible_cause"
+                                          if fact.relation.kind == "service_guard"
+                                          else "static_declaration"))
                      for fact in facts)
 
 

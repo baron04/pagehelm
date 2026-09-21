@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import re
+from collections.abc import Iterable
 from importlib import resources
 from pathlib import Path
 
@@ -134,6 +135,10 @@ class SourceTree:
                 for fn in filenames:
                     rel = os.path.relpath(os.path.join(dirpath, fn), self.root)
                     if self.permits(rel):
+                        try:
+                            self.resolve(rel)
+                        except AccessDenied:
+                            continue
                         out.append(rel)
             self._files = sorted(out)
         return list(self._files)
@@ -143,7 +148,10 @@ class SourceTree:
         data = path.read_bytes()
         if len(data) > self.max_bytes:
             raise AccessDenied(f"{rel} is {len(data)} bytes, over the {self.max_bytes} limit")
-        return data.decode("utf-8", errors="replace")
+        # A citation hashes the UTF-8 bytes reconstructed from this text.  Replacing invalid
+        # bytes would produce a digest for bytes that never existed in the release, so a
+        # non-UTF-8 file is not readable source rather than silently lossy source.
+        return data.decode("utf-8", errors="strict")
 
     def cite(self, rel: str, start_line: int, end_line: int, *, excerpt_chars: int = 0) -> EvidenceRef:
         """Build the citation for a line range, hashing the exact cited bytes."""
@@ -163,20 +171,23 @@ class SourceTree:
             return False
         try:
             fresh = self.cite(ref.path, ref.start_line, ref.end_line)
-        except (AccessDenied, SchemaError):
+        except (AccessDenied, SchemaError, UnicodeDecodeError):
             return False
         return fresh.sha256 == ref.sha256
 
-    def surface_digest(self) -> str:
-        """sha256 over 'relpath\\0filesha\\n' for every allowlisted file.
+    def surface_digest(self, paths: Iterable[str] | None = None) -> str:
+        """sha256 over 'relpath\\0filesha\\n' for an allowlisted source surface.
 
-        This is the value the attestation binds. It changes if a compiled file changes, is
-        added or is removed, which is exactly the drift the SourceMap must not survive.
+        With no explicit paths this covers every allowlisted file.  A provider narrowed by
+        an application-owned scope filter supplies its exact path set instead, so unrelated
+        modules do not become part of that provider's attestation.  Either digest changes if
+        an input changes, is added or is removed.
         """
         h = hashlib.sha256()
-        for rel in self.files():
+        selected = self.files() if paths is None else sorted(set(paths))
+        for rel in selected:
             fh = hashlib.sha256()
-            with open(self.root / rel, "rb") as f:
+            with open(self.resolve(rel), "rb") as f:
                 for chunk in iter(lambda: f.read(1 << 20), b""):
                     fh.update(chunk)
             h.update(f"{rel}\0{fh.hexdigest()}\n".encode())

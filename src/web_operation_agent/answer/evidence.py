@@ -37,6 +37,7 @@ _EVIDENCE_ID = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*#[0-9]{1,6}")
 #: `typed` matters: "nothing in this session can do that" and "the application holds no such
 #: record" are different claims, and collapsing them is how a missing tool became a NotFound.
 SOURCE_KINDS = ("typed", "page", "computed", "capability", "source")
+SOURCE_FACT_TYPES = frozenset({"static_declaration", "possible_cause", "implementation"})
 MAX_TURN_EVIDENCE_BYTES = 256 * 1024
 
 
@@ -386,6 +387,7 @@ class SourceEvidence:
     sha256: str
     excerpt: str
     summary: str = ""
+    fact_type: str = "static_declaration"
 
     def __post_init__(self) -> None:
         _require_id(self.evidence_id)
@@ -409,14 +411,68 @@ class SourceEvidence:
             raise ValueError("source evidence excerpt exceeds 16 KiB")
         if not isinstance(self.summary, str):
             raise TypeError("summary must be a string")
+        if self.fact_type not in SOURCE_FACT_TYPES:
+            raise ValueError(f"fact_type must be one of {sorted(SOURCE_FACT_TYPES)}")
 
     @property
     def citation(self) -> str:
         return f"{self.path}:{self.start_line}-{self.end_line}"
 
 
+@dataclass(frozen=True, slots=True)
+class SourceHistoryEvidence:
+    """Replayable Git metadata, kept distinct from source line evidence.
+
+    This establishes what the bound repository history records.  It does not establish a
+    current maintainer, a current permission, or why one live business event occurred.
+    """
+
+    evidence_id: str
+    origin: Origin
+    release: str
+    deployed_commit: str
+    history_kind: str
+    statement: str
+    sha256: str
+    path: str = ""
+    start_line: int = 0
+    end_line: int = 0
+    commit: str = ""
+
+    def __post_init__(self) -> None:
+        _require_id(self.evidence_id)
+        _require_origin(self.origin)
+        if self.origin.kind != "source":
+            raise ValueError("source history evidence must come from source lookup")
+        object.__setattr__(self, "release", _text(self.release, "release"))
+        if not re.fullmatch(r"[0-9a-f]{40,64}", self.deployed_commit):
+            raise ValueError("source history evidence requires a full deployed commit")
+        if self.history_kind not in {"owners", "blame", "commits", "changes"}:
+            raise ValueError("unknown source history evidence kind")
+        object.__setattr__(self, "statement", _text(self.statement, "statement"))
+        if len(self.statement.encode("utf-8")) > 4096:
+            raise ValueError("source history statement exceeds 4 KiB")
+        if not re.fullmatch(r"[0-9a-f]{64}", self.sha256):
+            raise ValueError("source history evidence requires a sha256 digest")
+        if self.path.startswith("/") or ".." in self.path.split("/"):
+            raise ValueError("source history path must be repository-relative")
+        if self.start_line or self.end_line:
+            if not 1 <= self.start_line <= self.end_line:
+                raise ValueError("source history evidence line range is invalid")
+        if self.commit and not re.fullmatch(r"[0-9a-f]{40,64}", self.commit):
+            raise ValueError("source history commit must be a full commit id")
+
+    @property
+    def citation(self) -> str:
+        location = self.path
+        if self.start_line:
+            location += f":{self.start_line}-{self.end_line}"
+        return f"git:{self.commit or self.deployed_commit[:12]}:{location}".rstrip(":")
+
+
 Evidence = Union[RecordEvidence, QueryEvidence, PageEvidence, CapabilityEvidence,
-                 ComputationEvidence, SelectionEvidence, SourceEvidence]
+                 ComputationEvidence, SelectionEvidence, SourceEvidence,
+                 SourceHistoryEvidence]
 
 
 def _require_id(value: object) -> None:
@@ -500,7 +556,7 @@ class TurnEvidence:
         # by this session's release-bound lookup.
         if not isinstance(item, (RecordEvidence, QueryEvidence, PageEvidence,
                                  ComputationEvidence, SelectionEvidence, CapabilityEvidence,
-                                 SourceEvidence)):
+                                 SourceEvidence, SourceHistoryEvidence)):
             raise TypeError("only evidence can be recorded")
         if item.evidence_id in self._items:
             raise ValueError(f"evidence {item.evidence_id} was already recorded this turn")
@@ -552,7 +608,8 @@ class TurnEvidence:
 
     def has_application_evidence(self) -> bool:
         """Whether the turn read runtime application state, not only release source."""
-        return any(not isinstance(item, SourceEvidence) for item in self._items.values())
+        return any(not isinstance(item, (SourceEvidence, SourceHistoryEvidence))
+                   for item in self._items.values())
 
     def __contains__(self, evidence_id: object) -> bool:
         return evidence_id in self._items
