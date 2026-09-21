@@ -26,6 +26,7 @@ DISTRIBUTIONS = {
             "web_operation_agent/policies/model_options.json",
             "web_operation_agent/policies/prices.json",
             "web_operation_agent/web_runtime/assistant.js",
+            "web_operation_agent/web_runtime/browser_contract.json",
             "web_operation_agent/web_runtime/panel_contract.json",
             "web_operation_agent/web_runtime/design_tokens.json",
             "web_operation_agent/web_runtime/trace_replay.html",

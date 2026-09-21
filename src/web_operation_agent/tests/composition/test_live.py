@@ -97,7 +97,7 @@ def _channel_with_observation():
         runtime="test-runtime/1",
         runtime_instance_id="document-1",
         capabilities=("dom.observe", "dom.click", "dom.fill", "dom.select",
-                      "dom.submit", "page.goto", "page.back", "page.wait"),
+                      "dom.submit", "page.goto", "page.back", "page.scroll", "page.wait"),
         page_origin=ORIGIN,
     )
     lease = channel.accept_hello(hello)["lease_id"]

@@ -9,15 +9,18 @@ from ..planning.affordance import SourceAffordance, resolve_source_affordances
 from ..business.writes import PRE_DISPATCH_ERRORS, WatchState
 from .grounding import NOT_APPLICABLE, REFUTED, WRITE_PERMITTED, WRITE_REFUSED
 from ..planning.retrieval import EvidenceBundle
-from ..schemas import (POTENTIALLY_WRITING_ACTIONS, ActionReceipt, OperationContract,
-                       PageObservation)
+from ..schemas import (MAX_OBSERVATION_ELEMENTS, POTENTIALLY_WRITING_ACTIONS,
+                       ActionReceipt, OperationContract, PageObservation)
 from . import knowledge_tools
 from .business_tools import render_business_skills
 from .prompts import _PLAN_PREAMBLE
 from .turn_answer import AnswerState
 
 
-RENDER_ELEMENTS = 200
+# Rendering cannot expose more refs than the shared browser wire contract accepts.  Keep the
+# public alias because tests and downstream integrations use it when exercising truncation,
+# but do not give it an independently drifting value.
+RENDER_ELEMENTS = MAX_OBSERVATION_ELEMENTS
 
 
 class SessionContext:

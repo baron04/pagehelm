@@ -38,7 +38,7 @@ import {WIRE_VERSION, type ActionCommand, type ActionEnvelope, type ActionResult
 const RUNTIME_NAME = 'woa-embedded/page-controller-1.12.4'
 const CAPABILITIES = [
   'dom.observe', 'dom.click', 'dom.fill', 'dom.select', 'dom.submit',
-  'page.goto', 'page.back', 'page.wait',
+  'page.goto', 'page.back', 'page.scroll', 'page.wait',
 ]
 
 /**

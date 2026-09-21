@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import copy
+import json
 from dataclasses import dataclass, field
+from importlib.resources import files
 
 from .common import (SCHEMA_VERSIONS, _bool, _dict_copy, _non_negative_int,
                      _require, _schema_version, _str, _strict_object, digest)
@@ -12,14 +14,24 @@ from .common import (SCHEMA_VERSIONS, _bool, _dict_copy, _non_negative_int,
 #: The fixed, generic tool surface. The browser exposes exactly these and nothing else;
 #: no task-specific or application-specific action ever appears here.
 BROWSER_ACTIONS = frozenset({
-    "observe", "goto", "click", "fill", "select", "submit", "back", "wait_for",
+    "observe", "goto", "click", "fill", "select", "submit", "back", "scroll", "wait_for",
 })
 
-# Only these two actions are intrinsically unable to initiate an application request that
+# Only these actions are intrinsically unable to initiate an application request that
 # changes state. Navigation is deliberately included in the complement: a GET, route
 # transition or onchange handler can write in legacy applications. Product policy and the
 # write witness import this one set so they cannot silently disagree.
-INTRINSICALLY_READ_ONLY_ACTIONS = frozenset({"observe", "wait_for"})
+INTRINSICALLY_READ_ONLY_ACTIONS = frozenset({"observe", "scroll", "wait_for"})
+
+_BROWSER_CONTRACT = json.loads(
+    files("web_operation_agent").joinpath(
+        "web_runtime", "browser_contract.json").read_text(encoding="utf-8"))
+MAX_OBSERVATION_ELEMENTS = int(_BROWSER_CONTRACT["observation"]["max_elements"])
+MAX_OBSERVATION_CONTENT_CHARS = int(
+    _BROWSER_CONTRACT["observation"]["max_content_chars"])
+MAX_SCROLL_PAGES = int(_BROWSER_CONTRACT["scroll"]["max_pages"])
+if min(MAX_OBSERVATION_ELEMENTS, MAX_OBSERVATION_CONTENT_CHARS, MAX_SCROLL_PAGES) < 1:
+    raise ValueError("browser contract bounds must be positive integers")
 POTENTIALLY_WRITING_ACTIONS = BROWSER_ACTIONS - INTRINSICALLY_READ_ONLY_ACTIONS
 
 
@@ -119,6 +131,8 @@ class PageObservation:
         _require(all(isinstance(item, str) for item in self.landmarks),
                  "landmarks entries must be strings")
         _require(isinstance(self.elements, list), "elements must be an array")
+        _require(len(self.elements) <= MAX_OBSERVATION_ELEMENTS,
+                 f"elements must contain at most {MAX_OBSERVATION_ELEMENTS} entries")
         _require(all(isinstance(item, ElementRef) for item in self.elements),
                  "elements entries must be ElementRef values")
         _require(all(item.epoch == self.epoch for item in self.elements),
@@ -126,6 +140,8 @@ class PageObservation:
         refs = [item.ref for item in self.elements]
         _require(len(refs) == len(set(refs)), "element refs must be unique within an observation")
         _str(self.content, "content", allow_empty=True)
+        _require(len(self.content) <= MAX_OBSERVATION_CONTENT_CHARS,
+                 f"content must contain at most {MAX_OBSERVATION_CONTENT_CHARS} characters")
         _require(isinstance(self.messages, list), "messages must be an array")
         _require(all(isinstance(item, str) for item in self.messages),
                  "messages entries must be strings")

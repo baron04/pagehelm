@@ -1440,6 +1440,52 @@ class EmbeddedRuntimeTests(unittest.TestCase):
 
     @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
                          "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
+    def test_real_pagecontroller_observation_is_viewport_bounded_and_scrollable(self):
+        """P8.6: a large page stays bounded and off-screen controls require a fresh view."""
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            self.skipTest("Playwright is not installed")
+
+        registry = RemoteSessionRegistry()
+        app = _FixtureApplication(PAGE_CONTROLLER)
+        app.start()
+        grant, channel = registry.create(
+            allowed_origins=[app.origin], session_id="bounded-observation-session")
+        gateway = EmbeddedGateway(registry, sse_wait_s=0.1).start()
+        app.runtime_url = gateway.runtime_url
+        app.runtime_config = gateway.bootstrap_config(
+            grant, page_controller_module=app.origin + "/page-controller.js")
+        try:
+            with sync_playwright() as playwright:
+                browser_process = playwright.chromium.launch(headless=True)
+                page = browser_process.new_page(viewport={"width": 1280, "height": 800})
+                page.goto(app.origin + "/large", wait_until="domcontentloaded")
+
+                remote = RemoteBrowserClient(channel, timeout_s=8)
+                remote.start()
+                first = remote.observe()
+                self.assertLess(len(first.elements), 100)
+                self.assertTrue(any(element.name == "Action 0" for element in first.elements))
+                self.assertFalse(any(element.name == "Action 999" for element in first.elements))
+                self.assertIn("scroll to see more", first.content)
+
+                receipt = remote.execute("scroll", {"direction": "down", "pages": 3})
+                self.assertTrue(receipt.ok, receipt.error_detail)
+                self.assertIsNotNone(receipt.observation)
+                after = receipt.observation
+                self.assertFalse(any(element.name == "Action 0" for element in after.elements))
+                self.assertTrue(any(element.name.startswith("Action ")
+                                    for element in after.elements))
+                self.assertGreater(page.evaluate("scrollY"), 0)
+
+                browser_process.close()
+        finally:
+            gateway.close()
+            app.close()
+
+    @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
+                         "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
     def test_real_pagecontroller_survives_navigation_without_repeating_action(self):
         try:
             from playwright.sync_api import sync_playwright
@@ -1639,6 +1685,11 @@ class _FixtureApplication:
                       <a id="next" href="/page2?source=page-controller-long-navigation-target">
                         Open order details</a>
                     """)
+                if self.path == "/large":
+                    controls = "".join(
+                        f'<button style="display:block;width:240px;height:28px;margin:2px">'
+                        f'Action {index}</button>' for index in range(1000))
+                    return self.page("<h1>Large workspace</h1>" + controls)
                 if self.path.startswith("/page2?"):
                     owner.page2_requests += 1
                     return self.page("<h1>Order details</h1><button>Done</button>")

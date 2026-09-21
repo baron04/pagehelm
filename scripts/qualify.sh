@@ -323,6 +323,7 @@ elif [[ "${chromium_ready}" != "1" ]]; then
 else
   run_gate "embedded Runtime Chromium qualification" 1 \
     env WOA_PAGE_CONTROLLER_MODULE="${page_controller_module}" "${PYTHON}" -m unittest \
+    web_operation_agent.tests.transport.test_embedded_runtime.EmbeddedRuntimeTests.test_real_pagecontroller_observation_is_viewport_bounded_and_scrollable \
     web_operation_agent.tests.transport.test_embedded_runtime.EmbeddedRuntimeTests.test_real_pagecontroller_survives_navigation_without_repeating_action \
     web_operation_agent.tests.transport.test_embedded_runtime.EmbeddedRuntimeTests.test_same_origin_iframe_form_navigation_is_observed_without_top_level_change \
     web_operation_agent.tests.transport.test_embedded_runtime.EmbeddedRuntimeTests.test_real_confirmation_card_posts_authenticated_user_decision \

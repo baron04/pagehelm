@@ -1,0 +1,10 @@
+{
+  "observation": {
+    "max_content_chars": 120000,
+    "max_elements": 200,
+    "viewport_expansion": 0
+  },
+  "scroll": {
+    "max_pages": 3
+  }
+}

@@ -9,8 +9,9 @@
  * is the security boundary, and a refactor is not the place to improve it.
  */
 import type {JsonObject} from './types'
+import browserContract from '@contract/browser_contract.json'
 
-export const MAX_CONTENT_CHARS = 120_000
+export const MAX_CONTENT_CHARS = browserContract.observation.max_content_chars
 
 const GENERIC_SENSITIVE_NAME = '(?:password|passwd|pwd|secret|token|api[_-]?key|authorization)'
 const URL_SECRET_ASSIGNMENT = /((?:^|[?&#;\s"'<>\\]|%(?:25)*(?:26|23|3[bBfF]))(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|authorization|password|passwd|pwd|secret|token)(?:=|%(?:25)*3[dD]))(.+?)(?=(?:[&;/?#\s"'<>\\]|%(?:25)*(?:26|3[bBfF]|2[fF]|23)|$))/gi

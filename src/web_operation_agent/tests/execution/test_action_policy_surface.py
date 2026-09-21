@@ -48,7 +48,8 @@ class TheToolSurfaceFollowsTheActionPolicy(unittest.TestCase):
 
     def test_a_run_with_every_page_action_disabled_can_still_observe_and_finish(self):
         offered = _names(self._session(
-            {"click", "fill", "select", "submit", "back", "goto", "wait_for"}).tool_schemas())
+            {"click", "fill", "select", "submit", "back", "goto", "scroll",
+             "wait_for"}).tool_schemas())
 
         self.assertIn("finish", offered)
         self.assertIn("observe", offered)

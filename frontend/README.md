@@ -24,6 +24,7 @@ the server owns:
 |---|---|
 | `../src/web_operation_agent/web_runtime/panel_contract.json` | protocol version, panel states and tones, the progress-state map, bounds, every user-visible string |
 | `../src/web_operation_agent/web_runtime/design_tokens.json` | the palette and scale, for both themes, with the contrast each pair must meet |
+| `../src/web_operation_agent/web_runtime/browser_contract.json` | viewport extraction, observation-size, and bounded-scroll limits shared with the Python wire schema |
 
 Those are imported here through the `@contract` alias, never copied. Two sets of constants
 drifting apart is the defect this arrangement exists to prevent, and

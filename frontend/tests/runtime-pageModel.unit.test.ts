@@ -1,11 +1,32 @@
 import {describe, expect, it} from 'vitest'
 import {createRedactor} from '../src/runtime/redaction'
 import {
-  actionElementFingerprint, elementsFrom, explicitAttribute, hydrateFormFacts,
+  actionElementFingerprint, boundIndexedContent, elementsFrom, explicitAttribute, hydrateFormFacts,
   hydrateLinkFacts, refIndex,
 } from '../src/runtime/pageModel'
 
 const redactor = createRedactor()
+
+describe('boundIndexedContent limits the live control surface without cutting a record', () => {
+  it('retains the first bounded records and reports omitted controls', () => {
+    const content = Array.from({length: 205}, (_, index) =>
+      `[${index}]<button>Action ${index} />`).join('\n')
+
+    const bounded = boundIndexedContent(content, 200)
+
+    expect(bounded.truncated).toBe(true)
+    expect(elementsFrom(bounded.content, 1, redactor)).toHaveLength(200)
+    expect(bounded.content).toContain('[199]<button>Action 199 />')
+    expect(bounded.content).not.toContain('[200]<button>Action 200 />')
+  })
+
+  it('leaves a short observation unchanged and validates its bound', () => {
+    expect(boundIndexedContent('[0]<button>Only />', 2)).toEqual({
+      content: '[0]<button>Only />', truncated: false,
+    })
+    expect(() => boundIndexedContent('', 0)).toThrow(/positive integer/)
+  })
+})
 
 describe('refIndex parses the server ref format and nothing else', () => {
   it('extracts the numeric index from e<number>', () => {

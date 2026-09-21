@@ -118,7 +118,7 @@ def _clip(value: Any, limit: int) -> str:
 #: Page commands already reach the timeline as `action` events; a second line for the same
 #: dispatch would say everything twice.
 _PAGE_TOOLS = frozenset({
-    "goto", "back", "click", "fill", "select", "submit", "wait_for", "observe",
+    "goto", "back", "click", "fill", "select", "submit", "scroll", "wait_for", "observe",
     "prefill_form", "finish", "ask_user"})
 
 
@@ -215,6 +215,8 @@ def describe_action(command: dict | None) -> str:
         return f"提交页面表单：{ref}"
     if action == "wait_for":
         return "等待页面状态更新"
+    if action == "scroll":
+        return "向下滚动页面" if args.get("direction") == "down" else "向上滚动页面"
     if action == "observe":
         return "重新检查当前页面"
     return f"执行页面动作：{_clip(action, 40)}" if action else "执行页面动作"

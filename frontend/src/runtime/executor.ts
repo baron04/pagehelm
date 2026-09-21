@@ -2,7 +2,7 @@
  * Doing one page action, and knowing afterwards whether it did what it was for.
  *
  * The server hands the Runtime a generic command -- click, fill, select, submit, goto,
- * back, wait. Some of those leave the page. For those the Runtime has to decide, before it
+ * back, scroll, wait. Some of those leave the page. For those the Runtime has to decide, before it
  * acts, where the page should end up, and after it acts, whether it got there: a navigation
  * it cannot see is `navigation_timeout`, never a success.
  */
@@ -15,8 +15,10 @@ import {
 import type {Page} from './page'
 import {explicitAttribute, type ElementLike} from './pageModel'
 import type {ActionCommand, RuntimeConfig} from './types'
+import browserContract from '@contract/browser_contract.json'
 
 const MAX_WAIT_MS = 10_000
+const MAX_SCROLL_PAGES = browserContract.scroll.max_pages
 /** Time kept back from an action's deadline so its result can still reach the server. */
 const RESULT_POST_RESERVE_MS = 500
 
@@ -139,6 +141,17 @@ export async function executeCommand(command: ActionCommand, access: PageAccess,
     case 'wait_for':
       await sleep(Math.min(Math.max(Number(args.ms || 1000), 0), MAX_WAIT_MS))
       return {success: true, message: 'wait completed'}
+    case 'scroll': {
+      const direction = args.direction
+      const pages = args.pages === undefined ? 1 : Number(args.pages)
+      if (!['up', 'down'].includes(String(direction || ''))) {
+        throw new Error('bad_arguments: scroll direction must be up or down')
+      }
+      if (!Number.isInteger(pages) || pages < 1 || pages > MAX_SCROLL_PAGES) {
+        throw new Error(`bad_arguments: scroll pages must be an integer from 1 to ${MAX_SCROLL_PAGES}`)
+      }
+      return access().scroll(direction === 'down', pages)
+    }
     case 'goto': {
       if (!args.url) throw new Error('bad_arguments: goto needs url')
       const href = sameOriginUrl(args.url)

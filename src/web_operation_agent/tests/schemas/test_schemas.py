@@ -115,6 +115,26 @@ class WireTypes(unittest.TestCase):
         with self.assertRaises(S.SchemaError):
             S.ActionCommand(command_id="c1", action="drag", args={})
 
+    def test_scroll_is_a_read_only_browser_action(self):
+        command = S.ActionCommand(
+            command_id="c-scroll", action="scroll",
+            args={"direction": "down", "pages": 1})
+
+        self.assertEqual(command.action, "scroll")
+        self.assertIn("scroll", S.INTRINSICALLY_READ_ONLY_ACTIONS)
+        self.assertNotIn("scroll", S.POTENTIALLY_WRITING_ACTIONS)
+
+    def test_page_observation_refuses_unbounded_elements_and_content(self):
+        with self.assertRaisesRegex(S.SchemaError, "at most 200"):
+            S.PageObservation(
+                schema_version=1, epoch=1, url="http://x/y", title="T", landmarks=[],
+                elements=[S.ElementRef(f"e{i}", "button", str(i), "button", 1)
+                          for i in range(201)])
+        with self.assertRaisesRegex(S.SchemaError, "at most 120000"):
+            S.PageObservation(
+                schema_version=1, epoch=1, url="http://x/y", title="T", landmarks=[],
+                elements=[], content="x" * 120_001)
+
     def test_version_mismatch_is_refused(self):
         d = S.ActionCommand(command_id="c1", action="observe").to_json()
         d["schema_version"] = 99

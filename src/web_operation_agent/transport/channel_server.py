@@ -31,7 +31,7 @@ class ChannelServer:
             capability = {
                 "observe": "dom.observe", "click": "dom.click", "fill": "dom.fill",
                 "select": "dom.select", "submit": "dom.submit", "goto": "page.goto",
-                "back": "page.back", "wait_for": "page.wait",
+                "back": "page.back", "scroll": "page.scroll", "wait_for": "page.wait",
             }[action.command.action]
             if capability not in self._hello.capabilities:
                 raise RemoteProtocolError(

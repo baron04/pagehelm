@@ -24,7 +24,7 @@ from web_operation_agent.schemas import (
 ORIGIN = "http://app.test"
 CAPABILITIES = (
     "dom.observe", "dom.click", "dom.fill", "dom.select", "dom.submit",
-    "page.goto", "page.back", "page.wait",
+    "page.goto", "page.back", "page.scroll", "page.wait",
 )
 
 

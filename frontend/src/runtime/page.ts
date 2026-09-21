@@ -8,12 +8,13 @@
  * a lookup cannot happen against nothing.
  */
 import {
-  actionElementFingerprint, elementsFrom, hydrateFormFacts, hydrateLinkFacts, refIndex,
-  type ElementLike, type ElementLookup,
+  actionElementFingerprint, boundIndexedContent, elementsFrom, hydrateFormFacts,
+  hydrateLinkFacts, refIndex, type ElementLike, type ElementLookup,
 } from './pageModel'
 import {canonicalUrl} from './navigation'
 import {MAX_CONTENT_CHARS, type Redactor} from './redaction'
 import {WIRE_VERSION, type ElementRef, type PageObservation} from './types'
+import browserContract from '@contract/browser_contract.json'
 
 const ANNOTATION_STYLE_ID = 'woa-hide-page-controller-annotations'
 
@@ -32,6 +33,7 @@ export interface PageControllerApi {
   clickElement(index: number): Promise<unknown>
   inputText(index: number, text: string): Promise<unknown>
   selectOption(index: number, text: string): Promise<unknown>
+  scroll(options: {down: boolean; numPages: number}): Promise<unknown>
   dispose(): void
 }
 
@@ -73,6 +75,9 @@ export class Page {
   select(ref: unknown, text: string): Promise<unknown> {
     return this.controller.selectOption(refIndex(ref), text)
   }
+  scroll(down: boolean, pages: number): Promise<unknown> {
+    return this.controller.scroll({down, numPages: pages})
+  }
 
   /** PageController's reading of the page, with its debugging overlay removed. */
   async read(): Promise<BrowserState> {
@@ -85,8 +90,15 @@ export class Page {
 
   /** The server's view of one reading, numbered with the epoch the session assigned it. */
   describe(state: BrowserState, epoch: number): PageReading {
-    const content = this.redactor.sanitizePageContent(
-      `${state.header ?? ''}\n${state.content}\n${state.footer ?? ''}`)
+    const header = this.redactor.sanitizePageContent(state.header ?? '').slice(0, 2_000)
+    const footer = this.redactor.sanitizePageContent(state.footer ?? '').slice(0, 2_000)
+    const availableBodyChars = Math.max(0, MAX_CONTENT_CHARS - header.length - footer.length - 2)
+    const sanitizedBody = this.redactor.sanitizePageContent(state.content)
+    const charBoundedBody = sanitizedBody.slice(0, availableBodyChars)
+    const boundedBody = boundIndexedContent(charBoundedBody)
+    // Keep PageController's scroll hints even when its body was bounded. Without the footer
+    // the Agent cannot distinguish a short page from one that needs another observation.
+    const content = `${header}\n${boundedBody.content}\n${footer}`
     const map = this.controller.selectorMap
     const elements: ElementRef[] = hydrateFormFacts(hydrateLinkFacts(
       elementsFrom(content, epoch, this.redactor), map, this.lookup, this.redactor),
@@ -103,7 +115,7 @@ export class Page {
         elements,
         content,
         messages: [],
-        truncated: state.content.length > MAX_CONTENT_CHARS,
+        truncated: (state.content.length > availableBodyChars || boundedBody.truncated),
       },
       fingerprints,
       canonicalUrl: canonicalUrl(state.url),
@@ -127,6 +139,26 @@ export interface LoadedPageController {
   lookup: ElementLookup
 }
 
+/** The fixed extraction policy qualified by the product Runtime. */
+export function pageControllerOptions(exclude: Element[]): Record<string, unknown> {
+  return {
+    enableMask: false,
+    highlightOpacity: 0,
+    highlightLabelOpacity: 0,
+    // A full-page scan grows with the whole DOM and bypasses PageController's top-layer
+    // check. Observe the current viewport; the server can request a bounded scroll and then
+    // reason from a fresh observation.
+    viewportExpansion: browserContract.observation.viewport_expansion,
+    keepSemanticTags: true,
+    includeAttributes: [
+      'href', 'action', 'method', 'target', 'formaction', 'formmethod', 'formtarget',
+      'type', 'name', 'id', 'value',
+      'aria-label', 'placeholder', 'autocomplete',
+    ],
+    interactiveBlacklist: exclude,
+  }
+}
+
 /** Load the application's PageController, excluding the assistant's own container. */
 export async function loadPageController(moduleUrl: string | undefined,
                                          exclude: Element[]): Promise<LoadedPageController> {
@@ -141,18 +173,6 @@ export async function loadPageController(moduleUrl: string | undefined,
   if (!PageController || !getElementByIndex) {
     throw new Error('pageControllerModule does not expose the required PageController API')
   }
-  const controller = new PageController({
-    enableMask: false,
-    highlightOpacity: 0,
-    highlightLabelOpacity: 0,
-    viewportExpansion: -1,
-    keepSemanticTags: true,
-    includeAttributes: [
-      'href', 'action', 'method', 'target', 'formaction', 'formmethod', 'formtarget',
-      'type', 'name', 'id', 'value',
-      'aria-label', 'placeholder', 'autocomplete',
-    ],
-    interactiveBlacklist: exclude,
-  })
+  const controller = new PageController(pageControllerOptions(exclude))
   return {controller, lookup: getElementByIndex}
 }

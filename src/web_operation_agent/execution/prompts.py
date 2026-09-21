@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import re
 
+from ..schemas import MAX_SCROLL_PAGES
+
 _PLAN_PREAMBLE = {
     "compiled": "A plan compiled from this application's source code. It is a hint, not the "
                 "truth; the page in front of you decides.",
@@ -78,6 +80,9 @@ tools return their own facts without changing or re-reading the page.
 * Navigate using links the page offers. If the run's public scope forbids `click`, call \
 `goto` with that link's exact href. Otherwise you may click the link. Never use `goto` for \
 a path that is not an exact href on the current page.
+* Page observations cover the current viewport and may say that more content is above or \
+below. Use `scroll` in a bounded direction, inspect the fresh observation, and stop scrolling \
+when the page says you reached the start or end. Never assume an off-screen control exists.
 * When a form is what the task needs, fill its fields and then click its submit control.
 * Leave expect_navigation unset unless you know the page routes in JavaScript. An ordinary \
 link or a submitting form is recognised without it. Setting it makes the runtime *require* \
@@ -146,6 +151,16 @@ TOOL_SCHEMAS = [
         "parameters": {"type": "object", "properties": {
             "ms": {"type": "integer", "minimum": 0, "maximum": 10000}},
             "additionalProperties": False}}},
+    {"type": "function", "function": {
+        "name": "scroll", "description": (
+            "Scroll the current page vertically by a bounded number of viewports, then "
+            "inspect the fresh observation."),
+        "parameters": {"type": "object", "additionalProperties": False,
+                       "properties": {
+                           "direction": {"type": "string", "enum": ["up", "down"]},
+                           "pages": {"type": "integer", "minimum": 1,
+                                     "maximum": MAX_SCROLL_PAGES}},
+                       "required": ["direction"]}}},
     {"type": "function", "function": {
         "name": "finish", "description": "End the task. Use done=false if you cannot complete it.",
         "parameters": {"type": "object", "properties": {

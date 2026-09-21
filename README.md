@@ -33,6 +33,8 @@ agent.
   Skills are selected from the current task; and deployment source remains a lazy cited
   lookup instead of being injected wholesale.
 - Browser actions are checked against the current observation and application route policy.
+  Page observations are viewport-bound and expose at most 200 live controls; a bounded
+  read-only scroll obtains the next fresh observation instead of scanning an unbounded DOM.
   Page switches require a visible confirmation.
 - Writes are disabled by default. Core turn configuration initially disables every browser
   action that can initiate an application write, including navigation; an adapter must

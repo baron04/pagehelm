@@ -23,7 +23,7 @@ def hello(session_id: str, *, cursor: str = "",
         client_id="browser-tab-1", runtime="test-runtime/1",
         runtime_instance_id=runtime_instance_id,
         capabilities=("dom.observe", "dom.click", "dom.fill", "dom.select", "dom.submit",
-                      "page.goto", "page.back", "page.wait"), page_origin=ORIGIN,
+                      "page.goto", "page.back", "page.scroll", "page.wait"), page_origin=ORIGIN,
         application_id=application_id, principal_digest=principal_digest,
         last_event_id=cursor,
     )

@@ -9,6 +9,39 @@
  */
 import type {Redactor} from './redaction'
 import type {ElementRef} from './types'
+import browserContract from '@contract/browser_contract.json'
+
+/** Maximum live controls one observation may expose across the browser boundary. */
+export const MAX_OBSERVATION_ELEMENTS = browserContract.observation.max_elements
+
+export interface BoundedPageContent {
+  content: string
+  truncated: boolean
+}
+
+/**
+ * Keep only the first bounded set of PageController records.
+ *
+ * PageController owns the expensive DOM walk; this bounds what crosses the browser boundary
+ * and what the model can reference. It cuts before a complete indexed record, never inside
+ * one. With viewport-only extraction the omitted records are reachable by an explicit scroll
+ * and a fresh observation.
+ */
+export function boundIndexedContent(content: string,
+                                    maximum = MAX_OBSERVATION_ELEMENTS): BoundedPageContent {
+  if (!Number.isInteger(maximum) || maximum < 1) {
+    throw new Error('maximum observation elements must be a positive integer')
+  }
+  const records = /(?:^|\n)\s*\*?\[(\d+)]</g
+  let seen = 0
+  for (const match of content.matchAll(records)) {
+    if (seen === maximum) {
+      return {content: content.slice(0, match.index).trimEnd(), truncated: true}
+    }
+    seen += 1
+  }
+  return {content, truncated: false}
+}
 
 /**
  * The properties a fingerprint or a fact is read from. Elements are heterogeneous -- an

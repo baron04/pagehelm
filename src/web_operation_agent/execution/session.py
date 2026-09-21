@@ -653,12 +653,3 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         result.policy_blocks = self.policy_blocks
         self.ledger.append("run_finished", **result.to_json())
         return result
-
-
-# --------------------------------------------------------------------------------------
-# rendering helpers (kept free of session state so tests can call them directly)
-# --------------------------------------------------------------------------------------
-
-#: How many elements of a page the model is shown. Long enterprise forms can place relevant
-#: controls deep in DOM order; `_trim` bounds the resulting context cost.
-RENDER_ELEMENTS = 200
