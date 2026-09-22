@@ -13,7 +13,8 @@ import time
 import unittest
 from pathlib import Path
 
-from web_operation_agent_odoo.demo.demo import (OdooDemoConfig, _await_outcome, _capture,
+from web_operation_agent_odoo.demo.demo import (OdooDemoConfig, _await_outcome,
+                                                _browser_window_options, _capture,
                                                 _notify_turn_boundary)
 
 
@@ -129,6 +130,18 @@ class TheFixtureHookRunsOnlyBetweenTurns(unittest.TestCase):
             lambda turn, record: calls.append((turn, record)),
             turn=2, total_turns=2, record={"status": "finished"})
         self.assertEqual(calls, [])
+
+
+class TheDemoViewportFitsItsWindow(unittest.TestCase):
+    def test_interactive_window_uses_the_available_screen(self):
+        launch, context = _browser_window_options(headless=False)
+        self.assertEqual(launch, {"headless": False, "args": ["--start-maximized"]})
+        self.assertEqual(context, {"no_viewport": True})
+
+    def test_headless_capture_retains_a_deterministic_size(self):
+        launch, context = _browser_window_options(headless=True)
+        self.assertEqual(launch, {"headless": True})
+        self.assertEqual(context, {"viewport": {"width": 1440, "height": 1000}})
 
 
 class QualificationOnlyDemoSeamsFailClosed(unittest.TestCase):

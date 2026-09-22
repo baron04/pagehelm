@@ -486,6 +486,13 @@ def _notify_turn_boundary(hook: Callable[[int, dict], None] | None, *, turn: int
         hook(turn, dict(record))
 
 
+def _browser_window_options(headless: bool) -> tuple[dict, dict]:
+    """Keep reproducible headless captures, but fit an interactive demo to its window."""
+    if headless:
+        return {"headless": True}, {"viewport": {"width": 1440, "height": 1000}}
+    return {"headless": False, "args": ["--start-maximized"]}, {"no_viewport": True}
+
+
 def _run_browser(config: OdooDemoConfig, live: LiveProductSession,
                  conversation: LiveConversationRunner, *,
                  adapter: OdooApplicationAdapter, expected_binding: str,
@@ -500,12 +507,13 @@ def _run_browser(config: OdooDemoConfig, live: LiveProductSession,
     last_url = last_text = ""
     final_probe: dict = {}
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=config.headless)
+        launch_options, window_options = _browser_window_options(config.headless)
+        browser = playwright.chromium.launch(**launch_options)
         try:
             context = browser.new_context(
                 storage_state=str(config.storage_state_path),
                 ignore_https_errors=config.browser_ignore_https_errors,
-                viewport={"width": 1440, "height": 1000})
+                **window_options)
             try:
                 context.add_init_script(script=live.bootstrap_script)
                 # The panel remembers whether a viewer left it open, in `localStorage`. A
