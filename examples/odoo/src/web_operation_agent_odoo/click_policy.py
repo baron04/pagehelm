@@ -68,7 +68,7 @@ class OdooReviewedClickPolicy:
         match = _ACTION.match(path)
         return bool(match and match.group(1) in self.actions)
 
-    def _destination_allowed(self, path: str) -> bool:
+    def destination_allowed(self, path: str) -> bool:
         path = path.rstrip("/") or "/"
         if self.reviewed(path):
             return True
@@ -90,7 +90,7 @@ class OdooReviewedClickPolicy:
             target = element.attrs.get("target") if isinstance(element.attrs, dict) else ""
             if target and str(target).lower() not in {"_self", ""}:
                 return "a link that opens another window is not a reviewed control"
-            if self._destination_allowed(there.path):
+            if self.destination_allowed(there.path):
                 return ""
             return "that link leads to a page nobody reviewed for the assistant"
         if not self.reviewed(urlsplit(observation.url).path):

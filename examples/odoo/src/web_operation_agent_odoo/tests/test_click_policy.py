@@ -77,5 +77,43 @@ class ReviewedClicks(unittest.TestCase):
         self.assertTrue(unresolved.decide(_obs("/odoo/action-286", element), element))
 
 
+class SkillRoutesOnOdoo(unittest.TestCase):
+    """A Skill's routes on Odoo must be pages reviewed as read-only on this database."""
+
+    def _adapter(self, routes):
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        from web_operation_agent.business.runtime import BusinessSkill
+        from web_operation_agent_odoo.adapter import OdooApplicationAdapter
+        from web_operation_agent_odoo.tests.test_adapter import BASE, _key_file
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        skill = BusinessSkill.from_bytes(json.dumps({
+            "schema_version": 1, "skill_id": "eval.terms", "title": "Terms",
+            "intent": "Open payment terms.", "triggers": ["payment terms"],
+            "instructions": ["Open the Payment Terms list."],
+            "tool_names": ["query_products"],
+            "provenance": ["src:odoo@test:skills/terms.json"], "read_only": True,
+            "routes": routes}).encode(), artifact_uri="memory://terms")
+        adapter = OdooApplicationAdapter(base_url=BASE, api_key_path=_key_file(Path(tmp.name)),
+                                         extra_skills=(skill,))
+        rows = [{"complete_name": "account.action_payment_term_form", "res_id": 286}]
+        patcher = mock.patch.object(adapter._executor, "call", return_value=rows)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return adapter
+
+    def test_a_reviewed_route_composes(self):
+        policy = self._adapter(["/odoo/action-286"]).click_policy()
+        self.assertTrue(policy.destination_allowed("/odoo/action-286"))
+
+    def test_an_unreviewed_action_route_refuses_the_composition(self):
+        with self.assertRaisesRegex(ValueError, "not reviewed read-only pages"):
+            self._adapter(["/odoo/action-999"]).click_policy()
+
+
 if __name__ == "__main__":
     unittest.main()

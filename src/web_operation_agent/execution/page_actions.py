@@ -498,12 +498,24 @@ def _leaves_the_page(name: str, args: dict, obs: PageObservation) -> bool:
 
 
 def _clicked_link(args: dict, obs: PageObservation) -> str | None:
-    """The target of the link a click names, "" for a link without one, None for no link."""
+    """The target of the link a click names, "" for a link without one, None for no link.
+
+    A link is what leaves the page, whatever role the application gave it: an ARIA
+    `menuitem` or `tab` rendered as `<a href="/next">` navigates exactly like a `link`, and
+    checking the role alone let an application-switcher entry change the page without the
+    confirmation every other page switch asks for. A same-document `#` anchor is not a
+    link in this sense; it stays where it is.
+    """
     ref = args.get("ref")
     for element in obs.elements:
-        if element.ref == ref and element.role == "link":
-            href = element.attrs.get("href") if isinstance(element.attrs, dict) else None
+        if element.ref != ref:
+            continue
+        href = element.attrs.get("href") if isinstance(element.attrs, dict) else None
+        if element.role == "link":
             return href if isinstance(href, str) else ""
+        if isinstance(href, str) and href.strip() and not href.strip().startswith("#"):
+            return href
+        return None
     return None
 
 

@@ -114,3 +114,18 @@ class ClickPolicyNarrowsADisabledClick(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AnyElementWithAnHrefIsAPageSwitch(unittest.TestCase):
+    def test_a_menuitem_link_asks_for_confirmation_like_a_link(self):
+        from web_operation_agent.execution.page_actions import _clicked_link
+        page = PageObservation(
+            schema_version=1, epoch=1, url="http://app/x", title="X", landmarks=[],
+            elements=[ElementRef("e1", "menuitem", "Sales", "a", 1, {"href": "/sales"}),
+                      ElementRef("e2", "tab", "Terms", "a", 1, {"href": "#"}),
+                      ElementRef("e3", "button", "Kanban", "button", 1),
+                      ElementRef("e4", "link", "Plain", "a", 1, {"href": "/plain"})])
+        self.assertEqual(_clicked_link({"ref": "e1"}, page), "/sales")
+        self.assertIsNone(_clicked_link({"ref": "e2"}, page))
+        self.assertIsNone(_clicked_link({"ref": "e3"}, page))
+        self.assertEqual(_clicked_link({"ref": "e4"}, page), "/plain")

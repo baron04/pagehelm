@@ -222,6 +222,11 @@ class BusinessToolRuntime:
     def route_validator(self) -> BusinessRouteValidator | None:
         return self._route_validator
 
+    @property
+    def skills(self) -> tuple[BusinessSkill, ...]:
+        """Every Skill this runtime can load, in catalog order."""
+        return tuple(self._skills.values())
+
     def _classify_result(self, name: str, result: BusinessToolResult) -> BusinessToolResult:
         if self._route_validator is not None:
             try:

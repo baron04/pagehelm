@@ -351,7 +351,19 @@ class OdooApplicationAdapter:
                         resolved[row["complete_name"]] = row["res_id"]
             except BusinessToolError:
                 resolved = {}
-            self._click_policy = OdooReviewedClickPolicy.from_review(review, resolved)
+            policy = OdooReviewedClickPolicy.from_review(review, resolved)
+            # A Skill route carries a typed result's route authority, and Odoo's route
+            # contract accepts any numeric action -- including a server action, which runs
+            # code when opened. So on Odoo a Skill may declare only pages reviewed as
+            # read-only; anything else refuses the composition rather than the click.
+            for skill in self.business_tools.skills:
+                unreviewed = [route for route in skill.routes
+                              if not policy.destination_allowed(route)]
+                if unreviewed:
+                    raise ValueError(
+                        f"Skill {skill.skill_id} declares routes that are not reviewed "
+                        f"read-only pages on this deployment: {unreviewed}")
+            self._click_policy = policy
         return self._click_policy
 
     @property
