@@ -20,6 +20,7 @@ from pathlib import Path
 
 from testapps.contacts.demo import DemoConfig, run_demo
 from web_operation_agent.composition.sources import SourceCapability
+from web_operation_agent.planning.source_facts import SourceHit
 from web_operation_agent.planning.sourcetree import SourceTree
 from web_operation_agent.schemas import SCHEMA_VERSIONS, SourceMap, SourceRelation
 
@@ -41,7 +42,21 @@ CASES = (
 )
 
 
-def source_capability(root: Path, release: str, official_name: str) -> SourceCapability:
+class FixedCorrectLookup:
+    """Step-2 oracle: removes ranking and query wording from the execution test."""
+
+    def __init__(self, release: str, hit: SourceHit):
+        self.release = release
+        self._hit = hit
+
+    def search(self, query: str, *, limit: int = 8, route=None) -> tuple[SourceHit, ...]:
+        if not isinstance(query, str) or not 1 <= limit <= 20:
+            raise ValueError("query or limit is invalid")
+        return (self._hit,)
+
+
+def source_capability(root: Path, release: str, official_name: str, *,
+                      oracle: bool = False) -> SourceCapability:
     source_file = root / "apps" / "contacts" / "rules.py"
     source_file.parent.mkdir(parents=True, exist_ok=True)
     statement = (f"The current official display name for vendor Orion is "
@@ -62,7 +77,11 @@ def source_capability(root: Path, release: str, official_name: str) -> SourceCap
                                 excerpt_chars=300),),
         )],
     )
-    return SourceCapability(source_map=source_map, runtime_source=True)
+    fixed = (FixedCorrectLookup(release, SourceHit(
+        evidence=source_map.relations[0].evidence[0], text=statement))
+        if oracle else None)
+    return SourceCapability(source_map=source_map, runtime_source=True,
+                            lookup=fixed)
 
 
 def _probe(expected_name: str, expected_email: str):
@@ -82,16 +101,25 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--negative", action="store_true",
                         help="explicit user value must prevail over a conflicting source")
+    parser.add_argument("--oracle", action="store_true",
+                        help="C-only fixed correct source fact; bypasses ranking")
+    parser.add_argument("--retrieval-only", action="store_true",
+                        help="C-only real local retrieval on the same two tasks")
     parser.add_argument("--model-env", type=Path, default=Path(".env"))
     args = parser.parse_args()
-    cases = (("C", "release-partner", "Nova Contact"),) if args.negative else CASES
+    if sum((args.negative, args.oracle, args.retrieval_only)) > 1:
+        parser.error("choose only one isolated evaluation gate")
+    cases = (("C", "release-partner", "Nova Contact"),) if args.negative else (
+        tuple(case for case in CASES if case[0] == "C")
+        if (args.oracle or args.retrieval_only) else CASES)
     output = Path(tempfile.mkdtemp(prefix="woa-source-form-"))
     print(json.dumps({"pilot_output": str(output), "cases": len(cases)},
                      sort_keys=True), flush=True)
     for index, (arm, release, expected) in enumerate(cases, 1):
         source = source_capability(
             output / "sources" / release, release,
-            "Orion Partner" if args.negative else expected)
+            "Orion Partner" if args.negative else expected,
+            oracle=args.oracle)
         expected_email = "nova@example.test" if args.negative else "orion@example.test"
         config = DemoConfig(
             headless=True, tasks=(NEGATIVE_TASK if args.negative else TASK,),
@@ -107,6 +135,7 @@ def main() -> None:
         verdict = (summary.get("panel") or {}).get("final_page_probe") or {}
         record = {
             "arm": arm, "release": release, "expected": expected,
+            "retrieval_mode": "fixed_oracle" if args.oracle else "local_index",
             "form_visible": verdict.get("form_visible"),
             "name_matched": verdict.get("name_matched"),
             "email_matched": verdict.get("email_matched"),
