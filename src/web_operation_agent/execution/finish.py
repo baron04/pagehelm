@@ -5,6 +5,7 @@ from ..answer.answer_view import (capability_gap_answer, render_payload,
                                   unavailable_answer)
 from ..answer.evidence import EvidenceUnknown
 from .knowledge_tools import active_capability_digest
+from .page_evidence import capture_page_snapshot
 from .prompts import _assistant_call, _tool_result
 from .runstate import CAPABILITY_GAP_TERMINAL, _Next
 
@@ -17,6 +18,30 @@ def _is_capability_gap(verified: dict | None) -> bool:
     return (len(conclusions) == 1
             and isinstance(conclusions[0], dict)
             and conclusions[0].get("kind") == "capability_gap")
+
+
+def _ignore_page_prose(args: dict) -> tuple[dict, int]:
+    """Discard model prose for page facts; the renderer uses cited page bytes only.
+
+    This narrow repair does not relax source support checks or accept new evidence IDs.
+    The original tool call stays in the audit. Other malformed fields still fail closed.
+    """
+    answer = args.get("answer")
+    entries = answer.get("conclusions") if isinstance(answer, dict) else None
+    if not isinstance(entries, list):
+        return args, 0
+    cleaned, count = [], 0
+    for entry in entries:
+        if isinstance(entry, dict) and entry.get("kind") == "page_observation":
+            extra = {"statement", "support"} & set(entry)
+            count += len(extra)
+            cleaned.append({key: value for key, value in entry.items()
+                            if key not in extra})
+        else:
+            cleaned.append(entry)
+    if not count:
+        return args, 0
+    return {**args, "answer": {**answer, "conclusions": cleaned}}, count
 
 
 class FinishHandler:
@@ -33,8 +58,21 @@ class FinishHandler:
         messages, obs = turn.messages, turn.obs
         successful_business_tools = turn.successful_business_tools
         kept_reply = turn.kept_reply
-        if name == "finish" and self._answers.answer_mode:
+        structured_answer = isinstance(args, dict) and "outcome" in args
+        if name == "finish" and (self._answers.answer_mode or structured_answer):
             try:
+                if isinstance(args, dict):
+                    args, ignored_page_prose = _ignore_page_prose(args)
+                    if ignored_page_prose:
+                        self.ledger.append("page_answer_prose_ignored", step=step,
+                                           fields=ignored_page_prose)
+                    if "outcome" in args and ("done" in args or "why" in args):
+                        # Existing scripted callers can still send both the old
+                        # done/why fields and the structured outcome. The structured
+                        # branch wins; plain prose cannot become a visible claim.
+                        self.ledger.append("plain_finish_fields_ignored", step=step)
+                        args = {key: value for key, value in args.items()
+                                if key not in {"done", "why"}}
                 answer = args.get("answer") if isinstance(args, dict) else None
                 conclusions = (answer.get("conclusions")
                                if isinstance(answer, dict) else ())
@@ -52,10 +90,12 @@ class FinishHandler:
                         "input, or finish with outcome=unable")
                 # Existing scripted navigation callers still use done/why. Never render
                 # their free prose once evidence mode is active; use the actual receipt.
-                if (isinstance(args, dict) and args.get("done") is True
+                if (isinstance(args, dict) and "outcome" not in args
+                        and args.get("done") is True
                         and self._answer_action_receipt is not None):
                     args = {"outcome": "acted"}
-                elif isinstance(args, dict) and args.get("done") is False:
+                elif (isinstance(args, dict) and "outcome" not in args
+                      and args.get("done") is False):
                     args = {"outcome": "unable"}
                 if isinstance(args, dict) and args.get("outcome") == "acted":
                     if (set(args) - {"outcome", "answer"} or self._answer_action_receipt is None
@@ -76,6 +116,8 @@ class FinishHandler:
                         "finish with outcome=unable")
             except (ValueError, TypeError, EvidenceUnknown) as exc:
                 self._answer_repairs += 1
+                if self._answer_action_receipt is not None:
+                    self._finalizing = True
                 # The message, not only the class. A run recorded three refusals as
                 # "ValueError" and nothing else, which is enough to know the answer was
                 # rejected and not enough to know why -- the reviewer reading it later
@@ -96,10 +138,36 @@ class FinishHandler:
                     result.agent_said = unavailable_answer(self.task.prompt)
                     return _Next(self._finish(result, t0, "agent_refused", result.agent_said,
                                         steps=step))
+                refs = self.evidence.ids()
+                ref_hint = (
+                    " Current answer evidence refs: " + ", ".join(refs[:24]) + "."
+                    if refs else " No answer evidence has been recorded yet.")
+                page_hint = ""
+                entries = ((args.get("answer") or {}).get("conclusions")
+                           if isinstance(args, dict) and
+                              isinstance(args.get("answer"), dict) else ())
+                attempted_page_fact = (isinstance(entries, list) and any(
+                    isinstance(entry, dict) and entry.get("kind") == "page_observation"
+                    for entry in entries))
+                if (self._finalizing and attempted_page_fact
+                        and not self._refused_reads and
+                        not any(ref.startswith("obs") for ref in refs)):
+                    try:
+                        _, page_hint = capture_page_snapshot(self, obs, step=step)
+                    except (ValueError, TypeError, EvidenceUnknown):
+                        page_hint = ""
+                repair = (" Element refs such as e1 are browser controls, not answer "
+                          "evidence. The action has already been observed. Only finish is available "
+                          "during answer repair; use an existing evidence ref, report the "
+                          "action without an answer, or finish with outcome=unable. "
+                          if self._finalizing else
+                          " Element refs such as e1 are browser controls, not answer evidence. "
+                          "For a page fact, call observe with answer_evidence=true and cite one "
+                          "of the returned obs-page refs exactly. Otherwise finish with "
+                          "outcome=unable. ")
                 messages += [_assistant_call(call), _tool_result(
-                    call, "ANSWER REFUSED: " + str(exc)[:500] +
-                    ". Correct the evidence reference or perform a supported read/compute; "
-                    "otherwise finish with outcome=unable. " + self._answers.render_action())]
+                    call, "ANSWER REFUSED: " + str(exc)[:500] + "." + ref_hint +
+                    repair + self._answers.render_action() + page_hint)]
                 return self._resume(turn, messages, obs, successful_business_tools)
             verified = self._answers.with_refused_reads(self._answers.with_labels(verified))
             result.verified_answer = verified
@@ -128,6 +196,26 @@ class FinishHandler:
 
         if name == "finish":
             done = bool(args.get("done"))
+            if done and self.evidence.has_source_evidence():
+                if self._answer_action_receipt is None or (
+                        self._explicit_mutation_intent
+                        and self._answer_action_receipt["kind"] != "mutation"
+                        and self._approvals.business_counts["mutation_completed"] == 0):
+                    self._answer_repairs += 1
+                    self._finalizing = True
+                    self.ledger.append("answer_contract_refused", step=step,
+                                       reason="source_plain_completion_without_action",
+                                       repair=self._answer_repairs)
+                    if self._answer_repairs > answer_protocol.MAX_ANSWER_REPAIRS:
+                        result.agent_said = unavailable_answer(self.task.prompt)
+                        return _Next(self._finish(result, t0, "agent_refused",
+                                            result.agent_said, steps=step))
+                    messages += [_assistant_call(call), _tool_result(
+                        call, "A source fact is not an action receipt. Submit an "
+                              "evidence-backed answer with outcome/answer, or finish "
+                              "with outcome=unable. Do not dispatch another action "
+                              "merely to repair this answer.")]
+                    return self._resume(turn, messages, obs, successful_business_tools)
             if done and kept_reply:
                 result.agent_said = kept_reply[:self.max_agent_said_chars]
                 self.ledger.append("plain_reply_kept", step=step,
@@ -148,6 +236,16 @@ class FinishHandler:
                           "Continue, or call finish with done=false if you cannot "
                           "complete it.")]
                 return self._resume(turn, messages, obs, successful_business_tools)
+            if done and self.evidence.has_source_evidence():
+                # The source informed a decision, but the user sees only the action
+                # the runtime actually observed. Model prose and source bytes do not
+                # become a claim about the business goal or a new permission.
+                verified = {"conclusions": (), "coverage": "complete", "prose": "",
+                            "lowered_because": (), "action": self._answer_action_receipt}
+                result.verified_answer = verified
+                result.agent_said = render_payload(
+                    verified, user_text=self.task.prompt,
+                    max_chars=max(512, self.max_agent_said_chars))
             if done and self._answers.business_answer_is_projectable(self.page_actions):
                 result.business_answer_projected = True
                 self.ledger.append(

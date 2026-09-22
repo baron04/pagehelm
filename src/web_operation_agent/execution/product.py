@@ -365,9 +365,9 @@ def render_neutral_user_answer(context: AgentAnswerContext) -> str:
                 "page. Ask again when you are ready.")
     if context.agent.terminal_reason == "no_progress":
         if re.search(r"[\u3400-\u9fff]", context.message.text):
-            return "同一步骤没有带来新结果，我已停止重复操作。请补充目标信息后重试。"
-        return ("The same step produced no new result, so I stopped repeating it. "
-                "Add more detail to the goal and try again.")
+            return "最近几步没有找到新信息或可确认的页面变化，我已停止重复操作。可以补充目标或缩小查询范围。"
+        return ("The recent steps produced no new information or confirmed page change, "
+                "so I stopped repeating them. You can clarify the goal or narrow the search.")
     if status is AgentTurnStatus.FINISHED and context.agent.verified_answer is not None:
         return render_payload(context.agent.verified_answer, user_text=context.message.text,
                               max_chars=context.max_chars)

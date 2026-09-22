@@ -85,6 +85,11 @@ class MinimalDemoUnitTests(unittest.TestCase):
             DemoConfig(start_path="/contacts/unknown")
         with self.assertRaisesRegex(TypeError, "final_page_probe"):
             DemoConfig(final_page_probe="not callable")
+        with self.assertRaisesRegex(TypeError, "extra_skills"):
+            DemoConfig(extra_skills=("not a Skill",))
+        with self.assertRaisesRegex(ValueError, "click"):
+            DemoConfig(start_path="/contacts/new", allow_page_click=True)
+        self.assertTrue(DemoConfig(allow_page_click=True).allow_page_click)
 
     def test_second_adapter_binds_and_reads_its_live_typed_api(self):
         with MinimalContactsApplication() as application:

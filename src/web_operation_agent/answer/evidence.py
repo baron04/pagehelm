@@ -611,6 +611,17 @@ class TurnEvidence:
         return any(not isinstance(item, (SourceEvidence, SourceHistoryEvidence))
                    for item in self._items.values())
 
+    def has_source_evidence(self) -> bool:
+        """Whether release-bound source may support a structured answer this turn."""
+        return any(isinstance(item, (SourceEvidence, SourceHistoryEvidence))
+                   for item in self._items.values())
+
+    def has_typed_evidence(self) -> bool:
+        """Whether a business read or calculation needs its own progress semantics."""
+        return any(isinstance(item, (RecordEvidence, QueryEvidence,
+                                     SelectionEvidence, ComputationEvidence))
+                   for item in self._items.values())
+
     def __contains__(self, evidence_id: object) -> bool:
         return evidence_id in self._items
 

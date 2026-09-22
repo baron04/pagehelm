@@ -8,17 +8,16 @@ from __future__ import annotations
 
 import hashlib
 import re
-import time
 from urllib.parse import urljoin, urlsplit
 
-from ..answer import answer_protocol, page_answer
 from ..answer.evidence import EvidenceUnknown
 from ..transport.browser import TransportError, TurnCancelled
 from .grounding import WRITE_PERMITTED
-from ..privacy import redact_sensitive_assignments, safe_tool_arguments as _safe
+from ..privacy import safe_tool_arguments as _safe
 from ..schemas import (BROWSER_ACTIONS, POTENTIALLY_WRITING_ACTIONS, ActionReceipt,
                        PageObservation)
 from .knowledge_tools import capability_check_available, capability_check_feedback
+from .page_evidence import capture_page_snapshot
 from .prompts import _assistant_call, _tool_result, _trim
 from .runstate import _Next, _StepEnd, _Turn
 
@@ -254,12 +253,10 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
     try:
         session._browser_attempts += 1
         session._writes.expect_decision(action_may_write)
-        preserve_completed_write = bool(
-            session._answer_action_receipt is not None
-            and session._answer_action_receipt["kind"] == "mutation"
-            and name in ("goto", "back"))
-        if name not in ("observe", "wait_for") and not preserve_completed_write:
-            session._answer_action_receipt = None
+        # A previous completed action remains true after a failed or read-only
+        # follow-up. Replace its receipt only when this action establishes a new
+        # navigation or an observed page interaction below. Route drift is checked
+        # by the main loop before the next model decision.
         receipt = session.browser.execute(name, args, expect_navigation=expect_nav)
     except TurnCancelled as exc:
         session.ledger.append(
@@ -299,12 +296,24 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
         return _Next(session._finish(result, t0, reason, detail, steps=step))
     if receipt.observation is not None:
         obs = receipt.observation
-    if (name in ("goto", "back") and receipt.ok
-            and receipt.observation is not None):
+    if ((name in ("goto", "back") or (name == "click" and receipt.navigated))
+            and receipt.ok and receipt.observation is not None
+            and receipt.observation.epoch > prior_page_epoch):
         if session._answer_action_receipt is not None and session._answer_action_receipt["kind"] == "mutation":
             session._answer_action_receipt["navigation_url"] = obs.url
         else:
             session._answer_action_receipt = {"kind": "navigation", "url": obs.url}
+    elif (name == "click" and receipt.ok and not receipt.navigated
+          and receipt.observation is not None
+          and receipt.observation.epoch > prior_page_epoch
+          and write["state"] == "none"
+          and obs.url == receipt.url_before
+          and (obs.content != turn.obs.content or obs.title != turn.obs.title)):
+        # A successful DOM-changing click is reportable as an interaction, not as a
+        # verified business result. The answer may state only that the page changed;
+        # application-specific completion still needs its own postcondition check.
+        session._answer_action_receipt = {"kind": "page_interaction", "action": "click",
+                                          "url": obs.url}
     target_observed = False
     if name == "goto" and isinstance(args.get("url"), str):
         expected = urlsplit(urljoin(receipt.url_before, args["url"]))
@@ -351,18 +360,9 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
         session._answer_mode = True
         if (receipt.ok and receipt.action == "observe" and receipt.observation is not None
                 and receipt.observation.epoch > prior_page_epoch):
-            session.evidence.discard_pages()
-            session._page_answer_digest = obs.content_digest
-            clean = PageObservation.from_json(
-                redact_sensitive_assignments(session.session_handoffs.redact(obs.to_json())))
-            rendered_observation = clean
             try:
-                refs = session.evidence.capture(page_answer.collect(clean, observed_at=str(time.time())),
-                                             namespace=f"obs{step}")
-                page_feedback = (answer_protocol.ANSWER_INSTRUCTIONS + "\n" +
-                                 answer_protocol.evidence_index(session.evidence, refs))
-                session.ledger.append("page_answer_evidence", step=step, epoch=obs.epoch,
-                                   recorded=len(refs), digest=obs.content_digest)
+                rendered_observation, page_feedback = capture_page_snapshot(
+                    session, obs, step=step, reused_observation=False)
             except (ValueError, TypeError, EvidenceUnknown):
                 page_feedback = "PAGE EVIDENCE UNAVAILABLE: the observation could not support an answer."
         else:

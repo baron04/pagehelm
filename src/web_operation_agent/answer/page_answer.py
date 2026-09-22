@@ -11,7 +11,8 @@ SYSTEM = """For factual questions about what the page displays, use observe with
 answer_evidence=true and cite the resulting page_observation or undetermined references.
 Quote the observed text/value; do not infer that a label means an empty field. Explanations
 without claims about current data can use ordinary prose. Prefer a suitable typed read for
-business facts, and do not repeat page observations after a sufficient API read."""
+business facts, and do not repeat page observations after a sufficient API read. A control
+with an explicit selected state may support only that UI state."""
 
 OBSERVE_TOOL = {"type": "function", "function": {
     "name": "observe", "description": (
@@ -60,6 +61,18 @@ def collect(observation: PageObservation, *, observed_at: str) -> tuple[PageEvid
             saw="value" if readable else "control_only",
             detail=f"{element.ref}: {element.name or element.role}"[:MAX_PAGE_EXCERPT_CHARS],
             value=value if readable else None))
+        if len(items) == MAX_PAGE_ITEMS:
+            return tuple(items)
+    # A selected tab is a current UI fact, not a business result. It can be
+    # reported without showing raw markup or trusting a model's paraphrase.
+    for element in observation.elements:
+        if element.attrs.get("aria-selected") != "true":
+            continue
+        items.append(PageEvidence(
+            evidence_id=f"page#{len(items) + 1}", origin=origin,
+            page_route=observation.url, saw="value",
+            detail=f"{element.name or element.role} ({element.role})"[:MAX_PAGE_EXCERPT_CHARS],
+            value="selected"))
         if len(items) == MAX_PAGE_ITEMS:
             return tuple(items)
     # Exact bounded excerpts, not inferred key/value pairs or extracted table records.

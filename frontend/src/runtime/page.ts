@@ -185,7 +185,8 @@ export function pageControllerOptions(exclude: Element[]): Record<string, unknow
     includeAttributes: [
       'href', 'action', 'method', 'target', 'formaction', 'formmethod', 'formtarget',
       'type', 'name', 'id', 'value',
-      'aria-label', 'placeholder', 'autocomplete',
+      'aria-label', 'aria-selected', 'aria-checked', 'aria-expanded',
+      'placeholder', 'autocomplete',
     ],
     interactiveBlacklist: exclude,
   }

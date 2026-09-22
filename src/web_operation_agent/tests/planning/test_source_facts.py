@@ -339,7 +339,8 @@ class SourceAnswerTests(unittest.TestCase):
         held = session.evidence.get("source#1")
         self.assertEqual(held.release, source_map.release)
         self.assertEqual(held.sha256, first.refs[held.citation].sha256)
-        self.assertTrue(session._answers.answer_mode)
+        self.assertTrue(session.evidence.has_source_evidence())
+        self.assertFalse(session._answers.answer_mode)
         self.assertGreaterEqual(first.stats["facts_shown"], 1)
 
 

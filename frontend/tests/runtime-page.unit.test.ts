@@ -19,6 +19,11 @@ describe('the product PageController extraction policy', () => {
   it('observes only the current viewport', () => {
     expect(pageControllerOptions([]).viewportExpansion).toBe(0)
   })
+
+  it('includes generic accessible control state in the bounded observation', () => {
+    expect(pageControllerOptions([]).includeAttributes).toEqual(
+      expect.arrayContaining(['aria-selected', 'aria-checked', 'aria-expanded']))
+  })
 })
 
 describe('Page.describe bounds an observation before it crosses the browser boundary', () => {

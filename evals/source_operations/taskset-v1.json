@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "semantic": [
+    {
+      "id": "orion-partner",
+      "release": "release-partner",
+      "official_name": "Orion Partner",
+      "entry_path": "/contacts/new",
+      "prompt": "On this new-contact form, enter the current release's official display name for vendor Orion in Name and orion@example.test in Email. Leave the form as an unsaved draft; do not submit it.",
+      "expected_email": "orion@example.test"
+    },
+    {
+      "id": "orion-supplier",
+      "release": "release-supplier",
+      "official_name": "Orion Supplier",
+      "entry_path": "/contacts/new",
+      "prompt": "On this new-contact form, enter the current release's official display name for vendor Orion in Name and orion@example.test in Email. Leave the form as an unsaved draft; do not submit it.",
+      "expected_email": "orion@example.test"
+    }
+  ],
+  "negative": [
+    {
+      "id": "visible-contact-link",
+      "kind": "visible_click",
+      "entry_path": "/contacts",
+      "prompt": "Click the visible Grace Hopper contact card and stop on her record. Do not create or edit anything.",
+      "expected_path": "/contacts/grace-hopper"
+    },
+    {
+      "id": "exact-contact-count",
+      "kind": "current_data",
+      "entry_path": "/contacts",
+      "prompt": "Give the exact number of contacts visible to my account in this workspace. Use the business API, not a count of rendered cards. Do not navigate or edit anything.",
+      "expected_count": 3
+    }
+  ]
+}

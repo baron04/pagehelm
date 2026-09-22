@@ -95,3 +95,40 @@ class RepeatGuard:
                 {"tool": name, "args_type": type(args).__name__, "page": page},
                 ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
+
+
+class SourcePageProgress:
+    """Bound a source/page loop that revisits states without acquiring new facts.
+
+    This never declares success. Typed reads and asynchronous waits are outside its
+    caller's scope; a changed query, epoch, or element ref is not new progress.
+    """
+
+    def __init__(self, *, warn_after: int = 3, stop_after: int = 5):
+        self._warn_after = warn_after
+        self._stop_after = stop_after
+        self._seen: set[str] = set()
+        self._stalled = 0
+
+    def note(self, observation: PageObservation,
+             source_refs: tuple[str, ...]) -> str:
+        page = observation.to_json()
+        page.pop("epoch", None)
+        page.pop("messages", None)
+        for element in page.get("elements", ()):
+            element.pop("epoch", None)
+            element.pop("ref", None)
+        encoded = json.dumps(
+            {"page": page, "source_refs": sorted(source_refs)}, ensure_ascii=False,
+            sort_keys=True, separators=(",", ":")).encode("utf-8")
+        fingerprint = hashlib.sha256(encoded).hexdigest()
+        if fingerprint not in self._seen:
+            self._seen.add(fingerprint)
+            self._stalled = 0
+            return ""
+        self._stalled += 1
+        if self._stalled >= self._stop_after:
+            return "end"
+        if self._stalled == self._warn_after:
+            return "warn"
+        return ""

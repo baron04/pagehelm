@@ -155,6 +155,9 @@ def render_payload(payload: dict, *, user_text: str, max_chars: int) -> str:
         if action["kind"] == "navigation":
             label = "已打开页面" if _language(user_text) == "zh" else "Opened the page"
             action_text = f"{label}：{_literal(action['url'])}"
+        elif action["kind"] == "page_interaction":
+            action_text = ("已操作当前页面。" if _language(user_text) == "zh"
+                           else "Interacted with the current page.")
         else:
             label = "已完成已批准的操作" if _language(user_text) == "zh" else "Completed the approved action"
             action_text = (f"{label}：{_literal(action['effect'])}\n" +

@@ -131,12 +131,14 @@ def run_loop(session) -> RunResult:
     #: model's `why` at that point describes the reply ("told the user what I can do")
     #: rather than being one, and showing it replaced a complete answer with a run report.
     unanswered_reply = ""
+    last_tool_name = ""
     while True:
         if session._page_answer_digest and session._page_answer_digest != obs.content_digest:
             session.evidence.discard_pages()
             session._page_answer_digest = ""
         if (session._answer_action_receipt is not None
-                and session._answer_action_receipt["kind"] == "navigation"
+                and session._answer_action_receipt["kind"] in
+                    {"navigation", "page_interaction"}
                 and session._answer_action_receipt["url"] != obs.url):
             session._answer_action_receipt = None
         if (session._answer_action_receipt is not None
@@ -146,6 +148,30 @@ def run_loop(session) -> RunResult:
             return session._finish(
                 result, t0, "user_cancelled", "the user stopped this task",
                 steps=step)
+        if (last_tool_name in {"lookup_source", "lookup_source_history", "observe",
+                               "click", "goto", "back", "scroll"}
+                and session.evidence.has_source_evidence()
+                and not session.evidence.has_typed_evidence()
+                and not session._explicit_mutation_intent):
+            source_refs = tuple(ref for ref in session.evidence.ids()
+                                if ref.startswith(("source#", "history#")))
+            progress = session._source_page_progress.note(obs, source_refs)
+            if progress == "warn":
+                session.ledger.append("source_page_no_progress", step=step,
+                                      action="warn", last_tool=last_tool_name)
+                messages += [{"role": "user", "content":
+                             "The recent source/page steps returned no new fact or "
+                             "page state. Use the evidence already held, change the "
+                             "investigation materially, or finish with a limited result."}]
+                messages = _trim(messages, session.keep_observations)
+            elif progress == "end":
+                result.agent_said = (
+                    "I could not establish a new fact or page state after repeated "
+                    "source/page steps, so I stopped without claiming completion.")
+                session.ledger.append("source_page_no_progress", step=step,
+                                      action="end", last_tool=last_tool_name)
+                return session._finish(result, t0, "no_progress", result.agent_said,
+                                       steps=step)
         if step >= session.step_budget:
             return session._finish(result, t0, "step_budget", f"used all {session.step_budget} steps",
                                 steps=step)
@@ -306,6 +332,7 @@ def run_loop(session) -> RunResult:
 
         call = calls[0]
         name = (call.get("function") or {}).get("name") or ""
+        last_tool_name = name
         raw_args = (call.get("function") or {}).get("arguments") or "{}"
         try:
             args = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
@@ -357,6 +384,20 @@ def run_loop(session) -> RunResult:
             if session._writes.uncertain_write:
                 return session._finish(result, t0, "indeterminate_write",
                                     session._writes.uncertain_write, steps=step)
+
+        if session._finalizing and name != "finish":
+            session._answer_repairs += 1
+            session.ledger.append("finalizing_tool_refused", step=step, tool=name,
+                                  dispatched=False, repair=session._answer_repairs)
+            if session._answer_repairs > answer_protocol.MAX_ANSWER_REPAIRS:
+                result.agent_said = unavailable_answer(session.task.prompt)
+                return session._finish(result, t0, "agent_refused", result.agent_said,
+                                       steps=step)
+            messages += [_assistant_call(call), _tool_result(
+                call, "This turn is finalizing an observed action. No more tools may "
+                      "run. Submit finish using existing evidence, or use "
+                      "outcome=unable.")]
+            continue
 
         handled = handle_named_tool(session, turn, call, name, args)
         if handled is not None:

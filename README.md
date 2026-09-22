@@ -23,7 +23,9 @@ agent.
   evidence; that check does not prove the model's interpretation of the span.
   An optional local Git provider separately cites ownership, blame, commit, and version-diff
   metadata bound to the deployed commit. Source retrieval remains optional and is never a
-  prerequisite for ordinary browser or API operation.
+  prerequisite for ordinary browser or API operation. A lookup that informs an operation
+  does not itself turn the operation into a source answer: the action report comes from
+  an observed runtime receipt. Source answers still require checked supporting evidence.
 - An application-neutral entity-read contract can discover a current actor's readable
   business entities and perform bounded reads without adding one Skill per entity. The Agent
   receives only catalog-bound opaque entity and field IDs; an adapter translates its ORM,
@@ -51,7 +53,11 @@ agent.
 - Browser actions are checked against the current observation and application route policy.
   Page observations are viewport-bound and expose at most 200 live controls; a bounded
   read-only scroll obtains the next fresh observation instead of scanning an unbounded DOM.
-  Page switches require a visible confirmation.
+  Page switches require a visible confirmation. A successful same-page click can be
+  reported as an interaction only when a fresh observation shows a changed page; this
+  receipt is not proof that a business goal was completed. After an observed action,
+  answer-format repair cannot dispatch another page action. Source-assisted page loops
+  that revisit the same facts and states stop without claiming completion.
 - Writes are disabled by default. Core turn configuration initially disables every browser
   action that can initiate an application write, including navigation; an adapter must
   explicitly opt into its reviewed subset. An enabled write binds its exact effect and

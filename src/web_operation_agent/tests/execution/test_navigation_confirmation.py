@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from web_operation_agent import schemas as S
@@ -80,6 +80,184 @@ def _events(tmp) -> list[str]:
 
 
 class TheSessionAsksBeforeLeavingThePage(unittest.TestCase):
+    def test_successful_link_click_can_be_reported_as_completed_navigation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            browser = _Browser([_obs(1), _obs(2, "http://app/y")])
+            session = _session(
+                tmp,
+                chat=_Chat([("click", {"ref": "e1"}),
+                            ("finish", {"outcome": "acted"})]),
+                browser=browser, person=_Person("approved"))
+            session._answer_mode = True
+
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "agent_finished")
+            self.assertEqual(result.verified_answer["action"],
+                             {"kind": "navigation", "url": "http://app/y"})
+
+    def test_non_navigating_click_cannot_claim_completed_navigation(self):
+        class NoNavigation(_Browser):
+            def execute(self, action, args=None, expect_navigation=False):
+                receipt = super().execute(action, args, expect_navigation)
+                return replace(receipt, navigated=False, url_after="http://app/x",
+                               observation=_obs(2))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            browser = NoNavigation([_obs(1), _obs(2)])
+            session = _session(
+                tmp,
+                chat=_Chat([("click", {"ref": "e1"}),
+                            ("finish", {"outcome": "acted"})] * 2),
+                browser=browser, person=_Person("approved"))
+            session._answer_mode = True
+
+            result = session.run()
+
+            self.assertNotEqual(result.terminal_reason, "agent_finished")
+            self.assertIsNone(result.verified_answer)
+
+    def test_read_only_scroll_preserves_completed_navigation_receipt(self):
+        class Scrolling(_Browser):
+            def execute(self, action, args=None, expect_navigation=False):
+                receipt = super().execute(action, args, expect_navigation)
+                return (replace(receipt, navigated=False)
+                        if action == "scroll" else receipt)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            browser = Scrolling([_obs(1), _obs(2, "http://app/y"),
+                                 _obs(3, "http://app/y")])
+            session = _session(
+                tmp,
+                chat=_Chat([("click", {"ref": "e1"}),
+                            ("scroll", {"direction": "down", "pages": 1}),
+                            ("finish", {"outcome": "acted"})]),
+                browser=browser, person=_Person("approved"))
+            session._answer_mode = True
+
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "agent_finished")
+            self.assertEqual(result.verified_answer["action"],
+                             {"kind": "navigation", "url": "http://app/y"})
+
+    def test_failed_followup_click_does_not_erase_completed_navigation(self):
+        class SecondClickFails(_Browser):
+            def execute(self, action, args=None, expect_navigation=False):
+                receipt = super().execute(action, args, expect_navigation)
+                if len(self.done) == 2:
+                    return replace(receipt, ok=False, error_code="stale_observation",
+                                   navigated=False, observation=self.pages[1])
+                return receipt
+
+        with tempfile.TemporaryDirectory() as tmp:
+            browser = SecondClickFails([_obs(1), _obs(2, "http://app/y")])
+            session = _session(
+                tmp,
+                chat=_Chat([("click", {"ref": "e1"}),
+                            ("click", {"ref": "e1"}),
+                            ("finish", {"outcome": "acted"})]),
+                browser=browser, person=_Person("approved"))
+            session._answer_mode = True
+
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "agent_finished")
+            self.assertEqual(result.verified_answer["action"],
+                             {"kind": "navigation", "url": "http://app/y"})
+
+    def test_dom_changing_read_only_click_has_interaction_receipt(self):
+        class TabClick(_Browser):
+            def execute(self, action, args=None, expect_navigation=False):
+                receipt = super().execute(action, args, expect_navigation)
+                return replace(receipt, navigated=False, observation=self.pages[1])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            after = _obs(2)
+            after.content = "Terms tab selected"
+            browser = TabClick([_obs(1), after])
+            session = _session(
+                tmp,
+                chat=_Chat([("click", {"ref": "e1"}),
+                            ("finish", {"outcome": "acted"})]),
+                browser=browser, person=_Person("approved"))
+            session._answer_mode = True
+
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "agent_finished")
+            self.assertEqual(result.verified_answer["action"]["kind"],
+                             "page_interaction")
+
+    def test_answer_repair_distinguishes_control_refs_from_evidence_refs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            chat = _Chat([
+                ("click", {"ref": "e1"}),
+                ("finish", {"outcome": "acted", "answer": {
+                    "version": 1, "coverage": "complete", "conclusions": [{
+                        "kind": "page_observation", "evidence_ref": "e1",
+                        "statement": "The page is open"}]}}),
+                ("finish", {"outcome": "acted"}),
+            ])
+            session = _session(tmp, chat=chat,
+                               browser=_Browser([_obs(1), _obs(2, "http://app/y")]),
+                               person=_Person("approved"))
+            session._answer_mode = True
+
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "agent_finished")
+            self.assertIn("Element refs such as e1 are browser controls",
+                          str(chat.seen[-1]))
+
+    def test_answer_repair_after_action_cannot_dispatch_another_click(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            browser = _Browser([_obs(1), _obs(2, "http://app/y")])
+            chat = _Chat([
+                ("click", {"ref": "e1"}),
+                ("finish", {"outcome": "acted", "answer": {
+                    "version": 1, "coverage": "complete", "conclusions": [{
+                        "kind": "page_observation", "evidence_ref": "e1"}]}}),
+                ("click", {"ref": "e1"}),
+                ("finish", {"outcome": "acted"}),
+            ])
+            session = _session(tmp, chat=chat, browser=browser,
+                               person=_Person("approved"))
+            session._answer_mode = True
+
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "agent_finished")
+            self.assertEqual([action for action, _ in browser.done], ["click"])
+            self.assertEqual(len(session.ledger.of_kind("finalizing_tool_refused")), 1)
+            self.assertEqual(result.verified_answer["action"]["url"],
+                             "http://app/y")
+
+    def test_answer_repair_can_cite_latest_page_without_another_browser_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            after = _obs(2, "http://app/y")
+            after.content = "Terms tab selected"
+            browser = _Browser([_obs(1), after])
+            chat = _Chat([
+                ("click", {"ref": "e1"}),
+                ("finish", {"outcome": "acted", "answer": {
+                    "version": 1, "coverage": "complete", "conclusions": [{
+                        "kind": "page_observation", "evidence_ref": "e1"}]}}),
+                ("finish", {"outcome": "acted", "answer": {
+                    "version": 1, "coverage": "complete", "conclusions": [{
+                        "kind": "page_observation", "evidence_ref": "obs2-page#1"}]}}),
+            ])
+            session = _session(tmp, chat=chat, browser=browser,
+                               person=_Person("approved"))
+            session._answer_mode = True
+
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "agent_finished")
+            self.assertEqual([action for action, _ in browser.done], ["click"])
+            self.assertIn("Terms tab selected", result.agent_said)
+            self.assertEqual(len(session.ledger.of_kind("page_answer_evidence")), 1)
+
     def test_a_confirmed_switch_is_dispatched_and_counted(self):
         with tempfile.TemporaryDirectory() as tmp:
             person = _Person("approved")

@@ -218,6 +218,38 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
         document.title = 'New contact · Minimal Contacts';
         return;
       }}
+      if (location.pathname === '/contacts/workflows') {{
+        app.innerHTML = `<a class="back" href="/contacts" data-route>← All contacts</a>
+          <div class="eyebrow">Read-only workspace</div><h1>Vendor workspaces</h1>
+          <p class="lede">Choose a desk to inspect its current terms.</p>
+          <section class="grid"><a class="card" href="/contacts/workflows/partner" data-route>
+            <span class="name">Partner desk</span></a>
+          <a class="card" href="/contacts/workflows/supplier" data-route>
+            <span class="name">Supplier desk</span></a></section>`;
+        document.title = 'Vendor workspaces · Minimal Contacts';
+        return;
+      }}
+      const workflow = /^\\/contacts\\/workflows\\/(partner|supplier)$/.exec(location.pathname);
+      if (workflow) {{
+        const desk = workflow[1];
+        app.innerHTML = `<a class="back" href="/contacts/workflows" data-route>← Vendor workspaces</a>
+          <section class="record" data-workflow-desk="${{desk}}" data-active-tab="overview">
+          <div class="eyebrow">Read-only workspace</div><h1>${{desk === 'partner' ? 'Partner' : 'Supplier'}} desk</h1>
+          <nav role="tablist"><button type="button" role="tab" aria-selected="true" data-workflow-tab="overview">Overview</button>
+          <button type="button" role="tab" aria-selected="false" data-workflow-tab="terms">Terms</button></nav>
+          <p data-workflow-content>Overview</p></section>`;
+        for (const tab of app.querySelectorAll('[data-workflow-tab]'))
+          tab.addEventListener('click', () => {{
+            const section = app.querySelector('[data-workflow-desk]');
+            section.dataset.activeTab = tab.dataset.workflowTab;
+            for (const peer of section.querySelectorAll('[data-workflow-tab]'))
+              peer.setAttribute('aria-selected', String(peer === tab));
+            section.querySelector('[data-workflow-content]').textContent =
+              tab.dataset.workflowTab === 'terms' ? 'Current terms' : 'Overview';
+          }});
+        document.title = 'Vendor desk · Minimal Contacts';
+        return;
+      }}
       const match = /^\\/contacts\\/([^/]+)$/.exec(location.pathname);
       if (match) {{
         const contact = contacts.find(item => item.id === match[1]);

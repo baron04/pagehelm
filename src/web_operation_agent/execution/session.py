@@ -50,7 +50,7 @@ from ..planning.knowledge import ApplicationKnowledgePort
 from ..state.ledger import SessionLedger
 from ..privacy import SessionHandoffPolicy, safe_tool_arguments as _safe
 from .routes import Router, candidate_url
-from .turnwatch import ProgressFeed, RepeatGuard
+from .turnwatch import ProgressFeed, RepeatGuard, SourcePageProgress
 from .turn_answer import AnswerState, TurnAnswer
 from .tools import ToolSurface
 from .business_tools import render_business_skills
@@ -487,6 +487,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         #: Deciding the same thing twice on the same page is not progress, and the step
         #: budget finds that out only after spending every remaining step.
         self._repeats = RepeatGuard(no_progress_repeat_limit)
+        self._source_page_progress = SourcePageProgress()
         self.lab = lab
         #: Plan from the task and the page, with no source evidence. The control arm of the
         #: comparison: same planner, same schema, same withdrawal and recovery, nothing to cite.
@@ -512,6 +513,8 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
             ledger=ledger, run_id=self.run_id, prompt=task.prompt,
             business_tools=business_tools,
             plain_business_answer_min_page_actions=plain_business_answer_min_page_actions)
+        # Answer-format repair may not reopen browser actions after an observed action.
+        self._finalizing = False
         self._approvals = ApprovalWatch(
             ledger=ledger, run_id=self.run_id, principal=principal,
             session_id=session_id, turn_id=turn_id,

@@ -5951,6 +5951,7 @@
           ],
           "lines": 9,
           "menu_candidates": 1,
+          "new_source_facts": 2,
           "page_epoch": 1,
           "page_url": "http://app.test/glasshouse/do/main",
           "query": "trays",

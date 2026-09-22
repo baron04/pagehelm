@@ -28,6 +28,134 @@ def _candidate_url(candidate, bindings):
 
 
 class RuntimeSourceLoop(unittest.TestCase):
+    def test_source_informed_navigation_settles_from_receipt_without_answer_prose(self):
+        class ToolCapture(_Chat):
+            def __init__(self, calls):
+                super().__init__(calls)
+                self.tools_seen = []
+
+            def complete(self, messages, tools, run_id, **kwargs):
+                self.tools_seen.append(tools)
+                return super().complete(messages, tools, run_id, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            route = "/glasshouse/do/findTrays?trayId=42"
+            chat = ToolCapture([
+                ("lookup_source", {"query": "find trays"}),
+                ("open_source_route", {"url": route}),
+                ("finish", {"done": True, "why": "invented business result"}),
+            ])
+            browser = _Browser([_obs(1), _obs(2),
+                                _obs(3, "http://app" + route)])
+            session = ServerAgentSession(application_routes=FIXTURE_ROUTE_PORT,
+                task=TaskSpec("T", "open the tray page"), lab=LabApparatus(arm="S"),
+                chat=chat, browser=browser, control=_Control([[], [], []]),
+                ledger=SessionLedger(root / "settlement.jsonl", "source-action"),
+                source=SourceCapability(source_map=_map(root), runtime_source=True))
+            session.entry_observation = _obs(1)
+
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "agent_finished")
+            self.assertEqual(result.verified_answer["action"],
+                             {"kind": "navigation", "url": "http://app" + route})
+            self.assertNotIn("invented business result", result.agent_said)
+            self.assertFalse(session._answers.answer_mode)
+            finish = next(tool for tool in chat.tools_seen[1]
+                          if tool["function"]["name"] == "finish")
+            self.assertIn("answer", finish["function"]["parameters"]["properties"])
+            self.assertIn("acted", finish["function"]["parameters"]
+                          ["properties"]["outcome"]["enum"])
+            self.assertNotIn("done", finish["function"]["parameters"]["properties"])
+
+    def test_structured_source_answer_is_not_erased_by_extra_done_flag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            route = "/glasshouse/do/findTrays?trayId=42"
+            chat = _Chat([
+                ("lookup_source", {"query": "find trays"}),
+                ("open_source_route", {"url": route}),
+                ("finish", {"outcome": "acted", "answer": {
+                    "version": 1, "coverage": "complete", "conclusions": [{
+                        "kind": "source_excerpt", "evidence_ref": "source#1",
+                        "statement": "The tray route requires authorization.",
+                        "support": "route findTrays handled by view-only, auth required",
+                    }]}, "done": True, "why": "fabricated result"}),
+            ])
+            browser = _Browser([_obs(1), _obs(2),
+                                _obs(3, "http://app" + route)])
+            session = ServerAgentSession(application_routes=FIXTURE_ROUTE_PORT,
+                task=TaskSpec("T", "open the tray page and explain the route"),
+                lab=LabApparatus(arm="S"), chat=chat, browser=browser,
+                control=_Control([[], [], []]),
+                ledger=SessionLedger(root / "mixed-finish.jsonl", "mixed-finish"),
+                source=SourceCapability(source_map=_map(root), runtime_source=True))
+            session.entry_observation = _obs(1)
+
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "agent_finished")
+            self.assertEqual(result.verified_answer["conclusions"][0]["kind"],
+                             "source_excerpt")
+            self.assertEqual(result.verified_answer["action"],
+                             {"kind": "navigation", "url": "http://app" + route})
+            self.assertNotIn("fabricated result", result.agent_said)
+
+    def test_source_question_still_requires_cited_answer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            chat = _Chat([
+                ("lookup_source", {"query": "find trays"}),
+                ("finish", {"outcome": "partial", "answer": {
+                    "version": 1, "coverage": "partial", "conclusions": [{
+                        "kind": "source_excerpt", "evidence_ref": "source#1",
+                        "statement": "The route requires authorization.",
+                        "support": "route findTrays handled by view-only, auth required",
+                    }]}}),
+            ])
+            browser = _Browser([_obs(1), _obs(2)])
+            session = ServerAgentSession(application_routes=FIXTURE_ROUTE_PORT,
+                task=TaskSpec("T", "What does the tray route require?"),
+                lab=LabApparatus(arm="S"), chat=chat, browser=browser,
+                control=_Control([[], []]),
+                ledger=SessionLedger(root / "source-answer.jsonl", "source-answer"),
+                source=SourceCapability(source_map=_map(root), runtime_source=True))
+            session.entry_observation = _obs(1)
+
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "agent_finished")
+            self.assertEqual(result.verified_answer["conclusions"][0]["kind"],
+                             "source_excerpt")
+            self.assertNotIn("glasshouse.decl", result.agent_said)
+
+    def test_alternating_source_queries_with_no_new_facts_stop_without_success(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            chat = _Chat([
+                ("lookup_source", {"query": "find trays" if index % 2 == 0
+                                   else "find trays "})
+                for index in range(12)
+            ])
+            browser = _Browser([_obs(epoch) for epoch in range(1, 15)])
+            session = ServerAgentSession(application_routes=FIXTURE_ROUTE_PORT,
+                task=TaskSpec("T", "inspect tray rules"), lab=LabApparatus(arm="S"),
+                chat=chat, browser=browser, control=_Control([[]] * 14),
+                ledger=SessionLedger(root / "stalled.jsonl", "stalled"),
+                source=SourceCapability(source_map=_map(root), runtime_source=True),
+                step_budget=15)
+            session.entry_observation = _obs(1)
+
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "no_progress")
+            self.assertLess(len(browser.done), 12)
+            events = session.ledger.of_kind("source_page_no_progress")
+            self.assertEqual([event["action"] for event in events], ["warn", "end"])
+            self.assertIn("NO NEW SOURCE FACTS", str(chat.seen[2]))
+            self.assertFalse(result.success_claim)
+
     def test_scope_first_policy_is_one_shared_context_change(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -642,12 +642,18 @@ class MinimalContactsAdapter:
     """A second application adapter implemented only through the public SPI."""
 
     def __init__(self, origin: str, *, api_token: str = "",
-                 allow_mutations: bool = False, mutation_journal=None):
+                 allow_mutations: bool = False, mutation_journal=None,
+                 extra_skills: tuple[BusinessSkill, ...] = ()):
         if allow_mutations and mutation_journal is None:
             raise ValueError("allow_mutations=True requires an explicit mutation journal")
+        if (not isinstance(extra_skills, tuple)
+                or any(not isinstance(skill, BusinessSkill) or not skill.read_only
+                       for skill in extra_skills)):
+            raise TypeError("extra synthetic Skills must be read-only artifacts")
         skills = [_skill("contacts-query.json"), _skill("runtime-records-query.json")]
         if allow_mutations:
             skills.append(_skill("contacts-create.json"))
+        skills.extend(extra_skills)
         executor = _ContactsToolExecutor(origin, api_token=api_token,
                                          allow_mutations=allow_mutations)
         declarations = [("list_contacts", ("synthetic.contact", "business.identifier",

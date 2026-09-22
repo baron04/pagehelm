@@ -4,7 +4,8 @@ from __future__ import annotations
 import unittest
 
 from web_operation_agent.schemas import PageObservation
-from web_operation_agent.execution.turnwatch import ProgressFeed, RepeatGuard
+from web_operation_agent.execution.turnwatch import (ProgressFeed, RepeatGuard,
+                                                     SourcePageProgress)
 
 
 def _page(url: str = "https://app.test/orders", epoch: int = 1,
@@ -76,6 +77,26 @@ class ARepeatGuardEndsATurnThatIsNotMoving(unittest.TestCase):
         guard.decide("click", {"ref": "e1"}, _page())
         guard.reset()
         self.assertEqual(guard.decide("click", {"ref": "e1"}, _page()), "")
+
+
+class SourceAssistedProgressIsAboutNewFactsNotNewToolWording(unittest.TestCase):
+    def test_repeated_page_and_source_facts_warn_then_end(self):
+        guard = SourcePageProgress()
+        self.assertEqual(guard.note(_page(epoch=1), ("source#1",)), "")
+        self.assertEqual(guard.note(_page(epoch=2), ("source#1",)), "")
+        self.assertEqual(guard.note(_page(epoch=3), ("source#1",)), "")
+        self.assertEqual(guard.note(_page(epoch=4), ("source#1",)), "warn")
+        self.assertEqual(guard.note(_page(epoch=5), ("source#1",)), "")
+        self.assertEqual(guard.note(_page(epoch=6), ("source#1",)), "end")
+
+    def test_new_fact_or_page_resets_stall_but_a_revisited_page_does_not(self):
+        guard = SourcePageProgress(warn_after=2, stop_after=4)
+        self.assertEqual(guard.note(_page(content="Overview"), ("source#1",)), "")
+        self.assertEqual(guard.note(_page(content="Terms"), ("source#1",)), "")
+        self.assertEqual(guard.note(_page(content="Overview"), ("source#1",)), "")
+        self.assertEqual(guard.note(_page(content="Terms"), ("source#1",)), "warn")
+        self.assertEqual(guard.note(_page(content="Terms"),
+                                    ("source#1", "source#2")), "")
 
 
 if __name__ == "__main__":

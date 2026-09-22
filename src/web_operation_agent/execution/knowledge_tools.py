@@ -56,7 +56,6 @@ def _source_line(session, hit, query: str) -> str:
             sha256=reference.sha256, excerpt=reference.excerpt, summary=hit.text,
             fact_type=hit.fact_type))
         session._source_evidence_ids[reference.key] = ref
-    session._answers.answer_mode = True
     return f"{ref} {hit.line}"
 
 
@@ -81,6 +80,7 @@ def lookup_source(session, query: str, obs: PageObservation) -> EvidenceBundle:
     hits = (lookup.search(query, limit=10,
                           route=lambda identity: _source_route_path(session, identity))
             if lookup is not None else ())
+    known_fact_keys = set(session._source_evidence_ids)
     bundle = session._runtime_retriever.retrieve(
         session.task.task_ref, query,
         webapps=session.served_webapps, max_requests=12, max_menu=4, max_forms=4, max_lines=70)
@@ -89,6 +89,8 @@ def lookup_source(session, query: str, obs: PageObservation) -> EvidenceBundle:
         for hit in hits:
             bundle.refs.setdefault(hit.evidence.key, hit.evidence)
     bundle.stats = {**bundle.stats, "facts_shown": len(hits),
+                    "new_source_facts": len(
+                        {hit.evidence.key for hit in hits} - known_fact_keys),
                     "lines": len(bundle.lines), "citations": len(bundle.refs),
                     "latency_ms": round((time.monotonic() - started) * 1000, 1)}
     cited = bundle.citation_keys
@@ -143,9 +145,14 @@ def lookup_source_tool(session, turn: "_Turn", call: dict, name: str, args: dict
         "source phrase. Do not invent an answer."
         if not terms(query) else "No matching source evidence. Do not invent an answer."
     )
+    repeated_note = (
+        "NO NEW SOURCE FACTS: these cited bytes were already shown this turn. "
+        "Use the facts and current page, or ask a materially different source question.\n"
+        if bundle.stats.get("facts_shown") and not bundle.stats.get("new_source_facts")
+        else "")
     return session._reply(turn, call,
                        "SOURCE EVIDENCE (prior; current page wins):\n" +
-                       (bundle.render() or empty_note) +
+                       repeated_note + (bundle.render() or empty_note) +
                        "\n\n" + session._render(turn.obs, receipt, note, write,
                                               affordance_query=query))
 
@@ -166,7 +173,6 @@ def _source_history_line(session, hit) -> str:
             path=hit.path, start_line=hit.start_line, end_line=hit.end_line,
             commit=hit.commit))
         session._source_history_evidence_ids[hit.key] = ref
-    session._answers.answer_mode = True
     return f"{ref} [{hit.kind}] {hit.statement}"
 
 

@@ -15,7 +15,8 @@ function escaped(value) {
 function attributes(element) {
   const names = [
     'href', 'action', 'method', 'target', 'formaction', 'formmethod', 'formtarget',
-    'type', 'name', 'id', 'aria-label', 'placeholder', 'autocomplete',
+    'type', 'name', 'id', 'aria-label', 'aria-selected', 'aria-checked',
+    'aria-expanded', 'placeholder', 'autocomplete',
   ]
   const found = []
   for (const name of names) {
@@ -81,6 +82,11 @@ export class PageController {
     element.dispatchEvent(new Event('input', {bubbles: true}))
     element.dispatchEvent(new Event('change', {bubbles: true}))
     return {success: true, message: 'selection updated'}
+  }
+
+  scroll({down, numPages}) {
+    window.scrollBy(0, (down ? 1 : -1) * window.innerHeight * numPages)
+    return {success: true, message: 'page scroll observed'}
   }
 
   dispose() {

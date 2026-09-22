@@ -124,6 +124,15 @@ describe('actionElementFingerprint captures everything an action depends on', ()
     expect(actionElementFingerprint(base)).not.toBe(actionElementFingerprint(changedDisabled))
   })
 
+  it('changes when a tab selection changes without changing its label', () => {
+    const selected = {tagName: 'BUTTON', textContent: 'Terms', isConnected: true,
+      hasAttribute: (name: string) => name === 'aria-selected',
+      getAttribute: () => 'true'}
+    const unselected = {...selected, getAttribute: () => 'false'}
+    expect(actionElementFingerprint(selected)).not.toBe(
+      actionElementFingerprint(unselected))
+  })
+
   it('is stable for the same element read twice', () => {
     const element = {tagName: 'A', href: 'https://app.test/x', isConnected: true}
     expect(actionElementFingerprint(element)).toBe(actionElementFingerprint({...element}))

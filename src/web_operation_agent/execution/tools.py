@@ -27,6 +27,8 @@ class ToolSurface:
         session = self._session
         tools = [tool for tool in TOOL_SCHEMAS
                  if tool["function"]["name"] not in session.disabled_actions]
+        if session._finalizing:
+            return [answer_protocol.finish_answer_tool(source=session.runtime_source)]
         if session._capability_question:
             return [tool for tool in tools if tool["function"]["name"] == "finish"]
         if session.page_answer_evidence:
@@ -34,6 +36,12 @@ class ToolSurface:
                      else tool for tool in tools]
         if session._answers.answer_mode:
             finish = answer_protocol.finish_answer_tool(source=session.runtime_source)
+            tools = [finish if tool["function"]["name"] == "finish" else tool
+                     for tool in tools]
+        elif session.evidence.has_source_evidence():
+            # Source is evidence, not a task-mode switch. One structured finish
+            # supports either a cited answer or an observed action receipt.
+            finish = answer_protocol.finish_answer_tool(source=True)
             tools = [finish if tool["function"]["name"] == "finish" else tool
                      for tool in tools]
         if session.allow_clarification:

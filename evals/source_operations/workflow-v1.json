@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "releases": [
+    {"release": "release-partner", "desk": "partner"},
+    {"release": "release-supplier", "desk": "supplier"}
+  ],
+  "navigation_prompt": "Open vendor Orion's current operational desk. Use the deployed release's rule to choose between the two visible desks. Do not edit anything.",
+  "multistep_prompt": "Open vendor Orion's current operational desk, then switch to its Terms tab. Use the deployed release's rule to choose the desk. Do not edit anything.",
+  "button_prompt": "On this Partner desk, click the visible Terms tab and stop there. Do not edit anything."
+}

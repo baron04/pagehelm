@@ -43,6 +43,22 @@ class PageEvidenceContract(unittest.TestCase):
         self.assertEqual((items[2].saw, items[2].value), ("value", ""))
         self.assertEqual((items[3].saw, items[3].value), ("control_only", None))
 
+    def test_selected_tab_has_literal_ui_state_without_claiming_business_result(self):
+        observation = page()
+        observation.elements.append(ElementRef(
+            "e5", "button", "Terms", "button", observation.epoch,
+            {"aria-selected": "true"}))
+        items = collect(observation, observed_at="now")
+        self.assertEqual((items[4].detail, items[4].value),
+                         ("Terms (button)", "selected"))
+        turn = TurnEvidence()
+        turn.capture(items, namespace="obs1")
+        verified = submit(turn, _answer("page_observation", "obs1-page#5"))
+        rendered = render_payload(verified, user_text="Is the Terms tab selected?",
+                                  max_chars=1000)
+        self.assertIn("Terms", rendered)
+        self.assertIn("selected", rendered)
+
     def test_a_label_cannot_be_submitted_as_a_value_or_an_api_field(self):
         turn = TurnEvidence()
         turn.capture(collect(page(), observed_at="now"), namespace="obs1")
@@ -108,6 +124,19 @@ class DefaultPageAnswerPath(unittest.TestCase):
         self.assertIn("123-456", result.user_answer)
         self.assertIn("来源：页面观察", result.user_answer)
         self.assertNotIn("private", str(chat.messages))
+
+    def test_extra_page_prose_is_ignored_and_cited_bytes_are_rendered(self):
+        answer = _answer("page_observation", "obs1-page#1")
+        answer["answer"]["conclusions"][0].update(
+            statement="The phone is 900000", support="fabricated page text")
+        result, _ = self.execute([
+            ("observe", {"answer_evidence": True}),
+            ("finish", answer),
+        ])
+        self.assertEqual(result.status, AgentTurnStatus.FINISHED)
+        self.assertIn("123-456", result.user_answer)
+        self.assertNotIn("900000", result.user_answer)
+        self.assertNotIn("fabricated", result.user_answer)
 
     def test_plain_content_cannot_bypass_a_page_answer(self):
         result, _ = self.execute([

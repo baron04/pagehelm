@@ -29,6 +29,7 @@ from testapps.contacts.app import (ACTORS_BY_ID, DEMO_SESSION_COOKIE,
 from web_operation_agent import python_is_supported, supported_python_text
 from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.composition.sources import SourceCapability
+from web_operation_agent.business.runtime import BusinessSkill
 from web_operation_agent.business.control import ReadOnlyControl
 from web_operation_agent.state.identity import bind_matching_identity
 from web_operation_agent.composition.live import LiveConversationRunner, LiveProductSession
@@ -118,10 +119,14 @@ class DemoConfig:
     #: Evaluation-only entry page and deployed source; ordinary demo defaults stay unchanged.
     start_path: str = "/contacts"
     source: SourceCapability = SourceCapability.none()
+    extra_skills: tuple[BusinessSkill, ...] = ()
+    #: Only for disposable read-only list/workflow click controls, never a deployment default.
+    allow_page_click: bool = False
     #: Hidden test oracle, called only after the turn; never enters Agent context.
     final_page_probe: Callable[[Any], dict[str, bool]] | None = None
     keep_open_seconds: float = 3.0
     turn_timeout_s: float = 90.0
+    step_budget: int = 8
     #: Offer the write. Off by default: the read-only composition is what most integrations
     #: start from, and a template that enabled writes by default would teach the wrong
     #: default.
@@ -150,15 +155,29 @@ class DemoConfig:
             raise ValueError("scripted mode uses one fixed walkthrough and does not accept --task")
         if self.headless and not (self.tasks or self.scripted):
             raise ValueError("headless mode requires --task or --scripted")
-        if self.start_path not in {"/contacts", "/contacts/new"}:
+        if self.start_path not in {"/contacts", "/contacts/new",
+                                   "/contacts/workflows",
+                                   "/contacts/workflows/partner"}:
             raise ValueError("demo start_path must be a known synthetic page")
         if not isinstance(self.source, SourceCapability):
             raise TypeError("demo source must be a SourceCapability")
+        if (not isinstance(self.extra_skills, tuple)
+                or any(not isinstance(skill, BusinessSkill) or not skill.read_only
+                       for skill in self.extra_skills)):
+            raise TypeError("demo extra_skills must be read-only Skill artifacts")
+        if not isinstance(self.allow_page_click, bool) or (self.allow_page_click
+                and (self.start_path not in {"/contacts", "/contacts/workflows",
+                                                "/contacts/workflows/partner"}
+                     or self.allow_mutations)):
+            raise ValueError("evaluation click is limited to synthetic read-only pages")
         if self.final_page_probe is not None and not callable(self.final_page_probe):
             raise TypeError("final_page_probe must be callable")
         if (not math.isfinite(self.keep_open_seconds) or self.keep_open_seconds < 0
                 or not math.isfinite(self.turn_timeout_s) or self.turn_timeout_s <= 0):
             raise ValueError("demo timeouts are invalid")
+        if isinstance(self.step_budget, bool) or not isinstance(self.step_budget, int) \
+                or not 1 <= self.step_budget <= 20:
+            raise ValueError("demo step_budget must be an integer from 1 through 20")
         if self.approval_decision not in {"approved", "denied", "cancelled", "expired"}:
             raise ValueError("approval_decision is invalid")
         if (isinstance(self.approval_ttl_s, bool)
@@ -469,7 +488,8 @@ def run_demo(config: DemoConfig) -> dict:
         journal = MemoryMutationJournal() if config.allow_mutations else None
         adapter = MinimalContactsAdapter(
             application.origin, api_token=actor.token,
-            allow_mutations=config.allow_mutations, mutation_journal=journal)
+            allow_mutations=config.allow_mutations, mutation_journal=journal,
+            extra_skills=config.extra_skills)
         bound = bind_application(adapter)
         if not adapter.health()["passed"]:
             raise RuntimeError("the synthetic contacts application is not ready")
@@ -496,17 +516,28 @@ def run_demo(config: DemoConfig) -> dict:
                 channel=channel,
                 config=AgentTurnConfig(
                     supported_scope=(
+                        "Inspect the current read-only vendor workflow. You may click "
+                        "current-page links and tabs. Do not edit records or submit forms."
+                        if config.allow_page_click and
+                           config.start_path.startswith("/contacts/workflows") else
+                        "Read current contacts through the typed API. You may click a "
+                        "current-page contact link to open its record. Do not modify "
+                        "records or submit forms."
+                        if config.allow_page_click else
                         "Read current contacts through the typed API and open only an exact "
                         "route returned by that API. Do not modify records or submit forms."
                         if not config.allow_mutations else
                         "Read current contacts through the typed API, and create at most "
                         "the one contact the user confirms. Do not submit page forms."),
                     ledger_path=run_dir / "audit.jsonl",
-                    step_budget=8,
+                    step_budget=config.step_budget,
                     wall_budget_s=max(1, int(config.turn_timeout_s)),
                     transport_timeout_s=min(30, config.turn_timeout_s),
                     approval_ttl_s=config.approval_ttl_s,
-                    disabled_actions=frozenset({"click", "fill", "select", "submit", "back"}),
+                    disabled_actions=frozenset(
+                        {"fill", "select", "submit", "back"}
+                        if config.allow_page_click else
+                        {"click", "fill", "select", "submit", "back"}),
                     scope_first_policy=True,
                     policy_block_limit=2,
                     plain_business_answer_min_page_actions=0,
