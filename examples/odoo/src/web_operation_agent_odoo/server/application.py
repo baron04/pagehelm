@@ -162,7 +162,8 @@ class OdooApplicationAdapter:
                  page_controller_module: str | None = None,
                  timeout_s: float = 20,
                  public_origin: str | None = None,
-                 allow_private_http: bool = False):
+                 allow_private_http: bool = False,
+                 extra_skills: tuple[BusinessSkill, ...] = ()):
         if not isinstance(allow_mutations, bool):
             raise ValueError("allow_mutations must be a boolean")
         if not isinstance(allow_generic_forms, bool):
@@ -182,7 +183,13 @@ class OdooApplicationAdapter:
         # nor a page/write action. Phase 8 consumers must still pass through the ordinary
         # typed evidence and mutation boundaries before this can widen a turn.
         self.runtime_descriptors = OdooRuntimeDescriptorReader(executor)
-        skills = [_packaged_skill(name) for name in _READ_SKILLS]
+        # Read-only Skill artifacts supplied by the host -- an evaluation's hand-written
+        # procedure, say. They reuse the packaged typed tools and add no capability.
+        if (not isinstance(extra_skills, tuple)
+                or any(not isinstance(skill, BusinessSkill) or not skill.read_only
+                       for skill in extra_skills)):
+            raise TypeError("extra_skills must be read-only Skill artifacts")
+        skills = [_packaged_skill(name) for name in _READ_SKILLS] + list(extra_skills)
         withheld: list[BusinessSkill] = []
         if allow_mutations:
             skills += [_packaged_skill(name) for name in _WRITE_SKILLS]

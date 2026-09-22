@@ -23,6 +23,13 @@ class P87Judge(unittest.TestCase):
             if task["kind"] == "operation":
                 self.assertIsNotNone(_operation_probe(task["probe"]), task["id"])
 
+    def test_arm_d_skills_are_frozen_read_only_and_one_per_task(self):
+        from evals.odoo.p87_gate import _skills
+        skills = _skills()
+        self.assertEqual({skill.skill_id.removeprefix("eval.p87.") for skill in skills},
+                         set(self.tasks))
+        self.assertTrue(all(skill.read_only for skill in skills))
+
     def test_navigation_needs_the_exact_last_crumb_and_a_normal_end(self):
         task = self.tasks["nav-sale-order-tags"]
         good = {"breadcrumb_last": "Tags", "path": "/odoo/action-195"}

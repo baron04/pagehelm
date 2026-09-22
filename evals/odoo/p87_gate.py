@@ -3,8 +3,14 @@
 Each frozen task runs twice per repeat on the live reference Odoo, through the production
 turn executor and `odoo_turn_config`, with zero task Skills:
 
-* A -- the current page and the typed API, no deployment source;
-* S -- A plus the production deployment-source capability.
+* A -- the current page and the typed API, no deployment source and no task Skill;
+* B -- A plus raw deployment source: the production index's code blocks only, with no
+  structured facts, no source-bound route candidates and no cited routes;
+* C -- A plus the production deployment-source capability (structured facts, raw blocks,
+  route candidates);
+* D -- A plus the frozen hand-written read-only Skills, one per task, and no source.
+
+The first 102-attempt batch used A and C (then called S); its rows keep that label.
 
 The only evaluation seams are the ones `OdooDemoConfig.evaluation` names: page switches are
 confirmed in the page, a hidden DOM probe reads the final page, and generic click is offered
@@ -31,7 +37,9 @@ from web_operation_agent_odoo.demo.demo import OdooDemoConfig, run_demo
 ROOT = Path(__file__).resolve().parents[2]
 TASKSET = ROOT / "evals" / "odoo" / "tasksets" / "p87-odoo-source-operations-v1.json"
 TASKSET_SHA256 = "55f3c3ea4c6b8b60ad5f3e8188d814fdbfd3872136fa8b2f634e45b8be998955"
-ARMS = ("A", "S")
+ARMS = ("A", "B", "C", "D")
+SKILLS = ROOT / "evals" / "odoo" / "tasksets" / "p87-odoo-skills-v1.json"
+SKILLS_SHA256 = "d8953df7aa161f467784ac512e2ec4a9db64a8c0ca27f7b82720c22355e48b0a"
 FINGERPRINT_SQL = """
 SELECT string_agg(t || ':' || c || ':' || coalesce(w, ''), ' ' ORDER BY t) FROM (
  SELECT 'res_partner' t, count(*)::text c, max(write_date)::text w FROM res_partner UNION ALL
@@ -71,6 +79,37 @@ def _tasks() -> dict:
     if doc.get("status") != "FROZEN" or len(doc.get("tasks", ())) != 17:
         raise RuntimeError("the p87 taskset has an invalid shape")
     return doc
+
+
+def _skills() -> tuple:
+    from web_operation_agent.business.runtime import BusinessSkill
+    raw = SKILLS.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != SKILLS_SHA256:
+        raise RuntimeError("the frozen p87 Skills changed")
+    return tuple(BusinessSkill.from_bytes(
+        json.dumps(item["skill"], ensure_ascii=False, sort_keys=True).encode("utf-8"),
+        artifact_uri=f"eval://p87/{item['task']}") for item in json.loads(raw)["skills"])
+
+
+def arm_capabilities(env: dict) -> dict:
+    """The source capability of each arm, compiled once from the deployed release."""
+    from web_operation_agent.composition.sources import SourceCapability
+    from web_operation_agent.schemas import SourceMap
+    from web_operation_agent_odoo.adapter import OdooApplicationAdapter
+    adapter = OdooApplicationAdapter(base_url=env["WOA_ODOO_BASE_URL"],
+                                     api_key_path=Path(env["WOA_ODOO_API_KEY_FILE"]))
+    production = adapter.source_capability(Path(env["WOA_ODOO_SOURCE_ROOT"]),
+                                           release=env["WOA_ODOO_SOURCE_RELEASE"])
+    # The production lookup interleaves compiled facts with the raw repository blocks;
+    # arm B keeps only the second, over the same release-bound tree and path filter.
+    compiled, repository = production.lookup._lookups
+    raw_map = SourceMap(schema_version=production.source_map.schema_version,
+                        attestation_id=production.source_map.attestation_id,
+                        repository_id=production.source_map.repository_id,
+                        release=production.source_map.release, relations=[])
+    return {"A": None, "D": None, "C": production,
+            "B": SourceCapability(source_map=raw_map, runtime_source=True,
+                                  lookup=repository)}
 
 
 def fingerprint(container: str, database: str) -> str:
@@ -143,15 +182,15 @@ def _events(run_dir: Path) -> list[dict]:
 
 
 def run_attempt(task: dict, arm: str, *, env: dict, output: Path, container: str,
-                database: str, model_env: Path) -> dict:
+                database: str, model_env: Path, capabilities: dict, skills: tuple) -> dict:
     before = fingerprint(container, database)
     config = OdooDemoConfig(
         base_url=env["WOA_ODOO_BASE_URL"], api_key_path=Path(env["WOA_ODOO_API_KEY_FILE"]),
         storage_state_path=Path(env["WOA_ODOO_STORAGE_STATE"]),
         page_controller_module=env["WOA_ODOO_PAGE_CONTROLLER_MODULE"],
         entry_path=task["entry_path"],
-        source_root=Path(env["WOA_ODOO_SOURCE_ROOT"]) if arm == "S" else None,
-        source_release=env["WOA_ODOO_SOURCE_RELEASE"] if arm == "S" else "",
+        source_override=capabilities[arm],
+        extra_skills=skills if arm == "D" else (),
         scripted=False, headless=True, tasks=(task["prompt"],), output_dir=output,
         model_env=model_env, keep_open_seconds=0, turn_timeout_s=120.0,
         allow_generic_forms=True, evaluation=True, evaluation_page_click=True,
@@ -183,6 +222,10 @@ def run_attempt(task: dict, arm: str, *, env: dict, output: Path, container: str
                               if e.get("event") == "runtime_source_retrieved"),
         "source_candidates_opened": sum(1 for t in tools if t == "open_source_candidate"),
         "target_reached": any(e.get("event") == "target_state_reached" for e in events),
+        "skills_loaded": [e.get("skill_id") for e in events
+                          if e.get("event") == "business_skill_loaded"],
+        "navigation_refused_for_target": sum(
+            1 for e in events if e.get("event") == "source_navigation_requires_target"),
         "provider_calls": usage.get("provider_calls", 0),
         "input_tokens": usage.get("input_tokens", 0),
         "output_tokens": usage.get("output_tokens", 0),
@@ -205,6 +248,9 @@ def main() -> int:
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--select", default="",
                         help="diagnostic only: task_id:arm, e.g. nav-payment-terms:S")
+    parser.add_argument("--lane", default="1/1",
+                        help="k/n: run every n-th attempt of the schedule starting at k, so "
+                             "n processes split one schedule with every arm in every lane")
     parser.add_argument("--plan", default="",
                         help="a verification subset: comma-separated task_id:ARMS entries, "
                              "e.g. op-product-sales-tab:AS,nav-payment-terms:S")
@@ -226,11 +272,21 @@ def main() -> int:
                 or set(arms) - set(ARMS):
             raise ValueError(f"invalid --plan entry: {entry}")
         plan[task_id] = set(arms)
+    lane, lanes = (int(part) for part in args.lane.split("/"))
+    if not 1 <= lane <= lanes:
+        raise ValueError("--lane must be k/n with 1 <= k <= n")
+    capabilities = arm_capabilities(env)
+    skills = _skills()
     rows = []
+    position = -1
     for repeat in range(1, args.repeats + 1):
         for index, task in enumerate(doc["tasks"]):
-            arms = ARMS if (repeat + index) % 2 else tuple(reversed(ARMS))
+            shift = (repeat + index) % len(ARMS)
+            arms = ARMS[shift:] + ARMS[:shift]
             for arm in arms:
+                position += 1
+                if position % lanes != lane - 1:
+                    continue
                 identity = f"{task['id']}:{arm}"
                 if args.select and identity != args.select:
                     continue
@@ -243,7 +299,8 @@ def main() -> int:
                     row = run_attempt(task, arm, env=env,
                                       output=args.output / "runs",
                                       container=args.container, database=args.database,
-                                      model_env=args.model_env)
+                                      model_env=args.model_env,
+                                      capabilities=capabilities, skills=skills)
                     row["repeat"] = repeat
                     path.write_text(json.dumps(row, ensure_ascii=False, indent=1) + "\n")
                 rows.append(row)
@@ -256,7 +313,7 @@ def main() -> int:
                     print(json.dumps({"stopped": "write_detected", "attempt": identity}),
                           flush=True)
                     return 3
-    (args.output / "projection.json").write_text(
+    (args.output / f"projection-lane{lane}of{lanes}.json").write_text(
         json.dumps(rows, ensure_ascii=False, indent=1) + "\n")
     print(json.dumps({"attempts": len(rows), "passed": sum(r["passed"] for r in rows),
                       "provider_calls": sum(r["provider_calls"] for r in rows),

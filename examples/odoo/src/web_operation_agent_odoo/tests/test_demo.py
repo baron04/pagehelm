@@ -190,6 +190,10 @@ class QualificationOnlyDemoSeamsFailClosed(unittest.TestCase):
                          mutation_journal_path="/tmp/journal.sqlite3")
         with self.assertRaisesRegex(ValueError, "scripted run"):
             self._config(scripted=False, confirm_navigation_in_page=True)
+        with self.assertRaisesRegex(ValueError, "require an evaluation run"):
+            self._config(scripted=False, extra_skills=(object(),))
+        with self.assertRaisesRegex(ValueError, "require an evaluation run"):
+            self._config(scripted=False, source_override=object())
 
 
 if __name__ == "__main__":

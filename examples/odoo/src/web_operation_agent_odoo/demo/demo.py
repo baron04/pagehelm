@@ -194,6 +194,11 @@ class OdooDemoConfig:
     #: statement that says so. Fill, select, submit and back stay disabled; a write is
     #: detected by the caller against the fixture database. Never a deployment default.
     evaluation_page_click: bool = False
+    #: Evaluation only: read-only Skill artifacts added to the adapter's catalog, and a
+    #: source capability used in place of the one compiled from `source_root`. They define
+    #: an experiment's arms; a deployment compiles its own capability and ships its Skills.
+    extra_skills: tuple = ()
+    source_override: Any = None
 
     def __post_init__(self) -> None:
         for name in ("api_key_path", "storage_state_path", "output_dir"):
@@ -219,6 +224,10 @@ class OdooDemoConfig:
             raise ValueError("demo evaluation flags must be booleans")
         if self.evaluation_page_click and not self.evaluation:
             raise ValueError("evaluation page click requires an evaluation run")
+        if (self.extra_skills or self.source_override is not None) and not self.evaluation:
+            raise ValueError("extra Skills and a source override require an evaluation run")
+        if self.source_override is not None and self.source_root is not None:
+            raise ValueError("a source override replaces the compiled source root")
         if self.evaluation and (self.allow_mutations or self.scripted):
             raise ValueError("an evaluation run is a read-only provider run")
         if self.confirm_navigation_in_page and not (self.scripted or self.evaluation):
@@ -676,7 +685,8 @@ def run_demo(config: OdooDemoConfig, *,
         base_url=config.base_url, api_key_path=config.api_key_path,
         page_controller_module=config.page_controller_module,
         allow_generic_forms=config.allow_generic_forms,
-        allow_mutations=config.allow_mutations, mutation_journal=journal)
+        allow_mutations=config.allow_mutations, mutation_journal=journal,
+        extra_skills=tuple(config.extra_skills))
     bound = bind_application(adapter)
     health = adapter.health()
     if not health["passed"]:
@@ -688,9 +698,10 @@ def run_demo(config: OdooDemoConfig, *,
     expected_binding = adapter.page_session_binding(config.storage_state_path)
     # One compile per deployment release, not per turn: the capability is a value, and the
     # four session settings it carries only make sense together.
-    capability = adapter.source_capability(config.source_root,
-                                           release=config.source_release,
-                                           deployed_commit=config.source_commit)
+    capability = (config.source_override if config.source_override is not None else
+                  adapter.source_capability(config.source_root,
+                                            release=config.source_release,
+                                            deployed_commit=config.source_commit))
     chat, meter = _chat(config, run_dir, adapter)
     holder: dict[str, LiveConversationRunner] = {}
 
