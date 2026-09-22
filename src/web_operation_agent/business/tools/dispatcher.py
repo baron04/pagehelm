@@ -129,6 +129,22 @@ class BusinessToolRuntime:
                 route_validator, BusinessRouteValidator):
             raise TypeError("route_validator must provide validate_tool_route")
         self._route_validator = route_validator
+        for skill in self._skills.values():
+            if not skill.routes:
+                continue
+            if route_validator is None:
+                raise ValueError(
+                    f"Skill {skill.skill_id} declares routes but the runtime has no route "
+                    "validator to check them")
+            if not skill.read_only:
+                raise ValueError("only a read-only Skill may declare routes")
+            for route in skill.routes:
+                try:
+                    route_validator.validate_tool_route(route)
+                except Exception as exc:
+                    raise ValueError(
+                        f"Skill {skill.skill_id} declares a route outside the application's "
+                        "route contract") from exc
         compiled_hints = []
         for pattern, skill_id in route_skill_hints:
             if (not isinstance(pattern, str) or not pattern.startswith("^")

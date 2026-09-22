@@ -29,21 +29,24 @@ class ToolSurface:
                  if tool["function"]["name"] not in session.disabled_actions
                  or (tool["function"]["name"] == "click"
                      and session.click_policy is not None)]
+        skill = bool(session._loaded_business_skill_ids)
         if session._finalizing:
-            return [answer_protocol.finish_answer_tool(source=session.runtime_source)]
+            return [answer_protocol.finish_answer_tool(source=session.runtime_source,
+                                                       skill=skill)]
         if session._capability_question:
             return [tool for tool in tools if tool["function"]["name"] == "finish"]
         if session.page_answer_evidence:
             tools = [page_answer.OBSERVE_TOOL if tool["function"]["name"] == "observe"
                      else tool for tool in tools]
         if session._answers.answer_mode:
-            finish = answer_protocol.finish_answer_tool(source=session.runtime_source)
+            finish = answer_protocol.finish_answer_tool(source=session.runtime_source,
+                                                        skill=skill)
             tools = [finish if tool["function"]["name"] == "finish" else tool
                      for tool in tools]
         elif session.evidence.has_source_evidence():
             # Source is evidence, not a task-mode switch. One structured finish
             # supports either a cited answer or an observed action receipt.
-            finish = answer_protocol.finish_answer_tool(source=True)
+            finish = answer_protocol.finish_answer_tool(source=True, skill=skill)
             tools = [finish if tool["function"]["name"] == "finish" else tool
                      for tool in tools]
         if session.target_settlement_available():

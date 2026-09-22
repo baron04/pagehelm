@@ -42,6 +42,10 @@ class BusinessSkill:
     read_only: bool
     artifact_path: str
     artifact_sha256: str
+    #: Exact same-application read-only paths the Skill may open once loaded. Optional;
+    #: validated by the application's own tool-route contract when a runtime is built, so
+    #: a Skill route carries exactly the authority a typed tool's returned route carries.
+    routes: tuple[str, ...] = ()
 
     @classmethod
     def load(cls, path: str | Path) -> "BusinessSkill":
@@ -71,8 +75,17 @@ class BusinessSkill:
             "schema_version", "skill_id", "title", "intent", "triggers",
             "instructions", "tool_names", "provenance", "read_only",
         }
-        if not isinstance(data, dict) or set(data) != required or data.get("schema_version") != 1:
+        if (not isinstance(data, dict) or not required <= set(data) <= required | {"routes"}
+                or data.get("schema_version") != 1):
             raise ValueError("Business Skill fields or schema_version do not match schema 1")
+        routes: tuple[str, ...] = ()
+        if "routes" in data:
+            routes = _string_list(data["routes"], "routes")
+            if (len(routes) > 8 or len(set(routes)) != len(routes)
+                    or any(not route.startswith("/") or route.startswith("//")
+                           or len(route) > 300 or re.search(r"[\s\x00-\x1f#]", route)
+                           for route in routes)):
+                raise ValueError("routes must be at most eight exact same-application paths")
         skill_id = data.get("skill_id")
         if not isinstance(skill_id, str) or not _SKILL_ID.fullmatch(skill_id):
             raise ValueError("skill_id is invalid")
@@ -96,6 +109,7 @@ class BusinessSkill:
             read_only=data["read_only"],
             artifact_path=artifact_uri,
             artifact_sha256=hashlib.sha256(raw).hexdigest(),
+            routes=routes,
         )
 
     @property
@@ -119,6 +133,7 @@ class BusinessSkill:
             "instructions": list(self.instructions),
             "tools": list(self.tool_names),
             "provenance": list(self.provenance),
+            **({"routes": list(self.routes)} if self.routes else {}),
         }
 
 

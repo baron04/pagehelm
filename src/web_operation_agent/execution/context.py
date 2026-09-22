@@ -128,6 +128,7 @@ class SessionContext:
     _source_evidence_count = AnswerState("source_evidence_count", 0)
     _source_history_evidence_ids = AnswerState("source_history_evidence_ids")
     _source_history_evidence_count = AnswerState("source_history_evidence_count", 0)
+    _skill_evidence_count = AnswerState("skill_evidence_count", 0)
     _evidence_feedback = AnswerState("evidence_feedback", "")
     _capability_ref = AnswerState("capability_ref", "")
     _capability_withheld = AnswerState("capability_withheld", False)

@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import json
+import time
 
 from .business_mutations import execute_business_mutation, observe_after_business_mutation
 from .business_reads import execute_business_read
 from .form_tools import apply_form_draft, prefill_form
+from ..answer.evidence import Origin, SkillEvidence
 from .runstate import _Next, _Turn
 
 
@@ -33,14 +35,43 @@ def load_skill(session, turn: "_Turn", call: dict, name: str, args: dict) -> "_N
         return session._reply(turn, call, "The server rejected load_skill: " + rejection + ".")
     assert skill is not None
     session._loaded_business_skill_ids.add(skill.skill_id)
+    # A loaded Skill's declared routes carry a typed result's route authority: exact,
+    # validated against the application's route contract when the catalog was built, and
+    # still subject to the page-switch confirmation.
+    session._business_routes.update(skill.routes)
+    refs = record_skill_evidence(session, skill, step=turn.step)
     session.ledger.append(
         "business_skill_loaded", step=turn.step, skill_id=skill.skill_id,
         skill_sha256=skill.artifact_sha256,
-        tool_names=list(skill.tool_names), provenance=list(skill.provenance))
+        tool_names=list(skill.tool_names), provenance=list(skill.provenance),
+        routes=list(skill.routes), evidence_refs=list(refs))
+    card = {**skill.loaded_card(), "statement_refs": list(refs)}
     return session._reply(turn, call,
                        "BUSINESS SKILL LOADED (playbook; not runtime data):\n"
-                       + json.dumps(skill.loaded_card(), ensure_ascii=False,
-                                    sort_keys=True, separators=(",", ":")))
+                       + json.dumps(card, ensure_ascii=False,
+                                    sort_keys=True, separators=(",", ":"))
+                       + ("\nstatement_refs[i] cites instructions[i]: an answer may use "
+                          "skill_statement with that ref, a concise statement and an exact "
+                          "support span copied from that instruction."
+                          + (" routes may be opened with goto exactly as written."
+                             if skill.routes else "")))
+
+
+def record_skill_evidence(session, skill, *, step: int) -> tuple[str, ...]:
+    """Give each instruction of a loaded Skill a turn-owned, citable reference."""
+    refs = []
+    for instruction in skill.instructions:
+        session._skill_evidence_count += 1
+        ref = f"skill#{session._skill_evidence_count}"
+        session.evidence.record(SkillEvidence(
+            evidence_id=ref,
+            origin=Origin(kind="skill", reference=f"skill:{skill.skill_id}",
+                          observed_at=str(time.time()),
+                          scope=f"the installed Skill {skill.skill_id}"),
+            skill_id=skill.skill_id, artifact_sha256=skill.artifact_sha256,
+            statement=instruction))
+        refs.append(ref)
+    return tuple(refs)
 
 
 def render_business_skills(session) -> str:

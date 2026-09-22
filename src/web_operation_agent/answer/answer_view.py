@@ -458,7 +458,7 @@ def _one(words: dict, item: dict, *, presentation: str) -> list[str]:
         return [words["capability_gap"]]
     if kind == "source_excerpt":
         return [_literal(item["statement"])]
-    if kind == "source_history":
+    if kind in ("source_history", "skill_statement"):
         return [_literal(item["statement"])]
     if kind == "page_observation":
         label = "页面显示" if words["lang"] == "zh" else "The page shows"

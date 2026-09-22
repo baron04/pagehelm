@@ -6,10 +6,10 @@ from dataclasses import asdict
 
 from .computation import COMPARISONS, ComputationRequest, run
 from .conclusion import (Aggregate, AnswerDraft, CapabilityGap, ConclusionRefused, FieldValue,
-                         NotFound, PageFact, Selection, SourceExcerpt, SourceHistory,
-                         Undetermined, verify)
+                         NotFound, PageFact, Selection, SkillStatement, SourceExcerpt,
+                         SourceHistory, Undetermined, verify)
 from .evidence import (CapabilityEvidence, ComputationEvidence, PageEvidence, QueryEvidence,
-                       RecordEvidence, SelectionEvidence, SourceEvidence,
+                       RecordEvidence, SelectionEvidence, SkillEvidence, SourceEvidence,
                        SourceHistoryEvidence, TurnEvidence)
 
 MAX_INDEX_BYTES = 24 * 1024
@@ -25,14 +25,15 @@ CONCLUSION_KINDS = ("field_value", "selection", "aggregate", "not_found", "undet
                     "page_observation", "capability_gap")
 
 
-def answer_schema(*, source: bool = False) -> dict:
+def answer_schema(*, source: bool = False, skill: bool = False) -> dict:
     """The model-facing shape of an answer, stated once rather than once per kind.
 
     It used to spell out a separate object for each conclusion kind -- nine near-identical
     copies, 4 KB on every request. The server's `submit` checks each kind's exact fields
     either way; this schema only has to tell the model what they are.
     """
-    kinds = CONCLUSION_KINDS + (("source_excerpt", "source_history") if source else ())
+    kinds = (CONCLUSION_KINDS + (("source_excerpt", "source_history") if source else ())
+             + (("skill_statement",) if skill else ()))
     item = {
         "type": "object", "additionalProperties": False,
         "properties": {
@@ -42,10 +43,10 @@ def answer_schema(*, source: bool = False) -> dict:
         },
         "required": ["kind", "evidence_ref"],
     }
-    if source:
-        item["description"] = ("source_excerpt and source_history also require statement "
-                               "(the concise answer) and support (an exact span copied from "
-                               "that evidence); no other kind takes them.")
+    if source or skill:
+        item["description"] = ("source_excerpt, source_history and skill_statement also "
+                               "require statement (the concise answer) and support (an exact "
+                               "span copied from that evidence); no other kind takes them.")
         item["properties"].update({
             "statement": {"type": "string", "minLength": 1, "maxLength": 800},
             "support": {"type": "string", "minLength": 8, "maxLength": 400},
@@ -64,7 +65,7 @@ def answer_schema(*, source: bool = False) -> dict:
     }
 
 
-def finish_answer_tool(*, source: bool = False) -> dict:
+def finish_answer_tool(*, source: bool = False, skill: bool = False) -> dict:
     return {"type": "function", "function": {
         "name": "finish", "description": (
         "Answer the user's question with evidence-backed conclusions. Use compute for "
@@ -83,7 +84,7 @@ def finish_answer_tool(*, source: bool = False) -> dict:
         "parameters": {"type": "object", "additionalProperties": False,
                        "properties": {"outcome": {"type": "string", "enum": [
                            "answered", "partial", "unable", "acted"]},
-                           "answer": answer_schema(source=source)},
+                           "answer": answer_schema(source=source, skill=skill)},
                        "required": ["outcome"]}}}
 
 
@@ -139,11 +140,13 @@ _CITES = {"field_value": "a record field", "selection": "a query or a selection"
           "aggregate": "a compute result, so call compute first",
           "page_observation": "a page observation", "not_found": "a query",
           "capability_gap": "the capability check", "source_excerpt": "source lookup",
-          "source_history": "source history lookup"}
+          "source_history": "source history lookup",
+          "skill_statement": "a loaded Skill instruction"}
 _KIND_OF = {RecordEvidence: "a record field", QueryEvidence: "a query",
             SelectionEvidence: "a selection", ComputationEvidence: "a compute result",
             PageEvidence: "a page observation", CapabilityEvidence: "a capability check",
-            SourceEvidence: "a source excerpt", SourceHistoryEvidence: "source history"}
+            SourceEvidence: "a source excerpt", SourceHistoryEvidence: "source history",
+            SkillEvidence: "a Skill instruction"}
 
 
 def _shape(value: object, allowed: set[str], required: set[str], where: str) -> dict:
@@ -200,7 +203,8 @@ def submit(turn: TurnEvidence, args: dict) -> dict | None:
     for entry in entries:
         try:
             source_kind = (isinstance(entry, dict)
-                           and entry.get("kind") in ("source_excerpt", "source_history"))
+                           and entry.get("kind") in ("source_excerpt", "source_history",
+                                                     "skill_statement"))
             _shape(entry, {"kind", "evidence_ref", "fields", "statement", "support"},
                    {"kind", "evidence_ref", "statement", "support"} if source_kind
                    else {"kind", "evidence_ref"},
@@ -248,6 +252,8 @@ def submit(turn: TurnEvidence, args: dict) -> dict | None:
             conclusions.append(SourceExcerpt(ref, entry["statement"], entry["support"]))
         elif kind == "source_history" and isinstance(item, SourceHistoryEvidence):
             conclusions.append(SourceHistory(ref, entry["statement"], entry["support"]))
+        elif kind == "skill_statement" and isinstance(item, SkillEvidence):
+            conclusions.append(SkillStatement(ref, entry["statement"], entry["support"]))
         elif kind == "undetermined":
             about = (f"{item.record_id}.{item.field_name}" if isinstance(item, RecordEvidence)
                      else item.collection if isinstance(item, QueryEvidence)
@@ -280,7 +286,7 @@ def _sources(turn: TurnEvidence, refs: tuple[str, ...]) -> list[dict]:
             continue
         visited.add(ref)
         item = turn.get(ref)
-        if isinstance(item, (SourceEvidence, SourceHistoryEvidence)):
+        if isinstance(item, (SourceEvidence, SourceHistoryEvidence, SkillEvidence)):
             continue
         origin = item.origin
         source = origins.setdefault(origin, {

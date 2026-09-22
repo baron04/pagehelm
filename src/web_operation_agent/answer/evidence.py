@@ -36,7 +36,7 @@ _EVIDENCE_ID = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*#[0-9]{1,6}")
 #: it against the goal. It is not a read of the application's data, and keeping it out of
 #: `typed` matters: "nothing in this session can do that" and "the application holds no such
 #: record" are different claims, and collapsing them is how a missing tool became a NotFound.
-SOURCE_KINDS = ("typed", "page", "computed", "capability", "source")
+SOURCE_KINDS = ("typed", "page", "computed", "capability", "source", "skill")
 SOURCE_FACT_TYPES = frozenset({"static_declaration", "possible_cause", "implementation"})
 MAX_TURN_EVIDENCE_BYTES = 256 * 1024
 
@@ -420,6 +420,35 @@ class SourceEvidence:
 
 
 @dataclass(frozen=True, slots=True)
+class SkillEvidence:
+    """One instruction of an installed Skill that this turn loaded.
+
+    It establishes only that the deployment's reviewed Skill says this -- organizational
+    knowledge such as what a status means to this business. It is not a read of current
+    application data and never counts as one.
+    """
+
+    evidence_id: str
+    origin: Origin
+    skill_id: str
+    artifact_sha256: str
+    statement: str
+
+    def __post_init__(self) -> None:
+        _require_id(self.evidence_id)
+        _require_origin(self.origin)
+        if self.origin.kind != "skill":
+            raise ValueError("skill evidence must come from a loaded Skill")
+        object.__setattr__(self, "skill_id", _text(self.skill_id, "skill_id"))
+        if (not isinstance(self.artifact_sha256, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", self.artifact_sha256)):
+            raise ValueError("skill evidence carries the digest of its artifact")
+        if (not isinstance(self.statement, str) or not self.statement.strip()
+                or len(self.statement) > 2_000):
+            raise ValueError("skill evidence quotes one bounded instruction")
+
+
+@dataclass(frozen=True, slots=True)
 class SourceHistoryEvidence:
     """Replayable Git metadata, kept distinct from source line evidence.
 
@@ -472,7 +501,7 @@ class SourceHistoryEvidence:
 
 Evidence = Union[RecordEvidence, QueryEvidence, PageEvidence, CapabilityEvidence,
                  ComputationEvidence, SelectionEvidence, SourceEvidence,
-                 SourceHistoryEvidence]
+                 SourceHistoryEvidence, SkillEvidence]
 
 
 def _require_id(value: object) -> None:
@@ -556,7 +585,7 @@ class TurnEvidence:
         # by this session's release-bound lookup.
         if not isinstance(item, (RecordEvidence, QueryEvidence, PageEvidence,
                                  ComputationEvidence, SelectionEvidence, CapabilityEvidence,
-                                 SourceEvidence, SourceHistoryEvidence)):
+                                 SourceEvidence, SourceHistoryEvidence, SkillEvidence)):
             raise TypeError("only evidence can be recorded")
         if item.evidence_id in self._items:
             raise ValueError(f"evidence {item.evidence_id} was already recorded this turn")
@@ -608,7 +637,8 @@ class TurnEvidence:
 
     def has_application_evidence(self) -> bool:
         """Whether the turn read runtime application state, not only release source."""
-        return any(not isinstance(item, (SourceEvidence, SourceHistoryEvidence))
+        return any(not isinstance(item, (SourceEvidence, SourceHistoryEvidence,
+                                         SkillEvidence))
                    for item in self._items.values())
 
     def has_source_evidence(self) -> bool:

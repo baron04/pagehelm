@@ -23,7 +23,7 @@ from typing import Union
 
 from .evidence import (
     CapabilityEvidence, ComputationEvidence, EvidenceUnknown, PageEvidence, QueryEvidence,
-    RecordEvidence, SelectionEvidence, SourceEvidence, SourceHistoryEvidence, TurnEvidence,
+    RecordEvidence, SelectionEvidence, SourceEvidence, SourceHistoryEvidence, SkillEvidence, TurnEvidence,
 )
 
 #: How much of the question this answer covers. The model proposes one; the server may only
@@ -371,8 +371,26 @@ def _source_statement(value: str, citation: str, digest: str, *,
     return statement
 
 
+@dataclass(frozen=True, slots=True)
+class SkillStatement:
+    """A model paraphrase linked to a checked span of one loaded Skill instruction."""
+
+    evidence_id: str
+    statement: str
+    support: str
+    kind = "skill_statement"
+
+    def verify(self, turn: TurnEvidence) -> dict:
+        item = _one(turn, self.evidence_id, SkillEvidence, "a skill statement")
+        statement = _source_statement(self.statement, item.skill_id, item.artifact_sha256)
+        support = _support_span(self.support, item.statement)
+        return {"kind": self.kind, "skill_id": item.skill_id,
+                "sha256": item.artifact_sha256, "scope": item.origin.scope,
+                "source_kind": "skill", "statement": statement, "support": support}
+
+
 Conclusion = Union[FieldValue, Selection, Aggregate, NotFound, Undetermined, PageFact,
-                   CapabilityGap, SourceExcerpt, SourceHistory]
+                   CapabilityGap, SourceExcerpt, SourceHistory, SkillStatement]
 
 #: `action_succeeded` is deliberately absent. Whether a write happened already comes from the
 #: mutation journal's terminal state and a same-actor readback, and routing it through a

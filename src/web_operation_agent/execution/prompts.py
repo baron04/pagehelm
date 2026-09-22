@@ -406,6 +406,10 @@ for business data, answer from the typed result without navigating or observing 
 Respect the user's explicit read limits and scope. If they limit reading but also ask for
 a broader total, keep the limit and report only the supported subtotal with its limitation;
 do not enlarge the limit or make extra reads to manufacture a complete answer.
+A loaded Skill's instructions are organizational knowledge, not current data. When an answer
+rests on one, cite it as skill_statement with its statement_ref, a concise statement and an
+exact support span copied from that instruction. A loaded Skill's routes may be opened with
+goto exactly as written.
 For a requested mutation, load a matching candidate with read_only=false before deciding that
 no write tool is available. Such a Skill may also contain the read tool needed for preflight.
 Do not call observe merely because a Skill or typed business tool returned. Re-read the page

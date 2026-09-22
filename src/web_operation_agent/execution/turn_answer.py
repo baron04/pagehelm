@@ -55,6 +55,7 @@ class TurnAnswer:
         self.source_evidence_count = 0
         self.source_history_evidence_ids: dict[str, str] = {}
         self.source_history_evidence_count = 0
+        self.skill_evidence_count = 0
         self.evidence_feedback = ""
         self.capability_ref = ""
         self.capability_withheld = False

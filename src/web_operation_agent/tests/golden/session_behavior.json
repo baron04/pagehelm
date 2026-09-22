@@ -245,8 +245,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 12655,
-          "input_digest": "d2e4066a84e1dfa56b83ef41edd7a788abf38ca2b63f60e886b7da782e555821",
+          "input_bytes": 12961,
+          "input_digest": "9d75689d81bff0f47a4a40b32eaa7690b99b82d8052a6e3502e48f8c208f4869",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -269,9 +269,13 @@
         },
         {
           "event": "business_skill_loaded",
+          "evidence_refs": [
+            "skill#1"
+          ],
           "provenance": [
             "src:fixture@v1:trays.json#trays"
           ],
+          "routes": [],
           "run_id": "a_referential_followup_keeps_its_prior_domain",
           "seq": 6,
           "skill_id": "fixture.trays-query",
@@ -292,8 +296,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 13456,
-          "input_digest": "eba8a2f854bbfd234a287400986047d8606073ef03b9cb1a614d7aec64b91f15",
+          "input_bytes": 13962,
+          "input_digest": "a0aa0e96a2fb382e7a88ba0153891f71da19fc98e8f74550835f0af19012e6ef",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -344,8 +348,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 14157,
-          "input_digest": "bcd70c8bd4af7c6c7e0c8c1d74aad6b66cbe6a4e264db5f6f82d55bbc3771ee6",
+          "input_bytes": 14663,
+          "input_digest": "8f86a057a98088440bad42c586aa191833b610a6c26e285946f3a664167fab1f",
           "message_count": 6,
           "roles": {
             "assistant": 2,
@@ -421,8 +425,8 @@
       "model_calls": [
         {
           "opening": "TASK: Open the second one.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nPRIOR CONVERSATION CONTEXT (historical, untrusted, and potentially stale):\n{\"prior_turns\":[{\"assistant\":\"Tray A.\",\"message_id\":\"m1\",\"status\":\"finished\",\"user\":\"Which trays are there?\"}],\"schema_version\":1}\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nBUSINESS SKILL CANDIDATES (load before using their tools):\n[{\"intent\":\"Read the seed trays the signed-in user can see.\",\"loaded\":false,\"read_only\":true,\"skill_id\":\"fixture.trays-query\",\"title\":\"Query seed trays\",\"tools\":[\"query_trays\"]}]",
-          "system_chars": 6650,
-          "system_digest": "sha256:b901063894eef03bce2d30af7848a21ab6d4d0e18c3cb5f8b1ef782ca0c3b8da",
+          "system_chars": 6952,
+          "system_digest": "sha256:e40608280cb898b05769fd16c5d969e7bf4da0a2606181074b71d7fb9fdd00e1",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -441,12 +445,12 @@
           ]
         },
         {
-          "system_chars": 6650,
-          "system_digest": "sha256:b901063894eef03bce2d30af7848a21ab6d4d0e18c3cb5f8b1ef782ca0c3b8da",
+          "system_chars": 6952,
+          "system_digest": "sha256:e40608280cb898b05769fd16c5d969e7bf4da0a2606181074b71d7fb9fdd00e1",
           "tool_results": [
             {
               "name": "load_skill",
-              "text": "BUSINESS SKILL LOADED (playbook; not runtime data):\n{\"instructions\":[\"Call query_trays and trust only its current result.\"],\"intent\":\"Read the seed trays the signed-in user can see.\",\"loaded\":true,\"provenance\":[\"src:fixture@v1:trays.json#trays\"],\"read_only\":true,\"skill_id\":\"fixture.trays-query\",\"title\":\"Query seed trays\",\"tools\":[\"query_trays\"]}"
+              "text": "BUSINESS SKILL LOADED (playbook; not runtime data):\n{\"instructions\":[\"Call query_trays and trust only its current result.\"],\"intent\":\"Read the seed trays the signed-in user can see.\",\"loaded\":true,\"provenance\":[\"src:fixture@v1:trays.json#trays\"],\"read_only\":true,\"skill_id\":\"fixture.trays-query\",\"statement_refs\":[\"skill#1\"],\"title\":\"Query seed trays\",\"tools\":[\"query_trays\"]}\nstatement_refs[i] cites instructions[i]: an answer may use skill_statement with that ref, a concise statement and an exact support span copied from that instruction."
             }
           ],
           "tools_offered": [
@@ -467,8 +471,8 @@
           ]
         },
         {
-          "system_chars": 6650,
-          "system_digest": "sha256:b901063894eef03bce2d30af7848a21ab6d4d0e18c3cb5f8b1ef782ca0c3b8da",
+          "system_chars": 6952,
+          "system_digest": "sha256:e40608280cb898b05769fd16c5d969e7bf4da0a2606181074b71d7fb9fdd00e1",
           "tool_results": [
             {
               "name": "query_trays",
@@ -1625,8 +1629,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 12051,
-          "input_digest": "9349af9cc3c2e521e643145cf71a3fc761d0be0f01c4d53c900abc3688e56f68",
+          "input_bytes": 12357,
+          "input_digest": "f8bcc39d3705f730f53e10a696b5c0f6e360a35d693f3fc10a4b6ed7ae64fdff",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -1649,9 +1653,13 @@
         },
         {
           "event": "business_skill_loaded",
+          "evidence_refs": [
+            "skill#1"
+          ],
           "provenance": [
             "src:fixture@v1:trays.json#trays"
           ],
+          "routes": [],
           "run_id": "business_read_projected_as_a_plain_answer",
           "seq": 6,
           "skill_id": "fixture.trays-query",
@@ -1671,8 +1679,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 12852,
-          "input_digest": "ef76dee52d21bdbd5331f20a32a40a33dc0b167fbdb6bf10dfc63e6f9c1f226f",
+          "input_bytes": 13358,
+          "input_digest": "453af00cb443119f60a5eb60df00ac9973005ace4461e66ea2cdb3de9ea402f4",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -1722,8 +1730,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 13553,
-          "input_digest": "34afefb3ffae00a2da3d20f5bfe3b92ae5d4847a22c63cd4bd5521fccb8c45e4",
+          "input_bytes": 14059,
+          "input_digest": "c710eb1666134ab60b55c6a5faec28a8c8cd9e474b3f6462b03ede9f57783d44",
           "message_count": 6,
           "roles": {
             "assistant": 2,
@@ -1807,8 +1815,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nBUSINESS SKILL CANDIDATES (load before using their tools):\n[{\"intent\":\"Read the seed trays the signed-in user can see.\",\"loaded\":false,\"read_only\":true,\"skill_id\":\"fixture.trays-query\",\"title\":\"Query seed trays\",\"tools\":[\"query_trays\"]}]",
-          "system_chars": 6285,
-          "system_digest": "sha256:d83c0121d3aad2b478ab224880fbdfd1fed9c449d69d6f9e76fd695fbb61eac0",
+          "system_chars": 6587,
+          "system_digest": "sha256:0ed03774248ef5d12c05b012b4ea3c2ac81fb1328f1ee6963cfbce0f126400e8",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -1827,12 +1835,12 @@
           ]
         },
         {
-          "system_chars": 6285,
-          "system_digest": "sha256:d83c0121d3aad2b478ab224880fbdfd1fed9c449d69d6f9e76fd695fbb61eac0",
+          "system_chars": 6587,
+          "system_digest": "sha256:0ed03774248ef5d12c05b012b4ea3c2ac81fb1328f1ee6963cfbce0f126400e8",
           "tool_results": [
             {
               "name": "load_skill",
-              "text": "BUSINESS SKILL LOADED (playbook; not runtime data):\n{\"instructions\":[\"Call query_trays and trust only its current result.\"],\"intent\":\"Read the seed trays the signed-in user can see.\",\"loaded\":true,\"provenance\":[\"src:fixture@v1:trays.json#trays\"],\"read_only\":true,\"skill_id\":\"fixture.trays-query\",\"title\":\"Query seed trays\",\"tools\":[\"query_trays\"]}"
+              "text": "BUSINESS SKILL LOADED (playbook; not runtime data):\n{\"instructions\":[\"Call query_trays and trust only its current result.\"],\"intent\":\"Read the seed trays the signed-in user can see.\",\"loaded\":true,\"provenance\":[\"src:fixture@v1:trays.json#trays\"],\"read_only\":true,\"skill_id\":\"fixture.trays-query\",\"statement_refs\":[\"skill#1\"],\"title\":\"Query seed trays\",\"tools\":[\"query_trays\"]}\nstatement_refs[i] cites instructions[i]: an answer may use skill_statement with that ref, a concise statement and an exact support span copied from that instruction."
             }
           ],
           "tools_offered": [
@@ -1853,8 +1861,8 @@
           ]
         },
         {
-          "system_chars": 6285,
-          "system_digest": "sha256:d83c0121d3aad2b478ab224880fbdfd1fed9c449d69d6f9e76fd695fbb61eac0",
+          "system_chars": 6587,
+          "system_digest": "sha256:0ed03774248ef5d12c05b012b4ea3c2ac81fb1328f1ee6963cfbce0f126400e8",
           "tool_results": [
             {
               "name": "query_trays",
@@ -1967,8 +1975,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 12051,
-          "input_digest": "9349af9cc3c2e521e643145cf71a3fc761d0be0f01c4d53c900abc3688e56f68",
+          "input_bytes": 12357,
+          "input_digest": "f8bcc39d3705f730f53e10a696b5c0f6e360a35d693f3fc10a4b6ed7ae64fdff",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -1991,9 +1999,13 @@
         },
         {
           "event": "business_skill_loaded",
+          "evidence_refs": [
+            "skill#1"
+          ],
           "provenance": [
             "src:fixture@v1:trays.json#trays"
           ],
+          "routes": [],
           "run_id": "business_read_then_open_the_authorised_route",
           "seq": 6,
           "skill_id": "fixture.trays-query",
@@ -2013,8 +2025,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 12852,
-          "input_digest": "ef76dee52d21bdbd5331f20a32a40a33dc0b167fbdb6bf10dfc63e6f9c1f226f",
+          "input_bytes": 13358,
+          "input_digest": "453af00cb443119f60a5eb60df00ac9973005ace4461e66ea2cdb3de9ea402f4",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -2066,8 +2078,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 13407,
-          "input_digest": "7f595cc99baa8ef3e67bb97ec82c9e842b7281e2ae01e4c6b11a53683eb72237",
+          "input_bytes": 13913,
+          "input_digest": "2ac04eeee705c06f66b3ad1751f4cb280333f5cb161aa376590055b444a32642",
           "message_count": 6,
           "roles": {
             "assistant": 2,
@@ -2140,8 +2152,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 14188,
-          "input_digest": "8faa77eab8366ba342178f625266f03a0c95eb3beb96e4fd29d29a50cd0e9ed0",
+          "input_bytes": 14694,
+          "input_digest": "8bb28cd9d045f2a44fcffa7d6e88e9c6cc2c33c4f53ff1c2d01ccae270765a91",
           "message_count": 8,
           "roles": {
             "assistant": 3,
@@ -2235,8 +2247,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nBUSINESS SKILL CANDIDATES (load before using their tools):\n[{\"intent\":\"Read the seed trays the signed-in user can see.\",\"loaded\":false,\"read_only\":true,\"skill_id\":\"fixture.trays-query\",\"title\":\"Query seed trays\",\"tools\":[\"query_trays\"]}]",
-          "system_chars": 6285,
-          "system_digest": "sha256:d83c0121d3aad2b478ab224880fbdfd1fed9c449d69d6f9e76fd695fbb61eac0",
+          "system_chars": 6587,
+          "system_digest": "sha256:0ed03774248ef5d12c05b012b4ea3c2ac81fb1328f1ee6963cfbce0f126400e8",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -2255,12 +2267,12 @@
           ]
         },
         {
-          "system_chars": 6285,
-          "system_digest": "sha256:d83c0121d3aad2b478ab224880fbdfd1fed9c449d69d6f9e76fd695fbb61eac0",
+          "system_chars": 6587,
+          "system_digest": "sha256:0ed03774248ef5d12c05b012b4ea3c2ac81fb1328f1ee6963cfbce0f126400e8",
           "tool_results": [
             {
               "name": "load_skill",
-              "text": "BUSINESS SKILL LOADED (playbook; not runtime data):\n{\"instructions\":[\"Call query_trays and trust only its current result.\"],\"intent\":\"Read the seed trays the signed-in user can see.\",\"loaded\":true,\"provenance\":[\"src:fixture@v1:trays.json#trays\"],\"read_only\":true,\"skill_id\":\"fixture.trays-query\",\"title\":\"Query seed trays\",\"tools\":[\"query_trays\"]}"
+              "text": "BUSINESS SKILL LOADED (playbook; not runtime data):\n{\"instructions\":[\"Call query_trays and trust only its current result.\"],\"intent\":\"Read the seed trays the signed-in user can see.\",\"loaded\":true,\"provenance\":[\"src:fixture@v1:trays.json#trays\"],\"read_only\":true,\"skill_id\":\"fixture.trays-query\",\"statement_refs\":[\"skill#1\"],\"title\":\"Query seed trays\",\"tools\":[\"query_trays\"]}\nstatement_refs[i] cites instructions[i]: an answer may use skill_statement with that ref, a concise statement and an exact support span copied from that instruction."
             }
           ],
           "tools_offered": [
@@ -2281,8 +2293,8 @@
           ]
         },
         {
-          "system_chars": 6285,
-          "system_digest": "sha256:d83c0121d3aad2b478ab224880fbdfd1fed9c449d69d6f9e76fd695fbb61eac0",
+          "system_chars": 6587,
+          "system_digest": "sha256:0ed03774248ef5d12c05b012b4ea3c2ac81fb1328f1ee6963cfbce0f126400e8",
           "tool_results": [
             {
               "name": "query_trays",
@@ -2307,8 +2319,8 @@
           ]
         },
         {
-          "system_chars": 6285,
-          "system_digest": "sha256:d83c0121d3aad2b478ab224880fbdfd1fed9c449d69d6f9e76fd695fbb61eac0",
+          "system_chars": 6587,
+          "system_digest": "sha256:0ed03774248ef5d12c05b012b4ea3c2ac81fb1328f1ee6963cfbce0f126400e8",
           "tool_results": [
             {
               "name": "goto",
@@ -2421,8 +2433,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 10059,
-          "input_digest": "3ff2cf17b2062d6baccf3d27e84e7c201ee1579bb30e27706b9a7918c71d68a6",
+          "input_bytes": 10365,
+          "input_digest": "3fe1b2273ee0a3bc636533f9dbbbf561a0670bce0fb363553a614320367b4c2c",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -2445,9 +2457,13 @@
         },
         {
           "event": "business_skill_loaded",
+          "evidence_refs": [
+            "skill#1"
+          ],
           "provenance": [
             "src:fixture@v1:trays.json#create"
           ],
+          "routes": [],
           "run_id": "business_write_approved",
           "seq": 6,
           "skill_id": "fixture.trays-create",
@@ -2468,8 +2484,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 11115,
-          "input_digest": "6b0bb196ce3c0205c8562c0d3f4ccc1f4dd9b0cdcfae457b86d1b86ee923f93e",
+          "input_bytes": 11621,
+          "input_digest": "b24977933c68c78c751abdc48332e904ad218a841a60408251e0f9f717c353c3",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -2593,8 +2609,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 11982,
-          "input_digest": "4f200ce085ead82291122c0539fdce0b09be6b399c25a5d8d9f50a379b2e2119",
+          "input_bytes": 12488,
+          "input_digest": "a740808cddb283350063242401643e8f3130a8c64924b8bdbc2e75506f3ecc8f",
           "message_count": 6,
           "roles": {
             "assistant": 2,
@@ -2689,8 +2705,8 @@
       "model_calls": [
         {
           "opening": "TASK: Create tray Tray B.\n\nWHAT THIS RUN MAY CHANGE: Create exactly one seed tray.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nBUSINESS SKILL CANDIDATES (load before using their tools):\n[{\"intent\":\"Create exactly one seed tray after explicit confirmation.\",\"loaded\":false,\"read_only\":false,\"skill_id\":\"fixture.trays-create\",\"title\":\"Create a seed tray\",\"tools\":[\"query_trays\",\"create_tray\"]}]",
-          "system_chars": 5304,
-          "system_digest": "sha256:7f5a9b4e31482f5e6e362acd766bea072debfd84bda29fc65d88279f1d693ad7",
+          "system_chars": 5606,
+          "system_digest": "sha256:b949cf694dd1ff981b5a369b1a4d0f54f58981201682233db5b9582c2f7fae4e",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -2708,12 +2724,12 @@
           ]
         },
         {
-          "system_chars": 5304,
-          "system_digest": "sha256:7f5a9b4e31482f5e6e362acd766bea072debfd84bda29fc65d88279f1d693ad7",
+          "system_chars": 5606,
+          "system_digest": "sha256:b949cf694dd1ff981b5a369b1a4d0f54f58981201682233db5b9582c2f7fae4e",
           "tool_results": [
             {
               "name": "load_skill",
-              "text": "BUSINESS SKILL LOADED (playbook; not runtime data):\n{\"instructions\":[\"Propose one tray and wait for the user's confirmation.\"],\"intent\":\"Create exactly one seed tray after explicit confirmation.\",\"loaded\":true,\"provenance\":[\"src:fixture@v1:trays.json#create\"],\"read_only\":false,\"skill_id\":\"fixture.trays-create\",\"title\":\"Create a seed tray\",\"tools\":[\"query_trays\",\"create_tray\"]}"
+              "text": "BUSINESS SKILL LOADED (playbook; not runtime data):\n{\"instructions\":[\"Propose one tray and wait for the user's confirmation.\"],\"intent\":\"Create exactly one seed tray after explicit confirmation.\",\"loaded\":true,\"provenance\":[\"src:fixture@v1:trays.json#create\"],\"read_only\":false,\"skill_id\":\"fixture.trays-create\",\"statement_refs\":[\"skill#1\"],\"title\":\"Create a seed tray\",\"tools\":[\"query_trays\",\"create_tray\"]}\nstatement_refs[i] cites instructions[i]: an answer may use skill_statement with that ref, a concise statement and an exact support span copied from that instruction."
             }
           ],
           "tools_offered": [
@@ -2734,8 +2750,8 @@
           ]
         },
         {
-          "system_chars": 5304,
-          "system_digest": "sha256:7f5a9b4e31482f5e6e362acd766bea072debfd84bda29fc65d88279f1d693ad7",
+          "system_chars": 5606,
+          "system_digest": "sha256:b949cf694dd1ff981b5a369b1a4d0f54f58981201682233db5b9582c2f7fae4e",
           "tool_results": [
             {
               "name": "create_tray",
@@ -2848,8 +2864,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 10059,
-          "input_digest": "3ff2cf17b2062d6baccf3d27e84e7c201ee1579bb30e27706b9a7918c71d68a6",
+          "input_bytes": 10365,
+          "input_digest": "3fe1b2273ee0a3bc636533f9dbbbf561a0670bce0fb363553a614320367b4c2c",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -2872,9 +2888,13 @@
         },
         {
           "event": "business_skill_loaded",
+          "evidence_refs": [
+            "skill#1"
+          ],
           "provenance": [
             "src:fixture@v1:trays.json#create"
           ],
+          "routes": [],
           "run_id": "business_write_denied",
           "seq": 6,
           "skill_id": "fixture.trays-create",
@@ -2895,8 +2915,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 11115,
-          "input_digest": "6b0bb196ce3c0205c8562c0d3f4ccc1f4dd9b0cdcfae457b86d1b86ee923f93e",
+          "input_bytes": 11621,
+          "input_digest": "b24977933c68c78c751abdc48332e904ad218a841a60408251e0f9f717c353c3",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -3011,8 +3031,8 @@
       "model_calls": [
         {
           "opening": "TASK: Create tray Tray B.\n\nWHAT THIS RUN MAY CHANGE: Create exactly one seed tray.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nBUSINESS SKILL CANDIDATES (load before using their tools):\n[{\"intent\":\"Create exactly one seed tray after explicit confirmation.\",\"loaded\":false,\"read_only\":false,\"skill_id\":\"fixture.trays-create\",\"title\":\"Create a seed tray\",\"tools\":[\"query_trays\",\"create_tray\"]}]",
-          "system_chars": 5304,
-          "system_digest": "sha256:7f5a9b4e31482f5e6e362acd766bea072debfd84bda29fc65d88279f1d693ad7",
+          "system_chars": 5606,
+          "system_digest": "sha256:b949cf694dd1ff981b5a369b1a4d0f54f58981201682233db5b9582c2f7fae4e",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -3030,12 +3050,12 @@
           ]
         },
         {
-          "system_chars": 5304,
-          "system_digest": "sha256:7f5a9b4e31482f5e6e362acd766bea072debfd84bda29fc65d88279f1d693ad7",
+          "system_chars": 5606,
+          "system_digest": "sha256:b949cf694dd1ff981b5a369b1a4d0f54f58981201682233db5b9582c2f7fae4e",
           "tool_results": [
             {
               "name": "load_skill",
-              "text": "BUSINESS SKILL LOADED (playbook; not runtime data):\n{\"instructions\":[\"Propose one tray and wait for the user's confirmation.\"],\"intent\":\"Create exactly one seed tray after explicit confirmation.\",\"loaded\":true,\"provenance\":[\"src:fixture@v1:trays.json#create\"],\"read_only\":false,\"skill_id\":\"fixture.trays-create\",\"title\":\"Create a seed tray\",\"tools\":[\"query_trays\",\"create_tray\"]}"
+              "text": "BUSINESS SKILL LOADED (playbook; not runtime data):\n{\"instructions\":[\"Propose one tray and wait for the user's confirmation.\"],\"intent\":\"Create exactly one seed tray after explicit confirmation.\",\"loaded\":true,\"provenance\":[\"src:fixture@v1:trays.json#create\"],\"read_only\":false,\"skill_id\":\"fixture.trays-create\",\"statement_refs\":[\"skill#1\"],\"title\":\"Create a seed tray\",\"tools\":[\"query_trays\",\"create_tray\"]}\nstatement_refs[i] cites instructions[i]: an answer may use skill_statement with that ref, a concise statement and an exact support span copied from that instruction."
             }
           ],
           "tools_offered": [
@@ -3144,8 +3164,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 10059,
-          "input_digest": "3ff2cf17b2062d6baccf3d27e84e7c201ee1579bb30e27706b9a7918c71d68a6",
+          "input_bytes": 10365,
+          "input_digest": "3fe1b2273ee0a3bc636533f9dbbbf561a0670bce0fb363553a614320367b4c2c",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -3168,9 +3188,13 @@
         },
         {
           "event": "business_skill_loaded",
+          "evidence_refs": [
+            "skill#1"
+          ],
           "provenance": [
             "src:fixture@v1:trays.json#create"
           ],
+          "routes": [],
           "run_id": "business_write_indeterminate",
           "seq": 6,
           "skill_id": "fixture.trays-create",
@@ -3191,8 +3215,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 11115,
-          "input_digest": "6b0bb196ce3c0205c8562c0d3f4ccc1f4dd9b0cdcfae457b86d1b86ee923f93e",
+          "input_bytes": 11621,
+          "input_digest": "b24977933c68c78c751abdc48332e904ad218a841a60408251e0f9f717c353c3",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -3320,8 +3344,8 @@
       "model_calls": [
         {
           "opening": "TASK: Create tray Tray B.\n\nWHAT THIS RUN MAY CHANGE: Create exactly one seed tray.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nBUSINESS SKILL CANDIDATES (load before using their tools):\n[{\"intent\":\"Create exactly one seed tray after explicit confirmation.\",\"loaded\":false,\"read_only\":false,\"skill_id\":\"fixture.trays-create\",\"title\":\"Create a seed tray\",\"tools\":[\"query_trays\",\"create_tray\"]}]",
-          "system_chars": 5304,
-          "system_digest": "sha256:7f5a9b4e31482f5e6e362acd766bea072debfd84bda29fc65d88279f1d693ad7",
+          "system_chars": 5606,
+          "system_digest": "sha256:b949cf694dd1ff981b5a369b1a4d0f54f58981201682233db5b9582c2f7fae4e",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -3339,12 +3363,12 @@
           ]
         },
         {
-          "system_chars": 5304,
-          "system_digest": "sha256:7f5a9b4e31482f5e6e362acd766bea072debfd84bda29fc65d88279f1d693ad7",
+          "system_chars": 5606,
+          "system_digest": "sha256:b949cf694dd1ff981b5a369b1a4d0f54f58981201682233db5b9582c2f7fae4e",
           "tool_results": [
             {
               "name": "load_skill",
-              "text": "BUSINESS SKILL LOADED (playbook; not runtime data):\n{\"instructions\":[\"Propose one tray and wait for the user's confirmation.\"],\"intent\":\"Create exactly one seed tray after explicit confirmation.\",\"loaded\":true,\"provenance\":[\"src:fixture@v1:trays.json#create\"],\"read_only\":false,\"skill_id\":\"fixture.trays-create\",\"title\":\"Create a seed tray\",\"tools\":[\"query_trays\",\"create_tray\"]}"
+              "text": "BUSINESS SKILL LOADED (playbook; not runtime data):\n{\"instructions\":[\"Propose one tray and wait for the user's confirmation.\"],\"intent\":\"Create exactly one seed tray after explicit confirmation.\",\"loaded\":true,\"provenance\":[\"src:fixture@v1:trays.json#create\"],\"read_only\":false,\"skill_id\":\"fixture.trays-create\",\"statement_refs\":[\"skill#1\"],\"title\":\"Create a seed tray\",\"tools\":[\"query_trays\",\"create_tray\"]}\nstatement_refs[i] cites instructions[i]: an answer may use skill_statement with that ref, a concise statement and an exact support span copied from that instruction."
             }
           ],
           "tools_offered": [
@@ -6434,8 +6458,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 16608,
-          "input_digest": "9a399f508cb761369d41e0f9f550233c4b244f5e64ddc27ef1b15b0966e7d216",
+          "input_bytes": 16625,
+          "input_digest": "11f290b2c9d06f628f852d5d4253a2652e21914a03a598b30b4bce03f9efbbf0",
           "message_count": 4,
           "roles": {
             "assistant": 1,
