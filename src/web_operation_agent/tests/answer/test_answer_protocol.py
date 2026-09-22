@@ -83,8 +83,10 @@ class AnswerWireContract(unittest.TestCase):
             submit(_turn(), _draft("undetermined", "record#1"))
 
     def test_unknown_field_in_selection_is_not_rendered_empty(self):
-        with self.assertRaisesRegex(ConclusionRefused, "not read"):
+        with self.assertRaisesRegex(ConclusionRefused, "not read") as caught:
             submit(_turn(), _draft("selection", "query#1", fields=["phone"]))
+        # And it says what this read does have, so the repair is not another guess.
+        self.assertRegex(str(caught.exception), r"this read has \w+")
 
     def test_wrong_conclusion_type_cannot_relabel_a_query_as_an_aggregate(self):
         with self.assertRaises(ConclusionRefused):

@@ -144,7 +144,14 @@ class Selection:
             for field_name in self.fields:
                 record = cells.get((member, field_name))
                 if record is None or not record.field_was_read:
-                    raise ConclusionRefused(f"{member}.{field_name} was not read")
+                    # Name what was read. A turn that guessed a field spent a repair
+                    # learning only that its guess was wrong, and the next guess was a
+                    # synonym of the same one.
+                    available = sorted({name for _member, name in cells
+                                        if cells[(_member, name)].field_was_read})
+                    raise ConclusionRefused(
+                        f"{member}.{field_name} was not read; this read has "
+                        + (", ".join(available) if available else "no readable fields"))
                 values.append({"value": record.value, "unit": record.unit})
             rows.append(values)
         covers = item.covers_whole_scope and (

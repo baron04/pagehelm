@@ -229,8 +229,9 @@ def submit(turn: TurnEvidence, args: dict) -> dict | None:
             # source reference kept putting its sentence on the data conclusion too, and
             # spent every repair on a message that named only what was wrong.
             field = "statement" if "statement" in entry else "support"
+            article = "an" if kind[:1] in "aeiou" else "a"
             raise ConclusionRefused(
-                f"a {kind} conclusion carries no {field}: the server writes it from "
+                f"{article} {kind} conclusion carries no {field}: the server writes it from "
                 f"{ref}. Remove the {field} field here; only source_excerpt, "
                 "source_history and skill_statement carry one")
         if kind == "field_value" and isinstance(item, RecordEvidence):
