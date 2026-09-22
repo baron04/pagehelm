@@ -423,6 +423,7 @@ class OdooNativeHost:
                 session_id="odoo-" + stable,
                 navigation_mode=bound.descriptor.navigation_mode,
                 sensitive_query_keys=bound.ports.routes.session_handoff_query_keys,
+                page_write_guard=bound.descriptor.page_write_guard,
                 principal=principal).start()
             self._sessions[key] = _ActiveSession(
                 session=session, principal=principal, adapter=adapter,
@@ -443,7 +444,8 @@ class OdooNativeHost:
                 session.grant,
                 page_controller_module=session.page_controller_module,
                 navigation_mode=session.navigation_mode,
-                sensitive_query_keys=session.sensitive_query_keys),
+                sensitive_query_keys=session.sensitive_query_keys,
+                page_write_guard=session.page_write_guard),
         }
 
     def _revoke_actor(self, database: str, actor_id: str, reason: str) -> int:

@@ -21,6 +21,8 @@ export interface RuntimeConfig {
   principalExpiresAt?: number
   sessionExpiresAt?: number
   sensitiveQueryKeys?: string[]
+  /** Same-origin path of the application's page write guard; see `writeGuard.ts`. */
+  pageWriteGuard?: string
   panel?: boolean
   panelModule?: string
 }

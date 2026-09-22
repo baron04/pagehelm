@@ -58,12 +58,20 @@ def _elements(text: str) -> list[tuple[str, str, str]]:
 
 
 class TargetedClicks(ScriptedOdooChat):
-    """Click each (role, name) target in turn from the latest rendered observation."""
+    """Click each (role, name) target in turn from the latest rendered observation.
+
+    Odoo renders a view's controls after the document loads, so a target missing from the
+    latest observation is looked for again after up to `REOBSERVE` fresh observations
+    before it counts as absent.
+    """
+
+    REOBSERVE = 2
 
     def __init__(self, targets, **kwargs):
         super().__init__((), **kwargs)
         self.targets = list(targets)
         self.clicked: list[dict] = []
+        self._reobserved = 0
 
     def complete(self, messages, tools, run_id, **kwargs):
         self.calls += 1
@@ -72,14 +80,20 @@ class TargetedClicks(ScriptedOdooChat):
                        if "BEGIN_UNTRUSTED_PAGE_OBSERVATION" in str(m.get("content"))), "")
         if not self.targets:
             return self._reply("finish", {"done": False, "why": "case complete"})
-        role, name = self.targets.pop(0)
+        role, name = self.targets[0]
         for ref, element_role, element_name in _elements(latest):
             if element_role != role:
                 continue
             if name is None or element_name == name or (
                     name == "" and element_name == ""):
+                self.targets.pop(0)
+                self._reobserved = 0
                 self.clicked.append({"role": role, "name": element_name, "ref": ref})
                 return self._reply("click", {"ref": ref})
+        if self._reobserved < self.REOBSERVE:
+            self._reobserved += 1
+            return self._reply("observe", {})
+        self.targets.pop(0)
         self.clicked.append({"role": role, "name": name, "ref": None})
         self.targets.clear()
         return self._reply("finish", {"done": False, "why": "target absent"})

@@ -327,6 +327,8 @@ class AdapterContract(unittest.TestCase):
             bound = assert_adapter_contract(self, adapter)
         self.assertEqual(bound.descriptor.application_id, APPLICATION_ID)
         self.assertEqual(bound.descriptor.navigation_mode, "spa")
+        # woa_runtime 1.5 makes the session read-only while the Agent acts on the page.
+        self.assertEqual(bound.descriptor.page_write_guard, "/woa/page-guard")
         self.assertEqual(sorted(bound.business_tools.tool_names),
                          ["describe_entity", "discover_entities",
                           "prepare_customer_form", "query_customer_invoices",

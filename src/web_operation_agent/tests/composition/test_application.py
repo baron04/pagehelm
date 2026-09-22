@@ -59,6 +59,17 @@ class ApplicationAdapterTests(unittest.TestCase):
                 **{**adapter.descriptor.to_json(),
                    "page_controller_module": "https://cdn.example/controller.js"})
 
+    def test_descriptor_page_write_guard_is_optional_and_same_origin(self):
+        adapter = _InvoiceAdapter()
+        self.assertNotIn("page_write_guard", adapter.descriptor.to_json())
+        guarded = ApplicationDescriptor(
+            **{**adapter.descriptor.to_json(), "page_write_guard": "/guard"})
+        self.assertEqual(guarded.to_json()["page_write_guard"], "/guard")
+        for invalid in ("guard", "//evil.example/x", "https://ledger.example/guard", 7):
+            with self.subTest(guard=invalid), self.assertRaisesRegex(ValueError, "same-origin"):
+                ApplicationDescriptor(
+                    **{**adapter.descriptor.to_json(), "page_write_guard": invalid})
+
     def test_descriptor_origin_matching_normalizes_host_and_default_port(self):
         descriptor = _InvoiceAdapter().descriptor
         self.assertTrue(descriptor.owns_url("https://LEDGER.EXAMPLE:443/invoices/1"))

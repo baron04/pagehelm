@@ -18,6 +18,7 @@ from typing import Callable, Protocol, cast
 from ..state.store import SQLiteSessionStore
 from ..transport.gateway import EmbeddedGateway
 from ..state.identity import PrincipalContext
+from ..origins import validate_page_write_guard
 from ..privacy import redact_sensitive_assignments, redact_session_handoffs
 from ..execution.product import AgentTurnError
 from ..transport.channel import RemoteSessionChannel, RemoteSessionLimits, SessionGrant
@@ -204,6 +205,7 @@ class LiveProductSession:
                  session_id: str | None = None, sse_wait_s: float = _LONG_POLL_S,
                  navigation_mode: str = "document",
                  sensitive_query_keys: frozenset[str] = frozenset(),
+                 page_write_guard: str = "",
                  principal: PrincipalContext | None = None,
                  session_limits: RemoteSessionLimits | None = None,
                  durable_store: SQLiteSessionStore | None = None,
@@ -247,6 +249,7 @@ class LiveProductSession:
             raise ValueError("navigation_mode must be document or spa")
         self.navigation_mode = navigation_mode
         self.sensitive_query_keys = sensitive_query_keys
+        self.page_write_guard = validate_page_write_guard(page_write_guard)
         try:
             self.runner = runner_factory(self.channel)
         except BaseException:
@@ -264,7 +267,8 @@ class LiveProductSession:
         return self.gateway.bootstrap_script(
             self.grant, page_controller_module=self.page_controller_module,
             navigation_mode=self.navigation_mode,
-            sensitive_query_keys=self.sensitive_query_keys)
+            sensitive_query_keys=self.sensitive_query_keys,
+            page_write_guard=self.page_write_guard)
 
     def start(self) -> "LiveProductSession":
         if self._thread is not None:
@@ -481,6 +485,7 @@ class LiveProductServer:
                        session_id: str | None = None,
                        navigation_mode: str = "document",
                        sensitive_query_keys: frozenset[str] = frozenset(),
+                       page_write_guard: str = "",
                        principal: PrincipalContext | None = None) -> LiveProductSession:
         with self._lock:
             if self._closed:
@@ -505,6 +510,7 @@ class LiveProductServer:
                 session_id=session_id,
                 navigation_mode=navigation_mode,
                 sensitive_query_keys=sensitive_query_keys,
+                page_write_guard=page_write_guard,
                 principal=principal,
                 registry=self.registry,
                 gateway=self.gateway,

@@ -14,6 +14,7 @@ whenever one of them changed.
 """
 from __future__ import annotations
 
+import re
 from urllib.parse import urlsplit
 
 #: Long enough for any real origin, short enough that no caller has to bound it again.
@@ -70,3 +71,18 @@ def origin_of(value: object, *, name: str = "URL") -> str:
     """The canonical origin of an absolute http(s) URL; its path and query are not part of it."""
     return _canonical(value, name=name, allow_path=True,
                       require_secure_unless_loopback=False)
+
+
+#: A same-origin path the Runtime posts `/begin` and `/end` under; see `page_write_guard`.
+PAGE_WRITE_GUARD_PATH = re.compile(r"/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+){0,7}\Z")
+
+
+def validate_page_write_guard(value: object) -> str:
+    """An empty string, or a same-origin absolute path of at most 128 characters."""
+    if value == "":
+        return ""
+    if (not isinstance(value, str) or len(value) > 128
+            or not PAGE_WRITE_GUARD_PATH.fullmatch(value)
+            or any(not segment.strip(".") for segment in value.split("/")[1:])):
+        raise ValueError("page_write_guard must be a same-origin absolute path")
+    return value

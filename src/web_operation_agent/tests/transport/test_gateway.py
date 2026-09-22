@@ -430,6 +430,15 @@ class GatewayTests(unittest.TestCase):
             "assistant": "Operations copilot", "send": "Send",
             "statusReady": "Connected"})
         self.assertEqual(config["sensitiveQueryKeys"], ["handoffkey"])
+        self.assertNotIn("pageWriteGuard", config)
+        guarded = self.gateway.bootstrap_config(
+            self.grant, page_controller_module=module_url, page_write_guard="/woa/page-guard")
+        self.assertEqual(guarded["pageWriteGuard"], "/woa/page-guard")
+        for invalid in ("woa/page-guard", "//evil.example/x", "https://evil.example/x",
+                        "/a?b", "/a/../b", "/" + "x" * 128):
+            with self.subTest(guard=invalid), self.assertRaisesRegex(ValueError, "same-origin"):
+                self.gateway.bootstrap_config(
+                    self.grant, page_controller_module=module_url, page_write_guard=invalid)
         with self.assertRaisesRegex(ValueError, "unknown panel label"):
             self.gateway.bootstrap_config(
                 self.grant, page_controller_module=module_url,

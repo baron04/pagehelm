@@ -47,6 +47,10 @@ from .specs import (ANSWER_LABELS_ZH, APPLICATION_ID, ARCHIVE_CUSTOMER_TOOL,
                     _CUSTOMERS, _MAX_RESPONSE_BYTES, _READ_SKILLS, _WRITE_SKILLS,
                     _packaged_skill, _validated_origin)
 
+#: Served by the woa_runtime addon (1.5 and later): while the Agent acts on the page, every
+#: request of the person's session runs in a read-only transaction and a write is refused.
+PAGE_WRITE_GUARD = "/woa/page-guard"
+
 
 class _OdooIdentityPort:
     required = True
@@ -276,6 +280,8 @@ class OdooApplicationAdapter:
             navigation_mode="spa",
             page_controller_module=self.page_controller_module,
             catalog_sha256=self.business_tools.catalog_sha256,
+            # woa_runtime 1.5: page actions run with this session read-only.
+            page_write_guard=PAGE_WRITE_GUARD,
         )
 
     def source_capability(self, source_root: str | Path | None = None, *,

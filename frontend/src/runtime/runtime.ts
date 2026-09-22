@@ -29,6 +29,7 @@ import {createRedactor, type Redactor} from './redaction'
 import * as results from './results'
 import {clearStored, loadSession, writeStored, type SessionState} from './storage'
 import {SessionClient, sseBatches} from './transport'
+import {closeWriteGuard, openWriteGuard} from './writeGuard'
 import type {ApprovalRequest, PanelConfiguration, PanelState} from '../contract/panel'
 import {WIRE_VERSION, type ActionCommand, type ActionEnvelope, type ActionResultEnvelope,
   type JsonObject, type ObservationEnvelope, type RuntimeConfig} from './types'
@@ -675,6 +676,8 @@ export class EmbeddedWebRuntime {
   }
 
   private _finishTurn(turnId: string): void {
+    const guard = this.config?.pageWriteGuard
+    if (guard) detach('close page write guard', closeWriteGuard(guard))
     this.stored.taskInFlight = false
     this.stored.activeMessageId = ''
     this.stored.cancellationPending = false
@@ -746,6 +749,7 @@ export class EmbeddedWebRuntime {
   async _handleAction(action: ActionEnvelope): Promise<void> {
     if (await this._replayOrRecover(action)) return
     if (await this._rejectIfNotCurrent(action)) return
+    if (await this._rejectWithoutWriteGuard(action)) return
     const before = this.currentObservation
     if (!before) return
     const navigation = this._navigationExpectation(action.command)
@@ -789,6 +793,21 @@ export class EmbeddedWebRuntime {
       return true
     }
     return false
+  }
+
+  /**
+   * An application that names a page write guard gets no page action without the guard
+   * open: the action is refused, before anything is written ahead or claimed, rather than
+   * run on a session that could still change data.
+   */
+  private async _rejectWithoutWriteGuard(action: ActionEnvelope): Promise<boolean> {
+    const path = this.config?.pageWriteGuard
+    if (path === undefined || path === '') return false
+    if (await openWriteGuard(path)) return false
+    await this._reject(action, 'capability_refused',
+      'page_write_guard_unavailable: the application could not make this session read-only, '
+      + 'so the action was not executed.')
+    return true
   }
 
   private async _reject(action: ActionEnvelope, code: string, detail: string): Promise<void> {

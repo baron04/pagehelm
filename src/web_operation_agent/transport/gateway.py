@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from ..origins import origin_of
+from ..origins import origin_of, validate_page_write_guard
 from .panel_view import label_keys, panel_limits
 from .channel import SessionGrant
 from .protocol import RemoteProtocolError
@@ -502,7 +502,8 @@ class EmbeddedGateway:
                          page_controller_module: str,
                          navigation_mode: str = "document",
                          panel_labels: Mapping[str, str] | None = None,
-                         sensitive_query_keys=()) -> dict:
+                         sensitive_query_keys=(),
+                         page_write_guard: str = "") -> dict:
         """Return data for the first-party shell to place in ``window.__WOA_EMBED_CONFIG__``."""
         if not isinstance(page_controller_module, str):
             raise ValueError("page_controller_module must be an absolute http(s) URL")
@@ -534,13 +535,16 @@ class EmbeddedGateway:
         labels = _panel_labels(panel_labels)
         if labels:
             config["panelLabels"] = labels
+        if validate_page_write_guard(page_write_guard):
+            config["pageWriteGuard"] = page_write_guard
         return config
 
     def bootstrap_script(self, grant: SessionGrant, *,
                          page_controller_module: str,
                          navigation_mode: str = "document",
                          panel_labels: Mapping[str, str] | None = None,
-                         sensitive_query_keys=()) -> str:
+                         sensitive_query_keys=(),
+                         page_write_guard: str = "") -> str:
         """Build a harness integration as one ephemeral script: the session, then `assistant.js`.
 
         The returned source contains the session capability and must be injected directly
@@ -553,7 +557,7 @@ class EmbeddedGateway:
         config = self.bootstrap_config(
             grant, page_controller_module=page_controller_module,
             navigation_mode=navigation_mode, panel_labels=panel_labels,
-            sensitive_query_keys=sensitive_query_keys)
+            sensitive_query_keys=sensitive_query_keys, page_write_guard=page_write_guard)
         runtime_url = json.dumps(self.runtime_url)
         allowed_origins = json.dumps(sorted(grant.allowed_origins), separators=(",", ":"))
         safe_config = json.dumps(config, separators=(",", ":")).replace("</", "<\\/")

@@ -736,6 +736,7 @@ def run_demo(config: OdooDemoConfig, *,
         runner_factory=runner_factory,
         navigation_mode=bound.descriptor.navigation_mode,
         sensitive_query_keys=bound.ports.routes.session_handoff_query_keys,
+        page_write_guard=bound.descriptor.page_write_guard,
         principal=principal,
     ).start()
     try:

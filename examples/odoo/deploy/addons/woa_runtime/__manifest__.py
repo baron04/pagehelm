@@ -1,13 +1,15 @@
 {
     "name": "WOA Runtime assets",
-    "version": "1.4",
+    "version": "1.5",
     "category": "Hidden",
     "summary": "Put the assistant on signed-in pages and serve PageController same-origin.",
     "description": (
         "A small local shell keeps the assistant entry visible even when the Agent is "
         "unavailable. `/woa/session-assertion` states who is signed in, and PageController "
         "is served from the application's own origin for the Agent Runtime. The module also "
-        "provides actor-scoped model and action metadata; it never reads business records.\n\n"
+        "provides actor-scoped model and action metadata; it never reads business records. "
+        "While the Agent operates the page, `/woa/page-guard/begin` makes the signed-in "
+        "session read-only, so a page action cannot change data.\n\n"
         "Third-party PageController files are provisioned rather than committed: "
         "`python -m web_operation_agent_odoo.deploy "
         "provision` fetches them from the pinned npm release, checks every digest against "

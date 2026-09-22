@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-from ..origins import normalize_origin
+from ..origins import normalize_origin, validate_page_write_guard
 
 
 APPLICATION_ADAPTER_VERSION = 2
@@ -35,6 +35,12 @@ class ApplicationDescriptor:
     navigation_mode: str
     page_controller_module: str
     catalog_sha256: str
+    #: Where the application makes the signed-in session read-only while the Agent acts on
+    #: the page: the Runtime posts `{"ttl_s": n}` to `<path>/begin` before every page action
+    #: and expects `{"active": true, "expires_at": <epoch seconds>}`, refusing the action
+    #: otherwise, and posts to `<path>/end` when the turn ends. Empty for an application
+    #: without one.
+    page_write_guard: str = ""
 
     def __post_init__(self) -> None:
         if self.schema_version != APPLICATION_ADAPTER_VERSION:
@@ -60,6 +66,7 @@ class ApplicationDescriptor:
         if not isinstance(self.catalog_sha256, str) \
                 or not _SHA256.fullmatch(self.catalog_sha256):
             raise ValueError("catalog_sha256 is invalid")
+        validate_page_write_guard(self.page_write_guard)
         object.__setattr__(self, "display_name", self.display_name.strip())
         object.__setattr__(self, "origin", normalized_origin)
 
@@ -72,6 +79,7 @@ class ApplicationDescriptor:
             "navigation_mode": self.navigation_mode,
             "page_controller_module": self.page_controller_module,
             "catalog_sha256": self.catalog_sha256,
+            **({"page_write_guard": self.page_write_guard} if self.page_write_guard else {}),
         }
 
     def validate_page_controller(self, value: str) -> str:
