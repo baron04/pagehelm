@@ -12,7 +12,7 @@ from urllib.parse import urljoin, urlsplit
 
 from ..answer.evidence import EvidenceUnknown
 from ..transport.browser import TransportError, TurnCancelled
-from .grounding import WRITE_PERMITTED
+from .grounding import WRITE_NONE, WRITE_PERMITTED
 from ..privacy import safe_tool_arguments as _safe
 from ..schemas import (BROWSER_ACTIONS, POTENTIALLY_WRITING_ACTIONS, ActionReceipt,
                        PageObservation)
@@ -314,6 +314,14 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
         # application-specific completion still needs its own postcondition check.
         session._answer_action_receipt = {"kind": "page_interaction", "action": "click",
                                           "url": obs.url}
+    if (receipt.ok and receipt.observation is not None
+            and receipt.observation.epoch > prior_page_epoch
+            and write["state"] == WRITE_NONE and not session.pending_write):
+        # The declared target is checked against every fresh, write-free page, whatever
+        # action produced it, after the action's own receipt is recorded so the target
+        # receipt is the one a finish reports. A write in the same window is settled by
+        # the write path above and the ordinary loop; a page state cannot vouch for a write.
+        session._note_target_reached(obs, step=step, acted=True)
     target_observed = False
     if name == "goto" and isinstance(args.get("url"), str):
         expected = urlsplit(urljoin(receipt.url_before, args["url"]))

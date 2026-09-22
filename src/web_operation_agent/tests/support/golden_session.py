@@ -399,6 +399,23 @@ def page_action_then_finish(tmp: Path) -> Prepared:
     return Prepared(session=session, chat=chat, browser=browser)
 
 
+def declared_target_settles_on_the_page(tmp: Path) -> Prepared:
+    """The model declares the page that completes the request; the server reports the
+    receipt that shows it and offers only finish and set_target, and the finish reports
+    the observed state rather than the model's prose."""
+    trays = fixture_route("glasshouse", "findTrays")
+    chat = ScriptedChat([
+        ("set_target", {"path": trays}),
+        ("goto", {"url": trays}),
+        ("finish", {"done": True, "why": "invented business result"}),
+    ])
+    browser = ScriptedBrowser(links=(("e1", "Seed Trays", trays),))
+    session = _session(tmp, "declared_target_settles_on_the_page", chat=chat, browser=browser,
+                       task=TaskSpec(task_ref="T", prompt="Open the seed tray list.",
+                                     supported_scope="Read the current application only."))
+    return Prepared(session=session, chat=chat, browser=browser)
+
+
 def disabled_action_is_refused_before_dispatch(tmp: Path) -> Prepared:
     return _plain(tmp, "disabled_action_is_refused_before_dispatch", [
         ("click", {"ref": "e1"}),
@@ -765,6 +782,9 @@ SCENARIOS: tuple[Scenario, ...] = (
     Scenario("read_and_finish", "the shortest successful read path", read_and_finish),
     Scenario("page_action_then_finish", "navigation and a wait, then a claim",
              page_action_then_finish),
+    Scenario("declared_target_settles_on_the_page",
+             "a declared page state is reported on the receipt and closed by finish",
+             declared_target_settles_on_the_page),
     Scenario("disabled_action_is_refused_before_dispatch",
              "a server action policy refuses before the browser is asked",
              disabled_action_is_refused_before_dispatch),

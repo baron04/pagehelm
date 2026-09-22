@@ -98,12 +98,39 @@ class FinishHandler:
                       and args.get("done") is False):
                     args = {"outcome": "unable"}
                 if isinstance(args, dict) and args.get("outcome") == "acted":
-                    if (set(args) - {"outcome", "answer"} or self._answer_action_receipt is None
+                    stray = sorted(set(args) - {"outcome", "answer"})
+                    if stray:
+                        # A model that adds `reason` or `why` beside a structured outcome
+                        # is not making a claim the server could render: the fields are
+                        # ignored, as done/why are above. Refusing the whole call here
+                        # cost one paid turn three repairs for a field the refusal never
+                        # named.
+                        self.ledger.append("acted_stray_fields_ignored", step=step,
+                                           fields=stray)
+                        args = {key: value for key, value in args.items()
+                                if key in {"outcome", "answer"}}
+                    if (self._answer_action_receipt is None
                             or self._should_challenge_completion()):
                         raise ValueError("no successful action receipt supports this outcome")
-                    verified = (answer_protocol.submit(self.evidence, {
-                        "outcome": "answered", "answer": args["answer"]}) if "answer" in args else
-                        {"conclusions": (), "coverage": "complete", "prose": "", "lowered_because": ()})
+                    if "answer" in args:
+                        try:
+                            verified = answer_protocol.submit(self.evidence, {
+                                "outcome": "answered", "answer": args["answer"]})
+                        except (ValueError, TypeError, EvidenceUnknown) as exc:
+                            if not self._target_reached:
+                                raise
+                            # At a target checkpoint the action is server-verified and the
+                            # answer is optional. An answer that cites what the turn never
+                            # recorded is dropped rather than sent back for repair; the
+                            # person reads the observed state and nothing the model wrote.
+                            self.ledger.append("acted_answer_dropped", step=step,
+                                               reason=type(exc).__name__,
+                                               detail=str(exc)[:300])
+                            verified = {"conclusions": (), "coverage": "complete",
+                                        "prose": "", "lowered_because": ()}
+                    else:
+                        verified = {"conclusions": (), "coverage": "complete", "prose": "",
+                                    "lowered_because": ()}
                     verified["action"] = self._answer_action_receipt
                 else:
                     verified = answer_protocol.submit(self.evidence, args)
@@ -236,10 +263,13 @@ class FinishHandler:
                           "Continue, or call finish with done=false if you cannot "
                           "complete it.")]
                 return self._resume(turn, messages, obs, successful_business_tools)
-            if done and self.evidence.has_source_evidence():
-                # The source informed a decision, but the user sees only the action
-                # the runtime actually observed. Model prose and source bytes do not
-                # become a claim about the business goal or a new permission.
+            reached_target = (self._answer_action_receipt is not None
+                              and self._answer_action_receipt["kind"] == "target_state")
+            if done and (self.evidence.has_source_evidence() or reached_target):
+                # The source informed a decision, or the server observed the declared
+                # page state; either way the user sees only the action the runtime
+                # actually observed. Model prose and source bytes do not become a claim
+                # about the business goal or a new permission.
                 verified = {"conclusions": (), "coverage": "complete", "prose": "",
                             "lowered_because": (), "action": self._answer_action_receipt}
                 result.verified_answer = verified

@@ -26,7 +26,8 @@ from .page_actions import take_page_action
 from .prompts import (AGENT_SYSTEM, APPLICATION_ENTRY_SYSTEM, BUSINESS_SKILL_SYSTEM,
                       CAPABILITY_SYSTEM, CLARIFICATION_SYSTEM, CONVERSATION_SYSTEM,
                       FORM_SYSTEM, REACT_SOURCE_SYSTEM, SCOPE_FIRST_SYSTEM, SKILL_SYSTEM,
-                      SOURCE_AFFORDANCE_SYSTEM, _assistant_call, _tool_result, _trim)
+                      SOURCE_AFFORDANCE_SYSTEM, TARGET_SYSTEM, _assistant_call,
+                      _tool_result, _trim)
 from .runstate import RunResult, _Next, _Turn
 
 
@@ -61,6 +62,8 @@ def named_tools(session):
         available["compute"] = session._tool_compute
     if session.allow_clarification:
         available["ask_user"] = partial(ask_user_tool, session)
+    if session.target_settlement_available():
+        available["set_target"] = session._tool_set_target
     available["finish"] = session._tool_finish
     for tool in (session.business_tools.tool_names if session.business_tools is not None else ()):
         available[tool] = partial(business_tool, session)
@@ -93,6 +96,8 @@ def run_loop(session) -> RunResult:
                        elements=len(obs.elements), digest=obs.content_digest)
 
     system = AGENT_SYSTEM
+    if session.target_settlement_available():
+        system += "\n" + TARGET_SYSTEM
     if session.page_answer_evidence:
         system += "\n" + page_answer.SYSTEM
     if session.runtime_source:
@@ -138,7 +143,7 @@ def run_loop(session) -> RunResult:
             session._page_answer_digest = ""
         if (session._answer_action_receipt is not None
                 and session._answer_action_receipt["kind"] in
-                    {"navigation", "page_interaction"}
+                    {"navigation", "page_interaction", "target_state"}
                 and session._answer_action_receipt["url"] != obs.url):
             session._answer_action_receipt = None
         if (session._answer_action_receipt is not None
@@ -397,6 +402,19 @@ def run_loop(session) -> RunResult:
                 call, "This turn is finalizing an observed action. No more tools may "
                       "run. Submit finish using existing evidence, or use "
                       "outcome=unable.")]
+            continue
+
+        if (session._target_reached
+                and name not in {"finish", "set_target", "ask_user", "withdraw_request"}):
+            # The checkpoint offers two tools; a model that reaches for a third is told
+            # so without a dispatch. The step budget bounds how often it may be told.
+            session.ledger.append("target_checkpoint_tool_refused", step=step, tool=name,
+                                  dispatched=False, side_effect_possible=False)
+            messages += [_assistant_call(call), _tool_result(
+                call, "TARGET REACHED: the page already shows the declared state. Only "
+                      "finish and set_target are available. Call finish to report the "
+                      "action if the request is complete, or set_target with the next "
+                      "state if it is not.")]
             continue
 
         handled = handle_named_tool(session, turn, call, name, args)

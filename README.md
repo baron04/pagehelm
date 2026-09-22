@@ -58,6 +58,17 @@ agent.
   receipt is not proof that a business goal was completed. After an observed action,
   answer-format repair cannot dispatch another page action. Source-assisted page loops
   that revisit the same facts and states stop without claiming completion.
+- For a request that names a page state -- open a screen, switch a tab, arrive at a record --
+  the Agent declares that state up front with `set_target`: an exact same-application path
+  and/or the accessible names of controls that must show as selected. After every successful
+  write-free page action the server compares the fresh observation with the declaration; when
+  it matches, the server reports the reached state and offers only `finish` and `set_target`,
+  so the model either reports the action or declares the next state instead of investigating
+  a page it has already reached. The sentence the user reads is composed from the observed
+  page, never from model prose. A declared target grants no permission: clicks and navigation
+  are routed, confirmed, and settled exactly as before, and a write in the same window is
+  settled by the write path instead. The server never ends the turn on a target by itself,
+  because it can verify a page state but not that the state is the whole request.
 - Writes are disabled by default. Core turn configuration initially disables every browser
   action that can initiate an application write, including navigation; an adapter must
   explicitly opt into its reviewed subset. An enabled write binds its exact effect and

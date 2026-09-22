@@ -44,7 +44,10 @@ class TheToolSurfaceFollowsTheActionPolicy(unittest.TestCase):
         self.assertIn("goto", offered)
 
     def test_no_policy_leaves_every_tool_offered(self):
-        self.assertEqual(_names(self._session(()).tool_schemas()), _names(TOOL_SCHEMAS))
+        # `set_target` is a server-side declaration, not a browser action, and it is
+        # offered whenever the turn can act on a page; the policy never disables it.
+        self.assertEqual(_names(self._session(()).tool_schemas()),
+                         _names(TOOL_SCHEMAS) | {"set_target"})
 
     def test_a_run_with_every_page_action_disabled_can_still_observe_and_finish(self):
         offered = _names(self._session(

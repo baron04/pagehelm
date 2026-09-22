@@ -63,6 +63,8 @@ from .context import (RENDER_ELEMENTS, SessionContext, _PLAN_MARK,
 from .lifecycle import SessionLifecycle
 from .runstate import (CAPABILITY_GAP_TERMINAL, LabApparatus, NO_LAB, RunResult,
                        TaskSpec, _Next, _Turn)
+from .target import (MAX_TARGET_DECLARATIONS, TargetState, describe_target, parse_target,
+                     unmet_conditions)
 from ..business.writes import PRE_DISPATCH_ERRORS, WatchState, WriteWatch
 from .prompts import (AGENT_SYSTEM, SCOPE_FIRST_SYSTEM, TOOL_SCHEMAS, _CAPABILITY_QUESTION,
                       _NAVIGATION_EXTRA_GOAL, _NAVIGATION_ONLY, _PLAN_PREAMBLE,
@@ -541,6 +543,13 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         #: Source-contract scopes declared by the Adapter and observed on the entry page.
         #: Empty until `observe_entry()` has run, which is why planning happens after it.
         self.served_webapps: set[str] = set()
+        #: The page state the model declared as completing the request, if it has. The
+        #: server ends the turn when a fresh page shows it; see `execution.target`.
+        self._target: TargetState | None = None
+        self._target_declarations = 0
+        #: A fresh page has shown the declared target and the model has not yet said
+        #: whether that completes the request. Only `finish` and `set_target` are offered.
+        self._target_reached = False
         self._tool_surface = ToolSurface(self)
 
     # -- phases ------------------------------------------------------------------------
@@ -550,6 +559,79 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
             return run_loop(self)
         finally:
             self._writes.end_control()
+
+    # -- declared target state -----------------------------------------------------------
+    def target_settlement_available(self) -> bool:
+        """Whether this turn may declare a page state for the server to settle on.
+
+        Not while the turn is finalising an answer, not for the capability question, and
+        not for a request that matched a typed mutation: that request ends on the write's
+        own receipt, and a page state declared beside it would let a navigation stand in
+        for the change the person asked for.
+        """
+        return (not self._finalizing and not self._capability_question
+                and not self._explicit_mutation_intent)
+
+    def _tool_set_target(self, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
+        """Record what the model says completes the request; note at once if the page shows it."""
+        if self._target_declarations >= MAX_TARGET_DECLARATIONS:
+            self.ledger.append("target_state_refused", step=turn.step,
+                               reason="declaration_limit", limit=MAX_TARGET_DECLARATIONS)
+            return self._reply(turn, call,
+                               f"TARGET REFUSED: a turn may declare its target at most "
+                               f"{MAX_TARGET_DECLARATIONS} times. Act on the target you "
+                               "have, or finish.")
+        try:
+            target = parse_target(args)
+        except ValueError as exc:
+            self.ledger.append("target_state_refused", step=turn.step,
+                               reason="invalid", detail=str(exc)[:300])
+            return self._reply(turn, call, f"TARGET REFUSED: {exc}.")
+        self._target_declarations += 1
+        self._target = target
+        # A new declaration reopens the turn: the earlier checkpoint, and the receipt that
+        # said the earlier state was reached, no longer describe what the model is after.
+        self._target_reached = False
+        if (self._answer_action_receipt is not None
+                and self._answer_action_receipt["kind"] == "target_state"):
+            self._answer_action_receipt = None
+        unmet = unmet_conditions(target, turn.obs)
+        self.ledger.append("target_state_declared", step=turn.step, target=target.to_json(),
+                           declaration=self._target_declarations,
+                           unmet=list(unmet), page_url=turn.obs.url,
+                           page_epoch=turn.obs.epoch)
+        if not unmet:
+            self._note_target_reached(turn.obs, step=turn.step, acted=False)
+            return self._reply(turn, call, self._render_target(turn.obs))
+        return self._reply(turn, call,
+                           "TARGET SET: " + describe_target(target)
+                           + ". Act towards it now; the server reports the moment a fresh "
+                             "page observation shows it."
+                           + "\nStill unmet: " + "; ".join(unmet))
+
+    def _note_target_reached(self, obs: PageObservation, *, step: int, acted: bool) -> bool:
+        """Record that a fresh page shows the declared target, and open the checkpoint.
+
+        Called with the fresh observation of a successful, write-free page action, or at
+        declaration time when the page already shows the target. The server does not end
+        the turn here: it can verify the page state but not that the state is the whole of
+        the request, and the paid multistep gate showed a model declaring only the first
+        half of one. From this point the model may only finish or declare the next target;
+        the sentence the person then reads is composed from this observation, never from
+        model prose.
+        """
+        if self._target is None or unmet_conditions(self._target, obs):
+            return False
+        self._target_reached = True
+        self._answer_action_receipt = {
+            "kind": "target_state", "url": obs.url,
+            "selected": list(self._target.selected),
+            "acted": bool(acted), "page_actions": self.page_actions}
+        self.ledger.append("target_state_reached", step=step,
+                           target=self._target.to_json(), url=obs.url,
+                           page_epoch=obs.epoch, acted=bool(acted),
+                           page_actions=self.page_actions, side_effect_possible=False)
+        return True
 
     def _tool_withdraw_request(self, turn: "_Turn", call: dict, name: str,
                                args: dict) -> "_Next":

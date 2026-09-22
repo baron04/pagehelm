@@ -14,6 +14,7 @@ from ..schemas import (MAX_OBSERVATION_ELEMENTS, POTENTIALLY_WRITING_ACTIONS,
 from . import knowledge_tools
 from .business_tools import render_business_skills
 from .prompts import _PLAN_PREAMBLE
+from .target import describe_target, unmet_conditions
 from .turn_answer import AnswerState
 
 
@@ -230,6 +231,9 @@ class SessionContext:
         action = self._answers.render_action()
         if action:
             body.append(action)
+        target = self._render_target(obs)
+        if target:
+            body.append(target)
         body.append("CURRENT PAGE:\n" + _render_observation(obs))
         affordances = self._deliver_source_affordances(
             obs, query=affordance_query, reason="lookup" if affordance_query else "observation")
@@ -250,6 +254,23 @@ class SessionContext:
     def _mutation_dispatch_count(self) -> int:
         return sum(1 for event in self.ledger.events
                    if event.get("event") == "business_mutation_execution_started")
+
+    def _render_target(self, obs: PageObservation) -> str:
+        """Keep the declared target in view: context trimming drops the call that set it."""
+        if self._target is None:
+            return ""
+        if self._target_reached:
+            return ("TARGET REACHED (server-observed): " + describe_target(self._target)
+                    + ". Only finish and set_target are available now. If this completes "
+                      "the user's request, call finish with {\"outcome\": \"acted\"} and "
+                      "nothing else; the server reports the observed state. Add an answer "
+                      "only if the user also asked a question, citing recorded evidence "
+                      "refs, never element refs. If the request asks for more, call "
+                      "set_target with the next state.")
+        unmet = unmet_conditions(self._target, obs)
+        return ("TARGET (declared): " + describe_target(self._target)
+                + ("\nStill unmet: " + "; ".join(unmet) if unmet
+                   else "\nAll conditions are shown; a fresh page action confirms them."))
 
     def _render_task_skills(self) -> str:
         if not self._task_skills:
@@ -309,6 +330,11 @@ def _render_observation(obs: PageObservation, max_elements: int = RENDER_ELEMENT
                 if isinstance(v, list):
                     v = ",".join(v[:12])
                 bits.append(f"{k}={v}")
+        # The accessible state a tab or option declares. Without it the model could not
+        # tell which tab was current and clicked the one it had already reached.
+        for k in ("aria-selected", "aria-checked"):
+            if str(e.attrs.get(k, "")).strip().lower() == "true":
+                bits.append(f"{k}=true")
         lines.append("  " + " ".join(str(b) for b in bits))
     hidden = max(0, len(obs.elements) - max_elements)
     if hidden or obs.truncated:

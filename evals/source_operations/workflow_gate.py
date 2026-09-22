@@ -87,6 +87,12 @@ def _run(output: Path, case: dict, arm: str, model_env: Path) -> dict:
               (Path(summary["output"]) / "audit.jsonl").read_text().splitlines()]
     lookups = [event for event in events
                if event.get("event") == "runtime_source_retrieved"]
+    targets = [event for event in events
+               if event.get("event") == "target_state_declared"]
+    reached = any(event.get("event") == "target_state_reached" for event in events)
+    tools_after_target = [event.get("tool") for event in events
+                          if event.get("event") == "tool_call"
+                          and targets and event.get("step", 0) > targets[0]["step"]]
     rank = next((i for lookup in lookups for i, line in
                  enumerate(lookup.get("evidence", [])[:5], 1)
                  if f"{desk.title()} desk" in line), None)
@@ -106,6 +112,9 @@ def _run(output: Path, case: dict, arm: str, model_env: Path) -> dict:
         "steps": turn["steps"], "page_actions": turn["page_actions"],
         "source_lookups": len(lookups), "target_rank": rank,
         "source_queries": [lookup.get("query") for lookup in lookups],
+        "targets_declared": [event.get("target") for event in targets],
+        "target_reached": reached,
+        "tools_after_first_target": tools_after_target,
         "writes": writes, "created": created,
         "wall_s": round(time.monotonic() - started, 3),
         "provider_calls": usage.get("provider_calls", 0),

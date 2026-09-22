@@ -13,7 +13,7 @@ from .knowledge_tools import capability_check_available
 from .prompts import (APPLICATION_ENTRY_TOOL, ASK_USER_TOOL, CAPABILITY_TOOL,
                       LOAD_SKILL_TOOL, SOURCE_CANDIDATE_TOOL, SOURCE_NAV_TOOL,
                       SOURCE_TOOL, SOURCE_HISTORY_TOOL, SKILL_APP_TOOL, SKILL_ROUTE_TOOL,
-                      TOOL_SCHEMAS,
+                      TARGET_TOOL, TOOL_SCHEMAS,
                       WITHDRAW_TOOL, PREFILL_FORM_TOOL)
 
 
@@ -44,6 +44,8 @@ class ToolSurface:
             finish = answer_protocol.finish_answer_tool(source=True)
             tools = [finish if tool["function"]["name"] == "finish" else tool
                      for tool in tools]
+        if session.target_settlement_available():
+            tools += [TARGET_TOOL]
         if session.allow_clarification:
             tools += [ASK_USER_TOOL]
         if capability_check_available(session):
@@ -69,4 +71,10 @@ class ToolSurface:
             tools += list(FORM_TOOL_SCHEMAS)
         if session.allow_form_prefill and session._form_draft is not None:
             tools += [PREFILL_FORM_TOOL]
+        if session._target_reached:
+            # The page shows the declared state. The one open question is the model's:
+            # is the request complete, or is there a next state? Nothing else is offered,
+            # so the turn cannot drift back into investigating a page it has reached.
+            tools = [tool for tool in tools if tool["function"]["name"] in
+                     {"finish", "set_target", "ask_user", "withdraw_request"}]
         return tools

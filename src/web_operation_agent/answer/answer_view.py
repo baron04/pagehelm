@@ -158,6 +158,8 @@ def render_payload(payload: dict, *, user_text: str, max_chars: int) -> str:
         elif action["kind"] == "page_interaction":
             action_text = ("已操作当前页面。" if _language(user_text) == "zh"
                            else "Interacted with the current page.")
+        elif action["kind"] == "target_state":
+            action_text = _target_state_text(action, _language(user_text) == "zh")
         else:
             label = "已完成已批准的操作" if _language(user_text) == "zh" else "Completed the approved action"
             action_text = (f"{label}：{_literal(action['effect'])}\n" +
@@ -169,6 +171,20 @@ def render_payload(payload: dict, *, user_text: str, max_chars: int) -> str:
     return render(VerifiedAnswer(**data), user_text=user_text,
                   max_chars=max_chars, presentation=presentation, action_text=action_text,
                   labels=labels, refused_reads=refused_reads)
+
+
+def _target_state_text(action: dict, chinese: bool) -> str:
+    """What the page was observed to show, and nothing about the business goal behind it."""
+    selected = "、".join(_literal(name) for name in action.get("selected", ()))
+    if action.get("acted"):
+        head = ("已到达请求的页面状态" if chinese else "Reached the requested page state")
+    else:
+        head = ("当前页面已经处于请求的状态" if chinese
+                else "The page is already in the requested state")
+    lines = [f"{head}{'：' if chinese else ': '}{_literal(action['url'])}"]
+    if selected:
+        lines.append(("已选中：" if chinese else "Selected: ") + selected)
+    return "\n".join(lines)
 
 
 def _literal(value: object) -> str:

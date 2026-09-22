@@ -269,6 +269,28 @@ LOAD_SKILL_TOOL = {"type": "function", "function": {
         "skill_id": {"type": "string"}},
         "required": ["skill_id"], "additionalProperties": False}}}
 
+TARGET_TOOL = {"type": "function", "function": {
+    "name": "set_target",
+    "description": (
+        "Declare the page state that completes the user's request before acting on it: "
+        "the exact same-application path to arrive at, the visible control names that must "
+        "show as selected (a tab, an option), or both. Declare every condition the request "
+        "names: a request to open a page and then switch a tab has both a path and a "
+        "selected control. When a fresh page shows the declared state the server says so, "
+        "and only finish or a further set_target is offered. Declaring a target grants no "
+        "permission; clicks and navigation are checked as before."),
+    "parameters": {"type": "object", "additionalProperties": False,
+                   "properties": {
+                       "path": {"type": "string", "maxLength": 500,
+                                "description": ("exact same-application path, optionally "
+                                                "with its query, e.g. /orders/42")},
+                       "selected": {"type": "array", "maxItems": 4,
+                                    "items": {"type": "string", "minLength": 1,
+                                              "maxLength": 120},
+                                    "description": ("names of controls that must show as "
+                                                    "selected or checked, exactly as the "
+                                                    "page observation names them")}}}}}
+
 PREFILL_FORM_TOOL = {"type": "function", "function": {
     "name": "prefill_form",
     "description": "Apply the current application-issued transient form draft. It accepts "
@@ -307,6 +329,20 @@ You may use open_source_route only for a view-only request returned by lookup_so
 server checks it before the browser navigates. You can query source even if the initial
 contract has been withdrawn. Avoid repeating a query
 that supplied no new information. Do not regenerate a whole route merely because you acted.
+"""
+
+TARGET_SYSTEM = """\
+When the request is to reach a page state -- open a screen, switch to a tab, select a
+control, arrive at a record -- call set_target first with the complete state that finishes
+it: the exact path (an href on the current page, a route a typed result returned, or a
+cited source route) and/or the names of the controls that must be selected. A request with
+two parts, such as open a desk and then its Terms tab, is declared with both parts. Then act.
+The server reports TARGET REACHED as soon as a fresh page shows the declared state; at that
+point only finish and set_target are offered. Call finish to report the action if the request
+is complete, or set_target with the next state if it is not. Do not observe or query source
+to confirm a state the server has already reported. When a source fact or typed result
+decides between visible links, declare the target it names, then click or goto that link.
+A target is not a permission and does not change which actions are allowed.
 """
 
 FORM_SYSTEM = """\
