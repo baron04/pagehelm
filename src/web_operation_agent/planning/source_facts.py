@@ -34,7 +34,7 @@ this that these those it its their they them we our you your he she his her him 
 must should can could may might will would shall do does did done have has had not no
 what which who whom when where why how there here then than so such all any some each
 """.split())
-_WORD = re.compile(r"[A-Za-z][A-Za-z0-9]*")
+_WORD = re.compile(r"[A-Za-z][A-Za-z0-9]*|[\u3400-\u9fff]+")
 _CAMEL = re.compile(r"[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[a-z0-9]+")
 _MAX_LINE_CHARS = 400
 _K1, _B = 1.2, 0.75
@@ -52,9 +52,18 @@ def _stem(word: str) -> str:
 
 
 def terms(text: str) -> list[str]:
-    """Split snake_case and camelCase into the words a reader would use."""
+    """Split code identifiers and overlapping Han pairs without a language model.
+
+    The pairs make labels and comments searchable in their own language. They do not
+    translate a Chinese question into English code identifiers.
+    """
     out = []
     for word in _WORD.findall(text or ""):
+        if "\u3400" <= word[0] <= "\u9fff":
+            out.extend(word[i:i + 2] for i in range(len(word) - 1))
+            if len(word) == 1:
+                out.append(word)
+            continue
         for part in _CAMEL.findall(word):
             lowered = part.lower()
             if len(lowered) >= 2 and lowered not in _STOPWORDS:

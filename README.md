@@ -206,6 +206,9 @@ source compilation, fixture provisioning, and qualification.
   authorization mapping, and application-specific postcondition checks.
 - Browser automation cannot provide database transactions or rollback. Uncertain writes need
   application reads and an explicit operator decision.
+- Local source search can match Han-language labels and comments, but does not translate a
+  Chinese business question into English code identifiers. Cross-language recall still
+  depends on the Agent choosing suitable source terms and has not been broadly qualified.
 - Browser and accessibility coverage is strongest on Chromium; other engines and screen
   readers are not comprehensively qualified.
 

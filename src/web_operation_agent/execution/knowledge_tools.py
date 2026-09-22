@@ -16,6 +16,7 @@ from ..answer.evidence import (CapabilityEvidence, Origin, SourceEvidence,
                                SourceHistoryEvidence)
 from ..transport.browser import TransportError
 from ..planning.retrieval import EvidenceBundle
+from ..planning.source_facts import terms
 from ..privacy import redact_sensitive_assignments
 from ..schemas import BROWSER_ACTIONS, PageObservation, digest
 from .prompts import CLARIFICATION_CHOICE_LIMIT, _assistant_call, _tool_result
@@ -137,10 +138,14 @@ def lookup_source_tool(session, turn: "_Turn", call: dict, name: str, args: dict
     if receipt.observation is not None:
         turn.obs = receipt.observation
     note = session._ground(turn.obs, receipt, write["state"], write["refused_requests"])
+    empty_note = (
+        "No searchable source terms in the query. Try a concrete label, identifier, or "
+        "source phrase. Do not invent an answer."
+        if not terms(query) else "No matching source evidence. Do not invent an answer."
+    )
     return session._reply(turn, call,
                        "SOURCE EVIDENCE (prior; current page wins):\n" +
-                       (bundle.render()
-                        or "No matching source evidence. Do not invent an answer.") +
+                       (bundle.render() or empty_note) +
                        "\n\n" + session._render(turn.obs, receipt, note, write,
                                               affordance_query=query))
 
