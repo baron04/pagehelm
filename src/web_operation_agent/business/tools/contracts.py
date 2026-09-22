@@ -26,6 +26,64 @@ _SENSITIVE_KEY = re.compile(
     r"(?:password|passwd|pwd|secret|token|api[_-]?key|authorization)", re.I)
 _MAX_RESULT_BYTES = 64 * 1024
 _DATA_CLASS = re.compile(r"^[a-z][a-z0-9_.-]{1,63}$")
+_ENTITY_CLASS = re.compile(r"^[a-z][a-z0-9_.]{1,63}$")
+
+#: What a business tool may do to one entity class. A deployment's policy is written in
+#: this vocabulary rather than against tool names, so it keeps meaning when an application
+#: renames a tool, and an application that invents an operation is refused rather than
+#: silently classified as something milder.
+TOOL_OPERATIONS = frozenset({
+    "read", "create", "update", "archive", "delete", "state_change", "issue_document",
+})
+
+
+@dataclass(frozen=True, slots=True)
+class ToolOperation:
+    """The entity a tool acts on and what it does to it."""
+
+    entity: str
+    operation: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.entity, str) or not _ENTITY_CLASS.fullmatch(self.entity):
+            raise ValueError("tool operation entity is invalid")
+        if self.operation not in TOOL_OPERATIONS:
+            raise ValueError(f"tool operation must be one of {sorted(TOOL_OPERATIONS)}")
+
+    @property
+    def reads_only(self) -> bool:
+        return self.operation == "read"
+
+
+@dataclass(frozen=True, slots=True)
+class ForbiddenOperation:
+    """An effect class this deployment refuses to install, whatever a Skill declares.
+
+    `entity` is one entity class or `*` for every one. The rule is checked when the catalog
+    is built, so a forbidden capability cannot reach a session at all -- it is not a
+    run-time refusal the model could retry against.
+    """
+
+    operation: str
+    entity: str = "*"
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        if self.operation not in TOOL_OPERATIONS:
+            raise ValueError(f"forbidden operation must be one of {sorted(TOOL_OPERATIONS)}")
+        if self.entity != "*" and not (
+                isinstance(self.entity, str) and _ENTITY_CLASS.fullmatch(self.entity)):
+            raise ValueError("forbidden operation entity is invalid")
+        if not isinstance(self.reason, str) or len(self.reason) > 200:
+            raise ValueError("forbidden operation reason must be short text")
+
+    def matches(self, operation: ToolOperation) -> bool:
+        return (self.operation == operation.operation
+                and self.entity in {"*", operation.entity})
+
+    def __str__(self) -> str:
+        where = "any entity" if self.entity == "*" else self.entity
+        return f"{self.operation} on {where}" + (f" ({self.reason})" if self.reason else "")
 _FORM_FIELD = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,79}$")
 
 

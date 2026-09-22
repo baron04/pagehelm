@@ -24,7 +24,8 @@ from .catalog import BusinessSkillCatalog
 from .contracts import (_DATA_CLASS, _TOOL_NAME, BusinessDataClassifier,
                         BusinessMutationProposal, BusinessMutationSpec,
                         BusinessPostconditionVerifier, BusinessRouteValidator,
-                        BusinessToolExecutor, BusinessToolResult, MutationPostcondition)
+                        BusinessToolExecutor, BusinessToolResult, ForbiddenOperation,
+                        MutationPostcondition, ToolOperation)
 from .skills import BusinessSkill, BusinessSkillSelection, _answer_labels
 
 
@@ -45,6 +46,8 @@ class BusinessToolRuntime:
                  route_skill_hints: tuple[tuple[str, str], ...] = (),
                  max_pending_mutations: int = 1_000,
                  withheld_skills: tuple[BusinessSkill, ...] = (),
+                 operations: dict[str, ToolOperation] | None = None,
+                 forbidden_operations: tuple[ForbiddenOperation, ...] = (),
                  answer_labels: dict[str, dict[str, str]] | None = None):
         skill_ids = [skill.skill_id for skill in skills]
         if len(skill_ids) != len(set(skill_ids)):
@@ -123,6 +126,9 @@ class BusinessToolRuntime:
                     or getattr(postcondition_verifier, "supported_tools", None) != write_tools):
                 raise TypeError(
                     "postcondition_verifier must verify every mutation tool")
+        self._operations = self._validated_operations(
+            operations, forbidden_operations, schemas, effects)
+        self._forbidden_operations = tuple(forbidden_operations)
         self._data_classifier = data_classifier
         self._postcondition_verifier = postcondition_verifier
         if route_validator is not None and not isinstance(
@@ -227,6 +233,45 @@ class BusinessToolRuntime:
         """Every Skill this runtime can load, in catalog order."""
         return tuple(self._skills.values())
 
+    @staticmethod
+    def _validated_operations(operations, forbidden, schemas, effects) -> dict:
+        """Classify every tool by entity and operation, and refuse a forbidden capability.
+
+        The check is here rather than at dispatch because a capability this deployment
+        forbids should not exist in a session at all: a Skill that declares one refuses the
+        catalog, with the rule and the tool named, instead of failing the one turn that
+        happens to call it.
+        """
+        if not isinstance(forbidden, tuple) or any(
+                not isinstance(rule, ForbiddenOperation) for rule in forbidden):
+            raise TypeError("forbidden_operations must be ForbiddenOperation values")
+        if operations is None:
+            if forbidden:
+                raise ValueError(
+                    "forbidden operations require an entity and operation for every tool")
+            return {}
+        if (not isinstance(operations, dict)
+                or any(not isinstance(value, ToolOperation) for value in operations.values())):
+            raise TypeError("operations must map every tool to a ToolOperation")
+        if set(operations) != set(schemas):
+            raise ValueError("operations must classify every business tool")
+        for name, operation in operations.items():
+            if operation.reads_only != (effects[name] == "read"):
+                raise ValueError(
+                    f"business tool {name} is declared {effects[name]} but classified "
+                    f"{operation.operation}")
+            for rule in forbidden:
+                if rule.matches(operation):
+                    raise ValueError(
+                        f"business tool {name} performs {rule}, which this deployment "
+                        "forbids")
+        return dict(operations)
+
+    @property
+    def operations(self) -> dict:
+        """What each tool does, by entity and operation; empty when none was declared."""
+        return dict(self._operations)
+
     def _classify_result(self, name: str, result: BusinessToolResult) -> BusinessToolResult:
         if self._route_validator is not None:
             try:
@@ -235,6 +280,13 @@ class BusinessToolRuntime:
             except Exception as exc:
                 raise BusinessToolContractError(
                     "application returned a route outside its adapter contract") from exc
+        operation = self._operations.get(name)
+        if operation is not None:
+            # The server's own words for what this call did, beside whatever the
+            # application chose to report about itself.
+            result = replace(result, audit={**result.audit,
+                                            "server_entity": operation.entity,
+                                            "server_operation": operation.operation})
         if self._data_classifier is None:
             return result
         try:

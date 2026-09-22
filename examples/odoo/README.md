@@ -187,6 +187,19 @@ What none of this fixes: when the workflow itself changes, the instructions are 
 by a person. No retrieval scheme removes that, because what needs reviewing is judgement
 rather than fact.
 
+### Which Skills stay, and why (2026-09-23)
+
+Phase 8 asked whether deployed source removes the need for hand-written Skills. It does not remove these, and the verdict is per Skill rather than for the catalog as a whole. Every Skill below names a typed tool: a tool the model may only call through a Skill that declares it, so a Skill is how a capability is reachable at all, not merely where a procedure is written.
+
+| Skill | Verdict | Why |
+|---|---|---|
+| `customers-query`, `products-query`, `quotations-query`, `sale-orders-query`, `customer-invoices-query` | Keep | Each is the only way to reach its typed read, and each carries the scope its answers are true of. The quotations one also carries organizational semantics no source states: this deployment counts only draft orders as quotations, and that is the one task the four-arm run's Skill arm won outright. |
+| `runtime-records-query` | Keep | The generic entity read for everything without a typed collection. Three tool schemas serve every entity, so this is what keeps the surface from growing with the application. |
+| `customers-draft`, `customers-edit` | Keep | Form preparation, read-only. They hand the person a filled form to save themselves. |
+| `customers-create`, `customers-archive`, `sale-orders-confirm`, `sale-orders-invoice` | Keep | Writes. Each binds one effect to one confirmed proposal, and the server classifies them as create, archive, state change and document issue. Source can describe these operations; it cannot authorize one. |
+
+Nothing here is removed on the strength of "source could derive it". What a Skill contributes that source and the runtime descriptor do not is organizational: which records count, which scope an answer is true of, and which effect a person is being asked to authorize. Removing instruction text is a separate question from removing a Skill, and either needs the frozen P7.4 regression to run unchanged first.
+
 ## Tools
 
 | Tool | Model | Scope | Route |

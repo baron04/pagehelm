@@ -329,6 +329,15 @@ class AdapterContract(unittest.TestCase):
         self.assertEqual(bound.descriptor.navigation_mode, "spa")
         # woa_runtime 1.5 makes the session read-only while the Agent acts on the page.
         self.assertEqual(bound.descriptor.page_write_guard, "/woa/page-guard")
+        # Every tool says which entity it acts on and what it does to it, and this
+        # deployment installs no capability that deletes anything.
+        operations = bound.business_tools.operations
+        self.assertEqual(set(operations), set(bound.business_tools.tool_names))
+        self.assertEqual({operation.operation for operation in operations.values()},
+                         {"read"})
+        self.assertEqual({operation.entity for operation in operations.values()},
+                         {"customer", "customer_invoice", "product", "sales_order",
+                          "runtime_record"})
         self.assertEqual(sorted(bound.business_tools.tool_names),
                          ["describe_entity", "discover_entities",
                           "prepare_customer_form", "query_customer_invoices",

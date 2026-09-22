@@ -15,6 +15,7 @@ from web_operation_agent.business.errors import BusinessToolError
 from web_operation_agent.business.runtime import (BusinessSkill,
                                                   BusinessToolContractError,
                                                   BusinessToolRuntime,
+                                                  ForbiddenOperation, ToolOperation,
                                                   business_text_key)
 from web_operation_agent.composition.descriptor import (
     APPLICATION_ADAPTER_VERSION,
@@ -50,6 +51,33 @@ from .specs import (ANSWER_LABELS_ZH, APPLICATION_ID, ARCHIVE_CUSTOMER_TOOL,
 #: Served by the woa_runtime addon (1.5 and later): while the Agent acts on the page, every
 #: request of the person's session runs in a read-only transaction and a write is refused.
 PAGE_WRITE_GUARD = "/woa/page-guard"
+
+#: What each business tool does, in the core's entity-and-operation vocabulary. The server
+#: records it on every result, and a deployment's forbidden effect classes are checked
+#: against it when the catalog is built.
+TOOL_OPERATIONS = {
+    "query_sale_orders": ("sales_order", "read"),
+    "query_quotations": ("sales_order", "read"),
+    "query_customers": ("customer", "read"),
+    "query_customer_invoices": ("customer_invoice", "read"),
+    "query_products": ("product", "read"),
+    "discover_entities": ("runtime_record", "read"),
+    "describe_entity": ("runtime_record", "read"),
+    "query_entity_records": ("runtime_record", "read"),
+    "prepare_customer_form": ("customer", "read"),
+    "prepare_customer_edit_form": ("customer", "read"),
+    "create_customer": ("customer", "create"),
+    "archive_customer": ("customer", "archive"),
+    "confirm_quotation": ("sales_order", "state_change"),
+    "invoice_sale_order": ("customer_invoice", "issue_document"),
+}
+
+#: Effect classes this adapter refuses to install at all. Deletion is not reversible and
+#: this application never needs it; archiving is the supported way to retire a record.
+FORBIDDEN_OPERATIONS = (
+    ForbiddenOperation(operation="delete",
+                       reason="Odoo records are archived, never deleted, by this assistant"),
+)
 
 
 class _OdooIdentityPort:
@@ -254,6 +282,11 @@ class OdooApplicationAdapter:
             route_skill_hints=((r"^/odoo/customers(?:/[^/?#]+)?$",
                                 "odoo.sales.customers-query"),),
             withheld_skills=tuple(withheld),
+            operations={name: ToolOperation(entity, operation)
+                        for name, (entity, operation) in TOOL_OPERATIONS.items()
+                        if name in {schema["function"]["name"]
+                                    for schema in executor.tool_schemas()}},
+            forbidden_operations=FORBIDDEN_OPERATIONS,
             answer_labels={"zh": ANSWER_LABELS_ZH})
         self._executor = executor
         self._click_policy: OdooReviewedClickPolicy | None = None
