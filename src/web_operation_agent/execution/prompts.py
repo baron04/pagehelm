@@ -419,6 +419,12 @@ internal Skill names, tool availability, routes, record IDs, counters, or audit 
 the user explicitly asks for technical details.
 """
 
+SKILL_FIRST_SYSTEM = """\
+A Business Skill matched this request. It is this deployment's own knowledge: use its
+statements, routes and tools first, and consult source only for what the Skill does not
+cover. A Skill statement and a source result that disagree are both reported, not merged.
+"""
+
 UNMATCHED_SKILL_SYSTEM = """\
 No Business Skill matched the wording of this request. The Skills listed as not matched are
 the application's typed reads, offered only in case the request needs current business

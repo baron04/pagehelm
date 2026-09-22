@@ -122,10 +122,19 @@ class ProductReadAndNavigationTests(unittest.TestCase):
                 "one turn must not close the conversation-owned browser channel",
             )
 
-            self.assertNotIn("query_companies", chat.tool_names[0])
-            self.assertIn("query_companies", chat.tool_names[1])
+            # Skill first: the one read-only Skill this request's wording matched is loaded
+            # before the first call, so its typed tool is there from the start and the
+            # model's own load_skill finds it already loaded rather than minting it twice.
+            self.assertIn("query_companies", chat.tool_names[0])
             events = [json.loads(line) for line in
                       (root / "session.jsonl").read_text().splitlines()]
+            auto = [event for event in events
+                    if event["event"] == "business_skill_auto_loaded"]
+            self.assertEqual([event["reason"] for event in auto],
+                             ["skill_first_unique_match"])
+            self.assertEqual([event["event"] for event in events
+                              if event["event"] == "business_skill_loaded"], [])
+            self.assertIn("ALREADY LOADED", chat.messages[1][-1]["content"])
             self.assertEqual(events[-1]["event"], "product_turn_finished")
             public_result = execution.to_json()
             self.assertEqual(public_result["status"], "finished")

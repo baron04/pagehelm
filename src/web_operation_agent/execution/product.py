@@ -139,6 +139,11 @@ class AgentTurnConfig:
     #: still requires one exact read-only Skill match, a current typed route, and a fresh
     #: browser receipt at that route; this flag grants neither a route nor a mutation.
     deterministic_read_navigation: bool = False
+    #: Skill first: a request whose wording matched exactly one read-only Business Skill
+    #: starts with that Skill loaded -- playbook, routes and citable statements -- and the
+    #: prompt tells the model to use it before source. Source stays the fallback for what
+    #: no Skill covers. A write Skill is never loaded this way.
+    skill_first: bool = True
     #: Ask the person before the assistant leaves the current page, with one confirmation
     #: and no decline (owner ruling D7). Leaving a page can discard what was typed there or
     #: let the application save it on the way out, and loses the page's state. On by
@@ -180,6 +185,7 @@ class AgentTurnConfig:
                 or not isinstance(self.allow_clarification, bool)
                 or not isinstance(self.allow_form_prefill, bool)
                 or not isinstance(self.deterministic_read_navigation, bool)
+                or not isinstance(self.skill_first, bool)
                 or not isinstance(self.confirm_navigation, bool)
                 or not isinstance(self.require_identity, bool)):
             raise ValueError("turn policy flags must be booleans")

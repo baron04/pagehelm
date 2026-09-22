@@ -1,8 +1,10 @@
-"""A reviewed Skill can open its own read-only routes and be cited, like source can.
+"""A reviewed Skill can open its own read-only routes, be cited, and go first.
 
 Before this, a hand-written Skill could only describe a menu path for the model to click,
 and once a typed read put the turn under the evidence contract, nothing a Skill said could
-be cited -- the four-arm Odoo gate's Skill arm failed for exactly those two reasons.
+be cited -- the four-arm Odoo gate's Skill arm failed for exactly those two reasons. Skill
+first is the third: the deployment's own knowledge is what a matched request starts from,
+and source is the fallback for what no Skill covers.
 """
 from __future__ import annotations
 
@@ -70,6 +72,110 @@ class SkillRoutes(unittest.TestCase):
             self.assertEqual(len(session.ledger.of_kind("page_route_rejected")), 1)
             loaded = session.ledger.of_kind("business_skill_loaded")[0]
             self.assertEqual(loaded["routes"], ["/terms"])
+
+
+class SkillFirst(unittest.TestCase):
+    """The one read-only Skill a request's wording matched is loaded before the first call."""
+
+    def _session(self, prompt, replies, *, skills=None, skill_first=True, source=None,
+                 approval=None):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        chat = _Chat(list(replies))
+        browser = _Browser()
+        session = ServerAgentSession(
+            task=TaskSpec("T", prompt), chat=chat, browser=browser,
+            control=ReadOnlyControl(),
+            ledger=SessionLedger(Path(tmp.name) / "a.jsonl", "first"),
+            business_tools=BusinessToolRuntime(
+                tuple(skills if skills is not None else (_skill(["/terms"]),)),
+                _EvidenceExecutor(), route_validator=ROUTES),
+            application_routes=ROUTES, skill_first=skill_first, step_budget=6,
+            business_mutation_approval=approval,
+            **({"source": source} if source is not None else {}))
+        session.entry_observation = browser.observe()
+        return session, chat
+
+    def test_a_unique_read_only_match_starts_the_turn_loaded(self):
+        session, chat = self._session(
+            "what do the payment terms mean?",
+            [("finish", {"done": False, "why": "stop"})])
+        session.run()
+
+        opening = chat.messages[0][1]["content"]
+        self.assertIn("BUSINESS SKILLS (loaded cards include their playbook", opening)
+        self.assertIn("Payment terms split an invoice", opening)
+        self.assertIn("statement_refs", opening)
+        # Its tools are offered from the first call, and its routes are already open.
+        self.assertIn("query_companies", chat.tool_names[0])
+        self.assertEqual(session._business_routes, {"/terms"})
+        self.assertEqual([ref for ref in session.evidence.ids() if ref.startswith("skill#")],
+                         ["skill#1", "skill#2"])
+        auto = session.ledger.of_kind("business_skill_auto_loaded")
+        self.assertEqual([event["reason"] for event in auto], ["skill_first_unique_match"])
+        self.assertEqual(auto[0]["routes"], ["/terms"])
+
+    def test_loading_it_again_returns_the_same_refs_rather_than_new_ones(self):
+        session, chat = self._session(
+            "what do the payment terms mean?",
+            [("load_skill", {"skill_id": "fixture.terms-help"}),
+             ("finish", {"done": False, "why": "stop"})])
+        session.run()
+
+        self.assertIn("ALREADY LOADED", chat.messages[1][-1]["content"])
+        self.assertIn("skill#1", chat.messages[1][-1]["content"])
+        self.assertEqual([ref for ref in session.evidence.ids() if ref.startswith("skill#")],
+                         ["skill#1", "skill#2"])
+        self.assertEqual(session.ledger.of_kind("business_skill_loaded"), [])
+
+    def test_it_does_not_fire_where_the_choice_is_not_the_server_s(self):
+        from web_operation_agent.tests.support.golden_session import approve
+
+        second = BusinessSkill.from_bytes(json.dumps({
+            "schema_version": 1, "skill_id": "fixture.terms-report",
+            "title": "Payment terms report", "intent": "Report on payment terms.",
+            "triggers": ["payment terms"], "instructions": ["Read the terms report."],
+            "tool_names": ["query_companies"],
+            "provenance": ["src:fixture@v1:skills/report.json"], "read_only": True,
+        }).encode(), artifact_uri="memory://report")
+        cases = {
+            "no trigger matched the wording": (
+                "open the vendor desk page", None, True, None),
+            "two Skills matched the same wording": (
+                "what do the payment terms mean?", (_skill(["/terms"]), second), True, None),
+            "the Skill that matched can write": (
+                "what do the payment terms mean?", (_skill(read_only=False),), True, approve),
+            "skill first is off": ("what do the payment terms mean?", None, False, None),
+        }
+        for reason, (prompt, skills, first, approval) in cases.items():
+            with self.subTest(reason=reason):
+                session, chat = self._session(
+                    prompt, [("finish", {"done": False, "why": "stop"})],
+                    skills=skills, skill_first=first, approval=approval)
+                session.run()
+                self.assertEqual(session.ledger.of_kind("business_skill_auto_loaded"), [])
+                self.assertEqual(session._business_routes, set())
+                self.assertNotIn("query_companies", chat.tool_names[0])
+                self.assertIn("load_skill", chat.tool_names[0])
+
+    def test_with_source_available_the_prompt_says_the_skill_goes_first(self):
+        from web_operation_agent.composition.sources import SourceCapability
+        from web_operation_agent.tests.support.source_fixture import (build_fixture_tree,
+                                                                     fixture_source_map)
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        build_fixture_tree(root)
+        session, chat = self._session(
+            "what do the payment terms mean?",
+            [("finish", {"done": False, "why": "stop"})],
+            source=SourceCapability(source_map=fixture_source_map(root),
+                                    runtime_source=True))
+        session.run()
+        system = chat.messages[0][0]["content"]
+        self.assertIn("use its\nstatements, routes and tools first", system)
+        self.assertIn("lookup_source", system)
 
 
 class SkillStatements(unittest.TestCase):

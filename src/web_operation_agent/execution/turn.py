@@ -343,6 +343,7 @@ class AgentTurnExecutor:
             allow_form_prefill=self.config.allow_form_prefill,
             deterministic_read_navigation=(
                 self.config.deterministic_read_navigation),
+            skill_first=self.config.skill_first,
             plain_business_answer_min_page_actions=(
                 self.config.plain_business_answer_min_page_actions),
             max_agent_said_chars=self.config.max_user_answer_chars,

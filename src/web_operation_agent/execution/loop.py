@@ -19,14 +19,15 @@ from ..modeling.egress import ProviderEgressError
 from ..modeling.provider import ProviderError
 from ..modeling.spend import BudgetExhausted
 from ..privacy import safe_tool_arguments as _safe
-from .business_tools import business_tool, load_skill, prefill_form
+from .business_tools import apply_skill_first, business_tool, load_skill, prefill_form
 from .form_tools import describe_form, prepare_form
 from .knowledge_tools import ask_user_tool, lookup_source_history_tool, lookup_source_tool
 from .page_actions import take_page_action
 from .prompts import (AGENT_SYSTEM, APPLICATION_ENTRY_SYSTEM, BUSINESS_SKILL_SYSTEM,
                       CAPABILITY_SYSTEM, CLARIFICATION_SYSTEM, CONVERSATION_SYSTEM,
                       FORM_SYSTEM, REACT_SOURCE_SYSTEM, SCOPE_FIRST_SYSTEM, SKILL_SYSTEM,
-                      SOURCE_AFFORDANCE_SYSTEM, TARGET_SYSTEM, UNMATCHED_SKILL_SYSTEM,
+                      SKILL_FIRST_SYSTEM, SOURCE_AFFORDANCE_SYSTEM, TARGET_SYSTEM,
+                      UNMATCHED_SKILL_SYSTEM,
                       _assistant_call, _tool_result, _trim)
 from .runstate import RunResult, _Next, _Turn
 
@@ -141,6 +142,7 @@ def run_loop(session) -> RunResult:
             result, t0, "user_cancelled", "the user stopped this task")
     if session.planning_error:
         return session._finish(result, t0, "planning_failed", session.planning_error)
+    apply_skill_first(session)
     try:
         obs = session.entry_observation or session.browser.observe()
     except TransportError as e:
@@ -166,6 +168,8 @@ def run_loop(session) -> RunResult:
         system += "\n" + BUSINESS_SKILL_SYSTEM
         if session._skills_unmatched:
             system += "\n" + UNMATCHED_SKILL_SYSTEM
+        elif session.skill_first and session.runtime_source:
+            system += "\n" + SKILL_FIRST_SYSTEM
     if session.allow_form_prefill and session._application_form_tools is not None:
         system += "\n" + FORM_SYSTEM
     if session._conversation_context_selected:

@@ -34,12 +34,21 @@ def load_skill(session, turn: "_Turn", call: dict, name: str, args: dict) -> "_N
             side_effect_possible=False)
         return session._reply(turn, call, "The server rejected load_skill: " + rejection + ".")
     assert skill is not None
+    if skill.skill_id in session._skill_statement_refs:
+        # Already loaded -- by the server under Skill first, or earlier in this turn. The
+        # playbook is already in context; loading it again would mint a second set of refs
+        # for the same statements.
+        card = {**skill.loaded_card(),
+                "statement_refs": list(session._skill_statement_refs[skill.skill_id])}
+        return session._reply(turn, call, "BUSINESS SKILL ALREADY LOADED:\n" + json.dumps(
+            card, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
     session._loaded_business_skill_ids.add(skill.skill_id)
     # A loaded Skill's declared routes carry a typed result's route authority: exact,
     # validated against the application's route contract when the catalog was built, and
     # still subject to the page-switch confirmation.
     session._business_routes.update(skill.routes)
     refs = record_skill_evidence(session, skill, step=turn.step)
+    session._skill_statement_refs[skill.skill_id] = refs
     session.ledger.append(
         "business_skill_loaded", step=turn.step, skill_id=skill.skill_id,
         skill_sha256=skill.artifact_sha256,
@@ -55,6 +64,21 @@ def load_skill(session, turn: "_Turn", call: dict, name: str, args: dict) -> "_N
                           "support span copied from that instruction."
                           + (" routes may be opened with goto exactly as written."
                              if skill.routes else "")))
+
+
+def apply_skill_first(session) -> None:
+    """Give the Skill the server loaded under Skill first its routes and citable statements.
+
+    Runs once, at the start of the turn, where the turn's evidence exists; the selection
+    itself was made when the session was built.
+    """
+    skill = session._skill_first_pending
+    if skill is None:
+        return
+    session._skill_first_pending = None
+    session._business_routes.update(skill.routes)
+    refs = record_skill_evidence(session, skill, step=0)
+    session._skill_statement_refs[skill.skill_id] = refs
 
 
 def record_skill_evidence(session, skill, *, step: int) -> tuple[str, ...]:
@@ -97,7 +121,9 @@ def render_business_skills(session) -> str:
                 + json.dumps(cards, ensure_ascii=False, sort_keys=True,
                              separators=(",", ":")))
     cards = [
-        skill.loaded_card()
+        {**skill.loaded_card(),
+         **({"statement_refs": list(session._skill_statement_refs[skill.skill_id])}
+            if skill.skill_id in session._skill_statement_refs else {})}
         if skill.skill_id in session._auto_loaded_business_skill_ids
         else skill.candidate_card(loaded=False)
         for skill in session._task_business_skills]

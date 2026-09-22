@@ -33,8 +33,8 @@ from ..answer.answer_view import (capability_gap_answer, render_payload, unavail
                           withdrawn_answer)
 from ..planning.affordance import SourceAffordance, resolve_source_affordances
 from ..transport.browser import BrowserExecutor
-from ..business.runtime import (BUSINESS_SKILL_MATCHER_VERSION, BusinessSkillSelection,
-                               FormDraft, BusinessToolRuntime)
+from ..business.runtime import (BUSINESS_SKILL_MATCHER_VERSION, BusinessSkill,
+                               BusinessSkillSelection, FormDraft, BusinessToolRuntime)
 from ..business.forms import ApplicationFormPort, ApplicationFormTools
 from ..business.errors import BusinessToolPermissionError
 from ..business.text import trigger_requests_action
@@ -161,6 +161,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                  allow_form_prefill: bool = False,
                  application_forms: ApplicationFormPort | None = None,
                  deterministic_read_navigation: bool = False,
+                 skill_first: bool = False,
                  plain_business_answer_min_page_actions: int | None = None,
                  max_agent_said_chars: int = 500,
                  cancelled: Callable[[], bool] | None = None,
@@ -467,6 +468,28 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                 skill_sha256=skill.artifact_sha256,
                 tool_names=list(skill.tool_names), provenance=list(skill.provenance),
                 reason="unique_exact_read_navigation")
+        # Skill first: a request whose wording matched exactly one read-only Skill gets that
+        # Skill loaded before the first model call -- its playbook, routes and citable
+        # statements -- instead of a step spent deciding to load it. Source stays available
+        # for what the Skill does not cover; a write Skill is never loaded this way.
+        self.skill_first = bool(skill_first)
+        self._skill_first_pending: BusinessSkill | None = None
+        self._skill_statement_refs: dict[str, tuple[str, ...]] = {}
+        if (self.skill_first and not self._auto_loaded_business_skill_ids
+                and not self._skills_unmatched and not selection.fallback_used
+                and not selection.mutation_surface_widened):
+            matched = [skill for skill in self._task_business_skills
+                       if skill.skill_id in selection.trigger_matches]
+            if len(matched) == 1 and matched[0].read_only:
+                skill = matched[0]
+                self._loaded_business_skill_ids.add(skill.skill_id)
+                self._auto_loaded_business_skill_ids.add(skill.skill_id)
+                self._skill_first_pending = skill
+                self.ledger.append(
+                    "business_skill_auto_loaded", skill_id=skill.skill_id,
+                    skill_sha256=skill.artifact_sha256,
+                    tool_names=list(skill.tool_names), provenance=list(skill.provenance),
+                    routes=list(skill.routes), reason="skill_first_unique_match")
         self._business_routes: set[str] = set()
         self._latest_business_routes: set[str] = set()
         # One adapter-issued draft is usable once, in this turn only. It never enters the
