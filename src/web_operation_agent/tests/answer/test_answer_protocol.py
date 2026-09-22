@@ -90,6 +90,21 @@ class AnswerWireContract(unittest.TestCase):
         with self.assertRaises(ConclusionRefused):
             submit(_turn(), _draft("aggregate", "query#1"))
 
+    def test_a_data_conclusion_with_prose_is_refused_with_the_repair_named(self):
+        # A turn holding both a typed result and a Skill or source reference puts its
+        # sentence on the data conclusion too. The refusal has to say which field to drop,
+        # or every repair is spent rediscovering that.
+        for field in ("statement", "support"):
+            with self.subTest(field=field):
+                draft = _draft("selection", "query#1", fields=["name"])
+                draft["answer"]["conclusions"][0][field] = "four are still in draft"
+                with self.assertRaises(ConclusionRefused) as caught:
+                    submit(_turn(), draft)
+                message = str(caught.exception)
+                self.assertIn(f"selection conclusion carries no {field}", message)
+                self.assertIn(f"Remove the {field} field", message)
+                self.assertIn("skill_statement", message)
+
     def test_large_index_is_explicitly_bounded_without_mutating_evidence(self):
         turn = _turn()
         turn.record(replace(turn.get("record#1"), evidence_id="large#1", value="x" * 30000))

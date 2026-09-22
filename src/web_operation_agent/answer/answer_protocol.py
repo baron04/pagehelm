@@ -224,10 +224,15 @@ def submit(turn: TurnEvidence, args: dict) -> dict | None:
             raise ConclusionRefused("invalid selection fields")
         if fields and kind != "selection":
             raise ConclusionRefused("fields are only valid for selection")
-        if "statement" in entry and not source_kind:
-            raise ConclusionRefused("statement is only valid for a source conclusion")
-        if "support" in entry and not source_kind:
-            raise ConclusionRefused("support is only valid for a source conclusion")
+        if ("statement" in entry or "support" in entry) and not source_kind:
+            # Worth naming the repair. A turn that held both a typed result and a Skill or
+            # source reference kept putting its sentence on the data conclusion too, and
+            # spent every repair on a message that named only what was wrong.
+            field = "statement" if "statement" in entry else "support"
+            raise ConclusionRefused(
+                f"a {kind} conclusion carries no {field}: the server writes it from "
+                f"{ref}. Remove the {field} field here; only source_excerpt, "
+                "source_history and skill_statement carry one")
         if kind == "field_value" and isinstance(item, RecordEvidence):
             conclusions.append(FieldValue(item.record_id, item.field_name, ref))
         elif kind == "selection" and isinstance(item, (QueryEvidence, SelectionEvidence)):
