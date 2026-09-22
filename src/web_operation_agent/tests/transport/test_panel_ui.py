@@ -1066,6 +1066,9 @@ class PanelUITests(_PanelBrowser):
         page.locator(".woa-launcher").click()
         window = page.locator(".woa-window")
         window.wait_for()
+        # The opening animation transforms the measured box; dragging before it settles
+        # can press outside the title bar under a busy full-suite browser run.
+        window.evaluate("node => node.getAnimations().forEach(animation => animation.finish())")
         before = window.bounding_box()
         assert before is not None
         page.mouse.move(before["x"] + before["width"] / 2, before["y"] + 20)
