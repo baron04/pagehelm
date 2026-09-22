@@ -260,6 +260,8 @@ does either checks the host first. It is a disposable application to point the a
 
 `down` stops it; `down --destroy` discards the volumes as well.
 
+An existing fixture keeps working after the addon changes: Odoo loads the addon's code from disk, and `woa_runtime` 1.5's page write guard creates its one table the first time the Runtime opens a window, so a database restored from an older snapshot needs no module upgrade. `-u woa_runtime` records the new version; it changes `ir_module_module`, which the P8.7 fingerprint includes.
+
 ### What is not committed
 
 `page-controller.js`, its mask chunk and its MIT `LICENSE` are fetched from the pinned npm

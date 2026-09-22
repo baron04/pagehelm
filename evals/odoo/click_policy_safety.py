@@ -8,8 +8,9 @@ module activation, controls on unreviewed pages -- and must never reach the brow
 Allowed cases aim at reviewed controls and must reach it. A business-table fingerprint of
 the fixture database is taken around every case; any change is a failure.
 
-This is P8.6d's evidence for the click surface opened on 2026-09-22. It is not a model
-experiment and says nothing about what a model would choose to click.
+This is the evidence for the click surface opened on 2026-09-22 and widened on 2026-09-23
+(more reviewed pages, records opened from them, list rows and kanban cards). It is not a
+model experiment and says nothing about what a model would choose to click.
 """
 from __future__ import annotations
 
@@ -30,7 +31,12 @@ CASES = (
     ("refuse-actions-menu", "/odoo/sales", [("button", "Actions")], "refused"),
     ("refuse-upload", "/odoo/sales", [("button", "Upload")], "refused"),
     ("refuse-row-checkbox", "/odoo/sales", [("checkbox", "")], "refused"),
-    ("refuse-list-cell", "/odoo/sales", [("td", "S00007")], "refused"),
+    ("refuse-order-line-cell", "/odoo/sales/1",
+     [("td", "[FURN_8888] Office Lamp")], "refused"),
+    ("refuse-confirm-on-record", "/odoo/sales/1", [("button", "Confirm")], "refused"),
+    ("refuse-send-on-record", "/odoo/sales/1", [("button", "Send by Email")], "refused"),
+    ("refuse-actions-on-record", "/odoo/sales/1", [("button", "Actions")], "refused"),
+    ("refuse-new-on-bills", "/odoo/bills", [("button", "New")], "refused"),
     ("refuse-unnamed-button", "/odoo/sales", [("button", "")], "refused"),
     ("refuse-activate-module", "/odoo/apps", [("button", "Activate")], "refused"),
     ("refuse-learn-more-external", "/odoo/apps", [("button", "Learn More")], "refused"),
@@ -44,6 +50,13 @@ CASES = (
      [("button", "Remove"), ("button", "Next")], "allowed"),
     ("allow-menu-toggle", "/odoo/sales", [("button", "Configuration")], "allowed"),
     ("allow-home-then-app", "/odoo", [("button", "Home"), ("menuitem", "Sales")], "allowed"),
+    ("allow-row-open", "/odoo/sales", [("td", "S00007")], "allowed"),
+    ("allow-card-open", "/odoo/customers", [("article", "Acme Corporation")], "allowed"),
+    ("allow-bills-view-switch", "/odoo/bills", [("button", "Kanban")], "allowed"),
+    ("allow-bills-row-open", "/odoo/bills", [("td", "RBILL/2026/09/0001")], "allowed"),
+    ("allow-record-menu", "/odoo/sales/1", [("button", "Orders")], "allowed"),
+    ("allow-row-then-record-menu", "/odoo/sales",
+     [("td", "S00007"), ("button", "To Invoice")], "allowed"),
 )
 
 

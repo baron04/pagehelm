@@ -41,21 +41,23 @@ def session_digest(sid: str) -> str:
     return hashlib.sha256(sid.encode("utf-8")).hexdigest()
 
 
-_TABLE_READY: set[str] = set()
+_TABLE = """
+    CREATE TABLE IF NOT EXISTS woa_page_guard (
+        sid_digest varchar(64) PRIMARY KEY,
+        uid integer NOT NULL,
+        expires_at double precision NOT NULL
+    )
+"""
 
 
-def _table_ready(cr) -> bool:
-    """True once this database has the window table.
+def _table_exists(cr) -> bool:
+    """Whether this database has the window table.
 
-    Code of a newer module version is loaded before the module is upgraded; until then no
-    window can have been opened, and querying the absent table would fail every request.
+    Not cached: a database restored from a dump taken before woa_runtime 1.5 has no table
+    until the first window is opened, and a request must never fail on its absence.
     """
-    if cr.dbname not in _TABLE_READY:
-        cr.execute("SELECT to_regclass('woa_page_guard') IS NOT NULL")
-        if not cr.fetchone()[0]:
-            return False
-        _TABLE_READY.add(cr.dbname)
-    return True
+    cr.execute("SELECT to_regclass('woa_page_guard') IS NOT NULL")
+    return bool(cr.fetchone()[0])
 
 
 def _guarded_request() -> bool:
@@ -64,7 +66,7 @@ def _guarded_request() -> bool:
     if request.httprequest.path.startswith(EXEMPT_PREFIXES):
         return False
     cr = request.env.cr
-    if not _table_ready(cr):
+    if not _table_exists(cr):
         return False
     cr.execute("SELECT expires_at FROM woa_page_guard WHERE sid_digest = %s",
                [session_digest(request.session.sid)])
@@ -77,15 +79,12 @@ class WoaPageGuard(models.AbstractModel):
     _description = "WOA page write guard"
 
     def init(self):
-        self.env.cr.execute("""
-            CREATE TABLE IF NOT EXISTS woa_page_guard (
-                sid_digest varchar(64) PRIMARY KEY,
-                uid integer NOT NULL,
-                expires_at double precision NOT NULL
-            )
-        """)
+        self.env.cr.execute(_TABLE)
 
     def _open(self, ttl_s: float) -> float:
+        # Also here, not only at install: a fixture restored from an older dump gets its
+        # table from the first window rather than from a module upgrade.
+        self.env.cr.execute(_TABLE)
         expires_at = time.time() + ttl_s
         self.env.cr.execute("""
             INSERT INTO woa_page_guard (sid_digest, uid, expires_at) VALUES (%s, %s, %s)
@@ -98,10 +97,14 @@ class WoaPageGuard(models.AbstractModel):
         return expires_at
 
     def _close(self) -> None:
+        if not _table_exists(self.env.cr):
+            return
         self.env.cr.execute("DELETE FROM woa_page_guard WHERE sid_digest = %s",
                             [session_digest(request.session.sid)])
 
     def _state(self) -> dict:
+        if not _table_exists(self.env.cr):
+            return {"active": False, "expires_at": None}
         self.env.cr.execute("SELECT expires_at FROM woa_page_guard WHERE sid_digest = %s",
                             [session_digest(request.session.sid)])
         row = self.env.cr.fetchone()

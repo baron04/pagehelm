@@ -70,14 +70,8 @@ agent.
   are routed, confirmed, and settled exactly as before, and a write in the same window is
   settled by the write path instead. The server never ends the turn on a target by itself,
   because it can verify a page state but not that the state is the whole request.
-- Generic click can stay disabled as an action while an application re-allows part of it:
-  an optional click policy sees the current observation and the element named and either
-  allows that click or refuses it before dispatch. The Odoo reference integration allows
-  tabs, the Home button, same-application links to pages reviewed as read-only (and records
-  opened from them), and named view-switch, pager, search and menu controls on those pages;
-  every other control -- New, Actions, row selection, inline editing, module activation,
-  unnamed buttons, anything on an unreviewed page -- is refused. The review lives in the
-  adapter and names actions by XML ID, resolved against the deployed database.
+- Generic click can stay disabled as an action while an application re-allows part of it: an optional click policy sees the current observation and the element named and either allows that click or refuses it before dispatch. The Odoo reference integration allows tabs, the Home button, same-application links to pages reviewed as read-only (and records opened from them), named view-switch, pager, search and menu controls on those pages, and on the pages the review marks for it a list row or kanban card, which opens its record; on a record it allows only the record pager and the top menus. Every other control -- New, Actions, header workflow buttons, row selection, inline editing, module activation, unnamed buttons, anything on an unreviewed page -- is refused. The review lives in the adapter and names actions by XML ID, resolved (with their URL paths) against the deployed database.
+- An application can also make the signed-in session read-only while the Agent acts on the page. It declares a `page_write_guard` path on its descriptor; the Runtime posts to `<path>/begin` before every page action and refuses the action unless the application confirms the window, and posts to `<path>/end` when the turn ends. Odoo's `woa_runtime` 1.5 implements it: while the window is open every request of that session runs in a PostgreSQL read-only transaction and a write is refused with nothing saved, so a click the review missed -- or an autosave the web client makes on its own -- cannot change data. Deploy the 1.5 addon code before this adapter: against older addon code the Runtime cannot open the window, so every page action is refused.
 - When no Skill trigger matches a request's wording, the catalog's read-only fallback stays
   loadable but is presented as an unmatched index rather than as task candidates. A typed read
   whose result repeats one already returned in the same turn is answered with a short notice

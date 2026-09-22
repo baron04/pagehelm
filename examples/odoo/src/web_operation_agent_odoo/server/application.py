@@ -343,21 +343,35 @@ class OdooApplicationAdapter:
         """
         if self._click_policy is None:
             review = load_review()
-            names = [item["xmlid"] for item in review["actions"]]
+            names = {item["xmlid"] for item in review["actions"]}
             resolved: dict[str, int] = {}
+            paths: dict[str, str] = {}
             try:
+                # `complete_name` is not stored, so Odoo cannot search it: ask by module
+                # and name, then keep only the exact pairs the review names.
                 rows = self._executor.call(
                     "ir.model.data", "search_read",
                     [[["model", "=", "ir.actions.act_window"],
-                      ["complete_name", "in", names]]],
-                    {"fields": ["complete_name", "res_id"]})
+                      ["module", "in", sorted({n.split(".", 1)[0] for n in names})],
+                      ["name", "in", sorted({n.split(".", 1)[1] for n in names})]]],
+                    {"fields": ["module", "name", "res_id"]})
                 for row in rows if isinstance(rows, list) else ():
-                    if (isinstance(row, dict) and row.get("complete_name") in names
-                            and isinstance(row.get("res_id"), int)):
-                        resolved[row["complete_name"]] = row["res_id"]
+                    if not isinstance(row, dict) or not isinstance(row.get("res_id"), int):
+                        continue
+                    xmlid = f"{row.get('module')}.{row.get('name')}"
+                    if xmlid in names:
+                        resolved[xmlid] = row["res_id"]
+                if resolved:
+                    by_id = {action_id: xmlid for xmlid, action_id in resolved.items()}
+                    actions = self._executor.call(
+                        "ir.actions.act_window", "read", [sorted(by_id)], {"fields": ["path"]})
+                    for action in actions if isinstance(actions, list) else ():
+                        if (isinstance(action, dict) and action.get("id") in by_id
+                                and isinstance(action.get("path"), str)):
+                            paths[by_id[action["id"]]] = action["path"]
             except BusinessToolError:
-                resolved = {}
-            policy = OdooReviewedClickPolicy.from_review(review, resolved)
+                resolved, paths = {}, {}
+            policy = OdooReviewedClickPolicy.from_review(review, resolved, paths)
             # A Skill route carries a typed result's route authority, and Odoo's route
             # contract accepts any numeric action -- including a server action, which runs
             # code when opened. So on Odoo a Skill may declare only pages reviewed as
