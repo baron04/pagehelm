@@ -176,6 +176,21 @@ class QualificationOnlyDemoSeamsFailClosed(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "scripted qualification"):
             self._config(scripted=False, browser_ignore_https_errors=True)
 
+    def test_evaluation_seams_are_read_only_provider_runs(self):
+        config = self._config(scripted=False, evaluation=True, evaluation_page_click=True,
+                              confirm_navigation_in_page=True,
+                              final_page_probe=lambda _page: {})
+        self.assertTrue(config.evaluation_page_click)
+        with self.assertRaisesRegex(ValueError, "requires an evaluation run"):
+            self._config(scripted=False, evaluation_page_click=True)
+        with self.assertRaisesRegex(ValueError, "read-only provider run"):
+            self._config(scripted=True, evaluation=True)
+        with self.assertRaisesRegex(ValueError, "read-only provider run"):
+            self._config(scripted=False, evaluation=True, allow_mutations=True,
+                         mutation_journal_path="/tmp/journal.sqlite3")
+        with self.assertRaisesRegex(ValueError, "scripted run"):
+            self._config(scripted=False, confirm_navigation_in_page=True)
+
 
 if __name__ == "__main__":
     unittest.main()

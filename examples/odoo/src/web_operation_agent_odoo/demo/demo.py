@@ -20,6 +20,7 @@ about a model.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import math
 import os
@@ -46,6 +47,13 @@ from web_operation_agent.execution.product import (AgentTurnExecution,
 
 from ..adapter import OdooApplicationAdapter
 from ..turn import odoo_turn_config
+
+#: The public boundary an evaluation run with page click states to the model. It widens
+#: navigation to current-page controls and keeps every write out of scope.
+EVALUATION_CLICK_SCOPE = (
+    "Inspect the current Odoo application. You may click current-page links, menus, tabs, "
+    "view switches, filters and pager controls, and read current records through the typed "
+    "API. Do not create, change, delete, install, save or submit anything.")
 
 _MODEL_ENV_KEYS = ("AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY",
                    "AGENT_OPENAI_MODEL", "AGENT_PROVIDER")
@@ -173,6 +181,14 @@ class OdooDemoConfig:
     #: Hidden evaluator run after the last turn while the page is still alive. Its result is
     #: an artifact projection, never Agent context.
     final_page_probe: Callable[[Any], dict] | None = None
+    #: Model-backed evaluation against a disposable fixture. Permits the two seams above
+    #: -- in-page page-switch confirmation and the hidden final probe -- in provider mode.
+    #: Not exposed by the CLI; a person running the demo confirms page switches themselves.
+    evaluation: bool = False
+    #: Evaluation only: offer the generic click the production turn disables, with a scope
+    #: statement that says so. Fill, select, submit and back stay disabled; a write is
+    #: detected by the caller against the fixture database. Never a deployment default.
+    evaluation_page_click: bool = False
 
     def __post_init__(self) -> None:
         for name in ("api_key_path", "storage_state_path", "output_dir"):
@@ -193,7 +209,14 @@ class OdooDemoConfig:
         if self.approve_in_page and not (self.allow_mutations and self.scripted):
             raise ValueError(
                 "in-page approval only applies to a scripted mutation walkthrough")
-        if self.confirm_navigation_in_page and not self.scripted:
+        if not isinstance(self.evaluation, bool) or not isinstance(
+                self.evaluation_page_click, bool):
+            raise ValueError("demo evaluation flags must be booleans")
+        if self.evaluation_page_click and not self.evaluation:
+            raise ValueError("evaluation page click requires an evaluation run")
+        if self.evaluation and (self.allow_mutations or self.scripted):
+            raise ValueError("an evaluation run is a read-only provider run")
+        if self.confirm_navigation_in_page and not (self.scripted or self.evaluation):
             raise ValueError("in-page page-switch confirmation only applies to a scripted run")
         if self.scripted_chat_factory is not None and not self.scripted:
             raise ValueError("a scripted chat factory requires scripted mode")
@@ -202,7 +225,7 @@ class OdooDemoConfig:
             raise TypeError("scripted_chat_factory must be callable")
         if self.final_page_probe is not None and not callable(self.final_page_probe):
             raise TypeError("final_page_probe must be callable")
-        if self.final_page_probe is not None and not self.scripted:
+        if self.final_page_probe is not None and not (self.scripted or self.evaluation):
             raise ValueError("a final page probe requires scripted qualification mode")
         if (not isinstance(self.allow_generic_forms, bool)
                 or not isinstance(self.browser_ignore_https_errors, bool)):
@@ -666,14 +689,20 @@ def run_demo(config: OdooDemoConfig, *,
     holder: dict[str, LiveConversationRunner] = {}
 
     def runner_factory(channel):
+        turn_config = odoo_turn_config(
+            adapter=adapter, run_dir=run_dir,
+            allow_mutations=config.allow_mutations,
+            scripted=config.scripted,
+            turn_timeout_s=config.turn_timeout_s,
+            source=capability)
+        if config.evaluation_page_click:
+            turn_config = dataclasses.replace(
+                turn_config,
+                disabled_actions=turn_config.disabled_actions - {"click"},
+                supported_scope=EVALUATION_CLICK_SCOPE)
         executor = AgentTurnExecutor(
             channel=channel,
-            config=odoo_turn_config(
-                adapter=adapter, run_dir=run_dir,
-                allow_mutations=config.allow_mutations,
-                scripted=config.scripted,
-                turn_timeout_s=config.turn_timeout_s,
-                source=capability),
+            config=turn_config,
             chat=chat,
             application=bound,
             control=ReadOnlyControl(),
