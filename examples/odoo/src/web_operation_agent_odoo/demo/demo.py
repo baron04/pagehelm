@@ -716,6 +716,7 @@ def run_demo(config: OdooDemoConfig, *,
             turn_config = dataclasses.replace(
                 turn_config,
                 disabled_actions=turn_config.disabled_actions - {"click"},
+                click_policy=None,
                 supported_scope=EVALUATION_CLICK_SCOPE)
         executor = AgentTurnExecutor(
             channel=channel,

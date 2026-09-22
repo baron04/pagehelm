@@ -1,0 +1,104 @@
+{
+ "schema_version": 1,
+ "reviewed_at": "2026-09-22",
+ "review": "Collection views (list, kanban, pivot, graph) whose only reviewed controls are navigation, view switches, pagers and search facets. Record creation, row selection, inline editing, the Actions menu and module activation stay refused on every page.",
+ "named_routes": [
+  {
+   "path": "/odoo/sales",
+   "note": "Quotations (sale.order list)"
+  },
+  {
+   "path": "/odoo/invoicing",
+   "note": "Customer invoices (account.move list)"
+  },
+  {
+   "path": "/odoo/customers",
+   "note": "Customers (res.partner kanban)"
+  },
+  {
+   "path": "/odoo/products",
+   "note": "Products (product.template kanban)"
+  },
+  {
+   "path": "/odoo/apps",
+   "note": "Apps (ir.module.module kanban); Activate and Learn More are not reviewed controls"
+  }
+ ],
+ "actions": [
+  {
+   "xmlid": "analytic.account_analytic_line_action_entries",
+   "note": "Analytic Items"
+  },
+  {
+   "xmlid": "account.action_payment_term_form",
+   "note": "Payment Terms"
+  },
+  {
+   "xmlid": "account.action_account_fiscal_position_form",
+   "note": "Fiscal Positions"
+  },
+  {
+   "xmlid": "account.product_product_action_sellable",
+   "note": "Invoicing > Customers > Products"
+  },
+  {
+   "xmlid": "account.product_product_action_purchasable",
+   "note": "Invoicing > Vendors > Products"
+  },
+  {
+   "xmlid": "uom.product_uom_categ_form_action",
+   "note": "Units of Measure Categories"
+  },
+  {
+   "xmlid": "product.product_tag_action",
+   "note": "Product Tags"
+  },
+  {
+   "xmlid": "product.product_category_action_form",
+   "note": "Product Categories"
+  },
+  {
+   "xmlid": "product.product_normal_action_sell",
+   "note": "Product Variants"
+  },
+  {
+   "xmlid": "sale.product_template_action",
+   "note": "Sales > Products"
+  },
+  {
+   "xmlid": "sales_team.sales_team_crm_tag_action",
+   "note": "Sales order Tags"
+  },
+  {
+   "xmlid": "sales_team.crm_team_action_config",
+   "note": "Sales Teams"
+  }
+ ],
+ "controls_on_reviewed_pages": [
+  "List",
+  "Kanban",
+  "Pivot",
+  "Graph",
+  "Calendar",
+  "Activity",
+  "Map",
+  "Previous",
+  "Next",
+  "Search...",
+  "Toggle Search Panel",
+  "Remove",
+  "Apps",
+  "Orders",
+  "To Invoice",
+  "Products",
+  "Reporting",
+  "Configuration",
+  "Customers",
+  "Vendors",
+  "Accounting"
+ ],
+ "controls_anywhere": [
+  "Home",
+  "Home Menu"
+ ]
+}

@@ -173,7 +173,11 @@ export function elementsFrom(content: string, epoch: number, redactor: Redactor)
     const name = redactor.isSensitiveName(String(attrs.name || ''))
       ? ''
       : redactor.redactString(
-        (text || attrs['aria-label'] || attrs.placeholder || buttonValue || '').trim())
+        // Accessible-name order: content, aria-label, then title (HTML's own tooltip). An
+        // icon-only control named by a tooltip attribute alone -- `data-tooltip` is common --
+        // keeps that as a last resort, so "Kanban" is not an anonymous button.
+        (text || attrs['aria-label'] || attrs.title || attrs.placeholder || buttonValue ||
+          attrs['data-tooltip'] || '').trim())
         .slice(0, 120)
     elements.push({ref: `e${index}`, role, name, tag, epoch, attrs})
   }

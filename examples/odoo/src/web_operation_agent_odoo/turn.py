@@ -18,13 +18,17 @@ from web_operation_agent.execution.product import AgentTurnConfig
 #: the one write a turn may make goes through a confirmed typed tool.
 DISABLED_PAGE_ACTIONS = frozenset({"click", "fill", "select", "submit", "back"})
 
+#: What every Odoo turn may click, stated to the model; the adapter's policy enforces it.
+_CLICK_SCOPE = (
+    " You may click links, tabs, view switches, pagers and search facets on pages reviewed "
+    "as read-only; the server refuses every other click before it reaches the page.")
 _READ_ONLY_SCOPE = (
     "Read current Odoo records through the typed API and open only an exact route "
-    "returned by that API. Do not modify records or submit forms.")
+    "returned by that API. Do not modify records or submit forms." + _CLICK_SCOPE)
 _WRITE_SCOPE = (
     "Read current Odoo records through the typed API, and make at most the one record "
     "change the user confirms, through a typed write tool. Do not submit page forms. "
-    "Open only an exact route returned by the API.")
+    "Open only an exact route returned by the API." + _CLICK_SCOPE)
 
 
 def odoo_turn_config(*, adapter, run_dir: Path, allow_mutations: bool, scripted: bool,
@@ -42,6 +46,10 @@ def odoo_turn_config(*, adapter, run_dir: Path, allow_mutations: bool, scripted:
         wall_budget_s=max(1, int(turn_timeout_s)),
         transport_timeout_s=min(30, turn_timeout_s),
         disabled_actions=DISABLED_PAGE_ACTIONS,
+        # Click stays disabled as an action; the adapter's reviewed policy re-allows the
+        # read-only controls on reviewed pages, element by element (owner decision
+        # 2026-09-22). Everything it does not name is refused before dispatch.
+        click_policy=adapter.click_policy(),
         scope_first_policy=True,
         policy_block_limit=3,
         plain_business_answer_min_page_actions=0,

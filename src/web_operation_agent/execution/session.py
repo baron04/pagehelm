@@ -63,6 +63,7 @@ from .context import (RENDER_ELEMENTS, SessionContext, _PLAN_MARK,
 from .lifecycle import SessionLifecycle
 from .runstate import (CAPABILITY_GAP_TERMINAL, LabApparatus, NO_LAB, RunResult,
                        TaskSpec, _Next, _Turn)
+from .click_policy import ClickPolicy
 from .target import (MAX_TARGET_DECLARATIONS, TargetState, describe_target, parse_target,
                      unmet_conditions)
 from ..business.writes import PRE_DISPATCH_ERRORS, WatchState, WriteWatch
@@ -145,6 +146,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                  step_budget: int = 20, wall_budget_s: int = 300, run_id: str | None = None,
                  keep_observations: int = 3,
                  disabled_actions: frozenset[str] | set[str] | None = None,
+                 click_policy: ClickPolicy | None = None,
                  scope_first_policy: bool = False,
                  page_answer_evidence: bool = False,
                  policy_block_limit: int | None = None,
@@ -492,6 +494,10 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         # no browser command is sent, a fresh observation is read, and the model can revise
         # its next decision.  Hidden write authorisation remains the ControlPlane's job.
         self.disabled_actions = disabled
+        if click_policy is not None and (not isinstance(click_policy, ClickPolicy)
+                                         or "click" not in disabled):
+            raise ValueError("a click policy only narrows a disabled click")
+        self.click_policy = click_policy
         self.policy_blocks = 0
         self.policy_block_limit = policy_block_limit
         self.no_progress_repeat_limit = no_progress_repeat_limit

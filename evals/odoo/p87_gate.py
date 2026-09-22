@@ -182,7 +182,8 @@ def _events(run_dir: Path) -> list[dict]:
 
 
 def run_attempt(task: dict, arm: str, *, env: dict, output: Path, container: str,
-                database: str, model_env: Path, capabilities: dict, skills: tuple) -> dict:
+                database: str, model_env: Path, capabilities: dict, skills: tuple,
+                production_clicks: bool = False) -> dict:
     before = fingerprint(container, database)
     config = OdooDemoConfig(
         base_url=env["WOA_ODOO_BASE_URL"], api_key_path=Path(env["WOA_ODOO_API_KEY_FILE"]),
@@ -193,7 +194,8 @@ def run_attempt(task: dict, arm: str, *, env: dict, output: Path, container: str
         extra_skills=skills if arm == "D" else (),
         scripted=False, headless=True, tasks=(task["prompt"],), output_dir=output,
         model_env=model_env, keep_open_seconds=0, turn_timeout_s=120.0,
-        allow_generic_forms=True, evaluation=True, evaluation_page_click=True,
+        allow_generic_forms=True, evaluation=True,
+        evaluation_page_click=not production_clicks,
         confirm_navigation_in_page=True, final_page_probe=_probe(task))
     started = time.monotonic()
     error = ""
@@ -222,6 +224,9 @@ def run_attempt(task: dict, arm: str, *, env: dict, output: Path, container: str
                               if e.get("event") == "runtime_source_retrieved"),
         "source_candidates_opened": sum(1 for t in tools if t == "open_source_candidate"),
         "target_reached": any(e.get("event") == "target_state_reached" for e in events),
+        "clicks_refused": [e.get("element_name") or e.get("role") for e in events
+                           if e.get("event") == "click_policy_decision"
+                           and not e.get("allowed")],
         "skills_loaded": [e.get("skill_id") for e in events
                           if e.get("event") == "business_skill_loaded"],
         "navigation_refused_for_target": sum(
@@ -248,6 +253,9 @@ def main() -> int:
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--select", default="",
                         help="diagnostic only: task_id:arm, e.g. nav-payment-terms:S")
+    parser.add_argument("--production-clicks", action="store_true",
+                        help="use the deployment's reviewed click policy instead of the "
+                             "evaluation-only unrestricted click")
     parser.add_argument("--lane", default="1/1",
                         help="k/n: run every n-th attempt of the schedule starting at k, so "
                              "n processes split one schedule with every arm in every lane")
@@ -300,7 +308,8 @@ def main() -> int:
                                       output=args.output / "runs",
                                       container=args.container, database=args.database,
                                       model_env=args.model_env,
-                                      capabilities=capabilities, skills=skills)
+                                      capabilities=capabilities, skills=skills,
+                                      production_clicks=args.production_clicks)
                     row["repeat"] = repeat
                     path.write_text(json.dumps(row, ensure_ascii=False, indent=1) + "\n")
                 rows.append(row)

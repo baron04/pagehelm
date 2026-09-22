@@ -26,7 +26,9 @@ class ToolSurface:
     def schemas(self) -> list[dict]:
         session = self._session
         tools = [tool for tool in TOOL_SCHEMAS
-                 if tool["function"]["name"] not in session.disabled_actions]
+                 if tool["function"]["name"] not in session.disabled_actions
+                 or (tool["function"]["name"] == "click"
+                     and session.click_policy is not None)]
         if session._finalizing:
             return [answer_protocol.finish_answer_tool(source=session.runtime_source)]
         if session._capability_question:

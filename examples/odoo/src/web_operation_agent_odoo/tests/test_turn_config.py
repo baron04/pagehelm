@@ -35,6 +35,11 @@ class _Adapter:
         self.capability_calls += 1
         return SourceCapability.none()
 
+    @staticmethod
+    def click_policy():
+        from web_operation_agent_odoo.click_policy import OdooReviewedClickPolicy, load_review
+        return OdooReviewedClickPolicy.from_review(load_review(), {})
+
 
 class TheSameTurnWhereverItStarts(unittest.TestCase):
     def test_the_two_entry_points_assemble_the_same_configuration(self):

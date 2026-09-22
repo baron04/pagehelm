@@ -16,6 +16,7 @@ from .grounding import WRITE_NONE, WRITE_PERMITTED
 from ..privacy import safe_tool_arguments as _safe
 from ..schemas import (BROWSER_ACTIONS, POTENTIALLY_WRITING_ACTIONS, ActionReceipt,
                        PageObservation)
+from .click_policy import click_policy_refusal
 from .knowledge_tools import capability_check_available, capability_check_feedback
 from .page_evidence import capture_page_snapshot
 from .prompts import _assistant_call, _tool_result, _trim
@@ -33,7 +34,18 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
     result, t0, step = turn.result, turn.started_at, turn.step
     messages, obs = turn.messages, turn.obs
     successful_business_tools = turn.successful_business_tools
-    if name in session.disabled_actions:
+    click_refusal = ""
+    if name == "click" and name in session.disabled_actions \
+            and session.click_policy is not None:
+        click_refusal = click_policy_refusal(session.click_policy, obs, args.get("ref"))
+        element = next((e for e in obs.elements if e.ref == args.get("ref")), None)
+        session.ledger.append(
+            "click_policy_decision", step=step, allowed=not click_refusal,
+            reason=click_refusal[:200], page_url=obs.url,
+            role=element.role if element is not None else "",
+            element_name=(element.name[:80] if element is not None else ""))
+    if name in session.disabled_actions and not (
+            name == "click" and session.click_policy is not None and not click_refusal):
         # This refusal is known before dispatch, so it is safe to continue.  Do not
         # manufacture a failed ActionReceipt for the requested action: that would blur
         # the decisive fact that the browser never received it.  The real receipt is
@@ -90,7 +102,8 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
                                 steps=step))
         session._sync_plan_message(messages)
         feedback = (
-            f"The run's action policy blocked {name!r} before dispatch. "
+            f"The run's action policy blocked {name!r} before dispatch"
+            + (f" ({click_refusal})" if click_refusal else "") + ". "
             "The browser did not receive that requested action and it could not "
             "change the application. Inspect the fresh page and choose another "
             "available action.\n\n" + session._render(obs, receipt, "", write))

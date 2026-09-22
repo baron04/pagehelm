@@ -11,6 +11,7 @@ from web_operation_agent.business.entities import (DESCRIBE_ENTITY_TOOL,
                                                    DISCOVER_ENTITIES_TOOL,
                                                    QUERY_ENTITY_RECORDS_TOOL)
 from web_operation_agent.business.forms import NoApplicationForms
+from web_operation_agent.business.errors import BusinessToolError
 from web_operation_agent.business.runtime import (BusinessSkill,
                                                   BusinessToolContractError,
                                                   BusinessToolRuntime,
@@ -39,6 +40,7 @@ from .executor import OdooBusinessToolExecutor
 from .descriptors import OdooRuntimeDescriptorReader
 from .identity import OdooApiKeyStore, OdooPageSessionIdentityResolver
 from .generic_forms import OdooFormPort
+from ..click_policy import OdooReviewedClickPolicy, load_review
 from .specs import (ANSWER_LABELS_ZH, APPLICATION_ID, ARCHIVE_CUSTOMER_TOOL,
                     COLLECTIONS, CREATE_CUSTOMER_TOOL, MUTATION_SPECS, MUTATION_TOOLS,
                     PREPARE_CUSTOMER_EDIT_TOOL, PREPARE_CUSTOMER_FORM_TOOL,
@@ -250,6 +252,7 @@ class OdooApplicationAdapter:
             withheld_skills=tuple(withheld),
             answer_labels={"zh": ANSWER_LABELS_ZH})
         self._executor = executor
+        self._click_policy: OdooReviewedClickPolicy | None = None
         # `fields_get` cannot establish that deployment-specific onchange code is inert.
         # Keep the broad no-Skill form surface explicitly opt-in until the live P8.6
         # qualification checks the deployed modules. Dedicated typed form tools are
@@ -324,6 +327,32 @@ class OdooApplicationAdapter:
             history=history,
             history_unavailable_reason=history_reason,
         )
+
+    def click_policy(self) -> "OdooReviewedClickPolicy":
+        """The reviewed read-only click policy, resolved against this database once.
+
+        Reviewed actions are named by XML ID; their numbers are this deployment's. An XML ID
+        that does not resolve -- a module not installed, an unreachable API -- is left out,
+        so the policy only ever narrows to what could be confirmed here.
+        """
+        if self._click_policy is None:
+            review = load_review()
+            names = [item["xmlid"] for item in review["actions"]]
+            resolved: dict[str, int] = {}
+            try:
+                rows = self._executor.call(
+                    "ir.model.data", "search_read",
+                    [[["model", "=", "ir.actions.act_window"],
+                      ["complete_name", "in", names]]],
+                    {"fields": ["complete_name", "res_id"]})
+                for row in rows if isinstance(rows, list) else ():
+                    if (isinstance(row, dict) and row.get("complete_name") in names
+                            and isinstance(row.get("res_id"), int)):
+                        resolved[row["complete_name"]] = row["res_id"]
+            except BusinessToolError:
+                resolved = {}
+            self._click_policy = OdooReviewedClickPolicy.from_review(review, resolved)
+        return self._click_policy
 
     @property
     def source_scopes(self) -> frozenset[str]:

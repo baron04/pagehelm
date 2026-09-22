@@ -15,6 +15,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from ..composition.sources import SourceCapability
+from .click_policy import ClickPolicy
 from ..answer.answering import render_structured_query_answer
 from ..answer.answer_view import render_payload
 from ..business.runtime import BusinessToolResult
@@ -158,9 +159,18 @@ class AgentTurnConfig:
     #: `SourceCapability` of its own out of two of the adapter's four settings, so an
     #: adapter that declared cited runtime lookup got a deployment without it.
     source: SourceCapability = SourceCapability.none()
+    #: An application's decision, per page and per element, to allow a click the action
+    #: policy otherwise disables. See `execution.click_policy`. None keeps click as
+    #: `disabled_actions` says.
+    click_policy: ClickPolicy | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "ledger_path", Path(self.ledger_path))
+        if self.click_policy is not None:
+            if not isinstance(self.click_policy, ClickPolicy):
+                raise TypeError("click_policy must implement ClickPolicy")
+            if "click" not in self.disabled_actions:
+                raise ValueError("a click policy only narrows a disabled click")
         if not isinstance(self.supported_scope, str) or not self.supported_scope.strip():
             raise ValueError("supported_scope must be a non-empty string")
         if (not isinstance(self.scope_first_policy, bool)

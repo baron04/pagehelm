@@ -72,6 +72,13 @@ describe('elementsFrom parses PageController records into the server schema', ()
     ])
   })
 
+  it('names an icon-only control by title, then by a tooltip attribute', () => {
+    const elements = elementsFrom(
+      '[1]<button title=Remove />\n[2]<button data-tooltip=Kanban />\n' +
+      '[3]<button aria-label=Next data-tooltip=Other />', 1, redactor)
+    expect(elements.map(element => element.name)).toEqual(['Remove', 'Kanban', 'Next'])
+  })
+
   it('uses the button value as the accessible name only for submit-typed inputs', () => {
     const elements = elementsFrom('[9]<input type=submit name=find value=Find />', 1, redactor)
     expect(elements[0]?.role).toBe('button')

@@ -70,6 +70,14 @@ agent.
   are routed, confirmed, and settled exactly as before, and a write in the same window is
   settled by the write path instead. The server never ends the turn on a target by itself,
   because it can verify a page state but not that the state is the whole request.
+- Generic click can stay disabled as an action while an application re-allows part of it:
+  an optional click policy sees the current observation and the element named and either
+  allows that click or refuses it before dispatch. The Odoo reference integration allows
+  tabs, the Home button, same-application links to pages reviewed as read-only (and records
+  opened from them), and named view-switch, pager, search and menu controls on those pages;
+  every other control -- New, Actions, row selection, inline editing, module activation,
+  unnamed buttons, anything on an unreviewed page -- is refused. The review lives in the
+  adapter and names actions by XML ID, resolved against the deployed database.
 - When no Skill trigger matches a request's wording, the catalog's read-only fallback stays
   loadable but is presented as an unmatched index rather than as task candidates. A typed read
   whose result repeats one already returned in the same turn is answered with a short notice
