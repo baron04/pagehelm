@@ -17,6 +17,7 @@ adopted instead of, and it would arrive at the same place by a longer road.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Union
 
@@ -295,31 +296,79 @@ class CapabilityGap:
 
 @dataclass(frozen=True, slots=True)
 class SourceExcerpt:
-    """A verbatim rule excerpt from the exact deployed source release."""
+    """A model paraphrase linked to a checked span of exact source evidence."""
 
     evidence_id: str
+    statement: str
+    support: str
     kind = "source_excerpt"
 
     def verify(self, turn: TurnEvidence) -> dict:
         item = _one(turn, self.evidence_id, SourceEvidence, "a source excerpt")
+        statement = _source_statement(
+            self.statement, item.citation, item.sha256, source_excerpt=item.excerpt)
+        support = _support_span(self.support, item.excerpt, item.summary)
         return {"kind": self.kind, "citation": item.citation, "release": item.release,
                 "sha256": item.sha256, "excerpt": item.excerpt, "scope": item.origin.scope,
-                "source_kind": "source", "fact_type": item.fact_type}
+                "source_kind": "source", "fact_type": item.fact_type,
+                "statement": statement, "support": support}
 
 
 @dataclass(frozen=True, slots=True)
 class SourceHistory:
-    """A server-rendered fact from Git metadata bound to the deployment commit."""
+    """A model paraphrase linked to checked deployment-bound Git metadata."""
 
     evidence_id: str
+    statement: str
+    support: str
     kind = "source_history"
 
     def verify(self, turn: TurnEvidence) -> dict:
         item = _one(turn, self.evidence_id, SourceHistoryEvidence, "source history")
+        statement = _source_statement(self.statement, item.citation, item.sha256)
+        support = _support_span(self.support, item.statement)
         return {"kind": self.kind, "citation": item.citation, "release": item.release,
                 "deployed_commit": item.deployed_commit, "history_kind": item.history_kind,
-                "statement": item.statement, "sha256": item.sha256,
+                "history_statement": item.statement, "statement": statement,
+                "support": support,
+                "sha256": item.sha256,
                 "scope": item.origin.scope, "source_kind": "source"}
+
+
+def _support_span(value: str, *evidence_texts: str) -> str:
+    """Require a literal span from this turn's cited evidence, kept off the user surface.
+
+    This makes attribution inspectable. It does not establish that a model's paraphrase
+    logically follows from the span; that remains an answer-quality question.
+    """
+    if not isinstance(value, str) or not 8 <= len(value) <= 400:
+        raise ConclusionRefused("source support needs 8 to 400 characters")
+    support = " ".join(value.split())
+    if (len(support) < 8 or any(ord(char) < 32 or ord(char) == 127 for char in support)
+            or not any(support in " ".join(text.split()) for text in evidence_texts)):
+        raise ConclusionRefused("support is not present in the cited source evidence")
+    return support
+
+
+def _source_statement(value: str, citation: str, digest: str, *,
+                      source_excerpt: str = "") -> str:
+    """Keep code, source locations and digests out of user-facing conclusions."""
+    if (not isinstance(value, str) or not value.strip() or len(value) > 800
+            or any(ord(char) < 32 or ord(char) == 127 for char in value)
+            or "`" in value):
+        raise ConclusionRefused("source conclusion needs one bounded plain-text statement")
+    statement = value.strip()
+    copied_excerpt = " ".join(source_excerpt.split())
+    if (citation in statement or digest in statement
+            or re.search(r"\b[0-9a-fA-F]{64}\b", statement)
+            or re.search(r"(?<!\w)[\w./-]+\.(?:py|pyi|js|jsx|ts|tsx|xml|json|ya?ml|sql|md)"
+                         r"(?::[1-9]\d*(?:-[1-9]\d*)?)?\b", statement)
+            or re.search(r"\b(?:if|elif|else|def|class|for|while)\s+.{0,80}:\s*"
+                         r"(?:raise|return|pass)\b", statement)
+            or (len(copied_excerpt) >= 16
+                and copied_excerpt in " ".join(statement.split()))):
+        raise ConclusionRefused("source code, locations and hashes are internal evidence")
+    return statement
 
 
 Conclusion = Union[FieldValue, Selection, Aggregate, NotFound, Undetermined, PageFact,
@@ -357,7 +406,11 @@ class AnswerDraft:
 
 @dataclass(frozen=True, slots=True)
 class VerifiedAnswer:
-    """What survived checking, and how much of the question the server will let it claim."""
+    """What survived structural checks, not a proof of semantic entailment.
+
+    A source paraphrase has a checked reference and literal support span. This cannot
+    determine whether the model interpreted that span correctly.
+    """
 
     conclusions: tuple[dict, ...]
     coverage: str

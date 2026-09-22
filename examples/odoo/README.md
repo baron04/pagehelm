@@ -123,7 +123,10 @@ The map and raw-code index exclude modules that merely exist in the image, and t
 combines the image release with the installed-module digest. The capability goes into the
 turn as one value; `lookup_source` combines compiled rule relations with deterministic local
 BM25 over allowlisted Python, JavaScript, XML and access declarations. It mints turn-owned
-evidence, so a source answer quotes cited bytes rather than trusting the model's paraphrase.
+evidence. Source-backed answers show a concise conclusion rather than cited bytes, paths,
+or hashes; the source reference and an exact checked supporting span remain in the
+server-side answer record and audit. The span check verifies provenance, not the semantic
+correctness of the model's paraphrase.
 Raw blocks are labelled implementation, not current state. Static permission declarations
 still require an actor-scoped runtime check, and source cannot prove the cause of one actual
 record event.

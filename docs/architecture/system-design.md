@@ -326,8 +326,13 @@ App Skill 适合描述当前菜单不可见、但已审核的只读页面入口�
 状态转换与 API schema 编译成通用 `SourceRelation`；应用无关的代码块索引再对 allowlist 内的
 Python、JavaScript、XML、YAML、SQL、Markdown 与配置文件做确定性 BM25 召回。后者不假装
 理解语义，只把结果标为 implementation。两条路径都绑定同一 release，并返回仓库相对路径、
-精确行范围和该范围的 SHA-256；命中的源码字节由 Session 铸成当轮 `SourceEvidence`，最终答案
-只能由服务端逐字呈现。
+精确行范围和该范围的 SHA-256；命中的源码字节由 Session 铸成当轮 `SourceEvidence`。
+Agent 必须把面向用户的结论绑定到本轮证据引用；答案层只展示结论，不展示源码片段、路径、
+行号或哈希，也不把源码实现称作“配置”。对模型转述的源码结论，答案合同要求一段确实
+出现在该引用原文或结构事实中的简短支持文本。服务端验证引用、release、哈希与该文本的
+归属，不声称仅凭字面匹配就能证明转述在语义上必然正确。证据仍保存在服务端供核验和审计。
+只有证据确实
+不足以确定具体事件时才说明不确定性，明确的规则不附加固定免责声明。
 
 `lookup_source_history` 是独立的可选 Provider。它只读取本地 Git，要求 allowlist 内的工作树
 字节与部署 commit 一致，并把 CODEOWNERS 声明、blame author、文件 commit author 与

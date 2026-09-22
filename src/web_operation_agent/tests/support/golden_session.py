@@ -716,7 +716,9 @@ def runtime_source_lookup_returns_cited_evidence(tmp: Path) -> Prepared:
         ("lookup_source", {"query": "trays"}),
         ("finish", {"outcome": "partial", "answer": {
             "version": 1, "coverage": "partial", "conclusions": [
-                {"kind": "source_excerpt", "evidence_ref": "source#1"}],
+                {"kind": "source_excerpt", "evidence_ref": "source#1",
+                 "statement": "The findTrays route requires authorization.",
+                 "support": "route findTrays handled by view-only, auth required"}],
         }}),
     ])
     browser = ScriptedBrowser()

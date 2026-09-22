@@ -34,13 +34,7 @@ _WORDS = {
         "source_page": "来源：页面观察",
         "source_typed": "来源：应用的类型化读取",
         "source_computed": "来源：在本轮读到的数据上计算",
-        "source_source": "来源：部署版本源码中的规则，不是当前数据",
         "source_capability": "来源：当前会话的能力目录",
-        "source_rule": "源码规则",
-        "source_history": "部署版本的 Git 历史",
-        "source_static_declaration": "静态声明；当前有效权限仍需用同身份运行时检查确认",
-        "source_possible_cause": "可能的代码路径；不是这次实际事件的原因证明",
-        "source_implementation": "实现片段；不是当前数据或实际事件原因",
         "empty": "（该字段已读取，内容为空）",
         "page_scope": "只代表当时页面上显示的内容，不代表完整数据",
         "subtotal": "小计（未覆盖全部范围）",
@@ -60,16 +54,7 @@ _WORDS = {
         "source_page": "source: page observation",
         "source_typed": "source: the application's typed read",
         "source_computed": "source: computed over what this turn read",
-        "source_source": "source: a rule in the deployed release's code, not current data",
         "source_capability": "source: this session's capability catalog",
-        "source_rule": "Rule in the source",
-        "source_history": "Git history for the deployed source",
-        "source_static_declaration": ("static declaration; current effective permission "
-                                      "still requires a same-actor runtime check"),
-        "source_possible_cause": ("possible code path; not proof of the cause of this "
-                                  "actual event"),
-        "source_implementation": ("implementation excerpt; not current data or proof of "
-                                  "an actual event's cause"),
         "empty": "(read, and holds nothing)",
         "page_scope": "only what the page showed at that moment; not a complete collection",
         "subtotal": "subtotal (does not cover the whole scope)",
@@ -85,7 +70,6 @@ def _language(user_text: str) -> str:
 def _source_line(words: dict, item: dict) -> str:
     return {"page": words["source_page"], "typed": words["source_typed"],
             "computed": words["source_computed"],
-            "source": words["source_source"],
             "capability": words["source_capability"]}[item["source_kind"]]
 
 
@@ -196,6 +180,8 @@ def render_sources(payload: dict, *, user_text: str, max_chars: int) -> str:
     words = _WORDS["zh" if chinese else "en"]
     blocks = []
     for source in payload.get("sources", ()):
+        if source["kind"] == "source":
+            continue
         lines = [f"**{_source_line(words, {'source_kind': source['kind']})}**",
                  f"{'读取或计算时间' if chinese else 'Read or computation time'}: {_literal(source['observed_at'])}",
                  f"{words['scope']}: {_literal(source['scope'])}"]
@@ -452,31 +438,9 @@ def _one(words: dict, item: dict, *, presentation: str) -> list[str]:
         # would say the application answered a question it was never asked.
         return [words["capability_gap"]]
     if kind == "source_excerpt":
-        # A fence longer than every backtick run keeps arbitrary source bytes inside the
-        # quote instead of allowing the excerpt to become answer markup.
-        excerpt = item["excerpt"].replace("\r", "").rstrip()
-        fence = "`" * max(3, 1 + max((len(run) for run in re.findall(r"`+", excerpt)),
-                                     default=0))
-        head = (f"**{words['source_rule']}**（{_literal(item['citation'])}）："
-                if words["lang"] == "zh" else
-                f"**{words['source_rule']}** ({_literal(item['citation'])}):")
-        qualifier = words["source_" + item.get("fact_type", "static_declaration")]
-        return [head,
-                fence, excerpt, fence,
-                f"> {_source_line(words, item)} · {_literal(item['release'])} · "
-                f"lines sha256:{_literal(item['sha256'])} · {_literal(qualifier)}"]
+        return [_literal(item["statement"])]
     if kind == "source_history":
-        head = (f"**{words['source_history']}**（{_literal(item['citation'])}）："
-                if words["lang"] == "zh" else
-                f"**{words['source_history']}** ({_literal(item['citation'])}):")
-        caution = ("这只说明提交记录或所有权声明，不代表当前组织责任人，也不能证明一次业务事件的原因"
-                   if words["lang"] == "zh" else
-                   "This states repository metadata, not current organizational responsibility "
-                   "or the cause of a live business event.")
-        return [f"{head}{_literal(item['statement'])}",
-                f"> {_literal(item['release'])} · deployed "
-                f"{_literal(item['deployed_commit'])} · sha256:{_literal(item['sha256'])} · "
-                f"{caution}"]
+        return [_literal(item["statement"])]
     if kind == "page_observation":
         label = "页面显示" if words["lang"] == "zh" else "The page shows"
         # The scope of a page fact is always the same claim -- this page, at that moment --

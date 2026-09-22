@@ -5906,8 +5906,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 9761,
-          "input_digest": "e82c7fdc0ff782506089afd9055c25e1c9696d970dc485acd82e5c0b89a820e2",
+          "input_bytes": 10630,
+          "input_digest": "4a656cf16b5b082bb3c7c682bb66d50d3e48480ee5fb6697215ede5c3dfed763",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -5997,8 +5997,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 14312,
-          "input_digest": "5976d8befc8be61a53dfb78874e202737fdcfb5e8bed160e16707937152d00d9",
+          "input_bytes": 15590,
+          "input_digest": "c6236dcbd019f22af694fe68a9e64fca71da8577938005fb0edabd9a4a6d7186",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -6017,7 +6017,9 @@
               "conclusions": [
                 {
                   "evidence_ref": "source#1",
-                  "kind": "source_excerpt"
+                  "kind": "source_excerpt",
+                  "statement": "The findTrays route requires authorization.",
+                  "support": "route findTrays handled by view-only, auth required"
                 }
               ],
               "coverage": "partial",
@@ -6045,7 +6047,7 @@
           "seq": 12
         },
         {
-          "agent_said": "**Rule in the source** (apps/greenhouse/glasshouse.decl:1-1):\n```\nroute findTrays handled by view-only, auth required\n```\n> source: a rule in the deployed release's code, not current data · v0 · lines sha256:a867c432897f5c7ecc7f68738df248d97885901687b79520e7b1a35374fd1b33 · static declaration; current effective permission still requires a same-actor runtime check\n\n> **Answered the part supported by current data**",
+          "agent_said": "The findTrays route requires authorization.\n\n> **Answered the part supported by current data**",
           "arm": "G",
           "business_answer_projected": false,
           "business_control": {
@@ -6068,7 +6070,7 @@
             "trace_events": 0,
             "write_blocked": 0
           },
-          "detail": "**Rule in the source** (apps/greenhouse/glasshouse.decl:1-1):\n```\nroute findTrays handled by view-only, auth required\n```\n> source: a rule in the deployed release's code, not current data · v0 · lines sha256:a867c432897f5c7ecc7f68738df248d97885901687b79520e7b1a35374fd1b33 · static declaration; current effective permission still requires a same-actor runtime check\n\n> **Answered the part supported by current data**",
+          "detail": "The findTrays route requires authorization.\n\n> **Answered the part supported by current data**",
           "event": "run_finished",
           "page_actions": 0,
           "plan_status": {},
@@ -6094,20 +6096,16 @@
                 "release": "v0",
                 "scope": "the deployed release v0",
                 "sha256": "a867c432897f5c7ecc7f68738df248d97885901687b79520e7b1a35374fd1b33",
-                "source_kind": "source"
+                "source_kind": "source",
+                "statement": "The findTrays route requires authorization.",
+                "support": "route findTrays handled by view-only, auth required"
               }
             ],
             "coverage": "partial",
             "lowered_because": [],
             "presentation": "brief",
             "prose": "",
-            "sources": [
-              {
-                "kind": "source",
-                "observed_at": "<unix-time>",
-                "scope": "the deployed release v0"
-              }
-            ]
+            "sources": []
           },
           "wall_seconds": 0.0,
           "write_refusals": 0
@@ -6123,8 +6121,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION",
-          "system_chars": 4780,
-          "system_digest": "sha256:c52327091106a7e9e0144f99c79f9f0cbc826826fa995bdd24e1cba5d30bdd6e",
+          "system_chars": 5637,
+          "system_digest": "sha256:1f53b228ab61e5d479cd006c6e235a37ab26dadcf85bd660e051529dbea8f3fe",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -6143,8 +6141,8 @@
           ]
         },
         {
-          "system_chars": 4780,
-          "system_digest": "sha256:c52327091106a7e9e0144f99c79f9f0cbc826826fa995bdd24e1cba5d30bdd6e",
+          "system_chars": 5637,
+          "system_digest": "sha256:1f53b228ab61e5d479cd006c6e235a37ab26dadcf85bd660e051529dbea8f3fe",
           "tool_results": [
             {
               "name": "lookup_source",
@@ -6169,7 +6167,7 @@
         }
       ],
       "result": {
-        "agent_said": "**Rule in the source** (apps/greenhouse/glasshouse.decl:1-1):\n```\nroute findTrays handled by view-only, auth required\n```\n> source: a rule in the deployed release's code, not current data · v0 · lines sha256:a867c432897f5c7ecc7f68738df248d97885901687b79520e7b1a35374fd1b33 · static declaration; current effective permission still requires a same-actor runtime check\n\n> **Answered the part supported by current data**",
+        "agent_said": "The findTrays route requires authorization.\n\n> **Answered the part supported by current data**",
         "arm": "G",
         "business_answer_projected": false,
         "business_control": {
@@ -6192,7 +6190,7 @@
           "trace_events": 0,
           "write_blocked": 0
         },
-        "detail": "**Rule in the source** (apps/greenhouse/glasshouse.decl:1-1):\n```\nroute findTrays handled by view-only, auth required\n```\n> source: a rule in the deployed release's code, not current data · v0 · lines sha256:a867c432897f5c7ecc7f68738df248d97885901687b79520e7b1a35374fd1b33 · static declaration; current effective permission still requires a same-actor runtime check\n\n> **Answered the part supported by current data**",
+        "detail": "The findTrays route requires authorization.\n\n> **Answered the part supported by current data**",
         "page_actions": 0,
         "plan_status": {},
         "plan_withdrawn": false,
@@ -6216,20 +6214,16 @@
               "release": "v0",
               "scope": "the deployed release v0",
               "sha256": "a867c432897f5c7ecc7f68738df248d97885901687b79520e7b1a35374fd1b33",
-              "source_kind": "source"
+              "source_kind": "source",
+              "statement": "The findTrays route requires authorization.",
+              "support": "route findTrays handled by view-only, auth required"
             }
           ],
           "coverage": "partial",
           "lowered_because": [],
           "presentation": "brief",
           "prose": "",
-          "sources": [
-            {
-              "kind": "source",
-              "observed_at": "<unix-time>",
-              "scope": "the deployed release v0"
-            }
-          ]
+          "sources": []
         },
         "write_refusals": 0
       },

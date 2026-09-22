@@ -191,7 +191,7 @@ class SourceAnswerTests(unittest.TestCase):
                 path="p", start_line=1, end_line=1, release="v0", sha256="a" * 64,
                 excerpt="x")
 
-    def test_source_excerpt_must_cite_source_and_is_quoted_verbatim(self):
+    def test_source_conclusion_keeps_its_citation_internal_and_answers_directly(self):
         turn = TurnEvidence()
         turn.record(_source_evidence(excerpt="if x:\n    raise Y(```odd```)"))
         turn.record(QueryEvidence(
@@ -202,19 +202,61 @@ class SourceAnswerTests(unittest.TestCase):
         with self.assertRaisesRegex(ConclusionRefused, "source_excerpt.*is a query"):
             answer_protocol.submit(turn, {"outcome": "answered", "answer": {
                 "version": 1, "coverage": "complete", "conclusions": [
-                    {"kind": "source_excerpt", "evidence_ref": "call1-q#1"}]}})
+                    {"kind": "source_excerpt", "evidence_ref": "call1-q#1",
+                     "statement": "当 x 成立时，操作会被拒绝。",
+                     "support": "if x: raise Y"}]}})
         payload = answer_protocol.submit(turn, {"outcome": "answered", "answer": {
             "version": 1, "coverage": "complete", "conclusions": [
-                {"kind": "source_excerpt", "evidence_ref": "source#1"}]}})
+                {"kind": "source_excerpt", "evidence_ref": "source#1",
+                 "statement": "当 x 成立时，操作会被拒绝。",
+                 "support": "if x: raise Y"}]}})
         text = render_payload(payload, user_text="托盘为什么不能再发芽？", max_chars=2000)
-        self.assertIn("源码规则", text)
-        self.assertIn("apps/greenhouse/rules.py:3-4", text)
-        self.assertIn("部署版本源码中的规则，不是当前数据", text)
-        self.assertIn("lines sha256:" + "a" * 64, text)
-        self.assertIn("````\nif x:\n    raise Y(```odd```)\n````", text)
-        english = render_payload(payload, user_text="Why can it not sprout?", max_chars=2000)
-        self.assertIn("**Rule in the source** (apps/greenhouse/rules.py:3-4):", english)
-        self.assertNotIn("（", english)
+        self.assertEqual(text, "当 x 成立时，操作会被拒绝。")
+        self.assertEqual(payload["conclusions"][0]["citation"],
+                         "apps/greenhouse/rules.py:3-4")
+        self.assertEqual(payload["conclusions"][0]["support"], "if x: raise Y")
+        self.assertEqual(payload["sources"], [])
+        from web_operation_agent.answer.answer_view import render_sources
+        self.assertEqual(render_sources(payload, user_text="为什么？", max_chars=2000), "")
+        with self.assertRaisesRegex(ConclusionRefused, "internal evidence"):
+            answer_protocol.submit(turn, {"outcome": "answered", "answer": {
+                "version": 1, "coverage": "complete", "conclusions": [
+                    {"kind": "source_excerpt", "evidence_ref": "source#1",
+                     "statement": "见 apps/greenhouse/rules.py:3-4",
+                     "support": "if x: raise Y"}]}})
+        with self.assertRaisesRegex(ConclusionRefused, "internal evidence"):
+            answer_protocol.submit(turn, {"outcome": "answered", "answer": {
+                "version": 1, "coverage": "complete", "conclusions": [
+                    {"kind": "source_excerpt", "evidence_ref": "source#1",
+                     "statement": "见 apps/other/guard.py:8",
+                     "support": "if x: raise Y"}]}})
+        with self.assertRaisesRegex(ConclusionRefused, "internal evidence"):
+            answer_protocol.submit(turn, {"outcome": "answered", "answer": {
+                "version": 1, "coverage": "complete", "conclusions": [
+                    {"kind": "source_excerpt", "evidence_ref": "source#1",
+                     "statement": "See app/rules.py; if x: raise Y",
+                     "support": "if x: raise Y"}]}})
+        with self.assertRaisesRegex(ConclusionRefused, "not present"):
+            answer_protocol.submit(turn, {"outcome": "answered", "answer": {
+                "version": 1, "coverage": "complete", "conclusions": [
+                    {"kind": "source_excerpt", "evidence_ref": "source#1",
+                     "statement": "当 x 成立时，操作会被拒绝。",
+                     "support": "another unrelated fact"}]}})
+        with self.assertRaisesRegex(ConclusionRefused, "add support"):
+            answer_protocol.submit(turn, {"outcome": "answered", "answer": {
+                "version": 1, "coverage": "complete", "conclusions": [
+                    {"kind": "source_excerpt", "evidence_ref": "source#1",
+                     "statement": "当 x 成立时，操作会被拒绝。"}]}})
+
+    def test_source_statement_does_not_echo_a_code_excerpt(self):
+        turn = TurnEvidence()
+        turn.record(_source_evidence(excerpt="user.confirmed = False"))
+        with self.assertRaisesRegex(ConclusionRefused, "internal evidence"):
+            answer_protocol.submit(turn, {"outcome": "answered", "answer": {
+                "version": 1, "coverage": "complete", "conclusions": [
+                    {"kind": "source_excerpt", "evidence_ref": "source#1",
+                     "statement": "user.confirmed = False",
+                     "support": "user.confirmed = False"}]}})
 
     def test_source_evidence_refuses_an_unsafe_path_or_unbounded_excerpt(self):
         with self.assertRaisesRegex(ValueError, "repository-relative"):
@@ -240,11 +282,12 @@ class SourceAnswerTests(unittest.TestCase):
         self.assertFalse(turn.has_application_evidence())
         payload = answer_protocol.submit(turn, {"outcome": "answered", "answer": {
             "version": 1, "coverage": "complete", "conclusions": [
-                {"kind": "source_history", "evidence_ref": "history#1"}]}})
+                {"kind": "source_history", "evidence_ref": "history#1",
+                 "statement": "这行的提交记录归于 Fixture Author。",
+                 "support": "Fixture Author"}]}})
         text = render_payload(payload, user_text="谁改了这行？", max_chars=2000)
-        self.assertIn("部署版本的 Git 历史", text)
-        self.assertIn("不代表当前组织责任人", text)
-        self.assertIn("git:", text)
+        self.assertEqual(text, "这行的提交记录归于 Fixture Author。")
+        self.assertNotIn("git:", text)
 
     def test_runtime_history_is_evidence_or_explicitly_unavailable(self):
         with tempfile.TemporaryDirectory() as tmp:

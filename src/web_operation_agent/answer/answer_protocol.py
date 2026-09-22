@@ -41,8 +41,16 @@ def answer_schema(*, source: bool = False) -> dict:
                                      "kind": {"type": "string", "enum": [kind]},
                                      "evidence_ref": _REF,
                                      **({"fields": _FIELDS} if kind == "selection" else {}),
+                                     **({"statement": {"type": "string", "minLength": 1,
+                                                       "maxLength": 800}}
+                                        if kind in ("source_excerpt", "source_history") else {}),
+                                     **({"support": {"type": "string", "minLength": 8,
+                                                     "maxLength": 400}}
+                                        if kind in ("source_excerpt", "source_history") else {}),
                                  },
-                                 "required": ["kind", "evidence_ref"]}
+                                 "required": (["kind", "evidence_ref", "statement", "support"]
+                                              if kind in ("source_excerpt", "source_history")
+                                              else ["kind", "evidence_ref"])}
                                 for kind in kinds]}},
         },
         "required": ["version", "coverage", "conclusions"],
@@ -53,7 +61,10 @@ def finish_answer_tool(*, source: bool = False) -> dict:
     return {"type": "function", "function": {
         "name": "finish", "description": (
         "Answer the user's question with evidence-backed conclusions. Use compute for "
-        "arithmetic or filtering, then cite its result. Never submit facts as free prose. "
+        "arithmetic or filtering, then cite its result. Source conclusions require one "
+        "concise answer statement and an exact supporting span from their evidence; "
+        "the span stays internal. Other facts are not "
+        "free prose. "
         "Answer only what was asked: for a total, one aggregate is enough, without a table. "
         "Use outcome=acted for a completed navigation or approved mutation, optionally "
         "including additional evidence-backed conclusions in answer. "
@@ -181,7 +192,11 @@ def submit(turn: TurnEvidence, args: dict) -> dict | None:
     conclusions = []
     for entry in entries:
         try:
-            _shape(entry, {"kind", "evidence_ref", "fields"}, {"kind", "evidence_ref"},
+            source_kind = (isinstance(entry, dict)
+                           and entry.get("kind") in ("source_excerpt", "source_history"))
+            _shape(entry, {"kind", "evidence_ref", "fields", "statement", "support"},
+                   {"kind", "evidence_ref", "statement", "support"} if source_kind
+                   else {"kind", "evidence_ref"},
                    "conclusion")
         except ConclusionRefused as exc:
             raise ConclusionRefused(
@@ -198,6 +213,10 @@ def submit(turn: TurnEvidence, args: dict) -> dict | None:
             raise ConclusionRefused("invalid selection fields")
         if fields and kind != "selection":
             raise ConclusionRefused("fields are only valid for selection")
+        if "statement" in entry and not source_kind:
+            raise ConclusionRefused("statement is only valid for a source conclusion")
+        if "support" in entry and not source_kind:
+            raise ConclusionRefused("support is only valid for a source conclusion")
         if kind == "field_value" and isinstance(item, RecordEvidence):
             conclusions.append(FieldValue(item.record_id, item.field_name, ref))
         elif kind == "selection" and isinstance(item, (QueryEvidence, SelectionEvidence)):
@@ -219,9 +238,9 @@ def submit(turn: TurnEvidence, args: dict) -> dict | None:
                     "a capability gap is the entire answer and carries no other conclusion")
             conclusions.append(CapabilityGap(ref))
         elif kind == "source_excerpt" and isinstance(item, SourceEvidence):
-            conclusions.append(SourceExcerpt(ref))
+            conclusions.append(SourceExcerpt(ref, entry["statement"], entry["support"]))
         elif kind == "source_history" and isinstance(item, SourceHistoryEvidence):
-            conclusions.append(SourceHistory(ref))
+            conclusions.append(SourceHistory(ref, entry["statement"], entry["support"]))
         elif kind == "undetermined":
             about = (f"{item.record_id}.{item.field_name}" if isinstance(item, RecordEvidence)
                      else item.collection if isinstance(item, QueryEvidence)
@@ -244,7 +263,7 @@ def submit(turn: TurnEvidence, args: dict) -> dict | None:
 
 
 def _sources(turn: TurnEvidence, refs: tuple[str, ...]) -> list[dict]:
-    """Project cited lineage, excluding raw values, opaque IDs and unrelated reads."""
+    """Project user-facing lineage; source-code provenance stays in the server audit."""
     pending, visited, origins = list(refs), set(), {}
     queries = {item.origin: item for ref in turn.ids()
                if isinstance(item := turn.get(ref), QueryEvidence)}
@@ -254,6 +273,8 @@ def _sources(turn: TurnEvidence, refs: tuple[str, ...]) -> list[dict]:
             continue
         visited.add(ref)
         item = turn.get(ref)
+        if isinstance(item, (SourceEvidence, SourceHistoryEvidence)):
+            continue
         origin = item.origin
         source = origins.setdefault(origin, {
             "kind": origin.kind, "observed_at": origin.observed_at, "scope": origin.scope})

@@ -17,7 +17,10 @@ agent.
   its next decision, with step, time, token, and provider-spend limits.
 - Application-owned Skills and typed tools provide current business facts. When explicitly
   enabled, deployment-bound structured facts plus a language-neutral local code-block index
-  can answer source questions with exact file, line, release, and byte-digest provenance.
+  can answer source questions while retaining exact file, line, release, and byte-digest
+  provenance on the server rather than showing source excerpts in the user answer. For a
+  source paraphrase, the server also checks that a short supporting span occurs in the cited
+  evidence; that check does not prove the model's interpretation of the span.
   An optional local Git provider separately cites ownership, blame, commit, and version-diff
   metadata bound to the deployed commit. Source retrieval remains optional and is never a
   prerequisite for ordinary browser or API operation.
@@ -171,7 +174,8 @@ The adapter includes versioned Skills and an optional source compiler for Odoo m
 views, fields, method documentation, and user-visible refusal conditions. A generic raw-code
 index covers allowlisted Python, JavaScript, XML and access declarations alongside those
 compiled facts. Both are restricted to modules installed in the running deployment, and
-source answers quote cited bytes from that release. A full matching Git commit can optionally
+source-backed answers state the conclusion without displaying cited bytes or locations; the
+citations remain available to server-side audit. A full matching Git commit can optionally
 enable local history; an extracted image tree without `.git` reports history unavailable.
 Runtime facts remain authoritative when source or documentation disagrees. The installed
 add-on also exposes a bounded actor-scoped model/action catalog. The
@@ -209,6 +213,8 @@ source compilation, fixture provisioning, and qualification.
 - Local source search can match Han-language labels and comments, but does not translate a
   Chinese business question into English code identifiers. Cross-language recall still
   depends on the Agent choosing suitable source terms and has not been broadly qualified.
+- When source lookup is enabled with a hosted model, retrieved allowlisted source is sent in
+  model requests. Use that combination only where the deployment's data policy permits it.
 - Browser and accessibility coverage is strongest on Chromium; other engines and screen
   readers are not comprehensively qualified.
 
