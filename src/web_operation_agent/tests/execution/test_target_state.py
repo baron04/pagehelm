@@ -176,10 +176,13 @@ class TargetSettlement(unittest.TestCase):
         self.assertEqual(result.terminal_reason, "agent_finished")
         self.assertEqual(len(chat.seen), 3)
         self.assertEqual([command for command, _ in browser.commands], ["click"])
-        # At the checkpoint the model was offered exactly the completion decision.
-        offered = {tool["function"]["name"] for tool in chat.tools[2]}
-        self.assertEqual(offered, {"finish", "set_target"})
+        # The checkpoint does not change the tool list -- a changed list would invalidate
+        # the provider's cached prefix -- it tells the model the decision and the loop
+        # refuses anything else (see the refusal test below).
+        self.assertEqual(chat.tools[2], chat.tools[1])
         self.assertIn("TARGET REACHED", chat.seen[2][-1]["content"])
+        self.assertIn("Only finish and set_target are available now",
+                      chat.seen[2][-1]["content"])
         self.assertEqual(result.verified_answer["action"]["kind"], "target_state")
         self.assertEqual(result.verified_answer["action"]["url"], ORIGIN + PARTNER)
         self.assertTrue(result.verified_answer["action"]["acted"])
@@ -356,8 +359,8 @@ class TargetSettlement(unittest.TestCase):
         self.assertEqual(result.terminal_reason, "agent_finished")
         self.assertEqual(len(chat.seen), 2)
         self.assertEqual(browser.commands, [])
-        self.assertEqual({tool["function"]["name"] for tool in chat.tools[1]},
-                         {"finish", "set_target"})
+        self.assertEqual(chat.tools[1], chat.tools[0])
+        self.assertIn("TARGET REACHED", chat.seen[1][-1]["content"])
         self.assertFalse(result.verified_answer["action"]["acted"])
         self.assertIn("already in the requested state", result.agent_said)
 

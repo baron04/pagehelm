@@ -245,8 +245,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 11746,
-          "input_digest": "e4623d0f42b9a9d44e0f35ebef60077bfef33add85b4c3961c4f07fef652d8f5",
+          "input_bytes": 12655,
+          "input_digest": "d2e4066a84e1dfa56b83ef41edd7a788abf38ca2b63f60e886b7da782e555821",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -255,7 +255,7 @@
           "run_id": "a_referential_followup_keeps_its_prior_domain",
           "schema_version": 1,
           "seq": 4,
-          "tool_count": 12
+          "tool_count": 13
         },
         {
           "args": {
@@ -292,8 +292,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 12547,
-          "input_digest": "c7912b9db74dfec3eee30669e6da1be64198130e0c7ee305fe929086fd037d38",
+          "input_bytes": 13456,
+          "input_digest": "eba8a2f854bbfd234a287400986047d8606073ef03b9cb1a614d7aec64b91f15",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -304,7 +304,7 @@
           "run_id": "a_referential_followup_keeps_its_prior_domain",
           "schema_version": 1,
           "seq": 7,
-          "tool_count": 13
+          "tool_count": 14
         },
         {
           "args": {},
@@ -344,8 +344,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 13248,
-          "input_digest": "a3068e66d40b89ef5b05034d0ff571e1f2483a0b3bba5ffe5fa4ef5c5e4f95ee",
+          "input_bytes": 14157,
+          "input_digest": "bcd70c8bd4af7c6c7e0c8c1d74aad6b66cbe6a4e264db5f6f82d55bbc3771ee6",
           "message_count": 6,
           "roles": {
             "assistant": 2,
@@ -356,7 +356,7 @@
           "run_id": "a_referential_followup_keeps_its_prior_domain",
           "schema_version": 1,
           "seq": 10,
-          "tool_count": 13
+          "tool_count": 14
         },
         {
           "event": "business_answer",
@@ -427,6 +427,7 @@
           "tools_offered": [
             "back",
             "click",
+            "compute",
             "fill",
             "finish",
             "goto",
@@ -451,6 +452,7 @@
           "tools_offered": [
             "back",
             "click",
+            "compute",
             "fill",
             "finish",
             "goto",
@@ -476,6 +478,7 @@
           "tools_offered": [
             "back",
             "click",
+            "compute",
             "fill",
             "finish",
             "goto",
@@ -1622,8 +1625,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 11142,
-          "input_digest": "3abd4d8e3853dd67768e29d7c918d13d46952d23d0cc404a9db06d21b08c6486",
+          "input_bytes": 12051,
+          "input_digest": "9349af9cc3c2e521e643145cf71a3fc761d0be0f01c4d53c900abc3688e56f68",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -1632,7 +1635,7 @@
           "run_id": "business_read_projected_as_a_plain_answer",
           "schema_version": 1,
           "seq": 4,
-          "tool_count": 12
+          "tool_count": 13
         },
         {
           "args": {
@@ -1668,8 +1671,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 11943,
-          "input_digest": "73c7a502912018c2efc4d6b276a154709ac0f9d8af68ef41b5e1091ad12d038e",
+          "input_bytes": 12852,
+          "input_digest": "ef76dee52d21bdbd5331f20a32a40a33dc0b167fbdb6bf10dfc63e6f9c1f226f",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -1680,7 +1683,7 @@
           "run_id": "business_read_projected_as_a_plain_answer",
           "schema_version": 1,
           "seq": 7,
-          "tool_count": 13
+          "tool_count": 14
         },
         {
           "args": {},
@@ -1719,8 +1722,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 12644,
-          "input_digest": "b961516d68d0b9518639410e2868361e1370c983eb04f3fb9ff6debd5d190897",
+          "input_bytes": 13553,
+          "input_digest": "34afefb3ffae00a2da3d20f5bfe3b92ae5d4847a22c63cd4bd5521fccb8c45e4",
           "message_count": 6,
           "roles": {
             "assistant": 2,
@@ -1731,7 +1734,7 @@
           "run_id": "business_read_projected_as_a_plain_answer",
           "schema_version": 1,
           "seq": 10,
-          "tool_count": 13
+          "tool_count": 14
         },
         {
           "event": "business_answer",
@@ -1810,6 +1813,7 @@
           "tools_offered": [
             "back",
             "click",
+            "compute",
             "fill",
             "finish",
             "goto",
@@ -1834,6 +1838,7 @@
           "tools_offered": [
             "back",
             "click",
+            "compute",
             "fill",
             "finish",
             "goto",
@@ -1859,6 +1864,7 @@
           "tools_offered": [
             "back",
             "click",
+            "compute",
             "fill",
             "finish",
             "goto",
@@ -1961,8 +1967,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 11142,
-          "input_digest": "3abd4d8e3853dd67768e29d7c918d13d46952d23d0cc404a9db06d21b08c6486",
+          "input_bytes": 12051,
+          "input_digest": "9349af9cc3c2e521e643145cf71a3fc761d0be0f01c4d53c900abc3688e56f68",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -1971,7 +1977,7 @@
           "run_id": "business_read_then_open_the_authorised_route",
           "schema_version": 1,
           "seq": 4,
-          "tool_count": 12
+          "tool_count": 13
         },
         {
           "args": {
@@ -2007,8 +2013,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 11943,
-          "input_digest": "73c7a502912018c2efc4d6b276a154709ac0f9d8af68ef41b5e1091ad12d038e",
+          "input_bytes": 12852,
+          "input_digest": "ef76dee52d21bdbd5331f20a32a40a33dc0b167fbdb6bf10dfc63e6f9c1f226f",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -2019,7 +2025,7 @@
           "run_id": "business_read_then_open_the_authorised_route",
           "schema_version": 1,
           "seq": 7,
-          "tool_count": 13
+          "tool_count": 14
         },
         {
           "args": {
@@ -2060,8 +2066,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 12498,
-          "input_digest": "a9d56d29f087857707dbaa00f67efad2d0d7176c973094267537b5b6f597f357",
+          "input_bytes": 13407,
+          "input_digest": "7f595cc99baa8ef3e67bb97ec82c9e842b7281e2ae01e4c6b11a53683eb72237",
           "message_count": 6,
           "roles": {
             "assistant": 2,
@@ -2072,7 +2078,7 @@
           "run_id": "business_read_then_open_the_authorised_route",
           "schema_version": 1,
           "seq": 10,
-          "tool_count": 13
+          "tool_count": 14
         },
         {
           "args": {
@@ -2134,8 +2140,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 13279,
-          "input_digest": "cebdce9186c9f60177f16298a3df06dad40fc3971217c1c2f099ba93abd1968f",
+          "input_bytes": 14188,
+          "input_digest": "8faa77eab8366ba342178f625266f03a0c95eb3beb96e4fd29d29a50cd0e9ed0",
           "message_count": 8,
           "roles": {
             "assistant": 3,
@@ -2146,7 +2152,7 @@
           "run_id": "business_read_then_open_the_authorised_route",
           "schema_version": 1,
           "seq": 15,
-          "tool_count": 13
+          "tool_count": 14
         },
         {
           "args": {
@@ -2235,6 +2241,7 @@
           "tools_offered": [
             "back",
             "click",
+            "compute",
             "fill",
             "finish",
             "goto",
@@ -2259,6 +2266,7 @@
           "tools_offered": [
             "back",
             "click",
+            "compute",
             "fill",
             "finish",
             "goto",
@@ -2284,6 +2292,7 @@
           "tools_offered": [
             "back",
             "click",
+            "compute",
             "fill",
             "finish",
             "goto",
@@ -2309,6 +2318,7 @@
           "tools_offered": [
             "back",
             "click",
+            "compute",
             "fill",
             "finish",
             "goto",
@@ -2411,8 +2421,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 9150,
-          "input_digest": "6285d17683860a915824addc9257a22d12ba0f8404521f999f4ecb55d55dcd0a",
+          "input_bytes": 10059,
+          "input_digest": "3ff2cf17b2062d6baccf3d27e84e7c201ee1579bb30e27706b9a7918c71d68a6",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -2421,7 +2431,7 @@
           "run_id": "business_write_approved",
           "schema_version": 1,
           "seq": 4,
-          "tool_count": 11
+          "tool_count": 12
         },
         {
           "args": {
@@ -2458,8 +2468,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 10206,
-          "input_digest": "38ad7e467ba15df28f30919120b377dcde36e6f7553fc632dc5826d75b313a14",
+          "input_bytes": 11115,
+          "input_digest": "6b0bb196ce3c0205c8562c0d3f4ccc1f4dd9b0cdcfae457b86d1b86ee923f93e",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -2470,7 +2480,7 @@
           "run_id": "business_write_approved",
           "schema_version": 1,
           "seq": 7,
-          "tool_count": 13
+          "tool_count": 14
         },
         {
           "args": {
@@ -2583,8 +2593,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 11073,
-          "input_digest": "add2e9e828bb66c3be812f23cfcb06a6543a3f62df7080d56a50938e93e96c21",
+          "input_bytes": 11982,
+          "input_digest": "4f200ce085ead82291122c0539fdce0b09be6b399c25a5d8d9f50a379b2e2119",
           "message_count": 6,
           "roles": {
             "assistant": 2,
@@ -2595,7 +2605,7 @@
           "run_id": "business_write_approved",
           "schema_version": 1,
           "seq": 14,
-          "tool_count": 13
+          "tool_count": 14
         },
         {
           "args": {
@@ -2685,6 +2695,7 @@
           "tools_offered": [
             "back",
             "click",
+            "compute",
             "fill",
             "finish",
             "goto",
@@ -2708,6 +2719,7 @@
           "tools_offered": [
             "back",
             "click",
+            "compute",
             "create_tray",
             "fill",
             "finish",
@@ -2733,6 +2745,7 @@
           "tools_offered": [
             "back",
             "click",
+            "compute",
             "create_tray",
             "fill",
             "finish",
@@ -2835,8 +2848,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 9150,
-          "input_digest": "6285d17683860a915824addc9257a22d12ba0f8404521f999f4ecb55d55dcd0a",
+          "input_bytes": 10059,
+          "input_digest": "3ff2cf17b2062d6baccf3d27e84e7c201ee1579bb30e27706b9a7918c71d68a6",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -2845,7 +2858,7 @@
           "run_id": "business_write_denied",
           "schema_version": 1,
           "seq": 4,
-          "tool_count": 11
+          "tool_count": 12
         },
         {
           "args": {
@@ -2882,8 +2895,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 10206,
-          "input_digest": "38ad7e467ba15df28f30919120b377dcde36e6f7553fc632dc5826d75b313a14",
+          "input_bytes": 11115,
+          "input_digest": "6b0bb196ce3c0205c8562c0d3f4ccc1f4dd9b0cdcfae457b86d1b86ee923f93e",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -2894,7 +2907,7 @@
           "run_id": "business_write_denied",
           "schema_version": 1,
           "seq": 7,
-          "tool_count": 13
+          "tool_count": 14
         },
         {
           "args": {
@@ -3004,6 +3017,7 @@
           "tools_offered": [
             "back",
             "click",
+            "compute",
             "fill",
             "finish",
             "goto",
@@ -3027,6 +3041,7 @@
           "tools_offered": [
             "back",
             "click",
+            "compute",
             "create_tray",
             "fill",
             "finish",
@@ -3129,8 +3144,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 9150,
-          "input_digest": "6285d17683860a915824addc9257a22d12ba0f8404521f999f4ecb55d55dcd0a",
+          "input_bytes": 10059,
+          "input_digest": "3ff2cf17b2062d6baccf3d27e84e7c201ee1579bb30e27706b9a7918c71d68a6",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -3139,7 +3154,7 @@
           "run_id": "business_write_indeterminate",
           "schema_version": 1,
           "seq": 4,
-          "tool_count": 11
+          "tool_count": 12
         },
         {
           "args": {
@@ -3176,8 +3191,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 10206,
-          "input_digest": "38ad7e467ba15df28f30919120b377dcde36e6f7553fc632dc5826d75b313a14",
+          "input_bytes": 11115,
+          "input_digest": "6b0bb196ce3c0205c8562c0d3f4ccc1f4dd9b0cdcfae457b86d1b86ee923f93e",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -3188,7 +3203,7 @@
           "run_id": "business_write_indeterminate",
           "schema_version": 1,
           "seq": 7,
-          "tool_count": 13
+          "tool_count": 14
         },
         {
           "args": {
@@ -3311,6 +3326,7 @@
           "tools_offered": [
             "back",
             "click",
+            "compute",
             "fill",
             "finish",
             "goto",
@@ -3334,6 +3350,7 @@
           "tools_offered": [
             "back",
             "click",
+            "compute",
             "create_tray",
             "fill",
             "finish",
@@ -3721,8 +3738,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 7586,
-          "input_digest": "9904e00b96234216e52a7cc0b35f7ebf3ea9a2ba7e8f29a0847c1198836f71ae",
+          "input_bytes": 9971,
+          "input_digest": "2f8eaa5627bbbe88e933114ef63be9e17b07f7d32d05dce4e073b64ec7084110",
           "message_count": 6,
           "roles": {
             "assistant": 2,
@@ -3733,7 +3750,7 @@
           "run_id": "declared_target_settles_on_the_page",
           "schema_version": 1,
           "seq": 11,
-          "tool_count": 2
+          "tool_count": 11
         },
         {
           "args": {
@@ -3878,8 +3895,17 @@
             }
           ],
           "tools_offered": [
+            "back",
+            "click",
+            "fill",
             "finish",
-            "set_target"
+            "goto",
+            "observe",
+            "scroll",
+            "select",
+            "set_target",
+            "submit",
+            "wait_for"
           ]
         }
       ],
@@ -6408,8 +6434,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 18047,
-          "input_digest": "cb14ddf2df1a96833efe71ea755fde15f5bcbd73019c11302706e063416153b4",
+          "input_bytes": 16608,
+          "input_digest": "9a399f508cb761369d41e0f9f550233c4b244f5e64ddc27ef1b15b0966e7d216",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -9723,6 +9749,67 @@
       },
       {
         "function": {
+          "description": "Compute over one current query or a previous selection. The server resolves the actual records. count needs no field; filter supports numeric and ISO date comparisons (2026-08-18 covers that whole day) or exact text eq/ne/in; min/max and argmin/argmax also order dates, which do not sum; argmin/argmax return all tied records. No page action.",
+          "name": "compute",
+          "parameters": {
+            "additionalProperties": false,
+            "properties": {
+              "choices": {
+                "items": {
+                  "maxLength": 300,
+                  "type": "string"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              "comparison": {
+                "enum": [
+                  "gt",
+                  "ge",
+                  "lt",
+                  "le",
+                  "eq",
+                  "ne",
+                  "in"
+                ],
+                "type": "string"
+              },
+              "dataset_ref": {
+                "maxLength": 200,
+                "type": "string"
+              },
+              "field": {
+                "maxLength": 100,
+                "type": "string"
+              },
+              "operation": {
+                "enum": [
+                  "filter",
+                  "count",
+                  "sum",
+                  "min",
+                  "max",
+                  "argmin",
+                  "argmax"
+                ],
+                "type": "string"
+              },
+              "threshold": {
+                "maxLength": 128,
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation",
+              "dataset_ref"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "function"
+      },
+      {
+        "function": {
           "description": "Load one server-selected Business Skill before using its typed data tools.",
           "name": "load_skill",
           "parameters": {
@@ -9963,6 +10050,67 @@
                 "type": "array"
               }
             },
+            "type": "object"
+          }
+        },
+        "type": "function"
+      },
+      {
+        "function": {
+          "description": "Compute over one current query or a previous selection. The server resolves the actual records. count needs no field; filter supports numeric and ISO date comparisons (2026-08-18 covers that whole day) or exact text eq/ne/in; min/max and argmin/argmax also order dates, which do not sum; argmin/argmax return all tied records. No page action.",
+          "name": "compute",
+          "parameters": {
+            "additionalProperties": false,
+            "properties": {
+              "choices": {
+                "items": {
+                  "maxLength": 300,
+                  "type": "string"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              "comparison": {
+                "enum": [
+                  "gt",
+                  "ge",
+                  "lt",
+                  "le",
+                  "eq",
+                  "ne",
+                  "in"
+                ],
+                "type": "string"
+              },
+              "dataset_ref": {
+                "maxLength": 200,
+                "type": "string"
+              },
+              "field": {
+                "maxLength": 100,
+                "type": "string"
+              },
+              "operation": {
+                "enum": [
+                  "filter",
+                  "count",
+                  "sum",
+                  "min",
+                  "max",
+                  "argmin",
+                  "argmax"
+                ],
+                "type": "string"
+              },
+              "threshold": {
+                "maxLength": 128,
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation",
+              "dataset_ref"
+            ],
             "type": "object"
           }
         },

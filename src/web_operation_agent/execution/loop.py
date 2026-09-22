@@ -58,7 +58,8 @@ def named_tools(session):
             available["prepare_form"] = partial(prepare_form, session)
     if session._answers_pending_question:
         available["withdraw_request"] = session._tool_withdraw_request
-    if session.evidence.has_application_evidence():
+    if (session.business_tools is not None
+            or session.evidence.has_application_evidence()):
         available["compute"] = session._tool_compute
     if session.allow_clarification:
         available["ask_user"] = partial(ask_user_tool, session)

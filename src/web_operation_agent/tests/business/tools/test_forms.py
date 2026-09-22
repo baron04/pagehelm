@@ -157,7 +157,9 @@ class FormPrefillProductPath(unittest.TestCase):
             self.assertEqual(result.terminal_reason, "agent_finished")
             self.assertEqual(result.steps_used, 3)
             self.assertEqual(len(chat.messages), 3)
-            self.assertNotIn("prefill_form", chat.tool_names[0])
+            # Offered from the first call so the tool list never changes mid-turn; the
+            # server refuses it until an application-issued draft exists.
+            self.assertIn("prefill_form", chat.tool_names[0])
             self.assertIn("prefill_form", chat.tool_names[2])
             self.assertNotIn("fill", chat.tool_names[2])
             self.assertEqual(browser.actions, ["goto", "fill", "fill"])

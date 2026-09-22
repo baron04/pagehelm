@@ -468,14 +468,25 @@ def _tool_result(call: dict, text: str) -> dict:
             "name": (call.get("function") or {}).get("name") or "", "content": text}
 
 
+#: How many full tool results beyond `keep` a turn accumulates before it trims. Rewriting an
+#: old message changes the request prefix from that message on, so no provider prefix cache
+#: can serve anything after it. Trimming one message per step did that every step -- a
+#: measured ten-step turn had only 42% of its request bytes cacheable -- so the window is
+#: allowed to grow by this much and is then trimmed back to `keep` in one rewrite.
+TRIM_SLACK = 3
+
+
 def _trim(messages: list[dict], keep: int) -> list[dict]:
-    """Keep the opening context and the last `keep` tool results in full.
+    """Keep the opening context and the last `keep` tool results in full, in batches.
 
     Older tool results become a single line saying what the action was and where it landed,
-    which is what the model actually needs from them; the page they described is gone.
+    which is what the model actually needs from them; the page they described is gone. The
+    rewrite happens only once more than `keep + TRIM_SLACK` results are held in full.
     """
     tool_indexes = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
-    if len(tool_indexes) <= keep:
+    full = [i for i in tool_indexes
+            if not (messages[i].get("content") or "").startswith("(earlier) ")]
+    if len(full) <= keep + TRIM_SLACK:
         return messages
     for i in tool_indexes[:-keep]:
         content = messages[i].get("content") or ""

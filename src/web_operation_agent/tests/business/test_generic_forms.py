@@ -273,6 +273,40 @@ class GenericFormProductPathNeedsNoPerFormSkill(unittest.TestCase):
             return {"tool_calls": [{"id": str(self.step), "function": {
                 "name": name, "arguments": json.dumps(args)}}]}
 
+    def test_prefill_before_a_draft_exists_is_refused_without_dispatch(self):
+        """prefill_form is on the tool list from the first call so the list never changes
+        mid-turn; before an application-issued draft exists it must do nothing at all."""
+        class EarlyChat(self.Chat):
+            def complete(self, messages, tools, run_id, **kwargs):
+                if not self.messages:
+                    self.messages.append([dict(m) for m in messages])
+                    self.tool_names.append({t["function"]["name"] for t in tools})
+                    return {"tool_calls": [{"id": "early", "function": {
+                        "name": "prefill_form", "arguments": "{}"}}]}
+                return super().complete(messages, tools, run_id, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            browser, chat = self.Browser(), EarlyChat()
+            routes = DeclaredRoutePort("fixture.forms", (r"/companies/new",))
+            ledger = SessionLedger(Path(tmp) / "audit.jsonl", "early-prefill")
+            session = ServerAgentSession(
+                task=TaskSpec("T", "fill the company name but do not submit"),
+                chat=chat, browser=browser, control=ReadOnlyControl(), ledger=ledger,
+                application_routes=routes, application_forms=_Forms(),
+                disabled_actions={"click", "fill", "select", "submit"},
+                allow_form_prefill=True, step_budget=5, wall_budget_s=30)
+            session.entry_observation = browser.observe()
+            session.plan()
+
+            result = session.run()
+
+            self.assertIn("prefill_form", chat.tool_names[0])
+            self.assertIn("No current application-issued form draft",
+                          chat.messages[1][-1]["content"])
+            # The refused call reached no browser; the one fill is the real draft's.
+            self.assertEqual(browser.actions, ["fill"])
+            self.assertEqual(result.terminal_reason, "agent_finished")
+
     def test_describe_prepare_and_prefill_run_without_a_matching_skill(self):
         with tempfile.TemporaryDirectory() as tmp:
             browser, chat = self.Browser(), self.Chat()
@@ -292,7 +326,9 @@ class GenericFormProductPathNeedsNoPerFormSkill(unittest.TestCase):
 
             self.assertEqual(result.terminal_reason, "agent_finished")
             self.assertEqual(browser.actions, ["fill"])
-            self.assertNotIn("prefill_form", chat.tool_names[0])
+            # Offered from the first call so the tool list never changes mid-turn; the
+            # server refuses it until an application-issued draft exists.
+            self.assertIn("prefill_form", chat.tool_names[0])
             self.assertIn("describe_form", chat.tool_names[0])
             self.assertIn("prepare_form", chat.tool_names[0])
             self.assertIn("prefill_form", chat.tool_names[2])

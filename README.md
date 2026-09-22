@@ -62,9 +62,10 @@ agent.
   the Agent declares that state up front with `set_target`: an exact same-application path
   and/or the accessible names of controls that must show as selected. After every successful
   write-free page action the server compares the fresh observation with the declaration; when
-  it matches, the server reports the reached state and offers only `finish` and `set_target`,
-  so the model either reports the action or declares the next state instead of investigating
-  a page it has already reached. The sentence the user reads is composed from the observed
+  it matches, the server reports the reached state and accepts only `finish` and
+  `set_target` (any other call is refused without dispatch; the tool list itself stays the same
+  so the provider's prefix cache survives), so the model either reports the action or declares
+  the next state instead of investigating a page it has already reached. The sentence the user reads is composed from the observed
   page, never from model prose. A declared target grants no permission: clicks and navigation
   are routed, confirmed, and settled exactly as before, and a write in the same window is
   settled by the write path instead. The server never ends the turn on a target by itself,

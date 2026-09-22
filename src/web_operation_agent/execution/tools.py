@@ -52,7 +52,11 @@ class ToolSurface:
             tools += [CAPABILITY_TOOL]
         if session._answers_pending_question:
             tools += [WITHDRAW_TOOL]
-        if session.evidence.has_application_evidence():
+        # Offered for the whole turn wherever it can ever apply, rather than from the first
+        # typed result on: a tool list that changes invalidates every cached message after
+        # it. Without evidence the server refuses the call, as it always has.
+        if (session.business_tools is not None
+                or session.evidence.has_application_evidence()):
             tools += [answer_protocol.COMPUTE_TOOL]
         tools += [SOURCE_TOOL, SOURCE_HISTORY_TOOL, SOURCE_NAV_TOOL] \
             if session.runtime_source else []
@@ -69,12 +73,11 @@ class ToolSurface:
             tools += session.business_tools.schemas_for(session._loaded_business_skill_ids)
         if session.allow_form_prefill and session._application_form_tools is not None:
             tools += list(FORM_TOOL_SCHEMAS)
-        if session.allow_form_prefill and session._form_draft is not None:
+        if session.allow_form_prefill and (session._application_form_tools is not None
+                                           or session.business_tools is not None):
+            # Same reason as compute: offered while a draft can exist, refused without one.
             tools += [PREFILL_FORM_TOOL]
-        if session._target_reached:
-            # The page shows the declared state. The one open question is the model's:
-            # is the request complete, or is there a next state? Nothing else is offered,
-            # so the turn cannot drift back into investigating a page it has reached.
-            tools = [tool for tool in tools if tool["function"]["name"] in
-                     {"finish", "set_target", "ask_user", "withdraw_request"}]
+        # A reached target does not shrink this list: the loop refuses every tool but
+        # finish and set_target without dispatch, and the prompt says so. Shrinking it
+        # changed the request prefix at the one step that most needs to be cheap.
         return tools

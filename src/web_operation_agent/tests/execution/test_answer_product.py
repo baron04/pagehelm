@@ -147,11 +147,14 @@ class DefaultProductAnswerPath(unittest.TestCase):
         self.assertIsNone(result.agent.verified_answer)
 
     def test_selection_fields_survive_query_context_trimming_after_navigation(self):
+        # Enough results to cross the batched trim (keep + TRIM_SLACK): when it runs, the
+        # query result is among those shortened and the selection computed from it is not.
         result, chat = self.execute([
-            ("compute", {"operation": "argmax", "dataset_ref": "call2-query#1", "field": "amount"}),
             ("goto", {"url": "/object/company/company-1"}),
-            ("wait_for", {"ms": 0}),
-            ("finish", _answer("selection", "calc#3", fields=["name", "amount"])),
+            ("wait_for", {"ms": 0}), ("wait_for", {"ms": 1}),
+            ("compute", {"operation": "argmax", "dataset_ref": "call2-query#1", "field": "amount"}),
+            ("wait_for", {"ms": 2}),
+            ("finish", _answer("selection", "calc#6", fields=["name", "amount"])),
         ])
         self.assertEqual(result.status, AgentTurnStatus.FINISHED)
         self.assertIn("Acme", result.user_answer)

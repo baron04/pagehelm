@@ -26,7 +26,30 @@ CONCLUSION_KINDS = ("field_value", "selection", "aggregate", "not_found", "undet
 
 
 def answer_schema(*, source: bool = False) -> dict:
+    """The model-facing shape of an answer, stated once rather than once per kind.
+
+    It used to spell out a separate object for each conclusion kind -- nine near-identical
+    copies, 4 KB on every request. The server's `submit` checks each kind's exact fields
+    either way; this schema only has to tell the model what they are.
+    """
     kinds = CONCLUSION_KINDS + (("source_excerpt", "source_history") if source else ())
+    item = {
+        "type": "object", "additionalProperties": False,
+        "properties": {
+            "kind": {"type": "string", "enum": list(kinds)},
+            "evidence_ref": _REF,
+            "fields": _FIELDS,
+        },
+        "required": ["kind", "evidence_ref"],
+    }
+    if source:
+        item["description"] = ("source_excerpt and source_history also require statement "
+                               "(the concise answer) and support (an exact span copied from "
+                               "that evidence); no other kind takes them.")
+        item["properties"].update({
+            "statement": {"type": "string", "minLength": 1, "maxLength": 800},
+            "support": {"type": "string", "minLength": 8, "maxLength": 400},
+        })
     return {
         "type": "object", "additionalProperties": False,
         "properties": {
@@ -35,23 +58,7 @@ def answer_schema(*, source: bool = False) -> dict:
                 "complete", "partial", "undetermined"]},
             "presentation": {"type": "string", "enum": ["brief", "list", "table"]},
             "conclusions": {"type": "array", "minItems": 1,
-                            "maxItems": MAX_CONCLUSIONS, "items": {"anyOf": [
-                                {"type": "object", "additionalProperties": False,
-                                 "properties": {
-                                     "kind": {"type": "string", "enum": [kind]},
-                                     "evidence_ref": _REF,
-                                     **({"fields": _FIELDS} if kind == "selection" else {}),
-                                     **({"statement": {"type": "string", "minLength": 1,
-                                                       "maxLength": 800}}
-                                        if kind in ("source_excerpt", "source_history") else {}),
-                                     **({"support": {"type": "string", "minLength": 8,
-                                                     "maxLength": 400}}
-                                        if kind in ("source_excerpt", "source_history") else {}),
-                                 },
-                                 "required": (["kind", "evidence_ref", "statement", "support"]
-                                              if kind in ("source_excerpt", "source_history")
-                                              else ["kind", "evidence_ref"])}
-                                for kind in kinds]}},
+                            "maxItems": MAX_CONCLUSIONS, "items": item},
         },
         "required": ["version", "coverage", "conclusions"],
     }
