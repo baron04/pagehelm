@@ -46,6 +46,17 @@ def load_skill(session, turn: "_Turn", call: dict, name: str, args: dict) -> "_N
 def render_business_skills(session) -> str:
     if not session._task_business_skills:
         return ""
+    if session._skills_unmatched:
+        # An index, not a shortlist: id, title and whether it reads only. The intent and
+        # tool list are what made an unrelated Skill look like a plan for the request.
+        cards = [skill.loaded_card() if skill.skill_id in session._loaded_business_skill_ids
+                 else {"skill_id": skill.skill_id, "title": skill.title,
+                       "read_only": skill.read_only}
+                 for skill in session._task_business_skills]
+        return ("BUSINESS SKILLS NOT MATCHED TO THIS REQUEST (no Skill trigger matched its "
+                "wording; load one only if the request needs current business records):\n"
+                + json.dumps(cards, ensure_ascii=False, sort_keys=True,
+                             separators=(",", ":")))
     if not session._auto_loaded_business_skill_ids:
         cards = [skill.candidate_card(loaded=False)
                  if skill.skill_id not in session._loaded_business_skill_ids

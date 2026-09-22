@@ -411,6 +411,15 @@ internal Skill names, tool availability, routes, record IDs, counters, or audit 
 the user explicitly asks for technical details.
 """
 
+UNMATCHED_SKILL_SYSTEM = """\
+No Business Skill matched the wording of this request. The Skills listed as not matched are
+the application's typed reads, offered only in case the request needs current business
+records. They cannot tell you which page, tab or control to use: that comes from the current
+page, a cited source result or a typed result's exact ui_path. Load one only when the request
+needs data a record read supplies. A read that returned nothing has answered the question;
+do not repeat it with other wording or reread the whole collection.
+"""
+
 CONVERSATION_SYSTEM = """\
 PRIOR CONVERSATION CONTEXT is bounded historical application data supplied only to resolve
 references such as "it" or "the second company." It may be stale. Before making a factual

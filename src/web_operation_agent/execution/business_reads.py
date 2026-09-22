@@ -14,6 +14,10 @@ from .prompts import CLARIFICATION_CHOICE_LIMIT, _assistant_call, _tool_result, 
 from .routes import observation_is_at_route
 from .runstate import _Next, _Turn
 
+#: The third read in one turn whose content repeats an earlier one ends the turn as
+#: `no_progress`. Two are answered with a short notice instead of the whole result.
+MAX_REPEATED_READS = 3
+
 
 def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: dict,
                           operation_context, operation_identity: dict) -> "_Next":
@@ -53,15 +57,36 @@ def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: d
                 count=tool_result.query_answer.matched_count,
                 scope=session._scope_label(tool_result.query_answer.scope))
         successful_business_tools += 1
-        feedback = ("BUSINESS TOOL RESULT (current runtime fact):\n"
-                    + tool_result.render())
+        first_step = session._read_digests.setdefault(tool_result.content_digest, step)
+        if first_step != step:
+            # The application answered exactly as it did before. Handing the whole
+            # result back again is what let a turn spend its budget rereading one list
+            # between clicks; the earlier result and its evidence refs still stand.
+            session._repeated_reads += 1
+            session.ledger.append(
+                "business_read_repeated", step=step, tool=name,
+                first_step=first_step, repeated=session._repeated_reads,
+                result_digest=tool_result.content_digest, side_effect_possible=False)
+            if session._repeated_reads >= MAX_REPEATED_READS:
+                result.agent_said = (
+                    "I couldn't make progress: the same business read kept returning "
+                    "the same result, so I stopped without claiming completion.")
+                return _Next(session._finish(
+                    result, t0, "no_progress", result.agent_said, steps=step))
+            feedback = (
+                f"SAME RESULT: this read returned exactly what step {first_step} "
+                "returned. No new facts, and its evidence refs still apply. Do not "
+                "repeat it; use what you have, change the investigation, or finish.")
+        else:
+            feedback = ("BUSINESS TOOL RESULT (current runtime fact):\n"
+                        + tool_result.render())
         if session._form_draft is not None:
             feedback += (
                 "\n\nAPPLICATION FORM DRAFT READY: Call prefill_form with no "
                 "arguments. The server will use the exact current route, fields "
                 "and values above, stop before submission, and hand control to "
                 "the user.")
-        if session._evidence_feedback:
+        if session._evidence_feedback and first_step == step:
             feedback += "\n\n" + session._evidence_feedback
         if session._clarification_feedback:
             feedback += "\n\n" + session._clarification_feedback

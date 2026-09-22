@@ -349,6 +349,12 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         clarification_context_used = False
         selection = BusinessSkillSelection(
             BUSINESS_SKILL_MATCHER_VERSION, (), (), False)
+        #: No Skill trigger matched this request's own words, so the candidates are the
+        #: catalog's bounded fallback rather than a selection for this task. They stay
+        #: loadable -- a missed paraphrase must not hide the typed reads -- but they are
+        #: presented as unmatched, because a page request handed five unrelated Skills
+        #: as "candidates" spent most of its step budget querying them (P8 §17.5).
+        self._skills_unmatched = False
         if business_tools is None:
             self._task_business_skills = ()
         else:
@@ -409,6 +415,8 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                     break
                 merged_skills.setdefault(skill.skill_id, skill)
             self._task_business_skills = tuple(merged_skills.values())
+            self._skills_unmatched = bool(selection.fallback_used and not prior_skills
+                                          and self._task_business_skills)
             self.ledger.append(
                 "business_skill_candidates",
                 matcher_version=selection.matcher_version,
@@ -421,6 +429,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                 mutation_surface_widened=selection.mutation_surface_widened,
                 mutations_enabled=mutations_enabled,
                 prior_user_context_used=bool(prior_skills),
+                presented_as_unmatched=self._skills_unmatched,
                 bounded_limit=5,
                 **({"clarification_context_used": True}
                    if clarification_context_used else {}),
@@ -547,6 +556,10 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         #: server ends the turn when a fresh page shows it; see `execution.target`.
         self._target: TargetState | None = None
         self._target_declarations = 0
+        #: Content digests of the typed reads this turn has already been handed, by the
+        #: step that first returned them. A later read with the same content adds no fact.
+        self._read_digests: dict[str, int] = {}
+        self._repeated_reads = 0
         #: A fresh page has shown the declared target and the model has not yet said
         #: whether that completes the request. Only `finish` and `set_target` are offered.
         self._target_reached = False

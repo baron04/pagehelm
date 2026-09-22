@@ -26,8 +26,8 @@ from .page_actions import take_page_action
 from .prompts import (AGENT_SYSTEM, APPLICATION_ENTRY_SYSTEM, BUSINESS_SKILL_SYSTEM,
                       CAPABILITY_SYSTEM, CLARIFICATION_SYSTEM, CONVERSATION_SYSTEM,
                       FORM_SYSTEM, REACT_SOURCE_SYSTEM, SCOPE_FIRST_SYSTEM, SKILL_SYSTEM,
-                      SOURCE_AFFORDANCE_SYSTEM, TARGET_SYSTEM, _assistant_call,
-                      _tool_result, _trim)
+                      SOURCE_AFFORDANCE_SYSTEM, TARGET_SYSTEM, UNMATCHED_SKILL_SYSTEM,
+                      _assistant_call, _tool_result, _trim)
 from .runstate import RunResult, _Next, _Turn
 
 
@@ -110,6 +110,8 @@ def run_loop(session) -> RunResult:
         system += "\n" + APPLICATION_ENTRY_SYSTEM
     if session._task_business_skills:
         system += "\n" + BUSINESS_SKILL_SYSTEM
+        if session._skills_unmatched:
+            system += "\n" + UNMATCHED_SKILL_SYSTEM
     if session.allow_form_prefill and session._application_form_tools is not None:
         system += "\n" + FORM_SYSTEM
     if session._conversation_context_selected:

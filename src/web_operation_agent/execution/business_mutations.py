@@ -107,6 +107,8 @@ def execute_business_mutation(session, turn: "_Turn", call: dict, name: str, arg
         return _Next(session._finish(
             result, t0, "business_mutation_failed", detail, steps=step))
     session._approvals.mutation_completed()
+    # A write changes what a read may return; a read after it is a check, not a repeat.
+    session._read_digests.clear()
     session.ledger.append(
         "business_mutation_result", step=step, tool=name,
         approval_id=approval_id,
