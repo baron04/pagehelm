@@ -61,7 +61,7 @@ class _Server:
         self.thread.join(2)
 
 
-class ProviderTransport(unittest.TestCase):
+class _ProviderCase(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
@@ -73,11 +73,13 @@ class ProviderTransport(unittest.TestCase):
     def chat(self, server: _Server):
         self.addCleanup(server.close)
         self.ledger = Path(self.directory.name) / f"spend-{id(server)}.jsonl"
-        return M.ChatModel(
+        chat = M.ChatModel(
             M.SpendMeter(ledger=self.ledger),
             env={"AGENT_OPENAI_BASE_URL": f"http://127.0.0.1:{server.server.server_port}/v1",
                  "AGENT_OPENAI_API_KEY": "key", "AGENT_OPENAI_MODEL": "qwen3.8-flash"},
             runtime_guard=M.ProviderRuntimeGuard())
+        self.addCleanup(chat.close_connections)
+        return chat
 
     def call(self, chat):
         return chat.complete_cancellable(MESSAGES, None, "run", cancelled=lambda: False,
@@ -85,6 +87,9 @@ class ProviderTransport(unittest.TestCase):
 
     def rows(self):
         return [json.loads(line) for line in self.ledger.read_text().splitlines() if line]
+
+
+class ProviderTransport(_ProviderCase):
 
     def test_sequential_calls_share_one_connection(self):
         server = _Server()

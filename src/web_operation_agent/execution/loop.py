@@ -71,6 +71,59 @@ def named_tools(session):
     return available
 
 
+#: Provider failures one more attempt may recover: the transport failed, the provider was
+#: rate limited, or it said it was unavailable. Refusals, bad requests, authentication,
+#: an open circuit, a deadline and a cancellation end the turn as before.
+RETRYABLE_PROVIDER_CODES = frozenset({"provider_transport", "provider_rate_limited",
+                                      "provider_unavailable"})
+#: At most this many retried model calls in one turn; a provider that keeps failing is the
+#: shared circuit breaker's business, not a loop's.
+MAX_PROVIDER_RETRIES_PER_TURN = 2
+#: A retry starts only with this much of the turn's wall budget left.
+PROVIDER_RETRY_MIN_REMAINING_S = 5.0
+
+
+def _complete_once_more_if_transient(session, messages: list, step: int, t0: float) -> dict:
+    """One model call, repeated once when it failed in a way a repeat may recover.
+
+    A model call changes nothing but the bill, so a repeat is safe. The failed attempt keeps
+    its own spend row with usage unknown, and the retry is an audited `provider_retry`
+    event, so nothing about it is hidden from the turn's record.
+    """
+    for attempt in (1, 2):
+        elapsed = time.time() - t0
+        try:
+            return session.chat.complete_cancellable(
+                messages, session.tool_schemas(), session.run_id,
+                timeout_s=max(0.001, session.wall_budget_s - elapsed),
+                cancelled=session._cancel_requested,
+            )
+        except ProviderError as exc:
+            code = getattr(exc, "code", "provider_error")
+            used = getattr(session, "_provider_retries", 0)
+            if (attempt == 2 or not getattr(exc, "retryable", False)
+                    or code not in RETRYABLE_PROVIDER_CODES
+                    or used >= MAX_PROVIDER_RETRIES_PER_TURN
+                    or session.wall_budget_s - (time.time() - t0)
+                    < PROVIDER_RETRY_MIN_REMAINING_S
+                    or session._cancel_requested()):
+                raise
+            session._provider_retries = used + 1
+            dispatched = bool(getattr(exc, "dispatched", None))
+            session.ledger.append(
+                "provider_retry", step=step, provider_error_code=code,
+                provider_request_id=getattr(exc, "request_id", "") or "",
+                dispatched=dispatched,
+                accounting_status="usage_unavailable" if dispatched else "not_dispatched")
+            pause = 1.0 if code == "provider_rate_limited" else 0.3
+            until = time.monotonic() + pause
+            while time.monotonic() < until:
+                if session._cancel_requested():
+                    raise
+                time.sleep(0.05)
+    raise AssertionError("unreachable")
+
+
 def run_loop(session) -> RunResult:
     t0 = time.time()
     session._approvals.start_turn(int((t0 + session.wall_budget_s) * 1000))
@@ -189,11 +242,7 @@ def run_loop(session) -> RunResult:
                                 f"exceeded {session.wall_budget_s}s", steps=step)
         session._feed.note(stage="thinking", step=step + 1)
         try:
-            reply = session.chat.complete_cancellable(
-                messages, session.tool_schemas(), session.run_id,
-                timeout_s=max(0.001, session.wall_budget_s - elapsed),
-                cancelled=session._cancel_requested,
-            )
+            reply = _complete_once_more_if_transient(session, messages, step, t0)
         except BudgetExhausted as e:
             if session._cancel_requested():
                 return session._finish(

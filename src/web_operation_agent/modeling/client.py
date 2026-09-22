@@ -144,6 +144,13 @@ class _ConnectionCache:
                 return
         connection.close()
 
+    def close_all(self) -> None:
+        with self._lock:
+            idle = [connection for entries in self._idle.values() for connection, _ in entries]
+            self._idle.clear()
+        for connection in idle:
+            connection.close()
+
 
 class ChatModel(_ConcreteChatProvider):
     """A single OpenAI-compatible chat endpoint with native tool calling."""
@@ -689,6 +696,12 @@ class ChatModel(_ConcreteChatProvider):
             self._stale_retries += 1
             reused = False
             connection = open_new()
+
+    def close_connections(self) -> None:
+        """Close the idle provider connections this model kept for reuse."""
+        cache = self.__dict__.get("_connections")
+        if cache is not None:
+            cache.close_all()
 
     def _connection_cache(self) -> "_ConnectionCache":
         cache = self.__dict__.get("_connections")
