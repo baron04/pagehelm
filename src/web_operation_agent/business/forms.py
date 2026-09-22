@@ -69,9 +69,11 @@ PREPARE_FORM_SCHEMA = {
     "function": {
         "name": PREPARE_FORM_TOOL,
         "description": (
-            "Validate exact user-supplied values against a fresh application descriptor and "
-            "the unchanged current page, then create a one-use draft. Use only IDs returned "
-            "by describe_form. This does not type, submit, or persist anything."
+            "Validate user-supplied or source-derived values against a fresh application "
+            "descriptor and the unchanged current page, then create a one-use draft. "
+            "For a source-derived value include source_basis with a source#N reference "
+            "and exact support span from this turn. Use only IDs returned by describe_form. "
+            "This does not type, submit, or persist anything."
         ),
         "parameters": {
             "type": "object",
@@ -87,6 +89,16 @@ PREPARE_FORM_SCHEMA = {
                                 "pattern": "^form_field_[0-9a-f]{32}$",
                             },
                             "value": {"type": "string", "maxLength": 4000},
+                            "source_basis": {
+                                "type": "object",
+                                "properties": {
+                                    "ref": {"type": "string", "pattern": "^source#[1-9][0-9]*$"},
+                                    "support": {"type": "string", "minLength": 8,
+                                                "maxLength": 400},
+                                },
+                                "required": ["ref", "support"],
+                                "additionalProperties": False,
+                            },
                         },
                         "required": ["field_id", "value"],
                         "additionalProperties": False,

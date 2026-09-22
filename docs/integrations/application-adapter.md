@@ -74,11 +74,14 @@ actor missing them does not receive the generic form tools.
 
 The server consumes the draft once, resolves every field uniquely from a fresh page observation, fills or selects the adapter-issued value, and stops before click or submit. The adapter is asserting that editing these fields persists nothing by itself. Do not issue a draft for onchange handlers that write, forms that save as they are edited, credential fields, uploads, or any control whose edit can persist or trigger an external effect; use the ordinary confirmed mutation path for those cases. A form the application saves when its page is left (Odoo 18 does) is acceptable only because the assistant asks before it leaves any page and the prefill answer tells the user that leaving may save or discard the input. Test the claim against the deployed application, including a post-run API or database check that no record was created.
 
-Source lookup can explain a field, validation rule, or workflow before preparation, but may
-not create a form ID, field ID, selector, scope, value, or write permission. The current page
-and current application metadata are the execution authorities. When adopting the generic
-surface, run the shared `assert_current_form_contract` against this adapter and a real browser
-gate; an adapter-only unit result does not establish end-to-end form accuracy.
+Source lookup can explain a field, validation rule, or workflow before preparation and may
+inform the value selected for an existing field. A source-derived value includes a turn-local
+reference and exact support span; the server checks that provenance and removes it before
+calling the adapter. This check does not prove the model interpreted the rule correctly.
+Source cannot create a form ID, field ID, selector, choice, scope, or write permission. The
+current page and current application metadata are the execution authorities. When adopting
+the generic surface, run the shared `assert_current_form_contract` against this adapter and
+a real browser gate; an adapter-only unit result does not establish end-to-end form accuracy.
 
 The Odoo reference translation is deliberately off by default. Construct its adapter with
 `allow_generic_forms=True` only in an environment whose deployed modules have passed that

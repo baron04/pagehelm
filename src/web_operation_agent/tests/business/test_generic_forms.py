@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
+from web_operation_agent.answer.evidence import Origin, SourceEvidence, TurnEvidence
 from web_operation_agent.business.forms import (
     ApplicationFormDescriptor,
     ApplicationFormField,
@@ -17,9 +20,14 @@ from web_operation_agent.business.errors import (
     BusinessToolContractError,
     BusinessToolRequestError,
 )
-from web_operation_agent.schemas import ElementRef, PageObservation
+from web_operation_agent.schemas import (SCHEMA_VERSIONS, ElementRef, PageObservation,
+                                         SourceMap, SourceRelation)
 from web_operation_agent.composition.ports import DeclaredRoutePort
+from web_operation_agent.composition.sources import SourceCapability
 from web_operation_agent.execution.session import ServerAgentSession, TaskSpec
+from web_operation_agent.execution.form_tools import _source_bases
+from web_operation_agent.execution.prompts import AGENT_SYSTEM, FORM_SYSTEM
+from web_operation_agent.planning.sourcetree import SourceTree
 from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.tests.support.business import _Browser, _Chat
 
@@ -174,6 +182,48 @@ class GenericCurrentFormContract(unittest.TestCase):
                             "value": "NovaForge"}],
             })
 
+    def test_source_derived_value_requires_current_release_exact_evidence(self):
+        excerpt = "For a confirmed company, choose the active state."
+        evidence = TurnEvidence()
+        evidence.record(SourceEvidence(
+            evidence_id="source#1",
+            origin=Origin(kind="source", reference="lookup_source:company state",
+                          observed_at="1", scope="release v1"),
+            path="apps/contacts/rules.py", start_line=4, end_line=4,
+            release="v1", sha256=hashlib.sha256(excerpt.encode()).hexdigest(),
+            excerpt=excerpt, summary="confirmed companies use active state"))
+        session = SimpleNamespace(evidence=evidence,
+                                  source_map=SimpleNamespace(release="v1"))
+        value = {"field_id": "form_field_" + "a" * 32, "value": "active",
+                 "source_basis": {"ref": "source#1",
+                                  "support": "choose the active state"}}
+        args = {"form_id": "form_" + "b" * 32, "values": [value]}
+
+        stripped, refs = _source_bases(session, args)
+
+        self.assertEqual(refs, ("source#1",))
+        self.assertEqual(stripped["values"], [{"field_id": value["field_id"],
+                                                "value": "active"}])
+        self.assertIn("source_basis", args["values"][0])
+        for bad_basis in (
+            {"ref": "source#2", "support": "choose the active state"},
+            {"ref": "source#1", "support": "choose the archived state"},
+            {"ref": "source#1", "support": "short"},
+        ):
+            with self.subTest(bad_basis=bad_basis), self.assertRaises(
+                    BusinessToolRequestError):
+                _source_bases(session, {**args, "values": [{**value,
+                                             "source_basis": bad_basis}]})
+        session.source_map.release = "v2"
+        with self.assertRaisesRegex(BusinessToolRequestError, "deployment"):
+            _source_bases(session, args)
+
+    def test_form_prompt_distinguishes_draft_from_submission(self):
+        self.assertIn("A source rule may help derive a value",
+                      " ".join(FORM_SYSTEM.split()))
+        self.assertIn("Never submit a draft-only task", AGENT_SYSTEM)
+        self.assertNotIn("then click its submit control", AGENT_SYSTEM)
+
 
 class GenericFormProductPathNeedsNoPerFormSkill(unittest.TestCase):
     class Browser(_Browser):
@@ -250,6 +300,91 @@ class GenericFormProductPathNeedsNoPerFormSkill(unittest.TestCase):
             self.assertEqual(len(ledger.of_kind("application_form_prepared")), 1)
             self.assertEqual(len(ledger.of_kind("form_prefill_completed")), 1)
             self.assertNotIn("submit", browser.actions)
+
+    def test_deployed_source_rule_can_choose_a_current_field_value_without_skill(self):
+        class RuleChat(_Chat):
+            def __init__(self):
+                super().__init__([])
+                self.step = 0
+
+            def complete(self, messages, tools, _run_id, **_kwargs):
+                self.messages.append([dict(message) for message in messages])
+                self.tool_names.append({tool["function"]["name"] for tool in tools})
+                self.step += 1
+                if self.step == 1:
+                    name, args = "lookup_source", {
+                        "query": "confirmed company state rule"}
+                elif self.step == 2:
+                    self.test_source_result = messages[-1]["content"]
+                    name, args = "describe_form", {"field_query": "State"}
+                elif self.step == 3:
+                    descriptor = json.loads(messages[-1]["content"].split("\n", 1)[1])
+                    selected = "active" if "choose the active state" in self.test_source_result \
+                        else "draft"
+                    name, args = "prepare_form", {
+                        "form_id": descriptor["form_id"],
+                        "values": [{
+                            "field_id": descriptor["fields"][0]["field_id"],
+                            "value": selected,
+                            "source_basis": {
+                                "ref": "source#1",
+                                "support": f"choose the {selected} state",
+                            },
+                        }],
+                    }
+                else:
+                    name, args = "prefill_form", {}
+                return {"tool_calls": [{"id": str(self.step), "function": {
+                    "name": name, "arguments": json.dumps(args)}}]}
+
+        for release, expected in (("release-active", "active"),
+                                  ("release-draft", "draft")):
+            with self.subTest(release=release), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source_path = root / "apps" / "contacts" / "rules.py"
+                source_path.parent.mkdir(parents=True)
+                source_path.write_text(
+                    f"For a confirmed company, choose the {expected} state.\n",
+                    encoding="utf-8")
+                tree = SourceTree({
+                    "repository_id": "fixture/contacts", "release": release,
+                    "allow_globs": ["apps/**/*.py"], "deny_globs": [],
+                }, root)
+                source_map = SourceMap(
+                    schema_version=SCHEMA_VERSIONS["SourceMap"],
+                    attestation_id="test-release", repository_id=tree.repository_id,
+                    release=release,
+                    relations=[SourceRelation(
+                        kind="service_entity", subject="company", object="state",
+                        attrs={"help": (
+                            f"For a confirmed company, choose the {expected} state.")},
+                        evidence=(tree.cite("apps/contacts/rules.py", 1, 1,
+                                            excerpt_chars=200),))],
+                )
+                browser, chat = self.Browser(), RuleChat()
+                session = ServerAgentSession(
+                    task=TaskSpec("T", "Set the confirmed company state in the draft"),
+                    chat=chat, browser=browser, control=ReadOnlyControl(),
+                    ledger=SessionLedger(root / "audit.jsonl", "source-form"),
+                    application_routes=DeclaredRoutePort(
+                        "fixture.forms", (r"/companies/new",)),
+                    application_forms=_Forms(),
+                    source=SourceCapability(source_map=source_map,
+                                            runtime_source=True),
+                    disabled_actions={"click", "fill", "select", "submit"},
+                    allow_form_prefill=True, step_budget=5, wall_budget_s=30)
+                session.entry_observation = browser.observe()
+                session.plan()
+
+                result = session.run()
+
+                self.assertEqual(result.terminal_reason, "agent_finished",
+                                 [m[-1].get("content", "") for m in chat.messages])
+                self.assertIn("source#1", chat.test_source_result)
+                self.assertEqual(browser.actions, ["observe", "select"])
+                self.assertNotIn("submit", browser.actions)
+                prepared = session.ledger.of_kind("application_form_prepared")
+                self.assertEqual(prepared[0]["source_refs"], ["source#1"])
 
 if __name__ == "__main__":
     unittest.main()

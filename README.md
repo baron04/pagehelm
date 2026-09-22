@@ -36,8 +36,11 @@ agent.
   actor-scoped adapter metadata and returns only short-lived opaque IDs; `prepare_form`
   rechecks both sides and retains the exact native bindings on the server; `prefill_form`
   types that draft and ends the turn without clicking or submitting. Odoo and Contacts
-  translate different metadata sources to the same contract. Source lookup may explain a
-  field or rule, but it cannot create a field, selector, permission, or value.
+  translate different metadata sources to the same contract. An optional source lookup can
+  inform a value for an existing field; a source-derived value carries a turn-local reference
+  and exact supporting span for internal audit. This verifies provenance, not the model's
+  interpretation. Source cannot create a field, selector, choice, permission, or write
+  authority.
   The Odoo reference translation is experimental and remains an explicit adapter opt-in.
   Its three-case standard-module browser gate passes with zero submitted or created records,
   but that does not establish that arbitrary deployment-specific `onchange` code is inert.
@@ -213,6 +216,9 @@ source compilation, fixture provisioning, and qualification.
 - Local source search can match Han-language labels and comments, but does not translate a
   Chinese business question into English code identifiers. Cross-language recall still
   depends on the Agent choosing suitable source terms and has not been broadly qualified.
+- Source-informed no-Skill form filling has a scripted production-session contract test, but
+  no independent model-backed success-rate result yet. It does not establish arbitrary
+  page-operation coverage.
 - When source lookup is enabled with a hosted model, retrieved allowlisted source is sent in
   model requests. Use that combination only where the deployment's data policy permits it.
 - Browser and accessibility coverage is strongest on Chromium; other engines and screen

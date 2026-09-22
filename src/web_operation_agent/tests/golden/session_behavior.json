@@ -25,8 +25,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6377,
-          "input_digest": "b8aecd2fce623a3eafbded3664f046cd1a821d1cd39866efa709de9a69a9f122",
+          "input_bytes": 6528,
+          "input_digest": "374f9babcd2f420c01bb87b56ebf7b5748b364056ec4fe3a1eade2dc7791d021",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -141,8 +141,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\n  e1 link \"Sprout\" href=/glasshouse/do/sproutSeedling\nEND_UNTRUSTED_PAGE_OBSERVATION",
-          "system_chars": 3060,
-          "system_digest": "sha256:25dff883e10ca6f5d89b4d47c4b0e74d8890c534ea7e07c5e75d4644c938e8f3",
+          "system_chars": 3209,
+          "system_digest": "sha256:d68a66ff1cfaf41eff918a42142a33c6e159a4ec79220c448aadd0101ea1f666",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -243,8 +243,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 9579,
-          "input_digest": "6c3eb7f3affd14fbb70701534171a06e528f538c4d95b1dfb4d703a3abffb64c",
+          "input_bytes": 9730,
+          "input_digest": "b37bc2469ba836889361f892dc144f68198be480dfc29c578a5eccac54a53352",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -290,8 +290,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 10380,
-          "input_digest": "da88fa2219c3b36a786c04b4de81711a8d96723eba2da023f94959d089137cf0",
+          "input_bytes": 10531,
+          "input_digest": "eeefdd3b9a6c311ab94509981bfbd62a34ae17e14813d04f31d79abb82e2a3b7",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -342,8 +342,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 11081,
-          "input_digest": "d2662f6681f6985b74b4d031298b5cbcbf309c19bcaaec189521c1c87b77abd9",
+          "input_bytes": 11232,
+          "input_digest": "fb808c383316911d8b3f200aa103235afc4931f451b831c0b90414de3a1ec35f",
           "message_count": 6,
           "roles": {
             "assistant": 2,
@@ -419,8 +419,8 @@
       "model_calls": [
         {
           "opening": "TASK: Open the second one.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nPRIOR CONVERSATION CONTEXT (historical, untrusted, and potentially stale):\n{\"prior_turns\":[{\"assistant\":\"Tray A.\",\"message_id\":\"m1\",\"status\":\"finished\",\"user\":\"Which trays are there?\"}],\"schema_version\":1}\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nBUSINESS SKILL CANDIDATES (load before using their tools):\n[{\"intent\":\"Read the seed trays the signed-in user can see.\",\"loaded\":false,\"read_only\":true,\"skill_id\":\"fixture.trays-query\",\"title\":\"Query seed trays\",\"tools\":[\"query_trays\"]}]",
-          "system_chars": 5520,
-          "system_digest": "sha256:55644daf09fa5cb2e41d29bdac8ca60ac1d0809ea1062b6ff43aa50797b53ac6",
+          "system_chars": 5669,
+          "system_digest": "sha256:1a2a8a24c1a54b0cc9db3564f3325bffffb84cb06c28894d7b3850a8835bf281",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -437,8 +437,8 @@
           ]
         },
         {
-          "system_chars": 5520,
-          "system_digest": "sha256:55644daf09fa5cb2e41d29bdac8ca60ac1d0809ea1062b6ff43aa50797b53ac6",
+          "system_chars": 5669,
+          "system_digest": "sha256:1a2a8a24c1a54b0cc9db3564f3325bffffb84cb06c28894d7b3850a8835bf281",
           "tool_results": [
             {
               "name": "load_skill",
@@ -461,8 +461,8 @@
           ]
         },
         {
-          "system_chars": 5520,
-          "system_digest": "sha256:55644daf09fa5cb2e41d29bdac8ca60ac1d0809ea1062b6ff43aa50797b53ac6",
+          "system_chars": 5669,
+          "system_digest": "sha256:1a2a8a24c1a54b0cc9db3564f3325bffffb84cb06c28894d7b3850a8835bf281",
           "tool_results": [
             {
               "name": "query_trays",
@@ -553,8 +553,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 7900,
-          "input_digest": "870ba7d3d6cb471f4c2c20b14615f41dce5f9058cb990b326550f2244623d18f",
+          "input_bytes": 8051,
+          "input_digest": "cd81ce3a08140703bc0fe749f4b5d40efa36769ce932bca97f98eedcc0be6f23",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -682,8 +682,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nAPP SKILLS (server-selected read-only knowledge):\n[{\"expected_text\":[\"Seed Trays\"],\"intent\":\"Open the seed tray list.\",\"parameters\":[],\"requires_current_webapp\":\"glasshouse\",\"skill_id\":\"fixture.open-trays\",\"title\":\"Open the seed trays\"}]",
-          "system_chars": 3597,
-          "system_digest": "sha256:5e7f66b483cc97fc87a90a5c3d3c0ca23c9951da13aa46cb03bd64cb6fac3549",
+          "system_chars": 3746,
+          "system_digest": "sha256:6978bafbca4ce6eb4d5b35a8c2a46d74c44c3eb9f6909910cc0d8420c19995ad",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -767,8 +767,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6377,
-          "input_digest": "b8aecd2fce623a3eafbded3664f046cd1a821d1cd39866efa709de9a69a9f122",
+          "input_bytes": 6528,
+          "input_digest": "374f9babcd2f420c01bb87b56ebf7b5748b364056ec4fe3a1eade2dc7791d021",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -838,8 +838,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 7166,
-          "input_digest": "15e97e13e6e390f874a217699f96e2d0691d816fe7d638d01fea08f50b16af5e",
+          "input_bytes": 7317,
+          "input_digest": "d7268da2fd5e59f26b3d55b153ebe6acf0103f67dd01f74a544eee4e7cbd573c",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -926,8 +926,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\n  e1 link \"Sprout\" href=/glasshouse/do/sproutSeedling\nEND_UNTRUSTED_PAGE_OBSERVATION",
-          "system_chars": 3060,
-          "system_digest": "sha256:25dff883e10ca6f5d89b4d47c4b0e74d8890c534ea7e07c5e75d4644c938e8f3",
+          "system_chars": 3209,
+          "system_digest": "sha256:d68a66ff1cfaf41eff918a42142a33c6e159a4ec79220c448aadd0101ea1f666",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -943,8 +943,8 @@
           ]
         },
         {
-          "system_chars": 3060,
-          "system_digest": "sha256:25dff883e10ca6f5d89b4d47c4b0e74d8890c534ea7e07c5e75d4644c938e8f3",
+          "system_chars": 3209,
+          "system_digest": "sha256:d68a66ff1cfaf41eff918a42142a33c6e159a4ec79220c448aadd0101ea1f666",
           "tool_results": [
             {
               "name": "click",
@@ -1033,8 +1033,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 7027,
-          "input_digest": "7b18499fea9044216494593f53b9ab7f5456168afd4b39f0ff12c23c574e04b7",
+          "input_bytes": 7178,
+          "input_digest": "ac6c9745e3bdc34a36886a2c3ccae984bf13cfb09207ee8eb0b3adede0d7637d",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -1112,8 +1112,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 7584,
-          "input_digest": "43af1c46d5facc12d2d675f44e33b0ac46034233d1ed3da0dcdea64beb204c45",
+          "input_bytes": 7735,
+          "input_digest": "abec8f9b89ac3650e74e85b6cefff75f78592edf4658c9e03503e9b32e1e9e41",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -1204,8 +1204,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/portal\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\n  e1 link \"Elsewhere\" href=/other/page\nEND_UNTRUSTED_PAGE_OBSERVATION",
-          "system_chars": 3350,
-          "system_digest": "sha256:fcb942be8b43118ed5153234479a834b8925ce2b0072d67664d117eccc139b46",
+          "system_chars": 3499,
+          "system_digest": "sha256:e93d7ff9b6e639026a443c2fc2919e5bac35243ce4bb3c89fb26d90dda0c358e",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -1222,8 +1222,8 @@
           ]
         },
         {
-          "system_chars": 3350,
-          "system_digest": "sha256:fcb942be8b43118ed5153234479a834b8925ce2b0072d67664d117eccc139b46",
+          "system_chars": 3499,
+          "system_digest": "sha256:e93d7ff9b6e639026a443c2fc2919e5bac35243ce4bb3c89fb26d90dda0c358e",
           "tool_results": [
             {
               "name": "enter_application",
@@ -1311,8 +1311,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 7036,
-          "input_digest": "9cd994ebe8e51c8f987fc76de659829de4688a1abd6830ae3bff88fa1ceadd29",
+          "input_bytes": 7187,
+          "input_digest": "0b7891d44854039001a6dd81dd95423144b0cb066ced371f8384e468f5e27e06",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -1390,8 +1390,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 7623,
-          "input_digest": "a266fbcaf208fa0fd4f8e490f1392c517ca986f06e4cb6b7ea89e7756f21fe11",
+          "input_bytes": 7774,
+          "input_digest": "3bbddfd1137dd93b7b2e990fef6ba9024f4c8e320ea4cf9b26f0c1f0bea33d12",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -1482,8 +1482,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/portal\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\n  e1 link \"Glasshouse\" href=/glasshouse/do/main\nEND_UNTRUSTED_PAGE_OBSERVATION",
-          "system_chars": 3350,
-          "system_digest": "sha256:fcb942be8b43118ed5153234479a834b8925ce2b0072d67664d117eccc139b46",
+          "system_chars": 3499,
+          "system_digest": "sha256:e93d7ff9b6e639026a443c2fc2919e5bac35243ce4bb3c89fb26d90dda0c358e",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -1500,8 +1500,8 @@
           ]
         },
         {
-          "system_chars": 3350,
-          "system_digest": "sha256:fcb942be8b43118ed5153234479a834b8925ce2b0072d67664d117eccc139b46",
+          "system_chars": 3499,
+          "system_digest": "sha256:e93d7ff9b6e639026a443c2fc2919e5bac35243ce4bb3c89fb26d90dda0c358e",
           "tool_results": [
             {
               "name": "enter_application",
@@ -1609,8 +1609,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 8975,
-          "input_digest": "75cf4187f1927713d41deba664e975db944749df927fd3e22bc1460d2be27d03",
+          "input_bytes": 9126,
+          "input_digest": "fc1bb214cf603505da53c80bf03c81faff22bc4a6d4a4f43b45882d12a52c022",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -1655,8 +1655,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 9776,
-          "input_digest": "4b8a7b110c1ea582d1fae1db9099f6a279bbd3477cc0df49e9c457147cf17738",
+          "input_bytes": 9927,
+          "input_digest": "38ba382076a13d868c5a7d7d16be616ea094ded866c531df4e36d73768b54cd5",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -1706,8 +1706,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 10477,
-          "input_digest": "ba330bcc41761f5a1508ebc7f3af8c002b66c04f27caef8a2c3ec8146c72d68f",
+          "input_bytes": 10628,
+          "input_digest": "95878e357e8dc5b7c9648e82bae6b80a84e3a47e5a6c5ec140560d6de90b94f6",
           "message_count": 6,
           "roles": {
             "assistant": 2,
@@ -1791,8 +1791,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nBUSINESS SKILL CANDIDATES (load before using their tools):\n[{\"intent\":\"Read the seed trays the signed-in user can see.\",\"loaded\":false,\"read_only\":true,\"skill_id\":\"fixture.trays-query\",\"title\":\"Query seed trays\",\"tools\":[\"query_trays\"]}]",
-          "system_chars": 5155,
-          "system_digest": "sha256:3c115d06cb82f70468e54c3d45440a404d936b4c526123936d55a32c7d6a5be6",
+          "system_chars": 5304,
+          "system_digest": "sha256:7f5a9b4e31482f5e6e362acd766bea072debfd84bda29fc65d88279f1d693ad7",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -1809,8 +1809,8 @@
           ]
         },
         {
-          "system_chars": 5155,
-          "system_digest": "sha256:3c115d06cb82f70468e54c3d45440a404d936b4c526123936d55a32c7d6a5be6",
+          "system_chars": 5304,
+          "system_digest": "sha256:7f5a9b4e31482f5e6e362acd766bea072debfd84bda29fc65d88279f1d693ad7",
           "tool_results": [
             {
               "name": "load_skill",
@@ -1833,8 +1833,8 @@
           ]
         },
         {
-          "system_chars": 5155,
-          "system_digest": "sha256:3c115d06cb82f70468e54c3d45440a404d936b4c526123936d55a32c7d6a5be6",
+          "system_chars": 5304,
+          "system_digest": "sha256:7f5a9b4e31482f5e6e362acd766bea072debfd84bda29fc65d88279f1d693ad7",
           "tool_results": [
             {
               "name": "query_trays",
@@ -1944,8 +1944,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 8975,
-          "input_digest": "75cf4187f1927713d41deba664e975db944749df927fd3e22bc1460d2be27d03",
+          "input_bytes": 9126,
+          "input_digest": "fc1bb214cf603505da53c80bf03c81faff22bc4a6d4a4f43b45882d12a52c022",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -1990,8 +1990,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 9776,
-          "input_digest": "4b8a7b110c1ea582d1fae1db9099f6a279bbd3477cc0df49e9c457147cf17738",
+          "input_bytes": 9927,
+          "input_digest": "38ba382076a13d868c5a7d7d16be616ea094ded866c531df4e36d73768b54cd5",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -2043,8 +2043,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 10331,
-          "input_digest": "b27dbfcc11d3a2dae163c8cae1b288d9b5afa0a47cf131c80c4d4ac8f294b456",
+          "input_bytes": 10482,
+          "input_digest": "84dc59b401cf293c0191c27138382d752b9f4c293ad52d24ff505602b3411e02",
           "message_count": 6,
           "roles": {
             "assistant": 2,
@@ -2117,8 +2117,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 11112,
-          "input_digest": "49ee2c9f0e7dcad6708b049f7c327bc73bd01585d306561fe1e31661c576ef66",
+          "input_bytes": 11263,
+          "input_digest": "05b3af59fa6a5c920c1ba994976b05d09a5e0189f954329a18fb93454144cdb8",
           "message_count": 8,
           "roles": {
             "assistant": 3,
@@ -2212,8 +2212,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nBUSINESS SKILL CANDIDATES (load before using their tools):\n[{\"intent\":\"Read the seed trays the signed-in user can see.\",\"loaded\":false,\"read_only\":true,\"skill_id\":\"fixture.trays-query\",\"title\":\"Query seed trays\",\"tools\":[\"query_trays\"]}]",
-          "system_chars": 5155,
-          "system_digest": "sha256:3c115d06cb82f70468e54c3d45440a404d936b4c526123936d55a32c7d6a5be6",
+          "system_chars": 5304,
+          "system_digest": "sha256:7f5a9b4e31482f5e6e362acd766bea072debfd84bda29fc65d88279f1d693ad7",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -2230,8 +2230,8 @@
           ]
         },
         {
-          "system_chars": 5155,
-          "system_digest": "sha256:3c115d06cb82f70468e54c3d45440a404d936b4c526123936d55a32c7d6a5be6",
+          "system_chars": 5304,
+          "system_digest": "sha256:7f5a9b4e31482f5e6e362acd766bea072debfd84bda29fc65d88279f1d693ad7",
           "tool_results": [
             {
               "name": "load_skill",
@@ -2254,8 +2254,8 @@
           ]
         },
         {
-          "system_chars": 5155,
-          "system_digest": "sha256:3c115d06cb82f70468e54c3d45440a404d936b4c526123936d55a32c7d6a5be6",
+          "system_chars": 5304,
+          "system_digest": "sha256:7f5a9b4e31482f5e6e362acd766bea072debfd84bda29fc65d88279f1d693ad7",
           "tool_results": [
             {
               "name": "query_trays",
@@ -2278,8 +2278,8 @@
           ]
         },
         {
-          "system_chars": 5155,
-          "system_digest": "sha256:3c115d06cb82f70468e54c3d45440a404d936b4c526123936d55a32c7d6a5be6",
+          "system_chars": 5304,
+          "system_digest": "sha256:7f5a9b4e31482f5e6e362acd766bea072debfd84bda29fc65d88279f1d693ad7",
           "tool_results": [
             {
               "name": "goto",
@@ -2389,8 +2389,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 8999,
-          "input_digest": "3b0328ed2039d6e6d73c81b2d1202023c2af6b345c8092a35a833b6b028061c8",
+          "input_bytes": 9150,
+          "input_digest": "6285d17683860a915824addc9257a22d12ba0f8404521f999f4ecb55d55dcd0a",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -2436,8 +2436,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 10055,
-          "input_digest": "5d0adc33f1f5e2566330da4cf90abfd8facade3f59d6b6783b031a0663756a93",
+          "input_bytes": 10206,
+          "input_digest": "38ad7e467ba15df28f30919120b377dcde36e6f7553fc632dc5826d75b313a14",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -2561,8 +2561,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 10922,
-          "input_digest": "c1ef850c7a3e86d2e40b5acc8720523b5e1dcaee1512cc7535c502466ef48cf7",
+          "input_bytes": 11073,
+          "input_digest": "add2e9e828bb66c3be812f23cfcb06a6543a3f62df7080d56a50938e93e96c21",
           "message_count": 6,
           "roles": {
             "assistant": 2,
@@ -2657,8 +2657,8 @@
       "model_calls": [
         {
           "opening": "TASK: Create tray Tray B.\n\nWHAT THIS RUN MAY CHANGE: Create exactly one seed tray.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nBUSINESS SKILL CANDIDATES (load before using their tools):\n[{\"intent\":\"Create exactly one seed tray after explicit confirmation.\",\"loaded\":false,\"read_only\":false,\"skill_id\":\"fixture.trays-create\",\"title\":\"Create a seed tray\",\"tools\":[\"query_trays\",\"create_tray\"]}]",
-          "system_chars": 5155,
-          "system_digest": "sha256:3c115d06cb82f70468e54c3d45440a404d936b4c526123936d55a32c7d6a5be6",
+          "system_chars": 5304,
+          "system_digest": "sha256:7f5a9b4e31482f5e6e362acd766bea072debfd84bda29fc65d88279f1d693ad7",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -2675,8 +2675,8 @@
           ]
         },
         {
-          "system_chars": 5155,
-          "system_digest": "sha256:3c115d06cb82f70468e54c3d45440a404d936b4c526123936d55a32c7d6a5be6",
+          "system_chars": 5304,
+          "system_digest": "sha256:7f5a9b4e31482f5e6e362acd766bea072debfd84bda29fc65d88279f1d693ad7",
           "tool_results": [
             {
               "name": "load_skill",
@@ -2700,8 +2700,8 @@
           ]
         },
         {
-          "system_chars": 5155,
-          "system_digest": "sha256:3c115d06cb82f70468e54c3d45440a404d936b4c526123936d55a32c7d6a5be6",
+          "system_chars": 5304,
+          "system_digest": "sha256:7f5a9b4e31482f5e6e362acd766bea072debfd84bda29fc65d88279f1d693ad7",
           "tool_results": [
             {
               "name": "create_tray",
@@ -2812,8 +2812,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 8999,
-          "input_digest": "3b0328ed2039d6e6d73c81b2d1202023c2af6b345c8092a35a833b6b028061c8",
+          "input_bytes": 9150,
+          "input_digest": "6285d17683860a915824addc9257a22d12ba0f8404521f999f4ecb55d55dcd0a",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -2859,8 +2859,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 10055,
-          "input_digest": "5d0adc33f1f5e2566330da4cf90abfd8facade3f59d6b6783b031a0663756a93",
+          "input_bytes": 10206,
+          "input_digest": "38ad7e467ba15df28f30919120b377dcde36e6f7553fc632dc5826d75b313a14",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -2975,8 +2975,8 @@
       "model_calls": [
         {
           "opening": "TASK: Create tray Tray B.\n\nWHAT THIS RUN MAY CHANGE: Create exactly one seed tray.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nBUSINESS SKILL CANDIDATES (load before using their tools):\n[{\"intent\":\"Create exactly one seed tray after explicit confirmation.\",\"loaded\":false,\"read_only\":false,\"skill_id\":\"fixture.trays-create\",\"title\":\"Create a seed tray\",\"tools\":[\"query_trays\",\"create_tray\"]}]",
-          "system_chars": 5155,
-          "system_digest": "sha256:3c115d06cb82f70468e54c3d45440a404d936b4c526123936d55a32c7d6a5be6",
+          "system_chars": 5304,
+          "system_digest": "sha256:7f5a9b4e31482f5e6e362acd766bea072debfd84bda29fc65d88279f1d693ad7",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -2993,8 +2993,8 @@
           ]
         },
         {
-          "system_chars": 5155,
-          "system_digest": "sha256:3c115d06cb82f70468e54c3d45440a404d936b4c526123936d55a32c7d6a5be6",
+          "system_chars": 5304,
+          "system_digest": "sha256:7f5a9b4e31482f5e6e362acd766bea072debfd84bda29fc65d88279f1d693ad7",
           "tool_results": [
             {
               "name": "load_skill",
@@ -3105,8 +3105,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 8999,
-          "input_digest": "3b0328ed2039d6e6d73c81b2d1202023c2af6b345c8092a35a833b6b028061c8",
+          "input_bytes": 9150,
+          "input_digest": "6285d17683860a915824addc9257a22d12ba0f8404521f999f4ecb55d55dcd0a",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -3152,8 +3152,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 10055,
-          "input_digest": "5d0adc33f1f5e2566330da4cf90abfd8facade3f59d6b6783b031a0663756a93",
+          "input_bytes": 10206,
+          "input_digest": "38ad7e467ba15df28f30919120b377dcde36e6f7553fc632dc5826d75b313a14",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -3281,8 +3281,8 @@
       "model_calls": [
         {
           "opening": "TASK: Create tray Tray B.\n\nWHAT THIS RUN MAY CHANGE: Create exactly one seed tray.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nBUSINESS SKILL CANDIDATES (load before using their tools):\n[{\"intent\":\"Create exactly one seed tray after explicit confirmation.\",\"loaded\":false,\"read_only\":false,\"skill_id\":\"fixture.trays-create\",\"title\":\"Create a seed tray\",\"tools\":[\"query_trays\",\"create_tray\"]}]",
-          "system_chars": 5155,
-          "system_digest": "sha256:3c115d06cb82f70468e54c3d45440a404d936b4c526123936d55a32c7d6a5be6",
+          "system_chars": 5304,
+          "system_digest": "sha256:7f5a9b4e31482f5e6e362acd766bea072debfd84bda29fc65d88279f1d693ad7",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -3299,8 +3299,8 @@
           ]
         },
         {
-          "system_chars": 5155,
-          "system_digest": "sha256:3c115d06cb82f70468e54c3d45440a404d936b4c526123936d55a32c7d6a5be6",
+          "system_chars": 5304,
+          "system_digest": "sha256:7f5a9b4e31482f5e6e362acd766bea072debfd84bda29fc65d88279f1d693ad7",
           "tool_results": [
             {
               "name": "load_skill",
@@ -3391,8 +3391,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6320,
-          "input_digest": "49f2ef55bc2c2d38ef8c6cbe1781cff1f3f8c41e5e89bfc10fddabbfef8991f7",
+          "input_bytes": 6471,
+          "input_digest": "411887c7fb15a5dca83b7e90fa13c997d816f22ba522fefc13bc115799b55e6e",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -3487,8 +3487,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION",
-          "system_chars": 3060,
-          "system_digest": "sha256:25dff883e10ca6f5d89b4d47c4b0e74d8890c534ea7e07c5e75d4644c938e8f3",
+          "system_chars": 3209,
+          "system_digest": "sha256:d68a66ff1cfaf41eff918a42142a33c6e159a4ec79220c448aadd0101ea1f666",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -3570,8 +3570,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 5896,
-          "input_digest": "da1345a574a037039d9eead172af0155c81536301d20a0e4f1a1caf107298e0d",
+          "input_bytes": 6047,
+          "input_digest": "cae0459a139df9850e096f311913097688e410a6e231c81e212c072920251224",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -3650,8 +3650,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6508,
-          "input_digest": "032186a23283bce34b9dd123e07c070665370f1a1f3f638f024a7dacf5ac9c4a",
+          "input_bytes": 6659,
+          "input_digest": "8a6e3d341bab72c232c7245fa32e0f3c3cc3fe3867fd20bdbcfff8fdbbc97131",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -3742,8 +3742,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION",
-          "system_chars": 3060,
-          "system_digest": "sha256:25dff883e10ca6f5d89b4d47c4b0e74d8890c534ea7e07c5e75d4644c938e8f3",
+          "system_chars": 3209,
+          "system_digest": "sha256:d68a66ff1cfaf41eff918a42142a33c6e159a4ec79220c448aadd0101ea1f666",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -3758,8 +3758,8 @@
           ]
         },
         {
-          "system_chars": 3060,
-          "system_digest": "sha256:25dff883e10ca6f5d89b4d47c4b0e74d8890c534ea7e07c5e75d4644c938e8f3",
+          "system_chars": 3209,
+          "system_digest": "sha256:d68a66ff1cfaf41eff918a42142a33c6e159a4ec79220c448aadd0101ea1f666",
           "tool_results": [
             {
               "name": "click",
@@ -3845,8 +3845,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6377,
-          "input_digest": "b8aecd2fce623a3eafbded3664f046cd1a821d1cd39866efa709de9a69a9f122",
+          "input_bytes": 6528,
+          "input_digest": "374f9babcd2f420c01bb87b56ebf7b5748b364056ec4fe3a1eade2dc7791d021",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -3916,8 +3916,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 7166,
-          "input_digest": "15e97e13e6e390f874a217699f96e2d0691d816fe7d638d01fea08f50b16af5e",
+          "input_bytes": 7317,
+          "input_digest": "d7268da2fd5e59f26b3d55b153ebe6acf0103f67dd01f74a544eee4e7cbd573c",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -3978,8 +3978,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 7613,
-          "input_digest": "aba31a9815c66a49efd667c664864a9faf49794cd0ca168d4f65839edfd2f0ff",
+          "input_bytes": 7764,
+          "input_digest": "51bb9c6b9206a92a7bfc5dc1538bd1d0f08c1975a591906662d4d750708ca94c",
           "message_count": 6,
           "roles": {
             "assistant": 2,
@@ -4080,8 +4080,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\n  e1 link \"Sprout\" href=/glasshouse/do/sproutSeedling\nEND_UNTRUSTED_PAGE_OBSERVATION",
-          "system_chars": 3060,
-          "system_digest": "sha256:25dff883e10ca6f5d89b4d47c4b0e74d8890c534ea7e07c5e75d4644c938e8f3",
+          "system_chars": 3209,
+          "system_digest": "sha256:d68a66ff1cfaf41eff918a42142a33c6e159a4ec79220c448aadd0101ea1f666",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -4097,8 +4097,8 @@
           ]
         },
         {
-          "system_chars": 3060,
-          "system_digest": "sha256:25dff883e10ca6f5d89b4d47c4b0e74d8890c534ea7e07c5e75d4644c938e8f3",
+          "system_chars": 3209,
+          "system_digest": "sha256:d68a66ff1cfaf41eff918a42142a33c6e159a4ec79220c448aadd0101ea1f666",
           "tool_results": [
             {
               "name": "click",
@@ -4119,8 +4119,8 @@
           ]
         },
         {
-          "system_chars": 3060,
-          "system_digest": "sha256:25dff883e10ca6f5d89b4d47c4b0e74d8890c534ea7e07c5e75d4644c938e8f3",
+          "system_chars": 3209,
+          "system_digest": "sha256:d68a66ff1cfaf41eff918a42142a33c6e159a4ec79220c448aadd0101ea1f666",
           "tool_results": [
             {
               "name": "observe",
@@ -4209,8 +4209,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6377,
-          "input_digest": "b8aecd2fce623a3eafbded3664f046cd1a821d1cd39866efa709de9a69a9f122",
+          "input_bytes": 6528,
+          "input_digest": "374f9babcd2f420c01bb87b56ebf7b5748b364056ec4fe3a1eade2dc7791d021",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -4281,8 +4281,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 7014,
-          "input_digest": "4031fc83f31050146081bb8795b5c00788f7afa1e212261ae9393dc8afed5453",
+          "input_bytes": 7165,
+          "input_digest": "f8c23e6ad4a5b7ab767f189ed02cf51a15be38c2b592d563122615c4b162ad46",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -4378,8 +4378,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\n  e1 link \"Sprout\" href=/glasshouse/do/sproutSeedling\nEND_UNTRUSTED_PAGE_OBSERVATION",
-          "system_chars": 3060,
-          "system_digest": "sha256:25dff883e10ca6f5d89b4d47c4b0e74d8890c534ea7e07c5e75d4644c938e8f3",
+          "system_chars": 3209,
+          "system_digest": "sha256:d68a66ff1cfaf41eff918a42142a33c6e159a4ec79220c448aadd0101ea1f666",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -4395,8 +4395,8 @@
           ]
         },
         {
-          "system_chars": 3060,
-          "system_digest": "sha256:25dff883e10ca6f5d89b4d47c4b0e74d8890c534ea7e07c5e75d4644c938e8f3",
+          "system_chars": 3209,
+          "system_digest": "sha256:d68a66ff1cfaf41eff918a42142a33c6e159a4ec79220c448aadd0101ea1f666",
           "tool_results": [
             {
               "name": "click",
@@ -4485,8 +4485,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6320,
-          "input_digest": "49f2ef55bc2c2d38ef8c6cbe1781cff1f3f8c41e5e89bfc10fddabbfef8991f7",
+          "input_bytes": 6471,
+          "input_digest": "411887c7fb15a5dca83b7e90fa13c997d816f22ba522fefc13bc115799b55e6e",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -4524,8 +4524,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6684,
-          "input_digest": "8d02c7fc8ed3a18e4e1bb9088671b0fe4a006c3e470dfae09cdb5dc037db5a4d",
+          "input_bytes": 6835,
+          "input_digest": "56ba44a99733877352c5b9d673a112e47075aba1ed8198e7ac4a88f200704f49",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -4610,8 +4610,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION",
-          "system_chars": 3060,
-          "system_digest": "sha256:25dff883e10ca6f5d89b4d47c4b0e74d8890c534ea7e07c5e75d4644c938e8f3",
+          "system_chars": 3209,
+          "system_digest": "sha256:d68a66ff1cfaf41eff918a42142a33c6e159a4ec79220c448aadd0101ea1f666",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -4627,8 +4627,8 @@
           ]
         },
         {
-          "system_chars": 3060,
-          "system_digest": "sha256:25dff883e10ca6f5d89b4d47c4b0e74d8890c534ea7e07c5e75d4644c938e8f3",
+          "system_chars": 3209,
+          "system_digest": "sha256:d68a66ff1cfaf41eff918a42142a33c6e159a4ec79220c448aadd0101ea1f666",
           "tool_results": [
             {
               "name": "goto",
@@ -4715,8 +4715,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6376,
-          "input_digest": "08160d93a8c1995ada50c8b9025e7dc1d47650de9804aac9c6624ad1d352c437",
+          "input_bytes": 6527,
+          "input_digest": "928d3ac2ae07628bd1abf1de01e0db6762913460d9858f40a63798e1d312e5b2",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -4777,8 +4777,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6952,
-          "input_digest": "0b32f3c8a5a95047d0c4cdb232f200f1efbd5f0d2781f69d64a80bc20cecdfb2",
+          "input_bytes": 7103,
+          "input_digest": "163043dc2b4c0e30002ef292479730bd55e2ccba054471e90d10c4abda173122",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -4841,8 +4841,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 7424,
-          "input_digest": "463bf6a3c1df89f2bb71b0e9cc42b66d6399faec045a8d8fc2ca2394fc9c7e77",
+          "input_bytes": 7575,
+          "input_digest": "61f6c41c62c847473a0f442411a092989a1c036a15bbd3f6cbd8beb4b59157de",
           "message_count": 6,
           "roles": {
             "assistant": 2,
@@ -4942,8 +4942,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\n  e1 link \"Seed Trays\" href=/glasshouse/do/findTrays\nEND_UNTRUSTED_PAGE_OBSERVATION",
-          "system_chars": 3060,
-          "system_digest": "sha256:25dff883e10ca6f5d89b4d47c4b0e74d8890c534ea7e07c5e75d4644c938e8f3",
+          "system_chars": 3209,
+          "system_digest": "sha256:d68a66ff1cfaf41eff918a42142a33c6e159a4ec79220c448aadd0101ea1f666",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -4959,8 +4959,8 @@
           ]
         },
         {
-          "system_chars": 3060,
-          "system_digest": "sha256:25dff883e10ca6f5d89b4d47c4b0e74d8890c534ea7e07c5e75d4644c938e8f3",
+          "system_chars": 3209,
+          "system_digest": "sha256:d68a66ff1cfaf41eff918a42142a33c6e159a4ec79220c448aadd0101ea1f666",
           "tool_results": [
             {
               "name": "goto",
@@ -4981,8 +4981,8 @@
           ]
         },
         {
-          "system_chars": 3060,
-          "system_digest": "sha256:25dff883e10ca6f5d89b4d47c4b0e74d8890c534ea7e07c5e75d4644c938e8f3",
+          "system_chars": 3209,
+          "system_digest": "sha256:d68a66ff1cfaf41eff918a42142a33c6e159a4ec79220c448aadd0101ea1f666",
           "tool_results": [
             {
               "name": "wait_for",
@@ -5069,8 +5069,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6320,
-          "input_digest": "49f2ef55bc2c2d38ef8c6cbe1781cff1f3f8c41e5e89bfc10fddabbfef8991f7",
+          "input_bytes": 6471,
+          "input_digest": "411887c7fb15a5dca83b7e90fa13c997d816f22ba522fefc13bc115799b55e6e",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -5099,8 +5099,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION",
-          "system_chars": 3060,
-          "system_digest": "sha256:25dff883e10ca6f5d89b4d47c4b0e74d8890c534ea7e07c5e75d4644c938e8f3",
+          "system_chars": 3209,
+          "system_digest": "sha256:d68a66ff1cfaf41eff918a42142a33c6e159a4ec79220c448aadd0101ea1f666",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -5146,8 +5146,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6320,
-          "input_digest": "49f2ef55bc2c2d38ef8c6cbe1781cff1f3f8c41e5e89bfc10fddabbfef8991f7",
+          "input_bytes": 6471,
+          "input_digest": "411887c7fb15a5dca83b7e90fa13c997d816f22ba522fefc13bc115799b55e6e",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -5206,8 +5206,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6710,
-          "input_digest": "acb7fbf79f8381c50481720341d9f51b02fbde9d3af1a00fc9a161130c36829f",
+          "input_bytes": 6861,
+          "input_digest": "6149d42e6cecd3be424cab1df2fd27916bd23836d1cc03a16f029e09e8fb73b3",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -5298,8 +5298,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION",
-          "system_chars": 3060,
-          "system_digest": "sha256:25dff883e10ca6f5d89b4d47c4b0e74d8890c534ea7e07c5e75d4644c938e8f3",
+          "system_chars": 3209,
+          "system_digest": "sha256:d68a66ff1cfaf41eff918a42142a33c6e159a4ec79220c448aadd0101ea1f666",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -5315,8 +5315,8 @@
           ]
         },
         {
-          "system_chars": 3060,
-          "system_digest": "sha256:25dff883e10ca6f5d89b4d47c4b0e74d8890c534ea7e07c5e75d4644c938e8f3",
+          "system_chars": 3209,
+          "system_digest": "sha256:d68a66ff1cfaf41eff918a42142a33c6e159a4ec79220c448aadd0101ea1f666",
           "tool_results": [
             {
               "name": "observe",
@@ -5403,8 +5403,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6320,
-          "input_digest": "49f2ef55bc2c2d38ef8c6cbe1781cff1f3f8c41e5e89bfc10fddabbfef8991f7",
+          "input_bytes": 6471,
+          "input_digest": "411887c7fb15a5dca83b7e90fa13c997d816f22ba522fefc13bc115799b55e6e",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -5487,8 +5487,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION",
-          "system_chars": 3060,
-          "system_digest": "sha256:25dff883e10ca6f5d89b4d47c4b0e74d8890c534ea7e07c5e75d4644c938e8f3",
+          "system_chars": 3209,
+          "system_digest": "sha256:d68a66ff1cfaf41eff918a42142a33c6e159a4ec79220c448aadd0101ea1f666",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -5570,8 +5570,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 5896,
-          "input_digest": "da1345a574a037039d9eead172af0155c81536301d20a0e4f1a1caf107298e0d",
+          "input_bytes": 6047,
+          "input_digest": "cae0459a139df9850e096f311913097688e410a6e231c81e212c072920251224",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -5650,8 +5650,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6508,
-          "input_digest": "032186a23283bce34b9dd123e07c070665370f1a1f3f638f024a7dacf5ac9c4a",
+          "input_bytes": 6659,
+          "input_digest": "8a6e3d341bab72c232c7245fa32e0f3c3cc3fe3867fd20bdbcfff8fdbbc97131",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -5795,8 +5795,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION",
-          "system_chars": 3060,
-          "system_digest": "sha256:25dff883e10ca6f5d89b4d47c4b0e74d8890c534ea7e07c5e75d4644c938e8f3",
+          "system_chars": 3209,
+          "system_digest": "sha256:d68a66ff1cfaf41eff918a42142a33c6e159a4ec79220c448aadd0101ea1f666",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -5811,8 +5811,8 @@
           ]
         },
         {
-          "system_chars": 3060,
-          "system_digest": "sha256:25dff883e10ca6f5d89b4d47c4b0e74d8890c534ea7e07c5e75d4644c938e8f3",
+          "system_chars": 3209,
+          "system_digest": "sha256:d68a66ff1cfaf41eff918a42142a33c6e159a4ec79220c448aadd0101ea1f666",
           "tool_results": [
             {
               "name": "click",
@@ -5906,8 +5906,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 10630,
-          "input_digest": "4a656cf16b5b082bb3c7c682bb66d50d3e48480ee5fb6697215ede5c3dfed763",
+          "input_bytes": 10781,
+          "input_digest": "c4a19bc476b08e2c0c6b2f8acc0ce18fc20a9d68bdd77ff8a127d52b385a6f8b",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -5997,8 +5997,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 15590,
-          "input_digest": "c6236dcbd019f22af694fe68a9e64fca71da8577938005fb0edabd9a4a6d7186",
+          "input_bytes": 15741,
+          "input_digest": "09ddc1e7d4dbfe426f98b529d73e726363b1a75d90824d60bc427a0f3bc85bd1",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -6121,8 +6121,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION",
-          "system_chars": 5637,
-          "system_digest": "sha256:1f53b228ab61e5d479cd006c6e235a37ab26dadcf85bd660e051529dbea8f3fe",
+          "system_chars": 5786,
+          "system_digest": "sha256:53a4bb080f74d154d01fea1c90e5926b7bab3934af8e94c945ed0e1492178032",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -6141,8 +6141,8 @@
           ]
         },
         {
-          "system_chars": 5637,
-          "system_digest": "sha256:1f53b228ab61e5d479cd006c6e235a37ab26dadcf85bd660e051529dbea8f3fe",
+          "system_chars": 5786,
+          "system_digest": "sha256:53a4bb080f74d154d01fea1c90e5926b7bab3934af8e94c945ed0e1492178032",
           "tool_results": [
             {
               "name": "lookup_source",
@@ -6254,8 +6254,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 7900,
-          "input_digest": "870ba7d3d6cb471f4c2c20b14615f41dce5f9058cb990b326550f2244623d18f",
+          "input_bytes": 8051,
+          "input_digest": "cd81ce3a08140703bc0fe749f4b5d40efa36769ce932bca97f98eedcc0be6f23",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -6333,8 +6333,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 8725,
-          "input_digest": "0c856a8d955cbb81f6fe9c319bfcb7a289d2c60b0ee8c25efd980a4fee5570bb",
+          "input_bytes": 8876,
+          "input_digest": "9689537935f22beab8d9603f63430b8f71bd27e18a267fcd3557b76b69af056d",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -6427,8 +6427,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nAPP SKILLS (server-selected read-only knowledge):\n[{\"expected_text\":[\"Seed Trays\"],\"intent\":\"Open the seed tray list.\",\"parameters\":[],\"requires_current_webapp\":\"glasshouse\",\"skill_id\":\"fixture.open-trays\",\"title\":\"Open the seed trays\"}]",
-          "system_chars": 3597,
-          "system_digest": "sha256:5e7f66b483cc97fc87a90a5c3d3c0ca23c9951da13aa46cb03bd64cb6fac3549",
+          "system_chars": 3746,
+          "system_digest": "sha256:6978bafbca4ce6eb4d5b35a8c2a46d74c44c3eb9f6909910cc0d8420c19995ad",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -6446,8 +6446,8 @@
           ]
         },
         {
-          "system_chars": 3597,
-          "system_digest": "sha256:5e7f66b483cc97fc87a90a5c3d3c0ca23c9951da13aa46cb03bd64cb6fac3549",
+          "system_chars": 3746,
+          "system_digest": "sha256:6978bafbca4ce6eb4d5b35a8c2a46d74c44c3eb9f6909910cc0d8420c19995ad",
           "tool_results": [
             {
               "name": "open_skill_route",
@@ -6537,8 +6537,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 7900,
-          "input_digest": "870ba7d3d6cb471f4c2c20b14615f41dce5f9058cb990b326550f2244623d18f",
+          "input_bytes": 8051,
+          "input_digest": "cd81ce3a08140703bc0fe749f4b5d40efa36769ce932bca97f98eedcc0be6f23",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -6617,8 +6617,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 8783,
-          "input_digest": "f32b2edb37aff7fb5f39c88ed2d5d65cc950c4594bbce0554e3e05b20ad411b8",
+          "input_bytes": 8934,
+          "input_digest": "b3be50efb069bed68ea5943223146c634ce9b9605e185e9f0bedd26826c25dc3",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -6709,8 +6709,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nAPP SKILLS (server-selected read-only knowledge):\n[{\"expected_text\":[\"Seed Trays\"],\"intent\":\"Open the seed tray list.\",\"parameters\":[],\"requires_current_webapp\":\"glasshouse\",\"skill_id\":\"fixture.open-trays\",\"title\":\"Open the seed trays\"}]",
-          "system_chars": 3597,
-          "system_digest": "sha256:5e7f66b483cc97fc87a90a5c3d3c0ca23c9951da13aa46cb03bd64cb6fac3549",
+          "system_chars": 3746,
+          "system_digest": "sha256:6978bafbca4ce6eb4d5b35a8c2a46d74c44c3eb9f6909910cc0d8420c19995ad",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -6728,8 +6728,8 @@
           ]
         },
         {
-          "system_chars": 3597,
-          "system_digest": "sha256:5e7f66b483cc97fc87a90a5c3d3c0ca23c9951da13aa46cb03bd64cb6fac3549",
+          "system_chars": 3746,
+          "system_digest": "sha256:6978bafbca4ce6eb4d5b35a8c2a46d74c44c3eb9f6909910cc0d8420c19995ad",
           "tool_results": [
             {
               "name": "open_skill_route",
@@ -6838,8 +6838,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 7289,
-          "input_digest": "4a37aa341f063f56534ef3b9be805b1b36403d3dfc09c4bd84818c4246ff9273",
+          "input_bytes": 7440,
+          "input_digest": "7850fa23696be554c34f1a4c2a3c1122650a23429db34cd0226c401dc7ec73c1",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -6931,8 +6931,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 8071,
-          "input_digest": "e8056d6f0e3e1f95290bd2e24a26cc4be35ef5c42a2341dd2126084b6b7e606a",
+          "input_bytes": 8222,
+          "input_digest": "b53a179c2a97ca0389a31b8e36f0743bae9ddc0a2e5d82094d94ea30898c8fa3",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -7023,8 +7023,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nSOURCE AFFORDANCES (source-bound read-only candidates; current page wins):\n[]",
-          "system_chars": 3503,
-          "system_digest": "sha256:9c4ef2574d07a039f482514e0a522a05413e6eebfa1658fc665f414600eac329",
+          "system_chars": 3652,
+          "system_digest": "sha256:4e884d8fb75dbfbb23bf07b54bba1cb9e6536e2e63b90766f5b6e7a3f7d09562",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -7041,8 +7041,8 @@
           ]
         },
         {
-          "system_chars": 3503,
-          "system_digest": "sha256:9c4ef2574d07a039f482514e0a522a05413e6eebfa1658fc665f414600eac329",
+          "system_chars": 3652,
+          "system_digest": "sha256:4e884d8fb75dbfbb23bf07b54bba1cb9e6536e2e63b90766f5b6e7a3f7d09562",
           "tool_results": [
             {
               "name": "open_source_candidate",
@@ -7150,8 +7150,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 7289,
-          "input_digest": "4a37aa341f063f56534ef3b9be805b1b36403d3dfc09c4bd84818c4246ff9273",
+          "input_bytes": 7440,
+          "input_digest": "7850fa23696be554c34f1a4c2a3c1122650a23429db34cd0226c401dc7ec73c1",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -7243,8 +7243,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 8058,
-          "input_digest": "de71222cc508a0ee1deac5f383aa5e98aa790f8248cd60db89d52db1c0027842",
+          "input_bytes": 8209,
+          "input_digest": "3dd1937f8e11abfc6169f8ce64b5874c0cc585c7de34c41c7145576f99672e37",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -7335,8 +7335,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nSOURCE AFFORDANCES (source-bound read-only candidates; current page wins):\n[]",
-          "system_chars": 3503,
-          "system_digest": "sha256:9c4ef2574d07a039f482514e0a522a05413e6eebfa1658fc665f414600eac329",
+          "system_chars": 3652,
+          "system_digest": "sha256:4e884d8fb75dbfbb23bf07b54bba1cb9e6536e2e63b90766f5b6e7a3f7d09562",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -7353,8 +7353,8 @@
           ]
         },
         {
-          "system_chars": 3503,
-          "system_digest": "sha256:9c4ef2574d07a039f482514e0a522a05413e6eebfa1658fc665f414600eac329",
+          "system_chars": 3652,
+          "system_digest": "sha256:4e884d8fb75dbfbb23bf07b54bba1cb9e6536e2e63b90766f5b6e7a3f7d09562",
           "tool_results": [
             {
               "name": "open_source_candidate",
@@ -7442,8 +7442,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6320,
-          "input_digest": "49f2ef55bc2c2d38ef8c6cbe1781cff1f3f8c41e5e89bfc10fddabbfef8991f7",
+          "input_bytes": 6471,
+          "input_digest": "411887c7fb15a5dca83b7e90fa13c997d816f22ba522fefc13bc115799b55e6e",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -7502,8 +7502,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6710,
-          "input_digest": "acb7fbf79f8381c50481720341d9f51b02fbde9d3af1a00fc9a161130c36829f",
+          "input_bytes": 6861,
+          "input_digest": "6149d42e6cecd3be424cab1df2fd27916bd23836d1cc03a16f029e09e8fb73b3",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -7619,8 +7619,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION",
-          "system_chars": 3060,
-          "system_digest": "sha256:25dff883e10ca6f5d89b4d47c4b0e74d8890c534ea7e07c5e75d4644c938e8f3",
+          "system_chars": 3209,
+          "system_digest": "sha256:d68a66ff1cfaf41eff918a42142a33c6e159a4ec79220c448aadd0101ea1f666",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -7636,8 +7636,8 @@
           ]
         },
         {
-          "system_chars": 3060,
-          "system_digest": "sha256:25dff883e10ca6f5d89b4d47c4b0e74d8890c534ea7e07c5e75d4644c938e8f3",
+          "system_chars": 3209,
+          "system_digest": "sha256:d68a66ff1cfaf41eff918a42142a33c6e159a4ec79220c448aadd0101ea1f666",
           "tool_results": [
             {
               "name": "observe",
@@ -7724,8 +7724,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6320,
-          "input_digest": "49f2ef55bc2c2d38ef8c6cbe1781cff1f3f8c41e5e89bfc10fddabbfef8991f7",
+          "input_bytes": 6471,
+          "input_digest": "411887c7fb15a5dca83b7e90fa13c997d816f22ba522fefc13bc115799b55e6e",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -7764,8 +7764,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 6664,
-          "input_digest": "2c2e3814318d197a0715691185e8b24284376e152922de60ffb97308133d52ae",
+          "input_bytes": 6815,
+          "input_digest": "9210b7674610ccd9a8aaf9d57eead4f66541c558e6af7cf290b7e01f2ac0c47a",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -7850,8 +7850,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION",
-          "system_chars": 3060,
-          "system_digest": "sha256:25dff883e10ca6f5d89b4d47c4b0e74d8890c534ea7e07c5e75d4644c938e8f3",
+          "system_chars": 3209,
+          "system_digest": "sha256:d68a66ff1cfaf41eff918a42142a33c6e159a4ec79220c448aadd0101ea1f666",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -7867,8 +7867,8 @@
           ]
         },
         {
-          "system_chars": 3060,
-          "system_digest": "sha256:25dff883e10ca6f5d89b4d47c4b0e74d8890c534ea7e07c5e75d4644c938e8f3",
+          "system_chars": 3209,
+          "system_digest": "sha256:d68a66ff1cfaf41eff918a42142a33c6e159a4ec79220c448aadd0101ea1f666",
           "tool_results": [
             {
               "name": "teleport",

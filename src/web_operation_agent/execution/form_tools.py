@@ -6,7 +6,9 @@ import json
 import re
 
 from ..transport.browser import TransportError, TurnCancelled
-from ..business.errors import BusinessToolError, BusinessToolPermissionError
+from ..answer.evidence import EvidenceUnknown, SourceEvidence
+from ..business.errors import (BusinessToolError, BusinessToolPermissionError,
+                               BusinessToolRequestError)
 from ..business.runtime import FormDraft
 from ..schemas import PageObservation
 from .routes import observation_is_at_route
@@ -16,6 +18,46 @@ from .runstate import _Next, _Turn
 def _form_identity(session, step: int, tool: str) -> tuple[object, dict]:
     context = session._approvals.context(step, tool)
     return context, context.audit_projection() if context is not None else {}
+
+
+def _source_bases(session, args: object) -> tuple[object, tuple[str, ...]]:
+    """Validate source-derived value provenance without exposing it to an adapter.
+
+    The check establishes that the cited bytes belong to this turn and deployment, not
+    that the model's interpretation or arithmetic is correct. The current-form contract
+    independently validates the proposed value against live fields and choices.
+    """
+    if not isinstance(args, dict) or not isinstance(args.get("values"), list):
+        return args, ()
+    values = []
+    refs = []
+    for item in args["values"]:
+        if not isinstance(item, dict) or "source_basis" not in item:
+            values.append(item)
+            continue
+        basis = item["source_basis"]
+        if (not isinstance(basis, dict) or set(basis) != {"ref", "support"}
+                or not isinstance(basis["ref"], str)
+                or not isinstance(basis["support"], str)
+                or not 8 <= len(basis["support"]) <= 400
+                or not re.fullmatch(r"source#[1-9][0-9]*", basis["ref"])):
+            raise BusinessToolRequestError("source_basis requires a cited source span")
+        try:
+            evidence = session.evidence.get(basis["ref"])
+        except EvidenceUnknown:
+            raise BusinessToolRequestError(
+                "source_basis must cite source evidence from this turn") from None
+        if (not isinstance(evidence, SourceEvidence)
+                or session.source_map is None
+                or evidence.release != session.source_map.release
+                or (basis["support"] not in evidence.excerpt
+                    and basis["support"] not in evidence.summary)):
+            raise BusinessToolRequestError(
+                "source_basis does not match this deployment's cited source")
+        values.append({key: value for key, value in item.items()
+                       if key != "source_basis"})
+        refs.append(basis["ref"])
+    return {**args, "values": values}, tuple(refs)
 
 
 def describe_form(session, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
@@ -53,8 +95,9 @@ def prepare_form(session, turn: "_Turn", call: dict, name: str, args: dict) -> "
     session._form_draft = None
     context, identity = _form_identity(session, turn.step, name)
     try:
+        form_args, source_refs = _source_bases(session, args)
         draft, content = session._application_form_tools.prepare(
-            turn.obs, args, context=context)
+            turn.obs, form_args, context=context)
     except BusinessToolPermissionError as exc:
         return _Next(session._permission_denied(
             turn.result, turn.started_at, turn.step, name, exc,
@@ -72,6 +115,7 @@ def prepare_form(session, turn: "_Turn", call: dict, name: str, args: dict) -> "
     session.ledger.append(
         "application_form_prepared", step=turn.step, tool=name,
         draft_digest=draft.content_digest, field_count=len(draft.fields),
+        source_refs=list(source_refs),
         persistence=draft.persistence, side_effect_possible=False,
         submitted=False, persisted=False, identity=identity)
     return session._reply(
