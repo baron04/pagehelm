@@ -200,8 +200,8 @@ class ActionReceipt:
     epoch_before: int = 0
     epoch_after: int = 0
     elapsed_ms: int = 0
-    #: True when the browser re-authenticated during this action. OFBiz carries its session
-    #: between webapps in a URL parameter, so any navigation that does not inherit it lands on
+    #: True when the browser re-authenticated during this action. Some applications carry a
+    #: session between webapps in a URL parameter, so navigation without it lands on
     #: a login form. Recovering is session lifecycle, which is the browser's job, but it is
     #: reported rather than hidden: it is applied identically for every arm and it must be
     #: visible when reading a trace.

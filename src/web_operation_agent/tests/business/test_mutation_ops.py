@@ -63,14 +63,14 @@ class MutationOpsTests(unittest.TestCase):
         identity = {k: v for k, v in p.audit_projection().items()
                     if k in {'tenant_digest', 'workspace_digest', 'actor_digest'}}
         adapter = SimpleNamespace(
-            descriptor=SimpleNamespace(application_id='twenty'),
+            descriptor=SimpleNamespace(application_id='sample'),
             ports=SimpleNamespace(identity=Mock(), reconciliation=Mock()))
         adapter.ports.reconciliation.reconcile.return_value = MutationReconciliation(
             'unknown', True, 'current state is not proof of the earlier outcome')
         with tempfile.TemporaryDirectory() as tmp:
             journal = SQLiteMutationJournal(Path(tmp) / 'journal.db')
             journal.register('a' * 64, 'b' * 64, expires_at=2000, now_ms=1000,
-                             reconciliation={'application_id': 'twenty', 'tool': 'create_company',
+                             reconciliation={'application_id': 'sample', 'tool': 'create_company',
                                              'args': {'name': 'Synthetic'}, 'identity': identity})
             journal.claim('a' * 64, 'b' * 64, now_ms=1001)
             before = journal.get('a' * 64)

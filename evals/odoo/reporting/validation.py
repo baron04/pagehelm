@@ -2,7 +2,7 @@
 
 Every attempt is written down before its runner starts, every model request before it is
 forwarded, and every result afterwards, so a failed or interrupted trial cannot be rerun
-without leaving a trace. The file reuses the Twenty batch ledger's discipline -- a private
+without leaving a trace. The file uses a private batch ledger -- a
 ``0600`` regular file, a POSIX lock held across read-validate-append, SHA-256 entry digests
 linking each line to the previous one. It records attempts rather than completed trials:
 an attempt may be interrupted, replaced within a closed policy, or end a batch.
@@ -222,4 +222,3 @@ def records_request_parameters(value: Any, max_output_tokens: Any) -> bool:
 
 def _entry_digest(entry: dict[str, Any]) -> str:
     return digest_json({key: value for key, value in entry.items() if key != "digest"})
-

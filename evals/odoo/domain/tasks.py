@@ -4,7 +4,7 @@ A task names population *roles* and never a record value, so the development and
 sets can share one generator and still be instantiated against different synthetic data. Each
 task carries a structural fingerprint; families must be unique within and across splits,
 while the causal-shape distribution must match so the two splits describe one task
-population. Seals follow the Twenty task-set discipline: a per-set 128-bit nonce salts every
+population. Seals use a per-set 128-bit nonce that salts every
 task digest, so the public seal of a private held-out set does not reveal short prompts.
 
 Instantiation produces two separate objects. ``RunnerInput`` holds only what a user would

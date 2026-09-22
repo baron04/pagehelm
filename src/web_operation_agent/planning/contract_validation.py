@@ -25,11 +25,11 @@ def _segment_from_template(template: str) -> str:
 def normalise_request(webapp: str, request: str, *, segment: str) -> str:
     """Accept the request name in either spelling the page presents it in.
 
-    A form's action reads a full path such as `/accounting/<segment>/findPayments`, and a
+    A form's action reads a full path such as `/billing/<segment>/findInvoices`, and a
     model that copies it verbatim is being reasonable -- it is quoting the deployment.
     Stripping the servlet prefix is syntax, not task knowledge: it says nothing about *which*
     request is right, it is applied identically to every planning mode, and multi-segment
-    request names such as `WorkEffortPartyAssigns/create` come through untouched. A request
+    request names such as `Schedule/create` come through untouched. A request
     must not be rejected merely because the model copied the deployment's servlet prefix.
     `segment` is the adapter-declared path segment that wraps a route; an adapter with no such
     convention passes an empty `segment` and only the bare-name fallback below ever applies.
@@ -69,8 +69,8 @@ def normalise_citation(key: str) -> str:
 def split_handler_subject(subject: str) -> tuple[str, str]:
     """`webapp/request` as the compiler writes it for a controller entry.
 
-    The request part may itself contain slashes -- OFBiz has entries like
-    `beacon/LampSchedule/create` -- so only the first segment is the application.
+    The request part may itself contain slashes, as in `beacon/LampSchedule/create`,
+    so only the first segment is the application.
     """
     webapp, _, request = (subject or "").partition("/")
     return webapp.lower(), request.lower()
@@ -96,8 +96,8 @@ def qualified_request(uri: str, *, segment: str, default_webapp: str = "") -> st
         webapp = head.rsplit("/", 1)[-1]
     else:
         # Only the adapter's own wrapper proves an application prefix. A bare `a/b` is
-        # ambiguous and is far more often a request name that contains a slash -- OFBiz has
-        # `LampSchedule/create` -- than an application. Reading the first segment as the
+        # ambiguous and may be a request name that contains a slash, such as
+        # `LampSchedule/create`, rather than an application. Reading the first segment as the
         # application turned that request into an application called LampSchedule and dropped
         # the step that named it.
         webapp, rest = "", cleaned

@@ -262,7 +262,7 @@ class Pruning(unittest.TestCase):
         self.assertTrue(dropped)
 
     def test_a_form_target_with_no_controller_entry_is_still_a_real_move(self):
-        """OFBiz builds some request names at runtime; a declared form target proves it exists.
+        """Runtime-built request names still have declared form targets.
 
         The citation must still be about it -- existing and being cited for are two questions.
         """

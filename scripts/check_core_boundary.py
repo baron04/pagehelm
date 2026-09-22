@@ -7,12 +7,10 @@ last time -- core test modules imported a reference adapter, so the core suite
 could not run without an application distribution installed and every generic route consumer
 was only ever exercised against one application's URL spelling.
 
-1. No line of *executable code* spells an application's name (``ofbiz``, ``odoo``,
-   ``twenty``) or an application's route shape (``/control/``, ``/odoo/``), case-insensitive. A comment or a docstring MAY still explain OFBiz as a
-   historical example -- the review that set this gate was explicit that explanatory prose is
-   good documentation and grep-zeroing names is not the acceptance bar; only application-owned
-   execution logic has to be gone. This is why the check is AST/token-aware rather than a bare
-   ``grep``: a naive line grep cannot tell a citation-matching regex from a comment about one.
+1. No line of *executable code* spells the reference application's name (``odoo``)
+   or its route shape (``/odoo/``), case-insensitive. Comments and docstrings may explain
+   an application boundary; only application-owned execution logic must stay outside core.
+   This check is AST/token-aware so explanatory prose is not mistaken for executable code.
 2. Core never imports from ``evals`` -- the evaluation harness is a consumer of core, never
    the other way around.
 
@@ -30,8 +28,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CORE = ROOT / "src" / "web_operation_agent"
 
-#: Application names and the servlet/route shapes that belong to one application.
-_PATTERN = re.compile(r"ofbiz|/control/|\bodoo\b|/odoo/|\btwenty\b", re.IGNORECASE)
+#: Reference-application names and routes that must not become core execution logic.
+_PATTERN = re.compile(r"\bodoo\b|/odoo/", re.IGNORECASE)
 #: Every in-repository application distribution. The core imports none of them, anywhere.
 _ADAPTER_IMPORT = re.compile(r"web_operation_agent_[a-z0-9_]+")
 

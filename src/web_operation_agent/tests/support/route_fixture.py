@@ -6,9 +6,9 @@ every generic consumer of a route port (`affordance`, `contract`, `grounding`, `
 `session`) was only ever exercised against one application's URL spelling, so a
 grammar assumption leaking into the core would have passed unnoticed.
 
-The spelling here is deliberately neither OFBiz's nor Odoo's: the contract segment is `do`,
-not `control`, and it is not a fixed prefix like Odoo's `/odoo/`. A core module that still
-works against all three is not encoding any one application's syntax.
+The spelling here is deliberately distinct from the public reference: the contract segment
+is `do`, and it is not a fixed prefix like the reference's `/odoo/`. A core module that works
+against both is not encoding the reference application's syntax.
 """
 from __future__ import annotations
 

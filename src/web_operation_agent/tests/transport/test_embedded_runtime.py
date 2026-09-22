@@ -809,7 +809,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
           globalThis.location = {{origin:'https://app.example.test'}};
           const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
           runtime.sessionId = 'session-1';
-          runtime.applicationId = 'twenty';
+          runtime.applicationId = 'sample';
           runtime.principalBinding = '{'a' * 64}';
           runtime.runtimeInstanceId = 'document-1';
           runtime.stored = {{clientId:'client-1', lastEventId:''}};
@@ -827,7 +827,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                               text=True, capture_output=True, timeout=10, check=True)
         result = json.loads(proc.stdout)
         self.assertEqual(result["sent"]["path"], "/hello")
-        self.assertEqual(result["sent"]["body"]["application_id"], "twenty")
+        self.assertEqual(result["sent"]["body"]["application_id"], "sample")
         self.assertEqual(result["sent"]["body"]["principal_digest"], "a" * 64)
         self.assertEqual(result["sent"]["options"], {"includeLease": False})
         self.assertEqual(result["leaseId"], "lease-1")

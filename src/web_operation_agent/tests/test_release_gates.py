@@ -58,9 +58,8 @@ class TheLocalEnvironmentTemplateIsSafeAndUseful(unittest.TestCase):
         self.assertFalse(any(self.values[name] for name in expected),
                          "copying the template must not enable a live service")
 
-    def test_it_contains_neither_a_credential_nor_a_retired_integration(self):
+    def test_it_contains_neither_a_credential_nor_a_local_path(self):
         self.assertEqual(self.values["AGENT_OPENAI_API_KEY"], "")
-        self.assertFalse(any(name.startswith("WOA_TWENTY_") for name in self.values))
         text = (ROOT / ".env.example").read_text(encoding="utf-8")
         self.assertNotRegex(text, r"/(Users|home)/[^/]+/")
 

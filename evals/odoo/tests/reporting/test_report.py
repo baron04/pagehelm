@@ -458,7 +458,7 @@ class VerificationTests(unittest.TestCase):
             report.verify_report(tampered)
 
     def test_wrong_kind_is_rejected(self):
-        tampered = {**copy.deepcopy(self.value), "kind": "twenty_public_report"}
+        tampered = {**copy.deepcopy(self.value), "kind": "obsolete_public_report"}
         with self.assertRaises(ValueError):
             report.verify_report(tampered)
 

@@ -97,7 +97,7 @@ class ChannelTests(unittest.TestCase):
             principal=expected)
 
         self.assertIs(channel.principal, expected)
-        self.assertEqual(grant.application_id, "twenty")
+        self.assertEqual(grant.application_id, "sample")
         self.assertEqual(grant.principal_digest, expected.binding_digest)
         self.assertEqual(grant.expires_at, expected.expires_at)
         self.assertNotIn(expected.actor_id, repr(grant))
@@ -106,10 +106,10 @@ class ChannelTests(unittest.TestCase):
         self.assertEqual(missing.exception.code, "principal_mismatch")
         with self.assertRaisesRegex(RemoteProtocolError, "principal binding"):
             channel.accept_hello(hello(
-                grant.session_id, application_id="twenty",
+                grant.session_id, application_id="sample",
                 principal_digest="0" * 64))
         reply = channel.accept_hello(hello(
-            grant.session_id, application_id="twenty",
+            grant.session_id, application_id="sample",
             principal_digest=expected.binding_digest))
         self.assertTrue(reply["lease_id"])
 
@@ -135,7 +135,7 @@ class ChannelTests(unittest.TestCase):
         grant, channel = registry.create(
             allowed_origins=[ORIGIN], session_id="busy-renewal", principal=initial)
         lease = channel.accept_hello(hello(
-            grant.session_id, application_id="twenty",
+            grant.session_id, application_id="sample",
             principal_digest=initial.binding_digest))["lease_id"]
         channel.accept_message({"message_id": "turn-1", "text": "list companies",
                                 "page_url": ORIGIN + "/start"}, lease_id=lease)
@@ -149,7 +149,7 @@ class ChannelTests(unittest.TestCase):
         with self.assertRaisesRegex(RemoteProtocolError, "no principal") as caught:
             self.channel.accept_hello(dataclasses.replace(
                 hello(self.grant.session_id, runtime_instance_id="another-document"),
-                application_id="twenty", principal_digest="0" * 64))
+                application_id="sample", principal_digest="0" * 64))
         self.assertEqual(caught.exception.code, "principal_mismatch")
 
     def test_registry_retirement_revokes_capability_and_releases_state(self):
@@ -199,7 +199,7 @@ class ChannelTests(unittest.TestCase):
         grant, channel = registry.create(
             allowed_origins=[ORIGIN], session_id="outlived-wait", principal=initial)
         lease = channel.accept_hello(hello(
-            grant.session_id, application_id="twenty",
+            grant.session_id, application_id="sample",
             principal_digest=initial.binding_digest))["lease_id"]
         # The worker parks while the session has a short life left in front of it.
         channel.expires_at = int(time.time() * 1000) + 300
@@ -391,7 +391,7 @@ class ChannelTests(unittest.TestCase):
             allowed_origins=[ORIGIN], session_id="bound-approval",
             principal=expected)
         lease = channel.accept_hello(hello(
-            grant.session_id, application_id="twenty",
+            grant.session_id, application_id="sample",
             principal_digest=expected.binding_digest))["lease_id"]
         message = {"message_id": "message-1", "text": "Create Acme",
                    "page_url": ORIGIN + "/start"}

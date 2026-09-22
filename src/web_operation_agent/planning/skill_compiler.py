@@ -253,9 +253,8 @@ class BusinessSkillCompiler:
         handlers = [row for row in self.source_map.by_kind("request_handler")
                     if row.subject == subject]
         action = _one(handlers, f"declared request {subject}")
-        # What a handler's `object` slot holds is where the two compilers stop agreeing.
-        # Odoo puts the model an action opens there; OFBiz puts the service a request
-        # invokes, and leaves it empty for a view-only one. So the model is taken only when
+        # A handler's `object` slot may identify an entity or a service and can be empty
+        # for a view-only request. So the model is taken only when
         # the map itself describes it as an entity, and a draft without one keeps every
         # fact that does not depend on it rather than refusing to compile.
         entities = {row.subject for row in self.source_map.by_kind("service_entity")}
@@ -376,8 +375,8 @@ class BusinessSkillCompiler:
     def _menus_for(self, subject: str) -> list[SourceRelation]:
         """Menus point at a request by its subject, or by its route within the scope.
 
-        Both spellings occur in practice -- Odoo's menu targets the whole identity
-        (`odoo/orders`), OFBiz's targets the bare request (`findTrays`) -- and neither is
+        Both spellings occur in practice: a menu may target the whole identity
+        (`shop/orders`) or the bare request (`findTrays`). Neither is
         wrong, so the link accepts either rather than picking one application's habit.
         """
         route = subject.split("/", 1)[-1]
@@ -468,8 +467,8 @@ class BusinessSkillCompiler:
     def _anchor(relation: SourceRelation) -> str:
         """The identifier a reader would search the cited file for.
 
-        Applications name their descriptors differently -- Odoo has globally qualified XML
-        ids, OFBiz has request and menu-item names -- so this prefers whichever identity the
+        Applications name their descriptors differently: some use qualified XML IDs,
+        others request and menu-item names. This prefers whichever identity the
         compiler recorded and falls back to the relation's own subject.
         """
         for key in ("action_id", "menu_id", "view_id", "form_name", "screen_name"):

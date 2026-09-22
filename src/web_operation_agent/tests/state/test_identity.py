@@ -17,7 +17,7 @@ class PrincipalContextTests(unittest.TestCase):
         self.assertEqual(restored, value)
         self.assertEqual(restored.binding_digest, value.binding_digest)
         audit = value.audit_projection()
-        self.assertEqual(audit["application_id"], "twenty")
+        self.assertEqual(audit["application_id"], "sample")
         self.assertEqual(audit["principal_digest"], value.binding_digest)
         for raw in (value.tenant_id, value.workspace_id, value.actor_id,
                     value.delegation_id):
@@ -70,7 +70,7 @@ class PrincipalContextTests(unittest.TestCase):
 
     def test_live_check_rejects_future_expired_and_other_application(self):
         value = principal()
-        value.require_live(application_id="twenty", now_ms=1_000_000)
+        value.require_live(application_id="sample", now_ms=1_000_000)
         with self.assertRaisesRegex(PrincipalError, "not active"):
             value.require_live(now_ms=999_999)
         with self.assertRaisesRegex(PrincipalError, "expired"):
@@ -88,7 +88,7 @@ class OperationContextTests(unittest.TestCase):
             now_ms=1_000_000)
 
         context.require_live(
-            application_id="twenty", required_scope="companies:read",
+            application_id="sample", required_scope="companies:read",
             now_ms=1_000_001)
         self.assertEqual(context.expires_at, 1_030_000)
         audit = context.audit_projection()
@@ -121,7 +121,7 @@ class IdentityBindingTests(unittest.TestCase):
     def assertion(source: str, *, actor_id: str = "actor-1",
                   workspace_id: str = "workspace-1") -> IdentityAssertion:
         return IdentityAssertion(
-            1, source, "twenty", workspace_id, workspace_id, actor_id,
+            1, source, "sample", workspace_id, workspace_id, actor_id,
             1_000_000, 1_060_000)
 
     def test_matching_page_and_api_identity_create_one_principal(self):

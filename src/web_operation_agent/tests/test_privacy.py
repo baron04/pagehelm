@@ -184,10 +184,9 @@ class GenericCredentialPrivacy(unittest.TestCase):
 class AdapterSessionVocabulary(unittest.TestCase):
     """The static baseline is a floor, and an adapter's own vocabulary must reach redaction.
 
-    The review that raised this recorded the failure precisely: "Twenty's own session
-    parameters are not in the redaction scope." The baseline in `privacy.py` names OFBiz's
-    hand-off keys and nothing else, so an application whose session parameter this package
-    has never heard of -- Odoo's `session_id`, historically carried in URLs -- is invisible to
+    The baseline in `privacy.py` cannot know every application's hand-off keys, so an
+    application whose session parameter this package has never heard of -- the reference's
+    `session_id`, historically carried in URLs -- is invisible to
     every consumer that only calls the module-level functions.
     """
 

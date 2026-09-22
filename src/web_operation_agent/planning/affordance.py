@@ -133,8 +133,8 @@ def _tokens(text: str) -> set[str]:
 def _humanize(value: str) -> str:
     leaf = value.rsplit("/", 1)[-1]
     human = " ".join(_CAMEL_RE.split(leaf.replace("_", " ").replace("-", " "))).strip()
-    # Some OFBiz controller names concatenate a generic verb and a business noun in all
-    # lower case (for example ``viewidentifications``), so CamelCase splitting cannot see
+    # Some route names concatenate a generic verb and a business noun in all lower case
+    # (for example ``viewidentifications``), so CamelCase splitting cannot see
     # the useful noun.  Split only the long, common controller prefixes; their generic verb
     # is a stop word and the remainder carries the ranking signal.
     if human == leaf and leaf == leaf.casefold():
@@ -158,7 +158,7 @@ def _identity(subject: str) -> tuple[str, str] | None:
 
 def _menu_destinations(relation: SourceRelation,
                        known: set[tuple[str, str]]) -> tuple[tuple[str, str], ...]:
-    """Resolve only syntactic menu targets; never evaluate an OFBiz expression."""
+    """Resolve only syntactic menu targets; never evaluate a descriptor expression."""
     raw = relation.object.strip()
     if not raw:
         return ()
@@ -167,9 +167,6 @@ def _menu_destinations(relation: SourceRelation,
         return ()
     path = split.path.strip("/")
     parts = path.split("/")
-    if len(parts) >= 3 and parts[-2] == "control":
-        explicit = (parts[-3], parts[-1])
-        return (explicit,) if explicit in known else ()
     if len(parts) >= 2 and (parts[0], "/".join(parts[1:])) in known:
         return ((parts[0], "/".join(parts[1:])),)
     webapps = relation.attrs.get("webapps", ())

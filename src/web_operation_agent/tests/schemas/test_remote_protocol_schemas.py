@@ -120,12 +120,12 @@ class ClientHandshake(unittest.TestCase):
             capabilities=("observe",), page_origin="https://app.example.test",
         )
         bound = S.ClientHello(
-            **base, application_id="twenty", principal_digest="a" * 64)
+            **base, application_id="sample", principal_digest="a" * 64)
         self.assertEqual(S.ClientHello.from_json(bound.to_json()), bound)
         for fields in (
-            {"application_id": "twenty"},
+            {"application_id": "sample"},
             {"principal_digest": "a" * 64},
-            {"application_id": "twenty", "principal_digest": "not-a-digest"},
+            {"application_id": "sample", "principal_digest": "not-a-digest"},
         ):
             with self.subTest(fields=fields), self.assertRaises(S.SchemaError):
                 S.ClientHello(**base, **fields)

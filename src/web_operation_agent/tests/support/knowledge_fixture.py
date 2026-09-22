@@ -1,9 +1,9 @@
 """A synthetic `ApplicationKnowledgePort` for core session tests.
 
 `knowledge.py` is a four-method Protocol; the implementation that satisfies it lives in
-whichever application distribution owns the route grammar. Core tests previously borrowed
-the OFBiz one, which made the core suite depend on that distribution *and* checked every
-Skill-routing behaviour against `/{webapp}/control/{request}` only.
+whichever application distribution owns the route grammar. Core tests once borrowed a
+reference adapter, which made the core suite depend on that distribution and checked every
+Skill-routing behaviour against only one route grammar.
 
 This implementation is deliberately the same shape and a different grammar: it composes and
 recognises routes through `FIXTURE_ROUTE_PORT`, so a session behaviour that only works for

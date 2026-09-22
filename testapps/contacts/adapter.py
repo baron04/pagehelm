@@ -27,7 +27,7 @@ each one exists because of a specific way writes go wrong:
 
 The identity port is real for the same reason: `AgentTurnConfig` refuses to enable business
 mutations without a verified session identity, and it is right to. Two credentials resolve
-independently and must agree, which is the smallest honest version of what Odoo and Twenty
+independently and must agree, which is the smallest honest version of what two applications
 both do.
 """
 from __future__ import annotations

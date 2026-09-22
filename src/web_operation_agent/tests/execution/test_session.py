@@ -549,7 +549,7 @@ class PreDispatchActionPolicy(unittest.TestCase):
             self.assertIn(SCOPE_FIRST_SYSTEM, new_system)
             self.assertEqual(new_system, old_system + "\n" + SCOPE_FIRST_SYSTEM)
             self.assertNotIn("open_source_route", SCOPE_FIRST_SYSTEM)
-            for hidden_target in ("OFBiz", "paymentId", "facilityId", "workEffortId",
+            for hidden_target in ("OtherApp", "paymentId", "facilityId", "workEffortId",
                                   "EditProduct", "EditQuote", "NewLead"):
                 self.assertNotIn(hidden_target, SCOPE_FIRST_SYSTEM)
 

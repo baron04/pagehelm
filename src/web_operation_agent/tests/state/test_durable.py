@@ -45,7 +45,7 @@ class DurableSessionTests(unittest.TestCase):
             p = principal(int(time.time() * 1000))
             grant, channel = registries[0].create(allowed_origins=[ORIGIN],
                                                   session_id='recover', principal=p)
-            lease = channel.accept_hello(hello('recover', application_id='twenty',
+            lease = channel.accept_hello(hello('recover', application_id='sample',
                                   principal_digest=p.binding_digest))['lease_id']
             message = {'message_id': 'm1', 'text': 'read companies', 'page_url': ORIGIN + '/start'}
             channel.accept_message(message, lease_id=lease)
@@ -64,7 +64,7 @@ class DurableSessionTests(unittest.TestCase):
                                                      session_id='recover', principal=fresh)
             try:
                 self.assertNotEqual(grant.client_token, newer.client_token)
-                new_lease = recovered.accept_hello(hello('recover', application_id='twenty',
+                new_lease = recovered.accept_hello(hello('recover', application_id='sample',
                                        principal_digest=fresh.binding_digest))['lease_id']
                 self.assertNotEqual(lease, new_lease)
                 self.assertTrue(recovered.accept_message(message, lease_id=new_lease)['duplicate'])
@@ -153,7 +153,7 @@ def _crash_session(path, ready):
     registry = RemoteSessionRegistry(durable_store=store)
     p = principal(int(time.time() * 1000))
     grant, channel = registry.create(allowed_origins=[ORIGIN], session_id='crashed', principal=p)
-    lease = channel.accept_hello(hello('crashed', application_id='twenty',
+    lease = channel.accept_hello(hello('crashed', application_id='sample',
                                       principal_digest=p.binding_digest))['lease_id']
     channel.accept_message({'message_id': 'crashed-message', 'text': 'create synthetic',
                             'page_url': ORIGIN + '/start'}, lease_id=lease)
@@ -228,7 +228,7 @@ class PrincipalRevocationTests(unittest.TestCase):
             first_grant, channel = registry.create(
                 allowed_origins=[ORIGIN], session_id="revoked", principal=first_principal)
             lease = channel.accept_hello(hello(
-                "revoked", application_id="twenty",
+                "revoked", application_id="sample",
                 principal_digest=first_principal.binding_digest))["lease_id"]
             channel.accept_message({"message_id": "m1", "text": "read companies",
                                     "page_url": ORIGIN + "/start"}, lease_id=lease)

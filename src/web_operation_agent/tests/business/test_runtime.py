@@ -45,19 +45,19 @@ class SkillCitations(unittest.TestCase):
 
     def test_a_citation_round_trips_through_its_parts(self):
         for text in ("src:odoo@18.0:addons/sale/views/sale_order_views.xml#action_orders",
-                     "src:twenty@v2.39.0:packages/twenty-server/src/x.ts",
+                     "src:sample@v2:packages/sample-server/src/x.ts",
                      "api:odoo@18.0:/jsonrpc#object.execute_kw",
-                     "api:twenty@v2.39.0:/rest/open-api/core#/paths/~1companies/post"):
+                     "api:sample@v2:/rest/open-api/core#/paths/~1companies/post"):
             with self.subTest(text=text):
                 self.assertEqual(Citation.parse(text).text, text)
 
     def test_every_spelling_this_repository_used_to_ship_is_now_refused(self):
         """The point of the grammar is that the old entries do not survive it."""
         for legacy in ("odoo:18.0:addons/sale/views/sale_order_views.xml#action_orders",
-                       "twenty/v2.39.0:packages/twenty-docs/x.mdx",
+                       "sample/v2:packages/sample-docs/x.mdx",
                        "minimal-demo://contacts/v1",
                        "Odoo external API: /jsonrpc object.execute_kw",
-                       "Twenty self-hosted /rest/companies API"):
+                       "Sample self-hosted /rest/companies API"):
             with self.subTest(legacy=legacy):
                 with self.assertRaises(ValueError):
                     Citation.parse(legacy)

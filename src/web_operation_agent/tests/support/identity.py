@@ -6,7 +6,7 @@ def principal(*, issued_at: int = 1_000_000,
               expires_at: int = 1_060_000) -> PrincipalContext:
     return PrincipalContext(
         schema_version=1,
-        application_id="twenty",
+        application_id="sample",
         tenant_id="tenant-1",
         workspace_id="workspace-1",
         actor_id="actor-1",

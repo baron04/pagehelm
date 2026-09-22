@@ -97,7 +97,7 @@ class SourceRetriever:
 
         Matching is prefix-tolerant: a user writes "sprouted", "applied", "received", while
         a request is named `sproutSeedling`, `createPaymentApplication`,
-        `receiveInventoryProduct`. Requiring equality after a crude stemmer threw those
+        `receiveStockItem`. Requiring equality after a crude stemmer threw those
         matches away and left the retriever returning only navigation.
         """
         if not candidate:
@@ -156,16 +156,14 @@ class SourceRetriever:
                  webapps: set[str] | None = None, extra_terms: tuple[str, ...] = ()) -> EvidenceBundle:
         """`webapps` limits candidates to what this deployment actually serves.
 
-        The release tree carries every plugin Apache ships; this deployment serves nine
-        webapps. Ranking over all of them filled the top of the list with ebaystore and
-        scrum requests that no page here can reach, which is worse than useless -- a
-        contract must only offer moves the running application actually has. The set comes
+        A source tree can contain modules the deployment does not serve. Ranking over all
+        of them would offer requests that no current page can reach. A contract must only
+        offer moves the running application actually has. The set comes
         from the entry page's own navigation, so it is a runtime fact, not a guess.
 
-        `extra_terms` is the vocabulary bridge. A user writes "book them in" and the
-        framework calls it `receiveInventoryProduct`; "deliver there" is `addShippingAddress`;
-        "a colleague takes responsibility" is `WorkEffortPartyAssigns/create`. No amount of
-        string matching crosses that gap, so the words are expanded first (see
+        `extra_terms` is the vocabulary bridge between a user's wording and a framework's
+        method or route names. String matching alone cannot cross that gap, so terms are
+        expanded first (see
         `expand_terms`) and the ranking stays deterministic given the expanded query.
         """
         words = {_stem(w) for w in _tokens(prompt)} | {_stem(w) for w in extra_terms if w}
@@ -328,8 +326,8 @@ class SourceRetriever:
                                f"{', '.join(p.object for p in optional[:8]) or '(none)'}")
 
         # 4. forms whose target no controller declares.
-        # OFBiz builds some request names at runtime from the entity, so a form can post to
-        # `WorkEffortPartyAssigns/create` while no controller.xml mentions it. Walking forms
+        # Some applications build request names at runtime from the entity, so a form can
+        # target an operation that no static controller declaration mentions. Walking forms
         # only outward from chosen requests made those operations unreachable no matter how
         # well they matched, so forms are ranked as candidates in their own right.
         emitted_targets = {t for t, _ in ((s.partition("/")[2], r) for s, r in chosen_reqs)}

@@ -1,6 +1,6 @@
 """Two records a person cannot tell apart must not both exist.
 
-`twenty.py:696` used to reject only C0 controls, so a zero-width space, a bidirectional
+An earlier adapter used to reject only C0 controls, so a zero-width space, a bidirectional
 override, a non-breaking space or one Cyrillic letter produced a second company whose
 confirmation card rendered identically to the first (review finding P2-a).
 """

@@ -501,7 +501,7 @@ class LiveProductSessionTests(unittest.TestCase):
 
         def actor(actor_id, delegation_id):
             return PrincipalContext(
-                schema_version=1, application_id="twenty",
+                schema_version=1, application_id="sample",
                 tenant_id="tenant-1", workspace_id="workspace-1",
                 actor_id=actor_id, delegation_id=delegation_id,
                 issued_at=now, expires_at=now + 60_000,

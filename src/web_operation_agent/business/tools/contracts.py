@@ -94,7 +94,7 @@ class Citation:
     A Skill is a playbook a person wrote, and the only thing that keeps it honest is being
     able to go and look at what it was written from. Until this existed `provenance` was
     validated as "a non-empty list of strings", and four spellings had accumulated across
-    nine artifacts -- ``odoo:18.0:path#anchor``, ``twenty/v2.39.0:path``,
+    nine artifacts -- ``sample:18.0:path#anchor``, ``sample/v2:path``,
     ``minimal-demo://contacts/v1`` and the sentence ``Odoo external API: /jsonrpc
     object.execute_kw``. Nothing could resolve any of them, so nothing could tell a citation
     that had rotted from one that never pointed anywhere.

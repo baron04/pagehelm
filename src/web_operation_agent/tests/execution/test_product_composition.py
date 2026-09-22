@@ -256,7 +256,7 @@ class _FixtureGrammarAdapter:
     A source-enabled session needs an application route port -- `lookup_source` licenses
     view-only routes, and something has to say which strings are routes at all. The port
     here is the fixture grammar (`/{scope}/do/{route}`), which is the grammar the fixture
-    `SourceMap` was written against and is deliberately neither OFBiz's nor Odoo's.
+    `SourceMap` was written against and is deliberately not the public reference's.
     """
 
     _TOOL = {

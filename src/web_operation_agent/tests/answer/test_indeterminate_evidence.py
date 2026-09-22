@@ -1,6 +1,6 @@
 """The strongest evidence about an uncertain write must survive to the operator.
 
-`twenty.py` raised four indeterminate outcomes with text only, so the record identifier the
+An earlier adapter raised four indeterminate outcomes with text only, so the record identifier the
 upstream acknowledgement had already returned was discarded: the journal kept a digest, the
 ledger event carried no digest at all, and settling a row meant scanning the collection
 (review finding F5d).

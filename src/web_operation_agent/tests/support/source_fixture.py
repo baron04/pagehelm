@@ -6,7 +6,7 @@ than by running an application distribution's compiler, buys three things:
 
   * the core suite installs and runs without any application distribution;
   * the relations use an invented route grammar (`/{scope}/do/{route}`), so a core module
-    that silently assumed OFBiz's `/webapp/control/request` spelling fails here;
+    that silently assumes the public reference's route spelling fails here;
   * a compiler change cannot quietly alter what the core retriever is tested against.
 
 The descriptor files this writes are deliberately plain: their only job is to give every

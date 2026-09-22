@@ -2,8 +2,8 @@
 
 Application adapters supply a runner and decide how their page includes the returned
 bootstrap script. This module owns the common registry, capability grant, shared loopback
-gateway, server worker lifecycle and optional replay projection. It has no knowledge of OFBiz, lab
-tasks, hidden evaluator data or browser automation.
+gateway, server worker lifecycle and optional replay projection. It has no knowledge of
+application-specific tasks, hidden evaluator data or browser automation.
 """
 from __future__ import annotations
 

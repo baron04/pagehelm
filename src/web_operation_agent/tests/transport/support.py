@@ -31,7 +31,7 @@ def hello(session_id: str, *, cursor: str = "",
 
 def principal(now_ms: int, *, actor_id: str = "actor-1") -> PrincipalContext:
     return PrincipalContext(
-        1, "twenty", "tenant-1", "workspace-1", actor_id,
+        1, "sample", "tenant-1", "workspace-1", actor_id,
         "delegation-1", now_ms, now_ms + 60_000,
         ("companies:read", "page:operate"),
     )
