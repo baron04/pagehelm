@@ -251,6 +251,20 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text.casefold().replace("‑", "-")).strip()
 
 
+def _probe_equals(observed: Any, expected: Any) -> bool:
+    if observed == expected:
+        return True
+    if not isinstance(observed, str) or not isinstance(expected, str):
+        return False
+    # Native select values may contain a JSON-encoded string rather than the
+    # underlying application value. Compare its decoded value, never a display
+    # label or the agent's success claim.
+    try:
+        return json.loads(observed) == expected
+    except (TypeError, ValueError):
+        return False
+
+
 def judge(task: dict[str, Any], artifact: dict[str, Any]) -> dict[str, Any]:
     answer = ""
     failures: list[str] = []
@@ -292,7 +306,7 @@ def judge(task: dict[str, Any], artifact: dict[str, Any]) -> dict[str, Any]:
         if artifact.get("final_probe_error"):
             failures.append("final_probe_error")
         for name, expected in oracle.get("probe_equals", {}).items():
-            if probe.get(name) != expected:
+            if not _probe_equals(probe.get(name), expected):
                 failures.append(f"probe_mismatch:{name}")
         for name, minimum in oracle.get("probe_min", {}).items():
             value = probe.get(name)

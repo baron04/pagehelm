@@ -80,6 +80,23 @@ class JudgeTests(unittest.TestCase):
         self.assertEqual(
             judge(task, artifact)["failures"], ["probe_mismatch:active_kanban"])
 
+    def test_native_select_json_string_is_compared_by_its_actual_value(self):
+        task = {"kind": "operation", "oracle": {
+            "probe_equals": {"invoice_policy": "delivery"}}}
+        artifact = {
+            "product_started": True,
+            "bridge": {"status": "completed", "metrics": {"page_actions": 2}},
+            "turns": [{"visible_answer": "done"}],
+            "final_probe": {"invoice_policy": '"delivery"'},
+            "final_probe_error": None,
+            "dialogs": 0,
+            "page_errors": [],
+        }
+        self.assertTrue(judge(task, artifact)["passed"])
+        artifact["final_probe"]["invoice_policy"] = '"order"'
+        self.assertEqual(judge(task, artifact)["failures"],
+                         ["probe_mismatch:invoice_policy"])
+
     def test_operation_refusal_requires_no_page_action_and_an_explanation(self):
         task = {"kind": "operation", "oracle": {
             "probe_equals": {"path": "/odoo/sales"},
