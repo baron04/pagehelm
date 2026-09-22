@@ -195,6 +195,12 @@ class DemoConfig:
             raise ValueError("forged_scopes must be a tuple of scope names")
 
 
+#: How much longer than the turn's own wall budget the host waits for its outcome. The
+#: server ends a turn at its budget and then settles and publishes it; waiting exactly the
+#: budget raced that settlement and reported a finished turn as the host's own timeout.
+OUTCOME_GRACE_S = 30.0
+
+
 #: The panel's own approve control, inside the assistant's shadow root. There is no other
 #: way to approve: the decision has to come from the page session that holds the lease, and
 #: an integration that found a way around that would be testing a product it does not ship.
@@ -406,7 +412,8 @@ def _run_browser(config: DemoConfig, live: LiveProductSession,
                         if config.allow_mutations and config.scripted:
                             approvals.append(_decide_in_page(page, config))
                         outcome = _next_outcome(
-                            page, conversation, config.turn_timeout_s, navigations)
+                            page, conversation, config.turn_timeout_s + OUTCOME_GRACE_S,
+                            navigations)
                         if config.replay_approval:
                             replay = page.evaluate("""async () => {
                               const item = window.__woaApprovalPosts?.[0];

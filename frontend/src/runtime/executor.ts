@@ -8,8 +8,8 @@
  */
 import {every, later, listen, sleep} from './contain'
 import {
-  effectiveTarget, formGetUrl, isSubmitControl, navigationCommitted, navigationWatch,
-  sameOriginUrl, targetsCurrentPage, type NativeForm, type NavigationSignal,
+  effectiveTarget, formGetUrl, isSameDocumentFragment, isSubmitControl, navigationCommitted,
+  navigationWatch, sameOriginUrl, targetsCurrentPage, type NativeForm, type NavigationSignal,
   type NavigationWatch,
 } from './navigation'
 import type {Page} from './page'
@@ -45,6 +45,9 @@ type ControlElement = ElementLike & {formAction?: string; form?: FormElement | n
 export function nativeNavigation(element: ElementLike | null | undefined): NativeNavigation | null {
   const tag = String(element?.tagName || '').toUpperCase()
   if (element && tag === 'A' && element.href) {
+    // `element.href` is resolved; the raw attribute says whether a fragment was written.
+    const written = explicitAttribute(element, 'href') ?? ''
+    if (isSameDocumentFragment(written || String(element.href))) return null
     const target = effectiveTarget(element)
     if (!targetsCurrentPage(target)) {
       throw new Error('bad_arguments: link target must be the current page')

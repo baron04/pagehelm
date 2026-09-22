@@ -98,6 +98,24 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
         messages = _trim(messages, session.keep_observations)
         return session._resume(turn, messages, obs, successful_business_tools)
 
+    if _leaves_the_page(name, args, obs) and session.evidence.has_source_evidence() \
+            and session._target is None:
+        # Deployment source answers what a release declares; another page cannot. Every
+        # paid Odoo run that drifted had the answering fact at its first lookup and then
+        # went browsing to confirm it until the budget ran out. Leaving the page is still
+        # possible -- as a declared page goal, which the target checkpoint then settles.
+        session.ledger.append("source_navigation_requires_target", step=step, tool=name,
+                              dispatched=False, side_effect_possible=False)
+        messages += [_assistant_call(call), _tool_result(
+            call, "NAVIGATION NOT DISPATCHED: this turn holds deployment-source evidence "
+                  "and no declared target. Another page cannot show what the release "
+                  "declares. If the user asked you to open or change a page, call "
+                  "set_target with that page state first. Otherwise answer from the "
+                  "evidence you hold, stating what it does not establish with "
+                  "coverage=partial, or look up source with different words.")]
+        messages = _trim(messages, session.keep_observations)
+        return session._resume(turn, messages, obs, successful_business_tools)
+
     source_route_citations: list[str] = []
     source_route_read_only = False
     latest_business_route = False
@@ -436,6 +454,34 @@ def _observe_after_source_rejection(session, obs: PageObservation, step: int,
                        page_epoch_before=prior_epoch, observation_epoch=observed_epoch,
                        fresh_observation=fresh)
     return receipt, write, fresh
+
+
+#: Tools that resolve to opening another page, whatever route they are given.
+_ROUTING_TOOLS = frozenset({"goto", "back", "open_source_route", "open_source_candidate",
+                            "enter_application", "open_skill_route", "enter_skill_app"})
+
+
+def _leaves_the_page(name: str, args: dict, obs: PageObservation) -> bool:
+    """Whether this action opens another page rather than acting on the current one.
+
+    A click counts only when it names a link to another path or query; a tab, a button or
+    a same-document `#` anchor acts in place. A click's script may still navigate, which
+    the receipt reports; this is a pre-dispatch intent check, not a guarantee.
+    """
+    if name in _ROUTING_TOOLS:
+        return True
+    if name != "click":
+        return False
+    href = _clicked_link(args, obs)
+    if not href or href.lower().startswith("javascript:"):
+        return False
+    try:
+        current = urlsplit(obs.url)
+        target = urlsplit(urljoin(obs.url, href))
+    except ValueError:
+        return False
+    return (target.scheme, target.netloc, target.path, target.query) != (
+        current.scheme, current.netloc, current.path, current.query)
 
 
 def _clicked_link(args: dict, obs: PageObservation) -> str | None:

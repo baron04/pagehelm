@@ -1,7 +1,8 @@
 import {describe, expect, it} from 'vitest'
 import {createRedactor} from '../src/runtime/redaction'
 import {
-  absoluteUrl, canonicalUrl, isSubmitControl, navigationWal, recoveryProvesNavigation,
+  absoluteUrl, canonicalUrl, isSameDocumentFragment, isSubmitControl, navigationWal,
+  recoveryProvesNavigation,
   sameOriginUrl, scrubLegacyNavigationUrls, targetsCurrentPage,
 } from '../src/runtime/navigation'
 import type {ActionEnvelope} from '../src/runtime/types'
@@ -98,5 +99,18 @@ describe('recoveryProvesNavigation only trusts a digest match, not what the page
   it('an action that was never claimed proves nothing', async () => {
     const action = {phase: 'prepared', navigation_kind: 'link'} as unknown as ActionEnvelope
     expect(await recoveryProvesNavigation(action, 'https://app.test/next')).toBe(false)
+  })
+})
+
+describe('isSameDocumentFragment', () => {
+  it('is true only for a written fragment on the same path and query', () => {
+    const here = 'https://app.test/odoo/products/new?x=1'
+    expect(isSameDocumentFragment('#', here)).toBe(true)
+    expect(isSameDocumentFragment('#sales', here)).toBe(true)
+    expect(isSameDocumentFragment('/odoo/products/new?x=1#a', here)).toBe(true)
+    expect(isSameDocumentFragment('/odoo/products/new?x=2#a', here)).toBe(false)
+    expect(isSameDocumentFragment('/odoo/products#a', here)).toBe(false)
+    expect(isSameDocumentFragment('/odoo/products/new?x=1', here)).toBe(false)
+    expect(isSameDocumentFragment('https://other.test/odoo/products/new?x=1#a', here)).toBe(false)
   })
 })

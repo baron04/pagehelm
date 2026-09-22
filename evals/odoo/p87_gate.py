@@ -205,6 +205,9 @@ def main() -> int:
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--select", default="",
                         help="diagnostic only: task_id:arm, e.g. nav-payment-terms:S")
+    parser.add_argument("--plan", default="",
+                        help="a verification subset: comma-separated task_id:ARMS entries, "
+                             "e.g. op-product-sales-tab:AS,nav-payment-terms:S")
     args = parser.parse_args()
     doc = _tasks()
     env = {}
@@ -216,6 +219,13 @@ def main() -> int:
     (args.output / "attempts").mkdir(exist_ok=True)
     print(json.dumps({"output": str(args.output), "taskset_sha256": TASKSET_SHA256}),
           flush=True)
+    plan: dict[str, set[str]] = {}
+    for entry in filter(None, args.plan.split(",")):
+        task_id, _, arms = entry.partition(":")
+        if task_id not in {task["id"] for task in doc["tasks"]} or not arms \
+                or set(arms) - set(ARMS):
+            raise ValueError(f"invalid --plan entry: {entry}")
+        plan[task_id] = set(arms)
     rows = []
     for repeat in range(1, args.repeats + 1):
         for index, task in enumerate(doc["tasks"]):
@@ -223,6 +233,8 @@ def main() -> int:
             for arm in arms:
                 identity = f"{task['id']}:{arm}"
                 if args.select and identity != args.select:
+                    continue
+                if plan and arm not in plan.get(task["id"], set()):
                     continue
                 path = args.output / "attempts" / f"r{repeat}-{task['id']}-{arm}.json"
                 if path.exists():

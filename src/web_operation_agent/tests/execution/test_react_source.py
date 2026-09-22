@@ -8,7 +8,7 @@ from web_operation_agent.composition.sources import SourceCapability
 from web_operation_agent.planning.affordance import (AffordanceParameter,
                                              resolve_source_affordances)
 from web_operation_agent.state.ledger import SessionLedger
-from web_operation_agent.schemas import empty_contract
+from web_operation_agent.schemas import ElementRef, PageObservation, empty_contract
 from web_operation_agent.execution.session import (LabApparatus, SCOPE_FIRST_SYSTEM,
                                          ServerAgentSession, TaskSpec)
 from web_operation_agent.tests.support.route_fixture import (FIXTURE_ROUTE_PORT,
@@ -43,6 +43,7 @@ class RuntimeSourceLoop(unittest.TestCase):
             route = "/glasshouse/do/findTrays?trayId=42"
             chat = ToolCapture([
                 ("lookup_source", {"query": "find trays"}),
+                ("set_target", {"path": "/glasshouse/do/findTrays?trayId=42"}),
                 ("open_source_route", {"url": route}),
                 ("finish", {"done": True, "why": "invented business result"}),
             ])
@@ -58,8 +59,8 @@ class RuntimeSourceLoop(unittest.TestCase):
             result = session.run()
 
             self.assertEqual(result.terminal_reason, "agent_finished")
-            self.assertEqual(result.verified_answer["action"],
-                             {"kind": "navigation", "url": "http://app" + route})
+            self.assertEqual(result.verified_answer["action"]["kind"], "target_state")
+            self.assertEqual(result.verified_answer["action"]["url"], "http://app" + route)
             self.assertNotIn("invented business result", result.agent_said)
             self.assertFalse(session._answers.answer_mode)
             finish = next(tool for tool in chat.tools_seen[1]
@@ -69,12 +70,71 @@ class RuntimeSourceLoop(unittest.TestCase):
                           ["properties"]["outcome"]["enum"])
             self.assertNotIn("done", finish["function"]["parameters"]["properties"])
 
+    def test_leaving_the_page_with_source_evidence_needs_a_declared_target(self):
+        """The paid Odoo drift: the answering fact arrived at the first lookup, and the
+        turn went browsing to confirm it. Without a declared target nothing leaves the
+        page; an in-page click is untouched; with a target the same route opens."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            route = "/glasshouse/do/findTrays?trayId=42"
+            chat = _Chat([
+                ("lookup_source", {"query": "find trays"}),
+                ("open_source_route", {"url": route}),
+                ("goto", {"url": "/y"}),
+                ("click", {"ref": "e1"}),
+                ("set_target", {"path": route}),
+                ("open_source_route", {"url": route}),
+                ("finish", {"done": True, "why": "done"}),
+            ])
+            # Refused actions reach no browser: after the lookup's observe, the next
+            # command the browser sees is the one goto the declared target allowed.
+            browser = _Browser([_obs(1), _obs(2), _obs(3, "http://app" + route)])
+            session = ServerAgentSession(application_routes=FIXTURE_ROUTE_PORT,
+                task=TaskSpec("T", "open the tray page"), lab=LabApparatus(arm="S"),
+                chat=chat, browser=browser, control=_Control([[] for _ in range(6)]),
+                ledger=SessionLedger(root / "guard.jsonl", "guard"),
+                source=SourceCapability(source_map=_map(root), runtime_source=True))
+            session.entry_observation = _obs(1)
+
+            result = session.run()
+
+            refused = session.ledger.of_kind("source_navigation_requires_target")
+            self.assertEqual([event["tool"] for event in refused],
+                             ["open_source_route", "goto", "click"])
+            self.assertTrue(all(not event["dispatched"] for event in refused))
+            self.assertEqual([action for action, _ in browser.done], ["observe", "goto"])
+            self.assertEqual(result.terminal_reason, "agent_finished")
+            self.assertEqual(result.verified_answer["action"]["kind"], "target_state")
+
+    def test_an_in_page_click_with_source_evidence_is_not_navigation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tab_page = PageObservation(
+                schema_version=1, epoch=1, url="http://app/x", title="T", landmarks=["T"],
+                elements=[ElementRef("e1", "tab", "Terms", "a", 1, {"href": "#"}),
+                          ElementRef("e2", "link", "Same", "a", 1, {"href": "/x#part"})])
+            chat = _Chat([("lookup_source", {"query": "find trays"}),
+                          ("click", {"ref": "e1"}), ("click", {"ref": "e2"}),
+                          ("finish", {"done": False, "why": "stop"})])
+            browser = _Browser([tab_page, tab_page, tab_page, tab_page])
+            session = ServerAgentSession(application_routes=FIXTURE_ROUTE_PORT,
+                task=TaskSpec("T", "switch the tab"), lab=LabApparatus(arm="S"),
+                chat=chat, browser=browser, control=_Control([[] for _ in range(5)]),
+                ledger=SessionLedger(root / "tab.jsonl", "tab"),
+                source=SourceCapability(source_map=_map(root), runtime_source=True))
+            session.entry_observation = tab_page
+            session.run()
+            self.assertEqual(session.ledger.of_kind("source_navigation_requires_target"), [])
+            self.assertEqual([action for action, _ in browser.done],
+                             ["observe", "click", "click"])
+
     def test_structured_source_answer_is_not_erased_by_extra_done_flag(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             route = "/glasshouse/do/findTrays?trayId=42"
             chat = _Chat([
                 ("lookup_source", {"query": "find trays"}),
+                ("set_target", {"path": "/glasshouse/do/findTrays?trayId=42"}),
                 ("open_source_route", {"url": route}),
                 ("finish", {"outcome": "acted", "answer": {
                     "version": 1, "coverage": "complete", "conclusions": [{
@@ -98,8 +158,8 @@ class RuntimeSourceLoop(unittest.TestCase):
             self.assertEqual(result.terminal_reason, "agent_finished")
             self.assertEqual(result.verified_answer["conclusions"][0]["kind"],
                              "source_excerpt")
-            self.assertEqual(result.verified_answer["action"],
-                             {"kind": "navigation", "url": "http://app" + route})
+            self.assertEqual(result.verified_answer["action"]["kind"], "target_state")
+            self.assertEqual(result.verified_answer["action"]["url"], "http://app" + route)
             self.assertNotIn("fabricated result", result.agent_said)
 
     def test_source_question_still_requires_cited_answer(self):
@@ -180,6 +240,7 @@ class RuntimeSourceLoop(unittest.TestCase):
             chat = _Chat([
                 ("fill", {"ref": "e1", "value": "forbidden search"}),
                 ("lookup_source", {"query": "find trays"}),
+                ("set_target", {"path": "/glasshouse/do/findTrays?trayId=42"}),
                 ("open_source_route", {"url": route}),
                 ("finish", {"done": True, "why": "target page is visible"}),
             ])
@@ -287,6 +348,7 @@ class RuntimeSourceLoop(unittest.TestCase):
             root = Path(tmp)
             smap = _map(root)
             chat = _Chat([("lookup_source", {"query": "find trays"}),
+                          ("set_target", {"path": "/glasshouse/do/findTrays?trayId=42"}),
                           ("open_source_route", {
                               "url": "/glasshouse/do/findTrays?trayId=42"}),
                           ("finish", {"done": False, "why": "mechanism observed"})])
@@ -314,6 +376,7 @@ class RuntimeSourceLoop(unittest.TestCase):
             root = Path(tmp)
             smap = _map(root)
             chat = _Chat([("lookup_source", {"query": "find trays"}),
+                          ("set_target", {"path": "/glasshouse/do/findTrays?trayId=42"}),
                           ("open_source_route", {
                               "url": "https://elsewhere.invalid/glasshouse/do/findTrays"}),
                           ("finish", {"done": False, "why": "rejected as expected"})])
@@ -339,6 +402,7 @@ class RuntimeSourceLoop(unittest.TestCase):
             with self.subTest(url=url), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 chat = _Chat([("lookup_source", {"query": "find trays"}),
+                              ("set_target", {"path": "/glasshouse/do/findTrays?trayId=42"}),
                               ("open_source_route", {"url": url}),
                               ("finish", {"done": False, "why": "rejected"})])
                 browser = _Browser([_obs(1), _obs(2)])
@@ -361,6 +425,7 @@ class RuntimeSourceLoop(unittest.TestCase):
             root = Path(tmp)
             chat = _Chat([("click", {"ref": "e1"}),
                           ("lookup_source", {"query": "find trays"}),
+                          ("set_target", {"path": "/glasshouse/do/findTrays?trayId=42"}),
                           ("open_source_route", {
                               "url": "/glasshouse/do/findTrays?trayId=42"}),
                           ("finish", {"done": False, "why": "verified read-only page"})])

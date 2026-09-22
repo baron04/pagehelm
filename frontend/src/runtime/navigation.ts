@@ -34,6 +34,25 @@ export function sameOriginUrl(value: unknown): string {
   return url.href
 }
 
+/**
+ * Whether following `href` would only move within the current document: the same URL up to
+ * its fragment, with a fragment present. HTML scrolls to the fragment (or does nothing for a
+ * bare `#`) without loading anything, so there is no navigation for the Runtime to wait for.
+ * Widgets use such anchors as buttons -- a notebook tab is `<a href="#" role="tab">` -- and
+ * waiting for a page change that cannot come turned every tab click into a timeout.
+ */
+export function isSameDocumentFragment(href: string, current: string = window.location.href): boolean {
+  try {
+    const target = new URL(href, current)
+    const here = new URL(current)
+    if (!href.includes('#')) return false
+    return target.origin === here.origin && target.pathname === here.pathname &&
+      target.search === here.search
+  } catch {
+    return false
+  }
+}
+
 export async function urlDigest(value: unknown): Promise<string> {
   if (!value) return ''
   const bytes = new TextEncoder().encode(canonicalUrl(value))

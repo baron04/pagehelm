@@ -311,6 +311,10 @@ For who declared ownership, who last changed a line or file, or what changed bet
 use lookup_source_history. A returned history#N is source_history and likewise requires a
 concise user-facing statement and exact support span. If local Git metadata is
 unavailable, say so; do not infer an author from source text.
+While you hold source evidence and have not declared a target, the server refuses to open
+another page: the UI cannot show what a release declares. Answer from the evidence, marking
+what it does not establish as partial; call set_target first only when the user asked for a
+page state.
 Treat source declarations as static declarations, guard paths only as possible causes, and
 implementation blocks only as implementation. Current effective permissions require a
 same-actor runtime check. The cause of an actual record event requires same-actor data, logs

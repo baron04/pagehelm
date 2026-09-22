@@ -48,6 +48,11 @@ from web_operation_agent.execution.product import (AgentTurnExecution,
 from ..adapter import OdooApplicationAdapter
 from ..turn import odoo_turn_config
 
+#: How much longer than the turn's own wall budget the host waits for its outcome. The
+#: server ends a turn at its budget and then settles and publishes it; a host that waited
+#: exactly the budget raced that settlement and reported a finished turn as its own timeout.
+OUTCOME_GRACE_S = 30.0
+
 #: The public boundary an evaluation run with page click states to the model. It widens
 #: navigation to current-page controls and keeps every write out of scope.
 EVALUATION_CLICK_SCOPE = (
@@ -587,7 +592,8 @@ def _run_browser(config: OdooDemoConfig, live: LiveProductSession,
                         turn = len(records) + 1
                         record = _outcome_json(_await_outcome(
                             conversation, page, shots,
-                            timeout_s=config.turn_timeout_s, taken=taken, turn=turn,
+                            timeout_s=config.turn_timeout_s + OUTCOME_GRACE_S,
+                            taken=taken, turn=turn,
                             navigations=navigations))
                         if navigations is not None:
                             record["navigation_confirmations"] = len(navigations)
