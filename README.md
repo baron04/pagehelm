@@ -69,6 +69,11 @@ agent.
   are routed, confirmed, and settled exactly as before, and a write in the same window is
   settled by the write path instead. The server never ends the turn on a target by itself,
   because it can verify a page state but not that the state is the whole request.
+- When no Skill trigger matches a request's wording, the catalog's read-only fallback stays
+  loadable but is presented as an unmatched index rather than as task candidates. A typed read
+  whose result repeats one already returned in the same turn is answered with a short notice
+  instead of the full result, and a third such repeat ends the turn as `no_progress` without
+  claiming completion; a completed write resets this.
 - Writes are disabled by default. Core turn configuration initially disables every browser
   action that can initiate an application write, including navigation; an adapter must
   explicitly opt into its reviewed subset. An enabled write binds its exact effect and
