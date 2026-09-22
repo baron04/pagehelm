@@ -37,9 +37,18 @@ from web_operation_agent_odoo.demo.demo import OdooDemoConfig, run_demo
 ROOT = Path(__file__).resolve().parents[2]
 TASKSET = ROOT / "evals" / "odoo" / "tasksets" / "p87-odoo-source-operations-v1.json"
 TASKSET_SHA256 = "55f3c3ea4c6b8b60ad5f3e8188d814fdbfd3872136fa8b2f634e45b8be998955"
-ARMS = ("A", "B", "C", "D")
-SKILLS = ROOT / "evals" / "odoo" / "tasksets" / "p87-odoo-skills-v1.json"
-SKILLS_SHA256 = "d8953df7aa161f467784ac512e2ec4a9db64a8c0ca27f7b82720c22355e48b0a"
+#: A: no source, no Skills. B: raw source only. C: the deployment's compiled source.
+#: D: Skills only. E: the production pairing -- compiled source and Skills, where a
+#: matched Skill is loaded first and source is what it does not cover.
+ARMS = ("A", "B", "C", "D", "E")
+#: Arm D's frozen Skills. v1 is the four-arm run's set; v2 is the same instructions with
+#: declared read-only routes, for the arm that tests what a Skill may now carry.
+SKILL_SETS = {
+    "v1": (ROOT / "evals" / "odoo" / "tasksets" / "p87-odoo-skills-v1.json",
+           "d8953df7aa161f467784ac512e2ec4a9db64a8c0ca27f7b82720c22355e48b0a"),
+    "v2": (ROOT / "evals" / "odoo" / "tasksets" / "p87-odoo-skills-v2.json",
+           "7e1ebb296bc7e3024ab2550d6c0a3482eef2dae67927f830c276bbd71ad76ad6"),
+}
 FINGERPRINT_SQL = """
 SELECT string_agg(t || ':' || c || ':' || coalesce(w, ''), ' ' ORDER BY t) FROM (
  SELECT 'res_partner' t, count(*)::text c, max(write_date)::text w FROM res_partner UNION ALL
@@ -81,10 +90,11 @@ def _tasks() -> dict:
     return doc
 
 
-def _skills() -> tuple:
+def _skills(version: str = "v1") -> tuple:
     from web_operation_agent.business.runtime import BusinessSkill
-    raw = SKILLS.read_bytes()
-    if hashlib.sha256(raw).hexdigest() != SKILLS_SHA256:
+    path, digest = SKILL_SETS[version]
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != digest:
         raise RuntimeError("the frozen p87 Skills changed")
     return tuple(BusinessSkill.from_bytes(
         json.dumps(item["skill"], ensure_ascii=False, sort_keys=True).encode("utf-8"),
@@ -107,7 +117,7 @@ def arm_capabilities(env: dict) -> dict:
                         attestation_id=production.source_map.attestation_id,
                         repository_id=production.source_map.repository_id,
                         release=production.source_map.release, relations=[])
-    return {"A": None, "D": None, "C": production,
+    return {"A": None, "D": None, "C": production, "E": production,
             "B": SourceCapability(source_map=raw_map, runtime_source=True,
                                   lookup=repository)}
 
@@ -191,7 +201,7 @@ def run_attempt(task: dict, arm: str, *, env: dict, output: Path, container: str
         page_controller_module=env["WOA_ODOO_PAGE_CONTROLLER_MODULE"],
         entry_path=task["entry_path"],
         source_override=capabilities[arm],
-        extra_skills=skills if arm == "D" else (),
+        extra_skills=skills if arm in {"D", "E"} else (),
         scripted=False, headless=True, tasks=(task["prompt"],), output_dir=output,
         model_env=model_env, keep_open_seconds=0, turn_timeout_s=120.0,
         allow_generic_forms=True, evaluation=True,
@@ -256,6 +266,8 @@ def main() -> int:
     parser.add_argument("--production-clicks", action="store_true",
                         help="use the deployment's reviewed click policy instead of the "
                              "evaluation-only unrestricted click")
+    parser.add_argument("--skills", default="v1", choices=sorted(SKILL_SETS),
+                        help="which frozen Skill set arms D and E use")
     parser.add_argument("--lane", default="1/1",
                         help="k/n: run every n-th attempt of the schedule starting at k, so "
                              "n processes split one schedule with every arm in every lane")
@@ -271,7 +283,9 @@ def main() -> int:
             env[key.strip()] = value.strip()
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / "attempts").mkdir(exist_ok=True)
-    print(json.dumps({"output": str(args.output), "taskset_sha256": TASKSET_SHA256}),
+    print(json.dumps({"output": str(args.output), "taskset_sha256": TASKSET_SHA256,
+                      "skills": args.skills, "skills_sha256": SKILL_SETS[args.skills][1],
+                      "clicks": "production" if args.production_clicks else "evaluation"}),
           flush=True)
     plan: dict[str, set[str]] = {}
     for entry in filter(None, args.plan.split(",")):
@@ -284,7 +298,7 @@ def main() -> int:
     if not 1 <= lane <= lanes:
         raise ValueError("--lane must be k/n with 1 <= k <= n")
     capabilities = arm_capabilities(env)
-    skills = _skills()
+    skills = _skills(args.skills)
     rows = []
     position = -1
     for repeat in range(1, args.repeats + 1):
