@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import unittest
 
+from web_operation_agent.business.errors import BusinessToolPermissionError
 from web_operation_agent.schemas import ElementRef, PageObservation
 from web_operation_agent_odoo.click_policy import OdooReviewedClickPolicy, load_review
 
@@ -122,10 +123,52 @@ class ReviewedClicks(unittest.TestCase):
         self.assertTrue(unresolved.decide(_obs("/odoo/action-286", element), element))
 
 
+def _catalog(actions):
+    """A runtime descriptor catalog payload carrying exactly `actions`."""
+    from web_operation_agent_odoo.server.descriptors import _catalog_digest
+
+    models = [{"model": "account.payment.term", "label": "Payment Terms",
+               "operations": ["read"], "transient": False}]
+    rows = [{"action_id": action_id, "xml_id": xml_id, "name": xml_id, "route": route,
+             "model": "account.payment.term", "readable": True, "view_modes": ["list"],
+             "breadcrumbs": [], "domain": "", "context": ""}
+            for xml_id, action_id, route in actions]
+    return {"schema_version": 1, "odoo_release": "18.0", "language": "en_US",
+            "company_id": 1, "module_digest": "sha256:" + "0" * 64,
+            "descriptor_digest": _catalog_digest(models, rows, [], []),
+            "models": models, "actions": rows, "omitted_models": [], "omitted_actions": []}
+
+
+class ReviewedActionResolution(unittest.TestCase):
+    """How a reviewed XML ID becomes this database's action number, for whoever is asking."""
+
+    def test_an_ordinary_user_still_gets_the_pages_their_menus_reach(self):
+        # Reading ir.model.data needs Settings rights, which a salesperson does not have.
+        adapter = SkillRoutesOnOdoo._adapter(
+            self, ["/odoo/sales"], registry_readable=False,
+            in_menus=(("account.action_payment_term_form", 286, "payment-terms"),))
+        policy = adapter.click_policy()
+        self.assertTrue(policy.reviewed("/odoo/action-286"))
+        self.assertTrue(policy.reviewed("/odoo/payment-terms"))
+        self.assertFalse(policy.reviewed("/odoo/action-300"))
+
+    def test_a_page_with_no_menu_entry_is_resolved_for_whoever_may_read_the_registry(self):
+        adapter = SkillRoutesOnOdoo._adapter(self, ["/odoo/sales"], in_menus=())
+        policy = adapter.click_policy()
+        self.assertTrue(policy.reviewed("/odoo/action-286"))
+
+    def test_neither_source_leaves_the_policy_claiming_pages_it_could_not_confirm(self):
+        adapter = SkillRoutesOnOdoo._adapter(
+            self, ["/odoo/sales"], registry_readable=False, in_menus=())
+        policy = adapter.click_policy()
+        self.assertFalse(policy.reviewed("/odoo/action-286"))
+        self.assertTrue(policy.reviewed("/odoo/sales"))
+
+
 class SkillRoutesOnOdoo(unittest.TestCase):
     """A Skill's routes on Odoo must be pages reviewed as read-only on this database."""
 
-    def _adapter(self, routes):
+    def _adapter(self, routes, *, registry_readable=True, in_menus=()):
         import json
         import tempfile
         from pathlib import Path
@@ -146,6 +189,10 @@ class SkillRoutesOnOdoo(unittest.TestCase):
         adapter = OdooApplicationAdapter(base_url=BASE, api_key_path=_key_file(Path(tmp.name)),
                                          extra_skills=(skill,))
         def call(model, method, *_args, **_kwargs):
+            if model == "woa.runtime.descriptor":
+                return _catalog(in_menus)
+            if not registry_readable:
+                raise BusinessToolPermissionError("ordinary users cannot read the registry")
             if model == "ir.model.data":
                 return [{"module": "account", "name": "action_payment_term_form",
                          "res_id": 286},

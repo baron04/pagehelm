@@ -380,30 +380,24 @@ class OdooApplicationAdapter:
             resolved: dict[str, int] = {}
             paths: dict[str, str] = {}
             try:
-                # `complete_name` is not stored, so Odoo cannot search it: ask by module
-                # and name, then keep only the exact pairs the review names.
-                rows = self._executor.call(
-                    "ir.model.data", "search_read",
-                    [[["model", "=", "ir.actions.act_window"],
-                      ["module", "in", sorted({n.split(".", 1)[0] for n in names})],
-                      ["name", "in", sorted({n.split(".", 1)[1] for n in names})]]],
-                    {"fields": ["module", "name", "res_id"]})
-                for row in rows if isinstance(rows, list) else ():
-                    if not isinstance(row, dict) or not isinstance(row.get("res_id"), int):
-                        continue
-                    xmlid = f"{row.get('module')}.{row.get('name')}"
-                    if xmlid in names:
-                        resolved[xmlid] = row["res_id"]
-                if resolved:
-                    by_id = {action_id: xmlid for xmlid, action_id in resolved.items()}
-                    actions = self._executor.call(
-                        "ir.actions.act_window", "read", [sorted(by_id)], {"fields": ["path"]})
-                    for action in actions if isinstance(actions, list) else ():
-                        if (isinstance(action, dict) and action.get("id") in by_id
-                                and isinstance(action.get("path"), str)):
-                            paths[by_id[action["id"]]] = action["path"]
-            except BusinessToolError:
+                # The runtime descriptor first: reading `ir.model.data` or the action table
+                # directly needs Settings rights, so an ordinary salesperson resolved
+                # nothing and lost every reviewed page. The addon reports the actions this
+                # actor's own menus reach, with their XML IDs and URL paths.
+                for action in self.runtime_descriptors.catalog().actions:
+                    if action.xml_id in names:
+                        resolved[action.xml_id] = action.action_id
+                        if not action.route.startswith("action-"):
+                            paths[action.xml_id] = action.route
+            except (BusinessToolError, BusinessToolContractError):
                 resolved, paths = {}, {}
+            missing = names - set(resolved)
+            if missing:
+                # A reviewed page with no menu entry -- the reason a person asks the
+                # assistant for it at all -- is not in any actor's menu tree. Ask the
+                # registry directly, which an administrator may read and an ordinary user
+                # may not: what stays unresolved is simply not reviewed for that actor.
+                resolved.update(self._actions_by_registry(missing, paths))
             policy = OdooReviewedClickPolicy.from_review(review, resolved, paths)
             # A Skill route carries a typed result's route authority, and Odoo's route
             # contract accepts any numeric action -- including a server action, which runs
@@ -418,6 +412,38 @@ class OdooApplicationAdapter:
                         f"read-only pages on this deployment: {unreviewed}")
             self._click_policy = policy
         return self._click_policy
+
+    def _actions_by_registry(self, names: set[str], paths: dict[str, str]) -> dict[str, int]:
+        """Resolve reviewed XML IDs through `ir.model.data`; empty when this actor cannot.
+
+        `complete_name` is not stored, so Odoo cannot search it: ask by module and name and
+        keep only the exact pairs the review names.
+        """
+        resolved: dict[str, int] = {}
+        try:
+            rows = self._executor.call(
+                "ir.model.data", "search_read",
+                [[["model", "=", "ir.actions.act_window"],
+                  ["module", "in", sorted({name.split(".", 1)[0] for name in names})],
+                  ["name", "in", sorted({name.split(".", 1)[1] for name in names})]]],
+                {"fields": ["module", "name", "res_id"]})
+            for row in rows if isinstance(rows, list) else ():
+                if not isinstance(row, dict) or not isinstance(row.get("res_id"), int):
+                    continue
+                xmlid = f"{row.get('module')}.{row.get('name')}"
+                if xmlid in names:
+                    resolved[xmlid] = row["res_id"]
+            if resolved:
+                by_id = {action_id: xmlid for xmlid, action_id in resolved.items()}
+                actions = self._executor.call(
+                    "ir.actions.act_window", "read", [sorted(by_id)], {"fields": ["path"]})
+                for action in actions if isinstance(actions, list) else ():
+                    if (isinstance(action, dict) and action.get("id") in by_id
+                            and isinstance(action.get("path"), str) and action["path"]):
+                        paths[by_id[action["id"]]] = action["path"]
+        except BusinessToolError:
+            return {}
+        return resolved
 
     @property
     def source_scopes(self) -> frozenset[str]:
