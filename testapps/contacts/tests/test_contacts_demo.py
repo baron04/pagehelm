@@ -15,6 +15,7 @@ from testapps.contacts.adapter import MinimalContactsAdapter
 from testapps.contacts.demo import (DemoConfig, ScriptedDemoChat, WRITE_WALKTHROUGH,
                                     _confirm_navigation_in_page, run_demo)
 from web_operation_agent.composition.binding import bind_application
+from web_operation_agent.composition.sources import SourceCapability
 from web_operation_agent.business.runtime import (BusinessMutationIndeterminate,
                                           BusinessToolError)
 from web_operation_agent.business.control import ReadOnlyControl
@@ -77,6 +78,14 @@ def _chromium_launches() -> bool:
 
 
 class MinimalDemoUnitTests(unittest.TestCase):
+    def test_evaluation_entry_and_probe_are_bounded(self):
+        self.assertEqual(DemoConfig().start_path, "/contacts")
+        self.assertIsInstance(DemoConfig().source, SourceCapability)
+        with self.assertRaisesRegex(ValueError, "start_path"):
+            DemoConfig(start_path="/contacts/unknown")
+        with self.assertRaisesRegex(TypeError, "final_page_probe"):
+            DemoConfig(final_page_probe="not callable")
+
     def test_second_adapter_binds_and_reads_its_live_typed_api(self):
         with MinimalContactsApplication() as application:
             adapter = MinimalContactsAdapter(application.origin, api_token=DEMO_API_TOKEN)
@@ -145,6 +154,35 @@ class MinimalDemoBrowserTests(unittest.TestCase):
             self.assertIn("business_skill_loaded", events)
             self.assertIn("business_tool_result", events)
             self.assertIn("action_receipt", events)
+
+    def test_evaluation_probe_reads_new_form_after_turn_without_exposing_values(self):
+        script = (("finish", {"done": False, "why": "probe only"}),)
+        with tempfile.TemporaryDirectory() as directory, patch(
+                "testapps.contacts.demo._chat",
+                return_value=(ScriptedDemoChat(script), None)):
+            summary = run_demo(DemoConfig(
+                tasks=("Inspect this form",), headless=True,
+                start_path="/contacts/new", output_dir=Path(directory),
+                keep_open_seconds=0, turn_timeout_s=30,
+                final_page_probe=lambda page: {"form_visible": page.locator(
+                    "#contact-create").is_visible()},
+            ))
+        self.assertEqual(summary["panel"]["final_page_probe"], {"form_visible": True})
+        self.assertEqual(summary["application_state"]["records_created"], 0)
+
+    def test_evaluation_probe_rejects_raw_page_values(self):
+        script = (("finish", {"done": False, "why": "probe only"}),)
+        with tempfile.TemporaryDirectory() as directory, patch(
+                "testapps.contacts.demo._chat",
+                return_value=(ScriptedDemoChat(script), None)):
+            with self.assertRaisesRegex(TypeError, "boolean verdicts"):
+                run_demo(DemoConfig(
+                    tasks=("Inspect this form",), headless=True,
+                    start_path="/contacts/new", output_dir=Path(directory),
+                    keep_open_seconds=0, turn_timeout_s=30,
+                    final_page_probe=lambda page: {"name": page.locator(
+                        "#contact-create input[name=name]").input_value()},
+                ))
 
     def test_default_product_renders_a_computed_answer_without_page_actions(self):
         script = (

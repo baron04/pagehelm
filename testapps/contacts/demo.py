@@ -18,7 +18,7 @@ import sys
 import tempfile
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -28,6 +28,7 @@ from testapps.contacts.app import (ACTORS_BY_ID, DEMO_SESSION_COOKIE,
                                    MinimalContactsApplication)
 from web_operation_agent import python_is_supported, supported_python_text
 from web_operation_agent.composition.binding import bind_application
+from web_operation_agent.composition.sources import SourceCapability
 from web_operation_agent.business.control import ReadOnlyControl
 from web_operation_agent.state.identity import bind_matching_identity
 from web_operation_agent.composition.live import LiveConversationRunner, LiveProductSession
@@ -114,6 +115,11 @@ class DemoConfig:
     output_dir: Path = Path(tempfile.gettempdir()) / "web-operation-agent-minimal"
     model_env: Path | None = None
     model: str | None = None
+    #: Evaluation-only entry page and deployed source; ordinary demo defaults stay unchanged.
+    start_path: str = "/contacts"
+    source: SourceCapability = SourceCapability.none()
+    #: Hidden test oracle, called only after the turn; never enters Agent context.
+    final_page_probe: Callable[[Any], dict[str, bool]] | None = None
     keep_open_seconds: float = 3.0
     turn_timeout_s: float = 90.0
     #: Offer the write. Off by default: the read-only composition is what most integrations
@@ -144,6 +150,12 @@ class DemoConfig:
             raise ValueError("scripted mode uses one fixed walkthrough and does not accept --task")
         if self.headless and not (self.tasks or self.scripted):
             raise ValueError("headless mode requires --task or --scripted")
+        if self.start_path not in {"/contacts", "/contacts/new"}:
+            raise ValueError("demo start_path must be a known synthetic page")
+        if not isinstance(self.source, SourceCapability):
+            raise TypeError("demo source must be a SourceCapability")
+        if self.final_page_probe is not None and not callable(self.final_page_probe):
+            raise TypeError("final_page_probe must be callable")
         if (not math.isfinite(self.keep_open_seconds) or self.keep_open_seconds < 0
                 or not math.isfinite(self.turn_timeout_s) or self.turn_timeout_s <= 0):
             raise ValueError("demo timeouts are invalid")
@@ -327,7 +339,7 @@ def _run_browser(config: DemoConfig, live: LiveProductSession,
                                       "url": origin}])
                 context.add_init_script(script=live.bootstrap_script)
                 page = context.new_page()
-                page.goto(origin + "/contacts",
+                page.goto(origin + config.start_path,
                           wait_until="domcontentloaded", timeout=30_000)
                 page.wait_for_function("window.__WOA_RUNTIME_READY__ !== undefined",
                                        timeout=30_000)
@@ -392,6 +404,15 @@ def _run_browser(config: DemoConfig, live: LiveProductSession,
                     # though the document and runtime already observe the new route.
                     last_url = page.evaluate("() => location.href")
                     last_page_text = _page_text(page)
+                    if config.final_page_probe is not None:
+                        projection = config.final_page_probe(page)
+                        if (not isinstance(projection, dict)
+                                or not all(isinstance(key, str) and isinstance(value, bool)
+                                           for key, value in projection.items())):
+                            raise TypeError("final_page_probe must return boolean verdicts")
+                        panel["final_page_probe"] = json.loads(json.dumps(
+                            projection, ensure_ascii=False, sort_keys=True,
+                            separators=(",", ":"), allow_nan=False))
                     if config.capture_panel:
                         panel["live"] = _read_panel(page, tasks[-1])
                         # A full document load: the panel keeps no timeline of its own, so
@@ -492,6 +513,7 @@ def run_demo(config: DemoConfig) -> dict:
                     max_user_answer_chars=8_000,
                     require_identity=True,
                     allow_form_prefill=True,
+                    source=config.source,
                     allow_business_mutations=config.allow_mutations,
                     # A synthetic application with an in-memory journal is not a
                     # deployment, and saying so is what keeps the production profile's
