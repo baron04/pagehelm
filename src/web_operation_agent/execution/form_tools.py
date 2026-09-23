@@ -243,7 +243,7 @@ def apply_form_draft(
         except TransportError as exc:
             return before, "transport_error", str(exc)
         if action not in ("observe", "wait_for"):
-            session._approvals.settle_navigation(receipt)
+            session._approvals.settle_navigation(receipt, navigating=action == "goto")
         if action != "observe":
             session.page_actions += 1
         write = session._writes.write_outcome(receipt, step, action_may_write=False)

@@ -64,6 +64,54 @@ class _StaleFirstBrowser(_Browser):
         return super().execute(action, args, expect_navigation)
 
 
+class _MenuBrowser:
+    """A page with a menu toggle (e1), a link inside the menu (e2) and a script-routed
+    control (e3). With `close_first`, the first switch is refused as stale: answering the
+    confirmation closed the menu it was in."""
+
+    def __init__(self, *, close_first=False, menu_navigates=False):
+        self.url = "http://app/x"
+        self.close_first = close_first
+        self.menu_navigates = menu_navigates
+        self.done = []
+        self.pages = [self._page(1)]
+
+    def _page(self, epoch):
+        return S.PageObservation(
+            schema_version=1, epoch=epoch, url=self.url, title="T", landmarks=["T"],
+            elements=[S.ElementRef("e1", "button", "Apps", "button", epoch),
+                      S.ElementRef("e2", "menuitem", "Sales", "a", epoch, {"href": "/y"}),
+                      S.ElementRef("e3", "button", "Open", "button", epoch)])
+
+    def observe(self):
+        return self._page(len(self.done) + 1)
+
+    def execute(self, action, args=None, expect_navigation=False):
+        self.done.append((action, dict(args or {})))
+        before = self.url
+        ref = (args or {}).get("ref")
+        if self.close_first and len(self.done) == 1:
+            code, navigated = "stale_observation", False
+        else:
+            code = ""
+            if ref == "e2":
+                self.url = "http://app/y"
+            elif ref == "e1" and self.menu_navigates:
+                self.url = "http://app/elsewhere"
+            navigated = self.url != before
+        return ActionReceipt(
+            schema_version=1, command_id=f"c{len(self.done)}", action=action,
+            args_echo=dict(args or {}), ok=not code, error_code=code, url_before=before,
+            url_after=self.url, navigated=navigated,
+            observation=self._page(len(self.done) + 1))
+
+    def console(self):
+        return []
+
+    def close(self):
+        pass
+
+
 def _session(tmp, *, chat, browser, person, cancelled=None, task="open the other page"):
     session = ServerAgentSession(
         task=TaskSpec("T", task), chat=chat, browser=browser,
@@ -332,6 +380,50 @@ class TheSessionAsksBeforeLeavingThePage(unittest.TestCase):
 
             self.assertEqual(len(person.asked), 1)
             self.assertEqual([action for action, _args in browser.done], ["goto", "goto"])
+
+    def test_reopening_the_menu_the_answer_closed_does_not_spend_the_answer(self):
+        # Found on live Odoo: answering the card is a click on the page, the application
+        # closes its open menu on any click outside it, and the menu item the person agreed
+        # to open is gone by dispatch. Reopening the menu must not spend that answer, or the
+        # retry asks again and the answer closes the menu again, until the budget runs out.
+        with tempfile.TemporaryDirectory() as tmp:
+            person = _Person("approved")
+            browser = _MenuBrowser(close_first=True)
+            session = _session(tmp, chat=_Chat([
+                ("click", {"ref": "e2"}),       # the menu item: asked, then stale
+                ("click", {"ref": "e1"}),       # reopen the menu: not a switch
+                ("click", {"ref": "e2"}),       # the same item: already answered
+                ("finish", {"done": True, "why": "opened"}),
+            ]), browser=browser, person=person)
+
+            session.run()
+
+            self.assertEqual(len(person.asked), 1)
+            self.assertEqual([args["ref"] for _action, args in browser.done],
+                             ["e2", "e1", "e2"])
+            self.assertEqual(browser.url, "http://app/y")
+
+    def test_the_answer_does_not_outlive_leaving_the_page_or_a_switch_with_no_destination(self):
+        cases = {
+            # The action in between itself left the page.
+            "an intervening switch": (_MenuBrowser(close_first=True, menu_navigates=True),
+                                      "e2", 2),
+            # The confirmed control routes by script; its destination is unknown.
+            "no known destination": (_MenuBrowser(close_first=True), "e3", 2),
+        }
+        for reason, (browser, target, asked) in cases.items():
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as tmp:
+                person = _Person("approved", "approved")
+                first = {"ref": target, "expect_navigation": True} if target == "e3" \
+                    else {"ref": target}
+                session = _session(tmp, chat=_Chat([
+                    ("click", first), ("click", {"ref": "e1"}), ("click", first),
+                    ("finish", {"done": False, "why": "stop"}),
+                ]), browser=browser, person=person)
+
+                session.run()
+
+                self.assertEqual(len(person.asked), asked)
 
     def test_a_switch_that_reached_the_page_is_asked_about_again(self):
         with tempfile.TemporaryDirectory() as tmp:

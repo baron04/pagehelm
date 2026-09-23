@@ -72,6 +72,10 @@ class ApprovalWatch:
         }
         self.navigation_counts = {"requested": 0, "confirmed": 0, "not_confirmed": 0}
         self.confirmed_navigation = ""
+        #: Whether the pending confirmation names an exact destination. Only such a grant
+        #: may outlive an unrelated action: one for a script-routed control with no known
+        #: destination would otherwise cover the next such control, wherever it went.
+        self.confirmed_navigation_has_destination = False
 
     @property
     def mutations_enabled(self) -> bool:
@@ -293,13 +297,29 @@ class ApprovalWatch:
             return "navigation_not_confirmed", "the page switch was not confirmed"
         self.navigation_counts["confirmed"] += 1
         self.confirmed_navigation = plan.content_digest
+        self.confirmed_navigation_has_destination = bool(url)
         self.ledger.append("navigation_confirmed", step=step, tool=action,
                            approval_id=str(getattr(grant, "approval_id", ""))[:200])
         return "", ""
 
-    def settle_navigation(self, receipt: ActionReceipt) -> None:
-        """Consume a confirmation once its dispatch may have reached the page."""
-        if receipt.error_code not in PRE_DISPATCH_ERRORS:
+    def settle_navigation(self, receipt: ActionReceipt, *, navigating: bool = True) -> None:
+        """Consume a confirmation once the switch it was asked for may have reached the page.
+
+        Only that switch consumes it. Answering the confirmation is itself a click on the
+        page, and an application closes an open menu on any click outside it (Odoo does, on
+        pointerdown in the capture phase), so the menu item the person just agreed to open
+        is gone by the time the switch is dispatched and the switch comes back stale. The
+        assistant reopens the menu and clicks the item again: reopening it must not spend
+        the person's answer, or the second click asks again, the answer closes the menu
+        again, and the turn loops until its budget runs out. An action in between that left
+        the page does spend it, and so does anything when the grant named no destination.
+        """
+        if not self.confirmed_navigation:
+            return
+        if navigating:
+            if receipt.error_code not in PRE_DISPATCH_ERRORS:
+                self.confirmed_navigation = ""
+        elif receipt.navigated or not self.confirmed_navigation_has_destination:
             self.confirmed_navigation = ""
 
     def navigation_result(self) -> dict | None:

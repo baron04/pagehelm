@@ -274,7 +274,9 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
             result, t0, "user_cancelled",
             "the user stopped this task before browser dispatch", steps=step))
     link = _clicked_link(args, obs) if name == "click" else None
-    if name in ("goto", "back") or (name == "click" and (expect_nav or link is not None)):
+    navigating = name in ("goto", "back") or (
+        name == "click" and (expect_nav or link is not None))
+    if navigating:
         reason, detail = session._approvals.confirm_navigation(
             step, obs, action=name,
             url=(str(args.get("url") or "") if name == "goto" else (link or "")))
@@ -301,7 +303,7 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
                             steps=step))
 
     if name not in ("observe", "wait_for"):
-        session._approvals.settle_navigation(receipt)
+        session._approvals.settle_navigation(receipt, navigating=navigating)
     if name != "observe" and receipt.error_code != "stale_observation":
         session.page_actions += 1
     write = session._writes.write_outcome(
