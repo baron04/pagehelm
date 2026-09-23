@@ -644,10 +644,21 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                                "have, or finish.")
         try:
             target = parse_target(args)
-        except ValueError as exc:
+            # An application may expose a reviewed, deployment-bound alias for a page
+            # it canonicalises after navigation. This changes only the equality check;
+            # it never authorises a browser action or declares the page rendered.
+            canonical = getattr(self.click_policy, "canonical_target_path", None)
+            if target.path and callable(canonical):
+                resolved = canonical(target.path)
+                if not isinstance(resolved, str):
+                    raise ValueError("the application returned an invalid target path")
+                if resolved != target.path:
+                    target = parse_target({**target.to_json(), "path": resolved})
+        except Exception as exc:  # noqa: BLE001 -- an application alias must fail closed
+            reason = str(exc) if isinstance(exc, ValueError) else "invalid application target alias"
             self.ledger.append("target_state_refused", step=turn.step,
-                               reason="invalid", detail=str(exc)[:300])
-            return self._reply(turn, call, f"TARGET REFUSED: {exc}.")
+                               reason="invalid", detail=reason[:300])
+            return self._reply(turn, call, f"TARGET REFUSED: {reason}.")
         self._target_declarations += 1
         self._target = target
         self._remember_active_filters(turn.obs)

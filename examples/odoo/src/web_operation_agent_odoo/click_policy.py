@@ -72,6 +72,7 @@ class OdooReviewedClickPolicy:
     page_controls: frozenset[str]
     record_controls: frozenset[str]
     anywhere_controls: frozenset[str]
+    action_target_paths: tuple[tuple[str, str], ...] = ()
 
     @classmethod
     def from_review(cls, review: dict, action_ids: dict[str, int],
@@ -85,6 +86,7 @@ class OdooReviewedClickPolicy:
         paths: set[str] = set()
         actions: set[str] = set()
         rows: set[str] = set()
+        target_paths: list[tuple[str, str]] = []
         for item in review["named_routes"]:
             paths.add(item["path"])
             if item.get("rows") == "open":
@@ -94,6 +96,8 @@ class OdooReviewedClickPolicy:
             if xmlid not in action_ids:
                 continue
             keys = {xmlid, str(action_ids[xmlid])}
+            target_paths.append((f"/odoo/action-{xmlid}",
+                                 f"/odoo/action-{action_ids[xmlid]}"))
             path = action_paths.get(xmlid)
             if isinstance(path, str) and _ACTION_PATH.fullmatch(path):
                 paths.add("/odoo/" + path)
@@ -107,7 +111,20 @@ class OdooReviewedClickPolicy:
                    row_pages=frozenset(rows),
                    page_controls=frozenset(review["controls_on_reviewed_pages"]),
                    record_controls=frozenset(review.get("controls_on_reviewed_records", ())),
-                   anywhere_controls=frozenset(review["controls_anywhere"]))
+                   anywhere_controls=frozenset(review["controls_anywhere"]),
+                   action_target_paths=tuple(target_paths))
+
+    def canonical_target_path(self, path: str) -> str:
+        """Bind a reviewed XML-ID target to this deployment's observed action number.
+
+        Only resolved reviewed actions are aliases. The query, if any, is kept so the
+        generic target checker can still demand the exact requested view.
+        """
+        parts = urlsplit(path)
+        mapped = dict(self.action_target_paths).get(parts.path)
+        if mapped is None:
+            return path
+        return mapped + (f"?{parts.query}" if parts.query else "")
 
     def _collection(self, path: str) -> str | None:
         """The reviewed collection `path` is, as the key rows are marked under, or None."""

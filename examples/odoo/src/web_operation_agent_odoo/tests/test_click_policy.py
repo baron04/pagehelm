@@ -91,6 +91,17 @@ class ReviewedClicks(unittest.TestCase):
             {"account.action_move_in_invoice_type": "../settings"})
         self.assertFalse(odd.reviewed("/odoo/../settings"))
 
+    def test_reviewed_action_target_uses_this_deployments_number_only(self):
+        policy = OdooReviewedClickPolicy.from_review(
+            load_review(), {"account.action_move_in_refund_type": 266})
+        self.assertEqual(policy.canonical_target_path(
+            "/odoo/action-account.action_move_in_refund_type?view_type=list"),
+            "/odoo/action-266?view_type=list")
+        self.assertEqual(policy.canonical_target_path(
+            "/odoo/action-account.unreviewed"), "/odoo/action-account.unreviewed")
+        self.assertEqual(policy.canonical_target_path("/odoo/action-999"),
+                         "/odoo/action-999")
+
     def test_an_unreviewed_page_refuses_its_controls_but_not_tabs_or_the_home_menu(self):
         self.assertIn("not been reviewed", self.decide("/odoo/discuss",
                                                         _el("e1", "button", "Kanban")))

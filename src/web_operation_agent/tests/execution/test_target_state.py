@@ -806,6 +806,29 @@ class TargetSettlement(unittest.TestCase):
         self.assertFalse(result.verified_answer["action"]["acted"])
         self.assertIn("already in the requested state", result.agent_said)
 
+    def test_application_reviewed_alias_is_checked_against_the_rendered_page(self):
+        class AliasedPolicy:
+            def decide(self, observation, element):
+                return "not reviewed"
+
+            def canonical_target_path(self, path):
+                return SUPPLIER if path == "/legacy/vendor-desk" else path
+
+        chat = _Chat([("set_target", {"path": "/legacy/vendor-desk"}),
+                      ("finish", {"done": True, "why": "done"})])
+        browser = _WorkspaceBrowser(SUPPLIER)
+        session = _session(self.tmp, chat, browser,
+                           disabled_actions=frozenset({"click"}),
+                           click_policy=AliasedPolicy())
+
+        result = session.run()
+
+        self.assertEqual(result.terminal_reason, "agent_finished")
+        self.assertEqual(_events(session, "target_state_declared")[0]["target"]["path"],
+                         SUPPLIER)
+        self.assertEqual(result.verified_answer["action"]["url"], ORIGIN + SUPPLIER)
+        self.assertEqual(browser.commands, [])
+
     def test_a_write_in_the_same_window_is_settled_by_the_write_path_not_the_target(self):
         # The gateway refuses a write during the click that reaches the target page. The
         # page state matches, but the target is not reported reached: the refused write
