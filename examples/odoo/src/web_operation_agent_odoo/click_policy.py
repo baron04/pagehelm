@@ -31,7 +31,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import parse_qsl, urljoin, urlsplit
 
 from web_operation_agent.schemas import ElementRef, PageObservation
 
@@ -39,6 +39,9 @@ REVIEW = Path(__file__).with_name("policies") / "reviewed_click_pages.json"
 _ACTION = re.compile(r"^/odoo/action-([A-Za-z0-9_.]+)$")
 _RECORD = re.compile(r"^(?P<collection>/odoo/[^/]+)/(?P<id>\d+)$")
 _ACTION_PATH = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
+#: The one query an address the assistant opens directly may carry: which view to show.
+_VIEW_TYPES = frozenset({"list", "kanban", "form", "pivot", "graph", "calendar", "activity",
+                         "map"})
 #: What a row or card of a collection is in the Runtime's observation.
 _ROW_ROLES = frozenset({"td", "article"})
 
@@ -122,6 +125,26 @@ class OdooReviewedClickPolicy:
         """A reviewed collection page or a record opened from one."""
         path = _normal(path)
         return self.reviewed(path) or self._record_of_reviewed(path)
+
+    def allows_destination(self, url: str) -> bool:
+        """A reviewed page, or a record opened from one, to open by address.
+
+        Only a same-application path, and at most `view_type` in its query: `debug=1` and
+        the like change how the web client behaves for the person, not which page it shows.
+        """
+        if not isinstance(url, str):
+            return False
+        parts = urlsplit(url)
+        if parts.scheme or parts.netloc or parts.fragment or not parts.path.startswith("/"):
+            return False
+        if parts.query:
+            try:
+                query = parse_qsl(parts.query, keep_blank_values=True, strict_parsing=True)
+            except ValueError:
+                return False
+            if len(query) != 1 or query[0][0] != "view_type" or query[0][1] not in _VIEW_TYPES:
+                return False
+        return self.destination_allowed(parts.path)
 
     def decide(self, observation: PageObservation, element: ElementRef) -> str:
         name = (element.name or "").strip()

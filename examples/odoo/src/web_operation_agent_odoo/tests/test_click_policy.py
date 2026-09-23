@@ -117,6 +117,17 @@ class ReviewedClicks(unittest.TestCase):
             with self.subTest(element=element.name):
                 self.assertTrue(self.decide("/odoo/sales", element))
 
+    def test_a_reviewed_page_opens_by_address_with_nothing_but_its_view(self):
+        for url in ("/odoo/sales", "/odoo/sales?view_type=kanban", "/odoo/sales/7",
+                    "/odoo/action-286"):
+            with self.subTest(url=url):
+                self.assertTrue(self.policy.allows_destination(url))
+        for url in ("/odoo/sales?debug=1", "/odoo/sales?view_type=kanban&debug=1",
+                    "/odoo/settings", "/odoo/sales/new", "/odoo/sales-7", "//evil/x",
+                    "http://odoo.test/odoo/sales", "/odoo/sales#x", "/odoo/sales?view_type=x"):
+            with self.subTest(url=url):
+                self.assertFalse(self.policy.allows_destination(url))
+
     def test_an_unresolved_action_is_not_reviewed(self):
         unresolved = OdooReviewedClickPolicy.from_review(load_review(), {})
         element = _el("e1", "button", "List")

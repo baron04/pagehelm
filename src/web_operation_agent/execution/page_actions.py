@@ -16,7 +16,7 @@ from .grounding import WRITE_NONE, WRITE_PERMITTED
 from ..privacy import safe_tool_arguments as _safe
 from ..schemas import (BROWSER_ACTIONS, POTENTIALLY_WRITING_ACTIONS, ActionReceipt,
                        PageObservation)
-from .click_policy import click_policy_refusal
+from .click_policy import click_policy_refusal, reviewed_destination
 from .knowledge_tools import capability_check_available, capability_check_feedback
 from .page_evidence import capture_page_snapshot
 from .prompts import _assistant_call, _tool_result, _trim
@@ -228,6 +228,15 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
                 "business_route_opened", step=step,
                 url_digest=hashlib.sha256(url.encode()).hexdigest(),
                 route_intent="read_only", side_effect_possible=True)
+        elif isinstance(url, str) and _reviewed_address(session, url, obs):
+            # The application reviewed this page as read-only; opening it by address is
+            # what its menu link would do, and the switch below is still confirmed. The
+            # model otherwise had to find the menu from wherever it stood, and from a page
+            # with the menu closed it could only repeat the refused address.
+            session.ledger.append(
+                "reviewed_destination_opened", step=step,
+                url_digest=hashlib.sha256(url.encode()).hexdigest(),
+                side_effect_possible=True)
         elif not isinstance(url, str) or not _page_link_allows(url, obs):
             messages += [_assistant_call(call), _tool_result(
                 call, "Direct navigation is allowed only to an exact link on the "
@@ -547,6 +556,21 @@ def _clicked_link(args: dict, obs: PageObservation) -> str | None:
             return href
         return None
     return None
+
+
+def _reviewed_address(session, url: str, obs: PageObservation) -> bool:
+    """A same-origin address the application's click policy reviewed as a destination."""
+    if session.click_policy is None:
+        return False
+    try:
+        current = urlsplit(obs.url)
+        wanted = urlsplit(urljoin(obs.url, url))
+    except (TypeError, ValueError):
+        return False
+    if (wanted.scheme, wanted.netloc) != (current.scheme, current.netloc) or wanted.fragment:
+        return False
+    relative = wanted.path + (f"?{wanted.query}" if wanted.query else "")
+    return reviewed_destination(session.click_policy, relative)
 
 
 def _page_link_allows(url: str, obs: PageObservation) -> bool:

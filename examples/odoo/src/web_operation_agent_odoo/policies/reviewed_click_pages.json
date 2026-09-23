@@ -140,6 +140,16 @@
   {
    "xmlid": "account.action_account_journal_form",
    "note": "Journals"
+  },
+  {
+   "xmlid": "account.action_move_out_invoice",
+   "note": "Customer Invoices, as an ordinary invoicing user's menu opens them",
+   "rows": "open"
+  },
+  {
+   "xmlid": "account.action_move_in_invoice",
+   "note": "Vendor Bills, as an ordinary invoicing user's menu opens them",
+   "rows": "open"
   }
  ],
  "controls_on_reviewed_pages": [

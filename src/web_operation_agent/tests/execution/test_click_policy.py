@@ -129,3 +129,46 @@ class AnyElementWithAnHrefIsAPageSwitch(unittest.TestCase):
         self.assertIsNone(_clicked_link({"ref": "e2"}, page))
         self.assertIsNone(_clicked_link({"ref": "e3"}, page))
         self.assertEqual(_clicked_link({"ref": "e4"}, page), "/plain")
+
+
+class _WithDestinations(_Reviewed):
+    """The review also names /reports as a page to open by address."""
+
+    def allows_destination(self, url):
+        return url in {"/reports", "/reports?view_type=kanban"}
+
+
+class ReviewedDestinations(unittest.TestCase):
+    """A page the application reviewed may be opened by address, and nothing else may."""
+
+    def _goto(self, policy, url):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        browser = _Browser([_page(), _page(2, "http://app/reports")])
+        session = _session(tmp.name, _Chat([("goto", {"url": url}),
+                                            ("finish", {"done": False, "why": "stop"})]),
+                           browser, policy)
+        session.run()
+        return session, browser
+
+    def test_a_reviewed_destination_opens_by_address(self):
+        for url in ("/reports", "http://app/reports", "/reports?view_type=kanban"):
+            with self.subTest(url=url):
+                session, browser = self._goto(_WithDestinations(), url)
+                self.assertEqual([action for action, _args in browser.done], ["goto"])
+                self.assertEqual(len(session.ledger.of_kind("reviewed_destination_opened")), 1)
+
+    def test_anything_else_is_refused_as_before(self):
+        cases = {"an address the review does not name": (_WithDestinations(), "/admin"),
+                 "another origin": (_WithDestinations(), "http://evil.example/reports"),
+                 "a policy without destinations": (_Reviewed(), "/reports"),
+                 "a policy that fails": (_Broken(), "/reports")}
+        for reason, (policy, url) in cases.items():
+            with self.subTest(reason=reason):
+                session, browser = self._goto(policy, url)
+                self.assertEqual(browser.done, [])
+                self.assertEqual(len(session.ledger.of_kind("page_route_rejected")), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

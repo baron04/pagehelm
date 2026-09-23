@@ -25,6 +25,23 @@ class ClickPolicy(Protocol):
         ...
 
 
+def reviewed_destination(policy: object, url: str) -> bool:
+    """Whether an application's click policy names `url` as a page to open directly.
+
+    Optional: a policy may define `allows_destination(relative_url) -> bool` for the pages
+    its review cleared as read-only. Opening one by address is what clicking the menu link
+    to it would do; the page switch is still confirmed. Without the method, or on any
+    error, the answer is no.
+    """
+    method = getattr(policy, "allows_destination", None)
+    if not callable(method):
+        return False
+    try:
+        return method(url) is True
+    except Exception:  # noqa: BLE001 -- a broken policy fails closed
+        return False
+
+
 def click_policy_refusal(policy: ClickPolicy, observation: PageObservation,
                          ref: object) -> str:
     """The policy's reason for refusing a click on `ref`, or "" when it allows it.
