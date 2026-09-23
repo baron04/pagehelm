@@ -204,7 +204,8 @@ class OdooApplicationAdapter:
         self.rpc_origin = _validated_origin(
             base_url, allow_private_http=allow_private_http)
         self.page_controller_module = (
-            page_controller_module or self.origin + "/woa/page-controller.js")
+            page_controller_module or self.origin
+            + "/woa_runtime/static/src/page-controller-with-state.js")
         executor = OdooBusinessToolExecutor(
             base_url=self.rpc_origin, keys=OdooApiKeyStore(api_key_path),
             timeout_s=timeout_s, allow_mutations=allow_mutations,

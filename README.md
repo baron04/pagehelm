@@ -52,6 +52,11 @@ agent.
   name/price/invoicing policy, quotation expiration). Other create pages or fields are not
   promoted to safe drafts from `fields_get` metadata alone: arbitrary deployment-specific
   `onchange` code may have external effects that a read-only database transaction cannot stop.
+  The separate existing-customer edit path requires approval before filling. Its Odoo
+  controller adapter delivers the form's `change` event so a value visible in the DOM also
+  enters Odoo's pending record; the reference pilot verified an email remained unchanged
+  until the person left the page, then saved. This does not qualify arbitrary edit forms,
+  in-flight requests started before the guard, or external effects.
 - Turn context is assembled by source role: the current page is the live grounding baseline;
   bounded conversation history is included for referential or clarification follow-ups;
   Skills are selected from the current task; and deployment source remains a lazy cited
@@ -280,6 +285,10 @@ source compilation, fixture provisioning, and qualification.
   authorization mapping, and application-specific postcondition checks.
 - Browser automation cannot provide database transactions or rollback. Uncertain writes need
   application reads and an explicit operator decision.
+- The Odoo page guard waits for prior same-session transactions before acknowledging its
+  read-only window; a controlled in-flight write test verified this fence. It still cannot
+  isolate external effects, other browser sessions, custom mid-request commits, or client
+  retries after the window closes. Do not treat it as a general write sandbox.
 - Local source search can match Han-language labels and comments, but does not translate a
   Chinese business question into English code identifiers. Cross-language recall still
   depends on the Agent choosing suitable source terms and has not been broadly qualified.

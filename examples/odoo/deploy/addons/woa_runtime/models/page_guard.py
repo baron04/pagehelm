@@ -8,10 +8,13 @@ in a PostgreSQL read-only transaction, and a request that tries to change data i
 with nothing saved. The Runtime closes the window when the turn ends, and it closes itself
 after at most `MAX_TTL_S` seconds.
 
-What this guards: database writes from requests carrying this browser session. What it
-does not guard: the typed business tools, which run through their own API credentials and
-the product's proposal-and-confirmation protocol; other sessions of the same person; and
-server code that causes an external effect without writing to the database first.
+The begin response also fences browser requests that entered earlier: ordinary requests
+hold a shared transaction lock until commit, and opening a window takes the exclusive
+lock before acknowledging it. What this guards: database writes from requests carrying
+this browser session after the begin acknowledgement. What it does not guard: the typed
+business tools, which run through their own API credentials and the product's
+proposal-and-confirmation protocol; other sessions of the same person; and server code
+that causes an external effect without writing to the database first.
 """
 from __future__ import annotations
 
@@ -41,6 +44,12 @@ def session_digest(sid: str) -> str:
     return hashlib.sha256(sid.encode("utf-8")).hexdigest()
 
 
+def _session_lock_key(sid: str) -> int:
+    """A signed PostgreSQL bigint derived from the same opaque session digest."""
+    return int.from_bytes(hashlib.sha256(sid.encode("utf-8")).digest()[:8],
+                          byteorder="big", signed=True)
+
+
 _TABLE = """
     CREATE TABLE IF NOT EXISTS woa_page_guard (
         sid_digest varchar(64) PRIMARY KEY,
@@ -60,10 +69,16 @@ def _table_exists(cr) -> bool:
     return bool(cr.fetchone()[0])
 
 
-def _guarded_request() -> bool:
+def _eligible_request() -> bool:
     if not request or not request.db or not request.session.uid:
         return False
     if request.httprequest.path.startswith(EXEMPT_PREFIXES):
+        return False
+    return True
+
+
+def _guarded_request() -> bool:
+    if not _eligible_request():
         return False
     cr = request.env.cr
     if not _table_exists(cr):
@@ -82,6 +97,11 @@ class WoaPageGuard(models.AbstractModel):
         self.env.cr.execute(_TABLE)
 
     def _open(self, ttl_s: float) -> float:
+        # Every earlier ordinary request of this browser session holds the shared form
+        # of this lock through its own transaction commit. Do not acknowledge the window
+        # while any such request could still write after the acknowledgement.
+        self.env.cr.execute("SELECT pg_advisory_xact_lock(%s)",
+                            [_session_lock_key(request.session.sid)])
         # Also here, not only at install: a fixture restored from an older dump gets its
         # table from the first window rather than from a module upgrade.
         self.env.cr.execute(_TABLE)
@@ -117,6 +137,11 @@ class IrHttp(models.AbstractModel):
 
     @classmethod
     def _dispatch(cls, endpoint):
+        if _eligible_request():
+            # Shared locks do not serialize normal concurrent page requests. They only
+            # make `/begin` wait for requests already in flight to commit or roll back.
+            request.env.cr.execute("SELECT pg_advisory_xact_lock_shared(%s)",
+                                   [_session_lock_key(request.session.sid)])
         if not _guarded_request():
             return super()._dispatch(endpoint)
         cr = request.env.cr

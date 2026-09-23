@@ -276,6 +276,11 @@ does either checks the host first. It is a disposable application to point the a
 
 An existing fixture keeps working after the addon changes: Odoo loads the addon's code from disk, and `woa_runtime` 1.5's page write guard creates its one table the first time the Runtime opens a window. Restart Odoo to load new backend asset declarations, including the search-model facet bridge; the local pilot loaded it on restart without a database module upgrade. `-u woa_runtime` records a new module version when needed; it changes `ir_module_module`, which the P8.7 fingerprint includes.
 
+The guard uses per-browser-session transaction advisory locks: normal requests share the
+lock through commit; `/begin` takes it exclusively before acknowledging the read-only
+window. This fences requests already in flight. It does not stop effects outside the
+database or a client retry made after `/end`.
+
 ### What is not committed
 
 `page-controller.js`, its mask chunk and its MIT `LICENSE` are fetched from the pinned npm
@@ -340,9 +345,12 @@ form handoff above is still available because it leaves the record unpersisted.
 Against the provisioned fixture, or against your own Odoo with the pinned page controller
 served from its origin — any module directory on the addons path works. The Odoo
 distribution loads `<addons>/woa_runtime/static/src/page-controller-with-state.js`,
-which re-exports the pinned `page-controller.js`, reports active search facets, and exposes
-bounded filter/group choices from the current search model. Set
-`WOA_ODOO_PAGE_CONTROLLER_MODULE` to this wrapper for demo runs that need those choices:
+which wraps the pinned `page-controller.js`, reports active search facets, and exposes
+bounded filter/group choices from the current search model. It also emits Odoo's required
+`change` event after a successful existing-customer edit fill: without it the form can show
+the new value in the DOM yet save the old one on leaving. Demo and qualification defaults
+use this wrapper; set `WOA_ODOO_PAGE_CONTROLLER_MODULE` explicitly only when the
+deployment serves it at another path:
 
 ```bash
 python -m web_operation_agent_odoo.demo --scripted --headless \

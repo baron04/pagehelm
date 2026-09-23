@@ -698,7 +698,8 @@ class AdapterContract(unittest.TestCase):
         self.assertEqual(adapter.descriptor.origin, "https://erp.example.test")
         self.assertEqual(
             adapter.descriptor.page_controller_module,
-            "https://erp.example.test/woa/page-controller.js")
+            "https://erp.example.test/woa_runtime/static/src/"
+            "page-controller-with-state.js")
 
     def test_a_deployment_can_narrow_the_principal_to_an_application_grant(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -838,7 +838,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Playwright storage state for a signed-in Odoo session")
     parser.add_argument("--page-controller-module", default=_env_default(
         "WOA_ODOO_PAGE_CONTROLLER_MODULE",
-        "http://127.0.0.1:8069/woa_runtime/static/src/page-controller.js"))
+        "http://127.0.0.1:8069/woa_runtime/static/src/page-controller-with-state.js"))
     parser.add_argument("--entry-path", default="/odoo/customers")
     parser.add_argument("--source-root", default=_env_default("WOA_ODOO_SOURCE_ROOT"),
                         help="an Odoo source tree matching the deployed release")

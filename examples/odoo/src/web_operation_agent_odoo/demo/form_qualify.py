@@ -353,7 +353,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api-key", required=True)
     parser.add_argument("--storage-state", required=True)
     parser.add_argument("--page-controller-module", default=(
-        "http://127.0.0.1:8069/woa_runtime/static/src/page-controller.js"))
+        "http://127.0.0.1:8069/woa_runtime/static/src/page-controller-with-state.js"))
     parser.add_argument("--turn-timeout", type=float, default=120.0)
     parser.add_argument("--ignore-browser-https-errors", action="store_true",
                         help="loopback qualification only; rejected for non-loopback URLs")

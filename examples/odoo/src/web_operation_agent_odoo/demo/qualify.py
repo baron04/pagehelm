@@ -537,7 +537,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--api-key", required=True)
     parser.add_argument("--storage-state", required=True)
     parser.add_argument("--page-controller-module", default=(
-        "http://127.0.0.1:8069/woa_runtime/static/src/page-controller.js"))
+        "http://127.0.0.1:8069/woa_runtime/static/src/page-controller-with-state.js"))
     parser.add_argument("--entry-path", default="/odoo/customers")
     parser.add_argument("--source-root", default="",
                         help="an Odoo source tree matching the deployed release")

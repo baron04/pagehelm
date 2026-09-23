@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import contextlib
 import io
+import shutil
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -69,10 +71,75 @@ class OnlyFirstPartyBootstrapCodeIsCommitted(unittest.TestCase):
         self.assertIn("page_controller.json", manifest_text)
         self.assertEqual(manifest["license"], "Other OSI approved licence")
 
+    @unittest.skipUnless(shutil.which("node"), "Node.js is required for the Odoo wrapper")
+    def test_the_odoo_input_adapter_changes_only_existing_customer_records(self):
+        # Load the actual first-party module against a tiny stand-in for the pinned
+        # controller. A string assertion would not catch an event on a create form.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shutil.copyfile(deploy.SERVED_ASSETS / "page-controller-with-state.js",
+                            root / "page-controller-with-state.js")
+            (root / "package.json").write_text('{"type":"module"}', encoding="utf-8")
+            (root / "page-controller.js").write_text("""
+export class PageController {
+  constructor(element, success = true) {
+    this.selectorMap = [element]; this.success = success;
+  }
+  async inputText(index, text) {
+    this.selectorMap[index].value = text;
+    return {success: this.success};
+  }
+}
+export const getElementByIndex = (map, index) => map[index];
+""", encoding="utf-8")
+            (root / "page-facets.js").write_text("""
+export const readPageFacets = () => {};
+export const readFacetCandidates = () => {};
+export const applyPageFacet = () => {};
+""", encoding="utf-8")
+            (root / "page-record-route.js").write_text(
+                "export const readPageRecordRoute = () => {};\n", encoding="utf-8")
+            script = """
+import assert from 'node:assert/strict';
+import {pathToFileURL} from 'node:url';
+const {PageController} = await import(pathToFileURL(process.argv[1]).href);
+async function check(path, success, connected, expected) {
+  globalThis.location = {pathname: path};
+  const events = [];
+  const element = {value: '', isConnected: connected,
+    dispatchEvent: event => events.push(event.type)};
+  const outcome = await new PageController(element, success).inputText(0, 'new');
+  assert.deepEqual(events, expected);
+  assert.equal(outcome.success, success && connected);
+}
+await check('/odoo/customers/11', true, true, ['change']);
+await check('/odoo/customers/new', true, true, []);
+await check('/odoo/sales/new', true, true, []);
+await check('/odoo/customers/11', false, true, []);
+await check('/odoo/customers/11', true, false, []);
+"""
+            completed = subprocess.run(
+                ["node", "--input-type=module", "-e", script,
+                 str(root / "page-controller-with-state.js")],
+                capture_output=True, text=True, check=False)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+
     def test_the_compose_file_binds_loopback_only(self):
         compose = deploy.COMPOSE_FILE.read_text()
         self.assertIn('"127.0.0.1:8069:8069"', compose)
         self.assertNotIn('"8069:8069"', compose)
+
+    def test_the_guard_fences_older_same_session_transactions(self):
+        # The live row-lock gate proves the ordering. These source checks keep a future
+        # addon edit from silently removing either half of that fence.
+        source = (deploy.ADDONS_ROOT / "woa_runtime" / "models" /
+                  "page_guard.py").read_text(encoding="utf-8")
+        self.assertIn("SELECT pg_advisory_xact_lock_shared(%s)", source)
+        self.assertIn("SELECT pg_advisory_xact_lock(%s)", source)
+        self.assertLess(source.index("SELECT pg_advisory_xact_lock(%s)"),
+                        source.index("expires_at = time.time() + ttl_s"))
+        self.assertLess(source.index("SELECT pg_advisory_xact_lock_shared(%s)"),
+                        source.index("if not _guarded_request():"))
 
     def test_the_addon_keeps_a_local_shell_but_runtime_uses_server_identity(self):
         import ast
