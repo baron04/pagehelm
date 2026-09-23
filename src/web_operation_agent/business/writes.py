@@ -19,6 +19,7 @@ from ..schemas import ActionReceipt, POTENTIALLY_WRITING_ACTIONS
 PRE_DISPATCH_ERRORS = frozenset({
     "stale_ref", "unknown_ref", "bad_arguments", "no_such_action",
     "deadline_expired", "stale_observation", "capability_refused", "runtime_replaced",
+    "user_intervened",
 })
 
 

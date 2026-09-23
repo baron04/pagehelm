@@ -1,7 +1,8 @@
 import {afterEach, describe, expect, it, vi} from 'vitest'
 import {EmbeddedWebRuntime} from '../src/runtime/runtime'
 import {
-  WRITE_GUARD_TTL_S, closeWriteGuard, openWriteGuard, validWriteGuardPath,
+  WRITE_GUARD_TTL_S, closeWriteGuard, openWriteGuard, releaseWriteGuard,
+  validWriteGuardPath,
 } from '../src/runtime/writeGuard'
 
 function reply(status: number, body: unknown): Response {
@@ -54,6 +55,22 @@ describe('opening the guard', () => {
   it('closes with a best-effort request that cannot throw', async () => {
     const fetcher = vi.fn(async () => { throw new TypeError('offline') })
     await expect(closeWriteGuard('/woa/page-guard', fetcher as typeof fetch)).resolves.toBeUndefined()
+    expect((fetcher.mock.calls[0] as unknown as [string])[0]).toBe('/woa/page-guard/end')
+  })
+
+  it('requires an explicit application acknowledgement before user handoff', async () => {
+    for (const answer of [
+      async () => reply(503, {active: false}),
+      async () => reply(200, {active: true}),
+      async () => reply(200, {}),
+      async () => new Response('not json', {status: 200}),
+      async () => { throw new TypeError('offline') },
+    ]) {
+      expect(await releaseWriteGuard('/woa/page-guard', vi.fn(answer) as typeof fetch))
+        .toBe(false)
+    }
+    const fetcher = vi.fn(async () => reply(200, {active: false}))
+    expect(await releaseWriteGuard('/woa/page-guard', fetcher as typeof fetch)).toBe(true)
     expect((fetcher.mock.calls[0] as unknown as [string])[0]).toBe('/woa/page-guard/end')
   })
 })
@@ -136,5 +153,76 @@ describe('a page action in an application that names a write guard', () => {
     expect(executed).toEqual(['click'])
     const receipt = posts[1]?.body.receipt as Record<string, unknown>
     expect(receipt.write_guard_held).toBe(false)
+  })
+
+  it('releases the guard before highlighting and reports a completed handoff', async () => {
+    const fetcher = vi.fn(async (url: string) => url.endsWith('/begin')
+      ? reply(200, {active: true, expires_at: Date.now() / 1000 + 120})
+      : reply(200, {active: false}))
+    vi.stubGlobal('fetch', fetcher)
+    const {runtime, posts, action} = actingRuntime('/woa/page-guard')
+    const state = runtime as unknown as Record<string, unknown>
+    const execute = vi.fn(() => {
+      state.highlightHandle = {active: () => true, clear: vi.fn()}
+      state.handoffGranted = true
+      return Promise.resolve({success: true})
+    })
+    state._execute = execute
+    action.command.action = 'highlight'
+    await runtime._handleAction(action as never)
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      '/woa/page-guard/begin', '/woa/page-guard/end',
+    ])
+    expect(execute).toHaveBeenCalledOnce()
+    expect((posts[1]?.body.receipt as Record<string, unknown>).ok).toBe(true)
+  })
+
+  it('does not highlight or report handoff if guard release is unacknowledged', async () => {
+    const fetcher = vi.fn(async (url: string) => url.endsWith('/begin')
+      ? reply(200, {active: true, expires_at: Date.now() / 1000 + 120})
+      : reply(200, {active: true}))
+    vi.stubGlobal('fetch', fetcher)
+    const {runtime, posts, action} = actingRuntime('/woa/page-guard')
+    action.command.action = 'highlight'
+    await runtime._handleAction(action as never)
+    const receipt = posts[1]?.body.receipt as Record<string, unknown>
+    expect(receipt.ok).toBe(false)
+    expect(receipt.error_code).toBe('capability_refused')
+  })
+
+  it('rejects an old action after the person takes control', async () => {
+    const {runtime, executed, posts, action} = actingRuntime()
+    const state = runtime as unknown as Record<string, unknown>
+    state.userIntervened = true
+    await runtime._handleAction(action as never)
+    expect(executed).toEqual([])
+    expect(posts.map(row => row.path)).toEqual(['/results'])
+    expect(posts[0]?.body.error_code).toBe('user_intervened')
+  })
+
+  it('fences a live turn on a real page gesture but does not block the handoff gesture', () => {
+    const {runtime} = actingRuntime()
+    const state = runtime as unknown as Record<string, unknown>
+    state.stored = {taskInFlight: true, inFlight: null, cachedResult: null}
+    state.cancelTask = vi.fn(async () => {})
+    const preventDefault = vi.fn()
+    const stopImmediatePropagation = vi.fn()
+    const event = {isTrusted: true, cancelable: true, composedPath: () => [document.body],
+      preventDefault, stopImmediatePropagation} as unknown as Event
+    runtime._userTookControl(event)
+    expect(state.userIntervened).toBe(true)
+    expect(preventDefault).toHaveBeenCalledOnce()
+    expect(state.cancelTask).toHaveBeenCalledOnce()
+    runtime._userTookControl(event)
+    expect(preventDefault).toHaveBeenCalledOnce()
+    expect(state.cancelTask).toHaveBeenCalledOnce()
+
+    state.userIntervened = false
+    state.handoffGranted = true
+    state.highlightHandle = {clear: vi.fn(), active: () => true}
+    runtime._userTookControl(event)
+    expect(state.userIntervened).toBe(true)
+    expect(preventDefault).toHaveBeenCalledOnce()
+    expect((state.highlightHandle as unknown)).toBeNull()
   })
 })

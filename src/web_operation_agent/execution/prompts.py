@@ -52,8 +52,11 @@ CAPABILITY_TOOL = {"type": "function", "function": {
         "Call this when the user asked you to change data -- create, change, delete, send, "
         "post, confirm, invoice -- and none of your tools performs that change. The server "
         "searches every capability installed for this actor, not only the tools shown for "
-        "this task, and returns a reference. If it found nothing, finish with outcome=unable "
-        "and a single capability_gap conclusion citing that reference. If it found something, "
+        "this task, and returns a reference. If it found nothing, you may follow an exact "
+        "read-only route offered by the current page or registered read result and highlight "
+        "a control in the fresh ready page; never claim the change "
+        "was made. If no such control is grounded, finish with outcome=unable and a single "
+        "capability_gap conclusion citing that reference. If it found something, "
         "use the authorized registered tool. Call it before looking the record up. Never call it for a "
         "question you can answer by reading."),
     "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}}
@@ -86,6 +89,9 @@ when the page says you reached the start or end. Never assume an off-screen cont
 * When a form is what the task needs, distinguish a requested draft from a requested
   submission. Never submit a draft-only task. Use the application form capability when
   available; its prefill handoff ends the turn before submission.
+* If the person must perform an unsupported page operation themselves, you may highlight
+  one named control from the latest observation. Highlight ends the turn; it does not
+  click, submit, or authorize a write. Use an installed typed write tool when one matches.
 * Leave expect_navigation unset unless you know the page routes in JavaScript. An ordinary \
 link or a submitting form is recognised without it. Setting it makes the runtime *require* \
 a navigation: if none commits, the action has already reached the page, so the run ends \
@@ -163,6 +169,14 @@ TOOL_SCHEMAS = [
                            "pages": {"type": "integer", "minimum": 1,
                                      "maximum": MAX_SCROLL_PAGES}},
                        "required": ["direction"]}}},
+    {"type": "function", "function": {
+        "name": "highlight", "description": (
+            "Mark one named interactive control from the latest ready page and hand control "
+            "to the person. This ends the turn without clicking or submitting. Use it only "
+            "when the person must complete the remaining action themselves."),
+        "parameters": {"type": "object", "additionalProperties": False,
+                       "properties": {"ref": {"type": "string", "pattern": "^e[0-9]+$"}},
+                       "required": ["ref"]}}},
     {"type": "function", "function": {
         "name": "finish", "description": "End the task. Use done=false if you cannot complete it.",
         "parameters": {"type": "object", "properties": {

@@ -51,6 +51,7 @@ export type PageFacetReader = () => unknown
 export type FacetCandidateReader = () => unknown
 export type FacetApplier = (ref: string, active: boolean) => Promise<unknown> | unknown
 export type PageRecordRouteReader = () => unknown
+export interface PageHighlight { clear(): void; active(): boolean }
 
 /** What one observation of the page found, before the session numbers and wraps it. */
 export interface PageReading {
@@ -142,6 +143,54 @@ export class Page {
   }
   scroll(down: boolean, pages: number): Promise<unknown> {
     return this.controller.scroll({down, numPages: pages})
+  }
+
+  /** Mark one observed control without focusing, clicking, or covering its hit target. */
+  highlight(ref: unknown): PageHighlight {
+    const element = this.element(ref)
+    if (!(element instanceof HTMLElement || element instanceof SVGElement) ||
+        !element.isConnected) {
+      throw new Error('bad_arguments: highlight target is no longer on the page')
+    }
+    element.scrollIntoView?.({block: 'center', inline: 'nearest', behavior: 'auto'})
+    const rect = element.getBoundingClientRect()
+    const computed = getComputedStyle(element)
+    if (rect.width <= 0 || rect.height <= 0 || computed.display === 'none' ||
+        computed.visibility === 'hidden') {
+      throw new Error('bad_arguments: highlight target is not visible')
+    }
+    const original = ['outline', 'outline-offset'].map(property => ({
+      property, value: element.style.getPropertyValue(property),
+      priority: element.style.getPropertyPriority(property),
+    }))
+    element.style.setProperty('outline', '3px solid Highlight', 'important')
+    element.style.setProperty('outline-offset', '3px', 'important')
+    const applied = new Map(original.map(saved => [
+      saved.property, element.style.getPropertyValue(saved.property),
+    ]))
+    let active = true
+    const clear = () => {
+      if (!active) return
+      active = false
+      observer.disconnect()
+      for (const saved of original) {
+        // An application that changed this style after handoff owns its new value.
+        if (element.style.getPropertyPriority(saved.property) !== 'important' ||
+            element.style.getPropertyValue(saved.property) !== applied.get(saved.property)) continue
+        if (saved.value) {
+          element.style.setProperty(saved.property, saved.value, saved.priority)
+        } else {
+          element.style.removeProperty(saved.property)
+        }
+      }
+    }
+    const observer = new MutationObserver(() => {
+      if (!element.isConnected) clear()
+    })
+    observer.observe(document.documentElement, {childList: true, subtree: true})
+    return {clear, active: () => active && element.isConnected && original.every(saved =>
+      element.style.getPropertyPriority(saved.property) === 'important' &&
+      element.style.getPropertyValue(saved.property) === applied.get(saved.property))}
   }
 
   /** PageController's reading of the page, with its debugging overlay removed. */

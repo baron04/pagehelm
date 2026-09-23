@@ -110,6 +110,48 @@ describe('Page.describe bounds an observation before it crosses the browser boun
 })
 
 describe('Page refuses controls that are not writable at execution time', () => {
+  it('highlights a live control without clicking it, then restores its style', () => {
+    const api = controller()
+    const button = document.createElement('button')
+    button.textContent = 'Review'
+    button.style.outline = '1px dotted red'
+    button.getBoundingClientRect = () => ({width: 80, height: 20} as DOMRect)
+    button.scrollIntoView = vi.fn()
+    document.body.append(button)
+    try {
+      const page = new Page(api, () => button, createRedactor())
+      const marker = page.highlight('e1')
+      expect(marker.active()).toBe(true)
+      expect(button.style.outline).toContain('Highlight')
+      expect(button.scrollIntoView).toHaveBeenCalledOnce()
+      expect(api.clickElement).not.toHaveBeenCalled()
+      marker.clear()
+      expect(marker.active()).toBe(false)
+      expect(button.style.outline).toBe('1px dotted red')
+      const replaced = page.highlight('e1')
+      button.style.setProperty('outline', '2px solid green', 'important')
+      expect(replaced.active()).toBe(false)
+      replaced.clear()
+      expect(button.style.outline).toContain('green')
+    } finally {
+      button.remove()
+    }
+  })
+
+  it('refuses a hidden or detached handoff control', () => {
+    const button = document.createElement('button')
+    button.getBoundingClientRect = () => ({width: 0, height: 0} as DOMRect)
+    document.body.append(button)
+    try {
+      expect(() => new Page(controller(), () => button, createRedactor()).highlight('e1'))
+        .toThrow(/not visible/)
+    } finally {
+      button.remove()
+    }
+    expect(() => new Page(controller(), () => button, createRedactor()).highlight('e1'))
+      .toThrow(/no longer on the page/)
+  })
+
   it('applies only a currently offered facet with a changed desired state', async () => {
     let active = false
     const apply = vi.fn(() => { active = true })

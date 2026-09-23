@@ -344,11 +344,13 @@ def capability_check_feedback(session) -> str:
                 + ", ".join(held.matches) + ". Use only one whose exact effect and "
                 "target fit the request; a capability_gap citing this check is refused.")
     return (f"CAPABILITY CHECK {ref}: nothing installed for this actor performs the change "
-            "the user asked for. Finish now with outcome=unable and answer "
+            "the user asked for. Do not substitute a different change or claim completion. "
+            "You may follow an exact read-only route from a registered result or a live "
+            "page link to locate the named record, then highlight a control seen in a fresh "
+            "ready observation and say the person must operate it. Never invent a route. "
+            "If no exact control can be grounded, finish with outcome=unable and answer "
             '{"version": 1, "coverage": "undetermined", "conclusions": '
-            f'[{{"kind": "capability_gap", "evidence_ref": "{ref}"}}]}}. '
-            "Do not look the record up, do not goto it, do not answer with a related query, "
-            "and do not substitute a different change.")
+            f'[{{"kind": "capability_gap", "evidence_ref": "{ref}"}}]}}.')
 
 
 def active_capability_digest(session) -> str:

@@ -22,7 +22,7 @@ import {
   absoluteUrl, armChildFrameNavigation, canonicalUrl, navigationWal, recoveryProvesNavigation,
 } from './navigation'
 import {Page, loadPageController, type PageControllerApi, type PageFacetReader,
-  type PageRecordRouteReader,
+  type PageHighlight, type PageRecordRouteReader,
   type FacetCandidateReader, type FacetApplier} from './page'
 import type {ElementLookup} from './pageModel'
 import {createPanelContainer, keepAttached, mountPanel, type PanelHandle} from './panelBridge'
@@ -32,7 +32,7 @@ import * as results from './results'
 import {renderState, type PendingView} from './renderState'
 import {clearStored, loadSession, writeStored, type SessionState} from './storage'
 import {SessionClient, sseBatches} from './transport'
-import {closeWriteGuard, openWriteGuard} from './writeGuard'
+import {closeWriteGuard, openWriteGuard, releaseWriteGuard} from './writeGuard'
 import type {ApprovalRequest, PanelConfiguration, PanelState} from '../contract/panel'
 import {WIRE_VERSION, type ActionCommand, type ActionEnvelope, type ActionResultEnvelope,
   type JsonObject, type ObservationEnvelope, type RuntimeConfig} from './types'
@@ -43,6 +43,7 @@ const RUNTIME_NAME = 'woa-embedded/page-controller-1.12.4'
 const CAPABILITIES = [
   'dom.observe', 'dom.click', 'dom.fill', 'dom.select', 'dom.submit',
   'page.goto', 'page.back', 'page.scroll', 'page.wait', 'page.apply_facet',
+  'page.highlight',
 ]
 
 /** Used where a Runtime was assembled without its constructor -- in conformance tests. */
@@ -100,6 +101,9 @@ export class EmbeddedWebRuntime {
   private redactorInstance: Redactor | null = null
   /** When the application's read-only window expires, in epoch milliseconds; 0 if none. */
   private writeGuardUntil = 0
+  private highlightHandle: PageHighlight | null = null
+  private userIntervened = false
+  private handoffGranted = false
   private clientInstance: SessionClient | null = null
   /** A message the person sent in place of an unanswered confirmation. */
   private replacementText = ''
@@ -148,6 +152,12 @@ export class EmbeddedWebRuntime {
         this.panelHost?.setConnection({online: false})
         this.panelHost?.raise('offline', {retryable: false})
       }),
+      listen('user pointer', document, 'pointerdown', event => this._userTookControl(event), true),
+      listen('user keyboard', document, 'keydown', event => this._userTookControl(event), true),
+      listen('user wheel', document, 'wheel', event => this._userTookControl(event),
+        {capture: true, passive: false}),
+      listen('route change', window, 'popstate', () => this._clearHighlight()),
+      listen('fragment change', window, 'hashchange', () => this._clearHighlight()),
     ]
   }
 
@@ -337,6 +347,7 @@ export class EmbeddedWebRuntime {
         loadOlder: before => {
           detach('load older', this._loadOlder(before).catch(error => this._raise(error)))
         },
+        panelVisibility: open => { if (!open) this._clearHighlight() },
       },
     })
     this.panelHandle = await mountPanel(
@@ -419,6 +430,7 @@ export class EmbeddedWebRuntime {
   // -- stopping --------------------------------------------------------------------------
 
   stop({removePanel = true}: {removePanel?: boolean} = {}): void {
+    this._clearHighlight()
     this.stopped = true
     this.cancelExpiry?.()
     this.cancelExpiry = null
@@ -477,6 +489,9 @@ export class EmbeddedWebRuntime {
     if (this.stored.taskInFlight) throw new Error('another task is still running')
     const goal = String(text || '').trim()
     if (!goal || goal.length > 2000) throw new Error('task must contain 1-2000 characters')
+    this._clearHighlight()
+    this.userIntervened = false
+    this.handoffGranted = false
     const messageId = crypto.randomUUID()
     this.stored.taskInFlight = true
     this.stored.activeMessageId = messageId
@@ -710,6 +725,26 @@ export class EmbeddedWebRuntime {
     }
   }
 
+  private _clearHighlight(): void {
+    this.highlightHandle?.clear()
+    this.highlightHandle = null
+  }
+
+  /** A person's real page gesture fences this turn before another command can dispatch. */
+  _userTookControl(event: Event): void {
+    if (!event.isTrusted) return
+    if (event.composedPath().includes(this.panelContainer as EventTarget)) return
+    this._clearHighlight()
+    if (!this.stored?.taskInFlight || this.userIntervened) return
+    this.userIntervened = true
+    if (this.handoffGranted) return
+    // The first gesture stops the assistant, not the application. In particular it must
+    // not reach an app whose read-only window is still closing and be replayed later.
+    if (event.cancelable) event.preventDefault()
+    event.stopImmediatePropagation()
+    detach('user takeover', this.cancelTask().catch(() => {}))
+  }
+
   // -- observing the page ------------------------------------------------------------------
 
   async observe(causedByActionId = ''): Promise<ObservationEnvelope> {
@@ -761,7 +796,7 @@ export class EmbeddedWebRuntime {
       }
       return {fresh: true, reason: ''}
     }
-    if (!['click', 'fill', 'select', 'submit'].includes(command?.action)) {
+    if (!['click', 'fill', 'select', 'submit', 'highlight'].includes(command?.action)) {
       return {fresh: true, reason: ''}
     }
     // Old constructed test shells have no map. Every real Runtime replaces this map during
@@ -781,15 +816,26 @@ export class EmbeddedWebRuntime {
 
   async _handleAction(action: ActionEnvelope): Promise<void> {
     if (await this._replayOrRecover(action)) return
+    if (await this._rejectIfIntervened(action)) return
     if (await this._rejectIfNotCurrent(action)) return
     if (await this._rejectWithoutWriteGuard(action)) return
+    if (await this._rejectIfIntervened(action)) return
     const before = this.currentObservation
     if (!before) return
     const navigation = this._navigationExpectation(action.command)
     const executing = await this._prepare(action, before, navigation)
+    if (await this._rejectIfIntervened(action)) return
     if (!await this._claim(action, executing)) return
+    if (await this._rejectIfIntervened(action)) return
     const outcome = await this._dispatch(action, executing, navigation)
     await this._settle(executing, before, outcome)
+  }
+
+  private async _rejectIfIntervened(action: ActionEnvelope): Promise<boolean> {
+    if (!this.userIntervened) return false
+    await this._reject(action, 'user_intervened',
+      'The person took control of the page before this action was dispatched.')
+    return true
   }
 
   /** A result already written for this action is resent; an interrupted one is recovered. */
@@ -907,6 +953,17 @@ export class EmbeddedWebRuntime {
   private async _dispatch(action: ActionEnvelope, executing: ActionEnvelope,
                           navigation: NavigationExpectation,
   ): Promise<{ok: boolean; code: string; detail: string}> {
+    if (action.command.action === 'highlight' && this.config?.pageWriteGuard) {
+      if (!await releaseWriteGuard(this.config.pageWriteGuard)) {
+        return {ok: false, code: 'capability_refused',
+          detail: 'the application did not acknowledge release of its read-only window'}
+      }
+      this.writeGuardUntil = 0
+    }
+    if (this.userIntervened) {
+      return {ok: false, code: 'user_intervened',
+        detail: 'the person took control before the command was dispatched'}
+    }
     // A native submit can commit a child-frame navigation before execution returns. Arm the
     // stable iframe element first so a fast server response cannot escape observation.
     const signal = armChildFrameNavigation(navigation.frameElement)
@@ -947,6 +1004,14 @@ export class EmbeddedWebRuntime {
   private async _settle(executing: ActionEnvelope, before: ObservationEnvelope,
                         outcome: {ok: boolean; code: string; detail: string}): Promise<void> {
     const observation = await this.observe(executing.action_id)
+    if (executing.command.action === 'highlight' && outcome.ok &&
+        (this.userIntervened || !this.highlightHandle?.active() ||
+         before.observation.url !== observation.observation.url)) {
+      this._clearHighlight()
+      this.handoffGranted = false
+      outcome = {ok: false, code: this.userIntervened ? 'user_intervened' : 'stale_observation',
+        detail: 'the highlighted control was no longer current at handoff'}
+    }
     // `navigated` is a change in the observed top-level URL. A child-frame commit satisfies
     // the action guard, and its new content travels in the fresh observation instead.
     const receipt = results.receipt(executing, {
@@ -960,6 +1025,12 @@ export class EmbeddedWebRuntime {
   }
 
   _execute(command: ActionCommand): Promise<unknown> {
+    if (command.action === 'highlight') {
+      this._clearHighlight()
+      this.highlightHandle = this.page.highlight(command.args?.ref)
+      this.handoffGranted = true
+      return Promise.resolve({success: true, message: 'control highlighted for the person'})
+    }
     if (command.action === 'apply_facet' && !this._actionFreshness(command).fresh) {
       throw new Error('bad_arguments: page facet changed before dispatch')
     }

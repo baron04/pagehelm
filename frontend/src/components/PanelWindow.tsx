@@ -62,7 +62,8 @@ export function PanelWindow({host, allowedOrigins}: {
   const setOpen = useCallback((value: boolean) => {
     rememberOpen(value)
     setOpenState(value)
-  }, [])
+    host.panelVisibility?.(value)
+  }, [host])
 
   const pending = snapshot.pendingApproval
   // A card past its deadline still shows what was asked, and blocks nothing: the runtime

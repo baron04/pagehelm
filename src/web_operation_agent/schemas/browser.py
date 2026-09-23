@@ -16,14 +16,14 @@ from .common import (SCHEMA_VERSIONS, _bool, _dict_copy, _non_negative_int,
 #: no task-specific or application-specific action ever appears here.
 BROWSER_ACTIONS = frozenset({
     "observe", "goto", "click", "fill", "select", "submit", "back", "scroll", "wait_for",
-    "apply_facet",
+    "apply_facet", "highlight",
 })
 
 # Only these actions are intrinsically unable to initiate an application request that
 # changes state. Navigation is deliberately included in the complement: a GET, route
 # transition or onchange handler can write in legacy applications. Product policy and the
 # write witness import this one set so they cannot silently disagree.
-INTRINSICALLY_READ_ONLY_ACTIONS = frozenset({"observe", "scroll", "wait_for"})
+INTRINSICALLY_READ_ONLY_ACTIONS = frozenset({"observe", "scroll", "wait_for", "highlight"})
 
 _BROWSER_CONTRACT = json.loads(
     files("web_operation_agent").joinpath(
@@ -363,4 +363,5 @@ RECEIPT_ERRORS = frozenset({
     "", "unknown_ref", "stale_ref", "no_such_action", "bad_arguments", "element_not_actionable",
     "navigation_timeout", "origin_refused", "page_error", "write_refused",
     "deadline_expired", "stale_observation", "capability_refused", "runtime_replaced",
+    "user_intervened",
 })

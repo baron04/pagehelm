@@ -62,6 +62,15 @@ agent.
   receipt is not proof that a business goal was completed. After an observed action,
   answer-format repair cannot dispatch another page action. Source-assisted page loops
   that revisit the same facts and states stop without claiming completion.
+- For a page operation the assistant cannot perform, `highlight` can mark one named,
+  currently visible control and end the turn without clicking or submitting. The server
+  checks the latest ready observation, any declared page target, and the fresh action
+  receipt before saying where to continue. A matched typed mutation remains the path for
+  an actual write; a marker cannot substitute for it. If the application declares a
+  page write guard, the Runtime requires its explicit release acknowledgement before
+  reporting the handoff ready. A real page gesture or closing the panel removes the marker;
+  a gesture during an active turn fences later Agent actions and requests cancellation.
+  This is a guided handoff, not a claim that the business change happened.
 - For a request that names a page state -- open a screen, switch a tab, apply a filter
   or grouping, arrive at a record --
   the Agent declares that state up front with `set_target`: an exact same-application path

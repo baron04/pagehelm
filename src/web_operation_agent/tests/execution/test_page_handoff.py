@@ -1,0 +1,93 @@
+"""A page handoff is a verified marker, not an unapproved browser write."""
+from __future__ import annotations
+
+import tempfile
+import unittest
+from dataclasses import replace
+from pathlib import Path
+
+from web_operation_agent.execution.session import ServerAgentSession, TaskSpec
+from web_operation_agent.state.ledger import SessionLedger
+from web_operation_agent.tests.support.execution import _Browser, _Chat, _Control, _obs
+
+
+class HandoffBrowser(_Browser):
+    def execute(self, action, args=None, expect_navigation=False):
+        receipt = super().execute(action, args, expect_navigation)
+        return replace(receipt, navigated=False)
+
+
+class PageHandoffTests(unittest.TestCase):
+    def _run(self, tmp, script, *, pages=None, browser_type=HandoffBrowser,
+             matched_mutation=False):
+        observations = pages or [_obs(1), _obs(2)]
+        for observation in observations:
+            observation.render_state = "ready"
+        browser = browser_type(observations)
+        session = ServerAgentSession(
+            task=TaskSpec("T", "请找到 Go 按钮，由我自己点击"),
+            chat=_Chat(script), browser=browser, control=_Control([[], [], []]),
+            ledger=SessionLedger(Path(tmp) / "audit.jsonl", "handoff"),
+            step_budget=4)
+        session.entry_observation = browser.pages[0]
+        session._explicit_mutation_intent = matched_mutation
+        return session.run(), browser
+
+    def test_highlight_finishes_without_click_or_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result, browser = self._run(tmp, [("highlight", {"ref": "e1"})])
+        self.assertEqual(result.terminal_reason, "agent_finished")
+        self.assertIn("尚未代你点击或提交", result.agent_said)
+        self.assertEqual([name for name, _ in browser.done], ["highlight"])
+        self.assertIsNone(result.verified_answer)
+
+    def test_missing_target_is_not_dispatched(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result, browser = self._run(tmp, [
+                ("highlight", {"ref": "e9"}),
+                ("finish", {"done": False, "why": "no matching control"}),
+            ])
+        self.assertEqual(browser.done, [])
+        self.assertNotEqual(result.terminal_reason, "agent_finished")
+
+    def test_a_matched_typed_mutation_cannot_be_replaced_by_a_marker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result, browser = self._run(tmp, [
+                ("highlight", {"ref": "e1"}),
+                ("finish", {"done": False, "why": "use the registered write"}),
+            ], matched_mutation=True)
+        self.assertEqual(browser.done, [])
+        self.assertNotEqual(result.terminal_reason, "agent_finished")
+
+    def test_failed_receipt_cannot_claim_handoff(self):
+        class FailedBrowser(HandoffBrowser):
+            def execute(self, action, args=None, expect_navigation=False):
+                receipt = super().execute(action, args, expect_navigation)
+                return replace(receipt, ok=False, error_code="capability_refused")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result, browser = self._run(tmp, [("highlight", {"ref": "e1"})],
+                                        browser_type=FailedBrowser)
+        self.assertEqual([name for name, _ in browser.done], ["highlight"])
+        self.assertNotEqual(result.terminal_reason, "agent_finished")
+
+    def test_user_takeover_ends_turn_without_claiming_success(self):
+        class IntervenedBrowser(HandoffBrowser):
+            def execute(self, action, args=None, expect_navigation=False):
+                receipt = super().execute(action, args, expect_navigation)
+                return replace(receipt, ok=False, error_code="user_intervened")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result, _ = self._run(tmp, [("highlight", {"ref": "e1"})],
+                                  browser_type=IntervenedBrowser)
+        self.assertEqual(result.terminal_reason, "user_cancelled")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result, _ = self._run(tmp, [("fill", {"ref": "e1", "value": "x"})],
+                                  browser_type=IntervenedBrowser)
+        self.assertEqual(result.terminal_reason, "user_cancelled")
+        self.assertEqual(result.page_actions, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

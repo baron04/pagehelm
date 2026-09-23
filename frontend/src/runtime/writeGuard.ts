@@ -53,3 +53,19 @@ export async function closeWriteGuard(path: string, fetcher: Fetch = fetch): Pro
     // The window closes itself when it expires.
   }
 }
+
+/** A handoff is ready only after the application acknowledges that writes are enabled. */
+export async function releaseWriteGuard(path: string, fetcher: Fetch = fetch): Promise<boolean> {
+  if (!validWriteGuardPath(path)) return false
+  try {
+    const response = await fetcher(`${path}/end`, {
+      method: 'POST', credentials: 'same-origin', cache: 'no-store',
+      headers: {'Content-Type': 'application/json'}, body: '{}',
+    })
+    if (!response.ok) return false
+    const body = await response.json() as {active?: unknown} | null
+    return body?.active === false
+  } catch {
+    return false
+  }
+}

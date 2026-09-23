@@ -206,7 +206,7 @@ ACTION_RESULT_STATUSES = frozenset({"completed", "rejected", "indeterminate"})
 # failures remain in ``RECEIPT_ERRORS`` on a completed result.
 ACTION_RESULT_ERRORS = frozenset({
     "", "stale_observation", "deadline_expired", "capability_refused",
-    "runtime_replaced", "execution_state_unknown",
+    "runtime_replaced", "execution_state_unknown", "user_intervened",
 })
 
 

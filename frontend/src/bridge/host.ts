@@ -50,6 +50,8 @@ export interface PanelHost {
   loadOlder(): void
   dismissNotice(): void
   reload(): void
+  /** Report a view-only visibility change to the host, which may clear page markers. */
+  panelVisibility?(open: boolean): void
 }
 
 const REQUIRED_METHODS = [

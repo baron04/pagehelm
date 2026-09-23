@@ -1440,6 +1440,64 @@ class EmbeddedRuntimeTests(unittest.TestCase):
 
     @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
                          "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
+    def test_real_highlight_hands_control_to_person_without_clicking(self):
+        """The actual embedded Runtime marks a live control and removes the marker on handoff."""
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            self.skipTest("Playwright is not installed")
+        if not (PANEL_ROOT / "panel.js").is_file():
+            self.skipTest("the assistant panel is not built; run scripts/build_panel.py")
+
+        registry = RemoteSessionRegistry()
+        app = _FixtureApplication(PAGE_CONTROLLER)
+        app.start()
+        grant, channel = registry.create(allowed_origins=[app.origin],
+                                         session_id="highlight-browser-session")
+        gateway = EmbeddedGateway(registry, sse_wait_s=0.1).start()
+        app.runtime_url = gateway.runtime_url
+        app.runtime_config = gateway.bootstrap_config(
+            grant, page_controller_module=app.origin + "/page-controller.js")
+        try:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                page = browser.new_page(viewport={"width": 1280, "height": 800})
+                errors = []
+                page.on("pageerror", lambda error: errors.append(str(error)))
+                page.goto(app.origin + "/page1", wait_until="domcontentloaded")
+                remote = RemoteBrowserClient(channel, timeout_s=8)
+                remote.start()
+                first = remote.observe()
+                link = next(element for element in first.elements
+                            if element.name == "Open order details")
+                receipt = remote.execute("highlight", {"ref": link.ref})
+                self.assertTrue(receipt.ok, receipt.error_detail)
+                self.assertFalse(receipt.navigated)
+                self.assertEqual(app.page2_requests, 0)
+                self.assertIn("highlight", page.locator("#next").evaluate(
+                    "element => element.style.outline").lower())
+
+                # A real user gesture removes the marker without clicking the link.
+                page.mouse.click(10, 10)
+                page.wait_for_function("document.querySelector('#next').style.outline === ''")
+                self.assertEqual(app.page2_requests, 0)
+
+                refreshed_link = next(element for element in receipt.observation.elements
+                                      if element.name == "Open order details")
+                second = remote.execute("highlight", {"ref": refreshed_link.ref})
+                self.assertTrue(second.ok, second.error_detail)
+                page.locator(".woa-launcher").click()
+                labels = channel._panel_configuration()["labels"]
+                page.get_by_role("button", name=labels["collapse"]).click()
+                page.wait_for_function("document.querySelector('#next').style.outline === ''")
+                self.assertEqual(errors, [])
+                browser.close()
+        finally:
+            gateway.close()
+            app.close()
+
+    @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
+                         "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
     def test_real_pagecontroller_observation_is_viewport_bounded_and_scrollable(self):
         """P8.6: a large page stays bounded and off-screen controls require a fresh view."""
         try:

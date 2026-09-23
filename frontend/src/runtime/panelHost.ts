@@ -99,6 +99,7 @@ export interface PanelActions {
   decide(approvalId: string, decision: 'approved' | 'denied'): void
   newConversation(): void
   loadOlder(before: string): void
+  panelVisibility?(open: boolean): void
 }
 
 const REQUIRED_ACTIONS = ['submit', 'cancel', 'decide', 'newConversation', 'loadOlder'] as const
@@ -143,6 +144,8 @@ export class PanelHost implements PanelHostContract {
   }
 
   snapshot(): PanelSnapshot { return this.state }
+
+  panelVisibility(open: boolean): void { this.actions.panelVisibility?.(open) }
 
   subscribe(listener: (snapshot: PanelSnapshot) => void): () => void {
     this.listeners.add(listener)

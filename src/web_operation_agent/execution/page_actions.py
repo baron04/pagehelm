@@ -10,6 +10,7 @@ import hashlib
 import re
 from urllib.parse import urljoin, urlsplit
 
+from ..answer.answer_view import _literal
 from ..answer.evidence import EvidenceUnknown
 from ..transport.browser import TransportError, TurnCancelled
 from .grounding import WRITE_NONE, WRITE_PERMITTED
@@ -44,6 +45,31 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
                   "before using its controls or claiming arrival.")]
         return session._resume(turn, _trim(messages, session.keep_observations), obs,
                                successful_business_tools)
+    highlighted = None
+    if name == "highlight":
+        if (session._explicit_mutation_intent
+                and session._approvals.business_counts["mutation_completed"] == 0):
+            messages += [_assistant_call(call), _tool_result(
+                call, "HANDOFF NOT DISPATCHED: this request matched an installed typed "
+                      "mutation. Use that tool and its exact pre-dispatch check; a "
+                      "highlight cannot stand in for the requested change.")]
+            return session._resume(turn, _trim(messages, session.keep_observations), obs,
+                                   successful_business_tools)
+        highlighted = next((item for item in obs.elements
+                            if item.ref == args.get("ref") and item.name.strip()), None)
+        unmet = session._page_goal_unmet(obs) if session._target is not None else ()
+        if (set(args) != {"ref"} or highlighted is None or obs.render_state != "ready"
+                or unmet or session.pending_write):
+            session.ledger.append("page_handoff_refused", step=step,
+                                  dispatched=False, side_effect_possible=False,
+                                  target_found=highlighted is not None,
+                                  unmet=list(unmet))
+            messages += [_assistant_call(call), _tool_result(
+                call, "HANDOFF NOT DISPATCHED: choose one named control from the latest "
+                      "ready observation after reaching the requested page state; "
+                      "an unresolved write cannot be handed off.")]
+            return session._resume(turn, _trim(messages, session.keep_observations), obs,
+                                   successful_business_tools)
     if name == "apply_facet" and session.allow_page_facets:
         ref, active = args.get("ref"), args.get("active")
         candidate = next((item for item in obs.facet_candidates or []
@@ -360,7 +386,8 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
 
     if name not in ("observe", "wait_for"):
         session._approvals.settle_navigation(receipt, navigating=navigating)
-    if name != "observe" and receipt.error_code != "stale_observation":
+    if name != "observe" and receipt.error_code not in {
+            "stale_observation", "user_intervened"}:
         session.page_actions += 1
     write = session._writes.write_outcome(
         receipt, step, action_may_write=action_may_write)
@@ -385,8 +412,30 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
     reason, detail = session._writes.settle_write(write)
     if reason:
         return _Next(session._finish(result, t0, reason, detail, steps=step))
+    if receipt.error_code == "user_intervened":
+        return _Next(session._finish(result, t0, "user_cancelled",
+                                     "the person took control before action dispatch",
+                                     steps=step))
     if receipt.observation is not None:
         obs = receipt.observation
+    if name == "highlight":
+        if (not receipt.ok or receipt.observation is None
+                or obs.epoch <= prior_page_epoch or obs.render_state != "ready"
+                or obs.url != turn.obs.url or write["state"] != WRITE_NONE):
+            return _Next(session._finish(
+                result, t0, "agent_refused",
+                "the control could not be safely highlighted and handed to the person",
+                steps=step))
+        label = _literal(highlighted.name[:80])
+        result.agent_said = (
+            f"已在页面标出「{label}」。尚未代你点击或提交，请核对后自行操作。"
+            if re.search(r"[\u3400-\u9fff]", session.task.prompt)
+            else f"Highlighted “{label}” on the page. I did not click or submit it; "
+                 "please review it and continue yourself.")
+        session.ledger.append("page_handoff_ready", step=step, command_id=receipt.command_id,
+                              observation_epoch=obs.epoch, submitted=False, persisted=False)
+        return _Next(session._finish(result, t0, "agent_finished",
+                                     result.agent_said, steps=step))
     if (session._pending_navigation_url and obs.url != session._pending_navigation_url):
         session._pending_navigation_url = ""
     if (session._pending_navigation_url and obs.render_state != "pending"
