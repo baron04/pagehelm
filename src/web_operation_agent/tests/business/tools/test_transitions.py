@@ -21,6 +21,7 @@ from web_operation_agent.state.identity import OperationContext, PrincipalContex
 from web_operation_agent.business.mutation import MemoryMutationJournal
 from web_operation_agent.execution.session import (CAPABILITY_GAP_TERMINAL,
                                         ServerAgentSession, TaskSpec)
+from web_operation_agent.execution.knowledge_tools import register_capability_evidence
 from web_operation_agent.tests.support.business import (
     SCHEMA, WRITE_SCHEMA, _Browser, _Chat, _Executor, _MutationExecutor,
     _ProjectedExecutor, _observation, _operation_context, _skill, _write_skill,
@@ -28,6 +29,25 @@ from web_operation_agent.tests.support.business import (
 
 
 class BusinessReActTransition(unittest.TestCase):
+    def test_skill_free_paraphrase_cannot_become_a_false_capability_gap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            context = _operation_context()
+            ledger = SessionLedger(Path(tmp) / "session.jsonl", "lexical-gap")
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="创建一个公司。",
+                              supported_scope="Create one company."),
+                chat=_Chat([]), browser=_Browser(), control=ReadOnlyControl(),
+                ledger=ledger, business_tools=BusinessToolRuntime(
+                    (), _MutationExecutor()),
+                business_mutation_approval=lambda proposal: None,
+                principal=context.principal, session_id=context.session_id,
+                turn_id=context.turn_id,
+                disabled_actions=frozenset({"click", "fill", "select", "submit", "back"}))
+
+            self.assertEqual(register_capability_evidence(session), "")
+            self.assertEqual(len(ledger.of_kind("capability_check_inconclusive")), 1)
+            self.assertFalse(session.evidence.ids())
+
     def test_a_capability_question_cannot_turn_into_a_business_query(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill = _skill(Path(tmp) / "skill.json")
@@ -324,7 +344,7 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertNotIn("this session", result.agent_said)
             event = session.ledger.of_kind("capability_check")[-1]
             self.assertEqual(event["matches"], [])
-            self.assertEqual(event["withheld"], [skill.skill_id])
+            self.assertEqual(event["withheld"], ["create_company"])
 
     def test_a_tool_authorization_refusal_ends_the_turn_before_a_proposal_or_page_route(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -623,6 +643,45 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertEqual(browser.url, "http://app.test/object/company/company-2")
             self.assertEqual(len(ledger.of_kind("business_mutation_result")), 1)
 
+    def test_registered_write_without_any_skill_still_requires_approval_and_once_dispatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            executor = _MutationExecutor()
+            runtime = BusinessToolRuntime((), executor)
+            chat = _Chat([
+                ("create_company", {"name": "Acme"}),
+                ("goto", {"url": "/object/company/company-2"}),
+                (None, {"content": "Created and opened Acme."}),
+            ])
+            ledger = SessionLedger(Path(tmp) / "session.jsonl", "write-no-skill")
+            approvals = []
+
+            def approve(proposal):
+                approvals.append(proposal)
+                return SimpleNamespace(
+                    approval_id="approval-1", decision="approved",
+                    plan_digest=proposal.content_digest)
+
+            browser = _Browser()
+            session = ServerAgentSession(
+                task=TaskSpec(task_ref="T", prompt="Create company Acme.",
+                              supported_scope="Create exactly one company."),
+                chat=chat, browser=browser, control=ReadOnlyControl(),
+                ledger=ledger, step_budget=4, wall_budget_s=30,
+                business_tools=runtime, business_mutation_approval=approve,
+                plain_business_answer_min_page_actions=1)
+            session.entry_observation = _observation(1)
+            session.plan()
+            result = session.run()
+
+            self.assertEqual(session._task_business_skills, ())
+            self.assertIn("create_company", chat.tool_names[0])
+            self.assertEqual(result.terminal_reason, "agent_finished")
+            self.assertEqual(len(approvals), 1)
+            self.assertEqual(executor.executions, 1)
+            self.assertEqual(result.business_control["mutation_completed"], 1)
+            self.assertEqual(len(ledger.of_kind("business_mutation_result")), 1)
+            self.assertEqual(browser.url, "http://app.test/object/company/company-2")
+
     def test_cancelling_followup_observation_does_not_rewrite_completed_mutation(self):
         with tempfile.TemporaryDirectory() as tmp:
             cancelled = {"value": False}
@@ -738,7 +797,7 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertTrue(result.business_answer_projected)
             self.assertEqual(result.steps_used, 3)
             self.assertIn("load_skill", chat.tool_names[0])
-            self.assertNotIn("query_companies", chat.tool_names[0])
+            self.assertIn("query_companies", chat.tool_names[0])
             self.assertIn("wait_for", chat.tool_names[0])
             self.assertIn("query_companies", chat.tool_names[1])
             self.assertEqual(browser.actions, [])
@@ -799,7 +858,7 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertEqual(len(ledger.of_kind("business_answer")), 1)
             self.assertEqual(len(ledger.of_kind("no_tool_call")), 0)
 
-    def test_complete_empty_query_finishes_without_another_model_round(self):
+    def test_complete_empty_query_does_not_claim_the_requested_record_is_absent(self):
         class EmptyProjectedExecutor(_Executor):
             @staticmethod
             def execute(name, args, *, context=None):
@@ -828,7 +887,7 @@ class BusinessReActTransition(unittest.TestCase):
             chat = _Chat([
                 ("load_skill", {"skill_id": skill.skill_id}),
                 ("query_companies", {}),
-                ("goto", {"url": "/should-not-run"}),
+                ("finish", {"outcome": "unable"}),
             ])
             ledger = SessionLedger(Path(tmp) / "session.jsonl", "empty-query")
             session = ServerAgentSession(
@@ -842,13 +901,14 @@ class BusinessReActTransition(unittest.TestCase):
             session.plan()
             result = session.run()
 
-            self.assertEqual(result.terminal_reason, "agent_finished")
-            self.assertEqual(result.steps_used, 2)
-            self.assertEqual(len(chat.messages), 2)
-            self.assertIn("未找到", result.agent_said)
-            self.assertIsNotNone(result.verified_answer)
-            self.assertEqual(
-                ledger.of_kind("answer_verified")[-1]["deterministic"], "empty_query")
+            self.assertEqual(result.terminal_reason, "agent_refused")
+            self.assertEqual(result.steps_used, 3)
+            self.assertEqual(len(chat.messages), 3)
+            self.assertIn("EMPTY QUERY SCOPE", chat.messages[2][-1]["content"])
+            self.assertNotIn("未找到", result.agent_said)
+            self.assertIsNone(result.verified_answer)
+            self.assertFalse(any(event.get("deterministic") == "empty_query"
+                                 for event in ledger.of_kind("answer_verified")))
 
     def test_complete_empty_preflight_does_not_finish_a_mutation_task(self):
         class EmptyMutationExecutor(_MutationExecutor):

@@ -79,8 +79,7 @@ def run_gate(config: OdooDemoConfig) -> dict:
     )
     adapter = OdooApplicationAdapter(
         base_url=config.base_url, api_key_path=config.api_key_path,
-        page_controller_module=config.page_controller_module,
-        allow_generic_forms=True)
+        page_controller_module=config.page_controller_module)
     before = _record_state(adapter, case)
     holder = {}
 
@@ -92,7 +91,7 @@ def run_gate(config: OdooDemoConfig) -> dict:
     summary = run_demo(dataclasses.replace(
         config, scripted=True, scripted_task=case.task, scripted_chat_factory=factory,
         tasks=(), headless=True, entry_path=case.entry_path,
-        allow_generic_forms=True, keep_open_seconds=0,
+        keep_open_seconds=0,
         final_page_probe=_page_probe(case)))
     after = _record_state(adapter, case)
     events = _event_counts(summary)

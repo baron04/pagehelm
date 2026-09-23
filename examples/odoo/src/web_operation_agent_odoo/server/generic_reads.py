@@ -28,6 +28,7 @@ from .descriptors import OdooRuntimeDescriptorReader
 
 
 _FIELD_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}\Z")
+_MODEL_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_.]{0,127}\Z")
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _SENSITIVE_FIELD = re.compile(
     r"(?:password|passwd|pwd|secret|token|api[_-]?key|private[_-]?key|"
@@ -54,6 +55,7 @@ _TYPE_MAP = {
 _MAX_FIELDS_GET = 2_000
 _MAX_SELECTION = 50
 _MAX_VALUE_CHARS = 300
+_MAX_CURRENCY_CHARS = 80
 
 
 def odoo_model_allowed(name: str) -> bool:
@@ -162,6 +164,7 @@ class OdooEntityReadPort:
     def fields(self, entity: EntityDescriptor, *, context=None) -> tuple[EntityField, ...]:
         payload = self._client.call(entity.reference, "fields_get", [], {"attributes": [
             "string", "type", "required", "readonly", "searchable", "store", "selection",
+            "currency_field", "relation",
         ]})
         if not isinstance(payload, dict) or len(payload) > _MAX_FIELDS_GET:
             raise BusinessToolContractError("Odoo returned an invalid fields_get payload")
@@ -182,6 +185,13 @@ class OdooEntityReadPort:
             searchable = value.get("searchable")
             if not isinstance(searchable, bool):
                 searchable = bool(value.get("store", True))
+            currency_field = value.get("currency_field", "")
+            if (mapped[0] != "monetary" or not isinstance(currency_field, str)
+                    or not _FIELD_NAME.fullmatch(currency_field)
+                    or currency_field not in payload
+                    or not isinstance(payload[currency_field], dict)
+                    or payload[currency_field].get("type") != "many2one"):
+                currency_field = ""
             result.append(EntityField(
                 reference=name,
                 label=" ".join(label.split()),
@@ -192,6 +202,13 @@ class OdooEntityReadPort:
                 choices=_choices(value.get("selection"))
                 if value.get("type") == "selection" else (),
                 evidence_type=mapped[1],
+                unit_field_reference=currency_field,
+                related_entity_reference=(value["relation"]
+                                          if mapped[0] == "reference"
+                                          and isinstance(value.get("relation"), str)
+                                          and _MODEL_NAME.fullmatch(value["relation"])
+                                          and odoo_model_allowed(value["relation"])
+                                          else ""),
             ))
         return tuple(result)
 
@@ -210,8 +227,12 @@ class OdooEntityReadPort:
         if matched > source_total:
             raise BusinessToolContractError(
                 "Odoo returned an entity match count above its source total")
+        read_fields = list(dict.fromkeys(
+            [field.reference for field in request.fields]
+            + [field.unit_field_reference for field in request.fields
+               if field.unit_field_reference]))
         rows = self._client.call(model, "search_read", [domain], {
-            "fields": [field.reference for field in request.fields],
+            "fields": read_fields,
             "limit": request.limit,
             "offset": request.offset,
             "order": "id asc",
@@ -232,9 +253,32 @@ class OdooEntityReadPort:
                 if field.reference not in row:
                     raise BusinessToolContractError(
                         "Odoo omitted a requested entity record field")
+                unit = ""
+                if field.unit_field_reference:
+                    currency = row.get(field.unit_field_reference)
+                    if field.unit_field_reference not in row:
+                        raise BusinessToolContractError(
+                            "Odoo omitted a requested monetary currency")
+                    if currency not in (None, False):
+                        if (not isinstance(currency, (list, tuple))
+                                or len(currency) != 2
+                                or isinstance(currency[0], bool)
+                                or not isinstance(currency[0], int)
+                                or not isinstance(currency[1], str)
+                                or not currency[1].strip()
+                                or len(currency[1]) > _MAX_CURRENCY_CHARS
+                                or _CONTROL.search(currency[1])):
+                            raise BusinessToolContractError(
+                                "Odoo returned an invalid monetary currency")
+                        unit = currency[1].strip()
                 cells.append(EntityCell(
                     field_reference=field.reference,
                     value=_render_value(row[field.reference], field),
+                    unit=unit,
+                    related_record_id=(str(row[field.reference][0])
+                                       if field.related_entity_reference
+                                       and isinstance(row[field.reference], (list, tuple))
+                                       else ""),
                 ))
             records.append(EntityRecord(
                 reference=f"{model}/{record_id}",

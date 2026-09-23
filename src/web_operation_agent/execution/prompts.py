@@ -51,10 +51,10 @@ CAPABILITY_TOOL = {"type": "function", "function": {
     "name": "check_capability", "description": (
         "Call this when the user asked you to change data -- create, change, delete, send, "
         "post, confirm, invoice -- and none of your tools performs that change. The server "
-        "searches every capability installed for this actor, not only the Skills selected for "
+        "searches every capability installed for this actor, not only the tools shown for "
         "this task, and returns a reference. If it found nothing, finish with outcome=unable "
         "and a single capability_gap conclusion citing that reference. If it found something, "
-        "load that Skill and use it. Call it before looking the record up. Never call it for a "
+        "use the authorized registered tool. Call it before looking the record up. Never call it for a "
         "question you can answer by reading."),
     "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}}
 
@@ -75,8 +75,8 @@ How to work:
 * Read the observation. Element references (e1, e2, ...) are only valid for the observation \
 they came from; after any action you get a fresh one and the old references are dead.
 * Call exactly one tool in each response, then wait for its result before choosing the next
-action. Browser actions return a fresh page observation. Server-only Skill and typed business
-tools return their own facts without changing or re-reading the page.
+action. Browser actions return a fresh page observation. Typed business tools are registered
+by the application; loading a Skill is optional knowledge, never permission to use a tool.
 * Navigate using links the page offers. If the run's public scope forbids `click`, call \
 `goto` with that link's exact href. Otherwise you may click the link. Never use `goto` for \
 a path that is not an exact href on the current page.
@@ -264,7 +264,7 @@ APPLICATION_ENTRY_TOOL = {"type": "function", "function": {
 
 LOAD_SKILL_TOOL = {"type": "function", "function": {
     "name": "load_skill",
-    "description": "Load one server-selected Business Skill before using its typed data tools.",
+    "description": "Load optional business guidance for this task; it does not grant tools or permissions.",
     "parameters": {"type": "object", "properties": {
         "skill_id": {"type": "string"}},
         "required": ["skill_id"], "additionalProperties": False}}}
@@ -272,12 +272,13 @@ LOAD_SKILL_TOOL = {"type": "function", "function": {
 TARGET_TOOL = {"type": "function", "function": {
     "name": "set_target",
     "description": (
-        "Declare the page state that completes the user's request before acting on it: "
+        "Declare the requested page state before acting on it: "
         "the exact same-application path to arrive at, the visible control names that must "
         "show as selected (a tab, an option), or both. Declare every condition the request "
         "names: a request to open a page and then switch a tab has both a path and a "
         "selected control. When a fresh page shows the declared state the server says so, "
-        "and only finish or a further set_target is offered. Declaring a target grants no "
+        "and a pure page-navigation request can finish. Continue other requested reads or "
+        "observations before finishing a mixed request. Declaring a target grants no "
         "permission; clicks and navigation are checked as before."),
     "parameters": {"type": "object", "additionalProperties": False,
                    "properties": {
@@ -342,9 +343,9 @@ it: the exact path (an href on the current page, a route a typed result returned
 cited source route) and/or the names of the controls that must be selected. A request with
 two parts, such as open a desk and then its Terms tab, is declared with both parts. Then act.
 The server reports TARGET REACHED as soon as a fresh page shows the declared state; at that
-point only finish and set_target are offered. Call finish to report the action if the request
-is complete, or set_target with the next state if it is not. Do not observe or query source
-to confirm a state the server has already reported. When a source fact or typed result
+point a pure navigation request should finish; a mixed request can still read or observe
+to complete its other parts. Do not observe only to reconfirm a state the server has
+already reported. When a source fact or typed result
 decides between visible links, declare the target it names, then click or goto that link.
 A target is not a permission and does not change which actions are allowed.
 A question about where something is kept -- which screen, list or setting -- is answered by
@@ -392,9 +393,10 @@ page before acting.
 """
 
 BUSINESS_SKILL_SYSTEM = """\
-BUSINESS SKILL CANDIDATES are server-selected playbooks, not current business data. Call
-load_skill for the relevant candidate before using its typed tools. The loaded Skill explains
-how to use those tools; the tool result supplies current data for the delegated application
+BUSINESS SKILL CANDIDATES are optional server-selected playbooks, not current business data
+and not tool grants. Load a relevant one when its workflow or organizational knowledge is
+needed. Registered typed tools are usable without loading any Skill; their results supply
+current data for the delegated application
 user. After every Skill or business-tool result, replan from those facts and the latest page
 observation already available.
 Runtime ToolResult facts override Skill text, source code, documentation and page assumptions.
@@ -403,9 +405,8 @@ server rejects invented record routes. Never invent omitted rows or repeat an un
 If a read says record_route_resolution=unique or exact and the user asked to open that
 record, open its returned route directly; do not ask for another confirmation. If it says
 confirmation_required, ask the user to choose one of the supplied current candidates. If it
-says no_match after a complete
-read for a specific name or reference, answer that the record was not found immediately; do
-not open the collection, observe the page, or compute unrelated data. If the user asks only
+says no_match after a complete read, that proves only this tool's entity and filter matched
+nothing; first check that they are the entity and scope the user meant. If the user asks only
 for business data, answer from the typed result without navigating or observing the page.
 Respect the user's explicit read limits and scope. If they limit reading but also ask for
 a broader total, keep the limit and report only the supported subtotal with its limitation;
@@ -414,8 +415,9 @@ A loaded Skill's instructions are organizational knowledge, not current data. Wh
 rests on one, cite it as skill_statement with its statement_ref, a concise statement and an
 exact support span copied from that instruction. A loaded Skill's routes may be opened with
 goto exactly as written.
-For a requested mutation, load a matching candidate with read_only=false before deciding that
-no write tool is available. Such a Skill may also contain the read tool needed for preflight.
+For a requested mutation, use only a registered write tool available under the current actor
+and deployment. A Skill can describe the workflow but never authorizes the write. The server
+requires an exact proposal, fresh approval, at-most-once dispatch and application readback.
 Do not call observe merely because a Skill or typed business tool returned. Re-read the page
 only when current UI state is needed for the next browser action. Keep the final user answer
 concise: state the outcome and the next useful action. Do not list
@@ -425,17 +427,16 @@ the user explicitly asks for technical details.
 
 SKILL_FIRST_SYSTEM = """\
 A Business Skill matched this request. It is this deployment's own knowledge: use its
-statements, routes and tools first, and consult source only for what the Skill does not
+statements and routes when relevant, and consult source only for what the Skill does not
 cover. A Skill statement and a source result that disagree are both reported, not merged.
 """
 
 UNMATCHED_SKILL_SYSTEM = """\
-No Business Skill matched the wording of this request. The Skills listed as not matched are
-the application's typed reads, offered only in case the request needs current business
-records. They cannot tell you which page, tab or control to use: that comes from the current
-page, a cited source result or a typed result's exact ui_path. Load one only when the request
-needs data a record read supplies. A read that returned nothing has answered the question;
-do not repeat it with other wording or reread the whole collection.
+No Business Skill matched the wording of this request. Registered tools remain available
+under the current actor and deployment. The unmatched Skills are optional playbooks, not
+a tool list or a reason to decline. A read with no matches only establishes that its exact
+entity and filter matched nothing; check whether those are the user's intended scope before
+concluding that the requested record is absent.
 """
 
 CONVERSATION_SYSTEM = """\

@@ -204,7 +204,7 @@ def run_attempt(task: dict, arm: str, *, env: dict, output: Path, container: str
         extra_skills=skills if arm in {"D", "E"} else (),
         scripted=False, headless=True, tasks=(task["prompt"],), output_dir=output,
         model_env=model_env, keep_open_seconds=0, turn_timeout_s=120.0,
-        allow_generic_forms=True, evaluation=True,
+        evaluation=True,
         evaluation_page_click=not production_clicks,
         confirm_navigation_in_page=True, final_page_probe=_probe(task))
     started = time.monotonic()

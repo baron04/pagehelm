@@ -13,6 +13,14 @@ from .runstate import _Next, _Turn
 
 def business_tool(session, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
     """Dispatch a typed business tool after binding its exact operation context."""
+    if (session.business_tools.is_mutation(name)
+            and not session._approvals.mutations_enabled):
+        session.ledger.append(
+            "business_mutation_unavailable", step=turn.step, tool=name,
+            dispatched=False, side_effect_possible=False)
+        return session._reply(
+            turn, call, "This deployment has not enabled approved business writes "
+            "for this turn. The tool was not dispatched.")
     operation_context = session._approvals.context(turn.step, name)
     operation_identity = (operation_context.audit_projection()
                           if operation_context is not None else {})
@@ -108,8 +116,8 @@ def render_business_skills(session) -> str:
                  else {"skill_id": skill.skill_id, "title": skill.title,
                        "read_only": skill.read_only}
                  for skill in session._task_business_skills]
-        return ("BUSINESS SKILLS NOT MATCHED TO THIS REQUEST (no Skill trigger matched its "
-                "wording; load one only if the request needs current business records):\n"
+        return ("BUSINESS SKILLS NOT MATCHED TO THIS REQUEST (optional playbooks; "
+                "registered tools do not require a Skill):\n"
                 + json.dumps(cards, ensure_ascii=False, sort_keys=True,
                              separators=(",", ":")))
     if not session._auto_loaded_business_skill_ids:
@@ -117,7 +125,7 @@ def render_business_skills(session) -> str:
                  if skill.skill_id not in session._loaded_business_skill_ids
                  else skill.candidate_card(loaded=True)
                  for skill in session._task_business_skills]
-        return ("BUSINESS SKILL CANDIDATES (load before using their tools):\n"
+        return ("BUSINESS SKILL CANDIDATES (optional business knowledge):\n"
                 + json.dumps(cards, ensure_ascii=False, sort_keys=True,
                              separators=(",", ":")))
     cards = [
@@ -127,7 +135,7 @@ def render_business_skills(session) -> str:
         if skill.skill_id in session._auto_loaded_business_skill_ids
         else skill.candidate_card(loaded=False)
         for skill in session._task_business_skills]
-    return ("BUSINESS SKILLS (loaded cards include their playbook; load remaining "
-            "candidates before using their tools):\n"
+    return ("BUSINESS SKILLS (loaded cards include their playbook; remaining "
+            "candidates may be loaded for business knowledge):\n"
             + json.dumps(cards, ensure_ascii=False, sort_keys=True,
                          separators=(",", ":")))

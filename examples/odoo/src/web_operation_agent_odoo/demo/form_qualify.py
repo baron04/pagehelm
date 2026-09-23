@@ -271,7 +271,6 @@ def run_case(case: FormCase, args, output_dir: Path,
         output_dir=output_dir,
         turn_timeout_s=args.turn_timeout,
         keep_open_seconds=0.0,
-        allow_generic_forms=True,
         browser_ignore_https_errors=args.ignore_browser_https_errors,
         final_page_probe=_page_probe(case),
     ))
@@ -364,7 +363,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         base_url=args.base_url,
         api_key_path=Path(args.api_key),
         page_controller_module=args.page_controller_module,
-        allow_generic_forms=True,
     )
     health = adapter.health()
     bound = bind_application(adapter)

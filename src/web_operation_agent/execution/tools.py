@@ -75,7 +75,11 @@ class ToolSurface:
             if (not session._auto_loaded_business_skill_ids
                     or session._loaded_business_skill_ids != session._task_business_skill_ids):
                 tools += [LOAD_SKILL_TOOL]
-            tools += session.business_tools.schemas_for(session._loaded_business_skill_ids)
+        if session.business_tools is not None:
+            principal = session._approvals.principal
+            tools += session.business_tools.available_schemas(
+                allow_mutations=session._approvals.mutations_enabled,
+                actor_scopes=(principal.scopes if principal is not None else None))
         if session.allow_form_prefill and session._application_form_tools is not None:
             tools += list(FORM_TOOL_SCHEMAS)
         if session.allow_form_prefill and (session._application_form_tools is not None

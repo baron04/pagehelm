@@ -275,13 +275,16 @@ def register_capability_evidence(session) -> str:
     writing_actions = {"fill", "select", "submit", "click"} - set(session.disabled_actions)
     extra = [f"page:{name}" for name in sorted(writing_actions & BROWSER_ACTIONS)]
     allowed = session._approvals.mutations_enabled
+    principal = session._approvals.principal
+    scopes = principal.scopes if principal is not None else None
     try:
         matches = session.business_tools.resolve_capability(
-            session.task.prompt, allow_mutations=allowed, extra=tuple(extra))
+            session.task.prompt, allow_mutations=allowed, extra=tuple(extra),
+            actor_scopes=scopes)
         # The same search with changes allowed. What it finds and this one does not is
         # what this actor's delegation (or this deployment) withholds -- the difference
         # between a capability nobody installed and one nobody granted them.
-        withheld = () if allowed else tuple(
+        withheld = tuple(
             name for name in (
                 tuple(session.business_tools.resolve_capability(
                     session.task.prompt, allow_mutations=True))
@@ -292,6 +295,14 @@ def register_capability_evidence(session) -> str:
         # gap can be claimed. That is the safe direction: the model falls back to ordinary
         # work rather than declining on a search that never happened.
         session.ledger.append("capability_check_unavailable", reason=str(exc)[:200])
+        return ""
+    if not matches and not withheld and session.business_tools.has_mutations:
+        # Literal/trigger lookup cannot establish that a paraphrase in another
+        # language has no matching registered write. Do not mint negative
+        # evidence from a lexical miss while write tools are installed.
+        session.ledger.append(
+            "capability_check_inconclusive", goal_chars=len(session.task.prompt),
+            catalog_digest=session.business_tools.catalog_sha256)
         return ""
     item = CapabilityEvidence(
         evidence_id="capability#1",
@@ -321,16 +332,17 @@ def capability_check_available(session) -> bool:
 def capability_check_feedback(session) -> str:
     ref = register_capability_evidence(session)
     if not ref:
-        return ("CAPABILITY CHECK UNAVAILABLE: no search could run, so no capability gap "
-                "can be claimed.")
+        return ("CAPABILITY CHECK INCONCLUSIVE: the search cannot prove a capability gap. "
+                "Inspect the registered tools and their exact effects; do not infer "
+                "that a lexical miss means the operation is unavailable.")
     # The structured finish is what can carry the conclusion, and until now it opened only
     # after a business read -- the one thing a turn declining a change must not do first.
     session._answer_mode = True
     held = session.evidence.get(ref)
     if held.matches:
-        return (f"CAPABILITY CHECK {ref}: this session can perform it with "
-                + ", ".join(held.matches) + ". Load that Skill and use it; a "
-                "capability_gap citing this check is refused.")
+        return (f"CAPABILITY CHECK {ref}: registered capability candidates are "
+                + ", ".join(held.matches) + ". Use only one whose exact effect and "
+                "target fit the request; a capability_gap citing this check is refused.")
     return (f"CAPABILITY CHECK {ref}: nothing installed for this actor performs the change "
             "the user asked for. Finish now with outcome=unable and answer "
             '{"version": 1, "coverage": "undetermined", "conclusions": '

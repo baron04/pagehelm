@@ -131,9 +131,10 @@ Raw blocks are labelled implementation, not current state. Static permission dec
 still require an actor-scoped runtime check, and source cannot prove the cause of one actual
 record event.
 
-The same add-on exposes a bounded actor-scoped model/action catalog. It derives actions only
-from the current user's filtered menu tree and reports model-level access; catalog generation
-itself reads no business records and never grants mutation authority. The Odoo adapter maps
+The same add-on exposes a bounded actor-scoped model/action catalog. It includes window
+actions without menu entries when the current user's groups and target-model read access
+permit them; menu entries only supply breadcrumbs. Catalog generation itself reads no
+business records and never grants mutation authority. The Odoo adapter maps
 that framework-specific catalog into the core entity-read contract, whose same three schemas
 also run over the synthetic Contacts REST adapter:
 
@@ -189,16 +190,16 @@ rather than fact.
 
 ### Which Skills stay, and why (2026-09-23)
 
-Phase 8 asked whether deployed source removes the need for hand-written Skills. It does not remove these, and the verdict is per Skill rather than for the catalog as a whole. Every Skill below names a typed tool: a tool the model may only call through a Skill that declares it, so a Skill is how a capability is reachable at all, not merely where a procedure is written.
+Phase 8 asked whether deployed source removes the need for hand-written Skills. It does not remove these, and the verdict is per Skill rather than for the catalog as a whole. Tools are registered by the adapter independently of Skills; an eligible tool does not require a Skill to be loaded. Skills supply optional business guidance, never authority.
 
 | Skill | Verdict | Why |
 |---|---|---|
-| `customers-query`, `products-query`, `quotations-query`, `sale-orders-query`, `customer-invoices-query` | Keep | Each is the only way to reach its typed read, and each carries the scope its answers are true of. The quotations one also carries organizational semantics no source states: this deployment counts only draft orders as quotations, and that is the one task the four-arm run's Skill arm won outright. |
+| `customers-query`, `products-query`, `quotations-query`, `sale-orders-query`, `customer-invoices-query` | Keep | These explain the typed reads' business scope. The quotations one also carries organizational semantics no source states: this deployment counts only draft orders as quotations, and that is the one task the four-arm run's Skill arm won outright. |
 | `runtime-records-query` | Keep | The generic entity read for everything without a typed collection. Three tool schemas serve every entity, so this is what keeps the surface from growing with the application. |
 | `customers-draft`, `customers-edit` | Keep | Form preparation, read-only. They hand the person a filled form to save themselves. |
-| `customers-create`, `customers-archive`, `sale-orders-confirm`, `sale-orders-invoice` | Keep | Writes. Each binds one effect to one confirmed proposal, and the server classifies them as create, archive, state change and document issue. Source can describe these operations; it cannot authorize one. |
+| `customers-create`, `customers-archive`, `sale-orders-confirm`, `sale-orders-invoice` | Keep | These describe business procedures around registered writes. The tool contract, actor scope, precise proposal, fresh approval and readback authorize and verify each operation independently of Skill loading. Source can explain the operation but cannot authorize it. |
 
-Nothing here is removed on the strength of "source could derive it". What a Skill contributes that source and the runtime descriptor do not is organizational: which records count, which scope an answer is true of, and which effect a person is being asked to authorize. Removing instruction text is a separate question from removing a Skill, and either needs the frozen P7.4 regression to run unchanged first.
+Nothing here is removed on the strength of "source could derive it". A Skill can still provide organizational meaning, such as which records count and how a procedure should be explained. That knowledge is separate from the registered tool and its permissions.
 
 ## Tools
 
@@ -378,9 +379,12 @@ python -m web_operation_agent_odoo.demo.form_qualify \
 
 For an HTTPS loopback gateway whose private CA is not installed in Chromium, add
 `--ignore-browser-https-errors`; the command rejects that option for non-loopback hosts.
-The gate does not make `allow_generic_forms` a production default. It qualifies the pinned
-standard-module cases and the no-submit boundary, not arbitrary installed modules or custom
-`onchange` side effects.
+The form port has no adapter-wide enable switch, but only the exact fields in the three
+browser-qualified standard-module cases are eligible by default. An unknown create page
+or field returns `form_available=false`; `fields_get` alone is not a safety certificate.
+This gate checks the pinned cases and no-submit boundary, not arbitrary installed modules
+or custom `onchange` side effects. Additional fields need application-owned qualification
+before they can become prefill drafts.
 
 `scripts/qualify.sh` runs both live gates whenever `WOA_ODOO_BASE_URL`, `WOA_ODOO_API_KEY_FILE`,
 `WOA_ODOO_STORAGE_STATE` and `WOA_ODOO_PAGE_CONTROLLER_MODULE` are set; without them the gate

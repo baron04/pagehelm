@@ -57,6 +57,15 @@ class RuntimeDescriptorCatalogTests(unittest.TestCase):
         self.assertEqual(catalog.actions[0].view_modes, ("list", "form"))
         self.assertTrue(catalog.complete)
 
+    def test_a_readable_action_without_a_menu_breadcrumb_is_accepted(self):
+        payload = _payload()
+        payload["actions"][0]["breadcrumbs"] = []
+        payload["descriptor_digest"] = _catalog_digest(
+            payload["models"], payload["actions"], [], [])
+        catalog = OdooRuntimeCatalog.from_payload(payload)
+        self.assertEqual(catalog.actions[0].breadcrumbs, ())
+        self.assertTrue(catalog.actions[0].readable)
+
     def test_the_digest_covers_the_exact_models_and_actions(self):
         payload = _payload()
         payload["actions"][0]["route"] = "quotations"

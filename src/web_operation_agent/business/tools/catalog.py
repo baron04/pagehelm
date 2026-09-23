@@ -54,19 +54,12 @@ class BusinessSkillCatalog:
         return hashlib.sha256(encoded).hexdigest()
 
     def resolve_capability(self, goal: str, *, allow_mutations: bool,
-                           effect: str = "write",
-                           extra: tuple[str, ...] = ()) -> tuple[str, ...]:
-        """Every installed capability that could serve this goal, from the whole catalog.
+                           effect: str = "write", extra: tuple[str, ...] = (),
+                           actor_scopes: tuple[str, ...] | None = None) -> tuple[str, ...]:
+        """Search registered tools; Skills only supply optional search vocabulary.
 
-        Deliberately not `relevant`/`select`. Those rank candidates to decide what to load,
-        and a miss there is a ranking miss; read as an answer it would say the application
-        cannot do something it can, which is the one error a capability gap must never make.
-        So this searches every installed Skill, and falls back to the tool names themselves
-        when no trigger matches -- a Skill whose triggers are all English still answers a
-        Chinese request to use the tool it owns.
-
-        `extra` carries the non-typed surfaces the session knows about (declarative page
-        actions, form handoff) so a gap means the whole executable surface was searched.
+        This is a lexical hint, not a proof that no semantically similar capability exists.
+        Dispatch independently checks the actor, arguments and exact effect.
         """
         if not isinstance(allow_mutations, bool):
             raise ValueError("allow_mutations must be a boolean")
@@ -75,35 +68,26 @@ class BusinessSkillCatalog:
         folded = str(goal or "").casefold()
         if not folded.strip():
             raise ValueError("a capability search needs the goal it searched for")
-        # Searching for a change means searching the capabilities that can make one. A read
-        # Skill whose trigger is a bare noun matches any sentence containing that noun --
-        # `customers-query` triggers on "客户" and so matches "删除客户" -- and counting it
-        # would answer "you have a capability" when what this session has is the capability
-        # to look at the thing it cannot change.
-        available = [skill for skill in sorted(self._skills.values(),
-                                               key=lambda item: item.skill_id)
-                     if (skill.read_only or allow_mutations)
-                     and (effect == "any" or not skill.read_only)]
+        scopes = None if actor_scopes is None else set(actor_scopes)
         found: list[str] = []
-        for skill in available:
-            if any(_trigger_matches(trigger, folded) for trigger in skill.triggers):
-                found.append(skill.skill_id)
+        for name in sorted(self._schemas):
+            if (self._effects[name] == "write" and not allow_mutations
+                    or effect == "write" and self._effects[name] != "write"
+                    or scopes is not None and self._required_scopes.get(name)
+                    and self._required_scopes[name] not in scopes):
                 continue
-            # A trigger list that missed does not retire the tools it owns.
-            if any(name.replace("_", " ") in folded or name in folded
-                   for name in skill.tool_names):
-                found.append(skill.skill_id)
+            if (name in folded or name.replace("_", " ") in folded
+                    or any(name in skill.tool_names
+                           and any(_trigger_matches(trigger, folded)
+                                   for trigger in skill.triggers)
+                           for skill in self._skills.values())):
+                found.append(name)
         found += [name for name in extra
                   if isinstance(name, str) and name.strip() and name not in found]
         return tuple(dict.fromkeys(found))
 
     def withheld_capability(self, goal: str) -> tuple[str, ...]:
-        """Installed capabilities that match this goal and this session may not use.
-
-        Same matching as `resolve_capability`, over the Skills the adapter declared as
-        withheld from this grant. Empty when the application genuinely has nothing for the
-        goal, which is the distinction the refusal sentence turns on.
-        """
+        """Tool names the adapter says this actor's grant withheld, not Skill grants."""
         folded = str(goal or "").casefold()
         if not folded.strip():
             raise ValueError("a capability search needs the goal it searched for")
@@ -112,7 +96,8 @@ class BusinessSkillCatalog:
             if (any(_trigger_matches(trigger, folded) for trigger in skill.triggers)
                     or any(name.replace("_", " ") in folded or name in folded
                            for name in skill.tool_names)):
-                found.append(skill.skill_id)
+                found.extend(name for name in skill.tool_names
+                             if name not in self._schemas)
         return tuple(dict.fromkeys(found))
 
     def relevant(self, task: str, limit: int = 3) -> tuple[BusinessSkill, ...]:
@@ -233,8 +218,3 @@ class BusinessSkillCatalog:
         if skill is None:
             return None, "skill_id is no longer in the server catalog"
         return skill, ""
-
-    def schemas_for(self, loaded_ids: set[str]) -> list[dict]:
-        names = {name for skill_id in loaded_ids
-                 for name in self._skills[skill_id].tool_names}
-        return [self._schemas[name] for name in sorted(names)]

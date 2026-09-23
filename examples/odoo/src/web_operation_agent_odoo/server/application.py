@@ -10,7 +10,6 @@ from web_operation_agent.business.mutation import MutationJournal
 from web_operation_agent.business.entities import (DESCRIBE_ENTITY_TOOL,
                                                    DISCOVER_ENTITIES_TOOL,
                                                    QUERY_ENTITY_RECORDS_TOOL)
-from web_operation_agent.business.forms import NoApplicationForms
 from web_operation_agent.business.errors import BusinessToolError
 from web_operation_agent.business.runtime import (BusinessSkill,
                                                   BusinessToolContractError,
@@ -191,7 +190,6 @@ class OdooApplicationAdapter:
 
     def __init__(self, *, base_url: str, api_key_path: str | Path,
                  allow_mutations: bool = False,
-                 allow_generic_forms: bool = False,
                  mutation_journal: MutationJournal | None = None,
                  page_controller_module: str | None = None,
                  timeout_s: float = 20,
@@ -200,8 +198,6 @@ class OdooApplicationAdapter:
                  extra_skills: tuple[BusinessSkill, ...] = ()):
         if not isinstance(allow_mutations, bool):
             raise ValueError("allow_mutations must be a boolean")
-        if not isinstance(allow_generic_forms, bool):
-            raise ValueError("allow_generic_forms must be a boolean")
         if allow_mutations and mutation_journal is None:
             raise ValueError("allow_mutations=True requires an explicit mutation journal")
         self.origin = _validated_origin(public_origin or base_url)
@@ -290,11 +286,10 @@ class OdooApplicationAdapter:
             answer_labels={"zh": ANSWER_LABELS_ZH})
         self._executor = executor
         self._click_policy: OdooReviewedClickPolicy | None = None
-        # `fields_get` cannot establish that deployment-specific onchange code is inert.
-        # Keep the broad no-Skill form surface explicitly opt-in until the live P8.6
-        # qualification checks the deployed modules. Dedicated typed form tools are
-        # unaffected and continue to use the existing prefill path.
-        forms = OdooFormPort(executor) if allow_generic_forms else NoApplicationForms()
+        # The form port recognizes bounded create pages. It declares the draft's
+        # persistence semantics; save-on-leave edits require approval before input.
+        # Metadata alone cannot certify arbitrary custom onchange side effects.
+        forms = OdooFormPort(executor)
         self.ports = ApplicationPorts(
             identity=_OdooIdentityPort(
                 executor,

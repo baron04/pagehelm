@@ -155,7 +155,7 @@ class SkillFirst(unittest.TestCase):
                 session.run()
                 self.assertEqual(session.ledger.of_kind("business_skill_auto_loaded"), [])
                 self.assertEqual(session._business_routes, set())
-                self.assertNotIn("query_companies", chat.tool_names[0])
+                self.assertIn("query_companies", chat.tool_names[0])
                 self.assertIn("load_skill", chat.tool_names[0])
 
     def test_with_source_available_the_prompt_says_the_skill_goes_first(self):
@@ -174,7 +174,7 @@ class SkillFirst(unittest.TestCase):
                                     runtime_source=True))
         session.run()
         system = chat.messages[0][0]["content"]
-        self.assertIn("use its\nstatements, routes and tools first", system)
+        self.assertIn("use its\nstatements and routes when relevant", system)
         self.assertIn("lookup_source", system)
 
 

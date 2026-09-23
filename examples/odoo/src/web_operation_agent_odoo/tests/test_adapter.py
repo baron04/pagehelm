@@ -23,7 +23,6 @@ from web_operation_agent.business.runtime import (BusinessMutationIndeterminate,
                                           BusinessMutationRefusedError,
                                           BusinessToolError, BusinessToolRequestError)
 from web_operation_agent.business.control import ReadOnlyControl
-from web_operation_agent.business.forms import NoApplicationForms
 from web_operation_agent.state.identity import IdentityAssertion, PrincipalError
 from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.business.mutation import MemoryMutationJournal
@@ -38,6 +37,7 @@ from web_operation_agent_odoo.adapter import (APPLICATION_ID, COLLECTIONS, QUERY
                                               OdooBusinessToolExecutor,
                                               OdooPageSessionIdentityResolver,
                                               PREPARE_CUSTOMER_FORM_TOOL)
+from web_operation_agent_odoo.server.generic_forms import OdooFormPort
 
 BASE = "http://127.0.0.1:8069"
 
@@ -344,19 +344,31 @@ class AdapterContract(unittest.TestCase):
                           "query_customers", "query_entity_records", "query_products",
                           "query_quotations", "query_sale_orders"])
         self.assertEqual(bound.business_tools.mutation_tool_names, frozenset())
-        self.assertIsInstance(bound.ports.forms, NoApplicationForms)
+        self.assertIsInstance(bound.ports.forms, OdooFormPort)
 
-    def test_generic_forms_are_an_explicit_experimental_adapter_capability(self):
+    def test_generic_forms_are_a_registered_adapter_capability(self):
         with tempfile.TemporaryDirectory() as tmp:
             adapter = OdooApplicationAdapter(
-                base_url=BASE, api_key_path=_key_file(Path(tmp)),
-                allow_generic_forms=True)
+                base_url=BASE, api_key_path=_key_file(Path(tmp)))
             bound = assert_adapter_contract(self, adapter)
 
         self.assertEqual(bound.ports.forms.required_scopes,
                          {"generic_forms:prepare"})
         self.assertIn("generic_forms:prepare",
                       bound.ports.identity.required_scopes)
+
+    def test_registered_write_catalog_is_independent_of_odoo_skill_loading(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            adapter = OdooApplicationAdapter(
+                base_url=BASE, api_key_path=_key_file(Path(tmp)),
+                allow_mutations=True, mutation_journal=MemoryMutationJournal())
+        runtime = adapter.business_tools
+        writer = {item["function"]["name"] for item in runtime.available_schemas(
+            allow_mutations=True, actor_scopes=("customers:write",))}
+        self.assertIn("create_customer", writer)
+        self.assertNotIn("create_customer", {
+            item["function"]["name"] for item in runtime.available_schemas(
+                allow_mutations=False, actor_scopes=("customers:write",))})
 
     def test_a_mutation_adapter_satisfies_the_shared_contract(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -595,8 +607,8 @@ class AdapterContract(unittest.TestCase):
         self.assertEqual(selection.candidate_ids,
                          ("odoo.sales.customers-create",))
         create_schema = next(
-            schema for schema in adapter.business_tools.schemas_for(
-                {"odoo.sales.customers-create"})
+            schema for schema in adapter.business_tools.available_schemas(
+                allow_mutations=True)
             if schema["function"]["name"] == "create_customer")
         self.assertEqual(
             create_schema["function"]["parameters"]["properties"]["email"]["format"],
@@ -626,7 +638,7 @@ class AdapterContract(unittest.TestCase):
                 self.assertEqual(
                     adapter.business_tools.resolve_capability(
                         task, allow_mutations=True),
-                    ("odoo.sales.customers-edit",))
+                    (), "form preparation is not an authorized write tool")
 
     def test_customer_archive_selects_the_typed_write_skill(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -642,7 +654,7 @@ class AdapterContract(unittest.TestCase):
             self.assertEqual(
                 adapter.business_tools.resolve_capability(
                     "归档客户 P75 Harbor Lights", allow_mutations=True),
-                ("odoo.sales.customers-archive",))
+                ("archive_customer",))
 
     def test_customer_invoice_wording_selects_the_mutation_skill_directly(self):
         with tempfile.TemporaryDirectory() as tmp:

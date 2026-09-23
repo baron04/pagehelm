@@ -174,9 +174,6 @@ class OdooDemoConfig:
     #: Confirm each page switch the panel asks about, as the person who asked for the page
     #: would. Only with `scripted`: a person running the demo confirms it themselves.
     confirm_navigation_in_page: bool = False
-    #: Experimental P8.6 surface. Production adapters keep it off until their deployed
-    #: modules have passed the model-free form qualification.
-    allow_generic_forms: bool = False
     #: Qualification-only TLS seam for a loopback gateway whose private CA is not installed
     #: in Chromium. The caller must enforce loopback; ordinary demos keep verification on.
     browser_ignore_https_errors: bool = False
@@ -241,9 +238,8 @@ class OdooDemoConfig:
             raise TypeError("final_page_probe must be callable")
         if self.final_page_probe is not None and not (self.scripted or self.evaluation):
             raise ValueError("a final page probe requires scripted qualification mode")
-        if (not isinstance(self.allow_generic_forms, bool)
-                or not isinstance(self.browser_ignore_https_errors, bool)):
-            raise ValueError("demo form and TLS flags must be booleans")
+        if not isinstance(self.browser_ignore_https_errors, bool):
+            raise ValueError("demo TLS flag must be a boolean")
         if self.browser_ignore_https_errors and not self.scripted:
             raise ValueError("ignoring browser HTTPS errors requires scripted qualification")
         if self.browser_ignore_https_errors and urlsplit(self.base_url).hostname not in {
@@ -684,7 +680,6 @@ def run_demo(config: OdooDemoConfig, *,
     adapter = OdooApplicationAdapter(
         base_url=config.base_url, api_key_path=config.api_key_path,
         page_controller_module=config.page_controller_module,
-        allow_generic_forms=config.allow_generic_forms,
         allow_mutations=config.allow_mutations, mutation_journal=journal,
         extra_skills=tuple(config.extra_skills))
     bound = bind_application(adapter)

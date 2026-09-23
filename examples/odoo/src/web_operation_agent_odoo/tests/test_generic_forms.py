@@ -41,6 +41,15 @@ class _Client:
         raise AssertionError((model, method, args, kwargs))
 
 
+def _qualified_port(client):
+    # This synthetic action is intentionally not one of the adapter's production
+    # qualifications. Tests inject an immutable qualification for the contract only.
+    return OdooFormPort(client, qualified_fields={
+        ("inventory/transfers", "stock.picking", "stock.action_picking_tree_all"):
+            frozenset({"name", "scheduled_date", "state"}),
+    })
+
+
 def _context(scopes=(GENERIC_FORM_SCOPE,)):
     now = int(time.time() * 1_000)
     principal = PrincipalContext(
@@ -72,14 +81,14 @@ class OdooGenericFormTests(unittest.TestCase):
     def test_shared_application_neutral_contract(self):
         client = _Client()
         assert_current_form_contract(
-            self, OdooFormPort(client), application_id="odoo",
+            self, _qualified_port(client), application_id="odoo",
             observation=_observation(), context=_context(), field_label="Reference",
             native_field="name", value="WH/OUT/00042")
         self.assertTrue(any(call[1] == "fields_get" for call in client.calls))
 
     def test_only_runtime_page_intersection_and_safe_scalar_fields_are_returned(self):
         tools = ApplicationFormTools(
-            OdooFormPort(_Client()), application_id="odoo", binding_secret=b"o" * 32)
+            _qualified_port(_Client()), application_id="odoo", binding_secret=b"o" * 32)
         result = tools.describe(_observation(), {}, context=_context())
         self.assertEqual(
             {item["label"] for item in result["fields"]},
@@ -90,7 +99,7 @@ class OdooGenericFormTests(unittest.TestCase):
     def test_missing_form_scope_is_refused_before_metadata_rpc(self):
         client = _Client()
         tools = ApplicationFormTools(
-            OdooFormPort(client), application_id="odoo", binding_secret=b"o" * 32)
+            _qualified_port(client), application_id="odoo", binding_secret=b"o" * 32)
         with self.assertRaises(BusinessToolPermissionError):
             tools.describe(_observation(), {}, context=_context(("unrelated:read",)))
         self.assertEqual(client.calls, [])
@@ -102,7 +111,7 @@ class OdooGenericFormTests(unittest.TestCase):
         observation.elements.append(
             ElementRef("e4", "select", "Status", "select", 4, {"field": "state"}))
         tools = ApplicationFormTools(
-            OdooFormPort(client), application_id="odoo", binding_secret=b"o" * 32)
+            _qualified_port(client), application_id="odoo", binding_secret=b"o" * 32)
         described = tools.describe(observation, {"field_query": "Status"},
                                    context=_context())
         field = next(item for item in described["fields"] if item["label"] == "Status")
@@ -113,6 +122,49 @@ class OdooGenericFormTests(unittest.TestCase):
         }, context=_context())
 
         self.assertEqual(draft.fields[0].value, '"done"')
+
+    def test_unknown_create_page_is_not_promoted_to_safe_prefill(self):
+        client = _Client()
+        tools = ApplicationFormTools(
+            OdooFormPort(client), application_id="odoo", binding_secret=b"o" * 32)
+        result = tools.describe(_observation(), {}, context=_context())
+        self.assertFalse(result["form_available"])
+
+    def test_default_qualification_only_exposes_browser_checked_fields(self):
+        client = _Client()
+        client.catalog["models"][0]["model"] = "res.partner"
+        client.catalog["actions"][0]["model"] = "res.partner"
+        client.catalog["actions"][0]["route"] = "customers"
+        client.catalog["actions"][0]["xml_id"] = "account.res_partner_action_customer"
+        client.catalog["descriptor_digest"] = _catalog_digest(
+            client.catalog["models"], client.catalog["actions"],
+            client.catalog["omitted_models"], client.catalog["omitted_actions"])
+        original = client.call
+
+        def call(model, method, args, kwargs=None):
+            if (model, method) == ("res.partner", "fields_get"):
+                fields = _fields()
+                fields["email"] = {"string": "Email", "type": "char",
+                                   "readonly": False}
+                fields["phone"] = {"string": "Phone", "type": "char",
+                                   "readonly": False}
+                return fields
+            return original(model, method, args, kwargs)
+
+        client.call = call
+        observation = _observation()
+        observation.url = "https://odoo.test/odoo/customers/new"
+        observation.elements = [
+            ElementRef("e1", "combobox", "Reference", "input", 4, {"field": "name"}),
+            ElementRef("e2", "textbox", "Email", "input", 4, {"field": "email"}),
+            ElementRef("e3", "textbox", "Phone", "input", 4, {"field": "phone"}),
+        ]
+        tools = ApplicationFormTools(
+            OdooFormPort(client), application_id="odoo", binding_secret=b"o" * 32)
+        result = tools.describe(observation, {}, context=_context())
+        self.assertTrue(result["form_available"])
+        self.assertEqual({item["label"] for item in result["fields"]},
+                         {"Reference", "Email"})
 
 
 if __name__ == "__main__":

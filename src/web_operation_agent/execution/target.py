@@ -6,13 +6,11 @@ answer and writes end on a settled receipt, but a navigation ended only when the
 decided to call ``finish``; a model that kept investigating after it had already reached
 the page spent the whole step budget on the page it wanted (Phase 8, section 16).
 
-The model now declares the state it is working towards *before* acting, in the only
-vocabulary the server can check against a page observation: an exact same-application
-path and the accessible names of controls that must show as selected. After every
-successful page action the fresh observation is compared with that declaration, and the
-turn ends on the server's word when it matches. Declaring a target grants nothing: every
-click and navigation is still routed, confirmed and settled exactly as before, and the
-sentence the person reads says only what the page was observed to show.
+The model declares a page state before acting: an exact same-application path and
+accessible names of controls that must show as selected. A fresh observation can verify
+that declared state, but only a pure navigation request may then be settled. A question
+or multi-part request may still need another read or action. Declaring a target grants
+nothing: every click and navigation is routed, confirmed and settled as before.
 """
 from __future__ import annotations
 

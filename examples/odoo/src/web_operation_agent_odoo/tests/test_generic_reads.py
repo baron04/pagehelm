@@ -203,7 +203,76 @@ class GenericDescriptionAndQueryTests(unittest.TestCase):
         self.assertNotIn("Integration Secret", encoded)
         self.assertIn(("stock.picking", "fields_get", [], {"attributes": [
             "string", "type", "required", "readonly", "searchable", "store", "selection",
+            "currency_field", "relation",
         ]}), self.client.calls)
+
+    def test_relation_keeps_an_actor_scoped_target_binding_for_followup(self):
+        original = self.client.call
+        fields = _fields()
+        fields["carrier_id"]["relation"] = "stock.picking"
+
+        def call(model, method, args, kwargs=None):
+            if method == "fields_get":
+                return copy.deepcopy(fields)
+            return original(model, method, args, kwargs)
+
+        self.client.call = call
+        description = self._description("Carrier")
+        carrier = description.content["fields"][0]["field_id"]
+        result = self.executor.execute(QUERY_ENTITY_RECORDS_TOOL, {
+            "entity_id": self.entity_id, "field_ids": [carrier],
+        })
+        value = result.content["records"][0]["values"][0]
+        self.assertEqual(value["value"], "FastShip")
+        self.assertEqual(value["related_entity_id"], self.entity_id)
+        self.assertEqual(value["related_record_id"], "4")
+        self.assertNotIn("stock.picking", json.dumps(value))
+
+    def test_monetary_value_carries_actor_read_currency_without_exposing_native_field(self):
+        original = self.client.call
+        fields = _fields()
+        fields["amount_total"] = {
+            "string": "Total", "type": "monetary", "required": False,
+            "readonly": True, "searchable": True, "store": True,
+            "currency_field": "currency_id",
+        }
+        fields["currency_id"] = {
+            "string": "Currency", "type": "many2one", "required": False,
+            "readonly": True, "searchable": True, "store": True,
+        }
+
+        def call(model, method, args, kwargs=None):
+            if method == "fields_get":
+                return copy.deepcopy(fields)
+            if method == "search_read":
+                self.assertEqual(kwargs["fields"], ["amount_total", "currency_id"])
+                return [{"id": 7, "amount_total": 120.5,
+                         "currency_id": [1, "USD"]}]
+            return original(model, method, args, kwargs)
+
+        self.client.call = call
+        description = self._description("Total")
+        total = description.content["fields"][0]["field_id"]
+        result = self.executor.execute(QUERY_ENTITY_RECORDS_TOOL, {
+            "entity_id": self.entity_id, "field_ids": [total],
+        })
+        self.assertEqual(result.content["records"][0]["values"], [{
+            "field_id": total, "label": "Total", "value": "120.5", "unit": "USD",
+        }])
+        self.assertEqual(result.evidence[1].value_type, "money")
+        self.assertEqual(result.evidence[1].unit, "USD")
+        self.assertNotIn("currency_id", json.dumps(result.content))
+
+        def missing_currency(model, method, args, kwargs=None):
+            if method == "search_read":
+                return [{"id": 7, "amount_total": 120.5}]
+            return call(model, method, args, kwargs)
+
+        self.client.call = missing_currency
+        with self.assertRaisesRegex(BusinessToolContractError, "omitted.*currency"):
+            self.executor.execute(QUERY_ENTITY_RECORDS_TOOL, {
+                "entity_id": self.entity_id, "field_ids": [total],
+            })
 
     def test_query_resolves_ids_server_side_and_reports_exact_scope_and_counts(self):
         description = self._description()

@@ -83,10 +83,11 @@ current page and current application metadata are the execution authorities. Whe
 the generic surface, run the shared `assert_current_form_contract` against this adapter and
 a real browser gate; an adapter-only unit result does not establish end-to-end form accuracy.
 
-The Odoo reference translation is deliberately off by default. Construct its adapter with
-`allow_generic_forms=True` only in an environment whose deployed modules have passed that
-browser and no-write qualification; its `fields_get` metadata cannot by itself prove that a
-custom `onchange` handler has no persistent or external side effect.
+The Odoo reference translation has no global enable switch, but defaults to the exact
+fields covered by three standard-module browser qualifications. Its `fields_get` metadata
+cannot by itself prove that a custom `onchange` handler has no persistent or external
+effect; an unknown field or page is not a prefill draft until separately qualified. A
+save-on-leave edit draft requires effect-and-target confirmation before input.
 
 ## Composition and qualification
 

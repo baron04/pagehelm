@@ -19,6 +19,7 @@ from web_operation_agent.answer.computation import ComputationRefused, Computati
 from web_operation_agent.answer.conclusion import ConclusionRefused
 from web_operation_agent.answer.evidence import (CapabilityEvidence, Origin, QueryEvidence,
                                           TurnEvidence)
+from web_operation_agent.tests.support.business import _MutationExecutor
 
 
 def _skill(path: Path, *, skill_id: str, triggers: list[str], tools: list[str],
@@ -74,6 +75,18 @@ class CapabilityResolutionFollowsTheCatalog(unittest.TestCase):
     def _runtime(self, directory: Path, skills: tuple[BusinessSkill, ...]) -> BusinessToolRuntime:
         return BusinessToolRuntime(skills, _executor_for(skills))
 
+    def test_registered_tool_is_discoverable_without_any_skill(self):
+        runtime = BusinessToolRuntime(
+            (), _MutationExecutor(),
+            required_scopes={"create_company": "companies:write"})
+        self.assertEqual(
+            runtime.resolve_capability("please call create_company", allow_mutations=True,
+                                       actor_scopes=("companies:write",)),
+            ("create_company",))
+        self.assertEqual(
+            runtime.resolve_capability("please call create_company", allow_mutations=True,
+                                       actor_scopes=("companies:read",)), ())
+
     def test_a_delete_goal_matches_nothing_when_no_delete_capability_is_installed(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -100,7 +113,7 @@ class CapabilityResolutionFollowsTheCatalog(unittest.TestCase):
             after = self._runtime(root, (query, delete))
             self.assertEqual(
                 after.resolve_capability("删除客户 X", allow_mutations=True),
-                ("fixture.customers-delete",))
+                ("delete_customer",))
 
     def test_a_trigger_list_that_misses_does_not_retire_the_tool_it_owns(self):
         """A matcher miss is a matcher bug; it must not read as the application lacking it."""
@@ -113,7 +126,7 @@ class CapabilityResolutionFollowsTheCatalog(unittest.TestCase):
             self.assertEqual(
                 runtime.resolve_capability("please run delete_customer for Ivydell",
                                            allow_mutations=True),
-                ("fixture.customers-delete",))
+                ("delete_customer",))
 
     def test_a_read_capability_for_the_same_entity_is_not_a_capability_to_change_it(self):
         """The bug this caught: `customers-query` triggers on the bare noun "客户", so it
@@ -131,7 +144,7 @@ class CapabilityResolutionFollowsTheCatalog(unittest.TestCase):
             self.assertEqual(
                 runtime.resolve_capability("删除客户 Ivydell Works", allow_mutations=True,
                                            effect="any"),
-                ("fixture.customers-query",))
+                ("query_customers",))
 
     def test_a_read_only_turn_does_not_see_mutation_capabilities(self):
         with TemporaryDirectory() as tmp:
@@ -141,7 +154,7 @@ class CapabilityResolutionFollowsTheCatalog(unittest.TestCase):
             runtime = self._runtime(root, (delete,))
             self.assertEqual(runtime.resolve_capability("删除客户 X", allow_mutations=False), ())
             self.assertEqual(runtime.resolve_capability("删除客户 X", allow_mutations=True),
-                             ("fixture.customers-delete",))
+                             ("delete_customer",))
 
     def test_a_page_surface_that_can_make_the_change_is_part_of_the_search(self):
         """The session passes only surfaces that perform a change themselves -- enabled page

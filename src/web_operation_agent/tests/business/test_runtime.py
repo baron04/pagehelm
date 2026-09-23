@@ -486,7 +486,7 @@ class BusinessRuntimeValidation(unittest.TestCase):
             loaded = {skill.skill_id}
             runtime = BusinessToolRuntime((skill,), _Executor(), application_id="fixture")
             with self.assertRaises(BusinessToolRequestError) as request:
-                runtime.execute("query_companies", {}, set())
+                runtime.execute("not_registered", {}, set())
             self.assertEqual(request.exception.code, "business_request")
             with self.assertRaises(BusinessToolIdentityError) as identity:
                 runtime.execute(
@@ -561,21 +561,40 @@ class BusinessRuntimeValidation(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "artifact_uri"):
                 BusinessSkill.from_bytes(raw, artifact_uri="")
 
-    def test_tool_is_unavailable_until_relevant_skill_is_loaded(self):
+    def test_registered_tool_is_available_without_loading_a_skill(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill = _skill(Path(tmp) / "skill.json")
             runtime = BusinessToolRuntime((skill,), _Executor())
             relevant = runtime.relevant("Which companies are in this workspace?")
             self.assertEqual([item.skill_id for item in relevant], [skill.skill_id])
-            self.assertEqual(runtime.schemas_for(set()), [])
-            with self.assertRaisesRegex(BusinessToolError, "load the matching"):
-                runtime.execute("query_companies", {}, set())
+            self.assertEqual(
+                [item["function"]["name"] for item in runtime.available_schemas(
+                    allow_mutations=False)], ["query_companies"])
+            self.assertIsInstance(runtime.execute("query_companies", {}, set()),
+                                  BusinessToolResult)
             loaded, error = runtime.load(skill.skill_id, {skill.skill_id})
             self.assertEqual(error, "")
             self.assertEqual(loaded, skill)
             self.assertEqual(
-                [item["function"]["name"] for item in runtime.schemas_for({skill.skill_id})],
+                [item["function"]["name"] for item in runtime.available_schemas(
+                    allow_mutations=False)],
                 ["query_companies"])
+
+    def test_tool_catalog_filters_write_and_actor_scope_without_consulting_skills(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _write_skill(Path(tmp) / "write-skill.json")
+            runtime = BusinessToolRuntime(
+                (skill,), _MutationExecutor(),
+                required_scopes={"create_company": "companies:write"})
+            names = lambda **options: [item["function"]["name"]
+                                       for item in runtime.available_schemas(**options)]
+            self.assertEqual(names(allow_mutations=False), [])
+            self.assertEqual(names(allow_mutations=True,
+                                   actor_scopes=("companies:read",)), [])
+            self.assertEqual(names(allow_mutations=True,
+                                   actor_scopes=("companies:write",)),
+                             ["create_company"])
+            self.assertEqual(names(allow_mutations=True), ["create_company"])
 
     def test_empty_trigger_match_uses_a_bounded_read_only_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -623,7 +642,7 @@ class BusinessRuntimeValidation(unittest.TestCase):
                 content={"companies": []}, audit={},
                 allowed_routes=("/object/company/company-1",))
 
-    def test_skill_and_executor_must_declare_the_same_tools(self):
+    def test_skill_cannot_recommend_a_tool_missing_from_the_executor(self):
         class EmptyExecutor:
             @staticmethod
             def tool_schemas():
@@ -634,7 +653,7 @@ class BusinessRuntimeValidation(unittest.TestCase):
                 return {}
 
         with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaisesRegex(ValueError, "same tools"):
+            with self.assertRaisesRegex(ValueError, "not registered"):
                 BusinessToolRuntime((_skill(Path(tmp) / "skill.json"),), EmptyExecutor())
 
     def test_custom_mutation_journal_must_declare_restart_behavior(self):

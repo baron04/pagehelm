@@ -2,9 +2,9 @@
 
 This is intentionally metadata, not a generic data endpoint.  Odoo's ordinary delegated
 users cannot enumerate ``ir.model`` or ``ir.actions.act_window`` even though the web client
-can load their permitted menus and call ``fields_get`` once it already knows a model name.
-Keeping the enumeration here lets Odoo apply the current user's ACLs and group-filtered menu
-tree before anything reaches the Agent server.
+can load actions by ID and call ``fields_get`` once it already knows a model name. This
+enumeration filters window actions by the actor's groups and model read access, including
+actions with no menu entry; the menu tree is only an optional breadcrumb source.
 
 The method grants no read or write on business records.  A later generic read still has to
 execute through the delegated actor, and a write still needs the product's proposal,
@@ -141,28 +141,28 @@ class WoaRuntimeDescriptor(models.AbstractModel):
 
         action_rows = []
         omitted_actions = []
-        if len(action_menus) > _MAX_ACTIONS:
+        actions = self.env["ir.actions.act_window"].sudo().search(
+            [], order="id", limit=_MAX_ACTIONS + 1)
+        if len(actions) > _MAX_ACTIONS:
             raise ValidationError("runtime action catalog exceeds its safety limit")
-        for action_id in sorted(action_menus):
-            # This is the same sudo read used by Odoo's auth=user /web/action/load.  The
-            # action id came from load_menus(), whose result has already been filtered for
-            # this actor.  We do not enumerate the action table under sudo.
-            action = self.env["ir.actions.act_window"].sudo().browse(action_id).exists()
-            if not action:
-                omitted_actions.append(action_id)
+        readable_models = {row["model"] for row in model_rows}
+        user_groups = self.env.user.groups_id
+        for action in actions:
+            action_id = action.id
+            # Odoo's action loader reads as sudo. A menu-only catalog misses valid
+            # configuration and contextual actions, but sudo enumeration cannot grant
+            # them to this user. Check the action's groups and the underlying model's
+            # actor-scoped read ACL before returning even its label.
+            if action.groups_id and not (action.groups_id & user_groups):
+                continue
+            target = str(action.res_model or "")
+            if target not in readable_models:
                 continue
             try:
                 descriptor = action._get_action_dict()
             except Exception:
                 omitted_actions.append(action_id)
                 continue
-            target = str(descriptor.get("res_model") or "")
-            readable = False
-            if target and target in self.env:
-                try:
-                    readable = bool(self.env[target].browse().has_access("read"))
-                except Exception:
-                    readable = False
             xml_id = str(descriptor.get("xml_id") or "")[:200]
             path = str(descriptor.get("path") or "")[:200]
             route = path or f"action-{xml_id or action_id}"
@@ -174,7 +174,7 @@ class WoaRuntimeDescriptor(models.AbstractModel):
                             and isinstance(item[1], str) and item[1] not in modes):
                         modes.append(item[1][:40])
             breadcrumbs = []
-            for key, menu in action_menus[action_id]:
+            for key, menu in action_menus.get(action_id, ()):
                 breadcrumb = _breadcrumb(
                     menu.get("id") if isinstance(menu.get("id"), int) else key, menus)
                 if breadcrumb and breadcrumb not in breadcrumbs:
@@ -186,7 +186,7 @@ class WoaRuntimeDescriptor(models.AbstractModel):
                 "name": str(descriptor.get("name") or "")[:200],
                 "route": route,
                 "model": target[:128],
-                "readable": readable,
+                "readable": True,
                 "view_modes": modes,
                 "breadcrumbs": breadcrumbs,
                 # These are untrusted application expressions, useful for explaining an

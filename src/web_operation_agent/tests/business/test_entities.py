@@ -226,6 +226,88 @@ class EntityReadContractTests(unittest.TestCase):
                 "entity_id": entity_id, "field_ids": ids,
             })
 
+    def test_money_needs_a_valid_unit_and_never_leaks_its_native_binding(self):
+        class MoneyPort(_Port):
+            def fields(self, entity, *, context=None):
+                return (EntityField(
+                    reference="native_amount", label="Amount", kind="monetary",
+                    unit_field_reference="native_currency_id"),)
+
+            def query(self, request, *, context=None):
+                return EntityQueryPage(
+                    records=(EntityRecord(
+                        reference="internal.work.item/42", display_id="42",
+                        cells=(EntityCell("native_amount", "12.50", unit="USD"),),
+                    ),), matched_count=1, source_total=1,
+                    source="fixture actor API", scope="fixture actor scope")
+
+        port = MoneyPort()
+        tools = EntityReadTools(port, application_id="fixture.app")
+        entity_id = tools.execute(DISCOVER_ENTITIES_TOOL, {"query": "work items"}) \
+            .content["candidates"][0]["entity_id"]
+        field_id = tools.execute(DESCRIBE_ENTITY_TOOL, {"entity_id": entity_id}) \
+            .content["fields"][0]["field_id"]
+        args = {"entity_id": entity_id, "field_ids": [field_id]}
+        result = tools.execute(QUERY_ENTITY_RECORDS_TOOL, args)
+        self.assertEqual(result.evidence[1].value_type, "money")
+        self.assertEqual(result.evidence[1].unit, "USD")
+        self.assertNotIn("native_currency_id", result.render())
+
+        original_query = port.query
+
+        def malformed(_request, *, context=None):
+            page = original_query(_request, context=context)
+            return EntityQueryPage(
+                records=(EntityRecord(
+                    reference=page.records[0].reference, display_id="42",
+                    cells=(EntityCell("native_amount", "not a number", unit="USD"),),
+                ),), matched_count=1, source_total=1,
+                source=page.source, scope=page.scope)
+
+        port.query = malformed
+        with self.assertRaisesRegex(BusinessToolContractError, "nonnumeric"):
+            tools.execute(QUERY_ENTITY_RECORDS_TOOL, args)
+
+    def test_related_record_binding_is_opaque_and_only_for_catalog_entities(self):
+        class RelatedPort(_Port):
+            target = "internal.work.item"
+
+            def fields(self, entity, *, context=None):
+                return (EntityField(
+                    reference="native_relation", label="Owner", kind="reference",
+                    related_entity_reference=self.target),)
+
+            def query(self, request, *, context=None):
+                return EntityQueryPage(
+                    records=(EntityRecord(
+                        reference="internal.work.item/42", display_id="42",
+                        cells=(EntityCell("native_relation", "Alex",
+                                          related_record_id="17"),),
+                    ),), matched_count=1, source_total=1,
+                    source="fixture actor API", scope="fixture actor scope")
+
+        port = RelatedPort()
+        tools = EntityReadTools(port, application_id="fixture.app")
+        entity_id = tools.execute(DISCOVER_ENTITIES_TOOL, {"query": "work items"}) \
+            .content["candidates"][0]["entity_id"]
+        field_id = tools.execute(DESCRIBE_ENTITY_TOOL, {"entity_id": entity_id}) \
+            .content["fields"][0]["field_id"]
+        args = {"entity_id": entity_id, "field_ids": [field_id]}
+        value = tools.execute(QUERY_ENTITY_RECORDS_TOOL, args) \
+            .content["records"][0]["values"][0]
+        self.assertEqual(value["related_entity_id"], entity_id)
+        self.assertEqual(value["related_record_id"], "17")
+        self.assertNotIn("internal.work.item", str(value))
+
+        port.target = "internal.hidden.entity"
+        field_id = tools.execute(DESCRIBE_ENTITY_TOOL, {"entity_id": entity_id}) \
+            .content["fields"][0]["field_id"]
+        value = tools.execute(QUERY_ENTITY_RECORDS_TOOL, {
+            "entity_id": entity_id, "field_ids": [field_id],
+        }).content["records"][0]["values"][0]
+        self.assertNotIn("related_entity_id", value)
+        self.assertNotIn("related_record_id", value)
+
 
 if __name__ == "__main__":
     unittest.main()

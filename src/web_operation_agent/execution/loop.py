@@ -462,10 +462,11 @@ def run_loop(session) -> RunResult:
                       "existing evidence, or use outcome=unable.")]
             continue
 
-        if (session._target_reached
+        if (session._target_reached and session._navigation_only
                 and name not in {"finish", "set_target", "ask_user", "withdraw_request"}):
-            # The checkpoint offers two tools; a model that reaches for a third is told
-            # so without a dispatch. The step budget bounds how often it may be told.
+            # A pure navigation request can stop at its page target. A request
+            # that also asks a question still needs reads or observation after
+            # reaching a page, so its target cannot lock the tool surface.
             session.ledger.append("target_checkpoint_tool_refused", step=step, tool=name,
                                   dispatched=False, side_effect_possible=False)
             messages += [_assistant_call(call), _tool_result(

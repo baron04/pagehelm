@@ -335,6 +335,25 @@ class TargetSettlement(unittest.TestCase):
         self.assertEqual([event["tool"] for event in refused], ["observe", "list_contacts"])
         self.assertIn("TARGET REACHED", chat.seen[3][-1]["content"])
 
+    def test_a_question_may_observe_after_a_page_target_without_claiming_completion(self):
+        chat = _Chat([
+            ("set_target", {"path": PARTNER}),
+            ("click", {"ref": "e1"}),
+            ("observe", {"answer_evidence": True}),
+            ("finish", {"outcome": "unable"}),
+        ])
+        browser = _WorkspaceBrowser()
+        session = _session(self.tmp, chat, browser,
+                           prompt="Open the partner desk and tell me its terms.",
+                           page_answer_evidence=True)
+
+        result = session.run()
+
+        self.assertEqual(result.terminal_reason, "agent_refused")
+        self.assertEqual([action for action, _ in browser.commands], ["click", "observe"])
+        self.assertEqual(_events(session, "target_checkpoint_tool_refused"), [])
+        self.assertIn("Continue reading or observing", chat.seen[2][-1]["content"])
+
     def test_a_wrong_link_is_reported_unmet_and_a_corrected_target_may_be_reached(self):
         chat = _Chat([
             ("set_target", {"path": PARTNER}),

@@ -261,6 +261,13 @@ class SessionContext:
         if self._target is None:
             return ""
         if self._target_reached:
+            if not self._navigation_only:
+                return ("TARGET REACHED (server-observed): "
+                        + describe_target(self._target)
+                        + ". This verifies only the declared page state. Continue "
+                          "reading or observing to answer any remaining part of the "
+                          "user's request; do not report the whole request complete "
+                          "from this page state alone.")
             return ("TARGET REACHED (server-observed): " + describe_target(self._target)
                     + ". Only finish and set_target are available now. If this completes "
                       "the user's request, call finish with {\"outcome\": \"acted\"} and "

@@ -178,7 +178,7 @@ class AReaderHearsWhichKindOfNoItIs(unittest.TestCase):
         runtime = self._runtime(allow_mutations=False)
         self.assertEqual(runtime.resolve_capability("创建客户 Ivydell Works", allow_mutations=False), ())
         self.assertEqual(runtime.withheld_capability("创建客户 Ivydell Works"),
-                         ("odoo.sales.customers-create",))
+                         ("create_customer",))
 
     def test_a_capability_nobody_installed_is_withheld_by_nobody(self):
         runtime = self._runtime(allow_mutations=False)
@@ -188,4 +188,4 @@ class AReaderHearsWhichKindOfNoItIs(unittest.TestCase):
         runtime = self._runtime(allow_mutations=True)
         self.assertEqual(runtime.withheld_capability("创建客户 Ivydell Works"), ())
         self.assertEqual(runtime.resolve_capability("创建客户 Ivydell Works", allow_mutations=True),
-                         ("odoo.sales.customers-create",))
+                         ("create_customer",))

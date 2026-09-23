@@ -528,6 +528,22 @@ class TheWriteChainAnAuthorCopies(unittest.TestCase):
             self.assertIn("create_contact", ports.data.tool_names)
             self.assertEqual(ports.forms.required_scopes, {"contacts:write"})
 
+    def test_registered_tools_are_available_independently_of_contact_skills(self):
+        with MinimalContactsApplication() as application:
+            adapter, bound = self._composed(application)
+            runtime = bound.business_tools
+            self.assertIn("create_contact", runtime.tool_names)
+            writer = {item["function"]["name"] for item in runtime.available_schemas(
+                allow_mutations=True, actor_scopes=("contacts:read", "contacts:write"))}
+            reader = {item["function"]["name"] for item in runtime.available_schemas(
+                allow_mutations=True, actor_scopes=("contacts:read",))}
+            self.assertIn("create_contact", writer)
+            self.assertIn("list_contacts", reader)
+            self.assertNotIn("create_contact", reader)
+            self.assertNotIn("create_contact", {
+                item["function"]["name"] for item in runtime.available_schemas(
+                    allow_mutations=False, actor_scopes=("contacts:read", "contacts:write"))})
+
     def test_the_two_credentials_have_to_name_the_same_actor(self):
         with MinimalContactsApplication() as application:
             adapter, _bound = self._composed(application)

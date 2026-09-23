@@ -43,9 +43,11 @@ agent.
   and exact supporting span for internal audit. This verifies provenance, not the model's
   interpretation. Source cannot create a field, selector, choice, permission, or write
   authority.
-  The Odoo reference translation is experimental and remains an explicit adapter opt-in.
-  Its three-case standard-module browser gate passes with zero submitted or created records,
-  but that does not establish that arbitrary deployment-specific `onchange` code is inert.
+  The Odoo reference translation is available by default only for the exact scalar fields
+  covered by its three standard-module browser cases (customer name/email, product
+  name/price/invoicing policy, quotation expiration). Other create pages or fields are not
+  promoted to safe drafts from `fields_get` metadata alone: arbitrary deployment-specific
+  `onchange` code may have external effects that a read-only database transaction cannot stop.
 - Turn context is assembled by source role: the current page is the live grounding baseline;
   bounded conversation history is included for referential or clarification follow-ups;
   Skills are selected from the current task; and deployment source remains a lazy cited
@@ -64,10 +66,10 @@ agent.
   the Agent declares that state up front with `set_target`: an exact same-application path
   and/or the accessible names of controls that must show as selected. After every successful
   write-free page action the server compares the fresh observation with the declaration; when
-  it matches, the server reports the reached state and accepts only `finish` and
-  `set_target` (any other call is refused without dispatch; the tool list itself stays the same
-  so the provider's prefix cache survives), so the model either reports the action or declares
-  the next state instead of investigating a page it has already reached. The sentence the user reads is composed from the observed
+  it matches, the server reports the reached state. For a pure navigation request it accepts
+  only `finish` and `set_target` (other calls are refused without dispatch; the tool list stays
+  the same for prefix caching). A request that also needs a fact may continue reading or
+  observing. The sentence the user reads is composed from the observed
   page, never from model prose. A declared target grants no permission: clicks and navigation
   are routed, confirmed, and settled exactly as before, and a write in the same window is
   settled by the write path instead. The server never ends the turn on a target by itself,
@@ -81,6 +83,9 @@ agent.
   whose result repeats one already returned in the same turn is answered with a short notice
   instead of the full result, and a third such repeat ends the turn as `no_progress` without
   claiming completion; a completed write resets this.
+- Registered typed tools do not require a matching or loaded Skill; Skills provide optional
+  business guidance, not tool installation or authorization. Tool schemas are filtered by
+  deployment write enablement and current actor scope, then checked again at dispatch.
 - Writes are disabled by default. Core turn configuration initially disables every browser
   action that can initiate an application write, including navigation; an adapter must
   explicitly opt into its reviewed subset. An enabled write binds its exact effect and
@@ -214,7 +219,11 @@ add-on also exposes a bounded actor-scoped model/action catalog. The
 Odoo adapter translates it to the core `discover_entities`, `describe_entity`, and
 `query_entity_records` contract, then maps validated generic filters back to bounded Odoo
 reads under the same delegated actor. Native model names and RPC methods are never Agent
-arguments. This does not authorize writes.
+arguments. Generic monetary reads attach the actor-visible currency to each value when
+Odoo exposes a valid currency binding; without it the amount remains text and cannot be
+summed. References to an actor-readable catalog entity retain an opaque related-record
+binding for a follow-up read; the related record is not treated as readable until that read
+succeeds. This does not authorize writes.
 A record found this way carries where it opens (`/odoo/<model>/<id>`, which Odoo 18 opens for any actor who may read the record), and `goto` may use exactly that path.
 
 Provision the disposable local fixture from a checkout:
@@ -254,7 +263,8 @@ source compilation, fixture provisioning, and qualification.
 - Browser and accessibility coverage is strongest on Chromium; other engines and screen
   readers are not comprehensively qualified.
 - A reached page state is checked only against what the Agent declared: the path and any controls it named as selected. The server does not check that the page finished rendering, or that the view or filters the person asked for are showing, so a declaration that leaves them out can be reported as reached. On one-sentence Chinese goals against the Odoo reference, 3 of 37 attempts were reported as reached this way.
-- A typed read that finds nothing answers "not found" for the scope it searched, and says so, but that scope can be narrower than the question: the Odoo quotations read does not cover confirmed sales orders, and the customers read does not cover partners without a customer role. In the same run, 2 of 37 attempts told the person a record did not exist when it did.
+- An empty typed read no longer ends the turn automatically: the Agent receives the exact query result and can check whether the entity and filters match the question. This does not yet prove that a model-selected query covers the user's intent. In the earlier 37-goal run, the old automatic answer incorrectly reported two existing records as absent; one of those reads had searched a customer name for an order number.
+- Reaching a declared page target no longer blocks further reading or observation for requests classified as more than pure navigation. A target still covers only the conditions the Agent declared, so a question or view requirement omitted from that declaration can remain unmet.
 
 ## License
 

@@ -1,4 +1,4 @@
-"""Validated Business Skill catalog and fail-closed tool dispatch."""
+"""Validated application tool catalog and fail-closed tool dispatch."""
 from __future__ import annotations
 
 import hashlib
@@ -34,7 +34,7 @@ _EXPLICIT_TOOL_REFERENCE = re.compile(
 
 
 class BusinessToolRuntime:
-    """Validate a Skill catalog and dispatch only tools from loaded relevant Skills."""
+    """Register application tools independently of optional business playbooks."""
 
     def __init__(self, skills: tuple[BusinessSkill, ...], executor: BusinessToolExecutor,
                  *, application_id: str = "",
@@ -66,8 +66,8 @@ class BusinessToolRuntime:
                 raise ValueError("business tool schema requires parameters")
             schemas[name] = schema
         declared = {name for skill in skills for name in skill.tool_names}
-        if declared != set(schemas):
-            raise ValueError("Business Skills and executor schemas must declare the same tools")
+        if not declared <= set(schemas):
+            raise ValueError("Business Skills reference tools not registered by the executor")
         effects = executor.tool_effects()
         if (not isinstance(effects, dict) or set(effects) != set(schemas)
                 or any(value not in {"read", "write"} for value in effects.values())):
@@ -88,11 +88,6 @@ class BusinessToolRuntime:
                 raise ValueError(
                     f"Business Skill {skill.skill_id} instructions reference unavailable "
                     f"tools: {sorted(unavailable)}")
-            foreign_business = (references & set(schemas)) - set(skill.tool_names)
-            if foreign_business:
-                raise ValueError(
-                    f"Business Skill {skill.skill_id} instructions reference business tools "
-                    f"it does not declare: {sorted(foreign_business)}")
         if application_id and not re.fullmatch(r"[a-z][a-z0-9.-]{2,79}", application_id):
             raise ValueError("business tool application_id is invalid")
         scopes = dict(required_scopes or {})
@@ -330,9 +325,11 @@ class BusinessToolRuntime:
 
     def resolve_capability(self, goal: str, *, allow_mutations: bool,
                            effect: str = "write",
-                           extra: tuple[str, ...] = ()) -> tuple[str, ...]:
+                           extra: tuple[str, ...] = (),
+                           actor_scopes: tuple[str, ...] | None = None) -> tuple[str, ...]:
         return self._catalog.resolve_capability(
-            goal, allow_mutations=allow_mutations, effect=effect, extra=extra)
+            goal, allow_mutations=allow_mutations, effect=effect, extra=extra,
+            actor_scopes=actor_scopes)
 
     def withheld_capability(self, goal: str) -> tuple[str, ...]:
         return self._catalog.withheld_capability(goal)
@@ -356,8 +353,20 @@ class BusinessToolRuntime:
              allowed_ids: set[str]) -> tuple[BusinessSkill | None, str]:
         return self._catalog.load(skill_id, allowed_ids)
 
-    def schemas_for(self, loaded_ids: set[str]) -> list[dict]:
-        return self._catalog.schemas_for(loaded_ids)
+    def available_schemas(self, *, allow_mutations: bool,
+                          actor_scopes: tuple[str, ...] | None = None) -> list[dict]:
+        """Offer deployed tools allowed by this turn, never by loaded Skill IDs.
+
+        Dispatch rechecks the live operation context; schema filtering is only a
+        bounded discovery surface, not an authorization decision.
+        """
+        if not isinstance(allow_mutations, bool):
+            raise TypeError("allow_mutations must be a boolean")
+        scopes = None if actor_scopes is None else set(actor_scopes)
+        return [self._schemas[name] for name in sorted(self._schemas)
+                if (allow_mutations or self._effects[name] == "read")
+                and (scopes is None or not self._required_scopes.get(name)
+                     or self._required_scopes[name] in scopes)]
 
     def is_mutation(self, name: str) -> bool:
         return self._effects.get(name) == "write"
@@ -371,11 +380,8 @@ class BusinessToolRuntime:
                        context: OperationContext | None = None) -> dict:
         if name not in self._schemas:
             raise BusinessToolRequestError("unknown business tool")
-        allowed = {tool for skill_id in loaded_ids
-                   for tool in self._skills[skill_id].tool_names}
-        if name not in allowed:
-            raise BusinessToolRequestError(
-                "load the matching Business Skill before calling this tool")
+        # The installed executor owns the tool. Skill text may explain it but
+        # cannot grant, withdraw, or gate its availability.
         if not isinstance(args, dict):
             raise BusinessToolRequestError("business tool arguments must be an object")
         if context is not None:

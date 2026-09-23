@@ -660,9 +660,9 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         declaration time when the page already shows the target. The server does not end
         the turn here: it can verify the page state but not that the state is the whole of
         the request, and the paid multistep gate showed a model declaring only the first
-        half of one. From this point the model may only finish or declare the next target;
-        the sentence the person then reads is composed from this observation, never from
-        model prose.
+        half of one. Only a pure navigation turn restricts later tools to finish or a new
+        target; a request that also asks a question may continue to read or observe. The
+        person-facing page statement is composed from the observation, not model prose.
         """
         if self._target is None or unmet_conditions(self._target, obs):
             return False

@@ -13,6 +13,7 @@ import math
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Protocol, runtime_checkable
 
 from ..answer.answering import StructuredQueryAnswer
@@ -302,6 +303,10 @@ class EntityField:
     searchable: bool = True
     choices: tuple[EntityChoice, ...] = ()
     evidence_type: str = "text"
+    # Adapter-private binding for a monetary field's denomination. It is never
+    # accepted from the Agent or included in the Agent-facing field descriptor.
+    unit_field_reference: str = ""
+    related_entity_reference: str = ""
 
     def __post_init__(self) -> None:
         reference = _text(self.reference, "entity field reference", 240)
@@ -323,6 +328,16 @@ class EntityField:
             raise ValueError("only choice fields may declare choices")
         if self.evidence_type not in _EVIDENCE_TYPES:
             raise ValueError("entity field evidence type is invalid")
+        if self.unit_field_reference:
+            if self.kind != "monetary":
+                raise ValueError("only monetary fields may bind a unit field")
+            object.__setattr__(self, "unit_field_reference", _text(
+                self.unit_field_reference, "entity unit field reference", 240))
+        if self.related_entity_reference:
+            if self.kind != "reference":
+                raise ValueError("only reference fields may bind a related entity")
+            object.__setattr__(self, "related_entity_reference", _text(
+                self.related_entity_reference, "related entity reference", 240))
 
 
 @dataclass(frozen=True, slots=True)
@@ -345,12 +360,18 @@ class EntityQuery:
 class EntityCell:
     field_reference: str
     value: str
+    unit: str = ""
+    related_record_id: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "field_reference", _text(
             self.field_reference, "entity cell field reference", 240))
         object.__setattr__(self, "value", _text(
             self.value, "entity cell value", _MAX_VALUE_CHARS, empty=True))
+        object.__setattr__(self, "unit", _text(
+            self.unit, "entity cell unit", 80, empty=True))
+        object.__setattr__(self, "related_record_id", _text(
+            self.related_record_id, "related record ID", 200, empty=True))
 
 
 @dataclass(frozen=True, slots=True)
@@ -435,6 +456,8 @@ def _field_binding(entity_id: str, fields: tuple[EntityField, ...]) -> str:
             "choices": [{"value": choice.value, "label": choice.label}
                         for choice in field.choices],
             "evidence_type": field.evidence_type,
+            "unit_field_reference": field.unit_field_reference,
+            "related_entity_reference": field.related_entity_reference,
         } for field in fields],
     })
 
@@ -766,10 +789,29 @@ class EntityReadTools:
         if not isinstance(page, EntityQueryPage) or len(page.records) > limit:
             raise BusinessToolContractError("the application returned an invalid entity page")
         expected = tuple(field.reference for field in selected)
+        related_entities = {entity.reference: entity_id for entity_id, entity
+                            in self._entities(catalog, context)}
         for record in page.records:
             if tuple(cell.field_reference for cell in record.cells) != expected:
                 raise BusinessToolContractError(
                     "the application omitted, repeated or reordered a requested field")
+            for field, cell in zip(selected, record.cells, strict=True):
+                if (cell.related_record_id and
+                        (field.kind != "reference" or not field.related_entity_reference)):
+                    raise BusinessToolContractError(
+                        "the application returned an unbound related record")
+                if cell.unit:
+                    if field.kind != "monetary" or not cell.value:
+                        raise BusinessToolContractError(
+                            "the application attached a unit to a non-monetary value")
+                    try:
+                        number = Decimal(cell.value)
+                    except InvalidOperation as exc:
+                        raise BusinessToolContractError(
+                            "the application returned a nonnumeric monetary value") from exc
+                    if not number.is_finite():
+                        raise BusinessToolContractError(
+                            "the application returned a nonfinite monetary value")
         observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         origin = Origin(kind="typed", reference=QUERY_ENTITY_RECORDS_TOOL,
                         observed_at=observed_at, scope=page.scope)
@@ -789,14 +831,24 @@ class EntityReadTools:
             for field_id, field, answer_field, cell in zip(
                     raw_ids, selected, answer_fields, record.cells, strict=True):
                 values.append({"field_id": field_id, "label": field.label,
-                               "value": cell.value})
+                               "value": cell.value,
+                               **({"unit": cell.unit} if cell.unit else {}),
+                               **({"related_entity_id": related_entities[
+                                   field.related_entity_reference],
+                                   "related_record_id": cell.related_record_id}
+                                  if (cell.related_record_id and
+                                      field.related_entity_reference in related_entities)
+                                  else {})})
                 cells.append(cell.value)
                 evidence.append(RecordEvidence(
                     evidence_id=f"record#{len(evidence)}", origin=origin,
                     record_id=f"{entity.label}/{record.display_id}",
                     field_name=answer_field,
                     field_meaning=field.label, field_was_read=True,
-                    value=cell.value or None, value_type=field.evidence_type,
+                    value=cell.value or None,
+                    value_type=("money" if field.kind == "monetary" and cell.unit
+                                else field.evidence_type),
+                    unit=cell.unit,
                 ))
             records.append({"record_id": record.display_id, "values": values,
                             **({"ui_path": record.route} if record.route else {})})

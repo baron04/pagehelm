@@ -4,9 +4,6 @@ from __future__ import annotations
 import hashlib
 import re
 
-from ..answer import answer_protocol
-from ..answer.answer_view import render_payload
-from ..answer.evidence import EvidenceUnknown
 from ..transport.browser import TransportError, TurnCancelled
 from ..business.errors import BusinessToolError, BusinessToolPermissionError
 from .knowledge_tools import finish_with_clarification
@@ -48,7 +45,7 @@ def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: d
         session.latest_business_tool_result = tool_result
         session._form_draft = (
             tool_result.form_draft if session.allow_form_prefill else None)
-        recorded_evidence = session._answers.collect_evidence(tool_result, step=step)
+        session._answers.collect_evidence(tool_result, step=step)
         session._latest_business_query_page_actions = (
             session.page_actions if tool_result.query_answer is not None else None)
         if tool_result.query_answer is not None:
@@ -96,42 +93,17 @@ def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: d
                 "answer now without a browser action. Navigate only when the "
                 "user explicitly asked to open a record or collection.")
             projection = tool_result.query_answer
-            if (projection.complete and projection.matched_count == 0
-                    and len(session._task_business_skills) == 1
-                    and all(skill.read_only
-                            for skill in session._task_business_skills)
-                    and len(recorded_evidence) == 1):
-                evidence_ref = recorded_evidence[0]
-                try:
-                    verified = answer_protocol.submit(session.evidence, {
-                        "outcome": "answered",
-                        "answer": {
-                            "version": 1,
-                            "coverage": "complete",
-                            "presentation": "brief",
-                            "conclusions": [{
-                                "kind": "not_found",
-                                "evidence_ref": evidence_ref,
-                            }],
-                        },
-                    })
-                except (ValueError, TypeError, EvidenceUnknown):
-                    # An adapter may provide other evidence shapes beside its
-                    # display projection. In that case the model still has to
-                    # choose a conclusion; never guess which item proves absence.
-                    pass
-                else:
-                    verified = session._answers.with_labels(verified)
-                    result.verified_answer = verified
-                    result.agent_said = render_payload(
-                        verified, user_text=session.task.prompt,
-                        max_chars=max(512, session.max_agent_said_chars))
-                    session.ledger.append(
-                        "answer_verified", step=step, conclusions=1,
-                        coverage="complete", deterministic="empty_query")
-                    return _Next(session._finish(
-                        result, t0, "agent_finished", result.agent_said,
-                        steps=step))
+            if projection.complete and projection.matched_count == 0:
+                # Completeness describes this tool's query scope, not whether
+                # its entity and filters answer the user's question. A number
+                # searched as a customer name is a complete empty query, but
+                # says nothing about the customer of that numbered order.
+                feedback += (
+                    "\n\nEMPTY QUERY SCOPE: No records matched this particular "
+                    "entity and filter. Do not conclude that the requested "
+                    "object is absent until its identity and query scope match "
+                    "the user's request. Check another relevant entity or "
+                    "relation if needed.")
             # Several records answer the person's own identifying words only
             # when the read carried them. A read that named nothing returns the
             # collection, and "which one did you mean" is then a question they
