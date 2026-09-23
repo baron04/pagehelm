@@ -48,7 +48,11 @@ class BusinessToolRuntime:
                  withheld_skills: tuple[BusinessSkill, ...] = (),
                  operations: dict[str, ToolOperation] | None = None,
                  forbidden_operations: tuple[ForbiddenOperation, ...] = (),
-                 answer_labels: dict[str, dict[str, str]] | None = None):
+                 answer_labels: dict[str, dict[str, str]] | None = None,
+                 numeric_goal_binding: bool = False):
+        if not isinstance(numeric_goal_binding, bool):
+            raise TypeError("numeric_goal_binding must be a boolean")
+        self.numeric_goal_binding = numeric_goal_binding
         skill_ids = [skill.skill_id for skill in skills]
         if len(skill_ids) != len(set(skill_ids)):
             raise ValueError("Business Skill IDs must be unique")
@@ -202,6 +206,11 @@ class BusinessToolRuntime:
     def mutation_tool_names(self) -> frozenset[str]:
         return frozenset(
             name for name, effect in self._effects.items() if effect == "write")
+
+    @property
+    def read_tool_names(self) -> frozenset[str]:
+        return frozenset(
+            name for name, effect in self._effects.items() if effect == "read")
 
     @property
     def required_scopes(self) -> dict[str, str]:

@@ -6,8 +6,9 @@ import json
 import re
 
 from ..answer import answer_protocol
+from ..answer.goal_scope import AnswerGoal
 from ..business.runtime import BusinessToolResult, BusinessToolRuntime
-from ..answer.evidence import EvidenceUnknown, TurnEvidence
+from ..answer.evidence import EvidenceUnknown, QueryEvidence, TurnEvidence
 from ..state.ledger import SessionLedger
 from ..privacy import redact_sensitive_assignments
 
@@ -68,8 +69,15 @@ class TurnAnswer:
         self.page_answer_digest = ""
         self.action_receipt: dict | None = None
         self.latest_business_query_page_actions: int | None = None
+        self.answer_goals: tuple[AnswerGoal, ...] = ()
+        self.first_business_read_seen = False
+        # The host, not an adapter-provided text label, binds each query reference to
+        # the exact registered tool call that produced it.
+        self.query_tools: dict[str, str] = {}
+        self.generated_goal_metric_refs: set[str] = set()
 
-    def collect_evidence(self, tool_result, *, step: int) -> tuple[str, ...]:
+    def collect_evidence(self, tool_result, *, step: int,
+                         read_tool: str = "") -> tuple[str, ...]:
         """Capture a typed result's evidence and current clarification candidates."""
         items = getattr(tool_result, "evidence", ()) or ()
         self.evidence_feedback = ""
@@ -83,6 +91,10 @@ class TurnAnswer:
         except (ValueError, TypeError, EvidenceUnknown) as exc:
             refused.append(str(exc)[:200])
         if recorded:
+            if read_tool:
+                self.query_tools.update(
+                    {ref: read_tool for ref in recorded
+                     if isinstance(self.evidence.get(ref), QueryEvidence)})
             self.evidence_feedback = (
                 answer_protocol.ANSWER_INSTRUCTIONS + "\n"
                 + answer_protocol.evidence_index(self.evidence, tuple(recorded)))

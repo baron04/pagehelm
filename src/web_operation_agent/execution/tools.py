@@ -7,6 +7,8 @@ surface separate first prevents their availability rules from being duplicated a
 """
 from __future__ import annotations
 
+from copy import deepcopy
+
 from ..answer import answer_protocol, page_answer
 from ..business.forms import FORM_TOOL_SCHEMAS
 from .knowledge_tools import capability_check_available
@@ -79,9 +81,39 @@ class ToolSurface:
                 tools += [LOAD_SKILL_TOOL]
         if session.business_tools is not None:
             principal = session._approvals.principal
-            tools += session.business_tools.available_schemas(
+            business_schemas = session.business_tools.available_schemas(
                 allow_mutations=session._approvals.mutations_enabled,
                 actor_scopes=(principal.scopes if principal is not None else None))
+            read_names = session.business_tools.read_tool_names & {
+                schema["function"]["name"] for schema in business_schemas}
+            goal_property = {
+                "type": "array", "minItems": 0, "maxItems": 4,
+                "description": (
+                    "Required on the FIRST business read. For a current count or sum "
+                    "question, name every requested read collection and metric, even if "
+                    "this call only resolves an identity. For other tasks pass []. These "
+                    "goals freeze before results and cannot be changed later."),
+                "items": {"type": "object", "additionalProperties": False,
+                          "properties": {
+                              "target_read_tool": {"type": "string",
+                                                   "enum": sorted(read_names)},
+                              "measures": {"type": "array", "minItems": 1,
+                                           "maxItems": 2, "uniqueItems": True,
+                                           "items": {"type": "string",
+                                                     "enum": ["count", "sum"]}},
+                          },
+                          "required": ["target_read_tool", "measures"]},
+            }
+            for schema in business_schemas:
+                if (session.business_tools.numeric_goal_binding
+                        and not session._answers.first_business_read_seen
+                        and schema["function"]["name"] in read_names):
+                    schema = deepcopy(schema)
+                    parameters = schema["function"]["parameters"]
+                    parameters["properties"]["answer_goals"] = goal_property
+                    parameters["required"] = list(dict.fromkeys(
+                        [*(parameters.get("required") or []), "answer_goals"]))
+                tools.append(schema)
         if session.allow_form_prefill and session._application_form_tools is not None:
             tools += list(FORM_TOOL_SCHEMAS)
         if session.allow_form_prefill and (session._application_form_tools is not None

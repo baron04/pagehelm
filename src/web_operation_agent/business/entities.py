@@ -897,12 +897,16 @@ class EntityReadTools:
         observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         origin = Origin(kind="typed", reference=QUERY_ENTITY_RECORDS_TOOL,
                         observed_at=observed_at, scope=page.scope)
+        answer_fields = _answer_fields(selected)
         evidence = [QueryEvidence(
             evidence_id="query#1", origin=origin, collection=entity.label[:100],
             conditions=tuple(conditions) or ("no filter",),
             matched_count=page.matched_count, records_scanned=len(page.records),
             covers_whole_scope=offset == 0 and len(page.records) == page.matched_count,
             count_exact=True,
+            summable_fields=tuple(answer_name for field, answer_name in
+                                  zip(selected, answer_fields, strict=True)
+                                  if field.summable),
         )]
         public_aggregates = []
         for index, aggregate in enumerate(page.aggregates, start=1):
@@ -925,7 +929,6 @@ class EntityReadTools:
             ))
         records = []
         answer_rows = []
-        answer_fields = _answer_fields(selected)
         for record in page.records:
             values = []
             cells = []

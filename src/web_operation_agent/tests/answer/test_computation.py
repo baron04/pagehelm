@@ -50,6 +50,34 @@ class TheTotalIsPerformedNotParaphrased(unittest.TestCase):
         self.assertEqual(result.value, "5")
         self.assertEqual(result.value_type, "count")
 
+    def test_exact_empty_sum_uses_certified_field_without_inventing_currency(self):
+        turn = TurnEvidence()
+        turn.record(QueryEvidence(
+            evidence_id="query#1",
+            origin=Origin("typed", "read_orders", AT, "orders for exact customer"),
+            collection="orders", conditions=("customer id = 10",),
+            matched_count=0, records_scanned=0, covers_whole_scope=True,
+            count_exact=True, summable_fields=("amount_total",)))
+        result = run(turn, ComputationRequest(
+            operation="sum", over=("query#1",), field_name="amount_total"),
+            evidence_id="computed#1", observed_at=AT)
+        self.assertEqual((result.value, result.value_type, result.unit),
+                         ("0", "number", ""))
+        self.assertTrue(result.covers_whole_scope)
+
+    def test_empty_sum_does_not_accept_an_untyped_or_partial_field(self):
+        turn = TurnEvidence()
+        turn.record(QueryEvidence(
+            evidence_id="query#1",
+            origin=Origin("typed", "read_orders", AT, "orders for exact customer"),
+            collection="orders", conditions=("customer id = 10",),
+            matched_count=0, records_scanned=0, covers_whole_scope=True,
+            count_exact=True))
+        with self.assertRaisesRegex(ComputationRefused, "no records"):
+            run(turn, ComputationRequest(
+                operation="sum", over=("query#1",), field_name="amount_total"),
+                evidence_id="computed#1", observed_at=AT)
+
 
 class AFilterIsASelectionNotARowDump(unittest.TestCase):
     """"Which quotations are over 2000" was answered with all five.

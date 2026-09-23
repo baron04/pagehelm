@@ -34,7 +34,11 @@ agent.
   ordering and exact counts. Odoo and the structurally different synthetic Contacts REST
   adapter run the same contract tests. When one answer combines different read scopes,
   numeric headlines identify their own scope; this does not prove that the Agent selected
-  the scope the user intended.
+  the scope the user intended. The Odoo reference also opts into a narrow count/sum
+  answer check: before its first business read the Agent declares the requested read
+  collections and measures; the server binds computed numbers to the executed query and
+  refuses a complete answer that substitutes another collection. This does not yet verify
+  that the declared collection, subject, or filters match the user's intent.
 - An optional application-neutral current-form contract supports a no-Skill fallback for
   safe scalar form filling. `describe_form` intersects the latest viewport controls with
   actor-scoped adapter metadata and returns only short-lived opaque IDs; `prepare_form`

@@ -215,7 +215,9 @@ class OdooReadTools:
             evidence_id="query#1", origin=origin, collection=collection.tool.removeprefix("query_"),
             conditions=conditions,
             matched_count=matched, records_scanned=scanned, covers_whole_scope=whole,
-            looked_for=looked_for, count_exact=count_exact, exact_matches=exact_matches)]
+            looked_for=looked_for, count_exact=count_exact, exact_matches=exact_matches,
+            summable_fields=tuple(field for field in collection.fields
+                                  if field in self._NUMERIC_FIELDS))]
         index = 0
         for row, _item in pairs:
             record_id = row.get("id")

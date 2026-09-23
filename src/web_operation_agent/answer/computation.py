@@ -246,6 +246,15 @@ def run(turn: TurnEvidence, request: ComputationRequest, *,
     values = [_decimal(item.value or "", where=f"{item.record_id}.{item.field_name}")
               for item in records]
     if not values:
+        if (request.operation == "sum" and expected == 0 and whole
+                and request.field_name in query.summable_fields):
+            # An application-certified additive field has an empty-set sum of zero.
+            # No result row exists from which to infer a currency, so report an
+            # unqualified numeric zero rather than inventing one from the account.
+            return turn_record(turn, ComputationEvidence(
+                evidence_id=evidence_id, origin=origin, operation=request.describe(),
+                inputs=request.over, value="0", value_type="number", unit="",
+                covers_whole_scope=True))
         raise ComputationRefused(
             f"{request.operation} over no records has no result; a count would")
     numeric = {item.value_type for item in records}

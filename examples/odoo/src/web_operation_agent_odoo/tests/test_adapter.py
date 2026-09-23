@@ -89,6 +89,14 @@ class _ProductRoutingChat(CancellableChatDouble):
     def complete(self, _messages, _tools, _run_id, **_kwargs):
         self.calls += 1
         name, arguments = self.script.pop(0)
+        # Legacy scripted cases exercise routing, permissions, and answer evidence rather
+        # than numeric-intent extraction. Satisfy the production first-read schema for
+        # those cases; dedicated goal-binding tests cover malformed or missing goals.
+        offered = next((tool["function"]["parameters"] for tool in _tools
+                        if tool["function"]["name"] == name), None)
+        if (offered is not None and "answer_goals" in offered.get("properties", {})
+                and "answer_goals" not in arguments):
+            arguments = {**arguments, "answer_goals": []}
         return {"tool_calls": [{"id": f"call-{self.calls}", "function": {
             "name": name, "arguments": json.dumps(arguments),
         }}]}

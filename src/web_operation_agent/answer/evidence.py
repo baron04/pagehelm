@@ -163,6 +163,10 @@ class QueryEvidence:
     #: not establish that a record called "Acme" exists; this does. None when the adapter
     #: cannot say, and then no answer may claim that such a record exists.
     exact_matches: int | None = None
+    #: Adapter-certified additive fields in this query.  They are needed when the exact
+    #: result is empty: no record field exists to prove that a requested sum is numeric,
+    #: yet the sum of an empty additive population is zero.  No currency is inferred.
+    summable_fields: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _require_id(self.evidence_id)
@@ -190,6 +194,12 @@ class QueryEvidence:
             if not self.looked_for or self.exact_matches > self.matched_count:
                 raise ValueError("exact_matches needs looked_for and cannot exceed "
                                  "matched_count")
+        if (not isinstance(self.summable_fields, tuple)
+                or len(self.summable_fields) > 20
+                or len(set(self.summable_fields)) != len(self.summable_fields)):
+            raise ValueError("summable_fields must be unique and bounded")
+        object.__setattr__(self, "summable_fields", tuple(
+            _text(name, "summable field") for name in self.summable_fields))
 
     @property
     def found_nothing(self) -> bool:

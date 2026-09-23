@@ -102,7 +102,8 @@ class AChineseAnswerSpeaksChinese(unittest.TestCase):
 
     def test_a_filtered_total_names_its_filter_and_hides_the_query(self):
         script = [("load_skill", {"skill_id": "odoo.sales.sale-orders-confirm"}),
-                  ("query_quotations", {"limit": 50}),
+                  ("query_quotations", {"limit": 50, "answer_goals": [
+                      {"target_read_tool": "query_quotations", "measures": ["sum"]}]}),
                   ("compute", {"operation": "filter", "dataset_ref": "call2-query#1",
                                "field": "state", "comparison": "eq", "threshold": "sent"}),
                   ("compute", {"operation": "sum", "dataset_ref": "calc#3",

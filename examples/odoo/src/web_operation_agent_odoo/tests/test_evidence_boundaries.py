@@ -138,7 +138,8 @@ class EvidenceKeepsItsBatch(unittest.TestCase):
 class ComputationStaysInsideWhatWasRead(unittest.TestCase):
     def test_b05_filtering_again_cannot_bring_back_what_the_first_filter_removed(self):
         result, _rows, _browser = _Turn("B05", [
-            ("query_customers", {"limit": 5}),
+            ("query_customers", {"limit": 5, "answer_goals": [
+                {"target_read_tool": "query_customers", "measures": ["count"]}]}),
             ("compute", {"operation": "filter", "dataset_ref": "call2-query#1",
                          "field": "name", "comparison": "eq",
                          "threshold": "Acme Corporation"}),
@@ -327,7 +328,8 @@ class ActingIsNotEvidence(unittest.TestCase):
 class SourcesFollowOnlyWhatWasCited(unittest.TestCase):
     def test_b18_an_unreferenced_record_leaves_no_trace_in_the_answer(self):
         result, _rows, _browser = _Turn("B18", [
-            ("query_customers", {"limit": 5}),
+            ("query_customers", {"limit": 5, "answer_goals": [
+                {"target_read_tool": "query_customers", "measures": ["count"]}]}),
             ("compute", {"operation": "filter", "dataset_ref": "call2-query#1",
                          "field": "name", "comparison": "eq",
                          "threshold": "Acme Corporation"}),

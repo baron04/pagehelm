@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import time
 
+from ..answer.goal_scope import parse_answer_goals
 from .business_mutations import execute_business_mutation, observe_after_business_mutation
 from .business_reads import execute_business_read
 from .form_tools import apply_form_draft, prefill_form
@@ -27,6 +28,34 @@ def business_tool(session, turn: "_Turn", call: dict, name: str, args: dict) -> 
     if session.business_tools.is_mutation(name):
         return execute_business_mutation(
             session, turn, call, name, args, operation_context, operation_identity)
+    if session.business_tools.numeric_goal_binding and isinstance(args, dict):
+        raw_goals = args.get("answer_goals")
+        if raw_goals is None and not session._answers.first_business_read_seen:
+            return session._reply(
+                turn, call, "The first business read requires answer_goals: declare "
+                "the requested count/sum collections, or pass [] when this request "
+                "does not need numeric business data. No read was dispatched.")
+        if raw_goals is not None:
+            try:
+                goals = parse_answer_goals(
+                    raw_goals, read_tools=session.business_tools.read_tool_names)
+            except ValueError as exc:
+                return session._reply(turn, call, "Invalid answer goals: " + str(exc))
+            if session._answers.first_business_read_seen:
+                if goals != session._answers.answer_goals:
+                    return session._reply(
+                        turn, call, "Answer goals were already frozen before the first "
+                        "business read; a later result cannot replace them. Continue with "
+                        "the original goal or report its unmet part.")
+            else:
+                session._answers.answer_goals = goals
+                session.ledger.append(
+                    "answer_goals_frozen", step=turn.step,
+                    targets=[goal.target_read_tool for goal in goals],
+                    measures=[sorted(goal.measures) for goal in goals],
+                    side_effect_possible=False)
+        session._answers.first_business_read_seen = True
+        args = {key: value for key, value in args.items() if key != "answer_goals"}
     return execute_business_read(
         session, turn, call, name, args, operation_context, operation_identity)
 

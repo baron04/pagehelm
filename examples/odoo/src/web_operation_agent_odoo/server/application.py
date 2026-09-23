@@ -284,7 +284,8 @@ class OdooApplicationAdapter:
                         if name in {schema["function"]["name"]
                                     for schema in executor.tool_schemas()}},
             forbidden_operations=FORBIDDEN_OPERATIONS,
-            answer_labels={"zh": ANSWER_LABELS_ZH})
+            answer_labels={"zh": ANSWER_LABELS_ZH},
+            numeric_goal_binding=True)
         self._executor = executor
         self._click_policy: OdooReviewedClickPolicy | None = None
         # The form port recognizes bounded create pages. It declares the draft's

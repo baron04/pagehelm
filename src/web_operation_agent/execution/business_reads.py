@@ -4,10 +4,12 @@ from __future__ import annotations
 import hashlib
 import re
 
+from ..answer import answer_protocol
 from ..transport.browser import TransportError, TurnCancelled
 from ..business.errors import BusinessToolError, BusinessToolPermissionError
 from ..business.entities import QUERY_ENTITY_RECORDS_TOOL
 from .knowledge_tools import finish_with_clarification
+from .goal_metrics import materialize_goal_metrics
 from .prompts import CLARIFICATION_CHOICE_LIMIT, _assistant_call, _tool_result, _trim
 from .routes import observation_is_at_route
 from .runstate import _Next, _Turn
@@ -50,7 +52,12 @@ def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: d
         session.latest_business_tool_result = tool_result
         session._form_draft = (
             tool_result.form_draft if session.allow_form_prefill else None)
-        session._answers.collect_evidence(tool_result, step=step)
+        recorded_refs = session._answers.collect_evidence(
+            tool_result, step=step, read_tool=name)
+        goal_metric_refs = materialize_goal_metrics(
+            session.evidence, recorded_refs, tool=name,
+            goals=session._answers.answer_goals, step=step)
+        session._answers.generated_goal_metric_refs.update(goal_metric_refs)
         session._latest_business_query_page_actions = (
             session.page_actions if tool_result.query_answer is not None else None)
         if tool_result.query_answer is not None:
@@ -90,6 +97,11 @@ def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: d
                 "the user.")
         if session._evidence_feedback and first_step == step:
             feedback += "\n\n" + session._evidence_feedback
+        if goal_metric_refs and first_step == step:
+            feedback += (
+                "\n\nDECLARED GOAL METRICS READY (full executed scope; cite these "
+                "refs directly in finish instead of calling compute again):\n"
+                + answer_protocol.evidence_index(session.evidence, goal_metric_refs))
         if session._clarification_feedback:
             feedback += "\n\n" + session._clarification_feedback
         if tool_result.query_answer is not None:
@@ -103,12 +115,22 @@ def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: d
                 # its entity and filters answer the user's question. A number
                 # searched as a customer name is a complete empty query, but
                 # says nothing about the customer of that numbered order.
-                feedback += (
-                    "\n\nEMPTY QUERY SCOPE: No records matched this particular "
-                    "entity and filter. Do not conclude that the requested "
-                    "object is absent until its identity and query scope match "
-                    "the user's request. Check another relevant entity or "
-                    "relation if needed.")
+                if any(goal.target_read_tool == name
+                       for goal in session._answers.answer_goals):
+                    feedback += (
+                        "\n\nEMPTY DECLARED GOAL SCOPE: This requested collection has "
+                        "an exact zero under the executed conditions. If the subject "
+                        "identity and filter match the user's request, compute count "
+                        "and any adapter-certified empty sum on THIS query reference. "
+                        "Other collections may help investigate identity, but their "
+                        "numbers cannot replace this goal's count or total.")
+                else:
+                    feedback += (
+                        "\n\nEMPTY QUERY SCOPE: No records matched this particular "
+                        "entity and filter. Do not conclude that the requested "
+                        "object is absent until its identity and query scope match "
+                        "the user's request. Check another relevant entity or "
+                        "relation if needed.")
             # Several records answer the person's own identifying words only
             # when the read carried them. A read that named nothing returns the
             # collection, and "which one did you mean" is then a question they

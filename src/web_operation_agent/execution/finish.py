@@ -1,9 +1,10 @@
 """Settlement of the model's terminal ``finish`` tool call."""
 
 from ..answer import answer_protocol
+from ..answer.goal_scope import assess_goal_conclusions, normalize_goal_entries
 from ..answer.answer_view import (capability_gap_answer, render_payload,
                                   unavailable_answer)
-from ..answer.evidence import EvidenceUnknown
+from ..answer.evidence import ComputationEvidence, EvidenceUnknown
 from .knowledge_tools import active_capability_digest
 from .page_evidence import capture_page_snapshot
 from .prompts import _assistant_call, _tool_result
@@ -108,6 +109,22 @@ class FinishHandler:
                 answer = args.get("answer") if isinstance(args, dict) else None
                 conclusions = (answer.get("conclusions")
                                if isinstance(answer, dict) else ())
+                if (self._answers.answer_goals and isinstance(answer, dict)):
+                    normalized, removed = normalize_goal_entries(
+                        self.evidence, conclusions, self._answers.answer_goals,
+                        self._answers.query_tools,
+                        frozenset(self._answers.generated_goal_metric_refs),
+                        complete=answer.get("coverage") == "complete")
+                    if removed:
+                        self.ledger.append("unrequested_answer_facts_omitted",
+                                           step=step, refs=list(removed))
+                    if removed and not normalized:
+                        raise ValueError(
+                            "only unrequested collection facts were selected; cite a "
+                            "metric from the read goal frozen before the first result")
+                    args = {**args, "answer": {**answer, "conclusions": normalized}}
+                    answer = args["answer"]
+                    conclusions = normalized
                 claims_read_only_result = (
                     isinstance(conclusions, list)
                     and any(isinstance(item, dict) for item in conclusions))
@@ -170,6 +187,42 @@ class FinishHandler:
                     if ignored:
                         self.ledger.append("answer_fields_ignored", step=step,
                                            fields=ignored[:12])
+                if (verified is not None and self._answers.answer_goals
+                        and isinstance(args, dict)
+                        and isinstance(args.get("answer"), dict)):
+                    findings = assess_goal_conclusions(
+                        self.evidence, args["answer"].get("conclusions"),
+                        self._answers.answer_goals, self._answers.query_tools)
+                    wrong = tuple(item for item in findings
+                                  if item.startswith(("unrequested ", "inconsistent ")))
+                    missing = tuple(item for item in findings
+                                    if item.startswith("missing "))
+                    if wrong or (verified["coverage"] == "complete" and missing):
+                        raise ValueError(
+                            "the answer does not cover the read collections and metrics "
+                            "frozen before the first business result: "
+                            + "; ".join((*wrong, *missing))
+                            + ". Use an exact result from the declared collection, "
+                            "or report partial/unable; another collection cannot replace it")
+                if (verified is not None and self.business_tools is not None
+                        and self.business_tools.numeric_goal_binding
+                        and self._answers.first_business_read_seen
+                        and not self._answers.answer_goals
+                        and isinstance(args, dict)
+                        and isinstance(args.get("answer"), dict)
+                        and args["answer"].get("coverage") == "complete"):
+                    for entry in args["answer"].get("conclusions") or ():
+                        if not isinstance(entry, dict) or entry.get("kind") != "aggregate":
+                            continue
+                        item = self.evidence.get(entry.get("evidence_ref", ""))
+                        if (isinstance(item, ComputationEvidence)
+                                and (item.operation == "count()"
+                                     or item.operation.startswith("sum(")
+                                     or item.operation.startswith("sum of "))):
+                            raise ValueError(
+                                "a complete count or sum answer needs the requested "
+                                "collection frozen on the first business read; an empty "
+                                "answer_goals declaration cannot be upgraded after results")
                 if self._refused_reads and any(
                         item["kind"] == "page_observation"
                         for item in verified["conclusions"]):
