@@ -32,7 +32,9 @@ agent.
   REST, OpenAPI, or other native metadata behind the contract. The core validates an
   AND-only filter AST and pagination bounds; the contract requires stable adapter-owned
   ordering and exact counts. Odoo and the structurally different synthetic Contacts REST
-  adapter run the same contract tests.
+  adapter run the same contract tests. When one answer combines different read scopes,
+  numeric headlines identify their own scope; this does not prove that the Agent selected
+  the scope the user intended.
 - An optional application-neutral current-form contract supports a no-Skill fallback for
   safe scalar form filling. `describe_form` intersects the latest viewport controls with
   actor-scoped adapter metadata and returns only short-lived opaque IDs; `prepare_form`

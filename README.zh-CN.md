@@ -24,7 +24,8 @@ Web Operation Agent 是一个 alpha 阶段的框架，用于在第一方 Web 应
   就能执行有界读取。Agent 只拿到与当前目录绑定的不透明实体/字段 ID；Adapter 把自己的
   ORM、REST、OpenAPI 或其它原生元数据翻译到合同之后。核心校验仅 AND 的过滤 AST 与分页
   上限；合同要求 Adapter 提供稳定排序和准确计数。Odoo 与结构不同的合成 Contacts REST
-  Adapter 运行同一组合同测试。
+  Adapter 运行同一组合同测试。答案组合了不同读取范围时，数量和合计的标题会标明各自范围；
+  这仍不能证明 Agent 选中了用户真正要的范围。
 - 可选的应用无关当前表单合同为无 Skill 场景提供安全的标量字段预填兜底。
   `describe_form` 只取最新视口控件与同 actor Adapter 元数据的交集，并返回短期不透明 ID；
   `prepare_form` 重新核对两侧事实，把准确的原生绑定只保留在服务端；`prefill_form` 按草稿

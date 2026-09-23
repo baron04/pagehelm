@@ -240,6 +240,12 @@ def render(answer: VerifiedAnswer, *, user_text: str, max_chars: int,
     lines: list[str] = [action_text, ""] if action_text else []
 
     items = answer.conclusions
+    # A collection count and a total can each be evidenced yet still answer a different
+    # question when the model mixes collections. Put their scopes in the headline whenever
+    # this answer cites more than one scope; a provenance footer alone is easy to miss.
+    words["show_scope_head"] = len({item.get("scope") for item in items
+                                    if item.get("kind") in {"selection", "aggregate", "not_found"}
+                                    and item.get("scope")}) > 1
     index = 0
     while index < len(items):
         end = index
@@ -303,6 +309,9 @@ def _selection_head(words: dict, item: dict) -> str:
     else:
         count = (f"下面列出 {shown} 条，符合条件的总数未能确认" if zh
                  else f"{shown} listed below; the total could not be confirmed")
+    if words.get("show_scope_head"):
+        scope = _literal(_named(words, item["scope"]))
+        count += f"（范围：{scope}）" if zh else f" (scope: {scope})"
     if item.get("source_kind") == "computed":
         # A computed selection's condition is the model's own filter over what was read --
         # "date_order ge 2026-08-18" for "orders in the last month" -- and it is part of the
@@ -516,6 +525,9 @@ def _one(words: dict, item: dict, *, presentation: str) -> list[str]:
         applied = _readable_condition(str(item.get("filter") or ""), words)
         if applied:
             label += f"（筛选：{applied}）" if chinese else f" (filter: {applied})"
+        if words.get("show_scope_head"):
+            scope = _literal(_named(words, item["scope"]))
+            label += f"（范围：{scope}）" if chinese else f" (scope: {scope})"
         unit = f" {_literal(item['unit'])}" if item.get("unit") else ""
         return [f"**{label}**：{_literal(item['value'])}{unit}", _basis(words, item)]
     if kind == "not_found":

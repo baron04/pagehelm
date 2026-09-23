@@ -11,7 +11,8 @@ from __future__ import annotations
 import unittest
 
 from web_operation_agent.answer.answer_protocol import compute, submit
-from web_operation_agent.answer.answer_view import render_payload
+from web_operation_agent.answer.answer_view import render, render_payload
+from web_operation_agent.answer.conclusion import VerifiedAnswer
 from web_operation_agent.answer.evidence import Origin, QueryEvidence, RecordEvidence, TurnEvidence
 
 AT = "2026-09-18T00:00:00+00:00"
@@ -97,6 +98,25 @@ class AFilterTheListStandsOnIsShown(unittest.TestCase):
         self.assertIn("共 2 条（筛选：amount\\_total \\> 500）", text)
         self.assertNotIn("state not in", text,
                          "the adapter's own query conditions stay in the answer basis")
+
+
+class MultipleReadScopesStayVisible(unittest.TestCase):
+    def test_numeric_headlines_cannot_hide_a_different_collection(self):
+        answer = VerifiedAnswer((
+            {"kind": "selection", "matched": 2, "total": 2, "count_exact": True,
+             "covers_whole_scope": True, "scope": "open quotations", "source_kind": "typed",
+             "members": ["quote/1", "quote/2"], "fields": []},
+            {"kind": "aggregate", "operation": "sum(amount_total)", "value": "2145.00",
+             "unit": "USD", "covers_whole_scope": True, "scope": "open quotations",
+             "source_kind": "computed"},
+            {"kind": "not_found", "looked_for": "orders", "scope": "confirmed orders"},
+        ), "complete", "")
+        text = render(answer, user_text="这位客户下过几单？金额合计多少？",
+                      max_chars=4000, labels={"open quotations": "未确认报价单",
+                                               "confirmed orders": "已确认订单"})
+        self.assertIn("共 2 条（范围：未确认报价单）", text)
+        self.assertIn("合计（范围：未确认报价单）**：2145.00 USD", text)
+        self.assertIn("未找到**：orders", text)
 
 
 class APageFactSaysWhatItCovers(unittest.TestCase):
