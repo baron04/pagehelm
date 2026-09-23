@@ -6,8 +6,8 @@ answer and writes end on a settled receipt, but a navigation ended only when the
 decided to call ``finish``; a model that kept investigating after it had already reached
 the page spent the whole step budget on the page it wanted (Phase 8, section 16).
 
-The model declares a page state before acting: an exact same-application path and
-accessible names of controls that must show as selected. A fresh observation can verify
+The model declares a page state before acting: an exact same-application path,
+selected controls and application-reported facets. A fresh observation can verify
 that declared state, but only a pure navigation request may then be settled. A question
 or multi-part request may still need another read or action. Declaring a target grants
 nothing: every click and navigation is routed, confirmed and settled as before.
@@ -45,6 +45,17 @@ _VIEW_ALIASES = {
     "图表": "graph", "chart": "graph",
 }
 
+# This is deliberately a small structural guard, not a semantic intent parser. It
+# recognizes explicit presentation verbs, independent of any application's field names.
+# Colloquial requests such as "按销售员看看" still need a separately validated goal spec.
+_EXPLICIT_FILTER = re.compile(r"筛选|过滤|只(?:看|显示)|仅(?:看|显示)|"
+                              r"(?<![a-z])filter(?:ed)?\s+by(?![a-z])", re.I)
+_EXPLICIT_GROUP = re.compile(r"分组|归类|(?<![a-z])group(?:ed)?\s+by(?![a-z])", re.I)
+_CLEAR_FILTER = re.compile(r"取消(?:[^，。]{0,12})?筛选|清除(?:[^，。]{0,12})?筛选|"
+                           r"不只是|不止是|不限于|"
+                           r"(?<![a-z])(?:remove|clear)\s+(?:the\s+)?filter|"
+                           r"(?<![a-z])not\s+(?:just|only)(?![a-z])", re.I)
+
 
 def required_page_controls(prompt: str) -> tuple[str, ...]:
     found = sorted((match.start(), name)
@@ -60,6 +71,19 @@ def required_page_controls(prompt: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(name for _, name in found))
 
 
+def required_page_effects(prompt: str) -> frozenset[str]:
+    """A lower bound for explicit filter/group requests, never an inferred field name."""
+    effects = set()
+    clear_matches_removed = _CLEAR_FILTER.sub("", prompt)
+    if _EXPLICIT_FILTER.search(clear_matches_removed):
+        effects.add("filter")
+    if _EXPLICIT_GROUP.search(prompt):
+        effects.add("group")
+    if _CLEAR_FILTER.search(prompt):
+        effects.add("clear_filter")
+    return frozenset(effects)
+
+
 @dataclass(frozen=True)
 class TargetState:
     """What a fresh observation must show for the request to be complete."""
@@ -73,11 +97,15 @@ class TargetState:
     #: Active application-reported facets, never inferred from menu candidates or body text.
     filters: tuple[str, ...] = ()
     groups: tuple[str, ...] = ()
+    #: A filter to remove must first have been observed active in this turn.
+    filters_absent: tuple[str, ...] = ()
 
     def to_json(self) -> dict:
         return {"path": self.path, "selected": list(self.selected),
                 **({"filters": list(self.filters)} if self.filters else {}),
-                **({"groups": list(self.groups)} if self.groups else {})}
+                **({"groups": list(self.groups)} if self.groups else {}),
+                **({"filters_absent": list(self.filters_absent)}
+                   if self.filters_absent else {})}
 
 
 def _normalise_name(name: str) -> str:
@@ -96,8 +124,9 @@ def parse_target(args: object) -> TargetState:
     and a control either shows as selected or it does not. There is no "contains", so a
     weak target that would be satisfied by an unrelated page cannot be expressed.
     """
-    if not isinstance(args, dict) or set(args) - {"path", "selected", "filters", "groups"}:
-        raise ValueError("set_target accepts only path, selected, filters and groups")
+    if (not isinstance(args, dict)
+            or set(args) - {"path", "selected", "filters", "groups", "filters_absent"}):
+        raise ValueError("set_target accepts only path, selected and facet conditions")
     path = args.get("path", "")
     if not isinstance(path, str):
         raise ValueError("path must be a string")
@@ -141,9 +170,14 @@ def parse_target(args: object) -> TargetState:
         return tuple(values)
 
     filters, groups = names("filters"), names("groups")
-    if not path and not selected and not filters and not groups:
-        raise ValueError("a target needs a path, selected controls, filters or groups")
-    return TargetState(path=path, selected=tuple(selected), filters=filters, groups=groups)
+    filters_absent = names("filters_absent")
+    if {_normalise_name(name) for name in filters} & {
+            _normalise_name(name) for name in filters_absent}:
+        raise ValueError("a filter cannot be both present and absent")
+    if not path and not selected and not filters and not groups and not filters_absent:
+        raise ValueError("a target needs a path, selected controls or facet conditions")
+    return TargetState(path=path, selected=tuple(selected), filters=filters, groups=groups,
+                       filters_absent=filters_absent)
 
 
 def _is_selected(element) -> bool:
@@ -156,7 +190,10 @@ def _is_selected(element) -> bool:
 
 
 def unmet_conditions(target: TargetState, obs: PageObservation, *,
-                     required_selected: tuple[str, ...] = ()) -> tuple[str, ...]:
+                     required_selected: tuple[str, ...] = (),
+                     required_effects: frozenset[str] = frozenset(),
+                     seen_active_filters: dict[str, set[str]] | None = None
+                     ) -> tuple[str, ...]:
     """Which parts of the target the observation does not show, in the order declared.
 
     Only what the observation carries counts. A control below the viewport is not in it,
@@ -190,6 +227,26 @@ def unmet_conditions(target: TargetState, obs: PageObservation, *,
                     unmet.append(f"active {kind} \"{name}\""
                                  + (" (application state unavailable)"
                                     if obs.page_facets is None else ""))
+    active_filters = ({_normalise_name(item["name"])
+                       for item in obs.page_facets or [] if item["kind"] == "filter"}
+                      if obs.page_facets is not None else set())
+    current_path = _normalise_path(urlsplit(obs.url).path)
+    seen_filters = {(_normalise_name(name), path)
+                    for name, paths in (seen_active_filters or {}).items()
+                    for path in paths}
+    for name in target.filters_absent:
+        normalised = _normalise_name(name)
+        if (normalised, current_path) not in seen_filters:
+            unmet.append(f'filter removal "{name}" not grounded in an active filter '
+                         'on this page')
+        elif obs.page_facets is None:
+            unmet.append(f'filter removal "{name}" (application state unavailable)')
+        elif normalised in active_filters:
+            unmet.append(f'filter "{name}" is still active')
+    for effect, declared in (("filter", target.filters), ("group", target.groups),
+                             ("clear_filter", target.filters_absent)):
+        if effect in required_effects and not declared:
+            unmet.append(f"{effect} condition not declared")
     return tuple(unmet)
 
 
@@ -204,4 +261,7 @@ def describe_target(target: TargetState) -> str:
         parts.append("filters: " + ", ".join(f'"{name}"' for name in target.filters))
     if target.groups:
         parts.append("groups: " + ", ".join(f'"{name}"' for name in target.groups))
+    if target.filters_absent:
+        parts.append("filters absent: " + ", ".join(
+            f'"{name}"' for name in target.filters_absent))
     return "; ".join(parts)

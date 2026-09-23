@@ -65,7 +65,7 @@ from .runstate import (CAPABILITY_GAP_TERMINAL, LabApparatus, NO_LAB, RunResult,
                        TaskSpec, _Next, _Turn)
 from .click_policy import ClickPolicy
 from .target import (MAX_TARGET_DECLARATIONS, TargetState, describe_target, parse_target,
-                     required_page_controls, unmet_conditions)
+                     required_page_controls, required_page_effects, unmet_conditions)
 from ..business.writes import PRE_DISPATCH_ERRORS, WatchState, WriteWatch
 from .prompts import (AGENT_SYSTEM, SCOPE_FIRST_SYSTEM, TOOL_SCHEMAS, _CAPABILITY_QUESTION,
                       _NAVIGATION_EXTRA_GOAL, _NAVIGATION_ONLY, _PLAN_PREAMBLE,
@@ -336,6 +336,8 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         current_navigation_only = _is_navigation_only(task.prompt)
         self._navigation_only = current_navigation_only
         self._required_page_controls = required_page_controls(task.prompt)
+        self._required_page_effects = required_page_effects(task.prompt)
+        self._seen_active_filters: dict[str, set[str]] = {}
         # A clarification reply such as "Azure Interior" carries no domain verb of its
         # own. The unresolved turn is the server-owned proof that it is a continuation;
         # recover only that turn's user-authored goal, never the assistant's question or
@@ -635,6 +637,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
             return self._reply(turn, call, f"TARGET REFUSED: {exc}.")
         self._target_declarations += 1
         self._target = target
+        self._remember_active_filters(turn.obs)
         # A new declaration reopens the turn: the earlier checkpoint, and the receipt that
         # said the earlier state was reached, no longer describe what the model is after.
         self._target_reached = False
@@ -642,7 +645,9 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                 and self._answer_action_receipt["kind"] == "target_state"):
             self._answer_action_receipt = None
         unmet = unmet_conditions(target, turn.obs,
-                                 required_selected=self._required_page_controls)
+                                 required_selected=self._required_page_controls,
+                                 required_effects=self._required_page_effects,
+                                 seen_active_filters=self._seen_active_filters)
         self.ledger.append("target_state_declared", step=turn.step, target=target.to_json(),
                            declaration=self._target_declarations,
                            unmet=list(unmet), page_url=turn.obs.url,
@@ -667,9 +672,12 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         target; a request that also asks a question may continue to read or observe. The
         person-facing page statement is composed from the observation, not model prose.
         """
+        self._remember_active_filters(obs)
         if (self._target is None or unmet_conditions(
                 self._target, obs,
-                required_selected=self._required_page_controls)):
+                required_selected=self._required_page_controls,
+                required_effects=self._required_page_effects,
+                seen_active_filters=self._seen_active_filters)):
             return False
         self._target_reached = True
         self._answer_action_receipt = {
@@ -678,6 +686,8 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                 (*self._target.selected, *self._required_page_controls))),
             **({"filters": list(self._target.filters)} if self._target.filters else {}),
             **({"groups": list(self._target.groups)} if self._target.groups else {}),
+            **({"filters_absent": list(self._target.filters_absent)}
+               if self._target.filters_absent else {}),
             "acted": bool(acted), "page_actions": self.page_actions}
         self.ledger.append("target_state_reached", step=step,
                            target=self._target.to_json(), url=obs.url,

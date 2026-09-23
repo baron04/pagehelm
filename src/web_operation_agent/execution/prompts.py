@@ -275,6 +275,7 @@ TARGET_TOOL = {"type": "function", "function": {
         "Declare the requested page state before acting on it: "
         "the exact same-application path to arrive at, the visible control names that must "
         "show as selected (a tab, an option), active filter names, active group names, "
+        "and names of observed active filters that must be removed, "
         "or a combination. Declare every condition the request "
         "names: a request to open a page and then switch a tab has both a path and a "
         "selected control. When a fresh page shows the declared state the server says so, "
@@ -299,7 +300,13 @@ TARGET_TOOL = {"type": "function", "function": {
                        "groups": {"type": "array", "maxItems": 4,
                                   "items": {"type": "string", "minLength": 1,
                                             "maxLength": 120},
-                                  "description": "exact names of active page groups"}}}}}
+                                  "description": "exact names of active page groups"},
+                       "filters_absent": {"type": "array", "maxItems": 4,
+                                          "items": {"type": "string", "minLength": 1,
+                                                    "maxLength": 120},
+                                          "description": ("exact names of filters to remove; "
+                                                          "each must first be observed active "
+                                                          "in this turn")}}}}}
 
 PREFILL_FORM_TOOL = {"type": "function", "function": {
     "name": "prefill_form",
@@ -352,7 +359,9 @@ the complete state that finishes
 it: the exact path (an href on the current page, a route a typed result returned, or a
 cited source route), names of controls that must be selected, and/or names of active
 filters and groups reported by the application. A menu option's presence alone does not
-establish that a filter or group was applied. A request with
+establish that a filter or group was applied. For a request to remove an existing
+restriction, first observe its active filter, then declare filters_absent with that exact
+name; its later absence alone is not proof it was removed. A request with
 two parts, such as open a desk and then its Terms tab, is declared with both parts. Then act.
 The server reports TARGET REACHED as soon as a fresh page shows the declared state; at that
 point a pure navigation request should finish; a mixed request can still read or observe

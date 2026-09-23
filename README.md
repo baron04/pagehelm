@@ -66,7 +66,9 @@ agent.
   or grouping, arrive at a record --
   the Agent declares that state up front with `set_target`: an exact same-application path
   and/or the accessible names of controls that must show as selected, or application-reported
-  active filters and groups. After every successful
+  active filters and groups, or a filter previously observed active on that page that must
+  become absent. Explicit requests to filter, group, or remove a filter cannot be settled
+  with a path-only target. After every successful
   write-free page action the server compares the fresh observation with the declaration. If
   a single-page application has changed its URL but still exposes the prior page projection,
   the embedded Runtime marks rendering pending and the server does not report arrival; a
@@ -271,9 +273,9 @@ source compilation, fixture provisioning, and qualification.
   model requests. Use that combination only where the deployment's data policy permits it.
 - Browser and accessibility coverage is strongest on Chromium; other engines and screen
   readers are not comprehensively qualified.
-- A reached page state is checked against the declared path, selected controls and any declared active filters or groups, plus an explicit request for one of the five conventional views above. The application must supply typed active-facet state; a same-named menu choice or column never counts. The pending-render signal catches a changed SPA URL with the old page projection; the view check catches a wrong view reported as reached. Neither proves that all asynchronous loading has finished or verifies record identity, other view names, or filters and groups the Agent omitted. In the earlier one-sentence Chinese goal run, 3 of 37 attempts were reported as reached incorrectly; that run predates these guards and has not yet been repeated.
+- A reached page state is checked against the declared path, selected controls and any declared active filters or groups, plus explicit requests for the five conventional views and filter/group changes above. Removing a filter additionally requires that exact filter to have been observed active on the same path earlier in the turn, followed by typed evidence that it is absent. The application must supply typed active-facet state; a same-named menu choice or column never counts. The pending-render signal catches a changed SPA URL with the old page projection; the view check catches a wrong view reported as reached. These guards do not prove that all asynchronous loading has finished or verify record identity, other view names, or implicit facet requests such as “look at orders by salesperson.” In the earlier one-sentence Chinese goal run, 3 of 37 attempts were reported as reached incorrectly; that run predates these guards and has not yet been repeated.
 - An empty typed read no longer ends the turn automatically: the Agent receives the exact query result and can check whether the entity and filters match the question. This does not yet prove that a model-selected query covers the user's intent. In the earlier 37-goal run, the old automatic answer incorrectly reported two existing records as absent; one of those reads had searched a customer name for an order number.
-- Reaching a declared page target no longer blocks further reading or observation for requests classified as more than pure navigation. Apart from the explicit view checks above, a target still covers only the conditions the Agent declared, so a question or presentation requirement omitted from that declaration can remain unmet.
+- Reaching a declared page target no longer blocks further reading or observation for requests classified as more than pure navigation. Apart from the explicit view and facet checks above, a target still covers only the conditions the Agent declared, so a question or other presentation requirement omitted from that declaration can remain unmet.
 
 ## License
 

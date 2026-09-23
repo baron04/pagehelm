@@ -29,6 +29,7 @@ class SessionLifecycle:
         the same code produced candidates in a session composed directly.
         """
         self.entry_observation = obs
+        self._remember_active_filters(obs)
         self.served_webapps = set(
             self.application_routes.discover_source_scopes(obs)
             if self.application_routes is not None else ())

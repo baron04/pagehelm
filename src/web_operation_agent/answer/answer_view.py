@@ -184,6 +184,12 @@ def _target_state_text(action: dict, chinese: bool) -> str:
     lines = [f"{head}{'：' if chinese else ': '}{_literal(action['url'])}"]
     if selected:
         lines.append(("已选中：" if chinese else "Selected: ") + selected)
+    for key, zh, en in (("filters", "已筛选：", "Filters: "),
+                        ("groups", "已分组：", "Grouped by: "),
+                        ("filters_absent", "已移除筛选：", "Removed filters: ")):
+        names = "、".join(_literal(name) for name in action.get(key, ()))
+        if names:
+            lines.append((zh if chinese else en) + names)
     return "\n".join(lines)
 
 

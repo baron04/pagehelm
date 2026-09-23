@@ -17,6 +17,7 @@ from pathlib import Path
 from web_operation_agent.execution.session import LabApparatus, ServerAgentSession, TaskSpec
 from web_operation_agent.execution.target import (MAX_TARGET_DECLARATIONS, TargetState,
                                                   parse_target, required_page_controls,
+                                                  required_page_effects,
                                                   unmet_conditions)
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionReceipt, ElementRef,
                                          PageObservation)
@@ -122,6 +123,24 @@ def _events(session, name: str) -> list[dict]:
 
 
 class TargetParsing(unittest.TestCase):
+    def test_explicit_facet_verbs_require_a_declared_effect(self):
+        self.assertEqual(required_page_effects("只看还没付款的发票"),
+                         frozenset({"filter"}))
+        self.assertEqual(required_page_effects("按客户分组显示订单"),
+                         frozenset({"group"}))
+        self.assertEqual(required_page_effects("Group by customer"),
+                         frozenset({"group"}))
+        self.assertEqual(required_page_effects("所有人的报价单，不只是我自己的"),
+                         frozenset({"clear_filter"}))
+        self.assertEqual(required_page_effects("取消默认筛选"),
+                         frozenset({"clear_filter"}))
+        self.assertEqual(required_page_effects("取消默认筛选，只看未付款发票"),
+                         frozenset({"clear_filter", "filter"}))
+        for plain in ("打开订单", "按价格排序看商品", "S00006 的客户是谁？",
+                      "按销售员看看销售订单"):
+            with self.subTest(plain=plain):
+                self.assertEqual(required_page_effects(plain), frozenset())
+
     def test_explicit_view_request_requires_a_selected_view(self):
         self.assertEqual(required_page_controls("用看板看销售订单"), ("Kanban",))
         self.assertEqual(required_page_controls("Open orders in Kanban view"), ("Kanban",))
@@ -190,9 +209,32 @@ class TargetParsing(unittest.TestCase):
         self.assertEqual(parse_target({"filters": ["Customer", " customer "]}).filters,
                          ("Customer",))
         for bad in ({"filters": "Customer"}, {"groups": [" "]},
-                    {"groups": ["x"] * 5}):
+                    {"groups": ["x"] * 5},
+                    {"filters": ["Open"], "filters_absent": ["open"]}):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 parse_target(bad)
+
+    def test_removal_needs_a_previously_active_filter_and_current_absence(self):
+        page = _page(1, PARTNER)
+        target = parse_target({"path": PARTNER,
+                               "filters_absent": ["My Quotations"]})
+        page.page_facets = [{"kind": "filter", "name": "My Quotations"}]
+        self.assertIn("not grounded", "; ".join(unmet_conditions(target, page)))
+        seen = {"My Quotations": {PARTNER}}
+        self.assertIn("still active", "; ".join(unmet_conditions(
+            target, page, seen_active_filters=seen)))
+        page.page_facets = None
+        self.assertIn("unavailable", "; ".join(unmet_conditions(
+            target, page, seen_active_filters=seen)))
+        page.page_facets = []
+        self.assertEqual(unmet_conditions(target, page, seen_active_filters=seen), ())
+        page.url = ORIGIN + SUPPLIER
+        self.assertIn("on this page", "; ".join(unmet_conditions(
+            target, page, seen_active_filters=seen)))
+        page.url = ORIGIN + PARTNER
+        self.assertEqual(unmet_conditions(TargetState(PARTNER), page,
+                                          required_effects=frozenset({"clear_filter"})),
+                         ("clear_filter condition not declared",))
 
     def test_a_tab_the_runtime_derived_as_selected_meets_the_target(self):
         # Odoo 18 marks the current notebook tab only by class; the Runtime reports it as
@@ -269,6 +311,67 @@ class TargetSettlement(unittest.TestCase):
         self.assertEqual(result.terminal_reason, "agent_finished")
         self.assertEqual(result.verified_answer["action"]["groups"], ["Customer"])
         self.assertEqual(len(_events(session, "target_state_reached")), 1)
+
+    def test_an_explicit_filter_request_cannot_end_on_a_path_only_target(self):
+        class FilteredBrowser(_WorkspaceBrowser):
+            def observe(self):
+                page = super().observe()
+                page.page_facets = [{"kind": "filter", "name": "To pay"}]
+                return page
+
+        chat = _Chat([("set_target", {"path": PARTNER}),
+                      ("finish", {"outcome": "acted"}),
+                      ("set_target", {"path": PARTNER, "filters": ["To pay"]}),
+                      ("finish", {"outcome": "acted"})])
+        session = _session(self.tmp, chat, FilteredBrowser(PARTNER),
+                           prompt="只看还没付款的客户发票")
+
+        result = session.run()
+
+        self.assertEqual(result.terminal_reason, "agent_finished")
+        self.assertEqual(result.verified_answer["action"]["filters"], ["To pay"])
+        self.assertIn("已筛选：To pay", result.agent_said)
+        self.assertEqual(len(_events(session, "page_presentation_claim_refused")), 1)
+
+    def test_filter_removal_needs_an_observed_active_filter_then_its_absence(self):
+        class FacetBrowser(_WorkspaceBrowser):
+            def __init__(self):
+                super().__init__(PARTNER)
+                self.active = True
+
+            def observe(self):
+                page = super().observe()
+                page.page_facets = ([{"kind": "filter", "name": "My Quotations"}]
+                                    if self.active else [])
+                if self.active:
+                    page.elements.append(ElementRef("e4", "button", "Remove My Quotations",
+                                                    "button", page.epoch, {}))
+                return page
+
+            def execute(self, action, args=None, expect_navigation=False):
+                if action == "click" and (args or {}).get("ref") == "e4":
+                    self.active = False
+                return replace(super().execute(action, args, expect_navigation),
+                               observation=self.observe())
+
+        chat = _Chat([("set_target", {"path": PARTNER}),
+                      ("finish", {"outcome": "acted"}),
+                      ("set_target", {"path": PARTNER,
+                                      "filters_absent": ["My Quotations"]}),
+                      ("click", {"ref": "e4"}),
+                      ("finish", {"outcome": "acted"})])
+        browser = FacetBrowser()
+        session = _session(self.tmp, chat, browser,
+                           prompt="我要看所有人的报价单，不只是我自己的")
+
+        result = session.run()
+
+        self.assertEqual(result.terminal_reason, "agent_finished")
+        self.assertFalse(browser.active)
+        self.assertEqual(result.verified_answer["action"]["filters_absent"],
+                         ["My Quotations"])
+        self.assertIn("已移除筛选：My Quotations", result.agent_said)
+        self.assertEqual(len(_events(session, "page_presentation_claim_refused")), 1)
 
     def test_path_only_declaration_cannot_complete_a_kanban_request(self):
         class ViewBrowser(_WorkspaceBrowser):

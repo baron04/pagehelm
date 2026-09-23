@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime
 import json
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from ..planning.affordance import SourceAffordance, resolve_source_affordances
@@ -28,8 +29,17 @@ class SessionContext:
     """Context and grounding behavior shared by one server-owned session."""
 
     def _page_goal_unmet(self, obs: PageObservation) -> tuple[str, ...]:
-        return unmet_conditions(TargetState(), obs,
-                                required_selected=self._required_page_controls)
+        return unmet_conditions(self._target or TargetState(), obs,
+                                required_selected=self._required_page_controls,
+                                required_effects=self._required_page_effects,
+                                seen_active_filters=self._seen_active_filters)
+
+    def _remember_active_filters(self, obs: PageObservation) -> None:
+        if obs.page_facets is not None:
+            path = urlsplit(obs.url).path.rstrip("/") or "/"
+            for item in obs.page_facets:
+                if item["kind"] == "filter":
+                    self._seen_active_filters.setdefault(item["name"], set()).add(path)
 
     def tool_schemas(self) -> list[dict]:
         return self._tool_surface.schemas()
@@ -280,7 +290,9 @@ class SessionContext:
                       "refs, never element refs. If the request asks for more, call "
                       "set_target with the next state.")
         unmet = unmet_conditions(self._target, obs,
-                                 required_selected=self._required_page_controls)
+                                 required_selected=self._required_page_controls,
+                                 required_effects=self._required_page_effects,
+                                 seen_active_filters=self._seen_active_filters)
         return ("TARGET (declared): " + describe_target(self._target)
                 + ("\nStill unmet: " + "; ".join(unmet) if unmet
                    else "\nAll conditions are shown; a fresh page action confirms them."))
