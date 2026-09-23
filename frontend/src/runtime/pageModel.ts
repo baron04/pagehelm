@@ -62,6 +62,7 @@ export interface ElementLike {
   href?: string
   target?: string
   isConnected?: boolean
+  className?: string | {baseVal?: string}
   options?: ArrayLike<{value?: string; textContent?: string | null; disabled?: boolean; selected?: boolean}>
   form?: {action?: string; method?: string; target?: string} | null
   ownerDocument?: Document | null
@@ -202,6 +203,37 @@ export function hydrateLinkFacts(elements: ElementRef[], selectorMap: unknown,
     } catch {
       // A DOM mutation between PageController's snapshot and this lookup makes the index
       // stale. Keep the lossy summary and let the server fail closed on exact navigation.
+    }
+  }
+  return elements
+}
+
+/** The current-state words a UI framework puts on the one selected tab of a set. */
+const SELECTED_CLASSES = new Set(['active', 'selected', 'is-active', 'is-selected'])
+const CURRENT_VALUES = new Set(['page', 'step', 'location', 'true'])
+
+/**
+ * Say which tab is current when the page says it only by class.
+ *
+ * A tab that declares `aria-selected` is left alone. Many applications do not declare it:
+ * Bootstrap's `.nav-link.active` is how Odoo 18 marks the current notebook tab, so the
+ * observation showed no tab as current, a declared "Sales tab selected" could never be met,
+ * and the turn clicked the tab again until its budget ran out. The fact is derived from the
+ * live element as `selected=true`, beside the ARIA attributes and never written to the page.
+ */
+export function hydrateSelectionFacts(elements: ElementRef[], selectorMap: unknown,
+                                      getByIndex: ElementLookup): ElementRef[] {
+  for (const item of elements) {
+    if (item.role !== 'tab' || item.attrs['aria-selected'] !== undefined) continue
+    try {
+      const element = getByIndex(selectorMap, refIndex(item.ref))
+      const current = String(explicitAttribute(element, 'aria-current') || '').toLowerCase()
+      const raw = element?.className
+      const className = typeof raw === 'string' ? raw : String(raw?.baseVal || '')
+      const byClass = className.split(/\s+/).some(token => SELECTED_CLASSES.has(token))
+      if (CURRENT_VALUES.has(current) || byClass) item.attrs.selected = 'true'
+    } catch {
+      // A stale index says nothing about the tab; leave it unmarked.
     }
   }
   return elements

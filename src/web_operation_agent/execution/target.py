@@ -29,7 +29,9 @@ MAX_SELECTED_CONTROLS = 4
 MAX_PATH_CHARS = 500
 MAX_CONTROL_NAME_CHARS = 120
 
-_SELECTED_ATTRS = ("aria-selected", "aria-checked", "checked")
+#: `selected` is the Runtime's own derived fact for a tab the page marks current only by
+#: class (Bootstrap's `.active`, which Odoo 18 notebooks use); see `hydrateSelectionFacts`.
+_SELECTED_ATTRS = ("aria-selected", "aria-checked", "checked", "selected")
 
 
 @dataclass(frozen=True)

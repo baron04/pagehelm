@@ -2,7 +2,7 @@ import {describe, expect, it} from 'vitest'
 import {createRedactor} from '../src/runtime/redaction'
 import {
   actionElementFingerprint, boundIndexedContent, elementsFrom, explicitAttribute, hydrateFormFacts,
-  hydrateLinkFacts, refIndex,
+  hydrateLinkFacts, hydrateSelectionFacts, refIndex,
 } from '../src/runtime/pageModel'
 
 const redactor = createRedactor()
@@ -205,5 +205,36 @@ describe('hydrateFormFacts adds a bounded application field identifier', () => {
     expect(elements[0]?.attrs).toMatchObject({
       field: 'company', disabled: 'true', readonly: 'true',
     })
+  })
+})
+
+describe('hydrateSelectionFacts says which tab is current when the page says it by class', () => {
+  const tabs = (content: string) => elementsFrom(content, 1, redactor)
+
+  it('marks the tab whose live element carries the current-state class', () => {
+    const elements = tabs('[0]<a role=tab>General />\n[1]<a role=tab>Sales />')
+    const live = [{className: 'nav-link'}, {className: 'nav-link active'}]
+    hydrateSelectionFacts(elements, {}, (_map, index) => live[index])
+    expect(elements.map(item => item.attrs.selected)).toEqual([undefined, 'true'])
+  })
+
+  it('reads aria-current as current too', () => {
+    const elements = tabs('[0]<a role=tab>Sales />')
+    hydrateSelectionFacts(elements, {}, () => ({
+      hasAttribute: (name: string) => name === 'aria-current',
+      getAttribute: (name: string) => (name === 'aria-current' ? 'page' : null)}))
+    expect(elements[0]?.attrs.selected).toBe('true')
+  })
+
+  it('leaves a tab that declares aria-selected, a non-tab, and a stale index alone', () => {
+    const declared = tabs('[0]<a role=tab aria-selected=false>Sales />')
+    hydrateSelectionFacts(declared, {}, () => ({className: 'nav-link active'}))
+    expect(declared[0]?.attrs.selected).toBeUndefined()
+    const button = tabs('[0]<button>Sales />')
+    hydrateSelectionFacts(button, {}, () => ({className: 'btn active'}))
+    expect(button[0]?.attrs.selected).toBeUndefined()
+    const stale = tabs('[0]<a role=tab>Sales />')
+    hydrateSelectionFacts(stale, {}, () => { throw new Error('stale index') })
+    expect(stale[0]?.attrs.selected).toBeUndefined()
   })
 })

@@ -9,7 +9,7 @@
  */
 import {
   actionElementFingerprint, boundIndexedContent, elementsFrom, hydrateFormFacts,
-  hydrateLinkFacts, refIndex, type ElementLike, type ElementLookup,
+  hydrateLinkFacts, hydrateSelectionFacts, refIndex, type ElementLike, type ElementLookup,
 } from './pageModel'
 import {canonicalUrl} from './navigation'
 import {MAX_CONTENT_CHARS, type Redactor} from './redaction'
@@ -132,9 +132,9 @@ export class Page {
     // the Agent cannot distinguish a short page from one that needs another observation.
     const content = `${header}\n${boundedBody.content}\n${footer}`
     const map = this.controller.selectorMap
-    const elements: ElementRef[] = hydrateFormFacts(hydrateLinkFacts(
+    const elements: ElementRef[] = hydrateSelectionFacts(hydrateFormFacts(hydrateLinkFacts(
       elementsFrom(content, epoch, this.redactor), map, this.lookup, this.redactor),
-    map, this.lookup, this.redactor)
+    map, this.lookup, this.redactor), map, this.lookup)
     const fingerprints = new Map<string, string>()
     for (const item of elements) fingerprints.set(item.ref, this.fingerprint(item.ref))
     return {

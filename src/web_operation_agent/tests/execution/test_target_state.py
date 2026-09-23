@@ -133,6 +133,15 @@ class TargetParsing(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 parse_target(bad)
 
+    def test_a_tab_the_runtime_derived_as_selected_meets_the_target(self):
+        # Odoo 18 marks the current notebook tab only by class; the Runtime reports it as
+        # selected=true, and the target reads that like aria-selected.
+        page = _page(1, PARTNER)
+        page.elements[2] = ElementRef("e3", "tab", "Terms", "a", 1, {"selected": "true"})
+        page.elements[1] = ElementRef("e2", "tab", "Overview", "a", 1, {})
+        self.assertEqual(unmet_conditions(TargetState(PARTNER, ("Terms",)), page), ())
+        self.assertTrue(unmet_conditions(TargetState(PARTNER, ("Overview",)), page))
+
     def test_unmet_conditions_are_exact_and_viewport_bound(self):
         target = TargetState(PARTNER, ("Terms",))
         self.assertEqual(len(unmet_conditions(target, _page(1, DESKS))), 2)
