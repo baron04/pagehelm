@@ -63,6 +63,8 @@ export interface PageObservation {
   page_facets?: Array<{kind: 'filter' | 'group'; name: string}>
   /** Choices supplied by this application's current page, not proof they are active. */
   facet_candidates?: Array<{ref: string; kind: 'filter' | 'group'; name: string; active: boolean}>
+  /** Application-owned route of the form record actually rendered, not a navigation grant. */
+  record_route?: string
 }
 
 export interface ObservationEnvelope {

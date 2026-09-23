@@ -6,6 +6,7 @@ import re
 
 from ..transport.browser import TransportError, TurnCancelled
 from ..business.errors import BusinessToolError, BusinessToolPermissionError
+from ..business.entities import QUERY_ENTITY_RECORDS_TOOL
 from .knowledge_tools import finish_with_clarification
 from .prompts import CLARIFICATION_CHOICE_LIMIT, _assistant_call, _tool_result, _trim
 from .routes import observation_is_at_route
@@ -42,6 +43,10 @@ def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: d
             side_effect_possible=False, identity=operation_identity)
         session._business_routes.update(tool_result.allowed_routes)
         session._latest_business_routes = set(tool_result.allowed_routes)
+        if name == QUERY_ENTITY_RECORDS_TOOL:
+            session._business_record_routes.update(
+                record["ui_path"] for record in tool_result.content.get("records", ())
+                if isinstance(record, dict) and record.get("ui_path") in tool_result.allowed_routes)
         session.latest_business_tool_result = tool_result
         session._form_draft = (
             tool_result.form_draft if session.allow_form_prefill else None)
@@ -195,7 +200,9 @@ def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: d
             reached = bool(
                 receipt.ok and receipt.observation is not None
                 and receipt.observation.epoch > prior_page_epoch
-                and observation_is_at_route(receipt.observation, target))
+                and receipt.observation.render_state == "ready"
+                and observation_is_at_route(receipt.observation, target)
+                and not session._page_goal_unmet(receipt.observation))
             if reached:
                 session._answer_action_receipt = {
                     "kind": "navigation", "url": obs.url}

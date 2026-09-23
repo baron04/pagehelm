@@ -8,3 +8,5 @@
 !page-controller-with-state.js
 !page-facets.js
 !facet-bridge.js
+!record-bridge.js
+!page-record-route.js

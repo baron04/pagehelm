@@ -2,3 +2,4 @@
 // origin as the pinned PageController; Odoo selectors never enter the product core.
 export {PageController, getElementByIndex} from './page-controller.js';
 export {readPageFacets, readFacetCandidates, applyPageFacet} from './page-facets.js';
+export {readPageRecordRoute} from './page-record-route.js';

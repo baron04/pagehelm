@@ -252,6 +252,48 @@ class ProductReadAndNavigationTests(unittest.TestCase):
                              if item["event"] == "deterministic_navigation_completed")
             self.assertEqual(completed["source"], "business_result")
 
+    def test_unique_route_does_not_claim_arrival_while_render_is_pending(self):
+        class PendingBrowser(_RemoteBrowser):
+            def execute(self, action, args=None, expect_navigation=False):
+                receipt = super().execute(action, args, expect_navigation)
+                if action == "goto" and receipt.observation is not None:
+                    receipt.observation.render_state = "pending"
+                return receipt
+
+        class UniqueRouteExecutor(_Executor):
+            @staticmethod
+            def execute(name, args, *, context=None):
+                return dataclasses.replace(
+                    _Executor.execute(name, args, context=context),
+                    navigation_target="/object/company/company-1")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = _skill(root / "query-skill.json")
+            chat = _Chat([("query_companies", {}),
+                          ("finish", {"outcome": "unable"})])
+            runtime = BusinessToolRuntime((skill,), UniqueRouteExecutor(),
+                route_skill_hints=((r"^/companies$", skill.skill_id),))
+            executor = AgentTurnExecutor(
+                channel=_Channel(),
+                config=AgentTurnConfig(
+                    supported_scope="Read and open one company.",
+                    ledger_path=root / "session.jsonl",
+                    deterministic_read_navigation=True,
+                    disabled_actions=READ_ONLY_NAVIGATION_POLICY),
+                chat=chat, business_tools=runtime, control=ReadOnlyControl(),
+                run_id_factory=lambda _message: "turn-pending-navigation")
+            with patch.object(turn, "RemoteBrowserClient", PendingBrowser):
+                execution = executor.execute({
+                    "message_id": "message-1", "text": "打开 Acme",
+                    "page_url": "http://app.test/companies",
+                })
+            self.assertNotEqual(execution.user_answer, "已打开请求的页面。")
+            events = [json.loads(line) for line in
+                      (root / "session.jsonl").read_text().splitlines()]
+            self.assertFalse(any(item["event"] == "deterministic_navigation_completed"
+                                 for item in events))
+
     def test_fallback_skill_still_requires_model_selection_but_skips_final_call(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

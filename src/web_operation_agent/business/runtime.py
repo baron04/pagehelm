@@ -17,7 +17,7 @@ from .entities import (DESCRIBE_ENTITY_SCHEMA, DESCRIBE_ENTITY_TOOL,
                        DISCOVER_ENTITIES_SCHEMA, DISCOVER_ENTITIES_TOOL,
                        ENTITY_READ_SCHEMAS, ENTITY_READ_TOOLS,
                        QUERY_ENTITY_RECORDS_SCHEMA, QUERY_ENTITY_RECORDS_TOOL,
-                       EntityCatalog, EntityCell, EntityChoice, EntityDescriptor,
+                       EntityAggregate, EntityCatalog, EntityCell, EntityChoice, EntityDescriptor,
                        EntityField, EntityFilter, EntityPageHint, EntityQuery,
                        EntityQueryPage, EntityReadPort, EntityReadTools, EntityRecord)
 from .forms import (ApplicationFormDescriptor, ApplicationFormField, ApplicationFormPort,

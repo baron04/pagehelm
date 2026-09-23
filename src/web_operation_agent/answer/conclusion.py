@@ -185,7 +185,7 @@ class Aggregate:
         return {"kind": self.kind, "operation": item.operation, "value": item.value,
                 "value_type": item.value_type, "unit": item.unit,
                 "covers_whole_scope": item.covers_whole_scope,
-                "scope": scope, "filter": applied, "source_kind": "computed"}
+                "scope": scope, "filter": applied, "source_kind": item.origin.kind}
 
 
 @dataclass(frozen=True, slots=True)

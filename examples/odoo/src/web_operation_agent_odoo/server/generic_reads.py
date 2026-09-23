@@ -9,8 +9,10 @@ from __future__ import annotations
 import json
 import math
 import re
+from decimal import Decimal
 
 from web_operation_agent.business.entities import (
+    EntityAggregate,
     EntityCatalog,
     EntityCell,
     EntityChoice,
@@ -190,7 +192,8 @@ class OdooEntityReadPort:
                     or not _FIELD_NAME.fullmatch(currency_field)
                     or currency_field not in payload
                     or not isinstance(payload[currency_field], dict)
-                    or payload[currency_field].get("type") != "many2one"):
+                    or payload[currency_field].get("type") != "many2one"
+                    or payload[currency_field].get("store") is not True):
                 currency_field = ""
             result.append(EntityField(
                 reference=name,
@@ -199,6 +202,9 @@ class OdooEntityReadPort:
                 required=value.get("required") is True,
                 readonly=value.get("readonly") is True,
                 searchable=searchable,
+                summable=(mapped[0] in {"integer", "number", "monetary"}
+                          and value.get("store") is True
+                          and (mapped[0] != "monetary" or bool(currency_field))),
                 choices=_choices(value.get("selection"))
                 if value.get("type") == "selection" else (),
                 evidence_type=mapped[1],
@@ -227,6 +233,40 @@ class OdooEntityReadPort:
         if matched > source_total:
             raise BusinessToolContractError(
                 "Odoo returned an entity match count above its source total")
+        aggregates = []
+        for field in request.aggregate_fields:
+            grouping = [field.unit_field_reference] if field.unit_field_reference else []
+            groups = self._client.call(model, "read_group", [
+                domain, [f"{field.reference}:sum"], grouping,
+            ], {"lazy": False})
+            if not isinstance(groups, list) or len(groups) > 200:
+                raise BusinessToolContractError("Odoo returned an invalid aggregate grouping")
+            for group in groups:
+                if not isinstance(group, dict):
+                    raise BusinessToolContractError("Odoo returned an invalid aggregate group")
+                count = group.get("__count")
+                raw = group.get(field.reference)
+                if (isinstance(count, bool) or not isinstance(count, int) or count <= 0
+                        or isinstance(raw, bool) or not isinstance(raw, (int, float))
+                        or not math.isfinite(float(raw))):
+                    raise BusinessToolContractError("Odoo returned an invalid aggregate value")
+                unit = ""
+                if field.unit_field_reference:
+                    currency = group.get(field.unit_field_reference)
+                    if (not isinstance(currency, (list, tuple)) or len(currency) != 2
+                            or isinstance(currency[0], bool)
+                            or not isinstance(currency[0], int) or currency[0] <= 0
+                            or not isinstance(currency[1], str) or not currency[1].strip()
+                            or len(currency[1]) > _MAX_CURRENCY_CHARS
+                            or _CONTROL.search(currency[1])):
+                        raise BusinessToolContractError(
+                            "Odoo returned an aggregate without its currency")
+                    unit = currency[1].strip()
+                aggregates.append(EntityAggregate(
+                    field_reference=field.reference,
+                    value=format(Decimal(str(raw)), "f"),
+                    count=count, unit=unit,
+                ))
         read_fields = list(dict.fromkeys(
             [field.reference for field in request.fields]
             + [field.unit_field_reference for field in request.fields
@@ -290,6 +330,7 @@ class OdooEntityReadPort:
             records=tuple(records),
             matched_count=matched,
             source_total=source_total,
+            aggregates=tuple(aggregates),
             source=f"delegated application API ({request.entity.label})",
             scope=(f"{request.entity.label} records visible to the delegated actor; "
                    f"{len(domain)} AND filters; stable identity ascending")[:200],

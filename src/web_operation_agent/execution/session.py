@@ -508,6 +508,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                     routes=list(skill.routes), reason="skill_first_unique_match")
         self._business_routes: set[str] = set()
         self._latest_business_routes: set[str] = set()
+        self._business_record_routes: set[str] = set()
         # One adapter-issued draft is usable once, in this turn only. It never enters the
         # browser protocol as authority: the model can request application of the current
         # draft but cannot provide or alter any route, field or value.

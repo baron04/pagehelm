@@ -21,7 +21,10 @@
     # One stable shell on the signed-in backend page; the full assistant is the Agent's.
     "data": ["views/assistant_entry.xml"],
     "assets": {
-        "web.assets_backend": ["woa_runtime/static/src/facet-bridge.js"],
+        "web.assets_backend": [
+            "woa_runtime/static/src/facet-bridge.js",
+            "woa_runtime/static/src/record-bridge.js",
+        ],
     },
     "installable": True,
     "auto_install": False,

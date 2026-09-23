@@ -104,7 +104,7 @@ class _ProductRoutingBrowser:
         return PageObservation(
             schema_version=1, epoch=self.epoch, url=self.url,
             title="Customers", landmarks=["Customers"], elements=[],
-            content="Customers")
+            content="Customers", render_state="ready")
 
     def execute(self, action, args=None, expect_navigation=False):
         self.actions.append(action)

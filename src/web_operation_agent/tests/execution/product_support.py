@@ -128,6 +128,14 @@ class _RemoteBrowser(_Browser):
         self.started = True
         return {"ok": True, "embedded": True}
 
+    def execute(self, action, args=None, expect_navigation=False):
+        receipt = super().execute(action, args, expect_navigation=expect_navigation)
+        # This fixture's synthetic destination is fully rendered. Tests for pending
+        # navigation override it explicitly; an unknown render state is not proof.
+        if receipt.observation is not None:
+            receipt.observation.render_state = "ready"
+        return receipt
+
     def close(self):
         self.closed = True
 

@@ -127,6 +127,18 @@ class WireTypes(unittest.TestCase):
                               url="https://app.test/orders", title="Orders",
                               landmarks=[], elements=[], render_state="complete")
 
+    def test_page_record_route_is_optional_bounded_observation_not_authority(self):
+        base = dict(schema_version=1, epoch=1, url="https://app.test/items/4",
+                    title="Item", landmarks=[], elements=[])
+        page = S.PageObservation(**base, record_route="/items/4")
+        self.assertEqual(S.PageObservation.from_json(page.to_json()).record_route,
+                         "/items/4")
+        self.assertNotIn("record_route", S.PageObservation(**base).to_json())
+        for bad in ("//other.test/x", "https://other.test/x", "/items/4?x=1",
+                    "/a\\b", "/a/../b", "/a b"):
+            with self.subTest(route=bad), self.assertRaises(S.SchemaError):
+                S.PageObservation(**base, record_route=bad)
+
     def test_approval_request_and_decision_are_strict_wire_types(self):
         request = S.ApprovalRequest(
             schema_version=1, approval_id="approval-1",

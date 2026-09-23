@@ -17,7 +17,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Protocol, runtime_checkable
 
 from ..answer.answering import StructuredQueryAnswer
-from ..answer.evidence import Origin, QueryEvidence, RecordEvidence
+from ..answer.evidence import ComputationEvidence, Origin, QueryEvidence, RecordEvidence
 from ..state.identity import OperationContext
 from .errors import BusinessToolContractError, BusinessToolRequestError
 from .tools.contracts import BusinessToolResult
@@ -48,6 +48,8 @@ _EVIDENCE_TYPES = frozenset({"text", "number", "boolean", "date", "moment"})
 _ANSWER_FIELD = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 _MAX_DESCRIBED_FIELDS = 40
 _MAX_QUERY_FIELDS = 8
+_MAX_AGGREGATE_FIELDS = 2
+_MAX_AGGREGATE_GROUPS = 200
 _MAX_FILTERS = 8
 _MAX_QUERY_ROWS = 20
 _MAX_OFFSET = 10_000
@@ -109,7 +111,10 @@ QUERY_ENTITY_RECORDS_SCHEMA = {
             "Read current records for one described entity. Use only opaque entity and "
             "field IDs returned by the current discovery calls. Filters are combined by "
             "AND and ordering is fixed by the server. Reports exact matching and "
-            "actor-visible totals; a record's ui_path, when present, is where it opens."
+            "actor-visible totals; a record's ui_path, when present, is where it opens. "
+            "For a related record, query its returned related_entity_id and exact ID "
+            "before opening its own ui_path. Full-scope sums use aggregate_field_ids and "
+            "remain separate by unit even when returned rows are limited."
         ),
         "parameters": {
             "type": "object",
@@ -135,6 +140,16 @@ QUERY_ENTITY_RECORDS_SCHEMA = {
                         "additionalProperties": False,
                     },
                     "description": "Zero to eight server-validated conditions, combined by AND.",
+                },
+                "aggregate_field_ids": {
+                    "type": "array", "maxItems": _MAX_AGGREGATE_FIELDS,
+                    "uniqueItems": True,
+                    "items": {"type": "string", "pattern": r"^field_[0-9a-f]{32}$"},
+                    "description": (
+                        "Optional application sums over all matching records, grouped by unit. "
+                        "Only described summable number or monetary fields are accepted; "
+                        "the returned row limit does not limit these sums."
+                    ),
                 },
                 "limit": {"type": "integer", "minimum": 1, "maximum": _MAX_QUERY_ROWS,
                           "description": "Rows in this page; defaults to 10."},
@@ -301,6 +316,7 @@ class EntityField:
     required: bool = False
     readonly: bool = True
     searchable: bool = True
+    summable: bool = False
     choices: tuple[EntityChoice, ...] = ()
     evidence_type: str = "text"
     # Adapter-private binding for a monetary field's denomination. It is never
@@ -318,8 +334,10 @@ class EntityField:
         if self.kind not in _KINDS:
             raise ValueError("entity field kind is not supported")
         if any(not isinstance(item, bool)
-               for item in (self.required, self.readonly, self.searchable)):
+               for item in (self.required, self.readonly, self.searchable, self.summable)):
             raise ValueError("entity field flags must be boolean")
+        if self.summable and self.kind not in {"integer", "number", "monetary"}:
+            raise ValueError("only numeric fields may be summable")
         if (not isinstance(self.choices, tuple) or len(self.choices) > 50
                 or any(not isinstance(item, EntityChoice) for item in self.choices)
                 or len({_json_digest(item.value) for item in self.choices}) != len(self.choices)):
@@ -354,6 +372,33 @@ class EntityQuery:
     filters: tuple[EntityFilter, ...]
     limit: int
     offset: int
+    aggregate_fields: tuple[EntityField, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class EntityAggregate:
+    """An application-computed full-scope sum for one field and denomination."""
+
+    field_reference: str
+    value: str
+    count: int
+    unit: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "field_reference", _text(
+            self.field_reference, "aggregate field reference", 240))
+        object.__setattr__(self, "value", _text(
+            self.value, "aggregate value", 120))
+        object.__setattr__(self, "unit", _text(
+            self.unit, "aggregate unit", 80, empty=True))
+        try:
+            number = Decimal(self.value)
+        except InvalidOperation as exc:
+            raise ValueError("aggregate value must be a decimal") from exc
+        if not number.is_finite():
+            raise ValueError("aggregate value must be finite")
+        if isinstance(self.count, bool) or not isinstance(self.count, int) or self.count < 0:
+            raise ValueError("aggregate count must be nonnegative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -411,6 +456,7 @@ class EntityQueryPage:
     source: str
     scope: str
     consistency: str = "count and page reads are not a transactional snapshot"
+    aggregates: tuple[EntityAggregate, ...] = ()
 
     def __post_init__(self) -> None:
         if (not isinstance(self.records, tuple) or len(self.records) > _MAX_QUERY_ROWS
@@ -424,6 +470,12 @@ class EntityQueryPage:
                 raise ValueError(f"entity query {name} must be a nonnegative integer")
         if self.matched_count > self.source_total or len(self.records) > self.matched_count:
             raise ValueError("entity query counts are inconsistent")
+        if (not isinstance(self.aggregates, tuple)
+                or len(self.aggregates) > _MAX_AGGREGATE_GROUPS
+                or any(not isinstance(item, EntityAggregate) for item in self.aggregates)
+                or len({(item.field_reference, item.unit) for item in self.aggregates})
+                != len(self.aggregates)):
+            raise ValueError("entity query aggregates are invalid or repeated")
         object.__setattr__(self, "source", _text(self.source, "entity query source", 200))
         object.__setattr__(self, "scope", _text(self.scope, "entity query scope", 200))
         object.__setattr__(self, "consistency", _text(
@@ -453,6 +505,7 @@ def _field_binding(entity_id: str, fields: tuple[EntityField, ...]) -> str:
             "required": field.required,
             "readonly": field.readonly,
             "searchable": field.searchable,
+            "summable": field.summable,
             "choices": [{"value": choice.value, "label": choice.label}
                         for choice in field.choices],
             "evidence_type": field.evidence_type,
@@ -709,6 +762,7 @@ class EntityReadTools:
                     "required": field.required,
                     "readonly": field.readonly,
                     "searchable": field.searchable,
+                    "summable": field.summable,
                     **({"choices": [{"value": choice.value, "label": choice.label}
                                       for choice in field.choices]}
                        if field.choices else {}),
@@ -735,7 +789,8 @@ class EntityReadTools:
 
     def _query(self, args: object,
                context: OperationContext | None) -> BusinessToolResult:
-        args = _exact_args(args, {"entity_id", "field_ids", "filters", "limit", "offset"},
+        args = _exact_args(args, {"entity_id", "field_ids", "filters", "limit", "offset",
+                                  "aggregate_field_ids"},
                            QUERY_ENTITY_RECORDS_TOOL)
         catalog, entity_id, entity = self._entity(args.get("entity_id"), context)
         fields = self._fields(entity_id, entity, context)
@@ -748,6 +803,19 @@ class EntityReadTools:
             raise BusinessToolRequestError(
                 "field_ids must be unique values returned by describe_entity")
         selected = tuple(by_id[item] for item in raw_ids)
+        aggregate_ids = args.get("aggregate_field_ids", [])
+        if (not isinstance(aggregate_ids, list)
+                or len(aggregate_ids) > _MAX_AGGREGATE_FIELDS
+                or any(not isinstance(item, str) for item in aggregate_ids)
+                or len(aggregate_ids) != len(set(aggregate_ids))
+                or any(not _FIELD_ID.fullmatch(item)
+                       or item not in by_id or not by_id[item].summable
+                       or (by_id[item].kind == "monetary"
+                           and not by_id[item].unit_field_reference)
+                       for item in aggregate_ids)):
+            raise BusinessToolRequestError(
+                "aggregate_field_ids must name described summable fields with units")
+        aggregate_fields = tuple(by_id[item] for item in aggregate_ids)
         raw_filters = args.get("filters", [])
         if not isinstance(raw_filters, list) or len(raw_filters) > _MAX_FILTERS:
             raise BusinessToolRequestError("filters must be a list of at most eight conditions")
@@ -778,7 +846,8 @@ class EntityReadTools:
         offset = _bounded_int(args.get("offset"), name="offset", default=0,
                               minimum=0, maximum=_MAX_OFFSET)
         request = EntityQuery(entity=entity, fields=selected, filters=tuple(filters),
-                              limit=limit, offset=offset)
+                              limit=limit, offset=offset,
+                              aggregate_fields=aggregate_fields)
         try:
             page = self._port.query(request, context=context)
         except (BusinessToolContractError, BusinessToolRequestError):
@@ -789,6 +858,19 @@ class EntityReadTools:
         if not isinstance(page, EntityQueryPage) or len(page.records) > limit:
             raise BusinessToolContractError("the application returned an invalid entity page")
         expected = tuple(field.reference for field in selected)
+        aggregate_by_ref = {field.reference: field for field in aggregate_fields}
+        grouped_counts = {reference: 0 for reference in aggregate_by_ref}
+        for aggregate in page.aggregates:
+            field = aggregate_by_ref.get(aggregate.field_reference)
+            if field is None or (field.kind == "monetary") != bool(aggregate.unit):
+                raise BusinessToolContractError(
+                    "the application returned an unrequested or unbound aggregate")
+            grouped_counts[field.reference] += aggregate.count
+        if any(count != page.matched_count for count in grouped_counts.values()):
+            raise BusinessToolContractError(
+                "the application returned an incomplete aggregate")
+        if page.aggregates and not aggregate_fields:
+            raise BusinessToolContractError("the application returned an unrequested aggregate")
         related_entities = {entity.reference: entity_id for entity_id, entity
                             in self._entities(catalog, context)}
         for record in page.records:
@@ -822,6 +904,25 @@ class EntityReadTools:
             covers_whole_scope=offset == 0 and len(page.records) == page.matched_count,
             count_exact=True,
         )]
+        public_aggregates = []
+        for index, aggregate in enumerate(page.aggregates, start=1):
+            field = aggregate_by_ref[aggregate.field_reference]
+            field_id = next(item for item, bound in fields if bound.reference == field.reference)
+            public_aggregates.append({
+                "field_id": field_id, "label": field.label,
+                "sum": aggregate.value, "count": aggregate.count,
+                **({"unit": aggregate.unit} if aggregate.unit else {}),
+            })
+            evidence.append(ComputationEvidence(
+                evidence_id=f"aggregate#{index}",
+                origin=Origin(kind="typed", reference=QUERY_ENTITY_RECORDS_TOOL,
+                              observed_at=observed_at,
+                              scope=page.scope + "; " + "; ".join(conditions or ["no filter"])),
+                operation=f"sum of {field.label}", inputs=("query#1",),
+                value=aggregate.value,
+                value_type="money" if field.kind == "monetary" else "number",
+                unit=aggregate.unit, covers_whole_scope=True,
+            ))
         records = []
         answer_rows = []
         answer_fields = _answer_fields(selected)
@@ -869,6 +970,7 @@ class EntityReadTools:
                             "type": field.kind}
                            for field_id, field in zip(raw_ids, selected, strict=True)],
                 "records": records,
+                "aggregates": public_aggregates,
                 "conditions": conditions or ["no filter"],
                 "ordering": "stable record identity ascending",
                 "offset": offset,
@@ -885,6 +987,7 @@ class EntityReadTools:
                 "catalog_digest": catalog.binding_digest,
                 "filter_count": len(filters),
                 "field_count": len(selected),
+                "aggregate_field_count": len(aggregate_fields),
                 "offset": offset,
                 "matched_count": page.matched_count,
                 "returned_count": len(page.records),
@@ -913,6 +1016,7 @@ __all__ = [
     "ENTITY_READ_SCHEMAS", "ENTITY_READ_TOOLS",
     "QUERY_ENTITY_RECORDS_SCHEMA", "QUERY_ENTITY_RECORDS_TOOL",
     "EntityCatalog", "EntityCell", "EntityChoice", "EntityDescriptor",
+    "EntityAggregate",
     "EntityField", "EntityFilter", "EntityPageHint", "EntityQuery",
     "EntityQueryPage", "EntityReadPort", "EntityReadTools", "EntityRecord",
 ]

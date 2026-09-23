@@ -14,6 +14,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
+from web_operation_agent.execution.context import SessionContext
 from web_operation_agent.execution.session import LabApparatus, ServerAgentSession, TaskSpec
 from web_operation_agent.execution.target import (MAX_TARGET_DECLARATIONS, TargetState,
                                                   parse_target, required_page_controls,
@@ -61,6 +62,28 @@ def _page(epoch: int, path: str, *, active_tab: str = "overview") -> PageObserva
         schema_version=SCHEMA_VERSIONS["PageObservation"], epoch=epoch,
         url=ORIGIN + path, title="Vendor desk", landmarks=["Vendor workspaces"],
         elements=elements, content=f"page {epoch} {active_tab}")
+
+
+class GenericRecordTargetIdentity(unittest.TestCase):
+    def test_a_read_backed_route_needs_the_rendered_record_identity(self):
+        class Session:
+            _target = TargetState(path="/items/4")
+            _required_page_controls = ()
+            _required_page_effects = frozenset()
+            _seen_active_filters = {}
+            _business_record_routes = {"/items/4"}
+            _navigation_only = True
+
+        page = PageObservation(schema_version=1, epoch=2,
+                               url="http://app.test/items/4", title="Item",
+                               landmarks=[], elements=[], render_state="ready")
+        self.assertIn("rendered record identity not verified",
+                      SessionContext._page_goal_unmet(Session(), page))
+        page.record_route = "/items/5"
+        self.assertIn("rendered record identity not verified",
+                      SessionContext._page_goal_unmet(Session(), page))
+        page.record_route = "/items/4"
+        self.assertEqual(SessionContext._page_goal_unmet(Session(), page), ())
 
 
 class _WorkspaceBrowser:

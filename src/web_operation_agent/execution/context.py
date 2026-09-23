@@ -29,10 +29,17 @@ class SessionContext:
     """Context and grounding behavior shared by one server-owned session."""
 
     def _page_goal_unmet(self, obs: PageObservation) -> tuple[str, ...]:
-        return unmet_conditions(self._target or TargetState(), obs,
+        target = self._target or TargetState()
+        missing = unmet_conditions(target, obs,
                                 required_selected=self._required_page_controls,
                                 required_effects=self._required_page_effects,
                                 seen_active_filters=self._seen_active_filters)
+        current_path = urlsplit(obs.url).path.rstrip("/") or "/"
+        if (current_path in self._business_record_routes
+                and (self._navigation_only or target.path == current_path)
+                and obs.record_route != current_path):
+            missing += ("rendered record identity not verified",)
+        return missing
 
     def _remember_active_filters(self, obs: PageObservation) -> None:
         if obs.page_facets is not None:

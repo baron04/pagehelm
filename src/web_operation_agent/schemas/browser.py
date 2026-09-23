@@ -140,6 +140,9 @@ class PageObservation:
     # Application-owned choices on this page. A ref is valid only with this observation;
     # a candidate is not an active facet and grants no action permission on its own.
     facet_candidates: list[dict] | None = None
+    # Application-owned identity of the form record actually rendered. This is an
+    # observation, never authority to navigate to that path.
+    record_route: str = ""
 
     def __post_init__(self) -> None:
         _schema_version(self.schema_version, "PageObservation")
@@ -201,6 +204,14 @@ class PageObservation:
                      "invalid facet candidate")
             refs = [item["ref"] for item in self.facet_candidates]
             _require(len(refs) == len(set(refs)), "facet candidate refs must be unique")
+        _require(isinstance(self.record_route, str) and len(self.record_route) <= 1000,
+                 "record_route must be a bounded application path")
+        if self.record_route:
+            _require(self.record_route.startswith("/") and not self.record_route.startswith("//")
+                     and not any(char in self.record_route for char in "?#\\")
+                     and not re.search(r"[\x00-\x20\x7f]", self.record_route)
+                     and not any(part in {".", ".."} for part in self.record_route.split("/")),
+                     "record_route must be a plain application path")
         self.landmarks = copy.deepcopy(self.landmarks)
         self.elements = copy.deepcopy(self.elements)
         self.messages = copy.deepcopy(self.messages)
@@ -223,13 +234,15 @@ class PageObservation:
             out["page_facets"] = copy.deepcopy(self.page_facets)
         if self.facet_candidates is not None:
             out["facet_candidates"] = copy.deepcopy(self.facet_candidates)
+        if self.record_route:
+            out["record_route"] = self.record_route
         return out
 
     @staticmethod
     def from_json(d: dict) -> "PageObservation":
         allowed = {"schema_version", "epoch", "url", "title", "landmarks", "elements",
                    "content", "messages", "truncated", "render_state", "selected_controls",
-                   "page_facets", "facet_candidates"}
+                   "page_facets", "facet_candidates", "record_route"}
         required = {"schema_version", "epoch", "url", "title", "landmarks", "elements"}
         d = _strict_object(d, "PageObservation", allowed=allowed, required=required)
         _require(isinstance(d["landmarks"], list), "landmarks must be an array")
@@ -246,7 +259,8 @@ class PageObservation:
                                render_state=d.get("render_state", "unknown"),
                                selected_controls=copy.deepcopy(d.get("selected_controls", [])),
                                page_facets=copy.deepcopy(d.get("page_facets")),
-                               facet_candidates=copy.deepcopy(d.get("facet_candidates")))
+                               facet_candidates=copy.deepcopy(d.get("facet_candidates")),
+                               record_route=d.get("record_route", ""))
 
     @property
     def content_digest(self) -> str:

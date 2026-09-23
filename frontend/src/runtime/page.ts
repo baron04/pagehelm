@@ -44,11 +44,13 @@ interface PageControllerModule {
   readPageFacets?: () => unknown
   readFacetCandidates?: () => unknown
   applyPageFacet?: (ref: string, active: boolean) => Promise<unknown> | unknown
+  readPageRecordRoute?: () => unknown
 }
 
 export type PageFacetReader = () => unknown
 export type FacetCandidateReader = () => unknown
 export type FacetApplier = (ref: string, active: boolean) => Promise<unknown> | unknown
+export type PageRecordRouteReader = () => unknown
 
 /** What one observation of the page found, before the session numbers and wraps it. */
 export interface PageReading {
@@ -63,7 +65,8 @@ export class Page {
               private readonly redactor: Redactor,
               private readonly readPageFacets?: PageFacetReader,
               private readonly readFacetCandidates?: FacetCandidateReader,
-              private readonly applyPageFacet?: FacetApplier) {}
+              private readonly applyPageFacet?: FacetApplier,
+              private readonly readPageRecordRoute?: PageRecordRouteReader) {}
 
   applyFacet(ref: unknown, active: unknown): Promise<unknown> {
     if (!this.readFacetCandidates || !this.applyPageFacet ||
@@ -169,6 +172,7 @@ export class Page {
     for (const item of elements) fingerprints.set(item.ref, this.fingerprint(item.ref))
     const facets = this.readPageFacets ? this.boundedFacets() : undefined
     const candidates = this.readFacetCandidates ? this.boundedCandidates() : undefined
+    const recordRoute = this.boundedRecordRoute()
     return {
       observation: {
         schema_version: WIRE_VERSION,
@@ -183,10 +187,22 @@ export class Page {
         selected_controls: selectedControlsFromPage(document, this.redactor),
         ...(facets === undefined ? {} : {page_facets: facets}),
         ...(candidates === undefined ? {} : {facet_candidates: candidates}),
+        ...(recordRoute === undefined ? {} : {record_route: recordRoute}),
       },
       fingerprints,
       canonicalUrl: canonicalUrl(state.url),
     }
+  }
+
+  private boundedRecordRoute(): string | undefined {
+    let raw: unknown
+    try { raw = this.readPageRecordRoute?.() } catch { return undefined }
+    if (typeof raw !== 'string' || raw.length > 1000 || !raw.startsWith('/') ||
+        raw.startsWith('//') || /[?#\\]/.test(raw) ||
+        Array.from(raw).some(char => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127) ||
+        raw.split('/').some(part => part === '.' || part === '..')) return undefined
+    const safe = this.redactor.redactString(raw)
+    return safe === raw ? raw : undefined
   }
 
   private boundedFacets(): Array<{kind: 'filter' | 'group'; name: string}> | undefined {
@@ -253,6 +269,7 @@ export interface LoadedPageController {
   readPageFacets?: PageFacetReader
   readFacetCandidates?: FacetCandidateReader
   applyPageFacet?: FacetApplier
+  readPageRecordRoute?: PageRecordRouteReader
 }
 
 /** The fixed extraction policy qualified by the product Runtime. */
@@ -298,5 +315,7 @@ export async function loadPageController(moduleUrl: string | undefined,
     ...(typeof module.readFacetCandidates === 'function'
       ? {readFacetCandidates: module.readFacetCandidates} : {}),
     ...(typeof module.applyPageFacet === 'function'
-      ? {applyPageFacet: module.applyPageFacet} : {})}
+      ? {applyPageFacet: module.applyPageFacet} : {}),
+    ...(typeof module.readPageRecordRoute === 'function'
+      ? {readPageRecordRoute: module.readPageRecordRoute} : {})}
 }

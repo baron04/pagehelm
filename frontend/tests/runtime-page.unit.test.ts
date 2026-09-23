@@ -28,6 +28,16 @@ describe('the product PageController extraction policy', () => {
 })
 
 describe('Page.describe bounds an observation before it crosses the browser boundary', () => {
+  it('accepts only a bounded application record route as an observation', () => {
+    const make = (route: unknown) => new Page(controller(), () => null,
+      createRedactor(), undefined, undefined, undefined, () => route).describe({
+        url: 'https://app.test/items/4', title: 'Item', content: '',
+      }, 1).observation.record_route
+    expect(make('/items/4')).toBe('/items/4')
+    for (const bad of ['//other.test/x', '/items/4?token=x', '/a/../b',
+      '/items/4#tab', '/items/4 password']) expect(make(bad)).toBeUndefined()
+    expect(make(null)).toBeUndefined()
+  })
   it('publishes only bounded, valid, non-sensitive application facet choices', () => {
     const choices = [
       {ref: 'fc_1', kind: 'group', name: 'Salesperson', active: false},

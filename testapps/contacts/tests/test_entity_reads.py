@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import time
 import unittest
+from dataclasses import replace
 
-from web_operation_agent.business.entities import ENTITY_READ_TOOLS, EntityReadTools
+from web_operation_agent.business.entities import (
+    ENTITY_READ_TOOLS, EntityAggregate, EntityField, EntityReadTools,
+)
 from web_operation_agent.business.runtime import (
     BusinessToolPermissionError,
     BusinessToolRequestError,
@@ -48,6 +51,42 @@ class ContactsEntityReadContractTests(unittest.TestCase):
             field_label="Name", filter_operator="contains", filter_value="ada",
             expected_record_id="c-1", expected_value="Ada Lovelace",
         )
+
+    def test_a_rest_backed_test_adapter_can_supply_the_same_exact_sum_contract(self):
+        class RestMetricPort(_ContactsEntityReadPort):
+            def fields(self, entity, *, context=None):
+                return super().fields(entity, context=context) + (
+                    EntityField(reference="name_length", label="Name length",
+                                kind="integer", summable=True, searchable=False),)
+
+            def query(self, request, *, context=None):
+                page = super().query(request, context=context)
+                if not request.aggregate_fields:
+                    return page
+                matched = [row for row in self._executor._contact_rows()
+                           if all(self._matches(row, condition)
+                                  for condition in request.filters)]
+                return replace(page, aggregates=(EntityAggregate(
+                    field_reference="name_length",
+                    value=str(sum(len(row["name"]) for row in matched)),
+                    count=len(matched)),))
+
+        tools = EntityReadTools(RestMetricPort(_FakeContactsExecutor()),
+                                application_id=APPLICATION_ID)
+        entity_id = tools.execute("discover_entities", {"query": "contacts"}) \
+            .content["candidates"][0]["entity_id"]
+        fields = {item["label"]: item["field_id"] for item in
+                  tools.execute("describe_entity", {"entity_id": entity_id})
+                  .content["fields"]}
+        result = tools.execute("query_entity_records", {
+            "entity_id": entity_id, "field_ids": [fields["Name"]],
+            "aggregate_field_ids": [fields["Name length"]], "limit": 1,
+        })
+        self.assertEqual(result.content["aggregates"], [{
+            "field_id": fields["Name length"], "label": "Name length",
+            "sum": "24", "count": 2,
+        }])
+        self.assertTrue(result.content["completeness"]["result_truncated"])
 
     def test_shared_contract_reads_the_live_rest_application(self):
         with MinimalContactsApplication() as application:

@@ -43,7 +43,7 @@ class OnlyFirstPartyBootstrapCodeIsCommitted(unittest.TestCase):
     def test_the_served_directory_tracks_only_the_first_party_loader(self):
         """Local modules ship here; third-party PageController remains provisioned."""
         first_party = {"loader.js", "page-controller-with-state.js", "page-facets.js",
-                       "facet-bridge.js"}
+                       "facet-bridge.js", "record-bridge.js", "page-record-route.js"}
         tracked = sorted(path.name for path in deploy.SERVED_ASSETS.glob("*")
                          if path.name not in {".gitignore", *first_party})
         for name in tracked:
@@ -54,6 +54,8 @@ class OnlyFirstPartyBootstrapCodeIsCommitted(unittest.TestCase):
         self.assertTrue(loader.is_file())
         self.assertIn("woa-assistant-bootstrap-shell", loader.read_text())
         self.assertIn("readPageFacets", (deploy.SERVED_ASSETS / "page-facets.js").read_text())
+        self.assertIn("readPageRecordRoute", (deploy.SERVED_ASSETS /
+            "page-controller-with-state.js").read_text())
         self.assertIn("./page-controller.js", (deploy.SERVED_ASSETS /
             "page-controller-with-state.js").read_text())
         self.assertTrue((deploy.SERVED_ASSETS / ".gitignore").is_file(),
@@ -79,9 +81,11 @@ class OnlyFirstPartyBootstrapCodeIsCommitted(unittest.TestCase):
         manifest = ast.literal_eval((addon / "__manifest__.py").read_text())
         controller = (addon / "controllers" / "session.py").read_text()
         self.assertEqual(manifest["assets"], {
-            "web.assets_backend": ["woa_runtime/static/src/facet-bridge.js"],
+            "web.assets_backend": ["woa_runtime/static/src/facet-bridge.js",
+                               "woa_runtime/static/src/record-bridge.js"],
         })
         self.assertIn("toggleSearchItem", (addon / "static/src/facet-bridge.js").read_text())
+        self.assertIn("FormController", (addon / "static/src/record-bridge.js").read_text())
         self.assertEqual(manifest["data"], ["views/assistant_entry.xml"])
         template = ElementTree.parse(addon / "views" / "assistant_entry.xml").find("template")
         self.assertEqual(template.get("inherit_id"), "web.webclient_bootstrap")

@@ -6,6 +6,8 @@ import time
 import unittest
 
 import web_operation_agent.business.entities as entity_module
+from web_operation_agent.answer.conclusion import Aggregate
+from web_operation_agent.answer.evidence import TurnEvidence
 from web_operation_agent.business.entities import (
     DESCRIBE_ENTITY_SCHEMA,
     DESCRIBE_ENTITY_TOOL,
@@ -14,6 +16,7 @@ from web_operation_agent.business.entities import (
     QUERY_ENTITY_RECORDS_SCHEMA,
     QUERY_ENTITY_RECORDS_TOOL,
     EntityCatalog,
+    EntityAggregate,
     EntityCell,
     EntityChoice,
     EntityDescriptor,
@@ -142,7 +145,8 @@ class EntityReadContractTests(unittest.TestCase):
             set(DESCRIBE_ENTITY_SCHEMA["function"]["parameters"]["properties"]),
             {"entity_id", "field_query", "limit"})
         query = QUERY_ENTITY_RECORDS_SCHEMA["function"]["parameters"]["properties"]
-        self.assertEqual(set(query), {"entity_id", "field_ids", "filters", "limit", "offset"})
+        self.assertEqual(set(query), {"entity_id", "field_ids", "filters", "limit", "offset",
+                                      "aggregate_field_ids"})
         self.assertFalse({"model", "table", "endpoint", "method", "domain", "order"}
                          & set(query))
 
@@ -267,6 +271,64 @@ class EntityReadContractTests(unittest.TestCase):
         port.query = malformed
         with self.assertRaisesRegex(BusinessToolContractError, "nonnumeric"):
             tools.execute(QUERY_ENTITY_RECORDS_TOOL, args)
+
+    def test_exact_sum_is_bound_to_same_query_scope_and_not_row_limit(self):
+        class SummingPort(_Port):
+            def fields(self, entity, *, context=None):
+                return (EntityField(reference="private_due", label="Amount Due",
+                                    kind="monetary", summable=True,
+                                    unit_field_reference="private_currency"),)
+
+            def query(self, request, *, context=None):
+                return EntityQueryPage(
+                    records=(EntityRecord(
+                        reference="item/1", display_id="1",
+                        cells=(EntityCell("private_due", "10.50", unit="USD"),)),),
+                    matched_count=3, source_total=5,
+                    source="actor API", scope="actor-visible unpaid records",
+                    aggregates=(EntityAggregate("private_due", "92.75", 3, "USD"),),
+                )
+
+        tools = EntityReadTools(SummingPort(), application_id="fixture.app")
+        entity_id = tools.execute(DISCOVER_ENTITIES_TOOL, {"query": "work items"}) \
+            .content["candidates"][0]["entity_id"]
+        field = tools.execute(DESCRIBE_ENTITY_TOOL, {"entity_id": entity_id}) \
+            .content["fields"][0]
+        self.assertTrue(field["summable"])
+        result = tools.execute(QUERY_ENTITY_RECORDS_TOOL, {
+            "entity_id": entity_id, "field_ids": [field["field_id"]],
+            "aggregate_field_ids": [field["field_id"]], "limit": 1,
+        })
+        self.assertEqual(result.content["completeness"]["matched_count"], 3)
+        self.assertTrue(result.content["completeness"]["result_truncated"])
+        self.assertEqual(result.content["aggregates"], [{
+            "field_id": field["field_id"], "label": "Amount Due",
+            "sum": "92.75", "count": 3, "unit": "USD",
+        }])
+        self.assertEqual(result.evidence[1].inputs, ("query#1",))
+        self.assertEqual(result.evidence[1].origin.kind, "typed")
+        self.assertTrue(result.evidence[1].covers_whole_scope)
+        turn = TurnEvidence()
+        turn.capture(result.evidence, namespace="call1")
+        self.assertEqual(Aggregate("call1-aggregate#1").verify(turn)["source_kind"],
+                         "typed")
+        self.assertNotIn("private_currency", result.render())
+
+        class PartialPort(SummingPort):
+            def query(self, request, *, context=None):
+                page = super().query(request, context=context)
+                return EntityQueryPage(
+                    records=page.records, matched_count=3, source_total=5,
+                    source=page.source, scope=page.scope,
+                    aggregates=(EntityAggregate("private_due", "10.50", 1, "USD"),),
+                )
+
+        partial = EntityReadTools(PartialPort(), application_id="fixture.app")
+        with self.assertRaisesRegex(BusinessToolContractError, "incomplete aggregate"):
+            partial.execute(QUERY_ENTITY_RECORDS_TOOL, {
+                "entity_id": entity_id, "field_ids": [field["field_id"]],
+                "aggregate_field_ids": [field["field_id"]],
+            })
 
     def test_related_record_binding_is_opaque_and_only_for_catalog_entities(self):
         class RelatedPort(_Port):

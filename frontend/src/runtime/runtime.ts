@@ -22,6 +22,7 @@ import {
   absoluteUrl, armChildFrameNavigation, canonicalUrl, navigationWal, recoveryProvesNavigation,
 } from './navigation'
 import {Page, loadPageController, type PageControllerApi, type PageFacetReader,
+  type PageRecordRouteReader,
   type FacetCandidateReader, type FacetApplier} from './page'
 import type {ElementLookup} from './pageModel'
 import {createPanelContainer, keepAttached, mountPanel, type PanelHandle} from './panelBridge'
@@ -86,6 +87,7 @@ export class EmbeddedWebRuntime {
   readPageFacets: PageFacetReader | undefined
   readFacetCandidates: FacetCandidateReader | undefined
   applyPageFacet: FacetApplier | undefined
+  readPageRecordRoute: PageRecordRouteReader | undefined
   panelEnabled = true
   panelContainer: HTMLDivElement | null = null
   panelHost: PanelHost | null = null
@@ -196,7 +198,8 @@ export class EmbeddedWebRuntime {
       throw new Error('the page is not loaded yet')
     }
     return new Page(this.controller, this.getElementByIndex, this.redactor,
-      this.readPageFacets, this.readFacetCandidates, this.applyPageFacet)
+      this.readPageFacets, this.readFacetCandidates, this.applyPageFacet,
+      this.readPageRecordRoute)
   }
 
   _save(): void { writeStored(this.sessionId, this.stored) }
@@ -232,13 +235,15 @@ export class EmbeddedWebRuntime {
   // -- starting ------------------------------------------------------------------------
 
   async start(): Promise<this> {
-    const {controller, lookup, readPageFacets, readFacetCandidates, applyPageFacet} = await loadPageController(
+    const {controller, lookup, readPageFacets, readFacetCandidates, applyPageFacet,
+      readPageRecordRoute} = await loadPageController(
       this.config.pageControllerModule, this.panelContainer ? [this.panelContainer] : [])
     this.controller = controller
     this.getElementByIndex = lookup
     this.readPageFacets = readPageFacets
     this.readFacetCandidates = readFacetCandidates
     this.applyPageFacet = applyPageFacet
+    this.readPageRecordRoute = readPageRecordRoute
     return this._startConnectedRuntime()
   }
 

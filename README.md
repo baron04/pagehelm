@@ -232,11 +232,14 @@ Odoo adapter translates it to the core `discover_entities`, `describe_entity`, a
 `query_entity_records` contract, then maps validated generic filters back to bounded Odoo
 reads under the same delegated actor. Native model names and RPC methods are never Agent
 arguments. Generic monetary reads attach the actor-visible currency to each value when
-Odoo exposes a valid currency binding; without it the amount remains text and cannot be
-summed. References to an actor-readable catalog entity retain an opaque related-record
+Odoo exposes a valid stored currency binding. The same query can request application-computed, full-scope sums over
+matching stored numeric fields; monetary sums are grouped by currency and are independent
+of the returned row limit. Count, page and aggregate are separate application reads, not
+one transactional snapshot; a disagreement in counts is refused. Without a stored currency
+binding an amount remains text and cannot be summed. References to an actor-readable catalog entity retain an opaque related-record
 binding for a follow-up read; the related record is not treated as readable until that read
 succeeds. This does not authorize writes.
-A record found this way carries where it opens (`/odoo/<model>/<id>`, which Odoo 18 opens for any actor who may read the record), and `goto` may use exactly that path.
+A record found this way carries where it opens (`/odoo/<model>/<id>`, which Odoo 18 opens for any actor who may read the record), and `goto` may use exactly that path. A related record must first be read by its returned opaque entity and exact ID; an unread relation label alone does not authorize opening it. Deterministic navigation reports arrival only after a fresh observation marks the destination rendered and the application reports the matching record identity, not merely when the URL changes.
 
 Provision the disposable local fixture from a checkout:
 

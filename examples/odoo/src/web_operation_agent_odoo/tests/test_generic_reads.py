@@ -146,7 +146,8 @@ class GenericDiscoveryTests(unittest.TestCase):
         query = QUERY_ENTITY_RECORDS_SCHEMA["function"]["parameters"]["properties"]
         self.assertEqual(set(discovery), {"query", "limit"})
         self.assertEqual(
-            set(query), {"entity_id", "field_ids", "filters", "limit", "offset"})
+            set(query), {"entity_id", "field_ids", "filters", "limit", "offset",
+                         "aggregate_field_ids"})
         self.assertFalse({"model", "method", "domain", "order"} & set(query))
 
     def test_a_catalog_change_invalidates_an_old_candidate(self):
@@ -274,6 +275,32 @@ class GenericDescriptionAndQueryTests(unittest.TestCase):
                 "entity_id": self.entity_id, "field_ids": [total],
             })
 
+    def test_unstored_currency_cannot_authorize_a_monetary_sum(self):
+        original = self.client.call
+        fields = _fields()
+        fields["debit_limit"] = {
+            "string": "Debit Limit", "type": "monetary", "store": True,
+            "currency_field": "currency_id",
+        }
+        fields["currency_id"] = {
+            "string": "Currency", "type": "many2one", "store": False,
+        }
+
+        def call(model, method, args, kwargs=None):
+            if method == "fields_get":
+                return copy.deepcopy(fields)
+            return original(model, method, args, kwargs)
+
+        self.client.call = call
+        field = self._description("Debit Limit").content["fields"][0]
+        self.assertFalse(field["summable"])
+        with self.assertRaisesRegex(BusinessToolRequestError, "summable"):
+            self.executor.execute(QUERY_ENTITY_RECORDS_TOOL, {
+                "entity_id": self.entity_id, "field_ids": [field["field_id"]],
+                "aggregate_field_ids": [field["field_id"]],
+            })
+        self.assertFalse(any(method == "read_group" for _, method, _, _ in self.client.calls))
+
     def test_query_resolves_ids_server_side_and_reports_exact_scope_and_counts(self):
         description = self._description()
         by_label = {item["label"]: item["field_id"]
@@ -312,6 +339,67 @@ class GenericDescriptionAndQueryTests(unittest.TestCase):
                                        "fields": ["name", "state", "carrier_id"],
                                        "limit": 10, "offset": 0, "order": "id asc",
                                    })])
+
+    def test_aggregate_uses_application_sum_with_currency_and_full_filter_scope(self):
+        original = self.client.call
+        fields = _fields()
+        fields["amount_due"] = {
+            "string": "Amount Due", "type": "monetary", "required": False,
+            "readonly": True, "searchable": True, "store": True,
+            "currency_field": "currency_id",
+        }
+        fields["currency_id"] = {
+            "string": "Currency", "type": "many2one", "required": False,
+            "readonly": True, "searchable": True, "store": True,
+        }
+
+        def call(model, method, args, kwargs=None):
+            if method == "fields_get":
+                return copy.deepcopy(fields)
+            if method == "search_count":
+                return 100 if args == [[]] else 3
+            if method == "search_read":
+                return [{"id": 7, "name": "WH/OUT/00007"}]
+            if method == "read_group":
+                self.assertEqual(args, [
+                    [["state", "=", "done"]], ["amount_due:sum"], ["currency_id"],
+                ])
+                self.assertEqual(kwargs, {"lazy": False})
+                return [
+                    {"currency_id": [1, "USD"], "amount_due": 90.25, "__count": 2},
+                    {"currency_id": [2, "EUR"], "amount_due": 7.5, "__count": 1},
+                ]
+            return original(model, method, args, kwargs)
+
+        self.client.call = call
+        by_label = {item["label"]: item for item in self._description().content["fields"]}
+        self.assertTrue(by_label["Amount Due"]["summable"])
+        result = self.executor.execute(QUERY_ENTITY_RECORDS_TOOL, {
+            "entity_id": self.entity_id,
+            "field_ids": [by_label["Reference"]["field_id"]],
+            "filters": [{"field_id": by_label["Status"]["field_id"],
+                         "operator": "=", "value": "done"}],
+            "aggregate_field_ids": [by_label["Amount Due"]["field_id"]],
+            "limit": 1,
+        })
+        self.assertEqual([(item["sum"], item["unit"], item["count"])
+                          for item in result.content["aggregates"]],
+                         [("90.25", "USD", 2), ("7.5", "EUR", 1)])
+        self.assertEqual(result.content["completeness"]["matched_count"], 3)
+        self.assertNotIn("currency_id", json.dumps(result.content))
+
+        def missing_unit(model, method, args, kwargs=None):
+            if method == "read_group":
+                return [{"currency_id": False, "amount_due": 97.75, "__count": 3}]
+            return call(model, method, args, kwargs)
+
+        self.client.call = missing_unit
+        with self.assertRaisesRegex(BusinessToolContractError, "without its currency"):
+            self.executor.execute(QUERY_ENTITY_RECORDS_TOOL, {
+                "entity_id": self.entity_id,
+                "field_ids": [by_label["Reference"]["field_id"]],
+                "aggregate_field_ids": [by_label["Amount Due"]["field_id"]],
+            })
 
     def test_raw_names_unknown_ids_and_invalid_operators_never_reach_a_data_read(self):
         before = len([call for call in self.client.calls if call[1].startswith("search")])
@@ -357,6 +445,96 @@ class GenericDescriptionAndQueryTests(unittest.TestCase):
                         "field_ids": [by_label["Reference"], by_label["Carrier"]],
                     })
                 self.client.call = original
+
+
+class RelatedRecordLocalizationTests(unittest.TestCase):
+    """A document number resolves its owner through two actor-visible reads."""
+
+    def test_order_identifier_then_customer_id_yields_only_verified_customer_route(self):
+        class Client(_FakeClient):
+            def __init__(self, *, customer_visible):
+                super().__init__()
+                self.customer_visible = customer_visible
+                models = [
+                    {"model": model, "label": label, "operations": ["read"],
+                     "transient": False}
+                    for model, label in (("sale.order", "Sales Orders"),
+                                         ("res.partner", "Customers"))
+                ]
+                actions = [
+                    {"action_id": index, "xml_id": f"test.action_{index}",
+                     "name": label, "route": route, "model": model,
+                     "readable": True, "view_modes": ["list", "form"],
+                     "breadcrumbs": [label], "domain": "[]", "context": "{}"}
+                    for index, (model, label, route) in enumerate((
+                        ("sale.order", "Sales Orders", "orders"),
+                        ("res.partner", "Customers", "customers")), start=1)
+                ]
+                self.catalog_payload["models"] = models
+                self.catalog_payload["actions"] = actions
+                self.catalog_payload["omitted_models"] = []
+                self.catalog_payload["descriptor_digest"] = _catalog_digest(
+                    models, actions, [], [])
+
+            def call(self, model, method, args, kwargs=None):
+                if (model, method) == ("woa.runtime.descriptor", "catalog"):
+                    return copy.deepcopy(self.catalog_payload)
+                if method == "fields_get":
+                    fields = {
+                        "id": {"string": "ID", "type": "integer", "store": True},
+                        "name": {"string": "Reference" if model == "sale.order"
+                                 else "Name", "type": "char", "store": True},
+                    }
+                    if model == "sale.order":
+                        fields["partner_id"] = {
+                            "string": "Customer", "type": "many2one", "store": True,
+                            "relation": "res.partner",
+                        }
+                    return fields
+                if method == "search_count":
+                    return (0 if model == "res.partner" and not self.customer_visible
+                            and args != [[]] else 1)
+                if method == "search_read":
+                    if model == "res.partner":
+                        return ([{"id": 4, "name": "Lumber Inc"}]
+                                if self.customer_visible else [])
+                    return [{"id": 7, "name": "S00006",
+                             "partner_id": [4, "Lumber Inc"]}]
+                raise AssertionError((model, method, args, kwargs))
+
+        for visible in (True, False):
+            with self.subTest(customer_visible=visible):
+                tools = EntityReadTools(OdooEntityReadPort(Client(
+                    customer_visible=visible)), application_id="odoo")
+                order_id = tools.execute(DISCOVER_ENTITIES_TOOL, {
+                    "query": "Sales Orders"}).content["candidates"][0]["entity_id"]
+                order_fields = {item["label"]: item["field_id"] for item in
+                                tools.execute(DESCRIBE_ENTITY_TOOL, {
+                                    "entity_id": order_id}).content["fields"]}
+                order = tools.execute(QUERY_ENTITY_RECORDS_TOOL, {
+                    "entity_id": order_id,
+                    "field_ids": [order_fields["Reference"], order_fields["Customer"]],
+                    "filters": [{"field_id": order_fields["Reference"],
+                                 "operator": "=", "value": "S00006"}],
+                })
+                self.assertEqual(order.content["completeness"]["matched_count"], 1)
+                relation = order.content["records"][0]["values"][1]
+                self.assertEqual(relation["value"], "Lumber Inc")
+                self.assertEqual(relation["related_record_id"], "4")
+                customer_id = relation["related_entity_id"]
+                customer_fields = {item["label"]: item["field_id"] for item in
+                                   tools.execute(DESCRIBE_ENTITY_TOOL, {
+                                       "entity_id": customer_id}).content["fields"]}
+                customer = tools.execute(QUERY_ENTITY_RECORDS_TOOL, {
+                    "entity_id": customer_id,
+                    "field_ids": [customer_fields["Name"]],
+                    "filters": [{"field_id": customer_fields["ID"],
+                                 "operator": "=", "value": 4}],
+                })
+                self.assertEqual(customer.content["completeness"]["matched_count"],
+                                 1 if visible else 0)
+                self.assertEqual(customer.allowed_routes,
+                                 ("/odoo/res.partner/4",) if visible else ())
 
 
 class GenericSkillRoutingTests(unittest.TestCase):

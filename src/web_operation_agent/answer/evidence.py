@@ -30,7 +30,8 @@ _EVIDENCE_ID = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*#[0-9]{1,6}")
 
 #: Where a piece of evidence came from. `typed` is an application tool call, `page` is a
 #: Runtime observation, `computed` is this server executing a bounded operation over other
-#: evidence. The distinction is load-bearing: a page observation must never be described as
+#: evidence. Application-computed aggregates remain `typed` reads. The distinction is
+#: load-bearing: a page observation must never be described as
 #: an API read, which is exactly what one failing answer did.
 #: `capability` is this server enumerating what the current actor could execute and comparing
 #: it against the goal. It is not a read of the application's data, and keeping it out of
@@ -232,11 +233,11 @@ class PageEvidence:
 
 @dataclass(frozen=True, slots=True)
 class ComputationEvidence:
-    """A bounded operation this server ran over other evidence, and what it produced.
+    """A bounded result of a server operation or an application's aggregate read.
 
-    The model chooses the operation; the server runs it on the real values. That split is
-    what a natural-language check could not give: "the total is 7,210.00" is a claim about
-    arithmetic over five records, and no amount of inspecting the sentence establishes it.
+    Server computations cite the values they used. An application aggregate cites the
+    query defining its scope; its adapter validates that the aggregate covered every
+    matching record rather than only the returned page. Its origin remains `typed`.
     """
 
     evidence_id: str
@@ -246,17 +247,16 @@ class ComputationEvidence:
     value: str
     value_type: str
     unit: str = ""
-    #: Whether the inputs covered the whole scope the question asked about. A sum over the
-    #: fifty records one page returned is a subtotal; calling it the total is the single
-    #: most expensive thing a correct-looking number can do, so the result carries the
-    #: answer rather than leaving it to whoever renders it.
+    #: Whether the operation covered the whole scope the question asked about. For a
+    #: server computation this follows its input rows; for an application aggregate the
+    #: adapter must independently validate full-scope coverage.
     covers_whole_scope: bool = False
 
     def __post_init__(self) -> None:
         _require_id(self.evidence_id)
         _require_origin(self.origin)
-        if self.origin.kind != "computed":
-            raise ValueError("computation evidence must be recorded as computed")
+        if self.origin.kind not in {"computed", "typed"}:
+            raise ValueError("computation evidence must be computed or typed")
         if not isinstance(self.covers_whole_scope, bool):
             raise TypeError("covers_whole_scope must be a boolean")
         object.__setattr__(self, "operation", _text(self.operation, "operation"))
