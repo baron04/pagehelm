@@ -90,6 +90,8 @@ export class EmbeddedWebRuntime {
   private cancelExpiry: Cancel | null = null
   private stopListening: Cancel[] = []
   private redactorInstance: Redactor | null = null
+  /** When the application's read-only window expires, in epoch milliseconds; 0 if none. */
+  private writeGuardUntil = 0
   private clientInstance: SessionClient | null = null
   /** A message the person sent in place of an unanswered confirmation. */
   private replacementText = ''
@@ -803,7 +805,14 @@ export class EmbeddedWebRuntime {
   private async _rejectWithoutWriteGuard(action: ActionEnvelope): Promise<boolean> {
     const path = this.config?.pageWriteGuard
     if (path === undefined || path === '') return false
-    if (await openWriteGuard(path)) return false
+    this.writeGuardUntil = 0
+    const expiresAt = await openWriteGuard(path)
+    if (expiresAt !== null) {
+      // Kept so the receipt can say whether the window still covered the action when it
+      // settled. A window that lapsed mid-action proves nothing about what the action did.
+      this.writeGuardUntil = expiresAt * 1000
+      return false
+    }
     await this._reject(action, 'capability_refused',
       'page_write_guard_unavailable: the application could not make this session read-only, '
       + 'so the action was not executed.')
@@ -914,6 +923,7 @@ export class EmbeddedWebRuntime {
       navigated: before.observation.url !== observation.observation.url,
       elapsedMs: Date.now() - Number(executing.started_at || 0),
       urlBefore: this.currentObservation?.observation.url || '',
+      writeGuardHeld: this.writeGuardUntil > Date.now(),
     }, this.redactor)
     await this._deliver(results.completed(executing, receipt, observation))
   }

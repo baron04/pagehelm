@@ -61,6 +61,8 @@ export interface ReceiptFacts {
   elapsedMs: number
   /** Where the page was before, if the in-flight record does not say. */
   urlBefore: string
+  /** The application's read-only window covered this whole action. */
+  writeGuardHeld?: boolean
 }
 
 export function receipt(action: ActionEnvelope, facts: ReceiptFacts, redactor: Redactor): ActionReceipt {
@@ -79,6 +81,7 @@ export function receipt(action: ActionEnvelope, facts: ReceiptFacts, redactor: R
     epoch_after: facts.observation.page_epoch,
     elapsed_ms: Math.max(0, Math.round(facts.elapsedMs || 0)),
     relogin: false,
+    write_guard_held: facts.writeGuardHeld === true,
     observation: facts.observation.observation,
   }
 }

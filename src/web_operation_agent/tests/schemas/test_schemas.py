@@ -148,10 +148,15 @@ class WireTypes(unittest.TestCase):
                             args_echo={"ref": "e1"}, ok=False, error_code="stale_ref",
                             error_detail="d", url_before="a", url_after="b", navigated=True,
                             epoch_before=2, epoch_after=3, elapsed_ms=17, relogin=True,
-                            observation=obs)
+                            write_guard_held=True, observation=obs)
         back = S.ActionReceipt.from_json(r.to_json())
         self.assertEqual(back.to_json(), r.to_json())
         self.assertTrue(back.relogin)
+        self.assertTrue(back.write_guard_held)
+        # A Runtime that predates the field sends none, which means it held no window.
+        legacy = r.to_json()
+        del legacy["write_guard_held"]
+        self.assertFalse(S.ActionReceipt.from_json(legacy).write_guard_held)
         self.assertEqual(back.observation.elements[0].ref, "e1")
 
     def test_receipt_error_codes_are_a_closed_set(self):

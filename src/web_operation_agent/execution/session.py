@@ -162,6 +162,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                  application_forms: ApplicationFormPort | None = None,
                  deterministic_read_navigation: bool = False,
                  skill_first: bool = False,
+                 page_write_guard: bool = False,
                  plain_business_answer_min_page_actions: int | None = None,
                  max_agent_said_chars: int = 500,
                  cancelled: Callable[[], bool] | None = None,
@@ -574,7 +575,8 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         #: The plan and what the run has learned about it. Replaced by `plan()`.
         self.plan_state: PlanState = PlanState.of(
             self.contract, route_identity=self._contract_route_identity)
-        self._writes = WriteWatch(control=control, ledger=ledger, run_id=self.run_id)
+        self._writes = WriteWatch(control=control, ledger=ledger, run_id=self.run_id,
+                                  write_guard_declared=bool(page_write_guard))
         #: Set once the agent has been told a write of its own did not execute.
         self._challenged_false_success = False
         self._browser_attempts = 0

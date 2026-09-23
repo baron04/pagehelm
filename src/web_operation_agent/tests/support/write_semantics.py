@@ -69,7 +69,8 @@ class _Browser:
             error_code=spec.get("error_code", ""),
             error_detail=spec.get("error_detail", ""),
             url_before="http://app/a", url_after="http://app/b",
-            navigated=spec.get("navigated", True), observation=_page(),
+            navigated=spec.get("navigated", True),
+            write_guard_held=spec.get("write_guard_held", False), observation=_page(),
         )
 
     def console(self):
@@ -84,14 +85,14 @@ class _DeadControl(_Control):
         raise ControlPlaneError("gateway unreachable")
 
 
-def _run(chat, browser, control):
+def _run(chat, browser, control, **session_options):
     with tempfile.TemporaryDirectory() as tmp:
         session = ServerAgentSession(
             task=TaskSpec(task_ref="T", prompt="change the delivery address"),
             lab=LabApparatus(arm="S"), chat=chat, browser=browser, control=control,
             ledger=SessionLedger(Path(tmp) / "l.jsonl", "r1"),
             step_budget=6, wall_budget_s=120, run_id="r1",
-            application_routes=FIXTURE_ROUTE_PORT,
+            application_routes=FIXTURE_ROUTE_PORT, **session_options,
         )
         session.contract = CONTRACT
         session.contract_source = "compiled"

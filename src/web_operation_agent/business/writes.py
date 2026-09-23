@@ -54,7 +54,12 @@ class WatchState:
 class WriteWatch:
     """Witness one run's control decisions and settle potentially writing actions."""
 
-    def __init__(self, *, control: ControlPlaneClient, ledger: SessionLedger, run_id: str):
+    def __init__(self, *, control: ControlPlaneClient, ledger: SessionLedger, run_id: str,
+                 write_guard_declared: bool = False):
+        #: Whether this application declares a page write guard. A receipt may only claim
+        #: the guard held if the application said it has one: the claim is the Runtime's,
+        #: and an application that never opens a window cannot produce a true one.
+        self.write_guard_declared = bool(write_guard_declared)
         self.control = control
         self.ledger = ledger
         self.run_id = run_id
@@ -117,6 +122,10 @@ class WriteWatch:
                     "detail": f"control plane unreadable: {exc}"[:300],
                     "permitted": 0, "refused": 0, "refused_requests": []}
         self.awaiting_control = False
+        # An action the application ran with this session read-only cannot have written
+        # through it, so losing its result is not an uncertain write. A permitted write is
+        # still pending business elsewhere and keeps its own uncertainty.
+        guarded = self.write_guard_declared and receipt.write_guard_held
         out = ControlPlaneClient.outcome_of(events)
         was_pending = self.pending_write
         self.writes_permitted += out["permitted"]
@@ -129,12 +138,14 @@ class WriteWatch:
         elif out["permitted"] and not action_may_write:
             detail = "late write permission observed after a non-dispatching action; cause unknown"
         elif not receipt.ok and (self.pending_write or (
-                action_may_write and receipt.error_code not in PRE_DISPATCH_ERRORS)):
+                action_may_write and receipt.error_code not in PRE_DISPATCH_ERRORS
+                and not guarded)):
             detail = ("a potentially writing action lost its result; an empty decision window "
                       "does not prove non-dispatch and retry is unsafe")
         self.ledger.append("write_outcome", step=step,
                            observed_after_command_id=receipt.command_id,
-                           attribution="unattributed", **out, detail=detail)
+                           attribution="unattributed", **out, detail=detail,
+                           **({"write_guard_held": True} if guarded else {}))
         if detail:
             return {**out, "state": WRITE_UNKNOWN, "detail": detail}
         if out["refused"]:

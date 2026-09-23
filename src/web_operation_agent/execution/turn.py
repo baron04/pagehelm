@@ -344,6 +344,10 @@ class AgentTurnExecutor:
             deterministic_read_navigation=(
                 self.config.deterministic_read_navigation),
             skill_first=self.config.skill_first,
+            # Only an application that declares a page write guard can have held one.
+            page_write_guard=bool(
+                self.application.descriptor.page_write_guard
+                if self.application is not None else ""),
             plain_business_answer_min_page_actions=(
                 self.config.plain_business_answer_min_page_actions),
             max_agent_said_chars=self.config.max_user_answer_chars,

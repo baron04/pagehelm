@@ -206,6 +206,11 @@ class ActionReceipt:
     #: reported rather than hidden: it is applied identically for every arm and it must be
     #: visible when reading a trace.
     relogin: bool = False
+    #: True when the application held this browser session read-only for the whole action,
+    #: through the page write guard it declares on its descriptor. It is what lets a turn
+    #: tell "the click ran and changed nothing" from "the click ran and may have written":
+    #: without it, an action that lost its result has to be settled as uncertain.
+    write_guard_held: bool = False
     observation: PageObservation | None = None
 
     def __post_init__(self) -> None:
@@ -227,6 +232,7 @@ class ActionReceipt:
         _non_negative_int(self.epoch_after, "epoch_after")
         _non_negative_int(self.elapsed_ms, "elapsed_ms")
         _bool(self.relogin, "relogin")
+        _bool(self.write_guard_held, "write_guard_held")
         _require(self.observation is None or isinstance(self.observation, PageObservation),
                  "observation must be a PageObservation or null")
         self.observation = copy.deepcopy(self.observation)
@@ -238,14 +244,15 @@ class ActionReceipt:
                 "url_before": self.url_before, "url_after": self.url_after,
                 "navigated": self.navigated, "epoch_before": self.epoch_before,
                 "epoch_after": self.epoch_after, "elapsed_ms": self.elapsed_ms,
-                "relogin": self.relogin,
+                "relogin": self.relogin, "write_guard_held": self.write_guard_held,
                 "observation": self.observation.to_json() if self.observation else None}
 
     @staticmethod
     def from_json(d: dict) -> "ActionReceipt":
         allowed = {"schema_version", "command_id", "action", "args_echo", "ok",
                    "error_code", "error_detail", "url_before", "url_after", "navigated",
-                   "epoch_before", "epoch_after", "elapsed_ms", "relogin", "observation"}
+                   "epoch_before", "epoch_after", "elapsed_ms", "relogin",
+                   "write_guard_held", "observation"}
         required = {"schema_version", "command_id", "action", "args_echo", "ok"}
         d = _strict_object(d, "ActionReceipt", allowed=allowed, required=required)
         obs = d.get("observation")
@@ -259,6 +266,7 @@ class ActionReceipt:
                              epoch_after=d.get("epoch_after", 0),
                              elapsed_ms=d.get("elapsed_ms", 0),
                              relogin=d.get("relogin", False),
+                             write_guard_held=d.get("write_guard_held", False),
                              observation=PageObservation.from_json(obs)
                              if obs is not None else None)
 

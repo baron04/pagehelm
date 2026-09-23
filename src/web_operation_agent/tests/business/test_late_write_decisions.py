@@ -99,3 +99,48 @@ class LateDecisions(unittest.TestCase):
                         _Control([[], [REFUSAL], [PERMIT]]))
         self.assertEqual(result.terminal_reason, "agent_finished")
         self.assertEqual(result.success_claim, "unverified")
+
+
+class ReadOnlyWindow(unittest.TestCase):
+    """An action the application ran with the session read-only cannot have written.
+
+    Found on the four-arm Odoo gate: the model marked the application-menu button as a
+    navigation, the button only opened a menu, and a click that changed nothing ended fifteen
+    turns as an uncertain write. With the application's write guard held for the whole
+    action, losing its result says nothing about a write, and the turn goes on.
+    """
+
+    TIMED_OUT = {"ok": False, "error_code": "navigation_timeout", "navigated": False}
+
+    def test_a_timed_out_click_under_the_guard_is_not_an_uncertain_write(self):
+        result, session = _run(
+            _Chat([SUBMIT, ("observe", {}), FINISH]),
+            _Browser([{**self.TIMED_OUT, "write_guard_held": True}, {}]),
+            _Control([[], [], []]), page_write_guard=True)
+        self.assertNotEqual(result.terminal_reason, "indeterminate_write")
+        self.assertEqual(len(session.browser.done), 2, "the turn went on after the click")
+        outcome = session.ledger.of_kind("write_outcome")[0]
+        self.assertTrue(outcome["write_guard_held"])
+        self.assertEqual(outcome["detail"], "")
+
+    def test_every_other_combination_stays_uncertain(self):
+        cases = {
+            # The Runtime says the guard held, but this application declares none.
+            "claimed without a declared guard": (True, False, [[], [], []]),
+            # The application has a guard, but the window did not cover the action.
+            "declared but not held": (False, True, [[], [], []]),
+            # A permitted write is pending: the guard says nothing about that one.
+            "a permitted write is pending": (True, True, [[PERMIT], [], []]),
+        }
+        for reason, (held, declared, events) in cases.items():
+            with self.subTest(reason=reason):
+                result, session = _run(
+                    _Chat([SUBMIT, ("observe", {}), FINISH]),
+                    _Browser([{**self.TIMED_OUT, "write_guard_held": held}, {}]),
+                    _Control(events), page_write_guard=declared)
+                self.assertEqual(result.terminal_reason, "indeterminate_write")
+                self.assertEqual(len(session.browser.done), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

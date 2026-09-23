@@ -20,20 +20,25 @@ export function validWriteGuardPath(value: unknown): value is string {
     && value.split('/').slice(1).every(segment => segment.replace(/\./g, '') !== '')
 }
 
-export async function openWriteGuard(path: string, fetcher: Fetch = fetch): Promise<boolean> {
-  if (!validWriteGuardPath(path)) return false
+/**
+ * Open the window, and report when it expires so the caller can say afterwards whether it
+ * still covered the action. Null means the application did not confirm one.
+ */
+export async function openWriteGuard(path: string, fetcher: Fetch = fetch): Promise<number | null> {
+  if (!validWriteGuardPath(path)) return null
   try {
     const response = await fetcher(`${path}/begin`, {
       method: 'POST', credentials: 'same-origin', cache: 'no-store',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ttl_s: WRITE_GUARD_TTL_S}),
     })
-    if (!response.ok) return false
+    if (!response.ok) return null
     const body = await response.json() as {active?: unknown; expires_at?: unknown} | null
-    return body?.active === true && typeof body.expires_at === 'number'
-      && Number.isFinite(body.expires_at)
+    if (body?.active !== true || typeof body.expires_at !== 'number'
+        || !Number.isFinite(body.expires_at)) return null
+    return body.expires_at
   } catch {
-    return false
+    return null
   }
 }
 

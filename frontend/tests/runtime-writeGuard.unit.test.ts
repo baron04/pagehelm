@@ -21,7 +21,7 @@ describe('the page write guard path', () => {
 describe('opening the guard', () => {
   it('asks for a bounded window and accepts only an explicit confirmation', async () => {
     const fetcher = vi.fn(async () => reply(200, {active: true, expires_at: 1790000000.5}))
-    expect(await openWriteGuard('/woa/page-guard', fetcher as typeof fetch)).toBe(true)
+    expect(await openWriteGuard('/woa/page-guard', fetcher as typeof fetch)).toBe(1790000000.5)
     const [url, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe('/woa/page-guard/begin')
     expect(init.method).toBe('POST')
@@ -41,13 +41,13 @@ describe('opening the guard', () => {
       async () => { throw new TypeError('network down') },
     ]
     for (const answer of cases) {
-      expect(await openWriteGuard('/woa/page-guard', vi.fn(answer) as typeof fetch)).toBe(false)
+      expect(await openWriteGuard('/woa/page-guard', vi.fn(answer) as typeof fetch)).toBeNull()
     }
   })
 
   it('never calls an invalid path', async () => {
     const fetcher = vi.fn()
-    expect(await openWriteGuard('//evil.test/x', fetcher as typeof fetch)).toBe(false)
+    expect(await openWriteGuard('//evil.test/x', fetcher as typeof fetch)).toBeNull()
     expect(fetcher).not.toHaveBeenCalled()
   })
 
@@ -105,22 +105,36 @@ describe('a page action in an application that names a write guard', () => {
     expect(String(posts[0]?.body.error_detail)).toMatch(/^page_write_guard_unavailable/)
   })
 
-  it('runs once the application confirms the window', async () => {
-    const fetcher = vi.fn(async () => reply(200, {active: true, expires_at: 1790000000}))
+  it('runs once the application confirms the window, and says the window held', async () => {
+    const expiresAt = Date.now() / 1000 + 120
+    const fetcher = vi.fn(async () => reply(200, {active: true, expires_at: expiresAt}))
     vi.stubGlobal('fetch', fetcher)
     const {runtime, executed, posts, action} = actingRuntime('/woa/page-guard')
     await runtime._handleAction(action as never)
     expect(fetcher).toHaveBeenCalledOnce()
     expect(executed).toEqual(['click'])
     expect(posts.map(row => row.path)).toEqual(['/claims', '/results'])
+    const receipt = posts[1]?.body.receipt as Record<string, unknown>
+    expect(receipt.write_guard_held).toBe(true)
+  })
+
+  it('does not say the window held when it had lapsed by the time the action settled', async () => {
+    const fetcher = vi.fn(async () => reply(200, {active: true, expires_at: Date.now() / 1000 - 1}))
+    vi.stubGlobal('fetch', fetcher)
+    const {runtime, posts, action} = actingRuntime('/woa/page-guard')
+    await runtime._handleAction(action as never)
+    const receipt = posts[1]?.body.receipt as Record<string, unknown>
+    expect(receipt.write_guard_held).toBe(false)
   })
 
   it('is untouched in an application without one', async () => {
     const fetcher = vi.fn()
     vi.stubGlobal('fetch', fetcher)
-    const {runtime, executed, action} = actingRuntime()
+    const {runtime, executed, posts, action} = actingRuntime()
     await runtime._handleAction(action as never)
     expect(fetcher).not.toHaveBeenCalled()
     expect(executed).toEqual(['click'])
+    const receipt = posts[1]?.body.receipt as Record<string, unknown>
+    expect(receipt.write_guard_held).toBe(false)
   })
 })

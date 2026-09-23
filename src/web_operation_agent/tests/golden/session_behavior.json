@@ -77,7 +77,8 @@
           "tool": "click",
           "url_after": "http://app.test/glasshouse/do/main",
           "write": "unknown",
-          "write_attribution": "unattributed"
+          "write_attribution": "unattributed",
+          "write_guard_held": false
         },
         {
           "event": "control_run_released",
@@ -840,7 +841,8 @@
           "tool": "click",
           "url_after": "http://app.test/glasshouse/do/main",
           "write": "permitted",
-          "write_attribution": "unattributed"
+          "write_attribution": "unattributed",
+          "write_guard_held": false
         },
         {
           "contains_raw_payload": false,
@@ -2140,7 +2142,8 @@
           "tool": "goto",
           "url_after": "http://app.test/glasshouse/do/tray?id=1",
           "write": "none",
-          "write_attribution": "unattributed"
+          "write_attribution": "unattributed",
+          "write_guard_held": false
         },
         {
           "contains_raw_payload": false,
@@ -3491,7 +3494,8 @@
           "tool": "observe",
           "url_after": "http://app.test/glasshouse/do/main",
           "write": "control_error",
-          "write_attribution": "unattributed"
+          "write_attribution": "unattributed",
+          "write_guard_held": false
         },
         {
           "event": "control_run_released",
@@ -3736,7 +3740,8 @@
           "tool": "goto",
           "url_after": "http://app.test/glasshouse/do/findTrays",
           "write": "none",
-          "write_attribution": "unattributed"
+          "write_attribution": "unattributed",
+          "write_guard_held": false
         },
         {
           "acted": true,
@@ -4349,7 +4354,8 @@
           "tool": "click",
           "url_after": "http://app.test/glasshouse/do/main",
           "write": "permitted",
-          "write_attribution": "unattributed"
+          "write_attribution": "unattributed",
+          "write_guard_held": false
         },
         {
           "contains_raw_payload": false,
@@ -4411,7 +4417,8 @@
           "tool": "observe",
           "url_after": "http://app.test/glasshouse/do/main",
           "write": "none",
-          "write_attribution": "unattributed"
+          "write_attribution": "unattributed",
+          "write_guard_held": false
         },
         {
           "contains_raw_payload": false,
@@ -4717,7 +4724,8 @@
           "tool": "click",
           "url_after": "http://app.test/glasshouse/do/main",
           "write": "refused",
-          "write_attribution": "unattributed"
+          "write_attribution": "unattributed",
+          "write_guard_held": false
         },
         {
           "contains_raw_payload": false,
@@ -5217,7 +5225,8 @@
           "tool": "goto",
           "url_after": "http://app.test/glasshouse/do/findTrays",
           "write": "none",
-          "write_attribution": "unattributed"
+          "write_attribution": "unattributed",
+          "write_guard_held": false
         },
         {
           "contains_raw_payload": false,
@@ -5281,7 +5290,8 @@
           "tool": "wait_for",
           "url_after": "http://app.test/glasshouse/do/findTrays",
           "write": "none",
-          "write_attribution": "unattributed"
+          "write_attribution": "unattributed",
+          "write_guard_held": false
         },
         {
           "contains_raw_payload": false,
@@ -5650,7 +5660,8 @@
           "tool": "observe",
           "url_after": "http://app.test/glasshouse/do/main",
           "write": "none",
-          "write_attribution": "unattributed"
+          "write_attribution": "unattributed",
+          "write_guard_held": false
         },
         {
           "contains_raw_payload": false,
@@ -6784,7 +6795,8 @@
           "tool": "goto",
           "url_after": "http://app.test/glasshouse/do/findTrays",
           "write": "none",
-          "write_attribution": "unattributed"
+          "write_attribution": "unattributed",
+          "write_guard_held": false
         },
         {
           "contains_raw_payload": false,
@@ -7962,7 +7974,8 @@
           "tool": "observe",
           "url_after": "http://app.test/glasshouse/do/main",
           "write": "none",
-          "write_attribution": "unattributed"
+          "write_attribution": "unattributed",
+          "write_guard_held": false
         },
         {
           "contains_raw_payload": false,
@@ -8024,7 +8037,8 @@
           "tool": "observe",
           "url_after": "http://app.test/glasshouse/do/main",
           "write": "none",
-          "write_attribution": "unattributed"
+          "write_attribution": "unattributed",
+          "write_guard_held": false
         },
         {
           "event": "control_run_released",

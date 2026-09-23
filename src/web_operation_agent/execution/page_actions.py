@@ -316,6 +316,8 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
                        # a run that kept arriving at a login page could not be told
                        # apart from one that was quietly being recovered.
                        relogin=receipt.relogin,
+                       # The application held this session read-only for the action.
+                       write_guard_held=receipt.write_guard_held,
                        source_route_citations=source_route_citations)
     if receipt.error_code == "stale_observation":
         # A document replacement can preserve the same DOM projection while

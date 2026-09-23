@@ -103,6 +103,8 @@ export interface ActionReceipt {
   epoch_after: number
   elapsed_ms: number
   relogin: boolean
+  /** The application held this session read-only for the whole action; see `writeGuard.ts`. */
+  write_guard_held: boolean
   observation: PageObservation | null
 }
 
