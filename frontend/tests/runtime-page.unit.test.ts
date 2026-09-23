@@ -27,6 +27,20 @@ describe('the product PageController extraction policy', () => {
 })
 
 describe('Page.describe bounds an observation before it crosses the browser boundary', () => {
+  it('accepts bounded typed facets and ignores invalid application facts', () => {
+    const page = new Page(controller(), () => null, createRedactor(), () => [
+      {kind: 'filter', name: '  Open  '}, {kind: 'group', name: 'Customer'},
+      {kind: 'candidate', name: 'Not applied'}, {kind: 'group', name: 'Customer'},
+    ])
+    const reading = page.describe({url: 'https://app.test/orders', title: 'Orders',
+      content: ''}, 1)
+    expect(reading.observation.page_facets).toEqual([
+      {kind: 'filter', name: 'Open'}, {kind: 'group', name: 'Customer'},
+    ])
+    expect(new Page(controller(), () => null, createRedactor()).describe({
+      url: 'https://app.test/orders', title: 'Orders', content: '',
+    }, 1).observation.page_facets).toBeUndefined()
+  })
   it('keeps 200 complete records, preserves the scroll hint and reports truncation', () => {
     const api = controller()
     const page = new Page(api, (_map, index) => ({

@@ -53,7 +53,7 @@ describe('selectedControlsFromPage', () => {
       expect(selectedControlsFromPage(document, redactor)).toEqual([])
     } finally {
       if (original) Object.defineProperty(document, 'elementFromPoint', original)
-      else delete (document as Document & {elementFromPoint?: unknown}).elementFromPoint
+      else Reflect.deleteProperty(document, 'elementFromPoint')
     }
   })
 })

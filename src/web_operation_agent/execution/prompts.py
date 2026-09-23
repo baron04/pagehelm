@@ -274,7 +274,8 @@ TARGET_TOOL = {"type": "function", "function": {
     "description": (
         "Declare the requested page state before acting on it: "
         "the exact same-application path to arrive at, the visible control names that must "
-        "show as selected (a tab, an option), or both. Declare every condition the request "
+        "show as selected (a tab, an option), active filter names, active group names, "
+        "or a combination. Declare every condition the request "
         "names: a request to open a page and then switch a tab has both a path and a "
         "selected control. When a fresh page shows the declared state the server says so, "
         "and a pure page-navigation request can finish. Continue other requested reads or "
@@ -290,7 +291,15 @@ TARGET_TOOL = {"type": "function", "function": {
                                               "maxLength": 120},
                                     "description": ("names of controls that must show as "
                                                     "selected or checked, exactly as the "
-                                                    "page observation names them")}}}}}
+                                                    "page observation names them")},
+                       "filters": {"type": "array", "maxItems": 4,
+                                   "items": {"type": "string", "minLength": 1,
+                                             "maxLength": 120},
+                                   "description": "exact names of active page filters"},
+                       "groups": {"type": "array", "maxItems": 4,
+                                  "items": {"type": "string", "minLength": 1,
+                                            "maxLength": 120},
+                                  "description": "exact names of active page groups"}}}}}
 
 PREFILL_FORM_TOOL = {"type": "function", "function": {
     "name": "prefill_form",
@@ -337,10 +346,13 @@ that supplied no new information. Do not regenerate a whole route merely because
 """
 
 TARGET_SYSTEM = """\
-When the request is to reach a page state -- open a screen, switch to a tab, select a
-control, arrive at a record -- call set_target first with the complete state that finishes
+When the request is to reach a page state -- open a screen, switch to a tab, apply a
+filter or grouping, select a control, arrive at a record -- call set_target first with
+the complete state that finishes
 it: the exact path (an href on the current page, a route a typed result returned, or a
-cited source route) and/or the names of the controls that must be selected. A request with
+cited source route), names of controls that must be selected, and/or names of active
+filters and groups reported by the application. A menu option's presence alone does not
+establish that a filter or group was applied. A request with
 two parts, such as open a desk and then its Terms tab, is declared with both parts. Then act.
 The server reports TARGET REACHED as soon as a fresh page shows the declared state; at that
 point a pure navigation request should finish; a mixed request can still read or observe

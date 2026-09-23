@@ -79,6 +79,22 @@ class WireTypes(unittest.TestCase):
                               title="Orders", landmarks=[], elements=[],
                               selected_controls=["x"] * 17)
 
+    def test_application_page_facets_distinguish_unknown_from_empty(self):
+        base = dict(schema_version=1, epoch=1, url="https://app.test/orders",
+                    title="Orders", landmarks=[], elements=[])
+        self.assertNotIn("page_facets", S.PageObservation(**base).to_json())
+        self.assertEqual(S.PageObservation.from_json(
+            S.PageObservation(**base, page_facets=[]).to_json()).page_facets, [])
+        facets = [{"kind": "filter", "name": "Open"},
+                  {"kind": "group", "name": "Customer"}]
+        self.assertEqual(S.PageObservation.from_json(
+            S.PageObservation(**base, page_facets=facets).to_json()).page_facets, facets)
+        for bad in ([{"kind": "sort", "name": "Customer"}],
+                    [{"kind": "filter", "name": ""}],
+                    [{"kind": "filter", "name": "X"}] * 17):
+            with self.subTest(bad=bad), self.assertRaises(S.SchemaError):
+                S.PageObservation(**base, page_facets=bad)
+
     def test_page_render_state_round_trips_and_rejects_unknown_values(self):
         page = S.PageObservation(schema_version=1, epoch=1,
                                  url="https://app.test/orders", title="Orders",

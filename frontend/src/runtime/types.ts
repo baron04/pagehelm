@@ -59,6 +59,8 @@ export interface PageObservation {
   render_state?: 'pending' | 'ready'
   /** Bounded selected names from visible exclusive groups, even when controls are omitted. */
   selected_controls?: string[]
+  /** Present only when the application inspected its active filter/group state. */
+  page_facets?: Array<{kind: 'filter' | 'group'; name: string}>
 }
 
 export interface ObservationEnvelope {

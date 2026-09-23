@@ -308,7 +308,7 @@ class OdooNativeHost:
             api_key_path=grant.api_key_path,
             page_controller_module=(
                 self.config.public_origin
-                + "/woa_runtime/static/src/page-controller.js"),
+                + "/woa_runtime/static/src/page-controller-with-state.js"),
             allow_private_http=self.config.allow_private_http,
             allow_mutations=allow_mutations,
             mutation_journal=self.mutation_journal if allow_mutations else None)

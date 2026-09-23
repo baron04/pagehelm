@@ -70,9 +70,14 @@ class TargetState:
     #: Accessible names of controls that must be selected or checked, as the observation
     #: names them. Empty when arriving at the path is the whole request.
     selected: tuple[str, ...] = ()
+    #: Active application-reported facets, never inferred from menu candidates or body text.
+    filters: tuple[str, ...] = ()
+    groups: tuple[str, ...] = ()
 
     def to_json(self) -> dict:
-        return {"path": self.path, "selected": list(self.selected)}
+        return {"path": self.path, "selected": list(self.selected),
+                **({"filters": list(self.filters)} if self.filters else {}),
+                **({"groups": list(self.groups)} if self.groups else {})}
 
 
 def _normalise_name(name: str) -> str:
@@ -91,8 +96,8 @@ def parse_target(args: object) -> TargetState:
     and a control either shows as selected or it does not. There is no "contains", so a
     weak target that would be satisfied by an unrelated page cannot be expressed.
     """
-    if not isinstance(args, dict) or set(args) - {"path", "selected"}:
-        raise ValueError("set_target accepts only path and selected")
+    if not isinstance(args, dict) or set(args) - {"path", "selected", "filters", "groups"}:
+        raise ValueError("set_target accepts only path, selected, filters and groups")
     path = args.get("path", "")
     if not isinstance(path, str):
         raise ValueError("path must be a string")
@@ -121,9 +126,24 @@ def parse_target(args: object) -> TargetState:
         cleaned = re.sub(r"\s+", " ", name).strip()
         if _normalise_name(cleaned) not in {_normalise_name(item) for item in selected}:
             selected.append(cleaned)
-    if not path and not selected:
-        raise ValueError("a target needs a path, selected controls, or both")
-    return TargetState(path=path, selected=tuple(selected))
+    def names(key: str) -> tuple[str, ...]:
+        raw = args.get(key, ())
+        if not isinstance(raw, list | tuple) or len(raw) > MAX_SELECTED_CONTROLS:
+            raise ValueError(f"{key} must list at most {MAX_SELECTED_CONTROLS} names")
+        values = []
+        for value in raw:
+            if (not isinstance(value, str) or not value.strip()
+                    or len(value) > MAX_CONTROL_NAME_CHARS):
+                raise ValueError(f"each {key} name must be a short non-empty string")
+            clean = re.sub(r"\s+", " ", value).strip()
+            if _normalise_name(clean) not in {_normalise_name(v) for v in values}:
+                values.append(clean)
+        return tuple(values)
+
+    filters, groups = names("filters"), names("groups")
+    if not path and not selected and not filters and not groups:
+        raise ValueError("a target needs a path, selected controls, filters or groups")
+    return TargetState(path=path, selected=tuple(selected), filters=filters, groups=groups)
 
 
 def _is_selected(element) -> bool:
@@ -161,6 +181,15 @@ def unmet_conditions(target: TargetState, obs: PageObservation, *,
         for name in dict.fromkeys((*target.selected, *required_selected)):
             if _normalise_name(name) not in selected_names:
                 unmet.append(f"selected control \"{name}\"")
+    if target.filters or target.groups:
+        facets = {(_normalise_name(item["name"]), item["kind"])
+                  for item in obs.page_facets or []}
+        for kind, names in (("filter", target.filters), ("group", target.groups)):
+            for name in names:
+                if (_normalise_name(name), kind) not in facets:
+                    unmet.append(f"active {kind} \"{name}\""
+                                 + (" (application state unavailable)"
+                                    if obs.page_facets is None else ""))
     return tuple(unmet)
 
 
@@ -171,4 +200,8 @@ def describe_target(target: TargetState) -> str:
         parts.append(f"path {target.path}")
     if target.selected:
         parts.append("selected: " + ", ".join(f'"{name}"' for name in target.selected))
+    if target.filters:
+        parts.append("filters: " + ", ".join(f'"{name}"' for name in target.filters))
+    if target.groups:
+        parts.append("groups: " + ", ".join(f'"{name}"' for name in target.groups))
     return "; ".join(parts)

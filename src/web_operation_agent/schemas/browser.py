@@ -29,10 +29,12 @@ _BROWSER_CONTRACT = json.loads(
 MAX_OBSERVATION_ELEMENTS = int(_BROWSER_CONTRACT["observation"]["max_elements"])
 MAX_SELECTED_CONTROLS = int(_BROWSER_CONTRACT["observation"]["max_selected_controls"])
 MAX_SELECTED_CONTROL_CHARS = int(_BROWSER_CONTRACT["observation"]["max_selected_control_chars"])
+MAX_PAGE_FACETS = int(_BROWSER_CONTRACT["observation"]["max_page_facets"])
 MAX_OBSERVATION_CONTENT_CHARS = int(
     _BROWSER_CONTRACT["observation"]["max_content_chars"])
 MAX_SCROLL_PAGES = int(_BROWSER_CONTRACT["scroll"]["max_pages"])
-if min(MAX_OBSERVATION_ELEMENTS, MAX_OBSERVATION_CONTENT_CHARS, MAX_SCROLL_PAGES) < 1:
+if min(MAX_OBSERVATION_ELEMENTS, MAX_OBSERVATION_CONTENT_CHARS, MAX_SCROLL_PAGES,
+       MAX_PAGE_FACETS) < 1:
     raise ValueError("browser contract bounds must be positive integers")
 POTENTIALLY_WRITING_ACTIONS = BROWSER_ACTIONS - INTRINSICALLY_READ_ONLY_ACTIONS
 
@@ -129,6 +131,9 @@ class PageObservation:
     # Bounded, viewport-visible selected controls from exclusive groups. Unlike elements,
     # these facts need no action ref and survive PageController omitting a large view's toolbar.
     selected_controls: list[str] = field(default_factory=list)
+    # None means the application has not supplied typed facet state; [] means it did
+    # inspect the page and found no active filters or groups.
+    page_facets: list[dict[str, str]] | None = None
 
     def __post_init__(self) -> None:
         _schema_version(self.schema_version, "PageObservation")
@@ -163,10 +168,21 @@ class PageObservation:
         _require(all(isinstance(name, str) and 0 < len(name) <= MAX_SELECTED_CONTROL_CHARS
                      for name in self.selected_controls),
                  "selected_controls entries must be short non-empty strings")
+        if self.page_facets is not None:
+            _require(isinstance(self.page_facets, list), "page_facets must be an array")
+            _require(len(self.page_facets) <= MAX_PAGE_FACETS,
+                     f"page_facets must contain at most {MAX_PAGE_FACETS} entries")
+            _require(all(isinstance(item, dict) and set(item) == {"kind", "name"}
+                         and item.get("kind") in {"filter", "group"}
+                         and isinstance(item.get("name"), str)
+                         and 0 < len(item["name"]) <= MAX_SELECTED_CONTROL_CHARS
+                         for item in self.page_facets),
+                     "page_facets entries must have a kind and short non-empty name")
         self.landmarks = copy.deepcopy(self.landmarks)
         self.elements = copy.deepcopy(self.elements)
         self.messages = copy.deepcopy(self.messages)
         self.selected_controls = copy.deepcopy(self.selected_controls)
+        self.page_facets = copy.deepcopy(self.page_facets)
 
     def to_json(self) -> dict:
         out = {"schema_version": self.schema_version, "epoch": self.epoch, "url": self.url,
@@ -179,12 +195,15 @@ class PageObservation:
             out["render_state"] = self.render_state
         if self.selected_controls:
             out["selected_controls"] = copy.deepcopy(self.selected_controls)
+        if self.page_facets is not None:
+            out["page_facets"] = copy.deepcopy(self.page_facets)
         return out
 
     @staticmethod
     def from_json(d: dict) -> "PageObservation":
         allowed = {"schema_version", "epoch", "url", "title", "landmarks", "elements",
-                   "content", "messages", "truncated", "render_state", "selected_controls"}
+                   "content", "messages", "truncated", "render_state", "selected_controls",
+                   "page_facets"}
         required = {"schema_version", "epoch", "url", "title", "landmarks", "elements"}
         d = _strict_object(d, "PageObservation", allowed=allowed, required=required)
         _require(isinstance(d["landmarks"], list), "landmarks must be an array")
@@ -199,7 +218,8 @@ class PageObservation:
                                messages=copy.deepcopy(d.get("messages", [])),
                                truncated=d.get("truncated", False),
                                render_state=d.get("render_state", "unknown"),
-                               selected_controls=copy.deepcopy(d.get("selected_controls", [])))
+                               selected_controls=copy.deepcopy(d.get("selected_controls", [])),
+                               page_facets=copy.deepcopy(d.get("page_facets")))
 
     @property
     def content_digest(self) -> str:

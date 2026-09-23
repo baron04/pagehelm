@@ -44,5 +44,6 @@ export default defineConfig(({command}) => ({
   plugins: [react()],
   // `index.html` and `dev/` are the harness for `npm run dev`; `lib` above is the
   // product, and it takes `src/index.ts` as its only entry, so neither ships.
-  test: {environment: 'jsdom', include: ['tests/**/*.unit.test.ts?(x)'], globals: true},
+  test: {environment: 'jsdom', include: ['tests/**/*.unit.test.ts?(x)',
+                                         'tests/**/*.unit.test.js'], globals: true},
 }))

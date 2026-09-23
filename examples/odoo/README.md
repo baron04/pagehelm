@@ -338,8 +338,9 @@ form handoff above is still available because it leaves the record unpersisted.
 ## Running it non-interactively
 
 Against the provisioned fixture, or against your own Odoo with the pinned page controller
-served from its origin — any module directory on the addons path works, for example
-`<addons>/woa_runtime/static/src/page-controller.js`:
+served from its origin — any module directory on the addons path works. The Odoo
+distribution loads `<addons>/woa_runtime/static/src/page-controller-with-state.js`,
+which re-exports the pinned `page-controller.js` and reports active search facets:
 
 ```bash
 python -m web_operation_agent_odoo.demo --scripted --headless \

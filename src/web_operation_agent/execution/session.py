@@ -676,6 +676,8 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
             "kind": "target_state", "url": obs.url,
             "selected": list(dict.fromkeys(
                 (*self._target.selected, *self._required_page_controls))),
+            **({"filters": list(self._target.filters)} if self._target.filters else {}),
+            **({"groups": list(self._target.groups)} if self._target.groups else {}),
             "acted": bool(acted), "page_actions": self.page_actions}
         self.ledger.append("target_state_reached", step=step,
                            target=self._target.to_json(), url=obs.url,

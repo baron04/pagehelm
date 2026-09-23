@@ -49,6 +49,8 @@ fi
 for path in \
   /woa_runtime/static/src/loader.js \
   /woa_runtime/static/src/page-controller.js \
+  /woa_runtime/static/src/page-controller-with-state.js \
+  /woa_runtime/static/src/page-facets.js \
   /assistant/v1/runtime/assistant.js \
   /assistant/v1/runtime/panel/panel.js; do
   if ! curl -fsSk -o /dev/null "$WOA_PUBLIC_ORIGIN$path"; then

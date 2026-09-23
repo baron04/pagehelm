@@ -172,6 +172,28 @@ class TargetParsing(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 parse_target(bad)
 
+    def test_active_filter_and_group_are_typed_application_facts(self):
+        page = _page(1, PARTNER)
+        page.content = "Filter Customer; Group By Customer; My Quotations"
+        page.elements.append(ElementRef("e4", "menuitemcheckbox", "Customer", "button", 1,
+                                        {"aria-checked": "false"}))
+        target = parse_target({"filters": ["My Quotations"], "groups": ["Customer"]})
+        self.assertIn("application state unavailable", "; ".join(
+            unmet_conditions(target, page)))
+        page.page_facets = []  # inspected, but menu candidates are not applied state
+        self.assertEqual(len(unmet_conditions(target, page)), 2)
+        page.page_facets = [{"kind": "filter", "name": "Customer"},
+                            {"kind": "filter", "name": "My Quotations"}]
+        self.assertEqual(unmet_conditions(target, page), ('active group "Customer"',))
+        page.page_facets.append({"kind": "group", "name": "Customer"})
+        self.assertEqual(unmet_conditions(target, page), ())
+        self.assertEqual(parse_target({"filters": ["Customer", " customer "]}).filters,
+                         ("Customer",))
+        for bad in ({"filters": "Customer"}, {"groups": [" "]},
+                    {"groups": ["x"] * 5}):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                parse_target(bad)
+
     def test_a_tab_the_runtime_derived_as_selected_meets_the_target(self):
         # Odoo 18 marks the current notebook tab only by class; the Runtime reports it as
         # selected=true, and the target reads that like aria-selected.
@@ -213,6 +235,40 @@ class TargetSettlement(unittest.TestCase):
 
     def tearDown(self):
         self.directory.cleanup()
+
+    def test_a_group_menu_candidate_cannot_complete_a_page_operation(self):
+        chat = _Chat([
+            ("set_target", {"path": PARTNER, "groups": ["Customer"]}),
+            ("click", {"ref": "e1"}),
+            ("finish", {"outcome": "acted"}),
+        ])
+        browser = _WorkspaceBrowser()
+        session = _session(self.tmp, chat, browser,
+                           prompt="Open the partner desk and group by Customer.")
+
+        result = session.run()
+
+        self.assertEqual(result.terminal_reason, "agent_refused")
+        self.assertEqual(_events(session, "target_state_reached"), [])
+        self.assertIn('active group "Customer"', chat.seen[2][-1]["content"])
+
+    def test_an_application_reported_group_can_complete_the_target(self):
+        class GroupedBrowser(_WorkspaceBrowser):
+            def observe(self):
+                page = super().observe()
+                page.page_facets = [{"kind": "group", "name": "Customer"}]
+                return page
+
+        chat = _Chat([("set_target", {"path": PARTNER, "groups": ["Customer"]}),
+                      ("finish", {"outcome": "acted"})])
+        session = _session(self.tmp, chat, GroupedBrowser(PARTNER),
+                           prompt="Group the partner desk by Customer.")
+
+        result = session.run()
+
+        self.assertEqual(result.terminal_reason, "agent_finished")
+        self.assertEqual(result.verified_answer["action"]["groups"], ["Customer"])
+        self.assertEqual(len(_events(session, "target_state_reached")), 1)
 
     def test_path_only_declaration_cannot_complete_a_kanban_request(self):
         class ViewBrowser(_WorkspaceBrowser):

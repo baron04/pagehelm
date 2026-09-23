@@ -4,6 +4,7 @@
     "max_elements": 200,
     "max_selected_controls": 16,
     "max_selected_control_chars": 120,
+    "max_page_facets": 16,
     "max_selection_groups": 32,
     "max_group_buttons": 12,
     "viewport_expansion": 0

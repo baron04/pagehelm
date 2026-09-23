@@ -41,7 +41,10 @@ export interface PageControllerApi {
 interface PageControllerModule {
   PageController?: new (options: Record<string, unknown>) => PageControllerApi
   getElementByIndex?: ElementLookup
+  readPageFacets?: () => unknown
 }
+
+export type PageFacetReader = () => unknown
 
 /** What one observation of the page found, before the session numbers and wraps it. */
 export interface PageReading {
@@ -53,7 +56,8 @@ export interface PageReading {
 export class Page {
   constructor(private readonly controller: PageControllerApi,
               private readonly lookup: ElementLookup,
-              private readonly redactor: Redactor) {}
+              private readonly redactor: Redactor,
+              private readonly readPageFacets?: PageFacetReader) {}
 
   /** The live element behind a server ref; an unknown ref is `bad_arguments`. */
   element(ref: unknown): ElementLike | null | undefined {
@@ -138,6 +142,7 @@ export class Page {
     map, this.lookup, this.redactor), map, this.lookup)
     const fingerprints = new Map<string, string>()
     for (const item of elements) fingerprints.set(item.ref, this.fingerprint(item.ref))
+    const facets = this.readPageFacets ? this.boundedFacets() : undefined
     return {
       observation: {
         schema_version: WIRE_VERSION,
@@ -150,10 +155,32 @@ export class Page {
         messages: [],
         truncated: (state.content.length > availableBodyChars || boundedBody.truncated),
         selected_controls: selectedControlsFromPage(document, this.redactor),
+        ...(facets === undefined ? {} : {page_facets: facets}),
       },
       fingerprints,
       canonicalUrl: canonicalUrl(state.url),
     }
+  }
+
+  private boundedFacets(): Array<{kind: 'filter' | 'group'; name: string}> | undefined {
+    let raw: unknown
+    try { raw = this.readPageFacets?.() } catch { return undefined }
+    if (!Array.isArray(raw)) return undefined
+    const result: Array<{kind: 'filter' | 'group'; name: string}> = []
+    for (const item of raw.slice(0, browserContract.observation.max_page_facets)) {
+      if (!item || typeof item !== 'object') continue
+      const fact = item as Record<string, unknown>
+      if (fact.kind !== 'filter' && fact.kind !== 'group') continue
+      if (typeof fact.name !== 'string') continue
+      const name = fact.name.replace(/\s+/g, ' ').trim()
+      if (!name || this.redactor.isSensitiveName(name) ||
+          this.redactor.isSensitiveName(name.replace(/\s+/g, '_'))) continue
+      const safe = this.redactor.redactString(name).slice(
+        0, browserContract.observation.max_selected_control_chars)
+      if (safe && !result.some(existing => existing.kind === fact.kind &&
+          existing.name === safe)) result.push({kind: fact.kind, name: safe})
+    }
+    return result
   }
 
   dispose(): void { this.controller.dispose() }
@@ -171,6 +198,7 @@ function hideAnnotations(): void {
 export interface LoadedPageController {
   controller: PageControllerApi
   lookup: ElementLookup
+  readPageFacets?: PageFacetReader
 }
 
 /** The fixed extraction policy qualified by the product Runtime. */
@@ -210,5 +238,7 @@ export async function loadPageController(moduleUrl: string | undefined,
     throw new Error('pageControllerModule does not expose the required PageController API')
   }
   const controller = new PageController(pageControllerOptions(exclude))
-  return {controller, lookup: getElementByIndex}
+  return {controller, lookup: getElementByIndex,
+    ...(typeof module.readPageFacets === 'function'
+      ? {readPageFacets: module.readPageFacets} : {})}
 }

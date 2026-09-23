@@ -41,9 +41,10 @@ class TheFixtureIsLoopbackByConstruction(unittest.TestCase):
 
 class OnlyFirstPartyBootstrapCodeIsCommitted(unittest.TestCase):
     def test_the_served_directory_tracks_only_the_first_party_loader(self):
-        """The local loader ships here; third-party PageController remains provisioned."""
+        """Local modules ship here; third-party PageController remains provisioned."""
+        first_party = {"loader.js", "page-controller-with-state.js", "page-facets.js"}
         tracked = sorted(path.name for path in deploy.SERVED_ASSETS.glob("*")
-                         if path.name not in {".gitignore", "loader.js"})
+                         if path.name not in {".gitignore", *first_party})
         for name in tracked:
             with self.subTest(name=name):
                 self.assertIn(name, PINNED_PAGE_CONTROLLER["served_files"],
@@ -51,6 +52,9 @@ class OnlyFirstPartyBootstrapCodeIsCommitted(unittest.TestCase):
         loader = deploy.SERVED_ASSETS / "loader.js"
         self.assertTrue(loader.is_file())
         self.assertIn("woa-assistant-bootstrap-shell", loader.read_text())
+        self.assertIn("readPageFacets", (deploy.SERVED_ASSETS / "page-facets.js").read_text())
+        self.assertIn("./page-controller.js", (deploy.SERVED_ASSETS /
+            "page-controller-with-state.js").read_text())
         self.assertTrue((deploy.SERVED_ASSETS / ".gitignore").is_file(),
                         "without this the fetched assets would be committed")
 

@@ -70,6 +70,8 @@ DEMO_PASSWORD = "admin"
 MASTER_PASSWORD = "woa-reference-fixture"
 API_KEY_NAME = "woa-reference-gate"
 PAGE_CONTROLLER_URL = f"{BASE_URL}/woa_runtime/static/src/page-controller.js"
+PAGE_STATE_CONTROLLER_URL = (
+    f"{BASE_URL}/woa_runtime/static/src/page-controller-with-state.js")
 
 
 class ProvisioningError(RuntimeError):
@@ -546,7 +548,7 @@ def environment_lines(*, key_path: Path, storage_state: Path, snapshot: Path,
         f"WOA_ODOO_BASE_URL={BASE_URL}",
         f"WOA_ODOO_API_KEY_FILE={Path(key_path).resolve()}",
         f"WOA_ODOO_STORAGE_STATE={Path(storage_state).resolve()}",
-        f"WOA_ODOO_PAGE_CONTROLLER_MODULE={PAGE_CONTROLLER_URL}",
+        f"WOA_ODOO_PAGE_CONTROLLER_MODULE={PAGE_STATE_CONTROLLER_URL}",
         f"WOA_ODOO_FIXTURE_CONTAINER={_container(DB_SERVICE)}",
         f"WOA_ODOO_FIXTURE_DATABASE={database}",
         f"WOA_ODOO_FIXTURE_SNAPSHOT={Path(snapshot).resolve()}",

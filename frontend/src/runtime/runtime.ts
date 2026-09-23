@@ -21,7 +21,7 @@ import {
 import {
   absoluteUrl, armChildFrameNavigation, canonicalUrl, navigationWal, recoveryProvesNavigation,
 } from './navigation'
-import {Page, loadPageController, type PageControllerApi} from './page'
+import {Page, loadPageController, type PageControllerApi, type PageFacetReader} from './page'
 import type {ElementLookup} from './pageModel'
 import {createPanelContainer, keepAttached, mountPanel, type PanelHandle} from './panelBridge'
 import {PanelHost, backoffAfter, classifyTransportError, type TransportVerdict} from './panelHost'
@@ -82,6 +82,7 @@ export class EmbeddedWebRuntime {
   /** Set once PageController is loaded; conformance tests set both directly. */
   controller: PageControllerApi | null = null
   getElementByIndex: ElementLookup | null = null
+  readPageFacets: PageFacetReader | undefined
   panelEnabled = true
   panelContainer: HTMLDivElement | null = null
   panelHost: PanelHost | null = null
@@ -191,7 +192,8 @@ export class EmbeddedWebRuntime {
     if (!this.controller || !this.getElementByIndex) {
       throw new Error('the page is not loaded yet')
     }
-    return new Page(this.controller, this.getElementByIndex, this.redactor)
+    return new Page(this.controller, this.getElementByIndex, this.redactor,
+      this.readPageFacets)
   }
 
   _save(): void { writeStored(this.sessionId, this.stored) }
@@ -227,10 +229,11 @@ export class EmbeddedWebRuntime {
   // -- starting ------------------------------------------------------------------------
 
   async start(): Promise<this> {
-    const {controller, lookup} = await loadPageController(
+    const {controller, lookup, readPageFacets} = await loadPageController(
       this.config.pageControllerModule, this.panelContainer ? [this.panelContainer] : [])
     this.controller = controller
     this.getElementByIndex = lookup
+    this.readPageFacets = readPageFacets
     return this._startConnectedRuntime()
   }
 

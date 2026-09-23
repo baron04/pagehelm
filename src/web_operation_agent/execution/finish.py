@@ -8,6 +8,7 @@ from .knowledge_tools import active_capability_digest
 from .page_evidence import capture_page_snapshot
 from .prompts import _assistant_call, _tool_result
 from .runstate import CAPABILITY_GAP_TERMINAL, _Next
+from .target import unmet_conditions
 
 
 def _is_capability_gap(verified: dict | None) -> bool:
@@ -75,6 +76,17 @@ class FinishHandler:
                     call, "The requested page presentation is not verified: "
                           + "; ".join(missing_page_state)
                           + ". Continue to the requested view or say it is unfinished.")]
+                return self._resume(turn, messages, obs, successful_business_tools)
+        if claims_page_action and self._target is not None:
+            missing_target = unmet_conditions(self._target, obs,
+                                              required_selected=self._required_page_controls)
+            if missing_target:
+                self.ledger.append("page_target_claim_refused", step=step,
+                                   unmet=list(missing_target))
+                messages += [_assistant_call(call), _tool_result(
+                    call, "The declared page target is not verified: "
+                          + "; ".join(missing_target)
+                          + ". Continue to the requested state or say it is unfinished.")]
                 return self._resume(turn, messages, obs, successful_business_tools)
         if name == "finish" and (self._answers.answer_mode or structured_answer):
             try:

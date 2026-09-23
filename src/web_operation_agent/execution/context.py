@@ -331,6 +331,9 @@ def _render_observation(obs: PageObservation, max_elements: int = RENDER_ELEMENT
                      "Observe again before using page controls or claiming arrival.")
     if obs.selected_controls:
         lines.append("selected controls: " + " | ".join(obs.selected_controls))
+    if obs.page_facets is not None:
+        lines.append("active page facets: " + (" | ".join(
+            f'{item["kind"]}: {item["name"]}' for item in obs.page_facets) or "none"))
     if obs.landmarks:
         lines.append("headings: " + " | ".join(obs.landmarks[:12]))
     if obs.messages:
