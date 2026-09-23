@@ -291,6 +291,18 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
         # navigation or an observed page interaction below. Route drift is checked
         # by the main loop before the next model decision.
         receipt = session.browser.execute(name, args, expect_navigation=expect_nav)
+        if _answer_closed_the_menu(session, name, link, receipt, obs):
+            # Answering the confirmation is a click on the page, and the application closed
+            # the menu this link was in. The click never dispatched, the person confirmed
+            # this exact destination, and the link was on the page the model acted on: go
+            # there by its address rather than make the model reopen the menu, which spent
+            # two steps per menu and ran a two-menu task out of budget.
+            session.ledger.append(
+                "confirmed_switch_opened_by_address", step=step,
+                url_digest=hashlib.sha256(link.encode()).hexdigest(),
+                reason="confirmation_closed_the_menu", side_effect_possible=True)
+            session._browser_attempts += 1
+            receipt = session.browser.execute("goto", {"url": link}, expect_navigation=True)
     except TurnCancelled as exc:
         session.ledger.append(
             "browser_action_cancelled_before_dispatch", step=step, tool=name,
@@ -499,6 +511,20 @@ def _leaves_the_page(name: str, args: dict, obs: PageObservation) -> bool:
         return False
     return (target.scheme, target.netloc, target.path, target.query) != (
         current.scheme, current.netloc, current.path, current.query)
+
+
+def _answer_closed_the_menu(session, name: str, link: str | None, receipt,
+                            obs: PageObservation) -> bool:
+    """A confirmed link click refused before dispatch, on the page it was aimed at.
+
+    Only a refusal that proves nothing was dispatched, only a link with an address, only
+    the destination the person confirmed, and only while the page is still the one the
+    model acted on -- a page that moved on is the model's to re-plan.
+    """
+    return (name == "click" and bool(link)
+            and receipt.error_code == "stale_observation"
+            and receipt.url_after == obs.url
+            and session._approvals.holds_confirmation(action="click", url=link))
 
 
 def _clicked_link(args: dict, obs: PageObservation) -> str | None:

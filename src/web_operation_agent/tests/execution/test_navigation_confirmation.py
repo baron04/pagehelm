@@ -69,10 +69,11 @@ class _MenuBrowser:
     control (e3). With `close_first`, the first switch is refused as stale: answering the
     confirmation closed the menu it was in."""
 
-    def __init__(self, *, close_first=False, menu_navigates=False):
+    def __init__(self, *, close_first=False, menu_navigates=False, stale_moves_to=""):
         self.url = "http://app/x"
         self.close_first = close_first
         self.menu_navigates = menu_navigates
+        self.stale_moves_to = stale_moves_to
         self.done = []
         self.pages = [self._page(1)]
 
@@ -91,10 +92,15 @@ class _MenuBrowser:
         before = self.url
         ref = (args or {}).get("ref")
         if self.close_first and len(self.done) == 1:
-            code, navigated = "stale_observation", False
+            code = "stale_observation"
+            if self.stale_moves_to:
+                self.url = self.stale_moves_to
+            navigated = self.url != before
         else:
             code = ""
-            if ref == "e2":
+            if action == "goto":
+                self.url = "http://app" + (args or {})["url"]
+            elif ref == "e2":
                 self.url = "http://app/y"
             elif ref == "e1" and self.menu_navigates:
                 self.url = "http://app/elsewhere"
@@ -381,49 +387,89 @@ class TheSessionAsksBeforeLeavingThePage(unittest.TestCase):
             self.assertEqual(len(person.asked), 1)
             self.assertEqual([action for action, _args in browser.done], ["goto", "goto"])
 
-    def test_reopening_the_menu_the_answer_closed_does_not_spend_the_answer(self):
+    def test_a_menu_link_the_answer_closed_is_opened_by_its_confirmed_address(self):
         # Found on live Odoo: answering the card is a click on the page, the application
         # closes its open menu on any click outside it, and the menu item the person agreed
-        # to open is gone by dispatch. Reopening the menu must not spend that answer, or the
-        # retry asks again and the answer closes the menu again, until the budget runs out.
+        # to open is gone by dispatch. The person confirmed that destination and nothing was
+        # dispatched, so the server goes there by the link's address in the same step.
         with tempfile.TemporaryDirectory() as tmp:
             person = _Person("approved")
             browser = _MenuBrowser(close_first=True)
             session = _session(tmp, chat=_Chat([
-                ("click", {"ref": "e2"}),       # the menu item: asked, then stale
-                ("click", {"ref": "e1"}),       # reopen the menu: not a switch
-                ("click", {"ref": "e2"}),       # the same item: already answered
+                ("click", {"ref": "e2"}),
                 ("finish", {"done": True, "why": "opened"}),
             ]), browser=browser, person=person)
 
             session.run()
 
             self.assertEqual(len(person.asked), 1)
-            self.assertEqual([args["ref"] for _action, args in browser.done],
-                             ["e2", "e1", "e2"])
+            self.assertEqual([action for action, _args in browser.done], ["click", "goto"])
+            self.assertEqual(browser.done[1][1], {"url": "/y"})
             self.assertEqual(browser.url, "http://app/y")
+            opened = session.ledger.of_kind("confirmed_switch_opened_by_address")
+            self.assertEqual([event["reason"] for event in opened],
+                             ["confirmation_closed_the_menu"])
 
-    def test_the_answer_does_not_outlive_leaving_the_page_or_a_switch_with_no_destination(self):
+    def test_the_address_is_used_only_where_it_is_exactly_what_was_confirmed(self):
         cases = {
-            # The action in between itself left the page.
-            "an intervening switch": (_MenuBrowser(close_first=True, menu_navigates=True),
-                                      "e2", 2),
-            # The confirmed control routes by script; its destination is unknown.
-            "no known destination": (_MenuBrowser(close_first=True), "e3", 2),
+            # The page itself moved on while the card waited: the model re-plans.
+            "the page moved": dict(browser=_MenuBrowser(close_first=True,
+                                                        stale_moves_to="http://app/z"),
+                                   first={"ref": "e2"}),
+            # A script-routed control has no address to go to.
+            "no address": dict(browser=_MenuBrowser(close_first=True),
+                               first={"ref": "e3", "expect_navigation": True}),
         }
-        for reason, (browser, target, asked) in cases.items():
+        for reason, case in cases.items():
             with self.subTest(reason=reason), tempfile.TemporaryDirectory() as tmp:
-                person = _Person("approved", "approved")
-                first = {"ref": target, "expect_navigation": True} if target == "e3" \
-                    else {"ref": target}
                 session = _session(tmp, chat=_Chat([
-                    ("click", first), ("click", {"ref": "e1"}), ("click", first),
-                    ("finish", {"done": False, "why": "stop"}),
-                ]), browser=browser, person=person)
+                    ("click", case["first"]), ("finish", {"done": False, "why": "stop"}),
+                ]), browser=case["browser"], person=_Person("approved"))
 
                 session.run()
 
-                self.assertEqual(len(person.asked), asked)
+                self.assertEqual([action for action, _args in case["browser"].done],
+                                 ["click"])
+                self.assertEqual(
+                    session.ledger.of_kind("confirmed_switch_opened_by_address"), [])
+
+    def test_an_answer_is_not_spent_by_an_action_in_between(self):
+        # Reopening the menu, or any other action that does not leave the page, leaves the
+        # person's answer standing for the switch it was given for.
+        with tempfile.TemporaryDirectory() as tmp:
+            browser = _MenuBrowser()
+            session = _session(tmp, chat=_Chat([]), browser=browser,
+                               person=_Person("approved"))
+            approvals = session._approvals
+            page = browser.observe()
+            self.assertEqual(approvals.confirm_navigation(1, page, action="click", url="/y"),
+                             ("", ""))
+
+            def receipt(*, navigated=False, code=""):
+                return ActionReceipt(schema_version=1, command_id="c", action="click",
+                                     args_echo={}, ok=not code, error_code=code,
+                                     navigated=navigated)
+
+            approvals.settle_navigation(receipt(code="stale_observation"), navigating=True)
+            approvals.settle_navigation(receipt(), navigating=False)
+            self.assertTrue(approvals.holds_confirmation(action="click", url="/y"))
+            approvals.settle_navigation(receipt(navigated=True), navigating=False)
+            self.assertFalse(approvals.holds_confirmation(action="click", url="/y"))
+
+    def test_an_answer_for_a_control_with_no_address_is_spent_by_anything(self):
+        # A script-routed control has no known destination, so a standing answer for it
+        # would cover the next such control wherever it went.
+        with tempfile.TemporaryDirectory() as tmp:
+            person = _Person("approved", "approved")
+            first = {"ref": "e3", "expect_navigation": True}
+            session = _session(tmp, chat=_Chat([
+                ("click", first), ("click", {"ref": "e1"}), ("click", first),
+                ("finish", {"done": False, "why": "stop"}),
+            ]), browser=_MenuBrowser(close_first=True), person=person)
+
+            session.run()
+
+            self.assertEqual(len(person.asked), 2)
 
     def test_a_switch_that_reached_the_page_is_asked_about_again(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -302,6 +302,11 @@ class ApprovalWatch:
                            approval_id=str(getattr(grant, "approval_id", ""))[:200])
         return "", ""
 
+    def holds_confirmation(self, *, action: str, url: str) -> bool:
+        """Whether the person has confirmed exactly this switch and it is still unspent."""
+        return bool(url) and bool(self.confirmed_navigation) and (
+            NavigationPlan(action=action, url=url).content_digest == self.confirmed_navigation)
+
     def settle_navigation(self, receipt: ActionReceipt, *, navigating: bool = True) -> None:
         """Consume a confirmation once the switch it was asked for may have reached the page.
 
