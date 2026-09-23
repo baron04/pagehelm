@@ -23,6 +23,7 @@ from .knowledge_tools import capability_check_available, capability_check_feedba
 from .page_evidence import capture_page_snapshot
 from .prompts import _assistant_call, _tool_result, _trim
 from .runstate import _Next, _StepEnd, _Turn
+from .target import required_highlight_control
 
 
 def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
@@ -64,6 +65,19 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
                                    successful_business_tools)
         highlighted = next((item for item in obs.elements
                             if item.ref == args.get("ref") and item.name.strip()), None)
+        required_highlight = required_highlight_control(session.task.prompt)
+        if (highlighted is not None and required_highlight
+                and re.sub(r"\s+", " ", highlighted.name).strip().casefold()
+                != required_highlight.casefold()):
+            session.ledger.append("page_handoff_refused", step=step,
+                                  dispatched=False, side_effect_possible=False,
+                                  reason="wrong_explicit_control")
+            messages += [_assistant_call(call), _tool_result(
+                call, f"HANDOFF NOT DISPATCHED: the person asked you to mark "
+                      f"{required_highlight!r}, not {highlighted.name!r}. Reach the "
+                      "requested control first, or explain what prevented it.")]
+            return session._resume(turn, _trim(messages, session.keep_observations), obs,
+                                   successful_business_tools)
         unmet = session._page_goal_unmet(obs) if session._target is not None else ()
         if (set(args) != {"ref"} or highlighted is None or obs.render_state != "ready"
                 or unmet or session.pending_write):

@@ -55,6 +55,9 @@ _CLEAR_FILTER = re.compile(r"取消(?:[^，。]{0,12})?筛选|清除(?:[^，。]
                            r"不只是|不止是|不限于|"
                            r"(?<![a-z])(?:remove|clear)\s+(?:the\s+)?filter|"
                            r"(?<![a-z])not\s+(?:just|only)(?![a-z])", re.I)
+_EXPLICIT_HIGHLIGHT = re.compile(
+    r"(?:标出|标记|高亮|圈出|找到|highlight|mark|point\s+out)"
+    r"[^。；\n]{0,60}?[「“\"]([^」”\"]{1,120})[」”\"]", re.I)
 
 
 def required_page_controls(prompt: str) -> tuple[str, ...]:
@@ -82,6 +85,16 @@ def required_page_effects(prompt: str) -> frozenset[str]:
     if _CLEAR_FILTER.search(prompt):
         effects.add("clear_filter")
     return frozenset(effects)
+
+
+def required_highlight_control(prompt: str) -> str:
+    """Only an explicitly quoted control name limits a highlight handoff.
+
+    This is a lower bound, not a guess from a business noun: an assistant may not mark
+    an earlier opener as if it were the named final control inside a requested dialog.
+    """
+    matches = list(_EXPLICIT_HIGHLIGHT.finditer(prompt))
+    return re.sub(r"\s+", " ", matches[-1].group(1)).strip() if matches else ""
 
 
 @dataclass(frozen=True)

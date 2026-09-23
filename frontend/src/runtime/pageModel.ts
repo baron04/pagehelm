@@ -287,3 +287,20 @@ export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
   }
   return elements
 }
+
+/** A bounded live button method identifier for an adapter's exact click review. */
+export function hydrateButtonFacts(elements: ElementRef[], selectorMap: unknown,
+                                   getByIndex: ElementLookup, redactor: Redactor): ElementRef[] {
+  for (const item of elements) {
+    if (item.role !== 'button') continue
+    try {
+      const element = getByIndex(selectorMap, refIndex(item.ref))
+      const method = explicitAttribute(element, 'name')
+      if (method !== null && /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/.test(method)
+          && !redactor.isSensitiveName(method)) item.attrs.action_name = method
+    } catch {
+      // A stale index supplies no policy fact. A reviewed opener then stays refused.
+    }
+  }
+  return elements
+}

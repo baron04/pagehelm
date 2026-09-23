@@ -7,6 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from web_operation_agent.execution.session import ServerAgentSession, TaskSpec
+from web_operation_agent.execution.target import required_highlight_control
 from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.tests.support.execution import _Browser, _Chat, _Control, _obs
 
@@ -18,14 +19,18 @@ class HandoffBrowser(_Browser):
 
 
 class PageHandoffTests(unittest.TestCase):
+    def test_final_explicit_marker_wins_over_earlier_dialog_opener(self):
+        self.assertEqual(required_highlight_control(
+            "找到「Pay」后高亮「Create Payment」，不要提交"), "Create Payment")
+
     def _run(self, tmp, script, *, pages=None, browser_type=HandoffBrowser,
-             matched_mutation=False):
+             matched_mutation=False, prompt="请找到 Go 按钮，由我自己点击"):
         observations = pages or [_obs(1), _obs(2)]
         for observation in observations:
             observation.render_state = "ready"
         browser = browser_type(observations)
         session = ServerAgentSession(
-            task=TaskSpec("T", "请找到 Go 按钮，由我自己点击"),
+            task=TaskSpec("T", prompt),
             chat=_Chat(script), browser=browser, control=_Control([[], [], []]),
             ledger=SessionLedger(Path(tmp) / "audit.jsonl", "handoff"),
             step_budget=4)
@@ -47,6 +52,15 @@ class PageHandoffTests(unittest.TestCase):
                 ("highlight", {"ref": "e9"}),
                 ("finish", {"done": False, "why": "no matching control"}),
             ])
+        self.assertEqual(browser.done, [])
+        self.assertNotEqual(result.terminal_reason, "agent_finished")
+
+    def test_quoted_final_control_cannot_be_replaced_by_an_earlier_opener(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result, browser = self._run(
+                tmp, [("highlight", {"ref": "e1"}),
+                      ("finish", {"done": False, "why": "dialog not opened"})],
+                prompt="打开对话框，再帮我标出「Create Payment」按钮")
         self.assertEqual(browser.done, [])
         self.assertNotEqual(result.terminal_reason, "agent_finished")
 

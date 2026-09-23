@@ -8,7 +8,7 @@
  * a lookup cannot happen against nothing.
  */
 import {
-  actionElementFingerprint, boundIndexedContent, elementsFrom, hydrateFormFacts,
+  actionElementFingerprint, boundIndexedContent, elementsFrom, hydrateButtonFacts, hydrateFormFacts,
   hydrateLinkFacts, hydrateSelectionFacts, explicitAttribute, refIndex, type ElementLike,
   type ElementLookup,
 } from './pageModel'
@@ -252,9 +252,10 @@ export class Page {
     // the Agent cannot distinguish a short page from one that needs another observation.
     const content = `${header}\n${boundedBody.content}\n${footer}`
     const map = this.controller.selectorMap
-    const elements: ElementRef[] = hydrateSelectionFacts(hydrateFormFacts(hydrateLinkFacts(
-      elementsFrom(content, epoch, this.redactor), map, this.lookup, this.redactor),
-    map, this.lookup, this.redactor), map, this.lookup)
+    const elements: ElementRef[] = hydrateSelectionFacts(hydrateButtonFacts(hydrateFormFacts(
+      hydrateLinkFacts(elementsFrom(content, epoch, this.redactor), map, this.lookup,
+        this.redactor), map, this.lookup, this.redactor), map, this.lookup,
+    this.redactor), map, this.lookup)
     const fingerprints = new Map<string, string>()
     for (const item of elements) fingerprints.set(item.ref, this.fingerprint(item.ref))
     const facets = this.readPageFacets ? this.boundedFacets() : undefined

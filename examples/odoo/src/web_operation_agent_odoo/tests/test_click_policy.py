@@ -75,6 +75,21 @@ class ReviewedClicks(unittest.TestCase):
         self.assertIn("not been reviewed", self.decide("/odoo/sales/new",
                                                         _el("e1", "button", "Next")))
 
+    def test_reviewed_dialog_opener_is_bound_to_record_collection_and_method(self):
+        policy = OdooReviewedClickPolicy.from_review(
+            load_review(), {"account.action_move_out_invoice": 263},
+            {"account.action_move_out_invoice": "customer-invoices"})
+        pay = _el("e1", "button", "Pay", action_name="action_register_payment")
+        self.assertEqual(policy.decide(_obs("/odoo/invoicing/1", pay), pay), "")
+        self.assertEqual(policy.decide(_obs("/odoo/customer-invoices/1", pay), pay), "")
+        for path, element in (
+            ("/odoo/sales/1", pay),
+            ("/odoo/invoicing", pay),
+            ("/odoo/invoicing/1", _el("e1", "button", "Pay", action_name="unsafe_override")),
+        ):
+            with self.subTest(path=path, element=element):
+                self.assertTrue(policy.decide(_obs(path, element), element))
+
     def test_an_action_s_own_url_path_is_the_same_reviewed_page(self):
         policy = OdooReviewedClickPolicy.from_review(
             load_review(), {"account.action_move_in_invoice_type": 264},

@@ -175,6 +175,15 @@
   "Vendors",
   "Accounting"
  ],
+ "safe_dialog_openers": [
+  {
+   "action_xmlid": "account.action_move_out_invoice",
+   "record_collection": "/odoo/invoicing",
+   "button_name": "Pay",
+   "method": "action_register_payment",
+   "reviewed_source": "addons/account/models/account_move.py:5487-5495; addons/account/models/account_move_line.py:1209-1227"
+  }
+ ],
  "controls_on_reviewed_records": [
   "Previous",
   "Next",

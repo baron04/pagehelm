@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest'
 import {createRedactor} from '../src/runtime/redaction'
 import {
-  actionElementFingerprint, boundIndexedContent, elementsFrom, explicitAttribute, hydrateFormFacts,
+  actionElementFingerprint, boundIndexedContent, elementsFrom, explicitAttribute, hydrateButtonFacts, hydrateFormFacts,
   hydrateLinkFacts, hydrateSelectionFacts, refIndex, type ElementLike,
 } from '../src/runtime/pageModel'
 
@@ -205,6 +205,25 @@ describe('hydrateFormFacts adds a bounded application field identifier', () => {
     expect(elements[0]?.attrs).toMatchObject({
       field: 'company', disabled: 'true', readonly: 'true',
     })
+  })
+})
+
+describe('hydrateButtonFacts adds a bounded live method identifier', () => {
+  it('uses the indexed button rather than display text', () => {
+    const elements = elementsFrom('[0]<button>Pay />', 1, redactor)
+    hydrateButtonFacts(elements, {}, () => ({hasAttribute: (n: string) => n === 'name',
+      getAttribute: () => 'action_register_payment'}), redactor)
+    expect(elements[0]?.attrs.action_name).toBe('action_register_payment')
+  })
+
+  it('omits credential-shaped and malformed method names', () => {
+    const elements = elementsFrom('[0]<button>Pay />', 1, redactor)
+    hydrateButtonFacts(elements, {}, () => ({hasAttribute: () => true,
+      getAttribute: () => 'password'}), redactor)
+    expect(elements[0]?.attrs.action_name).toBeUndefined()
+    hydrateButtonFacts(elements, {}, () => ({hasAttribute: () => true,
+      getAttribute: () => 'bad method'}), redactor)
+    expect(elements[0]?.attrs.action_name).toBeUndefined()
   })
 })
 

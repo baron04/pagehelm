@@ -11,14 +11,13 @@ checked, element by element:
 * on a reviewed collection page -- the view switches, pager, search and menu controls
   named in `policies/reviewed_click_pages.json`, and, where the review marks the page
   `rows: open`, a list row or kanban card, which opens its record;
-* on a record opened from a reviewed collection -- only the record pager and the
-  application's top menus, and a link to a related record (the order's customer, the
-  invoice's payment term), which Odoo writes as `/odoo/<model>/<id>`. That record's own
-  page is not reviewed, so the step goes no further than it.
+* on a record opened from a reviewed collection -- the record pager, top menus, and a
+  related-record link. One exact customer-invoice button may open the Pay dialog after
+  checking its live method name; opening this wizard does not submit a payment.
 
 Everything else is refused before dispatch: unnamed buttons, row checkboxes, cells of lists
 not marked `rows: open` (editable lists start inline editing), New, Upload, the Actions
-menu, header workflow buttons, module activation, and every control on a page nobody
+menu, other header workflow buttons, module activation, and every control on a page nobody
 reviewed. Odoo action numbers and URL paths differ between databases, so the review names
 actions by XML ID and the adapter resolves them against the deployment; an action it cannot
 resolve is simply not reviewed.
@@ -73,6 +72,7 @@ class OdooReviewedClickPolicy:
     record_controls: frozenset[str]
     anywhere_controls: frozenset[str]
     action_target_paths: tuple[tuple[str, str], ...] = ()
+    safe_dialog_openers: tuple[tuple[str, str, str], ...] = ()
 
     @classmethod
     def from_review(cls, review: dict, action_ids: dict[str, int],
@@ -107,12 +107,29 @@ class OdooReviewedClickPolicy:
             actions.update(keys)
             if item.get("rows") == "open":
                 rows.update(keys_with_path)
+        dialog_openers: set[tuple[str, str, str]] = set()
+        for item in review.get("safe_dialog_openers", ()):
+            if (not isinstance(item, dict)
+                    or not all(isinstance(item.get(key), str) for key in (
+                        "action_xmlid", "record_collection", "button_name", "method"))):
+                raise ValueError("invalid reviewed dialog opener")
+            xmlid = item["action_xmlid"]
+            if xmlid not in action_ids or item["record_collection"] not in paths:
+                continue
+            collections = {item["record_collection"], f"/odoo/action-{xmlid}",
+                           f"/odoo/action-{action_ids[xmlid]}"}
+            action_path = action_paths.get(xmlid)
+            if isinstance(action_path, str) and _ACTION_PATH.fullmatch(action_path):
+                collections.add("/odoo/" + action_path)
+            dialog_openers.update((collection, item["button_name"], item["method"])
+                                  for collection in collections)
         return cls(paths=frozenset(paths), actions=frozenset(actions),
                    row_pages=frozenset(rows),
                    page_controls=frozenset(review["controls_on_reviewed_pages"]),
                    record_controls=frozenset(review.get("controls_on_reviewed_records", ())),
                    anywhere_controls=frozenset(review["controls_anywhere"]),
-                   action_target_paths=tuple(target_paths))
+                   action_target_paths=tuple(target_paths),
+                   safe_dialog_openers=tuple(sorted(dialog_openers)))
 
     def canonical_target_path(self, path: str) -> str:
         """Bind a reviewed XML-ID target to this deployment's observed action number.
@@ -195,6 +212,11 @@ class OdooReviewedClickPolicy:
         if collection is None:
             if not self._record_of_reviewed(page):
                 return "this page has not been reviewed for assistant clicks"
+            record = _RECORD.match(page)
+            if (record is not None and element.role == "button"
+                    and (record.group("collection"), name, attrs.get("action_name"))
+                    in self.safe_dialog_openers):
+                return ""
             if element.role == "button" and name in self.record_controls:
                 return ""
             label = f"{name!r} " if name else "an unnamed "

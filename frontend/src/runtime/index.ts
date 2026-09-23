@@ -13,7 +13,7 @@
 import {autoBoot} from './boot'
 import {formGetUrl, navigationWal, recoveryProvesNavigation, urlDigest, type NativeForm} from './navigation'
 import {
-  actionElementFingerprint, elementsFrom, hydrateFormFacts, hydrateLinkFacts,
+  actionElementFingerprint, elementsFrom, hydrateButtonFacts, hydrateFormFacts, hydrateLinkFacts,
   type ElementLookup,
 } from './pageModel'
 import {createRedactor, type Redactor} from './redaction'
@@ -37,6 +37,8 @@ export const runtimeInternals = Object.freeze({
     hydrateLinkFacts(elements, selectorMap, getByIndex, internal),
   hydrateFormFacts: (elements: ElementRef[], selectorMap: unknown, getByIndex: ElementLookup) =>
     hydrateFormFacts(elements, selectorMap, getByIndex, internal),
+  hydrateButtonFacts: (elements: ElementRef[], selectorMap: unknown, getByIndex: ElementLookup) =>
+    hydrateButtonFacts(elements, selectorMap, getByIndex, internal),
   actionElementFingerprint,
   urlDigest,
   navigationWal: (startedUrl: string, expectedUrl: string, navigationKind: string) =>
