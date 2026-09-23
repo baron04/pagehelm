@@ -329,6 +329,8 @@ def _render_observation(obs: PageObservation, max_elements: int = RENDER_ELEMENT
         lines.append("render_state: pending; this URL's view is not distinguishable "
                      "from the preceding observation. "
                      "Observe again before using page controls or claiming arrival.")
+    if obs.selected_controls:
+        lines.append("selected controls: " + " | ".join(obs.selected_controls))
     if obs.landmarks:
         lines.append("headings: " + " | ".join(obs.landmarks[:12]))
     if obs.messages:
@@ -349,7 +351,7 @@ def _render_observation(obs: PageObservation, max_elements: int = RENDER_ELEMENT
                 bits.append(f"{k}={v}")
         # The accessible state a tab or option declares. Without it the model could not
         # tell which tab was current and clicked the one it had already reached.
-        for k in ("aria-selected", "aria-checked", "selected"):
+        for k in ("aria-selected", "aria-checked", "aria-pressed", "selected"):
             if str(e.attrs.get(k, "")).strip().lower() == "true":
                 bits.append(f"{k}=true")
         lines.append("  " + " ".join(str(b) for b in bits))

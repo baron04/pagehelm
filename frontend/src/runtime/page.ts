@@ -12,6 +12,7 @@ import {
   hydrateLinkFacts, hydrateSelectionFacts, refIndex, type ElementLike, type ElementLookup,
 } from './pageModel'
 import {canonicalUrl} from './navigation'
+import {selectedControlsFromPage} from './pageSelection'
 import {MAX_CONTENT_CHARS, type Redactor} from './redaction'
 import {WIRE_VERSION, type ElementRef, type PageObservation} from './types'
 import browserContract from '@contract/browser_contract.json'
@@ -148,6 +149,7 @@ export class Page {
         content,
         messages: [],
         truncated: (state.content.length > availableBodyChars || boundedBody.truncated),
+        selected_controls: selectedControlsFromPage(document, this.redactor),
       },
       fingerprints,
       canonicalUrl: canonicalUrl(state.url),

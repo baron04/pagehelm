@@ -30,15 +30,34 @@ MAX_CONTROL_NAME_CHARS = 120
 #: `selected` is the Runtime's own derived fact for a tab the page marks current only by
 #: class (Bootstrap's `.active`, which Odoo 18 notebooks use); see `hydrateSelectionFacts`.
 _SELECTED_ATTRS = ("aria-selected", "aria-checked", "aria-pressed", "checked", "selected")
-# A small application-neutral guard for an explicit presentation request. It is not a
-# general Chinese intent parser: only unmistakable requests for the conventional Kanban
-# view are covered until the full GoalSpec/PageState contract replaces this guard.
-_KANBAN_REQUEST = re.compile(
-    r"看板|(?<![a-z])kanban(?![a-z])", re.I)
+# A bounded guard for conventional named views, not a general intent parser. Unknown
+# views and compound page goals still need an application-provided PageState/GoalSpec.
+_VIEW_REQUESTS = (
+    ("Kanban", re.compile(r"看板|(?<![a-z])kanban(?![a-z])", re.I)),
+    ("List", re.compile(r"列表|(?<![a-z])(?:list|table)\s+view(?![a-z])", re.I)),
+    ("Calendar", re.compile(r"日历|(?<![a-z])calendar\s+view(?![a-z])", re.I)),
+    ("Pivot", re.compile(r"透视表?|(?<![a-z])pivot(?:\s+(?:table|view))?(?![a-z])", re.I)),
+    ("Graph", re.compile(r"图表|(?<![a-z])(?:graph|chart)\s+view(?![a-z])", re.I)),
+)
+_VIEW_ALIASES = {
+    "看板": "kanban", "列表": "list", "表格": "list", "table": "list",
+    "日历": "calendar", "透视": "pivot", "透视表": "pivot",
+    "图表": "graph", "chart": "graph",
+}
 
 
 def required_page_controls(prompt: str) -> tuple[str, ...]:
-    return ("Kanban",) if _KANBAN_REQUEST.search(prompt) else ()
+    found = sorted((match.start(), name)
+                   for name, pattern in _VIEW_REQUESTS
+                   for match in pattern.finditer(prompt))
+    # "从列表切换到看板" names the origin and the destination. The
+    # destination alone is the page state that must be visible at completion.
+    transition = re.search(r"(?:切换?|换|转)(?:到|为)\s*", prompt)
+    if transition:
+        destination = [name for start, name in found if start >= transition.end()]
+        if destination:
+            return (destination[-1],)
+    return tuple(dict.fromkeys(name for _, name in found))
 
 
 @dataclass(frozen=True)
@@ -58,7 +77,7 @@ class TargetState:
 
 def _normalise_name(name: str) -> str:
     normalised = re.sub(r"\s+", " ", name).strip().casefold()
-    return "kanban" if normalised == "看板" else normalised
+    return _VIEW_ALIASES.get(normalised, normalised)
 
 
 def _normalise_path(path: str) -> str:
@@ -136,8 +155,9 @@ def unmet_conditions(target: TargetState, obs: PageObservation, *,
                          f"{current.path or '/'}"
                          f"{'?' + current.query if current.query else ''})")
     if target.selected or required_selected:
-        selected_names = {_normalise_name(element.name or "")
-                          for element in obs.elements if _is_selected(element)}
+        selected_names = ({_normalise_name(element.name or "")
+                           for element in obs.elements if _is_selected(element)}
+                          | {_normalise_name(name) for name in obs.selected_controls})
         for name in dict.fromkeys((*target.selected, *required_selected)):
             if _normalise_name(name) not in selected_names:
                 unmet.append(f"selected control \"{name}\"")

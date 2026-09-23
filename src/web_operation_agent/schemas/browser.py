@@ -27,6 +27,8 @@ _BROWSER_CONTRACT = json.loads(
     files("web_operation_agent").joinpath(
         "web_runtime", "browser_contract.json").read_text(encoding="utf-8"))
 MAX_OBSERVATION_ELEMENTS = int(_BROWSER_CONTRACT["observation"]["max_elements"])
+MAX_SELECTED_CONTROLS = int(_BROWSER_CONTRACT["observation"]["max_selected_controls"])
+MAX_SELECTED_CONTROL_CHARS = int(_BROWSER_CONTRACT["observation"]["max_selected_control_chars"])
 MAX_OBSERVATION_CONTENT_CHARS = int(
     _BROWSER_CONTRACT["observation"]["max_content_chars"])
 MAX_SCROLL_PAGES = int(_BROWSER_CONTRACT["scroll"]["max_pages"])
@@ -124,6 +126,9 @@ class PageObservation:
     # The embedded Runtime marks a URL transition pending while its page projection
     # still belongs to the preceding route. Older browser ports omit this signal.
     render_state: str = "unknown"
+    # Bounded, viewport-visible selected controls from exclusive groups. Unlike elements,
+    # these facts need no action ref and survive PageController omitting a large view's toolbar.
+    selected_controls: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         _schema_version(self.schema_version, "PageObservation")
@@ -151,9 +156,17 @@ class PageObservation:
         _bool(self.truncated, "truncated")
         _require(self.render_state in {"unknown", "pending", "ready"},
                  "render_state must be unknown, pending or ready")
+        _require(isinstance(self.selected_controls, list),
+                 "selected_controls must be an array")
+        _require(len(self.selected_controls) <= MAX_SELECTED_CONTROLS,
+                 f"selected_controls must contain at most {MAX_SELECTED_CONTROLS} entries")
+        _require(all(isinstance(name, str) and 0 < len(name) <= MAX_SELECTED_CONTROL_CHARS
+                     for name in self.selected_controls),
+                 "selected_controls entries must be short non-empty strings")
         self.landmarks = copy.deepcopy(self.landmarks)
         self.elements = copy.deepcopy(self.elements)
         self.messages = copy.deepcopy(self.messages)
+        self.selected_controls = copy.deepcopy(self.selected_controls)
 
     def to_json(self) -> dict:
         out = {"schema_version": self.schema_version, "epoch": self.epoch, "url": self.url,
@@ -164,24 +177,29 @@ class PageObservation:
             out["content"] = self.content
         if self.render_state != "unknown":
             out["render_state"] = self.render_state
+        if self.selected_controls:
+            out["selected_controls"] = copy.deepcopy(self.selected_controls)
         return out
 
     @staticmethod
     def from_json(d: dict) -> "PageObservation":
         allowed = {"schema_version", "epoch", "url", "title", "landmarks", "elements",
-                   "content", "messages", "truncated", "render_state"}
+                   "content", "messages", "truncated", "render_state", "selected_controls"}
         required = {"schema_version", "epoch", "url", "title", "landmarks", "elements"}
         d = _strict_object(d, "PageObservation", allowed=allowed, required=required)
         _require(isinstance(d["landmarks"], list), "landmarks must be an array")
         _require(isinstance(d["elements"], list), "elements must be an array")
         _require(isinstance(d.get("messages", []), list), "messages must be an array")
+        _require(isinstance(d.get("selected_controls", []), list),
+                 "selected_controls must be an array")
         return PageObservation(schema_version=d["schema_version"], epoch=d["epoch"], url=d["url"],
                                title=d["title"], landmarks=copy.deepcopy(d["landmarks"]),
                                elements=[ElementRef.from_json(e) for e in d.get("elements", [])],
                                content=_str(d.get("content", ""), "content", allow_empty=True),
                                messages=copy.deepcopy(d.get("messages", [])),
                                truncated=d.get("truncated", False),
-                               render_state=d.get("render_state", "unknown"))
+                               render_state=d.get("render_state", "unknown"),
+                               selected_controls=copy.deepcopy(d.get("selected_controls", [])))
 
     @property
     def content_digest(self) -> str:

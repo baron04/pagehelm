@@ -65,6 +65,20 @@ def _reasons_emitted_by(*classes) -> set[str]:
 
 
 class WireTypes(unittest.TestCase):
+    def test_selected_controls_are_bounded_optional_presentation_facts(self):
+        page = S.PageObservation(schema_version=1, epoch=1,
+                                 url="https://app.test/orders", title="Orders",
+                                 landmarks=[], elements=[], selected_controls=["Pivot"])
+        self.assertEqual(S.PageObservation.from_json(page.to_json()).selected_controls,
+                         ["Pivot"])
+        self.assertNotIn("selected_controls", S.PageObservation(
+            schema_version=1, epoch=1, url="https://app.test/orders", title="Orders",
+            landmarks=[], elements=[]).to_json())
+        with self.assertRaises(S.SchemaError):
+            S.PageObservation(schema_version=1, epoch=1, url="https://app.test/orders",
+                              title="Orders", landmarks=[], elements=[],
+                              selected_controls=["x"] * 17)
+
     def test_page_render_state_round_trips_and_rejects_unknown_values(self):
         page = S.PageObservation(schema_version=1, epoch=1,
                                  url="https://app.test/orders", title="Orders",

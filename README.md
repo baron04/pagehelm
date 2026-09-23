@@ -69,10 +69,10 @@ agent.
   a single-page application has changed its URL but still exposes the prior page projection,
   the embedded Runtime marks rendering pending and the server does not report arrival; a
   later observation must show the replacement view. When the target matches a non-pending
-  observation, the server reports the reached state. An explicit Kanban-view request also
-  requires the current page observation to show the Kanban switch selected, even if the
-  Agent declared only a path; a fresh observation may be needed after the switch. For a
-  pure navigation request it accepts
+  observation, the server reports the reached state. An explicit request for a conventional
+  List, Kanban, Calendar, Pivot, or Graph view also requires that view to be selected, even
+  if the Agent declared only a path; a fresh observation may be needed after the switch.
+  For a pure navigation request it accepts
   only `finish` and `set_target` (other calls are refused without dispatch; the tool list stays
   the same for prefix caching). A request that also needs a fact may continue reading or
   observing. The sentence the user reads is composed from the observed
@@ -84,7 +84,7 @@ agent.
   with where it sits in the menus when a cited source or Skill says so.
 - Generic click can stay disabled as an action while an application re-allows part of it: an optional click policy sees the current observation and the element named and either allows that click or refuses it before dispatch. The Odoo reference integration allows tabs, the Home button, same-application links to pages reviewed as read-only (and records opened from them), named view-switch, pager, search and menu controls on those pages, and on the pages the review marks for it a list row or kanban card, which opens its record; on a record it allows only the record pager, the top menus, and a link to a related record (an order's customer, an invoice's payment term: `/odoo/<model>/<id>`), whose own page is not reviewed, so the step goes no further. Every other control -- New, Actions, header workflow buttons, row selection, inline editing, module activation, unnamed buttons, anything on an unreviewed page -- is refused. The review lives in the adapter and names actions by XML ID, resolved (with their URL paths) against the deployed database. A policy may also name the pages it reviewed as destinations, which the assistant may then open by address rather than by finding the menu; Odoo allows a reviewed page or a record opened from one, with at most a `view_type` query. A tab that marks itself current only by class, as Bootstrap's `.active` does in Odoo 18 notebooks, is reported by the Runtime as `selected=true`, so a declared tab can be verified.
 - An application can also make the signed-in session read-only while the Agent acts on the page. It declares a `page_write_guard` path on its descriptor; the Runtime posts to `<path>/begin` before every page action and refuses the action unless the application confirms the window, and posts to `<path>/end` when the turn ends. Odoo's `woa_runtime` 1.5 implements it: while the window is open every request of that session runs in a PostgreSQL read-only transaction and a write is refused with nothing saved, so a click the review missed -- or an autosave the web client makes on its own -- cannot change data. A page action that loses its result while the window holds, such as a menu button the model took for a link, is therefore settled as no write rather than as an uncertain one, and the turn continues; the receipt says the window held, and the server honours that only for an application that declares a guard. Deploy the 1.5 addon code before this adapter: against older addon code the Runtime cannot open the window, so every page action is refused.
-- The Runtime also reports the sole active button in a multi-button navigation group as selected; it does not treat a standalone active action button as a selected view.
+- The Runtime also reports the sole active button in a visible multi-button navigation group as selected, independently of the bounded action-ref list; it does not treat a standalone active action button as a selected view. These bounded names are observation facts, not clickable refs or permissions.
 - When no Skill trigger matches a request's wording, the catalog's read-only fallback stays
   loadable but is presented as an unmatched index rather than as task candidates. A typed read
   whose result repeats one already returned in the same turn is answered with a short notice
@@ -269,9 +269,9 @@ source compilation, fixture provisioning, and qualification.
   model requests. Use that combination only where the deployment's data policy permits it.
 - Browser and accessibility coverage is strongest on Chromium; other engines and screen
   readers are not comprehensively qualified.
-- A reached page state is checked against the declared path and selected controls, plus an explicit Kanban-view request. The pending-render signal catches a changed SPA URL with the old page projection; the Kanban check catches a list view falsely reported as Kanban. Neither proves that all asynchronous loading has finished or verifies other views and filters the Agent omitted. In the earlier one-sentence Chinese goal run, 3 of 37 attempts were reported as reached incorrectly; that run predates these guards and has not yet been repeated.
+- A reached page state is checked against the declared path and selected controls, plus an explicit request for one of the five conventional views above. The pending-render signal catches a changed SPA URL with the old page projection; the view check catches a wrong view reported as reached. Neither proves that all asynchronous loading has finished or verifies filters, grouping, record identity, or other view names the Agent omitted. In the earlier one-sentence Chinese goal run, 3 of 37 attempts were reported as reached incorrectly; that run predates these guards and has not yet been repeated.
 - An empty typed read no longer ends the turn automatically: the Agent receives the exact query result and can check whether the entity and filters match the question. This does not yet prove that a model-selected query covers the user's intent. In the earlier 37-goal run, the old automatic answer incorrectly reported two existing records as absent; one of those reads had searched a customer name for an order number.
-- Reaching a declared page target no longer blocks further reading or observation for requests classified as more than pure navigation. Apart from the explicit Kanban check above, a target still covers only the conditions the Agent declared, so a question or view requirement omitted from that declaration can remain unmet.
+- Reaching a declared page target no longer blocks further reading or observation for requests classified as more than pure navigation. Apart from the explicit view checks above, a target still covers only the conditions the Agent declared, so a question or presentation requirement omitted from that declaration can remain unmet.
 
 ## License
 

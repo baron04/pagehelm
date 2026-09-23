@@ -57,6 +57,8 @@ export interface PageObservation {
   truncated: boolean
   /** A URL transition whose page projection is still the preceding route cannot settle. */
   render_state?: 'pending' | 'ready'
+  /** Bounded selected names from visible exclusive groups, even when controls are omitted. */
+  selected_controls?: string[]
 }
 
 export interface ObservationEnvelope {

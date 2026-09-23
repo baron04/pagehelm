@@ -122,9 +122,15 @@ def _events(session, name: str) -> list[dict]:
 
 
 class TargetParsing(unittest.TestCase):
-    def test_explicit_kanban_request_requires_a_selected_view(self):
+    def test_explicit_view_request_requires_a_selected_view(self):
         self.assertEqual(required_page_controls("用看板看销售订单"), ("Kanban",))
         self.assertEqual(required_page_controls("Open orders in Kanban view"), ("Kanban",))
+        self.assertEqual(required_page_controls("用列表看销售订单"), ("List",))
+        self.assertEqual(required_page_controls("用透视表看销售订单"), ("Pivot",))
+        self.assertEqual(required_page_controls("Open orders in graph view"), ("Graph",))
+        self.assertEqual(required_page_controls("从列表切换到看板"), ("Kanban",))
+        self.assertEqual(required_page_controls("用列表和图表分别看"), ("List", "Graph"))
+        self.assertEqual(required_page_controls("List the accounts"), ())
         self.assertEqual(required_page_controls("Open orders"), ())
         page = _page(1, PARTNER)
         self.assertEqual(unmet_conditions(TargetState(PARTNER), page,
@@ -138,6 +144,20 @@ class TargetParsing(unittest.TestCase):
                                        {"aria-pressed": "true"})
         self.assertEqual(unmet_conditions(TargetState(PARTNER), page,
                                           required_selected=("Kanban",)), ())
+        self.assertEqual(unmet_conditions(TargetState(PARTNER), page,
+                                          required_selected=("List",)),
+                         ('selected control "List"',))
+        page.elements[-1] = ElementRef("e4", "button", "表格", "button", 1,
+                                       {"aria-pressed": "true"})
+        self.assertEqual(unmet_conditions(TargetState(PARTNER), page,
+                                          required_selected=("List",)), ())
+        page.elements = []  # A dense view may omit the toolbar from action refs.
+        page.selected_controls = ["Pivot"]
+        self.assertEqual(unmet_conditions(TargetState(PARTNER), page,
+                                          required_selected=("Pivot",)), ())
+        self.assertEqual(unmet_conditions(TargetState(PARTNER), page,
+                                          required_selected=("Graph",)),
+                         ('selected control "Graph"',))
 
     def test_a_target_is_exact_or_refused(self):
         target = parse_target({"path": "/contacts/workflows/partner/",
