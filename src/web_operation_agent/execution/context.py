@@ -14,7 +14,7 @@ from ..schemas import (MAX_OBSERVATION_ELEMENTS, POTENTIALLY_WRITING_ACTIONS,
 from . import knowledge_tools
 from .business_tools import render_business_skills
 from .prompts import _PLAN_PREAMBLE
-from .target import describe_target, unmet_conditions
+from .target import TargetState, describe_target, unmet_conditions
 from .turn_answer import AnswerState
 
 
@@ -26,6 +26,10 @@ RENDER_ELEMENTS = MAX_OBSERVATION_ELEMENTS
 
 class SessionContext:
     """Context and grounding behavior shared by one server-owned session."""
+
+    def _page_goal_unmet(self, obs: PageObservation) -> tuple[str, ...]:
+        return unmet_conditions(TargetState(), obs,
+                                required_selected=self._required_page_controls)
 
     def tool_schemas(self) -> list[dict]:
         return self._tool_surface.schemas()
@@ -275,7 +279,8 @@ class SessionContext:
                       "only if the user also asked a question, citing recorded evidence "
                       "refs, never element refs. If the request asks for more, call "
                       "set_target with the next state.")
-        unmet = unmet_conditions(self._target, obs)
+        unmet = unmet_conditions(self._target, obs,
+                                 required_selected=self._required_page_controls)
         return ("TARGET (declared): " + describe_target(self._target)
                 + ("\nStill unmet: " + "; ".join(unmet) if unmet
                    else "\nAll conditions are shown; a fresh page action confirms them."))

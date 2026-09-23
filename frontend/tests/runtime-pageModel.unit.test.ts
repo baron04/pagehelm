@@ -2,7 +2,7 @@ import {describe, expect, it} from 'vitest'
 import {createRedactor} from '../src/runtime/redaction'
 import {
   actionElementFingerprint, boundIndexedContent, elementsFrom, explicitAttribute, hydrateFormFacts,
-  hydrateLinkFacts, hydrateSelectionFacts, refIndex,
+  hydrateLinkFacts, hydrateSelectionFacts, refIndex, type ElementLike,
 } from '../src/runtime/pageModel'
 
 const redactor = createRedactor()
@@ -236,5 +236,20 @@ describe('hydrateSelectionFacts says which tab is current when the page says it 
     const stale = tabs('[0]<a role=tab>Sales />')
     hydrateSelectionFacts(stale, {}, () => { throw new Error('stale index') })
     expect(stale[0]?.attrs.selected).toBeUndefined()
+  })
+
+  it('marks the sole active button in a grouped view switch, not a lone active button', () => {
+    const elements = tabs('[0]<button data-tooltip=List />\n[1]<button data-tooltip=Kanban />')
+    const live: ElementLike[] = [
+      {className: 'btn o_list'}, {className: 'btn o_kanban active'},
+    ]
+    const group = {querySelectorAll: () => live}
+    for (const button of live) button.closest = () => group
+    hydrateSelectionFacts(elements, {}, (_map, index) => live[index])
+    expect(elements.map(item => item.attrs.selected)).toEqual([undefined, 'true'])
+
+    const lone = tabs('[0]<button data-tooltip=Kanban />')
+    hydrateSelectionFacts(lone, {}, () => ({className: 'btn active'}))
+    expect(lone[0]?.attrs.selected).toBeUndefined()
   })
 })

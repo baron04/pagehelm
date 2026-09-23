@@ -59,6 +59,23 @@ class FinishHandler:
         successful_business_tools = turn.successful_business_tools
         kept_reply = turn.kept_reply
         structured_answer = isinstance(args, dict) and "outcome" in args
+        claims_page_action = (isinstance(args, dict)
+                              and (args.get("outcome") == "acted"
+                                   or (args.get("done") is True
+                                       and self._answer_action_receipt is not None))
+                              and (self._answer_action_receipt is None
+                                   or self._answer_action_receipt["kind"] in {
+                                       "target_state", "navigation", "page_interaction"}))
+        if claims_page_action and self._required_page_controls:
+            missing_page_state = self._page_goal_unmet(obs)
+            if missing_page_state:
+                self.ledger.append("page_presentation_claim_refused", step=step,
+                                   unmet=list(missing_page_state))
+                messages += [_assistant_call(call), _tool_result(
+                    call, "The requested page presentation is not verified: "
+                          + "; ".join(missing_page_state)
+                          + ". Continue to the requested view or say it is unfinished.")]
+                return self._resume(turn, messages, obs, successful_business_tools)
         if name == "finish" and (self._answers.answer_mode or structured_answer):
             try:
                 if isinstance(args, dict):
@@ -227,6 +244,16 @@ class FinishHandler:
 
         if name == "finish":
             done = bool(args.get("done"))
+            if done and self.page_actions and self._required_page_controls:
+                missing_page_state = self._page_goal_unmet(obs)
+                if missing_page_state:
+                    self.ledger.append("page_presentation_claim_refused", step=step,
+                                       unmet=list(missing_page_state))
+                    messages += [_assistant_call(call), _tool_result(
+                        call, "The requested page presentation is not verified: "
+                              + "; ".join(missing_page_state)
+                              + ". Continue to the requested view or say it is unfinished.")]
+                    return self._resume(turn, messages, obs, successful_business_tools)
             if done and self.evidence.has_source_evidence():
                 if self._answer_action_receipt is None or (
                         self._explicit_mutation_intent

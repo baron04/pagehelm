@@ -69,6 +69,7 @@ export interface ElementLike {
   hasAttribute?(name: string): boolean
   getAttribute?(name: string): string | null
   closest?(selector: string): ElementLike | null
+  querySelectorAll?(selector: string): ArrayLike<ElementLike>
 }
 
 export type ElementLookup = (selectorMap: unknown, index: number) => ElementLike | null | undefined
@@ -224,14 +225,31 @@ const CURRENT_VALUES = new Set(['page', 'step', 'location', 'true'])
 export function hydrateSelectionFacts(elements: ElementRef[], selectorMap: unknown,
                                       getByIndex: ElementLookup): ElementRef[] {
   for (const item of elements) {
-    if (item.role !== 'tab' || item.attrs['aria-selected'] !== undefined) continue
+    if (item.role !== 'tab' && item.role !== 'button') continue
+    if (item.attrs['aria-selected'] !== undefined || item.attrs['aria-pressed'] !== undefined) continue
     try {
       const element = getByIndex(selectorMap, refIndex(item.ref))
       const current = String(explicitAttribute(element, 'aria-current') || '').toLowerCase()
       const raw = element?.className
       const className = typeof raw === 'string' ? raw : String(raw?.baseVal || '')
       const byClass = className.split(/\s+/).some(token => SELECTED_CLASSES.has(token))
-      if (CURRENT_VALUES.has(current) || byClass) item.attrs.selected = 'true'
+      if (item.role === 'tab' && (CURRENT_VALUES.has(current) || byClass)) {
+        item.attrs.selected = 'true'
+      } else if (item.role === 'button' && byClass) {
+        // A lone active button may be a workflow action, not a selected view. A group
+        // with exactly one active button is a conventional mutually exclusive toggle.
+        const group = element?.closest?.('nav, [role="group"], [role="toolbar"]')
+        const buttons = Array.from(group?.querySelectorAll?.('button') || [])
+        const active = buttons.filter(button => {
+          const value = button.className
+          const tokens = (typeof value === 'string' ? value : String(value?.baseVal || ''))
+            .split(/\s+/)
+          return tokens.some(token => SELECTED_CLASSES.has(token))
+        })
+        if (buttons.length >= 2 && active.length === 1 && active[0] === element) {
+          item.attrs.selected = 'true'
+        }
+      }
     } catch {
       // A stale index says nothing about the tab; leave it unmarked.
     }

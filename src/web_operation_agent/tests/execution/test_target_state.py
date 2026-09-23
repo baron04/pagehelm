@@ -16,7 +16,8 @@ from pathlib import Path
 
 from web_operation_agent.execution.session import LabApparatus, ServerAgentSession, TaskSpec
 from web_operation_agent.execution.target import (MAX_TARGET_DECLARATIONS, TargetState,
-                                                  parse_target, unmet_conditions)
+                                                  parse_target, required_page_controls,
+                                                  unmet_conditions)
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionReceipt, ElementRef,
                                          PageObservation)
 from web_operation_agent.state.ledger import SessionLedger
@@ -121,6 +122,23 @@ def _events(session, name: str) -> list[dict]:
 
 
 class TargetParsing(unittest.TestCase):
+    def test_explicit_kanban_request_requires_a_selected_view(self):
+        self.assertEqual(required_page_controls("用看板看销售订单"), ("Kanban",))
+        self.assertEqual(required_page_controls("Open orders in Kanban view"), ("Kanban",))
+        self.assertEqual(required_page_controls("Open orders"), ())
+        page = _page(1, PARTNER)
+        self.assertEqual(unmet_conditions(TargetState(PARTNER), page,
+                                          required_selected=("Kanban",)),
+                         ('selected control "Kanban"',))
+        page.elements.append(ElementRef("e4", "button", "Kanban", "button", 1,
+                                        {"selected": "true"}))
+        self.assertEqual(unmet_conditions(TargetState(PARTNER), page,
+                                          required_selected=("Kanban",)), ())
+        page.elements[-1] = ElementRef("e4", "button", "看板", "button", 1,
+                                       {"aria-pressed": "true"})
+        self.assertEqual(unmet_conditions(TargetState(PARTNER), page,
+                                          required_selected=("Kanban",)), ())
+
     def test_a_target_is_exact_or_refused(self):
         target = parse_target({"path": "/contacts/workflows/partner/",
                                "selected": ["Terms", " terms ", "Overview"]})
@@ -175,6 +193,60 @@ class TargetSettlement(unittest.TestCase):
 
     def tearDown(self):
         self.directory.cleanup()
+
+    def test_path_only_declaration_cannot_complete_a_kanban_request(self):
+        class ViewBrowser(_WorkspaceBrowser):
+            def __init__(self):
+                super().__init__()
+                self.view = "list"
+
+            def observe(self):
+                page = super().observe()
+                if self.path == PARTNER:
+                    for ref, name in (("e4", "List"), ("e5", "Kanban")):
+                        page.elements.append(ElementRef(
+                            ref, "button", name, "button", page.epoch,
+                            {"selected": "true" if self.view == name.lower() else "false"}))
+                    page.content += f" view {self.view}"
+                return page
+
+            def execute(self, action, args=None, expect_navigation=False):
+                if action == "click" and (args or {}).get("ref") == "e5":
+                    self.commands.append((action, dict(args or {})))
+                    before = self.epoch
+                    self.view = "kanban"
+                    self.epoch += 1
+                    return ActionReceipt(
+                        schema_version=SCHEMA_VERSIONS["ActionReceipt"],
+                        command_id=f"c{len(self.commands)}", action=action,
+                        args_echo=dict(args or {}), ok=True,
+                        url_before=ORIGIN + self.path, url_after=ORIGIN + self.path,
+                        navigated=False, epoch_before=before, epoch_after=self.epoch,
+                        observation=self.observe())
+                receipt = super().execute(action, args, expect_navigation)
+                return replace(receipt, observation=self.observe())
+
+        chat = _Chat([
+            ("set_target", {"path": PARTNER}),
+            ("click", {"ref": "e1"}),
+            ("finish", {"outcome": "acted"}),  # list is open; not the requested view
+            ("click", {"ref": "e5"}),
+            ("finish", {"outcome": "acted"}),
+        ])
+        browser = ViewBrowser()
+        session = _session(self.tmp, chat, browser,
+                           prompt="Open the partner desk in Kanban view.")
+
+        result = session.run()
+
+        self.assertEqual(result.terminal_reason, "agent_finished")
+        self.assertEqual(browser.view, "kanban")
+        self.assertEqual(len(_events(session, "page_presentation_claim_refused")), 1)
+        self.assertEqual(len(_events(session, "target_state_reached")), 1)
+        self.assertEqual(_events(session, "target_state_reached")[0]["page_epoch"], 3)
+        self.assertIn('selected control "Kanban"', chat.seen[2][-1]["content"])
+        self.assertIn("not verified", chat.seen[3][-1]["content"])
+        self.assertIn("Selected: Kanban", result.agent_said)
 
     def test_spa_url_change_waits_for_the_destination_view_before_claiming_arrival(self):
         class DelayedView(_WorkspaceBrowser):

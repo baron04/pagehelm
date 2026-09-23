@@ -417,7 +417,7 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
             and name == "goto" and latest_business_route
             and receipt.ok and receipt.observation is not None
             and receipt.observation.epoch > prior_page_epoch
-            and target_observed and obs.render_state != "pending"):
+            and target_observed and not session._page_goal_unmet(obs)):
         result.agent_said = (
             "已打开请求的页面。"
             if re.search(r"[\u3400-\u9fff]", session.task.prompt)

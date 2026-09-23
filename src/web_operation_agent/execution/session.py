@@ -65,7 +65,7 @@ from .runstate import (CAPABILITY_GAP_TERMINAL, LabApparatus, NO_LAB, RunResult,
                        TaskSpec, _Next, _Turn)
 from .click_policy import ClickPolicy
 from .target import (MAX_TARGET_DECLARATIONS, TargetState, describe_target, parse_target,
-                     unmet_conditions)
+                     required_page_controls, unmet_conditions)
 from ..business.writes import PRE_DISPATCH_ERRORS, WatchState, WriteWatch
 from .prompts import (AGENT_SYSTEM, SCOPE_FIRST_SYSTEM, TOOL_SCHEMAS, _CAPABILITY_QUESTION,
                       _NAVIGATION_EXTRA_GOAL, _NAVIGATION_ONLY, _PLAN_PREAMBLE,
@@ -335,6 +335,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         self.deterministic_read_navigation = deterministic_read_navigation
         current_navigation_only = _is_navigation_only(task.prompt)
         self._navigation_only = current_navigation_only
+        self._required_page_controls = required_page_controls(task.prompt)
         # A clarification reply such as "Azure Interior" carries no domain verb of its
         # own. The unresolved turn is the server-owned proof that it is a continuation;
         # recover only that turn's user-authored goal, never the assistant's question or
@@ -640,7 +641,8 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         if (self._answer_action_receipt is not None
                 and self._answer_action_receipt["kind"] == "target_state"):
             self._answer_action_receipt = None
-        unmet = unmet_conditions(target, turn.obs)
+        unmet = unmet_conditions(target, turn.obs,
+                                 required_selected=self._required_page_controls)
         self.ledger.append("target_state_declared", step=turn.step, target=target.to_json(),
                            declaration=self._target_declarations,
                            unmet=list(unmet), page_url=turn.obs.url,
@@ -665,12 +667,15 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         target; a request that also asks a question may continue to read or observe. The
         person-facing page statement is composed from the observation, not model prose.
         """
-        if self._target is None or unmet_conditions(self._target, obs):
+        if (self._target is None or unmet_conditions(
+                self._target, obs,
+                required_selected=self._required_page_controls)):
             return False
         self._target_reached = True
         self._answer_action_receipt = {
             "kind": "target_state", "url": obs.url,
-            "selected": list(self._target.selected),
+            "selected": list(dict.fromkeys(
+                (*self._target.selected, *self._required_page_controls))),
             "acted": bool(acted), "page_actions": self.page_actions}
         self.ledger.append("target_state_reached", step=step,
                            target=self._target.to_json(), url=obs.url,

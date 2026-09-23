@@ -29,7 +29,16 @@ MAX_CONTROL_NAME_CHARS = 120
 
 #: `selected` is the Runtime's own derived fact for a tab the page marks current only by
 #: class (Bootstrap's `.active`, which Odoo 18 notebooks use); see `hydrateSelectionFacts`.
-_SELECTED_ATTRS = ("aria-selected", "aria-checked", "checked", "selected")
+_SELECTED_ATTRS = ("aria-selected", "aria-checked", "aria-pressed", "checked", "selected")
+# A small application-neutral guard for an explicit presentation request. It is not a
+# general Chinese intent parser: only unmistakable requests for the conventional Kanban
+# view are covered until the full GoalSpec/PageState contract replaces this guard.
+_KANBAN_REQUEST = re.compile(
+    r"看板|(?<![a-z])kanban(?![a-z])", re.I)
+
+
+def required_page_controls(prompt: str) -> tuple[str, ...]:
+    return ("Kanban",) if _KANBAN_REQUEST.search(prompt) else ()
 
 
 @dataclass(frozen=True)
@@ -48,7 +57,8 @@ class TargetState:
 
 
 def _normalise_name(name: str) -> str:
-    return re.sub(r"\s+", " ", name).strip().casefold()
+    normalised = re.sub(r"\s+", " ", name).strip().casefold()
+    return "kanban" if normalised == "看板" else normalised
 
 
 def _normalise_path(path: str) -> str:
@@ -106,7 +116,8 @@ def _is_selected(element) -> bool:
     return False
 
 
-def unmet_conditions(target: TargetState, obs: PageObservation) -> tuple[str, ...]:
+def unmet_conditions(target: TargetState, obs: PageObservation, *,
+                     required_selected: tuple[str, ...] = ()) -> tuple[str, ...]:
     """Which parts of the target the observation does not show, in the order declared.
 
     Only what the observation carries counts. A control below the viewport is not in it,
@@ -124,10 +135,10 @@ def unmet_conditions(target: TargetState, obs: PageObservation) -> tuple[str, ..
             unmet.append(f"path {target.path} (current page: "
                          f"{current.path or '/'}"
                          f"{'?' + current.query if current.query else ''})")
-    if target.selected:
+    if target.selected or required_selected:
         selected_names = {_normalise_name(element.name or "")
                           for element in obs.elements if _is_selected(element)}
-        for name in target.selected:
+        for name in dict.fromkeys((*target.selected, *required_selected)):
             if _normalise_name(name) not in selected_names:
                 unmet.append(f"selected control \"{name}\"")
     return tuple(unmet)
