@@ -68,6 +68,18 @@ class DynamicFormQualificationScript(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "omitted requested labels"):
             self.chat.complete(messages, self.tools, "run")
 
+    def test_an_unrendered_form_gets_one_wait_before_it_is_declared_missing(self):
+        self.chat.complete([], self.tools, "run")
+        messages = [{"content": "CURRENT FORM DESCRIPTOR:\n" + json.dumps({
+            "form_available": False, "fields": [],
+        })}]
+        self.assertEqual(self._call(self.chat.complete(messages, self.tools, "run")),
+                         ("wait_for", {"ms": 1_000}))
+        self.assertEqual(self._call(self.chat.complete(messages, self.tools, "run"))[0],
+                         "describe_form")
+        with self.assertRaisesRegex(RuntimeError, "did not expose the current form"):
+            self.chat.complete(messages, self.tools, "run")
+
     def test_payload_parser_does_not_accept_a_non_matching_tool_result(self):
         with self.assertRaisesRegex(RuntimeError, "CURRENT FORM DESCRIPTOR"):
             _tool_payload([{"content": "some other result\n{}"}],

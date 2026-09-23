@@ -16,10 +16,19 @@ export type ResultStatus = 'completed' | 'rejected' | 'indeterminate'
 export function safeErrorDetail(detail: unknown, command: ActionCommand | null | undefined,
                                 redactor: Redactor): string {
   let out = redactor.redactString(detail)
-  const value = command?.args?.value
-  if (value !== undefined && value !== null && String(value)) {
-    out = out.split(String(value)).join('[redacted]')
+  const hideValues = (input: unknown): void => {
+    if (!input || typeof input !== 'object') return
+    for (const [key, value] of Object.entries(input)) {
+      if (key === 'value' && value !== undefined && value !== null && String(value)) {
+        out = out.split(String(value)).join('[redacted]')
+      } else if (Array.isArray(value)) {
+        value.forEach(hideValues)
+      } else if (value && typeof value === 'object') {
+        hideValues(value)
+      }
+    }
   }
+  hideValues(command?.args)
   return out.slice(0, 800)
 }
 

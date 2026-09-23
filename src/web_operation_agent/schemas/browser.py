@@ -16,14 +16,19 @@ from .common import (SCHEMA_VERSIONS, _bool, _dict_copy, _non_negative_int,
 #: no task-specific or application-specific action ever appears here.
 BROWSER_ACTIONS = frozenset({
     "observe", "goto", "click", "fill", "select", "submit", "back", "scroll", "wait_for",
-    "apply_facet", "highlight",
+    "apply_facet", "highlight", "handoff_form",
 })
 
-# Only these actions are intrinsically unable to initiate an application request that
-# changes state. Navigation is deliberately included in the complement: a GET, route
-# transition or onchange handler can write in legacy applications. Product policy and the
-# write witness import this one set so they cannot silently disagree.
-INTRINSICALLY_READ_ONLY_ACTIONS = frozenset({"observe", "scroll", "wait_for", "highlight"})
+# Only these actions are intrinsically unable to initiate a business-data write. The
+# internal form handoff closes the application's read-only window but never dispatches a
+# business operation. Navigation is deliberately excluded: a GET, route transition or
+# onchange handler can write in legacy applications. Product policy and the write witness
+# import this one set so they cannot silently disagree.
+INTRINSICALLY_READ_ONLY_ACTIONS = frozenset({
+    "observe", "scroll", "wait_for", "highlight", "handoff_form",
+})
+# A server-issued form handoff is not a tool the model may choose or parameterize.
+INTERNAL_BROWSER_ACTIONS = frozenset({"handoff_form"})
 
 _BROWSER_CONTRACT = json.loads(
     files("web_operation_agent").joinpath(

@@ -109,6 +109,27 @@ class ChannelTests(unittest.TestCase):
         self.assertEqual(channel.enqueue_action(facet_action(grant.session_id, current)).kind,
                          "action")
 
+    def test_form_handoff_requires_an_advertised_runtime_capability(self):
+        command = ActionCommand("a-form-handoff", "handoff_form", {"fields": [{
+            "ref": "e1", "field": "name", "control": "textbox", "value": "new"}]})
+        action = dataclasses.replace(
+            action_for(self.grant.session_id, self.first, action_id="a-form-handoff"),
+            command=command, command_digest=command.content_digest)
+        with self.assertRaisesRegex(RemoteProtocolError, "page.handoff_form"):
+            self.channel.enqueue_action(action)
+
+        registry = RemoteSessionRegistry()
+        grant, channel = registry.create(allowed_origins=[ORIGIN], session_id="handoff-session")
+        advertised = hello(grant.session_id)
+        reply = channel.accept_hello(dataclasses.replace(
+            advertised, capabilities=advertised.capabilities + ("page.handoff_form",)))
+        current = observation(grant.session_id, 1)
+        channel.accept_observation(current, lease_id=reply["lease_id"])
+        issued = dataclasses.replace(action, session_id=grant.session_id,
+                                     based_on_observation_id=current.observation_id,
+                                     page_epoch=current.page_epoch)
+        self.assertEqual(channel.enqueue_action(issued).kind, "action")
+
     def test_principal_bound_session_requires_exact_runtime_binding(self):
         now = int(time.time() * 1000)
         expected = principal(now)

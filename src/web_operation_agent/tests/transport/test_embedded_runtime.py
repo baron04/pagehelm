@@ -1498,6 +1498,54 @@ class EmbeddedRuntimeTests(unittest.TestCase):
 
     @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
                          "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
+    def test_real_form_handoff_reads_value_then_returns_control_without_submit(self):
+        """The server-only handoff checks the live DOM in actual Chromium."""
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            self.skipTest("Playwright is not installed")
+        if not (PANEL_ROOT / "panel.js").is_file():
+            self.skipTest("the assistant panel is not built; run scripts/build_panel.py")
+
+        registry = RemoteSessionRegistry()
+        app = _FixtureApplication(PAGE_CONTROLLER)
+        app.start()
+        grant, channel = registry.create(allowed_origins=[app.origin],
+                                         session_id="form-handoff-browser-session")
+        gateway = EmbeddedGateway(registry, sse_wait_s=0.1).start()
+        app.runtime_url = gateway.runtime_url
+        app.runtime_config = gateway.bootstrap_config(
+            grant, page_controller_module=app.origin + "/page-controller.js")
+        try:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                page = browser.new_page(viewport={"width": 1280, "height": 800})
+                page.goto(app.origin + "/form", wait_until="domcontentloaded")
+                remote = RemoteBrowserClient(channel, timeout_s=8)
+                remote.start()
+                first = remote.observe()
+                field = next(item for item in first.elements
+                             if item.attrs.get("field") == "phone")
+                filled = remote.execute("fill", {"ref": field.ref, "value": "new value"})
+                self.assertTrue(filled.ok, filled.error_detail)
+                fresh = next(item for item in filled.observation.elements
+                             if item.attrs.get("field") == "phone")
+                handed = remote.execute("handoff_form", {"fields": [{
+                    "ref": fresh.ref, "field": "phone", "control": fresh.role,
+                    "value": "new value"}]})
+                self.assertTrue(handed.ok, handed.error_detail)
+                self.assertEqual(handed.args_echo["fields"][0]["value"], "[redacted]")
+                self.assertEqual(page.locator('[name="phone"]').input_value(), "new value")
+                self.assertEqual(app.form_submissions, 0)
+                page.locator('[name="phone"]').fill("person's value")
+                self.assertEqual(page.locator('[name="phone"]').input_value(), "person's value")
+                browser.close()
+        finally:
+            gateway.close()
+            app.close()
+
+    @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
+                         "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
     def test_real_pagecontroller_observation_is_viewport_bounded_and_scrollable(self):
         """P8.6: a large page stays bounded and off-screen controls require a fresh view."""
         try:
@@ -1727,6 +1775,7 @@ class _FixtureApplication:
         self.runtime_config = {}
         self.page2_requests = 0
         self.iframe_result_requests = 0
+        self.form_submissions = 0
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -1743,6 +1792,10 @@ class _FixtureApplication:
                       <a id="next" href="/page2?source=page-controller-long-navigation-target">
                         Open order details</a>
                     """)
+                if self.path == "/form":
+                    return self.page('<h1>Customer</h1><form method="post" action="/saved">'
+                                     '<label>Phone <input name="phone" value="old"></label>'
+                                     '<button type="submit">Save</button></form>')
                 if self.path == "/large":
                     controls = "".join(
                         f'<button style="display:block;width:240px;height:28px;margin:2px">'
@@ -1767,6 +1820,12 @@ class _FixtureApplication:
                 if self.path.startswith("/accounting/control/InvoiceReport?"):
                     owner.iframe_result_requests += 1
                     return self.page("<h2>Invoice report ready</h2>", runtime=False)
+                self.send_error(404)
+
+            def do_POST(self):
+                if self.path == "/saved":
+                    owner.form_submissions += 1
+                    return self.reply(b"saved", "text/plain")
                 self.send_error(404)
 
             def page(self, content: str, *, runtime: bool = True):

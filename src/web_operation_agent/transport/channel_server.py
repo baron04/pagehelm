@@ -33,6 +33,7 @@ class ChannelServer:
                 "select": "dom.select", "submit": "dom.submit", "goto": "page.goto",
                 "back": "page.back", "scroll": "page.scroll", "wait_for": "page.wait",
                 "apply_facet": "page.apply_facet", "highlight": "page.highlight",
+                "handoff_form": "page.handoff_form",
             }[action.command.action]
             if capability not in self._hello.capabilities:
                 raise RemoteProtocolError(

@@ -38,6 +38,14 @@ describe('safeErrorDetail redacts and bounds an error message', () => {
   it('handles a command with no args at all', () => {
     expect(safeErrorDetail('plain failure', null, redactor)).toBe('plain failure')
   })
+
+  it('also removes a nested form handoff value from an unexpected error', () => {
+    const command = {command_id: 'a2', action: 'handoff_form',
+      args: {fields: [{field: 'phone', value: 'private-value-123'}]},
+      expect_navigation: false}
+    expect(safeErrorDetail('private-value-123 was not accepted', command, redactor))
+      .toBe('[redacted] was not accepted')
+  })
 })
 
 describe('result builders share one envelope header', () => {

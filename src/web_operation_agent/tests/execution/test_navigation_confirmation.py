@@ -534,10 +534,11 @@ class TheSessionAsksBeforeLeavingThePage(unittest.TestCase):
     def test_opening_the_form_for_a_prefill_is_a_switch_too(self):
         with tempfile.TemporaryDirectory() as tmp:
             form = form_page
-            for decision, dispatched in (("approved", ["goto", "fill"]), ("expired", [])):
+            for decision, dispatched in (("approved", ["goto", "fill", "handoff_form"]),
+                                         ("expired", [])):
                 with self.subTest(decision=decision):
                     person = _Person(decision)
-                    browser = _Browser([_obs(1), form(2), form(3)])
+                    browser = _Browser([_obs(1), form(2), form(3), form(4)])
                     session = ServerAgentSession(
                         task=TaskSpec("T", "填写客户但不要提交"), chat=_Chat([]),
                         browser=browser, control=_Control([[], [], []]),

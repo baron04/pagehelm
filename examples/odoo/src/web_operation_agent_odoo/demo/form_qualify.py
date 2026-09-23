@@ -134,6 +134,12 @@ class FormQualificationChat(ScriptedOdooChat):
         elif self._phase == "descriptor":
             described = _tool_payload(messages, "CURRENT FORM DESCRIPTOR")
             if described.get("form_available") is not True:
+                if not self._waited_for_application:
+                    self._waited_for_application = True
+                    name, arguments = "wait_for", {"ms": 1_000}
+                    self._phase = "after_wait"
+                    self.decision_trace.append((name, time.perf_counter()))
+                    return self._response(name, arguments)
                 raise RuntimeError("the application did not expose the current form")
             fields = described.get("fields")
             if not isinstance(fields, list):

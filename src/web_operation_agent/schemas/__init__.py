@@ -10,7 +10,8 @@ from .terminal import (INDETERMINATE_TERMINAL_REASONS, INVALIDATING_TERMINAL_REA
                        assert_terminal_reason_contract, classify_terminal)
 from .planning import (RELATION_KINDS, ContractStep, EvidenceRef, MutationSignature,
                        OperationContract, SourceMap, SourceRelation, empty_contract)
-from .browser import (BROWSER_ACTIONS, INTRINSICALLY_READ_ONLY_ACTIONS,
+from .browser import (BROWSER_ACTIONS, INTERNAL_BROWSER_ACTIONS,
+                      INTRINSICALLY_READ_ONLY_ACTIONS,
                       MAX_OBSERVATION_CONTENT_CHARS, MAX_OBSERVATION_ELEMENTS,
                       MAX_SCROLL_PAGES, POTENTIALLY_WRITING_ACTIONS, RECEIPT_ERRORS,
                       ActionCommand, ActionReceipt, ElementRef, PageObservation)

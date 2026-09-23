@@ -127,8 +127,8 @@ def prepare_form(session, turn: "_Turn", call: dict, name: str, args: dict) -> "
 def prefill_form(session, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
     """Fill the application's own draft into its form, and hand the page to the person.
 
-    The turn ends here whatever happens: a prefilled form is the person's to check and
-    save, and nothing the assistant does afterwards would be about it.
+    The turn ends here whatever happens: a verified prefilled form is the person's to
+    check and save, and nothing the assistant does afterwards would be about it.
     """
     if args:
         return session._reply(turn, call,
@@ -153,8 +153,10 @@ def prefill_form(session, turn: "_Turn", call: dict, name: str, args: dict) -> "
     chinese = bool(re.search(r"[\u3400-\u9fff]", session.task.prompt))
     if reason:
         turn.result.agent_said = (
-            "表单未能完整预填，未执行提交。" if chinese
-            else "The form could not be fully prefilled and was not submitted.")
+            "预填或交接未能核验；部分字段可能已经输入。请核对当前页面，助手没有执行提交。"
+            if chinese else
+            "Prefill or handoff could not be verified; some fields may have been entered. "
+            "Check the current page. The assistant did not submit the form.")
         return _Next(session._finish(
             turn.result, turn.started_at, reason,
             turn.result.agent_said + (f" {detail}" if detail else ""), steps=turn.step))
@@ -216,9 +218,10 @@ def apply_form_draft(
         step: int) -> tuple[PageObservation | None, str, str]:
     """Apply one adapter-issued transient draft without exposing its bindings to choice.
 
-    The application has attested that these exact fields do not persist until a user
-    submits. This method never calls ``click`` or ``submit`` and every generic browser
-    action still yields a fresh observation before the next field is resolved.
+    The application has attested the persistence behavior of these exact fields. This
+    method never calls ``click`` or ``submit`` and every generic browser action yields a
+    fresh observation before the next field is resolved. Completion requires a browser
+    receipt for the actual values and release of the read-only window.
     """
     current = observation
     #: The error code the last dispatched command came back with, so the caller can
@@ -244,7 +247,7 @@ def apply_form_draft(
             return before, "transport_error", str(exc)
         if action not in ("observe", "wait_for"):
             session._approvals.settle_navigation(receipt, navigating=action == "goto")
-        if action != "observe":
+        if action not in ("observe", "handoff_form"):
             session.page_actions += 1
         write = session._writes.write_outcome(receipt, step, action_may_write=False)
         session.ledger.append(
@@ -262,6 +265,8 @@ def apply_form_draft(
         if terminal:
             return receipt.observation or before, terminal, detail
         last_code = str(receipt.error_code or "")
+        if receipt.error_code == "user_intervened":
+            return receipt.observation or before, "user_cancelled", "the person took control"
         if (not receipt.ok or receipt.observation is None
                 or receipt.observation.epoch <= prior_epoch):
             return (receipt.observation or before, "agent_refused",
@@ -338,4 +343,14 @@ def apply_form_draft(
                     matches=len(matches), dispatched=False, side_effect_possible=False)
                 return current, "agent_refused", (
                     f"the current form did not expose one exact {binding.field} field")
-    return current, "", ""
+    handoff_fields = []
+    for binding in draft.fields:
+        matches = [element for element in current.elements
+                   if element.role == binding.control
+                   and element.attrs.get("field") == binding.field]
+        if len(matches) != 1:
+            return current, "agent_refused", (
+                f"the current form no longer exposes one exact {binding.field} field")
+        handoff_fields.append({"ref": matches[0].ref, "field": binding.field,
+                               "control": binding.control, "value": binding.value})
+    return dispatch("handoff_form", {"fields": handoff_fields}, "", current)

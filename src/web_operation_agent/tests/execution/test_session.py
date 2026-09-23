@@ -606,10 +606,38 @@ class WithdrawnPlanLeavesTheContext(unittest.TestCase):
 
 
 class ApplicationIssuedFormPrefill(unittest.TestCase):
+    def test_an_unverified_handoff_never_reports_a_completed_prefill(self):
+        class RefusedHandoff(_Browser):
+            def execute(self, action, args=None, expect_navigation=False):
+                receipt = super().execute(action, args, expect_navigation)
+                if action == "handoff_form":
+                    receipt.ok = False
+                    receipt.error_code = "capability_refused"
+                return receipt
+
+        with tempfile.TemporaryDirectory() as tmp:
+            browser = RefusedHandoff([form_page(1), form_page(2), form_page(3)])
+            session = ServerAgentSession(
+                task=TaskSpec("T", "预填客户"), chat=_Chat([]),
+                browser=browser, control=_Control([[], []]),
+                ledger=SessionLedger(Path(tmp) / "prefill.jsonl", "prefill"),
+                allow_form_prefill=True)
+            draft = FormDraft(
+                route="/accounting/do/createCustomer",
+                fields=(FormDraftField("name", "客户名称", "NovaForge"),))
+
+            _page_after, reason, _detail = apply_form_draft(
+                session, draft, browser.pages[0], step=1)
+
+            self.assertEqual(reason, "agent_refused")
+            self.assertEqual([action for action, _args in browser.done],
+                             ["fill", "handoff_form"])
+            self.assertEqual(session.ledger.of_kind("form_prefill_completed"), [])
+
     def test_only_the_adapter_values_are_filled_and_submit_is_never_dispatched(self):
         with tempfile.TemporaryDirectory() as tmp:
             browser = _Browser([
-                _page(1), form_page(2), form_page(3), form_page(4)])
+                _page(1), form_page(2), form_page(3), form_page(4), form_page(5)])
             session = ServerAgentSession(
                 task=TaskSpec("T", "填写客户但不要提交"), chat=_Chat([]),
                 browser=browser, control=_Control([[], [], []]),
@@ -625,12 +653,13 @@ class ApplicationIssuedFormPrefill(unittest.TestCase):
                 session, draft, browser.pages[0], step=1)
 
             self.assertEqual((reason, detail), ("", ""))
-            self.assertEqual(final_page.epoch, 4)
+            self.assertEqual(final_page.epoch, 5)
             self.assertEqual(
                 [(action, args.get("ref"), args.get("value"))
                  for action, args in browser.done],
                 [("goto", None, None), ("fill", "e2", "NovaForge"),
-                 ("fill", "e3", "ops@novaforge.example")])
+                 ("fill", "e3", "ops@novaforge.example"),
+                 ("handoff_form", None, None)])
             self.assertNotIn("submit", [action for action, _args in browser.done])
             ledger = (Path(tmp) / "prefill.jsonl").read_text()
             self.assertNotIn("NovaForge", ledger)

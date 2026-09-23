@@ -190,6 +190,78 @@ describe('a page action in an application that names a write guard', () => {
     expect(receipt.error_code).toBe('capability_refused')
   })
 
+  it('releases the guard only after an exact form readback and checks it again after release', async () => {
+    const input = document.createElement('input')
+    input.name = 'phone'
+    input.value = 'new value'
+    document.body.append(input)
+    try {
+      for (const changedAfterRelease of [false, true]) {
+        input.value = 'new value'
+        const fetcher = vi.fn(async (url: string) => {
+          if (url.endsWith('/begin')) {
+            return reply(200, {active: true, expires_at: Date.now() / 1000 + 120})
+          }
+          if (changedAfterRelease) input.value = 'application changed it'
+          return reply(200, {active: false})
+        })
+        vi.stubGlobal('fetch', fetcher)
+        const {runtime, posts, action} = actingRuntime('/woa/page-guard')
+        const state = runtime as unknown as Record<string, unknown>
+        const elements = [{ref: 'e2', role: 'textbox', name: 'Phone', tag: 'input',
+          epoch: 1, attrs: {field: 'phone'}}]
+        state.controller = {selectorMap: {}, getBrowserState: vi.fn(), clickElement: vi.fn(),
+          inputText: vi.fn(), selectOption: vi.fn(), scroll: vi.fn(), dispose: vi.fn()}
+        state.getElementByIndex = () => input
+        state.currentObservation = {...state.currentObservation as object,
+          observation: {url: 'https://app.test/odoo/sales', elements, render_state: 'ready'}}
+        state.observationFingerprints = new Map([['e2', runtime.page.fingerprint('e2')]])
+        state.observe = async (actionId: string) => ({session_id: 's', observation_id: 'o-2',
+          page_epoch: 2, caused_by_action_id: actionId,
+          observation: {url: 'https://app.test/odoo/sales', elements,
+            render_state: 'ready'}})
+        state._execute = EmbeddedWebRuntime.prototype._execute.bind(runtime)
+        action.command.action = 'handoff_form';
+        (action.command as {args: Record<string, unknown>}).args = {fields: [{ref: 'e2',
+          field: 'phone', control: 'textbox', value: 'new value'}]}
+        await runtime._handleAction(action as never)
+        const receipt = posts[1]?.body.receipt as Record<string, unknown>
+        expect(receipt.ok).toBe(!changedAfterRelease)
+        expect(receipt.args_echo).toEqual({fields: [{ref: 'e2', field: 'phone',
+          control: 'textbox', value: '[redacted]'}]})
+        expect(state.handoffGranted === true).toBe(!changedAfterRelease)
+        expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+          '/woa/page-guard/begin', '/woa/page-guard/end',
+        ])
+      }
+    } finally { input.remove() }
+  })
+
+  it('does not release the guard if the form value already changed', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      reply(200, {active: true, expires_at: Date.now() / 1000 + 120})))
+    const {runtime, posts, action} = actingRuntime('/woa/page-guard')
+    const state = runtime as unknown as Record<string, unknown>
+    state.controller = {selectorMap: {}, getBrowserState: vi.fn(), clickElement: vi.fn(),
+      inputText: vi.fn(), selectOption: vi.fn(), scroll: vi.fn(), dispose: vi.fn()}
+    state.getElementByIndex = () => ({tagName: 'INPUT', name: 'phone',
+      value: 'wrong', isConnected: true})
+    state.currentObservation = {...state.currentObservation as object,
+      observation: {url: 'https://app.test/odoo/sales', render_state: 'ready', elements: [
+        {ref: 'e2', role: 'textbox', name: 'Phone', tag: 'input', epoch: 1,
+          attrs: {field: 'phone'}},
+      ]}}
+    state.observationFingerprints = new Map([['e2', runtime.page.fingerprint('e2')]])
+    state._execute = EmbeddedWebRuntime.prototype._execute.bind(runtime)
+    action.command.action = 'handoff_form';
+    (action.command as {args: Record<string, unknown>}).args = {fields: [{ref: 'e2',
+      field: 'phone', control: 'textbox', value: 'new value'}]}
+    await runtime._handleAction(action as never)
+    expect((posts[1]?.body.receipt as Record<string, unknown>).ok).toBe(false)
+    expect((fetch as ReturnType<typeof vi.fn>).mock.calls.map(([url]) => url))
+      .toEqual(['/woa/page-guard/begin'])
+  })
+
   it('rejects an old action after the person takes control', async () => {
     const {runtime, executed, posts, action} = actingRuntime()
     const state = runtime as unknown as Record<string, unknown>

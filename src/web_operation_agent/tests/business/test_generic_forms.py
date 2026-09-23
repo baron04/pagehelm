@@ -304,7 +304,7 @@ class GenericFormProductPathNeedsNoPerFormSkill(unittest.TestCase):
             self.assertIn("No current application-issued form draft",
                           chat.messages[1][-1]["content"])
             # The refused call reached no browser; the one fill is the real draft's.
-            self.assertEqual(browser.actions, ["fill"])
+            self.assertEqual(browser.actions, ["fill", "handoff_form"])
             self.assertEqual(result.terminal_reason, "agent_finished")
 
     def test_describe_prepare_and_prefill_run_without_a_matching_skill(self):
@@ -325,7 +325,7 @@ class GenericFormProductPathNeedsNoPerFormSkill(unittest.TestCase):
             result = session.run()
 
             self.assertEqual(result.terminal_reason, "agent_finished")
-            self.assertEqual(browser.actions, ["fill"])
+            self.assertEqual(browser.actions, ["fill", "handoff_form"])
             # Offered from the first call so the tool list never changes mid-turn; the
             # server refuses it until an application-issued draft exists.
             self.assertIn("prefill_form", chat.tool_names[0])
@@ -417,7 +417,7 @@ class GenericFormProductPathNeedsNoPerFormSkill(unittest.TestCase):
                 self.assertEqual(result.terminal_reason, "agent_finished",
                                  [m[-1].get("content", "") for m in chat.messages])
                 self.assertIn("source#1", chat.test_source_result)
-                self.assertEqual(browser.actions, ["observe", "select"])
+                self.assertEqual(browser.actions, ["observe", "select", "handoff_form"])
                 self.assertNotIn("submit", browser.actions)
                 prepared = session.ledger.of_kind("application_form_prepared")
                 self.assertEqual(prepared[0]["source_refs"], ["source#1"])

@@ -110,6 +110,25 @@ describe('Page.describe bounds an observation before it crosses the browser boun
 })
 
 describe('Page refuses controls that are not writable at execution time', () => {
+  it('verifies an exact live form value without returning that value in a receipt', () => {
+    const input = document.createElement('input')
+    input.name = 'phone'
+    input.value = '+1 512 555 0199'
+    document.body.append(input)
+    try {
+      const page = new Page(controller(), () => input, createRedactor())
+      const observed = [{ref: 'e2', role: 'textbox', name: 'Phone', tag: 'input', epoch: 4,
+        attrs: {field: 'phone'}}]
+      const binding = [{ref: 'e2', field: 'phone', control: 'textbox', value: input.value}]
+      expect(page.verifyFormFields(binding, observed)).toBe(true)
+      input.value = 'someone changed it'
+      expect(page.verifyFormFields(binding, observed)).toBe(false)
+      input.value = binding[0]!.value
+      input.name = 'different_field'
+      expect(page.verifyFormFields(binding, observed)).toBe(false)
+    } finally { input.remove() }
+  })
+
   it('highlights a live control without clicking it, then restores its style', () => {
     const api = controller()
     const button = document.createElement('button')

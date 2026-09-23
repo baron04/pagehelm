@@ -43,7 +43,7 @@ const RUNTIME_NAME = 'woa-embedded/page-controller-1.12.4'
 const CAPABILITIES = [
   'dom.observe', 'dom.click', 'dom.fill', 'dom.select', 'dom.submit',
   'page.goto', 'page.back', 'page.scroll', 'page.wait', 'page.apply_facet',
-  'page.highlight',
+  'page.highlight', 'page.handoff_form',
 ]
 
 /** Used where a Runtime was assembled without its constructor -- in conformance tests. */
@@ -796,6 +796,20 @@ export class EmbeddedWebRuntime {
       }
       return {fresh: true, reason: ''}
     }
+    if (command?.action === 'handoff_form') {
+      const fields = command.args?.fields
+      if (!Array.isArray(fields) || !fields.length) {
+        return {fresh: false, reason: 'the form handoff fields are invalid'}
+      }
+      for (const field of fields) {
+        const ref = String((field as {ref?: unknown})?.ref || '')
+        const expected = this.observationFingerprints.get(ref)
+        if (expected === undefined || this.page.fingerprint(ref) !== expected) {
+          return {fresh: false, reason: 'a form field changed after the last observation'}
+        }
+      }
+      return {fresh: true, reason: ''}
+    }
     if (!['click', 'fill', 'select', 'submit', 'highlight'].includes(command?.action)) {
       return {fresh: true, reason: ''}
     }
@@ -984,6 +998,13 @@ export class EmbeddedWebRuntime {
         }
       }
       const ok = result?.success !== false
+      if (ok && action.command.action === 'handoff_form' && this.config?.pageWriteGuard) {
+        if (!await releaseWriteGuard(this.config.pageWriteGuard)) {
+          return {ok: false, code: 'capability_refused',
+            detail: 'the application did not acknowledge release of its read-only window'}
+        }
+        this.writeGuardUntil = 0
+      }
       return {
         ok,
         code: ok ? '' : 'element_not_actionable',
@@ -1012,6 +1033,25 @@ export class EmbeddedWebRuntime {
       outcome = {ok: false, code: this.userIntervened ? 'user_intervened' : 'stale_observation',
         detail: 'the highlighted control was no longer current at handoff'}
     }
+    if (executing.command.action === 'handoff_form' && outcome.ok) {
+      const fields = executing.command.args?.fields
+      const rebound = Array.isArray(fields) ? fields.map((field: unknown) => {
+        const binding = field as {field: string; control: string; value: string}
+        const matches = observation.observation.elements.filter(element =>
+          element.attrs.field === binding.field && element.role === binding.control)
+        return matches.length === 1 ? {...binding, ref: matches[0]!.ref} : null
+      }) : []
+      if (this.userIntervened || before.observation.url !== observation.observation.url ||
+          before.observation.record_route !== observation.observation.record_route ||
+          observation.observation.render_state !== 'ready' ||
+          rebound.some(field => field === null) ||
+          !this.page.verifyFormFields(rebound, observation.observation.elements)) {
+        outcome = {ok: false, code: this.userIntervened ? 'user_intervened' : 'stale_observation',
+          detail: 'the form fields were no longer ready at handoff'}
+      } else {
+        this.handoffGranted = true
+      }
+    }
     // `navigated` is a change in the observed top-level URL. A child-frame commit satisfies
     // the action guard, and its new content travels in the fresh observation instead.
     const receipt = results.receipt(executing, {
@@ -1030,6 +1070,13 @@ export class EmbeddedWebRuntime {
       this.highlightHandle = this.page.highlight(command.args?.ref)
       this.handoffGranted = true
       return Promise.resolve({success: true, message: 'control highlighted for the person'})
+    }
+    if (command.action === 'handoff_form') {
+      if (!this.currentObservation || !this.page.verifyFormFields(
+        command.args?.fields, this.currentObservation.observation.elements)) {
+        throw new Error('bad_arguments: form fields do not match the current page')
+      }
+      return Promise.resolve({success: true, message: 'form fields verified for handoff'})
     }
     if (command.action === 'apply_facet' && !this._actionFreshness(command).fresh) {
       throw new Error('bad_arguments: page facet changed before dispatch')

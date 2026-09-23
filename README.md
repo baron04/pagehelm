@@ -37,9 +37,13 @@ agent.
   safe scalar form filling. `describe_form` intersects the latest viewport controls with
   actor-scoped adapter metadata and returns only short-lived opaque IDs; `prepare_form`
   rechecks both sides and retains the exact native bindings on the server; `prefill_form`
-  types that draft and ends the turn without clicking or submitting. Odoo and Contacts
-  translate different metadata sources to the same contract. An optional source lookup can
-  inform a value for an existing field; a source-derived value carries a turn-local reference
+  types that draft, checks the live field values and, where an application declares a
+  read-only window, requires its acknowledgement of release before ending the turn.
+  It never clicks or submits the form.
+  A failed handoff does not claim the form is ready; some fields may already contain the
+  draft. Odoo and Contacts translate different metadata sources to the same contract.
+  An optional source lookup can inform a value for an existing field; a source-derived
+  value carries a turn-local reference
   and exact supporting span for internal audit. This verifies provenance, not the model's
   interpretation. Source cannot create a field, selector, choice, permission, or write
   authority.

@@ -9,7 +9,8 @@
  */
 import {
   actionElementFingerprint, boundIndexedContent, elementsFrom, hydrateFormFacts,
-  hydrateLinkFacts, hydrateSelectionFacts, refIndex, type ElementLike, type ElementLookup,
+  hydrateLinkFacts, hydrateSelectionFacts, explicitAttribute, refIndex, type ElementLike,
+  type ElementLookup,
 } from './pageModel'
 import {canonicalUrl} from './navigation'
 import {selectedControlsFromPage} from './pageSelection'
@@ -52,6 +53,7 @@ export type FacetCandidateReader = () => unknown
 export type FacetApplier = (ref: string, active: boolean) => Promise<unknown> | unknown
 export type PageRecordRouteReader = () => unknown
 export interface PageHighlight { clear(): void; active(): boolean }
+export interface FormHandoffField {ref: string; field: string; control: string; value: string}
 
 /** What one observation of the page found, before the session numbers and wraps it. */
 export interface PageReading {
@@ -143,6 +145,33 @@ export class Page {
   }
   scroll(down: boolean, pages: number): Promise<unknown> {
     return this.controller.scroll({down, numPages: pages})
+  }
+
+  /** Check an adapter-issued draft against live controls without sending their values back. */
+  verifyFormFields(fields: unknown, observed: ElementRef[]): boolean {
+    if (!Array.isArray(fields) || fields.length < 1 || fields.length > 20) return false
+    const seen = new Set<string>()
+    return fields.every((item: unknown) => {
+      if (!item || typeof item !== 'object') return false
+      const binding = item as FormHandoffField
+      if (typeof binding.ref !== 'string' || typeof binding.field !== 'string' ||
+          typeof binding.value !== 'string' ||
+          !['textbox', 'combobox', 'select'].includes(binding.control) ||
+          seen.has(binding.field)) return false
+      seen.add(binding.field)
+      const matches = observed.filter(element => element.ref === binding.ref &&
+        element.role === binding.control && element.attrs.field === binding.field)
+      if (matches.length !== 1) return false
+      let live: ElementLike | null | undefined
+      try { live = this.element(binding.ref) } catch { return false }
+      if (!live || live.isConnected === false || live.disabled || live.readOnly) return false
+      const owner = typeof live.closest === 'function' ? live.closest('[name]') : null
+      if (explicitAttribute(owner || live, 'name') !== binding.field) return false
+      if (binding.control === 'select' && String(live.tagName || '').toLowerCase() !== 'select') {
+        return false
+      }
+      return String(live.value ?? '') === binding.value
+    })
   }
 
   /** Mark one observed control without focusing, clicking, or covering its hit target. */

@@ -15,7 +15,8 @@ from ..answer.evidence import EvidenceUnknown
 from ..transport.browser import TransportError, TurnCancelled
 from .grounding import WRITE_NONE, WRITE_PERMITTED
 from ..privacy import safe_tool_arguments as _safe
-from ..schemas import (BROWSER_ACTIONS, POTENTIALLY_WRITING_ACTIONS, ActionReceipt,
+from ..schemas import (BROWSER_ACTIONS, INTERNAL_BROWSER_ACTIONS,
+                       POTENTIALLY_WRITING_ACTIONS, ActionReceipt,
                        PageObservation)
 from .click_policy import click_policy_refusal, reviewed_destination
 from .knowledge_tools import capability_check_available, capability_check_feedback
@@ -250,8 +251,10 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
                      _tool_result(call, capability_check_feedback(session))]
         return session._resume(turn, messages, obs, successful_business_tools)
 
-    if name not in BROWSER_ACTIONS:
-        available = BROWSER_ACTIONS if session.allow_page_facets else BROWSER_ACTIONS - {"apply_facet"}
+    public_actions = BROWSER_ACTIONS - INTERNAL_BROWSER_ACTIONS
+    if name not in public_actions:
+        available = (public_actions if session.allow_page_facets
+                     else public_actions - {"apply_facet"})
         session.ledger.append(
             "unknown_tool_rejected", step=step, tool=str(name)[:100],
             dispatched=False, side_effect_possible=False)
