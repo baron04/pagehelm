@@ -53,7 +53,9 @@ agent.
 - Browser actions are checked against the current observation and application route policy.
   Page observations are viewport-bound and expose at most 200 live controls; a bounded
   read-only scroll obtains the next fresh observation instead of scanning an unbounded DOM.
-  Page switches require a visible confirmation. A successful same-page click can be
+  Page switches require a visible confirmation.
+  The answer is spent only by the switch it was asked for, so when answering it closes the menu the switch was in, reopening the menu and picking the same item does not ask again.
+  A successful same-page click can be
   reported as an interaction only when a fresh observation shows a changed page; this
   receipt is not proof that a business goal was completed. After an observed action,
   answer-format repair cannot dispatch another page action. Source-assisted page loops
@@ -71,7 +73,7 @@ agent.
   settled by the write path instead. The server never ends the turn on a target by itself,
   because it can verify a page state but not that the state is the whole request.
 - Generic click can stay disabled as an action while an application re-allows part of it: an optional click policy sees the current observation and the element named and either allows that click or refuses it before dispatch. The Odoo reference integration allows tabs, the Home button, same-application links to pages reviewed as read-only (and records opened from them), named view-switch, pager, search and menu controls on those pages, and on the pages the review marks for it a list row or kanban card, which opens its record; on a record it allows only the record pager and the top menus. Every other control -- New, Actions, header workflow buttons, row selection, inline editing, module activation, unnamed buttons, anything on an unreviewed page -- is refused. The review lives in the adapter and names actions by XML ID, resolved (with their URL paths) against the deployed database.
-- An application can also make the signed-in session read-only while the Agent acts on the page. It declares a `page_write_guard` path on its descriptor; the Runtime posts to `<path>/begin` before every page action and refuses the action unless the application confirms the window, and posts to `<path>/end` when the turn ends. Odoo's `woa_runtime` 1.5 implements it: while the window is open every request of that session runs in a PostgreSQL read-only transaction and a write is refused with nothing saved, so a click the review missed -- or an autosave the web client makes on its own -- cannot change data. Deploy the 1.5 addon code before this adapter: against older addon code the Runtime cannot open the window, so every page action is refused.
+- An application can also make the signed-in session read-only while the Agent acts on the page. It declares a `page_write_guard` path on its descriptor; the Runtime posts to `<path>/begin` before every page action and refuses the action unless the application confirms the window, and posts to `<path>/end` when the turn ends. Odoo's `woa_runtime` 1.5 implements it: while the window is open every request of that session runs in a PostgreSQL read-only transaction and a write is refused with nothing saved, so a click the review missed -- or an autosave the web client makes on its own -- cannot change data. A page action that loses its result while the window holds, such as a menu button the model took for a link, is therefore settled as no write rather than as an uncertain one, and the turn continues; the receipt says the window held, and the server honours that only for an application that declares a guard. Deploy the 1.5 addon code before this adapter: against older addon code the Runtime cannot open the window, so every page action is refused.
 - When no Skill trigger matches a request's wording, the catalog's read-only fallback stays
   loadable but is presented as an unmatched index rather than as task candidates. A typed read
   whose result repeats one already returned in the same turn is answered with a short notice
@@ -211,6 +213,7 @@ Odoo adapter translates it to the core `discover_entities`, `describe_entity`, a
 `query_entity_records` contract, then maps validated generic filters back to bounded Odoo
 reads under the same delegated actor. Native model names and RPC methods are never Agent
 arguments. This does not authorize writes.
+A record found this way carries where it opens (`/odoo/<model>/<id>`, which Odoo 18 opens for any actor who may read the record), and `goto` may use exactly that path.
 
 Provision the disposable local fixture from a checkout:
 

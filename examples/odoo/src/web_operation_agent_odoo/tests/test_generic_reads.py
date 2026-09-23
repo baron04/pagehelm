@@ -224,7 +224,11 @@ class GenericDescriptionAndQueryTests(unittest.TestCase):
                 {"field_id": by_label["Status"], "label": "Status", "value": "Done"},
                 {"field_id": by_label["Carrier"], "label": "Carrier", "value": "FastShip"},
             ],
+            # Odoo 18 opens any record at /odoo/<model>/<id> for an actor who may read
+            # it, so a record found generically can be opened without a guessed address.
+            "ui_path": "/odoo/stock.picking/7",
         }])
+        self.assertEqual(result.allowed_routes, ("/odoo/stock.picking/7",))
         self.assertEqual(result.content["source_total"], 3)
         self.assertEqual(result.content["completeness"], {
             "source_total_known": True, "matching_count_exact": True,

@@ -36,11 +36,19 @@ def assert_entity_read_contract(case, tools: EntityReadTools, *, query: str,
                      "operator": filter_operator, "value": filter_value}],
         "limit": 10,
     })
-    case.assertEqual(result.content["records"][0], {
+    record = dict(result.content["records"][0])
+    # Where the record opens is optional, and when an adapter says it, it is an allowed
+    # route: nothing the model is shown as openable may be refused when it opens it.
+    route = record.pop("ui_path", None)
+    case.assertEqual(record, {
         "record_id": expected_record_id,
         "values": [{"field_id": field["field_id"], "label": field_label,
                     "value": expected_value}],
     })
+    if route is not None:
+        case.assertIn(route, result.allowed_routes)
+    case.assertEqual(set(result.allowed_routes), {
+        item["ui_path"] for item in result.content["records"] if "ui_path" in item})
     case.assertTrue(result.content["completeness"]["matching_count_exact"])
     case.assertEqual(result.evidence[0].matched_count,
                      result.content["completeness"]["matched_count"])

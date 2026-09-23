@@ -108,7 +108,7 @@ QUERY_ENTITY_RECORDS_SCHEMA = {
             "Read current records for one described entity. Use only opaque entity and "
             "field IDs returned by the current discovery calls. Filters are combined by "
             "AND and ordering is fixed by the server. Reports exact matching and "
-            "actor-visible totals."
+            "actor-visible totals; a record's ui_path, when present, is where it opens."
         ),
         "parameters": {
             "type": "object",
@@ -358,12 +358,22 @@ class EntityRecord:
     reference: str
     display_id: str
     cells: tuple[EntityCell, ...]
+    #: Where this record opens in the application, when the application can say. A record
+    #: found through the generic read otherwise had no way to be opened: the model made up
+    #: an address, the server refused it, and "open this record" spent the whole turn on
+    #: guesses. The route is checked against the application's route contract like any
+    #: typed result's, and only then may `goto` use it.
+    route: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "reference", _text(
             self.reference, "entity record reference", 400))
         object.__setattr__(self, "display_id", _text(
             self.display_id, "entity record display_id", 200))
+        if not isinstance(self.route, str) or len(self.route) > 1000 or (
+                self.route and (not self.route.startswith("/")
+                                or self.route.startswith("//"))):
+            raise ValueError("entity record route must be an application path")
         if (not isinstance(self.cells, tuple) or len(self.cells) > _MAX_QUERY_FIELDS
                 or any(not isinstance(item, EntityCell) for item in self.cells)
                 or len({item.field_reference for item in self.cells}) != len(self.cells)):
@@ -788,7 +798,8 @@ class EntityReadTools:
                     field_meaning=field.label, field_was_read=True,
                     value=cell.value or None, value_type=field.evidence_type,
                 ))
-            records.append({"record_id": record.display_id, "values": values})
+            records.append({"record_id": record.display_id, "values": values,
+                            **({"ui_path": record.route} if record.route else {})})
             answer_rows.append((record.display_id, *cells))
         truncated = offset > 0 or len(page.records) < page.matched_count
         completeness = {
@@ -839,6 +850,8 @@ class EntityReadTools:
                 result_truncated=truncated, matched_count=page.matched_count,
                 source_total=page.source_total, records_scanned=len(page.records),
             ),
+            allowed_routes=tuple(dict.fromkeys(
+                record.route for record in page.records if record.route)),
         )
 
 

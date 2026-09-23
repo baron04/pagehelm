@@ -23,6 +23,7 @@ from web_operation_agent.business.entities import (
 )
 from web_operation_agent.business.runtime import BusinessToolContractError
 
+from ..route import ODOO_ROUTE_PORT
 from .descriptors import OdooRuntimeDescriptorReader
 
 
@@ -239,6 +240,7 @@ class OdooEntityReadPort:
                 reference=f"{model}/{record_id}",
                 display_id=str(record_id),
                 cells=tuple(cells),
+                route=_record_route(model, record_id),
             ))
         return EntityQueryPage(
             records=tuple(records),
@@ -248,6 +250,21 @@ class OdooEntityReadPort:
             scope=(f"{request.entity.label} records visible to the delegated actor; "
                    f"{len(domain)} AND filters; stable identity ascending")[:200],
         )
+
+
+def _record_route(model: str, record_id: int) -> str:
+    """Odoo 18's own address for one record, `/odoo/<model>/<id>`, or none.
+
+    The web client opens that address in the model's default form view for any actor who
+    may read the record, whatever menu it sits under. A model name the route contract does
+    not accept gets no route rather than failing the whole read.
+    """
+    route = f"/odoo/{model}/{record_id}"
+    try:
+        ODOO_ROUTE_PORT.validate_tool_route(route)
+    except ValueError:
+        return ""
+    return route
 
 
 __all__ = ["OdooEntityReadPort", "odoo_model_allowed"]
