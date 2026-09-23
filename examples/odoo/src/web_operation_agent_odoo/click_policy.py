@@ -12,7 +12,9 @@ checked, element by element:
   named in `policies/reviewed_click_pages.json`, and, where the review marks the page
   `rows: open`, a list row or kanban card, which opens its record;
 * on a record opened from a reviewed collection -- only the record pager and the
-  application's top menus.
+  application's top menus, and a link to a related record (the order's customer, the
+  invoice's payment term), which Odoo writes as `/odoo/<model>/<id>`. That record's own
+  page is not reviewed, so the step goes no further than it.
 
 Everything else is refused before dispatch: unnamed buttons, row checkboxes, cells of lists
 not marked `rows: open` (editable lists start inline editing), New, Upload, the Actions
@@ -38,6 +40,9 @@ from web_operation_agent.schemas import ElementRef, PageObservation
 REVIEW = Path(__file__).with_name("policies") / "reviewed_click_pages.json"
 _ACTION = re.compile(r"^/odoo/action-([A-Za-z0-9_.]+)$")
 _RECORD = re.compile(r"^(?P<collection>/odoo/[^/]+)/(?P<id>\d+)$")
+#: A related record as a record's many2one link names it: a technical model name, which
+#: always has a dot, and an id. `/odoo/res.partner/11`, never `/odoo/res.partner/new`.
+_RELATED = re.compile(r"^/odoo/[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+/\d+$")
 _ACTION_PATH = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
 #: The one query an address the assistant opens directly may carry: which view to show.
 _VIEW_TYPES = frozenset({"list", "kanban", "form", "pivot", "graph", "calendar", "activity",
@@ -163,6 +168,9 @@ class OdooReviewedClickPolicy:
             if target and str(target).lower() not in {"_self", ""}:
                 return "a link that opens another window is not a reviewed control"
             if self.destination_allowed(there.path):
+                return ""
+            if (_RELATED.match(there.path)
+                    and self._record_of_reviewed(_normal(here.path))):
                 return ""
             return "that link leads to a page nobody reviewed for the assistant"
         page = _normal(urlsplit(observation.url).path)

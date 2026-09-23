@@ -117,6 +117,33 @@ class ReviewedClicks(unittest.TestCase):
             with self.subTest(element=element.name):
                 self.assertTrue(self.decide("/odoo/sales", element))
 
+    def test_a_reviewed_record_opens_its_related_records_and_no_further(self):
+        # Found live: "open order S00007, then open its customer" reached the order and was
+        # refused the customer link. Odoo writes a many2one link as /odoo/<model>/<id>.
+        customer = _el("e19", "link", "Gemini Furniture", href="/odoo/res.partner/11")
+        term = _el("e20", "link", "End of Following Month",
+                   href="/odoo/account.payment.term/6")
+        self.assertEqual(self.decide("/odoo/sales/7", customer), "")
+        self.assertEqual(self.decide("/odoo/sales/7", term), "")
+        refused = (
+            # From a page nobody reviewed, or from the related record itself: no chain.
+            ("/odoo/discuss", customer),
+            ("/odoo/res.partner/11", _el("e3", "link", "Parent", href="/odoo/res.partner/9")),
+            # From a reviewed list the rule does not apply; its rows are how records open.
+            ("/odoo/sales", customer),
+            # Not a record link: a new record, a model path with no dot, a nested path.
+            ("/odoo/sales/7", _el("e4", "link", "New", href="/odoo/res.partner/new")),
+            ("/odoo/sales/7", _el("e5", "link", "Other", href="/odoo/settings/1")),
+            ("/odoo/sales/7", _el("e6", "link", "Deep", href="/odoo/res.partner/11/edit")),
+            ("/odoo/sales/7", _el("e7", "link", "Window", href="/odoo/res.partner/11",
+                                  target="_blank")),
+        )
+        for page, element in refused:
+            with self.subTest(page=page, element=element.name):
+                self.assertTrue(self.decide(page, element))
+        # Only clicks: opening it by address is not what the review cleared.
+        self.assertFalse(self.policy.allows_destination("/odoo/res.partner/11"))
+
     def test_a_reviewed_page_opens_by_address_with_nothing_but_its_view(self):
         for url in ("/odoo/sales", "/odoo/sales?view_type=kanban", "/odoo/sales/7",
                     "/odoo/action-286"):
