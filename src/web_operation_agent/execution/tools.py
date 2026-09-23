@@ -13,7 +13,7 @@ from .knowledge_tools import capability_check_available
 from .prompts import (APPLICATION_ENTRY_TOOL, ASK_USER_TOOL, CAPABILITY_TOOL,
                       LOAD_SKILL_TOOL, SOURCE_CANDIDATE_TOOL, SOURCE_NAV_TOOL,
                       SOURCE_TOOL, SOURCE_HISTORY_TOOL, SKILL_APP_TOOL, SKILL_ROUTE_TOOL,
-                      TARGET_TOOL, TOOL_SCHEMAS,
+                      TARGET_TOOL, FACET_TOOL, TOOL_SCHEMAS,
                       WITHDRAW_TOOL, PREFILL_FORM_TOOL)
 
 
@@ -51,6 +51,8 @@ class ToolSurface:
                      for tool in tools]
         if session.target_settlement_available():
             tools += [TARGET_TOOL]
+        if session.allow_page_facets and "apply_facet" not in session.disabled_actions:
+            tools += [FACET_TOOL]
         if session.allow_clarification:
             tools += [ASK_USER_TOOL]
         if capability_check_available(session):

@@ -346,6 +346,11 @@ def _render_observation(obs: PageObservation, max_elements: int = RENDER_ELEMENT
     if obs.page_facets is not None:
         lines.append("active page facets: " + (" | ".join(
             f'{item["kind"]}: {item["name"]}' for item in obs.page_facets) or "none"))
+    if obs.facet_candidates:
+        lines.append("page facet candidates: " + " | ".join(
+            f'{item["ref"]} {item["kind"]} "{item["name"]}" '
+            f'active={str(item["active"]).lower()}'
+            for item in obs.facet_candidates))
     if obs.landmarks:
         lines.append("headings: " + " | ".join(obs.landmarks[:12]))
     if obs.messages:

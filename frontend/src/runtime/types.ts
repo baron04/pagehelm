@@ -61,6 +61,8 @@ export interface PageObservation {
   selected_controls?: string[]
   /** Present only when the application inspected its active filter/group state. */
   page_facets?: Array<{kind: 'filter' | 'group'; name: string}>
+  /** Choices supplied by this application's current page, not proof they are active. */
+  facet_candidates?: Array<{ref: string; kind: 'filter' | 'group'; name: string; active: boolean}>
 }
 
 export interface ObservationEnvelope {

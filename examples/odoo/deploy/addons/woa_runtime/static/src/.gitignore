@@ -7,3 +7,4 @@
 !loader.js
 !page-controller-with-state.js
 !page-facets.js
+!facet-bridge.js

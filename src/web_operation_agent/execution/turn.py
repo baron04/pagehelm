@@ -341,6 +341,8 @@ class AgentTurnExecutor:
                 confirm_navigation if self.config.confirm_navigation else None),
             allow_clarification=self.config.allow_clarification,
             allow_form_prefill=self.config.allow_form_prefill,
+            allow_page_facets=self.config.allow_page_facets,
+            page_facet_policy=self.config.page_facet_policy,
             deterministic_read_navigation=(
                 self.config.deterministic_read_navigation),
             skill_first=self.config.skill_first,

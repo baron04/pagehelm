@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from typing import Callable
 from urllib.parse import urlsplit
 
 from ..composition.sources import SourceCapability
@@ -19,7 +20,7 @@ from .click_policy import ClickPolicy
 from ..answer.answering import render_structured_query_answer
 from ..answer.answer_view import render_payload
 from ..business.runtime import BusinessToolResult
-from ..schemas import BROWSER_ACTIONS, POTENTIALLY_WRITING_ACTIONS
+from ..schemas import BROWSER_ACTIONS, POTENTIALLY_WRITING_ACTIONS, PageObservation
 from ..transport.panel_view import panel_limits
 from ..transport.protocol import RemoteProtocolError, ensure_safe_browser_payload
 from .session import RunResult
@@ -135,6 +136,9 @@ class AgentTurnConfig:
     #: form port, the generic current-page describe/prepare flow. Direct model
     #: fill/select/submit policy remains independent and may stay disabled.
     allow_form_prefill: bool = False
+    #: Application-owned, read-only-window facet choices; off for every integration by default.
+    allow_page_facets: bool = False
+    page_facet_policy: Callable[[PageObservation], bool] | None = None
     #: Let a deployment remove model-only bookends from pure read navigation. The session
     #: still requires one exact read-only Skill match, a current typed route, and a fresh
     #: browser receipt at that route; this flag grants neither a route nor a mutation.
@@ -176,6 +180,10 @@ class AgentTurnConfig:
                 raise TypeError("click_policy must implement ClickPolicy")
             if "click" not in self.disabled_actions:
                 raise ValueError("a click policy only narrows a disabled click")
+        if self.allow_page_facets and not callable(self.page_facet_policy):
+            raise ValueError("page facets require an application page policy")
+        if self.allow_page_facets and "apply_facet" in self.disabled_actions:
+            raise ValueError("enabled page facets cannot disable apply_facet")
         if not isinstance(self.supported_scope, str) or not self.supported_scope.strip():
             raise ValueError("supported_scope must be a non-empty string")
         if (not isinstance(self.scope_first_policy, bool)
@@ -184,6 +192,7 @@ class AgentTurnConfig:
                 or not isinstance(self.allow_business_mutations, bool)
                 or not isinstance(self.allow_clarification, bool)
                 or not isinstance(self.allow_form_prefill, bool)
+                or not isinstance(self.allow_page_facets, bool)
                 or not isinstance(self.deterministic_read_navigation, bool)
                 or not isinstance(self.skill_first, bool)
                 or not isinstance(self.confirm_navigation, bool)

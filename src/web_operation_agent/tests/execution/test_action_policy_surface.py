@@ -89,6 +89,17 @@ class TheRecoveryBudgetLetsTheRefusalReachTheModel(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "policy_block_limit"):
             self._config(policy_block_limit=0)
 
+    def test_facet_opt_in_needs_a_policy_and_an_enabled_action(self):
+        with self.assertRaisesRegex(ValueError, "page policy"):
+            self._config(allow_page_facets=True)
+        with self.assertRaisesRegex(ValueError, "cannot disable"):
+            self._config(allow_page_facets=True,
+                         page_facet_policy=lambda _obs: True)
+        configured = self._config(
+            allow_page_facets=True, page_facet_policy=lambda _obs: True,
+            disabled_actions=POTENTIALLY_WRITING_ACTIONS - {"apply_facet"})
+        self.assertTrue(configured.allow_page_facets)
+
 
 if __name__ == "__main__":
     unittest.main()

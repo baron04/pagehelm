@@ -278,6 +278,71 @@ class TargetSettlement(unittest.TestCase):
     def tearDown(self):
         self.directory.cleanup()
 
+    def test_a_generic_application_facet_is_applied_then_verified_from_fresh_state(self):
+        class FacetBrowser(_WorkspaceBrowser):
+            def __init__(self):
+                super().__init__(PARTNER)
+                self.grouped = False
+
+            def observe(self):
+                page = super().observe()
+                page.page_facets = ([{"kind": "group", "name": "Owner"}]
+                                    if self.grouped else [])
+                page.facet_candidates = [{"ref": "fc_owner", "kind": "group",
+                                          "name": "Owner", "active": self.grouped}]
+                return page
+
+            def execute(self, action, args=None, expect_navigation=False):
+                if action == "apply_facet" and args.get("ref") == "fc_owner" \
+                        and args.get("active") is True:
+                    self.grouped = True
+                receipt = super().execute(action, args, expect_navigation)
+                return replace(receipt, observation=self.observe())
+
+        chat = _Chat([("set_target", {"path": PARTNER, "groups": ["Owner"]}),
+                      ("apply_facet", {"ref": "fc_owner", "active": True}),
+                      ("finish", {"outcome": "acted"})])
+        browser = FacetBrowser()
+        session = _session(self.tmp, chat, browser,
+                           prompt="Group the partner desk by Owner.",
+                           allow_page_facets=True, page_write_guard=True,
+                           page_facet_policy=lambda obs: obs.url.endswith(PARTNER))
+
+        result = session.run()
+
+        self.assertEqual(result.terminal_reason, "agent_finished",
+                         (result.detail, browser.commands, session.ledger.events))
+        self.assertEqual(result.verified_answer["action"]["groups"], ["Owner"])
+        self.assertEqual([name for name, _ in browser.commands], ["apply_facet"])
+        self.assertIn("apply_facet", {tool["function"]["name"] for tool in chat.tools[1]})
+        self.assertEqual(len(_events(session, "target_state_reached")), 1)
+
+    def test_a_stale_or_unreviewed_facet_never_reaches_the_browser(self):
+        class FacetBrowser(_WorkspaceBrowser):
+            def observe(self):
+                page = super().observe()
+                page.page_facets = []
+                page.facet_candidates = [{"ref": "fc_owner", "kind": "group",
+                                          "name": "Owner", "active": False}]
+                return page
+
+            def execute(self, action, args=None, expect_navigation=False):
+                receipt = super().execute(action, args, expect_navigation)
+                return replace(receipt, observation=self.observe())
+
+        for args, reviewed in (({"ref": "fc_absent", "active": True}, True),
+                               ({"ref": "fc_owner", "active": True}, False)):
+            with self.subTest(args=args, reviewed=reviewed):
+                chat = _Chat([("set_target", {"path": PARTNER, "groups": ["Owner"]}),
+                              ("apply_facet", args), ("finish", {"outcome": "refused"})])
+                browser = FacetBrowser(PARTNER)
+                session = _session(self.tmp, chat, browser,
+                                   allow_page_facets=True, page_write_guard=True,
+                                   page_facet_policy=lambda _obs: reviewed)
+                session.run()
+                self.assertNotIn("apply_facet", [name for name, _ in browser.commands])
+                self.assertEqual(len(_events(session, "page_facet_refused")), 1)
+
     def test_a_group_menu_candidate_cannot_complete_a_page_operation(self):
         chat = _Chat([
             ("set_target", {"path": PARTNER, "groups": ["Customer"]}),

@@ -20,6 +20,9 @@
     "depends": ["web"],
     # One stable shell on the signed-in backend page; the full assistant is the Agent's.
     "data": ["views/assistant_entry.xml"],
+    "assets": {
+        "web.assets_backend": ["woa_runtime/static/src/facet-bridge.js"],
+    },
     "installable": True,
     "auto_install": False,
     # Odoo's manifest field is an enum, not an SPDX expression. The project itself is MIT.

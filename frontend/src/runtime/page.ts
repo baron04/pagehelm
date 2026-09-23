@@ -42,9 +42,13 @@ interface PageControllerModule {
   PageController?: new (options: Record<string, unknown>) => PageControllerApi
   getElementByIndex?: ElementLookup
   readPageFacets?: () => unknown
+  readFacetCandidates?: () => unknown
+  applyPageFacet?: (ref: string, active: boolean) => Promise<unknown> | unknown
 }
 
 export type PageFacetReader = () => unknown
+export type FacetCandidateReader = () => unknown
+export type FacetApplier = (ref: string, active: boolean) => Promise<unknown> | unknown
 
 /** What one observation of the page found, before the session numbers and wraps it. */
 export interface PageReading {
@@ -57,7 +61,28 @@ export class Page {
   constructor(private readonly controller: PageControllerApi,
               private readonly lookup: ElementLookup,
               private readonly redactor: Redactor,
-              private readonly readPageFacets?: PageFacetReader) {}
+              private readonly readPageFacets?: PageFacetReader,
+              private readonly readFacetCandidates?: FacetCandidateReader,
+              private readonly applyPageFacet?: FacetApplier) {}
+
+  applyFacet(ref: unknown, active: unknown): Promise<unknown> {
+    if (!this.readFacetCandidates || !this.applyPageFacet ||
+        typeof ref !== 'string' || typeof active !== 'boolean') {
+      throw new Error('bad_arguments: application facet operation unavailable')
+    }
+    const candidates = this.boundedCandidates()
+    const candidate = candidates?.find(item => item.ref === ref)
+    if (!candidate || candidate.active === active) {
+      throw new Error('bad_arguments: facet candidate absent or already in requested state')
+    }
+    return Promise.resolve(this.applyPageFacet(ref, active))
+  }
+
+  facetCandidate(ref: unknown): {ref: string; kind: 'filter' | 'group';
+    name: string; active: boolean} | undefined {
+    return typeof ref === 'string'
+      ? this.boundedCandidates()?.find(item => item.ref === ref) : undefined
+  }
 
   /** The live element behind a server ref; an unknown ref is `bad_arguments`. */
   element(ref: unknown): ElementLike | null | undefined {
@@ -143,6 +168,7 @@ export class Page {
     const fingerprints = new Map<string, string>()
     for (const item of elements) fingerprints.set(item.ref, this.fingerprint(item.ref))
     const facets = this.readPageFacets ? this.boundedFacets() : undefined
+    const candidates = this.readFacetCandidates ? this.boundedCandidates() : undefined
     return {
       observation: {
         schema_version: WIRE_VERSION,
@@ -156,6 +182,7 @@ export class Page {
         truncated: (state.content.length > availableBodyChars || boundedBody.truncated),
         selected_controls: selectedControlsFromPage(document, this.redactor),
         ...(facets === undefined ? {} : {page_facets: facets}),
+        ...(candidates === undefined ? {} : {facet_candidates: candidates}),
       },
       fingerprints,
       canonicalUrl: canonicalUrl(state.url),
@@ -183,6 +210,31 @@ export class Page {
     return result
   }
 
+  private boundedCandidates(): Array<{ref: string; kind: 'filter' | 'group';
+    name: string; active: boolean}> | undefined {
+    let raw: unknown
+    try { raw = this.readFacetCandidates?.() } catch { return undefined }
+    if (!Array.isArray(raw)) return undefined
+    const result: Array<{ref: string; kind: 'filter' | 'group'; name: string;
+      active: boolean}> = []
+    for (const item of raw.slice(0, browserContract.observation.max_facet_candidates)) {
+      if (!item || typeof item !== 'object') continue
+      const choice = item as Record<string, unknown>
+      if ((choice.kind !== 'filter' && choice.kind !== 'group') ||
+          typeof choice.ref !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(choice.ref) ||
+          typeof choice.name !== 'string' || typeof choice.active !== 'boolean') continue
+      const name = choice.name.replace(/\s+/g, ' ').trim()
+      if (!name || this.redactor.isSensitiveName(name) ||
+          this.redactor.isSensitiveName(name.replace(/\s+/g, '_'))) continue
+      const safe = this.redactor.redactString(name).slice(
+        0, browserContract.observation.max_selected_control_chars)
+      if (safe && !result.some(existing => existing.ref === choice.ref)) {
+        result.push({ref: choice.ref, kind: choice.kind, name: safe, active: choice.active})
+      }
+    }
+    return result
+  }
+
   dispose(): void { this.controller.dispose() }
 }
 
@@ -199,6 +251,8 @@ export interface LoadedPageController {
   controller: PageControllerApi
   lookup: ElementLookup
   readPageFacets?: PageFacetReader
+  readFacetCandidates?: FacetCandidateReader
+  applyPageFacet?: FacetApplier
 }
 
 /** The fixed extraction policy qualified by the product Runtime. */
@@ -240,5 +294,9 @@ export async function loadPageController(moduleUrl: string | undefined,
   const controller = new PageController(pageControllerOptions(exclude))
   return {controller, lookup: getElementByIndex,
     ...(typeof module.readPageFacets === 'function'
-      ? {readPageFacets: module.readPageFacets} : {})}
+      ? {readPageFacets: module.readPageFacets} : {}),
+    ...(typeof module.readFacetCandidates === 'function'
+      ? {readFacetCandidates: module.readFacetCandidates} : {}),
+    ...(typeof module.applyPageFacet === 'function'
+      ? {applyPageFacet: module.applyPageFacet} : {})}
 }

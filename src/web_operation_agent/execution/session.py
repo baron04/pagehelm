@@ -159,6 +159,8 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                  navigation_confirmation=None,
                  allow_clarification: bool = False,
                  allow_form_prefill: bool = False,
+                 allow_page_facets: bool = False,
+                 page_facet_policy: Callable[[PageObservation], bool] | None = None,
                  application_forms: ApplicationFormPort | None = None,
                  deterministic_read_navigation: bool = False,
                  skill_first: bool = False,
@@ -220,6 +222,14 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
             raise ValueError("cancelled must be callable or None")
         if not isinstance(allow_form_prefill, bool):
             raise ValueError("allow_form_prefill must be a boolean")
+        if not isinstance(allow_page_facets, bool):
+            raise ValueError("allow_page_facets must be a boolean")
+        if allow_page_facets and not page_write_guard:
+            raise ValueError("page facets require an application page write guard")
+        if allow_page_facets and not callable(page_facet_policy):
+            raise ValueError("page facets require an application page policy")
+        if allow_page_facets and "apply_facet" in disabled:
+            raise ValueError("enabled page facets cannot disable apply_facet")
         if application_forms is not None and not isinstance(
                 application_forms, ApplicationFormPort):
             raise TypeError("application_forms must implement ApplicationFormPort or be None")
@@ -328,6 +338,8 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
             raise ValueError("deterministic_read_navigation must be a boolean")
         self.allow_clarification = allow_clarification
         self.allow_form_prefill = allow_form_prefill
+        self.allow_page_facets = allow_page_facets
+        self.page_facet_policy = page_facet_policy
         self._application_form_tools = (
             ApplicationFormTools(
                 application_forms, application_id=application_routes.application_id)
@@ -520,7 +532,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         # tool remains visible so an attempted violation produces an ordinary ReAct result:
         # no browser command is sent, a fresh observation is read, and the model can revise
         # its next decision.  Hidden write authorisation remains the ControlPlane's job.
-        self.disabled_actions = disabled
+        self.disabled_actions = disabled if allow_page_facets else disabled | {"apply_facet"}
         if click_policy is not None and (not isinstance(click_policy, ClickPolicy)
                                          or "click" not in disabled):
             raise ValueError("a click policy only narrows a disabled click")

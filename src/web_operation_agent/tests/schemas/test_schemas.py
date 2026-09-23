@@ -95,6 +95,24 @@ class WireTypes(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(S.SchemaError):
                 S.PageObservation(**base, page_facets=bad)
 
+    def test_facet_candidates_are_bounded_and_round_trip_as_choices_not_state(self):
+        base = dict(schema_version=1, epoch=1, url="https://app.test/orders",
+                    title="Orders", landmarks=[], elements=[])
+        self.assertNotIn("facet_candidates", S.PageObservation(**base).to_json())
+        candidates = [{"ref": "fc_1", "kind": "group", "name": "Owner", "active": False}]
+        page = S.PageObservation(**base, facet_candidates=candidates)
+        candidates[0]["name"] = "changed"
+        self.assertEqual(S.PageObservation.from_json(page.to_json()).facet_candidates,
+                         [{"ref": "fc_1", "kind": "group", "name": "Owner",
+                           "active": False}])
+        for bad in ([{"ref": "fc_1", "kind": "sort", "name": "Owner", "active": False}],
+                    [{"ref": "fc_1", "kind": "group", "name": "Owner", "active": 1}],
+                    [{"ref": "fc_1", "kind": "group", "name": "Owner", "active": False}] * 2,
+                    [{"ref": f"fc_{i}", "kind": "group", "name": "Owner",
+                      "active": False} for i in range(33)]):
+            with self.subTest(bad=bad), self.assertRaises(S.SchemaError):
+                S.PageObservation(**base, facet_candidates=bad)
+
     def test_page_render_state_round_trips_and_rejects_unknown_values(self):
         page = S.PageObservation(schema_version=1, epoch=1,
                                  url="https://app.test/orders", title="Orders",

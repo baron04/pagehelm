@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from dataclasses import dataclass, field
 from importlib.resources import files
 
@@ -15,6 +16,7 @@ from .common import (SCHEMA_VERSIONS, _bool, _dict_copy, _non_negative_int,
 #: no task-specific or application-specific action ever appears here.
 BROWSER_ACTIONS = frozenset({
     "observe", "goto", "click", "fill", "select", "submit", "back", "scroll", "wait_for",
+    "apply_facet",
 })
 
 # Only these actions are intrinsically unable to initiate an application request that
@@ -30,11 +32,12 @@ MAX_OBSERVATION_ELEMENTS = int(_BROWSER_CONTRACT["observation"]["max_elements"])
 MAX_SELECTED_CONTROLS = int(_BROWSER_CONTRACT["observation"]["max_selected_controls"])
 MAX_SELECTED_CONTROL_CHARS = int(_BROWSER_CONTRACT["observation"]["max_selected_control_chars"])
 MAX_PAGE_FACETS = int(_BROWSER_CONTRACT["observation"]["max_page_facets"])
+MAX_FACET_CANDIDATES = int(_BROWSER_CONTRACT["observation"]["max_facet_candidates"])
 MAX_OBSERVATION_CONTENT_CHARS = int(
     _BROWSER_CONTRACT["observation"]["max_content_chars"])
 MAX_SCROLL_PAGES = int(_BROWSER_CONTRACT["scroll"]["max_pages"])
 if min(MAX_OBSERVATION_ELEMENTS, MAX_OBSERVATION_CONTENT_CHARS, MAX_SCROLL_PAGES,
-       MAX_PAGE_FACETS) < 1:
+       MAX_PAGE_FACETS, MAX_FACET_CANDIDATES) < 1:
     raise ValueError("browser contract bounds must be positive integers")
 POTENTIALLY_WRITING_ACTIONS = BROWSER_ACTIONS - INTRINSICALLY_READ_ONLY_ACTIONS
 
@@ -134,6 +137,9 @@ class PageObservation:
     # None means the application has not supplied typed facet state; [] means it did
     # inspect the page and found no active filters or groups.
     page_facets: list[dict[str, str]] | None = None
+    # Application-owned choices on this page. A ref is valid only with this observation;
+    # a candidate is not an active facet and grants no action permission on its own.
+    facet_candidates: list[dict] | None = None
 
     def __post_init__(self) -> None:
         _schema_version(self.schema_version, "PageObservation")
@@ -178,11 +184,29 @@ class PageObservation:
                          and 0 < len(item["name"]) <= MAX_SELECTED_CONTROL_CHARS
                          for item in self.page_facets),
                      "page_facets entries must have a kind and short non-empty name")
+        if self.facet_candidates is not None:
+            _require(isinstance(self.facet_candidates, list),
+                     "facet_candidates must be an array")
+            _require(len(self.facet_candidates) <= MAX_FACET_CANDIDATES,
+                     "too many facet_candidates")
+            _require(all(isinstance(item, dict)
+                         and set(item) == {"ref", "kind", "name", "active"}
+                         and isinstance(item.get("ref"), str)
+                         and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", item["ref"]) is not None
+                         and item.get("kind") in {"filter", "group"}
+                         and isinstance(item.get("name"), str)
+                         and 0 < len(item["name"]) <= MAX_SELECTED_CONTROL_CHARS
+                         and isinstance(item.get("active"), bool)
+                         for item in self.facet_candidates),
+                     "invalid facet candidate")
+            refs = [item["ref"] for item in self.facet_candidates]
+            _require(len(refs) == len(set(refs)), "facet candidate refs must be unique")
         self.landmarks = copy.deepcopy(self.landmarks)
         self.elements = copy.deepcopy(self.elements)
         self.messages = copy.deepcopy(self.messages)
         self.selected_controls = copy.deepcopy(self.selected_controls)
         self.page_facets = copy.deepcopy(self.page_facets)
+        self.facet_candidates = copy.deepcopy(self.facet_candidates)
 
     def to_json(self) -> dict:
         out = {"schema_version": self.schema_version, "epoch": self.epoch, "url": self.url,
@@ -197,13 +221,15 @@ class PageObservation:
             out["selected_controls"] = copy.deepcopy(self.selected_controls)
         if self.page_facets is not None:
             out["page_facets"] = copy.deepcopy(self.page_facets)
+        if self.facet_candidates is not None:
+            out["facet_candidates"] = copy.deepcopy(self.facet_candidates)
         return out
 
     @staticmethod
     def from_json(d: dict) -> "PageObservation":
         allowed = {"schema_version", "epoch", "url", "title", "landmarks", "elements",
                    "content", "messages", "truncated", "render_state", "selected_controls",
-                   "page_facets"}
+                   "page_facets", "facet_candidates"}
         required = {"schema_version", "epoch", "url", "title", "landmarks", "elements"}
         d = _strict_object(d, "PageObservation", allowed=allowed, required=required)
         _require(isinstance(d["landmarks"], list), "landmarks must be an array")
@@ -219,7 +245,8 @@ class PageObservation:
                                truncated=d.get("truncated", False),
                                render_state=d.get("render_state", "unknown"),
                                selected_controls=copy.deepcopy(d.get("selected_controls", [])),
-                               page_facets=copy.deepcopy(d.get("page_facets")))
+                               page_facets=copy.deepcopy(d.get("page_facets")),
+                               facet_candidates=copy.deepcopy(d.get("facet_candidates")))
 
     @property
     def content_digest(self) -> str:

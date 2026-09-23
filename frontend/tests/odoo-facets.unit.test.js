@@ -1,10 +1,23 @@
 /* global document */
-import {afterEach, describe, expect, it} from 'vitest'
-import {readPageFacets} from '../../examples/odoo/deploy/addons/woa_runtime/static/src/page-facets.js'
+import {afterEach, describe, expect, it, vi} from 'vitest'
+import {applyPageFacet, readFacetCandidates, readPageFacets}
+  from '../../examples/odoo/deploy/addons/woa_runtime/static/src/page-facets.js'
 
-afterEach(() => { document.body.replaceChildren() })
+afterEach(() => { document.body.replaceChildren(); vi.unstubAllGlobals() })
 
 describe('Odoo-owned active facet extraction', () => {
+  it('delegates candidate listing and application to the Odoo search-model bridge', () => {
+    const apply = vi.fn()
+    vi.stubGlobal('__woaFacetBridge', {
+      list: () => [{ref: 'fc_7', kind: 'group', name: 'Salesperson', active: false}],
+      apply,
+    })
+    expect(readFacetCandidates()).toEqual([
+      {ref: 'fc_7', kind: 'group', name: 'Salesperson', active: false},
+    ])
+    applyPageFacet('fc_7', true)
+    expect(apply).toHaveBeenCalledWith('fc_7', true)
+  })
   it('separates active filters and groups from same-named menu choices and columns', () => {
     document.body.innerHTML = `
       <div class="o_searchview_facet o_facet_with_domain"><div class="o_searchview_facet_label btn-primary"><i class="fa-filter"></i></div><div class="o_facet_values"><small class="o_facet_value">My Quotations</small></div></div>

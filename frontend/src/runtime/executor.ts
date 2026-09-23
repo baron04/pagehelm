@@ -119,6 +119,8 @@ export async function executeCommand(command: ActionCommand, access: PageAccess,
       if (native?.kind === 'form') return withSubmitEvidence(native, () => page.click(args.ref))
       return page.click(args.ref)
     }
+    case 'apply_facet':
+      return access().applyFacet(args.ref, args.active)
     case 'submit': {
       const element = access().element(args.ref) as ControlElement | null | undefined
       const form = (String(element?.tagName || '').toUpperCase() === 'FORM'

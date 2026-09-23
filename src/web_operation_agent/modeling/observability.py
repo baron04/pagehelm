@@ -16,7 +16,7 @@ from .chat import require_chat_port
 
 _LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
 _BROWSER_TOOLS = frozenset({"observe", "open_route", "click", "fill", "select",
-                            "submit", "back", "open_source_route"})
+                            "submit", "back", "open_source_route", "apply_facet"})
 _TOOL_END = frozenset({"action_receipt", "business_tool_result",
                        "business_tool_rejected", "business_tool_permission_denied"})
 

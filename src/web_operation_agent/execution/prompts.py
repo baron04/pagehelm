@@ -308,6 +308,17 @@ TARGET_TOOL = {"type": "function", "function": {
                                                           "each must first be observed active "
                                                           "in this turn")}}}}}
 
+FACET_TOOL = {"type": "function", "function": {
+    "name": "apply_facet",
+    "description": ("Set one application-listed page filter or group to active or inactive. "
+                    "Use only a facet ref from the latest page observation. This changes "
+                    "the page presentation, not business records; completion still needs "
+                    "a fresh observation showing the requested active facet state."),
+    "parameters": {"type": "object", "additionalProperties": False,
+                   "properties": {"ref": {"type": "string", "maxLength": 64},
+                                  "active": {"type": "boolean"}},
+                   "required": ["ref", "active"]}}}
+
 PREFILL_FORM_TOOL = {"type": "function", "function": {
     "name": "prefill_form",
     "description": "Apply the current application-issued transient form draft. It accepts "

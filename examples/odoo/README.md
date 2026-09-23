@@ -274,7 +274,7 @@ does either checks the host first. It is a disposable application to point the a
 
 `down` stops it; `down --destroy` discards the volumes as well.
 
-An existing fixture keeps working after the addon changes: Odoo loads the addon's code from disk, and `woa_runtime` 1.5's page write guard creates its one table the first time the Runtime opens a window, so a database restored from an older snapshot needs no module upgrade. `-u woa_runtime` records the new version; it changes `ir_module_module`, which the P8.7 fingerprint includes.
+An existing fixture keeps working after the addon changes: Odoo loads the addon's code from disk, and `woa_runtime` 1.5's page write guard creates its one table the first time the Runtime opens a window. Restart Odoo to load new backend asset declarations, including the search-model facet bridge; the local pilot loaded it on restart without a database module upgrade. `-u woa_runtime` records a new module version when needed; it changes `ir_module_module`, which the P8.7 fingerprint includes.
 
 ### What is not committed
 
@@ -340,7 +340,9 @@ form handoff above is still available because it leaves the record unpersisted.
 Against the provisioned fixture, or against your own Odoo with the pinned page controller
 served from its origin — any module directory on the addons path works. The Odoo
 distribution loads `<addons>/woa_runtime/static/src/page-controller-with-state.js`,
-which re-exports the pinned `page-controller.js` and reports active search facets:
+which re-exports the pinned `page-controller.js`, reports active search facets, and exposes
+bounded filter/group choices from the current search model. Set
+`WOA_ODOO_PAGE_CONTROLLER_MODULE` to this wrapper for demo runs that need those choices:
 
 ```bash
 python -m web_operation_agent_odoo.demo --scripted --headless \

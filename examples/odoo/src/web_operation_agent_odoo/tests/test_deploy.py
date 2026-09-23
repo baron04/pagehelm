@@ -42,7 +42,8 @@ class TheFixtureIsLoopbackByConstruction(unittest.TestCase):
 class OnlyFirstPartyBootstrapCodeIsCommitted(unittest.TestCase):
     def test_the_served_directory_tracks_only_the_first_party_loader(self):
         """Local modules ship here; third-party PageController remains provisioned."""
-        first_party = {"loader.js", "page-controller-with-state.js", "page-facets.js"}
+        first_party = {"loader.js", "page-controller-with-state.js", "page-facets.js",
+                       "facet-bridge.js"}
         tracked = sorted(path.name for path in deploy.SERVED_ASSETS.glob("*")
                          if path.name not in {".gitignore", *first_party})
         for name in tracked:
@@ -77,7 +78,10 @@ class OnlyFirstPartyBootstrapCodeIsCommitted(unittest.TestCase):
         addon = deploy.ADDONS_ROOT / "woa_runtime"
         manifest = ast.literal_eval((addon / "__manifest__.py").read_text())
         controller = (addon / "controllers" / "session.py").read_text()
-        self.assertNotIn("assets", manifest)
+        self.assertEqual(manifest["assets"], {
+            "web.assets_backend": ["woa_runtime/static/src/facet-bridge.js"],
+        })
+        self.assertIn("toggleSearchItem", (addon / "static/src/facet-bridge.js").read_text())
         self.assertEqual(manifest["data"], ["views/assistant_entry.xml"])
         template = ElementTree.parse(addon / "views" / "assistant_entry.xml").find("template")
         self.assertEqual(template.get("inherit_id"), "web.webclient_bootstrap")

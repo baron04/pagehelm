@@ -2,6 +2,7 @@ import {describe, expect, it, vi} from 'vitest'
 import {Page, pageControllerOptions, type BrowserState, type PageControllerApi}
   from '../src/runtime/page'
 import {createRedactor} from '../src/runtime/redaction'
+import {EmbeddedWebRuntime} from '../src/runtime/runtime'
 
 function controller(): PageControllerApi {
   return {
@@ -27,6 +28,28 @@ describe('the product PageController extraction policy', () => {
 })
 
 describe('Page.describe bounds an observation before it crosses the browser boundary', () => {
+  it('publishes only bounded, valid, non-sensitive application facet choices', () => {
+    const choices = [
+      {ref: 'fc_1', kind: 'group', name: 'Salesperson', active: false},
+      {ref: 'fc_2', kind: 'filter', name: '  Open  ', active: true},
+      {ref: 'bad ref', kind: 'group', name: 'Discard', active: false},
+      {ref: 'fc_3', kind: 'group', name: 'password', active: false},
+      ...Array.from({length: 40}, (_, index) => ({
+        ref: `fc_${index + 10}`, kind: 'filter', name: `Choice ${index}`, active: false,
+      })),
+    ]
+    const page = new Page(controller(), () => null, createRedactor(), undefined,
+      () => choices, vi.fn())
+    const reading = page.describe({url: 'https://app.test/orders', title: 'Orders',
+      content: ''}, 1)
+    expect(reading.observation.facet_candidates?.slice(0, 2)).toEqual([
+      {ref: 'fc_1', kind: 'group', name: 'Salesperson', active: false},
+      {ref: 'fc_2', kind: 'filter', name: 'Open', active: true},
+    ])
+    expect(reading.observation.facet_candidates?.length).toBeLessThanOrEqual(32)
+    expect(reading.observation.facet_candidates?.some(item => item.name === 'password'))
+      .toBe(false)
+  })
   it('accepts bounded typed facets and ignores invalid application facts', () => {
     const page = new Page(controller(), () => null, createRedactor(), () => [
       {kind: 'filter', name: '  Open  '}, {kind: 'group', name: 'Customer'},
@@ -77,6 +100,43 @@ describe('Page.describe bounds an observation before it crosses the browser boun
 })
 
 describe('Page refuses controls that are not writable at execution time', () => {
+  it('applies only a currently offered facet with a changed desired state', async () => {
+    let active = false
+    const apply = vi.fn(() => { active = true })
+    const page = new Page(controller(), () => null, createRedactor(), undefined,
+      () => [{ref: 'fc_1', kind: 'group', name: 'Salesperson', active}], apply)
+    expect(() => page.applyFacet('fc_2', true)).toThrow(/candidate absent/)
+    expect(() => page.applyFacet('fc_1', false)).toThrow(/already/)
+    await page.applyFacet('fc_1', true)
+    expect(apply).toHaveBeenCalledOnce()
+    expect(apply).toHaveBeenCalledWith('fc_1', true)
+    expect(() => page.applyFacet('fc_1', true)).toThrow(/already/)
+  })
+
+  it('rejects a reused facet ref if the page changed after observation', () => {
+    let name = 'Salesperson'
+    const runtime = Object.create(EmbeddedWebRuntime.prototype) as EmbeddedWebRuntime
+    const state = runtime as unknown as Record<string, unknown>
+    state.controller = controller()
+    state.getElementByIndex = () => null
+    state.redactorInstance = createRedactor()
+    state.readFacetCandidates = () => [
+      {ref: 'fc_1', kind: 'group', name, active: false},
+    ]
+    state.applyPageFacet = vi.fn()
+    state.observedUrl = window.location.href
+    state.currentObservation = {observation: {
+      url: window.location.href,
+      facet_candidates: [{ref: 'fc_1', kind: 'group', name, active: false}],
+    }}
+    const command = {command_id: 'c1', action: 'apply_facet',
+      args: {ref: 'fc_1', active: true}, expect_navigation: false}
+    expect(runtime._actionFreshness(command).fresh).toBe(true)
+    name = 'Customer'
+    expect(runtime._actionFreshness(command).fresh).toBe(false)
+    expect(() => runtime._execute(command)).toThrow(/changed before dispatch/)
+    expect(state.applyPageFacet).not.toHaveBeenCalled()
+  })
   it('does not pass a disabled input to PageController', async () => {
     const api = controller()
     const page = new Page(api, () => ({tagName: 'INPUT', disabled: true}), createRedactor())

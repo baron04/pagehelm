@@ -17,3 +17,12 @@ export function readPageFacets() {
   }
   return facts;
 }
+
+export function readFacetCandidates() {
+  return window.__woaFacetBridge?.list() ?? undefined;
+}
+
+export function applyPageFacet(ref, active) {
+  if (!window.__woaFacetBridge) throw new Error('facet operation unavailable');
+  return window.__woaFacetBridge.apply(ref, active);
+}

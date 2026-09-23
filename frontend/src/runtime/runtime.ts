@@ -21,7 +21,8 @@ import {
 import {
   absoluteUrl, armChildFrameNavigation, canonicalUrl, navigationWal, recoveryProvesNavigation,
 } from './navigation'
-import {Page, loadPageController, type PageControllerApi, type PageFacetReader} from './page'
+import {Page, loadPageController, type PageControllerApi, type PageFacetReader,
+  type FacetCandidateReader, type FacetApplier} from './page'
 import type {ElementLookup} from './pageModel'
 import {createPanelContainer, keepAttached, mountPanel, type PanelHandle} from './panelBridge'
 import {PanelHost, backoffAfter, classifyTransportError, type TransportVerdict} from './panelHost'
@@ -40,7 +41,7 @@ import {WIRE_VERSION, type ActionCommand, type ActionEnvelope, type ActionResult
 const RUNTIME_NAME = 'woa-embedded/page-controller-1.12.4'
 const CAPABILITIES = [
   'dom.observe', 'dom.click', 'dom.fill', 'dom.select', 'dom.submit',
-  'page.goto', 'page.back', 'page.scroll', 'page.wait',
+  'page.goto', 'page.back', 'page.scroll', 'page.wait', 'page.apply_facet',
 ]
 
 /** Used where a Runtime was assembled without its constructor -- in conformance tests. */
@@ -83,6 +84,8 @@ export class EmbeddedWebRuntime {
   controller: PageControllerApi | null = null
   getElementByIndex: ElementLookup | null = null
   readPageFacets: PageFacetReader | undefined
+  readFacetCandidates: FacetCandidateReader | undefined
+  applyPageFacet: FacetApplier | undefined
   panelEnabled = true
   panelContainer: HTMLDivElement | null = null
   panelHost: PanelHost | null = null
@@ -193,7 +196,7 @@ export class EmbeddedWebRuntime {
       throw new Error('the page is not loaded yet')
     }
     return new Page(this.controller, this.getElementByIndex, this.redactor,
-      this.readPageFacets)
+      this.readPageFacets, this.readFacetCandidates, this.applyPageFacet)
   }
 
   _save(): void { writeStored(this.sessionId, this.stored) }
@@ -229,11 +232,13 @@ export class EmbeddedWebRuntime {
   // -- starting ------------------------------------------------------------------------
 
   async start(): Promise<this> {
-    const {controller, lookup, readPageFacets} = await loadPageController(
+    const {controller, lookup, readPageFacets, readFacetCandidates, applyPageFacet} = await loadPageController(
       this.config.pageControllerModule, this.panelContainer ? [this.panelContainer] : [])
     this.controller = controller
     this.getElementByIndex = lookup
     this.readPageFacets = readPageFacets
+    this.readFacetCandidates = readFacetCandidates
+    this.applyPageFacet = applyPageFacet
     return this._startConnectedRuntime()
   }
 
@@ -739,6 +744,18 @@ export class EmbeddedWebRuntime {
     if (canonicalUrl(location.href) !== observedUrl) {
       return {fresh: false, reason: 'the page URL changed after the last observation'}
     }
+    if (command?.action === 'apply_facet') {
+      const ref = command.args?.ref
+      const expected = this.currentObservation?.observation?.facet_candidates
+        ?.find(item => item.ref === ref)
+      let actual: typeof expected
+      try { actual = this.page.facetCandidate(ref) } catch { /* unavailable stays stale */ }
+      if (!expected || !actual || expected.kind !== actual.kind ||
+          expected.name !== actual.name || expected.active !== actual.active) {
+        return {fresh: false, reason: 'the page facet changed after the last observation'}
+      }
+      return {fresh: true, reason: ''}
+    }
     if (!['click', 'fill', 'select', 'submit'].includes(command?.action)) {
       return {fresh: true, reason: ''}
     }
@@ -938,6 +955,9 @@ export class EmbeddedWebRuntime {
   }
 
   _execute(command: ActionCommand): Promise<unknown> {
+    if (command.action === 'apply_facet' && !this._actionFreshness(command).fresh) {
+      throw new Error('bad_arguments: page facet changed before dispatch')
+    }
     return executeCommand(command, () => this.page, this.config ?? {})
   }
 

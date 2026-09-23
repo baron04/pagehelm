@@ -9,10 +9,15 @@ That is P7.5 CR-18 all over again, still present on the path a new integrator fo
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from web_operation_agent.composition.sources import SourceCapability
 from web_operation_agent.execution.product import AgentTurnConfig
+from web_operation_agent.schemas import PageObservation
+
+from .click_policy import OdooReviewedClickPolicy
 
 #: Page actions this deployment does not offer: Odoo is driven through its typed API, and
 #: the one write a turn may make goes through a confirmed typed tool.
@@ -21,7 +26,9 @@ DISABLED_PAGE_ACTIONS = frozenset({"click", "fill", "select", "submit", "back"})
 #: What every Odoo turn may click, stated to the model; the adapter's policy enforces it.
 _CLICK_SCOPE = (
     " You may click links, tabs, view switches, pagers and search facets on pages reviewed "
-    "as read-only; the server refuses every other click before it reaches the page.")
+    "as read-only; the server refuses every other click before it reaches the page. "
+    "If the page lists filter or group candidates, use apply_facet with the listed ref; "
+    "the result must be verified in the next page state.")
 _READ_ONLY_SCOPE = (
     "Read current Odoo records through the typed API and open only an exact route "
     "returned by that API. Do not modify records or submit forms." + _CLICK_SCOPE)
@@ -29,6 +36,14 @@ _WRITE_SCOPE = (
     "Read current Odoo records through the typed API, and make at most the one record "
     "change the user confirms, through a typed write tool. Do not submit page forms. "
     "Open only an exact route returned by the API." + _CLICK_SCOPE)
+
+
+@dataclass(frozen=True)
+class _ReviewedFacetPolicy:
+    click_policy: OdooReviewedClickPolicy
+
+    def __call__(self, observation: PageObservation) -> bool:
+        return self.click_policy.reviewed(urlsplit(observation.url).path)
 
 
 def odoo_turn_config(*, adapter, run_dir: Path, allow_mutations: bool, scripted: bool,
@@ -39,6 +54,7 @@ def odoo_turn_config(*, adapter, run_dir: Path, allow_mutations: bool, scripted:
     `source` is the compiled source capability when the deployment has one; without it the
     adapter's own answer is used, which is the ordinary case.
     """
+    reviewed = adapter.click_policy()
     return AgentTurnConfig(
         supported_scope=_WRITE_SCOPE if allow_mutations else _READ_ONLY_SCOPE,
         ledger_path=run_dir / "audit.jsonl",
@@ -49,7 +65,7 @@ def odoo_turn_config(*, adapter, run_dir: Path, allow_mutations: bool, scripted:
         # Click stays disabled as an action; the adapter's reviewed policy re-allows the
         # read-only controls on reviewed pages, element by element (owner decision
         # 2026-09-22). Everything it does not name is refused before dispatch.
-        click_policy=adapter.click_policy(),
+        click_policy=reviewed,
         scope_first_policy=True,
         policy_block_limit=3,
         plain_business_answer_min_page_actions=0,
@@ -62,6 +78,8 @@ def odoo_turn_config(*, adapter, run_dir: Path, allow_mutations: bool, scripted:
         # The adapter may issue an exact transient customer-form draft. Direct model
         # fill/select/submit actions remain unavailable.
         allow_form_prefill=True,
+        allow_page_facets=True,
+        page_facet_policy=_ReviewedFacetPolicy(reviewed),
         deployment_profile="production",
         # The adapter's whole answer, not a selection from it: with a source root configured
         # this is what turns on cited runtime lookup as well as source affordance candidates.

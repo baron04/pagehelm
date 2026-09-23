@@ -13,6 +13,7 @@ import unittest
 from pathlib import Path
 
 from web_operation_agent.composition.sources import SourceCapability
+from web_operation_agent.schemas import PageObservation
 from web_operation_agent_odoo.turn import odoo_turn_config
 
 
@@ -85,6 +86,16 @@ class TheSameTurnWhereverItStarts(unittest.TestCase):
         self.assertEqual(read_only.wall_budget_s, 1)
         self.assertEqual(writing.wall_budget_s, 200)
         self.assertEqual(writing.transport_timeout_s, 30)
+        self.assertTrue(read_only.allow_page_facets)
+        self.assertNotIn("apply_facet", read_only.disabled_actions)
+        sales = PageObservation(schema_version=1, epoch=1,
+                                url="http://odoo.test/odoo/sales", title="Sales",
+                                landmarks=[], elements=[])
+        unknown = PageObservation(schema_version=1, epoch=1,
+                                  url="http://odoo.test/odoo/unknown", title="Unknown",
+                                  landmarks=[], elements=[])
+        self.assertTrue(read_only.page_facet_policy(sales))
+        self.assertFalse(read_only.page_facet_policy(unknown))
 
 
 if __name__ == "__main__":

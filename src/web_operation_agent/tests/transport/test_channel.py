@@ -88,6 +88,27 @@ class ChannelTests(unittest.TestCase):
         with self.assertRaisesRegex(RemoteProtocolError, "conflicting result"):
             self.channel.accept_result(conflict, lease_id=self.lease)
 
+    def test_page_facet_action_requires_an_advertised_runtime_capability(self):
+        def facet_action(session_id, current):
+            command = ActionCommand("a-facet", "apply_facet",
+                                    {"ref": "fc_1", "active": True})
+            return dataclasses.replace(
+                action_for(session_id, current, action_id="a-facet"),
+                command=command, command_digest=command.content_digest)
+
+        with self.assertRaisesRegex(RemoteProtocolError, "page.apply_facet"):
+            self.channel.enqueue_action(facet_action(self.grant.session_id, self.first))
+
+        registry = RemoteSessionRegistry()
+        grant, channel = registry.create(allowed_origins=[ORIGIN], session_id="facet-session")
+        advertised = hello(grant.session_id)
+        reply = channel.accept_hello(dataclasses.replace(
+            advertised, capabilities=advertised.capabilities + ("page.apply_facet",)))
+        current = observation(grant.session_id, 1)
+        channel.accept_observation(current, lease_id=reply["lease_id"])
+        self.assertEqual(channel.enqueue_action(facet_action(grant.session_id, current)).kind,
+                         "action")
+
     def test_principal_bound_session_requires_exact_runtime_binding(self):
         now = int(time.time() * 1000)
         expected = principal(now)

@@ -44,6 +44,30 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
                   "before using its controls or claiming arrival.")]
         return session._resume(turn, _trim(messages, session.keep_observations), obs,
                                successful_business_tools)
+    if name == "apply_facet" and session.allow_page_facets:
+        ref, active = args.get("ref"), args.get("active")
+        candidate = next((item for item in obs.facet_candidates or []
+                          if item["ref"] == ref), None)
+        try:
+            reviewed = bool(session.page_facet_policy(obs))
+        except Exception:
+            reviewed = False
+        if (not reviewed or not isinstance(ref, str) or not isinstance(active, bool)
+                or candidate is None or candidate["active"] == active):
+            session.ledger.append("page_facet_refused", step=step, dispatched=False,
+                                  reviewed=reviewed, candidate_found=candidate is not None)
+            ended = _refuse_before_dispatch(
+                session, name,
+                "FACET NOT DISPATCHED: choose a current candidate on a reviewed page "
+                "whose active state differs from the requested state.",
+                obs=obs, step=step,
+                no_fresh_detail="facet refusal could not obtain a fresh page")
+            if ended.terminal:
+                return _Next(session._finish(result, t0, ended.reason, ended.detail,
+                                             steps=step))
+            messages += [_assistant_call(call), _tool_result(call, ended.feedback)]
+            return session._resume(turn, _trim(messages, session.keep_observations),
+                                   ended.observation, successful_business_tools)
     click_refusal = ""
     if name == "click" and name in session.disabled_actions \
             and session.click_policy is not None:
@@ -201,12 +225,13 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
         return session._resume(turn, messages, obs, successful_business_tools)
 
     if name not in BROWSER_ACTIONS:
+        available = BROWSER_ACTIONS if session.allow_page_facets else BROWSER_ACTIONS - {"apply_facet"}
         session.ledger.append(
             "unknown_tool_rejected", step=step, tool=str(name)[:100],
             dispatched=False, side_effect_possible=False)
         messages += [_assistant_call(call),
                      _tool_result(call, f"There is no tool called {name!r}. "
-                                        f"Available: {sorted(BROWSER_ACTIONS)} and finish.")]
+                                        f"Available: {sorted(available)} and finish.")]
         return session._resume(turn, messages, obs, successful_business_tools)
 
     collect_page_answer = False
