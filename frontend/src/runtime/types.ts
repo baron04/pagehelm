@@ -56,7 +56,7 @@ export interface PageObservation {
   messages: string[]
   truncated: boolean
   /** A URL transition whose page projection is still the preceding route cannot settle. */
-  render_state?: 'pending' | 'ready'
+  render_state?: 'pending' | 'ready' | 'blocked'
   /** Bounded selected names from visible exclusive groups, even when controls are omitted. */
   selected_controls?: string[]
   /** Present only when the application inspected its active filter/group state. */

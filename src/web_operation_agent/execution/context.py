@@ -348,6 +348,10 @@ def _render_observation(obs: PageObservation, max_elements: int = RENDER_ELEMENT
         lines.append("render_state: pending; this URL's view is not distinguishable "
                      "from the preceding observation. "
                      "Observe again before using page controls or claiming arrival.")
+    elif obs.render_state == "blocked":
+        lines.append("render_state: blocked; the application reports a page error. "
+                     "Do not claim arrival. Try a different authorised route or "
+                     "report that the page could not be opened.")
     if obs.selected_controls:
         lines.append("selected controls: " + " | ".join(obs.selected_controls))
     if obs.page_facets is not None:

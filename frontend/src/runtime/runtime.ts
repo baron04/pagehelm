@@ -22,7 +22,7 @@ import {
   absoluteUrl, armChildFrameNavigation, canonicalUrl, navigationWal, recoveryProvesNavigation,
 } from './navigation'
 import {Page, loadPageController, type PageControllerApi, type PageFacetReader,
-  type PageHighlight, type PageRecordRouteReader,
+  type PageHighlight, type PageRecordRouteReader, type PageBlockerReader,
   type FacetCandidateReader, type FacetApplier} from './page'
 import type {ElementLookup} from './pageModel'
 import {createPanelContainer, keepAttached, mountPanel, type PanelHandle} from './panelBridge'
@@ -89,6 +89,7 @@ export class EmbeddedWebRuntime {
   readFacetCandidates: FacetCandidateReader | undefined
   applyPageFacet: FacetApplier | undefined
   readPageRecordRoute: PageRecordRouteReader | undefined
+  readPageBlocker: PageBlockerReader | undefined
   panelEnabled = true
   panelContainer: HTMLDivElement | null = null
   panelHost: PanelHost | null = null
@@ -209,7 +210,7 @@ export class EmbeddedWebRuntime {
     }
     return new Page(this.controller, this.getElementByIndex, this.redactor,
       this.readPageFacets, this.readFacetCandidates, this.applyPageFacet,
-      this.readPageRecordRoute)
+      this.readPageRecordRoute, this.readPageBlocker)
   }
 
   _save(): void { writeStored(this.sessionId, this.stored) }
@@ -246,7 +247,7 @@ export class EmbeddedWebRuntime {
 
   async start(): Promise<this> {
     const {controller, lookup, readPageFacets, readFacetCandidates, applyPageFacet,
-      readPageRecordRoute} = await loadPageController(
+      readPageRecordRoute, readPageBlocker} = await loadPageController(
       this.config.pageControllerModule, this.panelContainer ? [this.panelContainer] : [])
     this.controller = controller
     this.getElementByIndex = lookup
@@ -254,6 +255,7 @@ export class EmbeddedWebRuntime {
     this.readFacetCandidates = readFacetCandidates
     this.applyPageFacet = applyPageFacet
     this.readPageRecordRoute = readPageRecordRoute
+    this.readPageBlocker = readPageBlocker
     return this._startConnectedRuntime()
   }
 
@@ -754,7 +756,7 @@ export class EmbeddedWebRuntime {
     this._save()
     const reading = page.describe(state, epoch)
     const readiness = renderState(this.currentObservation?.observation ?? null,
-      reading.observation, this.pendingView)
+      reading.observation, this.pendingView, page.blocked())
     this.pendingView = readiness.pendingView
     reading.observation.render_state = readiness.state
     const envelope: ObservationEnvelope = {

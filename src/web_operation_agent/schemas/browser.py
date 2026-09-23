@@ -173,8 +173,8 @@ class PageObservation:
         _require(all(isinstance(item, str) for item in self.messages),
                  "messages entries must be strings")
         _bool(self.truncated, "truncated")
-        _require(self.render_state in {"unknown", "pending", "ready"},
-                 "render_state must be unknown, pending or ready")
+        _require(self.render_state in {"unknown", "pending", "ready", "blocked"},
+                 "render_state must be unknown, pending, ready or blocked")
         _require(isinstance(self.selected_controls, list),
                  "selected_controls must be an array")
         _require(len(self.selected_controls) <= MAX_SELECTED_CONTROLS,

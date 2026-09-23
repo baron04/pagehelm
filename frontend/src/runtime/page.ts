@@ -46,12 +46,14 @@ interface PageControllerModule {
   readFacetCandidates?: () => unknown
   applyPageFacet?: (ref: string, active: boolean) => Promise<unknown> | unknown
   readPageRecordRoute?: () => unknown
+  readPageBlocker?: () => unknown
 }
 
 export type PageFacetReader = () => unknown
 export type FacetCandidateReader = () => unknown
 export type FacetApplier = (ref: string, active: boolean) => Promise<unknown> | unknown
 export type PageRecordRouteReader = () => unknown
+export type PageBlockerReader = () => unknown
 export interface PageHighlight { clear(): void; active(): boolean }
 export interface FormHandoffField {ref: string; field: string; control: string; value: string}
 
@@ -69,7 +71,14 @@ export class Page {
               private readonly readPageFacets?: PageFacetReader,
               private readonly readFacetCandidates?: FacetCandidateReader,
               private readonly applyPageFacet?: FacetApplier,
-              private readonly readPageRecordRoute?: PageRecordRouteReader) {}
+              private readonly readPageRecordRoute?: PageRecordRouteReader,
+              private readonly readPageBlocker?: PageBlockerReader) {}
+
+  /** The application, not the generic Runtime, identifies a blocking error screen. */
+  blocked(): boolean {
+    if (!this.readPageBlocker) return false
+    try { return this.readPageBlocker() !== false } catch { return true }
+  }
 
   applyFacet(ref: unknown, active: unknown): Promise<unknown> {
     if (!this.readFacetCandidates || !this.applyPageFacet ||
@@ -348,6 +357,7 @@ export interface LoadedPageController {
   readFacetCandidates?: FacetCandidateReader
   applyPageFacet?: FacetApplier
   readPageRecordRoute?: PageRecordRouteReader
+  readPageBlocker?: PageBlockerReader
 }
 
 /** The fixed extraction policy qualified by the product Runtime. */
@@ -395,5 +405,7 @@ export async function loadPageController(moduleUrl: string | undefined,
     ...(typeof module.applyPageFacet === 'function'
       ? {applyPageFacet: module.applyPageFacet} : {}),
     ...(typeof module.readPageRecordRoute === 'function'
-      ? {readPageRecordRoute: module.readPageRecordRoute} : {})}
+      ? {readPageRecordRoute: module.readPageRecordRoute} : {}),
+    ...(typeof module.readPageBlocker === 'function'
+      ? {readPageBlocker: module.readPageBlocker} : {})}
 }

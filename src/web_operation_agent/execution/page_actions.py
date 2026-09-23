@@ -36,14 +36,20 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
     result, t0, step = turn.result, turn.started_at, turn.step
     messages, obs = turn.messages, turn.obs
     successful_business_tools = turn.successful_business_tools
-    if obs.render_state == "pending" and name not in {"observe", "wait_for"}:
-        session.ledger.append("pending_page_action_refused", step=step, tool=name,
+    if obs.render_state in {"pending", "blocked"} and name not in {"observe", "wait_for"}:
+        blocked = obs.render_state == "blocked"
+        session.ledger.append("blocked_page_action_refused" if blocked
+                              else "pending_page_action_refused", step=step, tool=name,
                               dispatched=False, side_effect_possible=False)
         messages += [_assistant_call(call), _tool_result(
-            call, "PAGE RENDERING PENDING: the destination view is not yet "
-                  "distinguishable from the preceding observation. The action was not "
-                  "dispatched. Observe the page again "
-                  "before using its controls or claiming arrival.")]
+            call, ("PAGE BLOCKED: the application reports a page error. The action was "
+                   "not dispatched. Try a different authorised route or report that "
+                   "the page could not be opened."
+                   if blocked else
+                   "PAGE RENDERING PENDING: the destination view is not yet "
+                   "distinguishable from the preceding observation. The action was not "
+                   "dispatched. Observe the page again before using its controls "
+                   "or claiming arrival."))]
         return session._resume(turn, _trim(messages, session.keep_observations), obs,
                                successful_business_tools)
     highlighted = None

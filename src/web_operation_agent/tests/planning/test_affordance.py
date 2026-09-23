@@ -110,6 +110,14 @@ class TypedSourceAffordances(unittest.TestCase):
         self.assertEqual(resolve_source_affordances(
             smap, task="Clone the lead", served_webapps={"sfa"}), ())
 
+    def test_view_route_requiring_record_context_is_not_a_global_affordance(self):
+        smap = fixture()
+        smap.relations.append(relation(
+            "request_handler", "partymgr/viewidentifications", "", 42,
+            webapp="partymgr", event_type="view-only", route_requires_context=True))
+        self.assertEqual(resolve_source_affordances(
+            smap, task="View identifications", served_webapps={"partymgr"}), ())
+
     def test_same_route_with_different_menu_schemas_stays_as_separate_candidates(self):
         candidates = resolve_source_affordances(
             fixture(), task="Clone Lead", served_webapps={"sfa"})

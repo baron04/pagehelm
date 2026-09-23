@@ -95,7 +95,8 @@ def lookup_source(session, query: str, obs: PageObservation) -> EvidenceBundle:
                     "latency_ms": round((time.monotonic() - started) * 1000, 1)}
     cited = bundle.citation_keys
     for relation in session.source_map.by_kind("request_handler"):
-        if relation.attrs.get("event_type") != "view-only":
+        if (relation.attrs.get("event_type") != "view-only"
+                or relation.attrs.get("route_requires_context")):
             continue
         keys = {ref.key for ref in relation.evidence} & cited
         if keys:

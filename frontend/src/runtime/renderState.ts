@@ -10,8 +10,9 @@ function view(value: Projection): string {
 }
 
 export function renderState(previous: Projection | null, current: Projection,
-                            pendingView: PendingView | null = null):
-    {state: 'pending' | 'ready'; pendingView: PendingView | null} {
+                            pendingView: PendingView | null = null,
+                            applicationBlocked = false):
+    {state: 'pending' | 'ready' | 'blocked'; pendingView: PendingView | null} {
   const currentView = view(current)
   const returnedToOrigin = Boolean(pendingView
     && canonicalUrl(current.url) === pendingView.originUrl)
@@ -22,5 +23,6 @@ export function renderState(previous: Projection | null, current: Projection,
     pending = {originUrl: canonicalUrl(previous.url), projection: currentView}
   }
   if (pending && currentView !== pending.projection) pending = null
-  return {state: pending ? 'pending' : 'ready', pendingView: pending}
+  return {state: applicationBlocked ? 'blocked' : pending ? 'pending' : 'ready',
+    pendingView: pending}
 }

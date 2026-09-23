@@ -31,4 +31,11 @@ describe('page render state across SPA routes', () => {
     const pending = renderState(before, early)
     expect(renderState(early, before, pending.pendingView).state).toBe('ready')
   })
+
+  it('never calls an application-reported error screen ready', () => {
+    const before = page('https://app.test/inbox', 'Inbox')
+    const failed = page('https://app.test/orders', 'Error dialog')
+    expect(renderState(before, failed, null, true).state).toBe('blocked')
+    expect(renderState(failed, failed, null, false).state).toBe('ready')
+  })
 })

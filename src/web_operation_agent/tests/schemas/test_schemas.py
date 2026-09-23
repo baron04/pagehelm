@@ -119,6 +119,9 @@ class WireTypes(unittest.TestCase):
                                  landmarks=[], elements=[], render_state="pending")
         self.assertEqual(S.PageObservation.from_json(page.to_json()).render_state,
                          "pending")
+        page.render_state = "blocked"
+        self.assertEqual(S.PageObservation.from_json(page.to_json()).render_state,
+                         "blocked")
         self.assertEqual(S.PageObservation.from_json({
             key: value for key, value in page.to_json().items()
             if key != "render_state"}).render_state, "unknown")

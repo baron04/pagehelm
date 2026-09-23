@@ -308,6 +308,12 @@ class OdooCompiler:
         if name:
             self.action_names[xml_id] = name
         target = self._text(rel, fields.get("target"))
+        context = self._text(rel, fields.get("context"))
+        # A form button may open this window with ``active_id`` supplied by its record.
+        # The same action has a URL, but opening that URL from an unrelated page leaves
+        # the expression unbound and may render an error dialog. Keep its source fact for
+        # explanation; do not license it as a standalone navigation destination.
+        route_requires_context = bool(re.search(r"\bactive_(?:id|ids|model)\b", context))
         # A target=new action is a dialog/wizard, commonly a mutation such as payment or
         # mass cancellation. It must never be offered as a read-only navigation candidate.
         self._add("request_handler", identity, res_model,
@@ -316,7 +322,8 @@ class OdooCompiler:
                    "name": name, "url_path": url_path,
                    "view_mode": self._text(rel, fields.get("view_mode")),
                    "domain": self._text(rel, fields.get("domain")),
-                   "context": self._text(rel, fields.get("context")),
+                   "context": context,
+                   "route_requires_context": route_requires_context,
                    "target": target,
                    "help": self._markup_text(rel, fields.get("help"))},
                   self._cite(rel, node, excerpt=_ACTION_EXCERPT_CHARS))

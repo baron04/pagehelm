@@ -465,7 +465,10 @@ class ProductAnswerAndContinuationTests(unittest.TestCase):
     def test_unchanged_repeat_is_not_dispatched_and_a_second_repeat_ends_the_turn(self):
         with tempfile.TemporaryDirectory() as tmp:
             channel = _Channel()
-            chat = _Chat([("observe", {}), ("observe", {}), ("observe", {})])
+            # The first observation transitions this fixture from unknown rendering
+            # state to ready. Only the following identical ready observations repeat.
+            chat = _Chat([("observe", {}), ("observe", {}),
+                          ("observe", {}), ("observe", {})])
             executor = AgentTurnExecutor(
                 channel=channel,
                 config=AgentTurnConfig(
@@ -481,8 +484,8 @@ class ProductAnswerAndContinuationTests(unittest.TestCase):
 
             self.assertEqual(result.status, AgentTurnStatus.REFUSED)
             self.assertEqual(result.terminal_reason, "no_progress")
-            self.assertEqual(browser.actions, ["observe"])
-            self.assertIn("NO PROGRESS", chat.messages[2][-1]["content"])
+            self.assertEqual(browser.actions, ["observe", "observe"])
+            self.assertIn("NO PROGRESS", chat.messages[3][-1]["content"])
             events = [json.loads(line) for line in
                       (Path(tmp) / "session.jsonl").read_text().splitlines()]
             self.assertEqual(

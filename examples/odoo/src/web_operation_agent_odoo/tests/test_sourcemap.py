@@ -91,6 +91,13 @@ FIXTURES = {
         <field name="view_mode">list,form</field>
     </record>
 
+    <record id="action_tray_varieties" model="ir.actions.act_window">
+        <field name="name">Tray Varieties</field>
+        <field name="res_model">greenhouse.cultivar</field>
+        <field name="context">{'search_default_tray_id': [active_id]}</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
     <record id="other_module.someone_elses_action" model="ir.actions.act_window">
         <field name="context">{'search_default_mine': 1}</field>
     </record>
@@ -294,6 +301,20 @@ class Extraction(unittest.TestCase):
         self.assertEqual(trays.attrs["url_path"], "trays")
         self.assertEqual(trays.attrs["domain"], "[('active', '=', True)]")
         self.assertEqual(trays.attrs["event_type"], "view-only")
+
+    def test_a_record_dependent_action_is_knowledge_not_a_standalone_route(self):
+        dependent = next(relation for relation in self._by("request_handler")
+                         if relation.attrs["action_id"] == "greenhouse.action_tray_varieties")
+        self.assertTrue(dependent.attrs["route_requires_context"])
+        self.assertIn("active_id", dependent.attrs["context"])
+        ordinary = next(relation for relation in self._by("request_handler")
+                        if relation.attrs["action_id"] == "greenhouse.action_cultivars")
+        self.assertFalse(ordinary.attrs["route_requires_context"])
+        offered = resolve_source_affordances(
+            self.map, task="Open Tray Varieties", served_webapps={ODOO_SOURCE_SCOPE},
+            route_port=ODOO_ROUTE_PORT)
+        self.assertNotIn("action-greenhouse.action_tray_varieties",
+                         {candidate.request for candidate in offered})
 
     def test_a_cross_module_patch_is_reported_not_published_as_a_definition(self):
         self.assertNotIn("other_module.someone_elses_action",

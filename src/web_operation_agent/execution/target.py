@@ -203,6 +203,8 @@ def unmet_conditions(target: TargetState, obs: PageObservation, *,
     unmet: list[str] = []
     if obs.render_state == "pending":
         unmet.append("page rendering pending")
+    elif obs.render_state == "blocked":
+        unmet.append("application reports a blocking page error")
     if target.path:
         wanted = urlsplit(target.path)
         current = urlsplit(obs.url)

@@ -283,7 +283,9 @@ def resolve_source_affordances(source_map: SourceMap, *, task: str, query: str =
     view_only = {
         key: relations for key, relations in grouped_handlers.items()
         if key[0] in served and relations
-        and all(relation.attrs.get("event_type") == "view-only" for relation in relations)
+        and all(relation.attrs.get("event_type") == "view-only"
+                and not relation.attrs.get("route_requires_context")
+                for relation in relations)
     }
 
     menus_by_route: dict[tuple[str, str], list[SourceRelation]] = {}

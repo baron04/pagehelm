@@ -45,7 +45,8 @@ class OnlyFirstPartyBootstrapCodeIsCommitted(unittest.TestCase):
     def test_the_served_directory_tracks_only_the_first_party_loader(self):
         """Local modules ship here; third-party PageController remains provisioned."""
         first_party = {"loader.js", "page-controller-with-state.js", "page-facets.js",
-                       "facet-bridge.js", "record-bridge.js", "page-record-route.js"}
+                       "facet-bridge.js", "record-bridge.js", "page-record-route.js",
+                       "page-blocker.js"}
         tracked = sorted(path.name for path in deploy.SERVED_ASSETS.glob("*")
                          if path.name not in {".gitignore", *first_party})
         for name in tracked:
@@ -79,6 +80,8 @@ class OnlyFirstPartyBootstrapCodeIsCommitted(unittest.TestCase):
             root = Path(tmp)
             shutil.copyfile(deploy.SERVED_ASSETS / "page-controller-with-state.js",
                             root / "page-controller-with-state.js")
+            shutil.copyfile(deploy.SERVED_ASSETS / "page-blocker.js",
+                            root / "page-blocker.js")
             (root / "package.json").write_text('{"type":"module"}', encoding="utf-8")
             (root / "page-controller.js").write_text("""
 export class PageController {

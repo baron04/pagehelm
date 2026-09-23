@@ -15,7 +15,8 @@ from dataclasses import replace
 from pathlib import Path
 
 from web_operation_agent.execution.context import SessionContext
-from web_operation_agent.execution.session import LabApparatus, ServerAgentSession, TaskSpec
+from web_operation_agent.execution.session import (LabApparatus, ServerAgentSession,
+                                                   TaskSpec, _is_navigation_only)
 from web_operation_agent.execution.target import (MAX_TARGET_DECLARATIONS, TargetState,
                                                   parse_target, required_page_controls,
                                                   required_page_effects,
@@ -545,6 +546,43 @@ class TargetSettlement(unittest.TestCase):
         self.assertEqual(_events(session, "target_state_reached")[0]["page_epoch"], 3)
         self.assertIn("page rendering pending", chat.seen[2][-1]["content"])
 
+    def test_application_error_at_target_url_cannot_be_reported_as_arrival(self):
+        class ErrorView(_WorkspaceBrowser):
+            failed = False
+
+            def observe(self):
+                page = super().observe()
+                if self.failed:
+                    page.render_state = "blocked"
+                return page
+
+            def execute(self, action, args=None, expect_navigation=False):
+                receipt = super().execute(action, args, expect_navigation)
+                if action == "click":
+                    self.failed = True
+                    page = receipt.observation
+                    page.render_state = "blocked"
+                    return replace(receipt, observation=page)
+                return receipt
+
+        chat = _Chat([
+            ("set_target", {"path": PARTNER}),
+            ("click", {"ref": "e1"}),
+            ("finish", {"outcome": "acted"}),
+            ("click", {"ref": "e2"}),
+            ("finish", {"outcome": "unable"}),
+        ])
+        browser = ErrorView()
+        session = _session(self.tmp, chat, browser)
+        result = session.run()
+        self.assertEqual(result.terminal_reason, "agent_refused")
+        self.assertEqual([name for name, _ in browser.commands], ["click"])
+        self.assertEqual(_events(session, "target_state_reached"), [])
+        self.assertEqual(len(_events(session, "page_target_claim_refused")), 1)
+        self.assertEqual(len(_events(session, "blocked_page_action_refused")), 1)
+        self.assertIn("application reports a blocking page error",
+                      chat.seen[2][-1]["content"])
+
     def test_navigation_is_reported_on_the_receipt_and_closed_by_finish(self):
         chat = _Chat([
             ("set_target", {"path": PARTNER}),
@@ -832,6 +870,33 @@ class TargetSettlement(unittest.TestCase):
         _session(self.tmp, chat, _WorkspaceBrowser(),
                  prompt="Where are partner desks kept?").run()
         self.assertIn("A question about where something is kept", chat.seen[0][0]["content"])
+
+    def test_simple_location_questions_use_the_navigation_checkpoint(self):
+        for prompt in ("产品标签在哪里管理？", "产品变体在哪看？",
+                       "给供应商的付款记录在哪？",
+                       "Where can I manage partner desks?"):
+            with self.subTest(prompt=prompt):
+                self.assertTrue(_is_navigation_only(prompt))
+        for prompt in ("产品标签在哪里管理？也告诉我谁能修改。",
+                       "打开合作伙伴工作台，然后切到条款页签。",
+                       "为什么客户的订单会被取消？"):
+            with self.subTest(prompt=prompt):
+                self.assertFalse(_is_navigation_only(prompt))
+
+        chat = _Chat([
+            ("set_target", {"path": PARTNER}),
+            ("click", {"ref": "e1"}),
+            ("observe", {}),
+            ("finish", {"outcome": "acted"}),
+        ])
+        browser = _WorkspaceBrowser()
+        session = _session(self.tmp, chat, browser,
+                           prompt="合作伙伴工作台在哪里管理？")
+        result = session.run()
+        self.assertEqual(result.terminal_reason, "agent_finished")
+        self.assertEqual([name for name, _ in browser.commands], ["click"])
+        self.assertEqual([event["tool"] for event in
+                          _events(session, "target_checkpoint_tool_refused")], ["observe"])
 
     def test_a_pending_target_is_kept_in_view_after_context_trimming(self):
         chat = _Chat([

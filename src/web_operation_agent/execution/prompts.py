@@ -36,8 +36,12 @@ _CAPABILITY_QUESTION = re.compile(
 _NAVIGATION_ONLY = re.compile(
     r"^\s*(?:(?:请(?:帮我)?|帮我)\s*)?(?:打开|进入|前往|跳转到|跳转至)\s*"
     r"[^，。！？,!?]{1,200}\s*[。.!！]?\s*$|"
+    r"^\s*[^，。！？,!?]{1,160}(?:在哪(?:里)?|哪里)\s*"
+    r"(?:查看|看|管理|维护|设置|配置|找)?\s*[？?。.!！]?\s*$|"
     r"^\s*(?:please\s+)?(?:open|go\s+to|navigate\s+to)\s+"
-    r"[^.!?]{1,200}\s*[.!]?\s*$",
+    r"[^.!?]{1,200}\s*[.!]?\s*$|"
+    r"^\s*where\s+(?:(?:can|do)\s+(?:i|we)\s+)?(?:find|see|view|manage|configure)\s+"
+    r"[^.!?]{1,160}\s*[?]?\s*$",
     re.I,
 )
 
