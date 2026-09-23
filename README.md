@@ -65,8 +65,11 @@ agent.
 - For a request that names a page state -- open a screen, switch a tab, arrive at a record --
   the Agent declares that state up front with `set_target`: an exact same-application path
   and/or the accessible names of controls that must show as selected. After every successful
-  write-free page action the server compares the fresh observation with the declaration; when
-  it matches, the server reports the reached state. For a pure navigation request it accepts
+  write-free page action the server compares the fresh observation with the declaration. If
+  a single-page application has changed its URL but still exposes the prior page projection,
+  the embedded Runtime marks rendering pending and the server does not report arrival; a
+  later observation must show the replacement view. When the target matches a non-pending
+  observation, the server reports the reached state. For a pure navigation request it accepts
   only `finish` and `set_target` (other calls are refused without dispatch; the tool list stays
   the same for prefix caching). A request that also needs a fact may continue reading or
   observing. The sentence the user reads is composed from the observed
@@ -262,7 +265,7 @@ source compilation, fixture provisioning, and qualification.
   model requests. Use that combination only where the deployment's data policy permits it.
 - Browser and accessibility coverage is strongest on Chromium; other engines and screen
   readers are not comprehensively qualified.
-- A reached page state is checked only against what the Agent declared: the path and any controls it named as selected. The server does not check that the page finished rendering, or that the view or filters the person asked for are showing, so a declaration that leaves them out can be reported as reached. On one-sentence Chinese goals against the Odoo reference, 3 of 37 attempts were reported as reached this way.
+- A reached page state is checked only against what the Agent declared: the path and any controls it named as selected. The new pending-render signal catches the specific case of a changed SPA URL with the old page projection, but does not prove that all asynchronous loading has finished or that the requested view and filters are showing. A declaration that omits those conditions may still be reported as reached. In the earlier one-sentence Chinese goal run, 3 of 37 attempts were reported as reached incorrectly; that run predates this guard and has not yet been repeated.
 - An empty typed read no longer ends the turn automatically: the Agent receives the exact query result and can check whether the entity and filters match the question. This does not yet prove that a model-selected query covers the user's intent. In the earlier 37-goal run, the old automatic answer incorrectly reported two existing records as absent; one of those reads had searched a customer name for an order number.
 - Reaching a declared page target no longer blocks further reading or observation for requests classified as more than pure navigation. A target still covers only the conditions the Agent declared, so a question or view requirement omitted from that declaration can remain unmet.
 

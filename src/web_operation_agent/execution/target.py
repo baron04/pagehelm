@@ -114,6 +114,8 @@ def unmet_conditions(target: TargetState, obs: PageObservation) -> tuple[str, ..
     observation; nothing here reaches into the page beyond what the browser reported.
     """
     unmet: list[str] = []
+    if obs.render_state == "pending":
+        unmet.append("page rendering pending")
     if target.path:
         wanted = urlsplit(target.path)
         current = urlsplit(obs.url)

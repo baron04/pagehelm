@@ -55,6 +55,8 @@ export interface PageObservation {
   content: string
   messages: string[]
   truncated: boolean
+  /** A URL transition whose page projection is still the preceding route cannot settle. */
+  render_state?: 'pending' | 'ready'
 }
 
 export interface ObservationEnvelope {

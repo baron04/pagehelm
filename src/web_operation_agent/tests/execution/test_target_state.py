@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from web_operation_agent.execution.session import LabApparatus, ServerAgentSession, TaskSpec
@@ -160,6 +161,12 @@ class TargetParsing(unittest.TestCase):
         self.assertTrue(unmet_conditions(TargetState(selected=("Terms",)),
                                          _page(1, PARTNER, active_tab="overview")))
 
+    def test_a_matching_url_with_the_previous_view_still_rendering_is_unmet(self):
+        pending = _page(2, PARTNER)
+        pending.render_state = "pending"
+        self.assertEqual(unmet_conditions(TargetState(PARTNER), pending),
+                         ("page rendering pending",))
+
 
 class TargetSettlement(unittest.TestCase):
     def setUp(self):
@@ -168,6 +175,36 @@ class TargetSettlement(unittest.TestCase):
 
     def tearDown(self):
         self.directory.cleanup()
+
+    def test_spa_url_change_waits_for_the_destination_view_before_claiming_arrival(self):
+        class DelayedView(_WorkspaceBrowser):
+            def execute(self, action, args=None, expect_navigation=False):
+                receipt = super().execute(action, args, expect_navigation)
+                if action == "click":
+                    old_view = _page(receipt.observation.epoch, DESKS)
+                    old_view.url = ORIGIN + PARTNER
+                    old_view.render_state = "pending"
+                    return replace(receipt, observation=old_view)
+                return receipt
+
+        chat = _Chat([
+            ("set_target", {"path": PARTNER}),
+            ("click", {"ref": "e1"}),
+            ("click", {"ref": "e1"}),
+            ("observe", {}),
+            ("finish", {"outcome": "acted"}),
+        ])
+        browser = DelayedView()
+        session = _session(self.tmp, chat, browser)
+
+        result = session.run()
+
+        self.assertEqual(result.terminal_reason, "agent_finished")
+        self.assertEqual([name for name, _ in browser.commands], ["click", "observe"])
+        self.assertEqual(len(_events(session, "pending_page_action_refused")), 1)
+        self.assertEqual(len(_events(session, "target_state_reached")), 1)
+        self.assertEqual(_events(session, "target_state_reached")[0]["page_epoch"], 3)
+        self.assertIn("page rendering pending", chat.seen[2][-1]["content"])
 
     def test_navigation_is_reported_on_the_receipt_and_closed_by_finish(self):
         chat = _Chat([

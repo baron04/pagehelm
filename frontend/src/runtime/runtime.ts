@@ -27,6 +27,7 @@ import {createPanelContainer, keepAttached, mountPanel, type PanelHandle} from '
 import {PanelHost, backoffAfter, classifyTransportError, type TransportVerdict} from './panelHost'
 import {createRedactor, type Redactor} from './redaction'
 import * as results from './results'
+import {renderState, type PendingView} from './renderState'
 import {clearStored, loadSession, writeStored, type SessionState} from './storage'
 import {SessionClient, sseBatches} from './transport'
 import {closeWriteGuard, openWriteGuard} from './writeGuard'
@@ -76,6 +77,7 @@ export class EmbeddedWebRuntime {
   currentObservation: ObservationEnvelope | null = null
   observationFingerprints = new Map<string, string>()
   observedUrl = ''
+  private pendingView: PendingView | null = null
   eventAbortController: AbortController | null = null
   /** Set once PageController is loaded; conformance tests set both directly. */
   controller: PageControllerApi | null = null
@@ -703,6 +705,10 @@ export class EmbeddedWebRuntime {
     const epoch = ++this.stored.epoch
     this._save()
     const reading = page.describe(state, epoch)
+    const readiness = renderState(this.currentObservation?.observation ?? null,
+      reading.observation, this.pendingView)
+    this.pendingView = readiness.pendingView
+    reading.observation.render_state = readiness.state
     const envelope: ObservationEnvelope = {
       schema_version: WIRE_VERSION,
       session_id: this.sessionId,

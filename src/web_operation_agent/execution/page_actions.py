@@ -34,6 +34,16 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
     result, t0, step = turn.result, turn.started_at, turn.step
     messages, obs = turn.messages, turn.obs
     successful_business_tools = turn.successful_business_tools
+    if obs.render_state == "pending" and name not in {"observe", "wait_for"}:
+        session.ledger.append("pending_page_action_refused", step=step, tool=name,
+                              dispatched=False, side_effect_possible=False)
+        messages += [_assistant_call(call), _tool_result(
+            call, "PAGE RENDERING PENDING: the destination view is not yet "
+                  "distinguishable from the preceding observation. The action was not "
+                  "dispatched. Observe the page again "
+                  "before using its controls or claiming arrival.")]
+        return session._resume(turn, _trim(messages, session.keep_observations), obs,
+                               successful_business_tools)
     click_refusal = ""
     if name == "click" and name in session.disabled_actions \
             and session.click_policy is not None:
@@ -352,7 +362,21 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
         return _Next(session._finish(result, t0, reason, detail, steps=step))
     if receipt.observation is not None:
         obs = receipt.observation
+    if (session._pending_navigation_url and obs.url != session._pending_navigation_url):
+        session._pending_navigation_url = ""
+    if (session._pending_navigation_url and obs.render_state != "pending"
+            and receipt.ok and receipt.observation is not None
+            and receipt.observation.epoch > prior_page_epoch
+            and write["state"] == WRITE_NONE):
+        session._answer_action_receipt = {
+            "kind": "navigation", "url": session._pending_navigation_url}
+        session._pending_navigation_url = ""
     if ((name in ("goto", "back") or (name == "click" and receipt.navigated))
+            and receipt.ok and receipt.observation is not None
+            and receipt.observation.epoch > prior_page_epoch
+            and obs.render_state == "pending"):
+        session._pending_navigation_url = obs.url
+    elif ((name in ("goto", "back") or (name == "click" and receipt.navigated))
             and receipt.ok and receipt.observation is not None
             and receipt.observation.epoch > prior_page_epoch):
         if session._answer_action_receipt is not None and session._answer_action_receipt["kind"] == "mutation":
@@ -393,7 +417,7 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
             and name == "goto" and latest_business_route
             and receipt.ok and receipt.observation is not None
             and receipt.observation.epoch > prior_page_epoch
-            and target_observed):
+            and target_observed and obs.render_state != "pending"):
         result.agent_said = (
             "已打开请求的页面。"
             if re.search(r"[\u3400-\u9fff]", session.task.prompt)

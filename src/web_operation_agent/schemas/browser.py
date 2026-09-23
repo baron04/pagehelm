@@ -121,6 +121,9 @@ class PageObservation:
     content: str = ""
     messages: list[str] = field(default_factory=list)
     truncated: bool = False
+    # The embedded Runtime marks a URL transition pending while its page projection
+    # still belongs to the preceding route. Older browser ports omit this signal.
+    render_state: str = "unknown"
 
     def __post_init__(self) -> None:
         _schema_version(self.schema_version, "PageObservation")
@@ -146,6 +149,8 @@ class PageObservation:
         _require(all(isinstance(item, str) for item in self.messages),
                  "messages entries must be strings")
         _bool(self.truncated, "truncated")
+        _require(self.render_state in {"unknown", "pending", "ready"},
+                 "render_state must be unknown, pending or ready")
         self.landmarks = copy.deepcopy(self.landmarks)
         self.elements = copy.deepcopy(self.elements)
         self.messages = copy.deepcopy(self.messages)
@@ -157,12 +162,14 @@ class PageObservation:
                 "messages": copy.deepcopy(self.messages), "truncated": self.truncated}
         if self.content:
             out["content"] = self.content
+        if self.render_state != "unknown":
+            out["render_state"] = self.render_state
         return out
 
     @staticmethod
     def from_json(d: dict) -> "PageObservation":
         allowed = {"schema_version", "epoch", "url", "title", "landmarks", "elements",
-                   "content", "messages", "truncated"}
+                   "content", "messages", "truncated", "render_state"}
         required = {"schema_version", "epoch", "url", "title", "landmarks", "elements"}
         d = _strict_object(d, "PageObservation", allowed=allowed, required=required)
         _require(isinstance(d["landmarks"], list), "landmarks must be an array")
@@ -173,7 +180,8 @@ class PageObservation:
                                elements=[ElementRef.from_json(e) for e in d.get("elements", [])],
                                content=_str(d.get("content", ""), "content", allow_empty=True),
                                messages=copy.deepcopy(d.get("messages", [])),
-                               truncated=d.get("truncated", False))
+                               truncated=d.get("truncated", False),
+                               render_state=d.get("render_state", "unknown"))
 
     @property
     def content_digest(self) -> str:

@@ -320,6 +320,10 @@ class SessionContext:
 def _render_observation(obs: PageObservation, max_elements: int = RENDER_ELEMENTS) -> str:
     lines = ["BEGIN_UNTRUSTED_PAGE_OBSERVATION",
              f"url: {obs.url}", f"title: {obs.title}"]
+    if obs.render_state == "pending":
+        lines.append("render_state: pending; this URL's view is not distinguishable "
+                     "from the preceding observation. "
+                     "Observe again before using page controls or claiming arrival.")
     if obs.landmarks:
         lines.append("headings: " + " | ".join(obs.landmarks[:12]))
     if obs.messages:

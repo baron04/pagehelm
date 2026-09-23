@@ -594,6 +594,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         #: A fresh page has shown the declared target and the model has not yet said
         #: whether that completes the request. Only `finish` and `set_target` are offered.
         self._target_reached = False
+        self._pending_navigation_url = ""
         self._tool_surface = ToolSurface(self)
 
     # -- phases ------------------------------------------------------------------------
