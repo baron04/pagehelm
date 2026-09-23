@@ -253,6 +253,8 @@ source compilation, fixture provisioning, and qualification.
   model requests. Use that combination only where the deployment's data policy permits it.
 - Browser and accessibility coverage is strongest on Chromium; other engines and screen
   readers are not comprehensively qualified.
+- A reached page state is checked only against what the Agent declared: the path and any controls it named as selected. The server does not check that the page finished rendering, or that the view or filters the person asked for are showing, so a declaration that leaves them out can be reported as reached. On one-sentence Chinese goals against the Odoo reference, 3 of 37 attempts were reported as reached this way.
+- A typed read that finds nothing answers "not found" for the scope it searched, and says so, but that scope can be narrower than the question: the Odoo quotations read does not cover confirmed sales orders, and the customers read does not cover partners without a customer role. In the same run, 2 of 37 attempts told the person a record did not exist when it did.
 
 ## License
 
