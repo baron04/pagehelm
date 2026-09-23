@@ -133,7 +133,11 @@ class FinishHandler:
                                     "lowered_because": ()}
                     verified["action"] = self._answer_action_receipt
                 else:
-                    verified = answer_protocol.submit(self.evidence, args)
+                    ignored: list[str] = []
+                    verified = answer_protocol.submit(self.evidence, args, ignored=ignored)
+                    if ignored:
+                        self.ledger.append("answer_fields_ignored", step=step,
+                                           fields=ignored[:12])
                 if self._refused_reads and any(
                         item["kind"] == "page_observation"
                         for item in verified["conclusions"]):

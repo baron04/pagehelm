@@ -8,9 +8,9 @@ from .computation import COMPARISONS, ComputationRequest, run
 from .conclusion import (Aggregate, AnswerDraft, CapabilityGap, ConclusionRefused, FieldValue,
                          NotFound, PageFact, Selection, SkillStatement, SourceExcerpt,
                          SourceHistory, Undetermined, verify)
-from .evidence import (CapabilityEvidence, ComputationEvidence, PageEvidence, QueryEvidence,
-                       RecordEvidence, SelectionEvidence, SkillEvidence, SourceEvidence,
-                       SourceHistoryEvidence, TurnEvidence)
+from .evidence import (CapabilityEvidence, ComputationEvidence, EvidenceUnknown, PageEvidence,
+                       QueryEvidence, RecordEvidence, SelectionEvidence, SkillEvidence,
+                       SourceEvidence, SourceHistoryEvidence, TurnEvidence)
 
 MAX_INDEX_BYTES = 24 * 1024
 MAX_CONCLUSIONS = 50
@@ -183,8 +183,27 @@ def compute(turn: TurnEvidence, args: dict, *, result_ref: str, observed_at: str
         evidence_id=result_ref, observed_at=observed_at)
 
 
-def submit(turn: TurnEvidence, args: dict) -> dict | None:
-    """Resolve IDs, never accept record/value/scope assertions supplied by the model."""
+def _recorded_refs(turn: TurnEvidence) -> str:
+    """The refs a conclusion may cite, newest first, so a refusal can name the right one.
+
+    Records are left out: there can be hundreds, and each is reachable from its query.
+    """
+    listed = [f"{ref} ({_KIND_OF.get(type(item), 'evidence')})"
+              for ref in reversed(turn.ids())
+              if not isinstance(item := turn.get(ref), RecordEvidence)]
+    return ", ".join(listed[:12]) or "none"
+
+
+def _compute_hint(ref: str) -> str:
+    return (f"call compute with {{\"operation\": \"count\", \"dataset_ref\": \"{ref}\"}} "
+            "(or sum/average with a field), then cite the calc# ref its result names")
+
+
+def submit(turn: TurnEvidence, args: dict, *, ignored: list | None = None) -> dict | None:
+    """Resolve IDs, never accept record/value/scope assertions supplied by the model.
+
+    `ignored` collects fields dropped rather than refused, for the caller's audit.
+    """
     _shape(args, {"outcome", "answer"}, {"outcome"}, "finish")
     if args["outcome"] not in ("answered", "partial", "unable"):
         raise ConclusionRefused("invalid answer outcome")
@@ -215,7 +234,14 @@ def submit(turn: TurnEvidence, args: dict) -> dict | None:
         ref = entry["evidence_ref"]
         if not isinstance(ref, str):
             raise ConclusionRefused("evidence_ref must be a string")
-        item = turn.get(ref)
+        try:
+            item = turn.get(ref)
+        except EvidenceUnknown:
+            # Name what can be cited. Found live: a count computed as calc#4 cited as
+            # "call2-compute#1", refused with only the wrong name, until the repairs ran out.
+            raise EvidenceUnknown(
+                f"this turn recorded no evidence {ref[:80]!r}; cite one of the refs it did "
+                f"record: {_recorded_refs(turn)}") from None
         kind = entry["kind"]
         fields = entry.get("fields", [])
         if (not isinstance(fields, list) or len(fields) > 12
@@ -225,15 +251,12 @@ def submit(turn: TurnEvidence, args: dict) -> dict | None:
         if fields and kind != "selection":
             raise ConclusionRefused("fields are only valid for selection")
         if ("statement" in entry or "support" in entry) and not source_kind:
-            # Worth naming the repair. A turn that held both a typed result and a Skill or
-            # source reference kept putting its sentence on the data conclusion too, and
-            # spent every repair on a message that named only what was wrong.
-            field = "statement" if "statement" in entry else "support"
-            article = "an" if kind[:1] in "aeiou" else "a"
-            raise ConclusionRefused(
-                f"{article} {kind} conclusion carries no {field}: the server writes it from "
-                f"{ref}. Remove the {field} field here; only source_excerpt, "
-                "source_history and skill_statement carry one")
+            # The server writes a data conclusion's sentence from the cited evidence, so
+            # the model's own is never shown and is dropped here rather than refused. A
+            # refusal cost a repair on most data answers, and on some every repair.
+            if ignored is not None:
+                ignored += [f"{ref[:80]}.{name}" for name in ("statement", "support")
+                            if name in entry]
         if kind == "field_value" and isinstance(item, RecordEvidence):
             conclusions.append(FieldValue(item.record_id, item.field_name, ref))
         elif kind == "selection" and isinstance(item, (QueryEvidence, SelectionEvidence)):
@@ -267,6 +290,12 @@ def submit(turn: TurnEvidence, args: dict) -> dict | None:
             if not about:
                 raise ConclusionRefused("this reference does not identify an evidence gap")
             conclusions.append(Undetermined(about, ref))
+        elif kind == "aggregate" and isinstance(item, (QueryEvidence, SelectionEvidence)):
+            # The number is the server's to compute; say exactly how.
+            raise ConclusionRefused(
+                f"an aggregate cites a compute result, and {ref} is "
+                f"{_KIND_OF[type(item)]}: {_compute_hint(ref)}. To list the records "
+                "instead, cite it as a selection")
         else:
             raise ConclusionRefused(
                 f"conclusion kind does not match its evidence: {kind} cites "
@@ -336,7 +365,11 @@ def evidence_index(turn: TurnEvidence, refs: tuple[str, ...]) -> str:
 
 
 def computation_feedback(turn: TurnEvidence, result_ref: str) -> str:
-    """A selection remains usable when the older query message leaves the context window."""
+    """A selection remains usable when the older query message leaves the context window.
+
+    The first line names the ref to cite and as what: a count computed as calc#4 was once
+    cited under a name the model made up.
+    """
     item = turn.get(result_ref)
     refs = [result_ref]
     if isinstance(item, SelectionEvidence):
@@ -345,4 +378,6 @@ def computation_feedback(turn: TurnEvidence, result_ref: str) -> str:
         refs.extend(ref for ref in turn.ids()
                     if isinstance(record := turn.get(ref), RecordEvidence)
                     and record.origin == query.origin and record.record_id in item.members)
-    return evidence_index(turn, tuple(refs))
+    cite = ("selection" if isinstance(item, SelectionEvidence) else "aggregate")
+    return (f"COMPUTED: cite this result as evidence_ref \"{result_ref}\" with kind "
+            f"{cite}.\n" + evidence_index(turn, tuple(refs)))

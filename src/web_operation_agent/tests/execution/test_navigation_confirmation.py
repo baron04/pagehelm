@@ -20,6 +20,7 @@ from web_operation_agent.transport.panel_view import panel_contract
 from web_operation_agent.schemas import ActionReceipt
 from web_operation_agent.execution.session import NavigationPlan, ServerAgentSession, TaskSpec
 from web_operation_agent.execution.business_tools import apply_form_draft
+from web_operation_agent.tests.support.answer import _turn
 from web_operation_agent.tests.support.route_fixture import FIXTURE_ROUTE_PORT
 from web_operation_agent.tests.support.execution import (
     _Browser, _Chat, _Control, _obs, form_page,
@@ -286,6 +287,32 @@ class TheSessionAsksBeforeLeavingThePage(unittest.TestCase):
             self.assertEqual(len(session.ledger.of_kind("finalizing_tool_refused")), 1)
             self.assertEqual(result.verified_answer["action"]["url"],
                              "http://app/y")
+
+    def test_answer_repair_after_action_may_still_compute(self):
+        # An answer refusal can name compute as its repair; it touches no page, so the
+        # finalizing turn runs it rather than refusing the repair it asked for.
+        with tempfile.TemporaryDirectory() as tmp:
+            chat = _Chat([
+                ("click", {"ref": "e1"}),
+                ("finish", {"outcome": "acted", "answer": {
+                    "version": 1, "coverage": "complete", "conclusions": [{
+                        "kind": "page_observation", "evidence_ref": "e1"}]}}),
+                ("compute", {"operation": "count", "dataset_ref": "query#1"}),
+                ("finish", {"outcome": "acted"}),
+            ])
+            session = _session(tmp, chat=chat,
+                               browser=_Browser([_obs(1), _obs(2, "http://app/y")]),
+                               person=_Person("approved"))
+            session._answer_mode = True
+            read = _turn()
+            for ref in read.ids():
+                session.evidence.record(read.get(ref))
+
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "agent_finished")
+            self.assertEqual(session.ledger.of_kind("finalizing_tool_refused"), [])
+            self.assertEqual(len(session.ledger.of_kind("answer_computed")), 1)
 
     def test_answer_repair_can_cite_latest_page_without_another_browser_read(self):
         with tempfile.TemporaryDirectory() as tmp:

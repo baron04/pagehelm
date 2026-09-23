@@ -2,7 +2,10 @@
 from dataclasses import replace
 import unittest
 
-from web_operation_agent.answer.answer_protocol import compute, evidence_index, submit, MAX_INDEX_BYTES
+from web_operation_agent.answer.answer_protocol import (MAX_INDEX_BYTES, compute,
+                                                        computation_feedback, evidence_index,
+                                                        submit)
+from web_operation_agent.answer.evidence import EvidenceUnknown
 from web_operation_agent.answer.answer_view import render_payload
 from web_operation_agent.answer.conclusion import ConclusionRefused
 from web_operation_agent.tests.support.answer import AT, _turn
@@ -89,23 +92,39 @@ class AnswerWireContract(unittest.TestCase):
         self.assertRegex(str(caught.exception), r"this read has \w+")
 
     def test_wrong_conclusion_type_cannot_relabel_a_query_as_an_aggregate(self):
-        with self.assertRaises(ConclusionRefused):
+        with self.assertRaises(ConclusionRefused) as caught:
             submit(_turn(), _draft("aggregate", "query#1"))
+        # The refusal is the call to make, not only the rule: the number is the server's.
+        self.assertIn('{"operation": "count", "dataset_ref": "query#1"}', str(caught.exception))
 
-    def test_a_data_conclusion_with_prose_is_refused_with_the_repair_named(self):
-        # A turn holding both a typed result and a Skill or source reference puts its
-        # sentence on the data conclusion too. The refusal has to say which field to drop,
-        # or every repair is spent rediscovering that.
+    def test_an_unknown_ref_is_refused_with_the_refs_that_can_be_cited(self):
+        # Found live: a count computed as calc#4 was cited as "call2-compute#1", refused
+        # with only the wrong name, until the repairs ran out.
+        turn = _turn()
+        feedback = computation_feedback(turn, compute(
+            turn, {"operation": "count", "dataset_ref": "query#1"},
+            result_ref="calc#4", observed_at=AT).evidence_id)
+        self.assertTrue(feedback.startswith(
+            'COMPUTED: cite this result as evidence_ref "calc#4" with kind aggregate.'))
+        with self.assertRaises(EvidenceUnknown) as caught:
+            submit(turn, _draft("aggregate", "call2-compute#1"))
+        message = str(caught.exception)
+        self.assertIn("calc#4 (a compute result), query#1 (a query)", message)
+        self.assertNotIn("record#", message)
+
+    def test_prose_on_a_data_conclusion_is_dropped_not_refused(self):
+        # The server writes a data conclusion's sentence from its evidence, so the model's
+        # own is never shown. Refusing it cost a repair on most data answers.
         for field in ("statement", "support"):
             with self.subTest(field=field):
-                draft = _draft("selection", "query#1", fields=["name"])
+                draft = _draft("selection", "query#1", fields=["amount_total"])
                 draft["answer"]["conclusions"][0][field] = "four are still in draft"
-                with self.assertRaises(ConclusionRefused) as caught:
-                    submit(_turn(), draft)
-                message = str(caught.exception)
-                self.assertIn(f"selection conclusion carries no {field}", message)
-                self.assertIn(f"Remove the {field} field", message)
-                self.assertIn("skill_statement", message)
+                ignored: list[str] = []
+                answer = submit(_turn(), draft, ignored=ignored)
+                self.assertEqual(ignored, [f"query#1.{field}"])
+                self.assertNotIn("four are still in draft", str(answer))
+                self.assertNotIn("four are still in draft", render_payload(
+                    answer, user_text="Which are open?", max_chars=2000))
 
     def test_large_index_is_explicitly_bounded_without_mutating_evidence(self):
         turn = _turn()

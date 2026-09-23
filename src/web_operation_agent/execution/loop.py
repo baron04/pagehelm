@@ -446,7 +446,9 @@ def run_loop(session) -> RunResult:
                 return session._finish(result, t0, "indeterminate_write",
                                     session._writes.uncertain_write, steps=step)
 
-        if session._finalizing and name != "finish":
+        if session._finalizing and name not in ("finish", "compute"):
+            # compute is arithmetic on evidence already read, with nothing dispatched, and
+            # an answer refusal may name it as the repair.
             session._answer_repairs += 1
             session.ledger.append("finalizing_tool_refused", step=step, tool=name,
                                   dispatched=False, repair=session._answer_repairs)
@@ -456,8 +458,8 @@ def run_loop(session) -> RunResult:
                                        steps=step)
             messages += [_assistant_call(call), _tool_result(
                 call, "This turn is finalizing an observed action. No more tools may "
-                      "run. Submit finish using existing evidence, or use "
-                      "outcome=unable.")]
+                      "run except compute on evidence already read. Submit finish using "
+                      "existing evidence, or use outcome=unable.")]
             continue
 
         if (session._target_reached
