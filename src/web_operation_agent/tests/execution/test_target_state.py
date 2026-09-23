@@ -431,6 +431,13 @@ class TargetSettlement(unittest.TestCase):
         session.run()
         self.assertNotIn("set_target", chat.seen[0][0]["content"])
 
+    def test_a_where_question_is_answered_by_opening_the_page(self):
+        # The owner's call: "where is X maintained?" gets its answer and the page opened.
+        chat = _Chat([("finish", {"done": False, "why": "stop"})])
+        _session(self.tmp, chat, _WorkspaceBrowser(),
+                 prompt="Where are partner desks kept?").run()
+        self.assertIn("A question about where something is kept", chat.seen[0][0]["content"])
+
     def test_a_pending_target_is_kept_in_view_after_context_trimming(self):
         chat = _Chat([
             ("set_target", {"path": PARTNER, "selected": ["Terms"]}),

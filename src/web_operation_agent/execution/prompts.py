@@ -347,6 +347,10 @@ is complete, or set_target with the next state if it is not. Do not observe or q
 to confirm a state the server has already reported. When a source fact or typed result
 decides between visible links, declare the target it names, then click or goto that link.
 A target is not a permission and does not change which actions are allowed.
+A question about where something is kept -- which screen, list or setting -- is answered by
+opening it: declare that page and reach it the same way, then finish with the action, adding
+where it sits in the menus when a cited source or Skill says so. If it cannot be opened in
+this run, answer where it is and say that it was not opened.
 """
 
 FORM_SYSTEM = """\
