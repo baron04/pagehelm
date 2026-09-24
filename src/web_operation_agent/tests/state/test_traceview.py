@@ -9,15 +9,24 @@ import unittest
 from importlib.resources import files
 from pathlib import Path
 
-from web_operation_agent.state.traceview import (build_trace_case, render_trace_html,
-                                            write_trace_bundle)
+from unittest import mock
+
+from web_operation_agent.state import traceview
+from web_operation_agent.state.traceview import (TraceReplayUnavailable, build_trace_case,
+                                            render_trace_html, write_trace_bundle)
+
+#: The page's source is the frontend's; what the server fills in is the frontend's build of it.
+SOURCE = Path(__file__).resolve().parents[4] / "frontend" / "trace" / "trace_replay.html"
+BUILT = files("web_operation_agent").joinpath("web_runtime", "trace_replay.html").is_file()
+needs_build = unittest.skipUnless(
+    BUILT, "the trace replay page is not built; run scripts/build_panel.py")
 
 
 class TraceViewTests(unittest.TestCase):
-    @staticmethod
-    def _template() -> str:
-        return files("web_operation_agent").joinpath(
-            "web_runtime", "trace_replay.html").read_text(encoding="utf-8")
+    def _template(self) -> str:
+        if not SOURCE.is_file():
+            self.skipTest("the frontend project is not present in this checkout")
+        return SOURCE.read_text(encoding="utf-8")
 
     def _files(self, root: Path, events=None):
         result = {
@@ -73,6 +82,7 @@ class TraceViewTests(unittest.TestCase):
                 build_trace_case(case_id="x", label="X", mode="test",
                                  result_path=result, ledger_path=ledger)
 
+    @needs_build
     def test_writes_json_and_dependency_free_html(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -86,8 +96,8 @@ class TraceViewTests(unittest.TestCase):
             self.assertIn('id="trace-data"', page)
             self.assertNotIn("__WOA_TRACE_BUNDLE__", page)
             self.assertNotIn("__WOA_DESIGN_TOKENS__", page)
-            # The replay shares the product's palette and none of its code: it renders a
-            # past run from a static bundle, which is a different job from driving a session.
+            # The replay is built with the product's palette and none of its code: it renders
+            # a past run from a static bundle, which is a different job from driving a session.
             self.assertIn("--woa-accent: #1d4ed8;", page)
             self.assertIn("prefers-color-scheme: dark", page)
             self.assertNotIn("createAssistantPanel", page)
@@ -121,6 +131,14 @@ class TraceViewTests(unittest.TestCase):
         self.assertIn("合成", example["cases"][0]["mode"])
         self.assertIn("不包含真实会话", example["cases"][0]["answer"])
 
+    def test_an_unbuilt_page_is_refused_by_name(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(traceview, "_TRACE_TEMPLATE", ("web_runtime", "absent.html")):
+            with self.assertRaises(TraceReplayUnavailable):
+                render_trace_html({"schema_version": 1, "product": "P", "cases": []},
+                                  Path(tmp) / "replay.html")
+
+    @needs_build
     def test_renderer_uses_redacted_product_name_in_title(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "replay.html"
@@ -145,6 +163,7 @@ class TraceViewTests(unittest.TestCase):
                 check=False)
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
+    @needs_build
     def test_rendered_replay_runs_from_a_local_file_with_no_dependency(self):
         try:
             from playwright.sync_api import Error as PlaywrightError

@@ -597,6 +597,7 @@ def run_demo(config: DemoConfig) -> dict:
             runner_factory=runner_factory,
             navigation_mode=bound.descriptor.navigation_mode,
             sensitive_query_keys=bound.ports.routes.session_handoff_query_keys,
+            panel_suggestions=bound.descriptor.panel_suggestions,
             principal=principal,
         ).start()
         try:

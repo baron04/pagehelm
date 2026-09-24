@@ -12,6 +12,7 @@ import {createRoot, type Root} from 'react-dom/client'
 import css from './styles/panel.scss?inline'
 import {requirePanelHost, type PanelHost} from './bridge/host'
 import {PANEL_PROTOCOL} from './contract/panel'
+import presentation from './presentation.json'
 import {ErrorBoundary, guarded, PanelFailure, reportPanelFailure} from './components/ErrorBoundary'
 import {PanelWindow} from './components/PanelWindow'
 
@@ -69,7 +70,7 @@ export function mountPanel(options: MountOptions): PanelHandle {
   element.setAttribute('role', 'complementary')
   element.setAttribute('aria-label', host.configuration.labels.assistant);
   element.style.setProperty(
-    'z-index', String(host.configuration.layout.overlay_z_index), 'important');
+    'z-index', String(presentation.layout.overlay_z_index), 'important');
   (options.container ?? documentRef.body).appendChild(element)
 
   // `:host-context()` is not portable, so the document's explicit theme choice is copied

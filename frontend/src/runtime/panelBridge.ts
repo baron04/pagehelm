@@ -6,6 +6,7 @@
  * application frameworks own and sometimes replace body children -- and reattaching it
  * afterwards still shows a blink where page and panel both repaint.
  */
+import presentation from '../presentation.json'
 import {contained} from './contain'
 import type {PanelHost} from './panelHost'
 
@@ -29,6 +30,7 @@ export function createPanelContainer(): HTMLDivElement {
     position: 'fixed', inset: '0', width: '0', height: '0',
     'min-width': '0', 'min-height': '0', flex: 'none', overflow: 'visible',
     'pointer-events': 'none',
+    'z-index': String(presentation.layout.overlay_z_index),
   })) {
     container.style.setProperty(name, value, 'important')
   }

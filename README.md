@@ -250,8 +250,11 @@ agent.
   automatically.
 - A short-lived actor/tenant/workspace principal can be bound to the browser capability,
   typed-tool scopes, approvals, mutations, audit records, and revocation state.
-- The React assistant panel is a view over server state. Its copy, bounds, state names, and
-  palette come from server-owned contracts.
+- The React assistant panel is a view over server state. The copy the server sends, its text
+  limits, and its state names come from server-owned contracts; its palette, scale, window
+  geometry, and the standing entry's words are its own.
+- An application may declare up to six goals for the empty panel to suggest, as `panel_suggestions` on its descriptor; each names the workflow it exercises (`enumerate`, `filter`, or `write`). The core suggests nothing on its own. Picking a suggestion fills the composer and never submits.
+- The panel opens as a floating window on the launcher's corner, or as a full-height drawer at the right edge; a title-bar button switches between them. On a viewport at least 900px wide the drawer narrows the host page by setting the root element's width, and gives it back when closed; elements the application positions against the viewport (`position: fixed`, such as dialogs and notifications) are not narrowed and can sit partly under the drawer. On a narrower viewport the drawer covers the page instead. The chosen mode, the floating window's placement, and the drawer's width are kept in the browser's local storage; switching modes resets placement and width to their defaults.
 - Optional SQLite stores provide session ownership, progress outbox, bounded conversation
   context, mutation journals, backups, and explicit operator settlement.
 

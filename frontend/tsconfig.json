@@ -27,5 +27,5 @@
       "@contract/*": ["../src/web_operation_agent/web_runtime/*"]
     }
   },
-  "include": ["src", "stories", "tests", "scripts", "vite.config.ts", "*.ts"]
+  "include": ["src", "stories", "tests", "scripts", "dev", "e2e", "vite.config.ts", "*.ts"]
 }

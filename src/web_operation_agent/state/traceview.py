@@ -7,7 +7,6 @@ from importlib.resources import files
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from ..transport.panel_view import token_custom_properties
 from ..privacy import (has_unredacted_sensitive_assignment,
                        has_unredacted_session_handoff,
                        redact_sensitive_assignments, redact_session_handoffs)
@@ -21,6 +20,10 @@ VISIBLE_EVENTS = frozenset({
 })
 
 _TRACE_TEMPLATE = ("web_runtime", "trace_replay.html")
+
+
+class TraceReplayUnavailable(RuntimeError):
+    """The replay page is built by the frontend, and this installation has no build of it."""
 
 
 def _safe(value):
@@ -161,17 +164,17 @@ def render_trace_html(bundle: dict, output: str | Path) -> None:
     """Render a dependency-free replay that also works from a local file URL."""
     safe_bundle = _safe(bundle)
     data = json.dumps(safe_bundle, ensure_ascii=False, sort_keys=True).replace("</", "<\\/")
-    template = files("web_operation_agent").joinpath(*_TRACE_TEMPLATE).read_text(encoding="utf-8")
+    # The page -- markup, script, and the palette inlined into it -- is the frontend's build
+    # (`frontend/trace/`); the server contributes only the run's data and its title.
+    resource = files("web_operation_agent").joinpath(*_TRACE_TEMPLATE)
+    if not resource.is_file():
+        raise TraceReplayUnavailable(
+            "the trace replay page is not built; run scripts/build_panel.py")
+    template = resource.read_text(encoding="utf-8")
     marker = "__WOA_TRACE_BUNDLE__"
     if template.count(marker) != 1:
         raise ValueError("trace replay template must contain exactly one data marker")
     rendered = template.replace(marker, data)
-    token_marker = "/*__WOA_DESIGN_TOKENS__*/"
-    if rendered.count(token_marker) != 1:
-        raise ValueError("trace replay template must contain exactly one design token marker")
-    # The replay page shares the product's palette but none of its code: it renders a past
-    # run from a static bundle, which is a different job from driving a live session.
-    rendered = rendered.replace(token_marker, token_custom_properties())
     # The data is inserted into application/json, then parsed via textContent. Escape any
     # accidental HTML-special characters in the static title only; JSON stays machine-readable.
     if not safe_bundle.get("product"):

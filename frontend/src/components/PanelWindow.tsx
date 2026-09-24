@@ -1,9 +1,11 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
-import {Plus, X} from 'lucide-react'
+import {PanelRight, PictureInPicture2, Plus, X} from 'lucide-react'
 import {toneOf} from '../contract/panel'
 import type {HostNotice, PanelHost} from '../bridge/host'
 import {useHostSnapshot} from '../state/useHost'
 import {loadOpen, rememberOpen, useWindowGeometry, type Handle} from '../state/geometry'
+import {usePageNarrowing} from '../state/pagePush'
+import presentation from '../presentation.json'
 import {ApprovalCard} from './ApprovalCard'
 import {Composer} from './Composer'
 import {EmptyState} from './EmptyState'
@@ -14,6 +16,12 @@ import {Mark} from './Mark'
 import {Thread} from './Thread'
 
 const HANDLES: Handle[] = ['n', 's', 'e', 'w', 'nw', 'ne', 'sw', 'se']
+const DRAWER_HANDLES: Handle[] = ['w']
+// The title bar's controls are the window's own and sit on its lightest surface, so they
+// draw a heavier line than the icons inside the conversation. The mode glyph is drawn a
+// size down from the plus and the cross: lucide fills nearly its whole grid with the frame,
+// and a frame reads heavier than a cross, so at 14 its 10.5px of ink sits level with them.
+const TITLE_INK = 1.25
 const CLOSED_STATES = new Set(['ended', 'replaced'])
 // A pressed approval card settles its own spinner: the server answers within a tick, and
 // this is how long the press stays visibly "registered" before the card comes down. It is
@@ -25,14 +33,17 @@ export function PanelWindow({host, allowedOrigins}: {
   allowedOrigins: readonly string[]
 }): React.JSX.Element {
   const snapshot = useHostSnapshot(host)
-  const {labels, limits, suggestions,
-    approval_visibility: visibility} = host.configuration
+  const {labels, limits, suggestions} = host.configuration
+  const visibility = presentation.approval_visibility
   const [open, setOpenState] = useState(loadOpen)
   const [draft, setDraft] = useState('')
   const [unread, setUnread] = useState(0)
   const [deciding, setDeciding] = useState(false)
   const [panelFailure, setPanelFailure] = useState<HostNotice | null>(null)
-  const {geometry, dragging, onPointerDown} = useWindowGeometry(open)
+  const {mode, geometry, docked, drawer, dragging, onPointerDown, toggleMode} =
+    useWindowGeometry(open)
+  // Only an open drawer on a wide enough viewport takes room from the page.
+  usePageNarrowing(open && mode === 'drawer' && drawer.pushes ? drawer.width : null)
 
   /**
    * Every call into the host goes through here, for two reasons.
@@ -150,30 +161,43 @@ export function PanelWindow({host, allowedOrigins}: {
     <section className="woa-window" data-dragging={dragging ?? undefined}
              data-state={state} data-tone={toneOf(state)}
              aria-label={labels.assistant}
-             style={{
-               left: `${geometry.left}px`,
-               top: `${geometry.top}px`,
-               width: `${geometry.width}px`,
-               height: `${geometry.height}px`,
-             }}>
-      {HANDLES.map(handle => (
+             data-mode={mode}
+             data-docked={mode === 'float' && docked ? 'true' : undefined}
+             style={mode === 'drawer'
+               ? {width: `${drawer.width}px`}
+               : {
+                   left: `${geometry.left}px`,
+                   top: `${geometry.top}px`,
+                   width: `${geometry.width}px`,
+                   height: `${geometry.height}px`,
+                 }}>
+      {(mode === 'drawer' ? DRAWER_HANDLES : HANDLES).map(handle => (
         <span key={handle} className="woa-handle" data-handle={handle}
               onPointerDown={onPointerDown(handle)} aria-hidden="true" />
       ))}
 
       <header className="woa-titlebar" onPointerDown={onPointerDown('move')}>
-        <span className="woa-brand"><Mark size={19} />
+        <span className="woa-brand"><Mark size={20} />
           <span className="woa-brand__word">{labels.product}</span></span>
         <button type="button" className="woa-icon-button" aria-label={labels.newChat}
-                onClick={newConversation}>
-          <Plus {...iconProps(14)} />
+                data-tip={labels.newChat} onClick={newConversation}>
+          <Plus {...iconProps(16, TITLE_INK)} />
         </button>
+        <button type="button" className="woa-icon-button"
+                aria-label={mode === 'float' ? labels.dockDrawer : labels.dockFloat}
+                data-tip={mode === 'float' ? labels.dockDrawer : labels.dockFloat}
+                onClick={toggleMode}>
+          {mode === 'float'
+            ? <PanelRight {...iconProps(14, TITLE_INK)} />
+            : <PictureInPicture2 {...iconProps(14, TITLE_INK)} />}
+        </button>
+        {/* The cross needs no words: closing is what a cross in a window's corner means. */}
         <button type="button" className="woa-icon-button" aria-label={labels.collapse}
                 onClick={() => {
                   setOpen(false)
                   setUnread(0)
                 }}>
-          <X {...iconProps(14)} />
+          <X {...iconProps(16, TITLE_INK)} />
         </button>
       </header>
 

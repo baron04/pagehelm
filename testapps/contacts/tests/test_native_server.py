@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from testapps.contacts.app import (DEMO_ACTORS, DEMO_API_TOKEN, DEMO_SESSION_COOKIE,
                                    DEMO_WORKSPACE)
+from testapps.contacts.adapter import PANEL_SUGGESTIONS
 from testapps.contacts.demo import ScriptedDemoChat, WRITE_WALKTHROUGH
 from testapps.contacts.server import (
     NativeContactsHost,
@@ -403,6 +404,11 @@ class NativeContactsHostTests(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(first["config"]["applicationId"], "minimal.contacts")
             self.assertEqual(host.server.session_count, 1)
+            # A second, structurally different application declares its own suggestions.
+            session, _principal = next(iter(host._sessions.values()))
+            self.assertEqual(
+                [item["text"] for item in session.channel._panel_configuration()["suggestions"]],
+                [item.text for item in PANEL_SUGGESTIONS])
 
             status, second, _ = _request(
                 endpoint, body={"runtime_instance_id": "tab-instance-123"},

@@ -30,7 +30,7 @@ DISTRIBUTIONS = {
             "web_operation_agent/web_runtime/assistant.js",
             "web_operation_agent/web_runtime/browser_contract.json",
             "web_operation_agent/web_runtime/panel_contract.json",
-            "web_operation_agent/web_runtime/design_tokens.json",
+            # Built from `frontend/trace/` by scripts/build_panel.py, palette inlined.
             "web_operation_agent/web_runtime/trace_replay.html",
             # The built panel. A wheel without it cannot serve the assistant at all, so its
             # absence is a packaging failure, not something to discover at runtime.
@@ -50,6 +50,8 @@ DISTRIBUTIONS = {
             # Replaced by `assistant.js`, built from `frontend/src/runtime/`.
             "web_operation_agent/web_runtime/embedded.js",
             "web_operation_agent/web_runtime/panel_host.js",
+            # The design tokens are the frontend's; the built pages carry them already.
+            "web_operation_agent/web_runtime/design_tokens.json",
         ],
         # The core package must not carry any application's own assets. A name containing
         # The core wheel carries no application, example, or internal test application.

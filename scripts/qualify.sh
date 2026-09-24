@@ -302,8 +302,10 @@ elif [[ "${chromium_ready}" != "1" ]]; then
   record "assistant panel Chromium qualification" BLOCKED "Chromium is unavailable"
   [[ "${require_browser}" == "1" ]] && failed+=("assistant panel Chromium qualification")
 else
-  run_gate "assistant panel Chromium qualification" 1 "${PYTHON}" -m unittest \
-    web_operation_agent.tests.transport.test_panel_ui
+  # Written in TypeScript beside the panel (frontend/e2e/), against the built panel and the
+  # Storybook build above; Node's Playwright brings its own Chromium (npx playwright install).
+  run_gate "assistant panel Chromium qualification" 1 \
+    bash -c 'cd "$1/frontend" && npx playwright test' _ "${ROOT}"
 fi
 
 page_controller_module="${ROOT}/evals/pageagent/node_modules/@page-agent/page-controller/dist/lib/page-controller.js"

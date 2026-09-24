@@ -16,7 +16,6 @@ from pathlib import Path
 from web_operation_agent import schemas as S
 from web_operation_agent.business.runtime import FormDraft, FormDraftField
 from web_operation_agent.state.ledger import SessionLedger
-from web_operation_agent.transport.panel_view import panel_contract
 from web_operation_agent.schemas import ActionReceipt
 from web_operation_agent.execution.session import NavigationPlan, ServerAgentSession, TaskSpec
 from web_operation_agent.execution.business_tools import apply_form_draft
@@ -572,11 +571,12 @@ class TheCardIsItsOwnKind(unittest.TestCase):
             S.ApprovalRequest(schema_version=1, approval_id="approval-x", effect="e",
                               targets=("t",), expires_at=2_000_000_000_000, kind="maybe")
 
-    def test_the_panel_contract_and_the_wire_type_know_the_same_kinds(self):
-        kinds = {name for name in panel_contract()["approval_kinds"] if name != "comment"}
+    def test_the_panel_and_the_wire_type_know_the_same_kinds(self):
+        """Which cards can be declined is the panel's; which kinds exist is the wire's."""
+        presentation = json.loads((Path(__file__).resolve().parents[4] / "frontend" / "src"
+                                   / "presentation.json").read_text(encoding="utf-8"))
+        kinds = {name for name in presentation["approval_kinds"] if name != "comment"}
         self.assertEqual(kinds, set(S.APPROVAL_KINDS))
-        self.assertFalse(panel_contract()["approval_kinds"]["navigation"]["declinable"])
-        self.assertTrue(panel_contract()["approval_kinds"]["write"]["declinable"])
 
 
 if __name__ == "__main__":

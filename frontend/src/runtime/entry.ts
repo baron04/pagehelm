@@ -4,17 +4,17 @@
  * It appears while the first connection is still being made and whenever starting failed,
  * and it goes the moment a panel is mounted. It sits exactly where the panel's own launcher
  * will, at the same size, so the swap does not move anything under the person's pointer.
- * Its words are the contract's (`entry` in `panel_contract.json`), not this file's, and so
- * are its colours (`design_tokens.json`, through the palette this file imports).
+ * Its words, place and size are `presentation.json`'s -- shared with the launcher it gives way
+ * to -- not this file's, and its colours are `design_tokens.json`'s, through the palette this
+ * file imports.
  */
-import {entry as contractEntry} from '@contract/panel_contract.json'
+import {entry as contractEntry, layout} from '../presentation.json'
 import {listen, type Cancel} from './contain'
 import {ENTRY_DARK, ENTRY_LIGHT} from './entry-palette.generated'
 
 export const ENTRY_ID = 'woa-assistant-entry'
 
 export type EntryText = Omit<typeof contractEntry, 'comment'>
-// Imported by name, so the bundle carries this section of the contract and not the rest.
 export const ENTRY_TEXT: EntryText = contractEntry
 
 /** Why starting failed: an HTTP status when the server answered, `null` when it did not. */
@@ -65,12 +65,13 @@ const DARK: EntryPalette = ENTRY_DARK
 const STYLE = `
   :host { all: initial }
   .entry {
-    position: fixed; right: 20px; bottom: 20px;
+    position: fixed; right: ${layout.launcher_inset}px; bottom: ${layout.launcher_inset}px;
     display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
     font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color: ${LIGHT.ink};
   }
   .badge {
-    position: relative; width: 52px; height: 52px; padding: 0; border-radius: 50%;
+    position: relative; width: ${layout.launcher_size}px; height: ${layout.launcher_size}px;
+    padding: 0; border-radius: 50%;
     border: 1px solid ${LIGHT.line}; background: ${LIGHT.card}; color: ${LIGHT.muted};
     box-shadow: ${LIGHT.shadow}; cursor: pointer; font: inherit;
   }

@@ -6,6 +6,7 @@ import {EmptyState} from '../src/components/EmptyState'
 import {InlineError} from '../src/components/InlineError'
 import {Launcher} from '../src/components/Launcher'
 import {APPROVAL, configuration, labels, limits} from './fixtures'
+import presentation from '../src/presentation.json'
 
 const frame = (children: React.ReactNode, width = 376) => (
   <div style={{width, background: 'var(--woa-bg)', borderRadius: 13,
@@ -33,7 +34,7 @@ export const Confirmation = {
   render: () => frame(
     <ApprovalCard approval={{...APPROVAL, expires_at: Date.now() + 107_000}}
                   labels={labels} limits={limits}
-                  visibility={configuration.approval_visibility} busy={false}
+                  visibility={presentation.approval_visibility} busy={false}
                   onDecide={() => undefined} onRefused={() => undefined} />),
 }
 
@@ -44,7 +45,7 @@ export const ConfirmationNarrow = {
       targets: ['res.partner · 新建一条客户记录'],
       expires_at: Date.now() + 41_000}}
       labels={labels} limits={limits}
-      visibility={configuration.approval_visibility} busy={false}
+      visibility={presentation.approval_visibility} busy={false}
       onDecide={() => undefined} onRefused={() => undefined} />, 320),
 }
 

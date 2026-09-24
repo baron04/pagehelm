@@ -1,8 +1,9 @@
 import {describe, expect, it} from 'vitest'
 import raw from '@contract/panel_contract.json'
-import rawTokens from '@contract/design_tokens.json'
+import rawTokens from '../src/styles/design_tokens.json'
+import presentation from '../src/presentation.json'
 import {
-  DEFAULT_CONFIGURATION, PANEL_PROTOCOL, isPanelState, statusLabelKey, toneOf,
+  DEFAULT_CONFIGURATION, PANEL_PROTOCOL, declinable, isPanelState, statusLabelKey, toneOf,
 } from '../src/contract/panel'
 import {requirePanelHost} from '../src/bridge/host'
 import {ENTRY_DARK, ENTRY_LIGHT} from '../src/runtime/entry-palette.generated'
@@ -34,13 +35,22 @@ describe('the contract is the server\'s, not a copy', () => {
     expect(() => statusLabelKey('invented' as never)).toThrow()
   })
 
-  it('offers the server\'s suggestions, and gives the composer limit words', () => {
-    expect(DEFAULT_CONFIGURATION.suggestions.length).toBeGreaterThan(0)
-    for (const item of DEFAULT_CONFIGURATION.suggestions) {
-      expect(item.text.trim()).toBeTruthy()
-      expect(item.kind.trim()).toBeTruthy()
-    }
+  it('offers no suggestions of its own, and gives the composer limit words', () => {
+    // Suggestions disclose what one application can do, so only an application declares them.
+    expect(DEFAULT_CONFIGURATION.suggestions).toEqual([])
     expect(DEFAULT_CONFIGURATION.labels.composerAtLimit).toBeTruthy()
+  })
+})
+
+describe('what only the panel reads is the panel\'s', () => {
+  it('stacks above the host page without claiming the topmost value', () => {
+    const z = presentation.layout.overlay_z_index
+    expect(Number.isInteger(z) && z >= 1 && z <= 2_147_483_646).toBe(true)
+  })
+
+  it('lets a write be declined and a navigation not', () => {
+    expect(declinable('write')).toBe(true)
+    expect(declinable('navigation')).toBe(false)
   })
 })
 

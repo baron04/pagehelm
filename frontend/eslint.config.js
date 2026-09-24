@@ -4,7 +4,8 @@ import tsparser from '@typescript-eslint/parser'
 import hooks from 'eslint-plugin-react-hooks'
 
 export default [
-  {ignores: ['dist', 'storybook-static', 'src/styles/_tokens.generated.scss', 'node_modules']},
+  {ignores: ['dist', 'storybook-static', 'src/styles/_tokens.generated.scss', 'node_modules',
+    'test-results', 'playwright-report']},
   js.configs.recommended,
   {
     files: ['scripts/**/*.mjs'],
@@ -68,5 +69,10 @@ export default [
         }],
       }],
     },
+  },
+  {
+    // Playwright's fixtures hand the test a function named `use`; it is not React's hook.
+    files: ['e2e/**/*.ts'],
+    rules: {'react-hooks/rules-of-hooks': 'off'},
   },
 ]

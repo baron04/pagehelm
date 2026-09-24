@@ -3,6 +3,8 @@
 
 The built panel is a generated artifact, so it is not committed. It is produced here and
 copied into ``web_operation_agent/web_runtime/panel/`` with a manifest the gateway reads.
+The trace replay page is built by the same frontend and copied beside it as
+``web_runtime/trace_replay.html``, the page ``traceview.py`` fills with a run's data.
 A checkout without Node has no panel; the gateway then refuses to serve the panel document
 with a named prerequisite rather than falling back to some older copy -- the same rule the
 PageAgent bundle gate already applies.
@@ -21,6 +23,8 @@ ROOT = Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / "frontend"
 DIST = FRONTEND / "dist" / "panel"
 TARGET = ROOT / "src" / "web_operation_agent" / "web_runtime" / "panel"
+TRACE_DIST = FRONTEND / "dist" / "trace" / "trace_replay.html"
+TRACE_TARGET = ROOT / "src" / "web_operation_agent" / "web_runtime" / "trace_replay.html"
 SERVABLE = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
             ".woff2": "font/woff2", ".svg": "image/svg+xml"}
 
@@ -78,6 +82,12 @@ def main() -> int:
         json.dumps({"schema_version": 1, "assets": assets}, indent=2, sort_keys=True) + "\n",
         encoding="utf-8")
     print(f"panel -> {TARGET} ({len(assets)} assets)")
+    if not TRACE_DIST.is_file():
+        print(f"the frontend build produced no trace replay page at {TRACE_DIST}",
+              file=sys.stderr)
+        return 1
+    shutil.copyfile(TRACE_DIST, TRACE_TARGET)
+    print(f"trace replay -> {TRACE_TARGET}")
     return 0
 
 

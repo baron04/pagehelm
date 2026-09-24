@@ -6,6 +6,7 @@
  * The panel renders what the server decided; it does not keep a second copy of it.
  */
 import raw from '@contract/panel_contract.json'
+import presentation from '../presentation.json'
 
 export type Tone = 'neutral' | 'ready' | 'active' | 'warning' | 'success' | 'error'
 export type PanelState = keyof typeof raw.panel_states
@@ -63,11 +64,11 @@ export interface ApprovalRequest {
   kind?: ApprovalKind
 }
 
-export type ApprovalKind = Exclude<keyof typeof raw.approval_kinds, 'comment'>
+export type ApprovalKind = Exclude<keyof typeof presentation.approval_kinds, 'comment'>
 
-/** Whether a card of this kind offers a decline, as the contract states it. */
+/** Whether a card of this kind offers a decline -- the panel's own choice, not the server's. */
 export function declinable(kind: ApprovalKind | undefined): boolean {
-  return raw.approval_kinds[kind ?? 'write'].declinable
+  return presentation.approval_kinds[kind ?? 'write'].declinable
 }
 
 export interface TimelinePage {
@@ -83,10 +84,11 @@ export interface TimelinePage {
 }
 
 /** Exactly what `RemoteSessionChannel._panel_configuration()` sends in the hello reply. */
-/** One empty-state suggestion the server offers: the words, and the workflow kind it teaches. */
+/** One empty-state suggestion the application offers: the words, and the workflow it teaches. */
 export interface Suggestion {
   text: string
   kind: string
+  workflow: 'enumerate' | 'filter' | 'write'
 }
 
 export interface PanelConfiguration {
@@ -97,8 +99,6 @@ export interface PanelConfiguration {
   notices: Record<string, string>
   panel_states: Record<PanelState, Tone>
   progress_states: Record<string, {panel_state: PanelState; tone: Tone; terminal: boolean}>
-  layout: {overlay_z_index: number}
-  approval_visibility: {min_visible_ratio: number; min_visible_ms: number}
   terminal_error_codes: string[]
   terminal_panel_state_by_code: Record<string, PanelState>
   session_expires_at: number
@@ -112,12 +112,10 @@ export const DEFAULT_CONFIGURATION: PanelConfiguration = {
   protocol: raw.protocol,
   limits: raw.limits as PanelLimits,
   labels: raw.label_keys as Labels,
-  suggestions: raw.suggestions,
+  suggestions: [],
   notices: raw.notices,
   panel_states: raw.panel_states as Record<PanelState, Tone>,
   progress_states: raw.progress_states as PanelConfiguration['progress_states'],
-  layout: raw.layout,
-  approval_visibility: raw.approval_visibility,
   terminal_error_codes: [...raw.terminal_error_codes],
   terminal_panel_state_by_code: raw.terminal_panel_state_by_code as Record<string, PanelState>,
   session_expires_at: 0,

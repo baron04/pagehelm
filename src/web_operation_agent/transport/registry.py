@@ -15,6 +15,7 @@ from collections.abc import Callable
 from ..state.store import SQLiteSessionStore
 from ..state.identity import PrincipalContext
 from .channel import RemoteSessionChannel, RemoteSessionLimits, SessionGrant
+from .panel_view import PanelSuggestion
 from .protocol import RemoteProtocolError, RemoteSessionClosed, _now_ms, _origin
 
 
@@ -37,7 +38,8 @@ class RemoteSessionRegistry:
 
     def create(self, *, allowed_origins: list[str] | tuple[str, ...],
                session_id: str | None = None,
-               principal: PrincipalContext | None = None
+               principal: PrincipalContext | None = None,
+               panel_suggestions: tuple[PanelSuggestion, ...] = ()
                ) -> tuple[SessionGrant, RemoteSessionChannel]:
         sid = session_id or f"s-{uuid.uuid4().hex}"
         if not sid or len(sid) > 128 or any(not (c.isalnum() or c in "-_") for c in sid):
@@ -54,7 +56,8 @@ class RemoteSessionRegistry:
         channel = RemoteSessionChannel(
             sid, origins, principal, self.limits,
             durable_store=self.durable_store,
-            principal_validator=self.principal_validator if principal is not None else None)
+            principal_validator=self.principal_validator if principal is not None else None,
+            panel_suggestions=panel_suggestions)
         with self._lock:
             if sid in self._channels:
                 raise ValueError(f"session {sid!r} already exists")

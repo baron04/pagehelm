@@ -45,6 +45,7 @@ from web_operation_agent.composition.descriptor import (
     APPLICATION_ADAPTER_VERSION,
     ApplicationDescriptor,
 )
+from web_operation_agent.transport.panel_view import PanelSuggestion
 from web_operation_agent.composition.ports import (
     ApplicationPorts,
     DeclaredDataClassifier,
@@ -108,6 +109,13 @@ from web_operation_agent.answer.evidence import Origin, QueryEvidence, RecordEvi
 #: `BusinessSkill.from_bytes` is what validates its shape and its tool references.
 SKILLS = Path(__file__).parent / "skills"
 APPLICATION_ID = "minimal.contacts"
+#: The contacts application's own goals for the empty panel: read, filter, create.
+PANEL_SUGGESTIONS = (
+    PanelSuggestion(text="列出所有联系人", kind="列举", workflow="enumerate"),
+    PanelSuggestion(text="名字里带 Grace 的联系人有哪些", kind="条件查询", workflow="filter"),
+    PanelSuggestion(text="新建联系人 Linus，邮箱 linus@example.test", kind="写入",
+                    workflow="write"),
+)
 CREATE_CONTACT = "create_contact"
 #: What a write needs the principal to carry. Declared here because scopes are the
 #: application's vocabulary, not the framework's.
@@ -788,6 +796,7 @@ class MinimalContactsAdapter:
             navigation_mode="spa",
             page_controller_module=origin + "/woa/page-controller.js",
             catalog_sha256=self.business_tools.catalog_sha256,
+            panel_suggestions=PANEL_SUGGESTIONS,
         )
 
     def health(self) -> dict:

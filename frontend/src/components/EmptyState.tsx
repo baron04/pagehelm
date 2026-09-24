@@ -4,19 +4,19 @@ import {iconProps} from './icon'
 import {Mark} from './Mark'
 
 /**
- * The default state is also the only capability disclosure this product gets. The three
- * suggestions are the workflow kinds the live gate actually qualifies -- enumerate, filter,
- * write -- so nothing here promises something the agent has not been shown to do. That is
- * why they arrive on the configuration (`contract["suggestions"]`): the promise itself is
- * the server's, and this file may not invent a fourth.
+ * The default state is also the only capability disclosure this product gets. The
+ * suggestions are goals the application declares for the workflows the live gate qualifies
+ * -- enumerate, filter, write -- so nothing here promises something the agent has not been
+ * shown to do. They arrive on the configuration because the promise is the application's;
+ * this file may not invent one, and an application that declares none gets none.
  *
- * What is local here is only which glyph decorates which row -- an icon is not a string
- * anyone reads aloud.
+ * What is local here is only which glyph decorates which workflow -- an icon is not a
+ * string anyone reads aloud.
  *
  * Picking one fills the composer. It never submits: a write is not something to start with
  * a single stray click.
  */
-const SUGGESTION_ICONS = [ListOrdered, Search, Plus]
+const WORKFLOW_ICONS = {enumerate: ListOrdered, filter: Search, write: Plus} as const
 
 export function EmptyState({labels, suggestions, onPick, compact}: {
   labels: Labels
@@ -29,9 +29,9 @@ export function EmptyState({labels, suggestions, onPick, compact}: {
       {!compact && <span className="woa-empty__hero"><Mark size={22} /></span>}
       <h3>{labels.emptyGreeting}</h3>
       {!compact && <p>{labels.emptyDetail}</p>}
-      <ul className="woa-suggestions">
-        {suggestions.map((item, index) => {
-          const Icon = SUGGESTION_ICONS[index] ?? Search
+      {suggestions.length > 0 && <ul className="woa-suggestions">
+        {suggestions.map(item => {
+          const Icon = WORKFLOW_ICONS[item.workflow]
           return (
             <li key={item.text}>
               <button type="button" onClick={() => onPick(item.text)}>
@@ -42,7 +42,7 @@ export function EmptyState({labels, suggestions, onPick, compact}: {
             </li>
           )
         })}
-      </ul>
+      </ul>}
     </div>
   )
 }

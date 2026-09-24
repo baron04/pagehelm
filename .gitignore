@@ -30,6 +30,8 @@ storybook-static/
 src/web_operation_agent/web_runtime/panel/
 # Built by scripts/build_runtime.py from frontend/src/runtime/; likewise generated.
 src/web_operation_agent/web_runtime/assistant.js
+# Built by scripts/build_panel.py from frontend/trace/ with the design tokens inlined.
+src/web_operation_agent/web_runtime/trace_replay.html
 frontend/src/styles/_tokens.generated.scss
 frontend/src/contract/protocol.generated.ts
 frontend/src/runtime/entry-palette.generated.ts

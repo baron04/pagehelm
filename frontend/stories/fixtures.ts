@@ -6,8 +6,9 @@
  */
 import {DEFAULT_CONFIGURATION, type TimelineEntry} from '../src/contract/panel'
 import type {PanelHost, PanelSnapshot} from '../src/bridge/host'
+import {SAMPLE_SUGGESTIONS} from '../dev/application'
 
-export const configuration = DEFAULT_CONFIGURATION
+export const configuration = {...DEFAULT_CONFIGURATION, suggestions: SAMPLE_SUGGESTIONS}
 export const labels = configuration.labels
 export const limits = configuration.limits
 

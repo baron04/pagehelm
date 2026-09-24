@@ -23,6 +23,9 @@ from web_operation_agent.tests.support.execution import _Chat, _Control
 
 RUNTIME = Path(__file__).resolve().parents[2] / "web_runtime" / "assistant.js"
 PANEL_ROOT = Path(__file__).resolve().parents[2] / "web_runtime" / "panel"
+#: What only the browser side reads -- the stacking order among it -- is the frontend's.
+PRESENTATION = json.loads((Path(__file__).resolve().parents[4] / "frontend" / "src"
+                           / "presentation.json").read_text(encoding="utf-8"))
 _PAGE_CONTROLLER_PATH = os.environ.get("WOA_PAGE_CONTROLLER_MODULE", "")
 PAGE_CONTROLLER = Path(_PAGE_CONTROLLER_PATH).expanduser() if _PAGE_CONTROLLER_PATH else None
 
@@ -224,7 +227,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                 self.assertEqual(root_layout, {
                     "position": "fixed", "width": "0px", "height": "0px",
                     "pointerEvents": "none",
-                    "zIndex": str(channel._panel_configuration()["layout"]["overlay_z_index"]),
+                    "zIndex": str(PRESENTATION["layout"]["overlay_z_index"]),
                 })
                 remained_connected = page.evaluate("""() => {
                   const root = document.querySelector('#woa-assistant-root')

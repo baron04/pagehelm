@@ -5920,6 +5920,41 @@
       "hashes": [
         {
           "alg": "npm-integrity",
+          "content": "sha512-oxMK4vllB9RK5NQ2l1pq1IfOf2AvnEuj/vYGDj0H2nMtmtZpKtCwt/l00GEO6xjGfpBNAvjovvYdCm50dRQkpQ=="
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "Apache-2.0"
+        }
+      ],
+      "name": "@playwright/test",
+      "properties": [
+        {
+          "name": "woa:licenseSource",
+          "value": "package-lock"
+        },
+        {
+          "name": "woa:requiredBy",
+          "value": "frontend"
+        },
+        {
+          "name": "woa:direct",
+          "value": "true"
+        },
+        {
+          "name": "woa:shipped",
+          "value": "false"
+        }
+      ],
+      "purl": "pkg:npm/@playwright/test@1.63.0",
+      "type": "library",
+      "version": "1.63.0"
+    },
+    {
+      "hashes": [
+        {
+          "alg": "npm-integrity",
           "content": "sha512-tNISae1QEf/vkb3xkRcjV5SEdzPE97We5IVaa2Z8jSszQPZ8U60B/YCYpw4QI7VidYsBtKavczXf+DyDs9WGxw=="
         }
       ],
@@ -14700,6 +14735,76 @@
       "purl": "pkg:npm/picomatch@4.0.7",
       "type": "library",
       "version": "4.0.7"
+    },
+    {
+      "hashes": [
+        {
+          "alg": "npm-integrity",
+          "content": "sha512-+7ziBLidS4NaNCdt57SUDT+wYmmd5fmiQejUic/kb+YsYSCPyOOE9sebzMjNmQrsnNpDJqd4WHvV/8lfKfUDUg=="
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "Apache-2.0"
+        }
+      ],
+      "name": "playwright",
+      "properties": [
+        {
+          "name": "woa:licenseSource",
+          "value": "package-lock"
+        },
+        {
+          "name": "woa:requiredBy",
+          "value": "frontend"
+        },
+        {
+          "name": "woa:direct",
+          "value": "false"
+        },
+        {
+          "name": "woa:shipped",
+          "value": "false"
+        }
+      ],
+      "purl": "pkg:npm/playwright@1.63.0",
+      "type": "library",
+      "version": "1.63.0"
+    },
+    {
+      "hashes": [
+        {
+          "alg": "npm-integrity",
+          "content": "sha512-rYCsBF/M5HjUch52bbtVONEFjv6Xu8sm8h72dNlR5bzIE1fvC/bxgspzkjSfU+MweEMmPM8KJebG6nnyxo5mCg=="
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "Apache-2.0"
+        }
+      ],
+      "name": "playwright-core",
+      "properties": [
+        {
+          "name": "woa:licenseSource",
+          "value": "package-lock"
+        },
+        {
+          "name": "woa:requiredBy",
+          "value": "frontend"
+        },
+        {
+          "name": "woa:direct",
+          "value": "false"
+        },
+        {
+          "name": "woa:shipped",
+          "value": "false"
+        }
+      ],
+      "purl": "pkg:npm/playwright-core@1.63.0",
+      "type": "library",
+      "version": "1.63.0"
     },
     {
       "hashes": [

@@ -23,6 +23,7 @@ from ..privacy import redact_sensitive_assignments, redact_session_handoffs
 from ..execution.product import AgentTurnError
 from ..transport.channel import RemoteSessionChannel, RemoteSessionLimits, SessionGrant
 from ..transport.protocol import RemoteSessionClosed
+from ..transport.panel_view import PanelSuggestion
 from ..transport.registry import RemoteSessionRegistry
 from ..state.traceview import build_trace_case, render_trace_html, write_trace_bundle
 
@@ -206,6 +207,7 @@ class LiveProductSession:
                  navigation_mode: str = "document",
                  sensitive_query_keys: frozenset[str] = frozenset(),
                  page_write_guard: str = "",
+                 panel_suggestions: tuple[PanelSuggestion, ...] = (),
                  principal: PrincipalContext | None = None,
                  session_limits: RemoteSessionLimits | None = None,
                  durable_store: SQLiteSessionStore | None = None,
@@ -240,6 +242,7 @@ class LiveProductSession:
             allowed_origins=[allowed_origin],
             session_id=session_id or f"live-{uuid.uuid4().hex}",
             principal=principal,
+            panel_suggestions=panel_suggestions,
         )
         self.page_controller_module = page_controller_module
         if navigation_mode not in {"document", "spa"}:
@@ -486,6 +489,7 @@ class LiveProductServer:
                        navigation_mode: str = "document",
                        sensitive_query_keys: frozenset[str] = frozenset(),
                        page_write_guard: str = "",
+                       panel_suggestions: tuple[PanelSuggestion, ...] = (),
                        principal: PrincipalContext | None = None) -> LiveProductSession:
         with self._lock:
             if self._closed:
@@ -511,6 +515,7 @@ class LiveProductServer:
                 navigation_mode=navigation_mode,
                 sensitive_query_keys=sensitive_query_keys,
                 page_write_guard=page_write_guard,
+                panel_suggestions=panel_suggestions,
                 principal=principal,
                 registry=self.registry,
                 gateway=self.gateway,

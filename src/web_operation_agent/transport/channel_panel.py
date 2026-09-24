@@ -9,22 +9,21 @@ from .protocol import RemoteProtocolError, _copy_json, _event_sequence
 
 class ChannelPanel:
     def _panel_configuration(self) -> dict:
-        """Every bound and every user-visible string the panel renders by.
+        """Every limit, state and server-sent string the panel renders by.
 
         The panel holds no copy of these.  F8b was two sets of constants drifting apart;
-        one of them is now a file the server reads and the panel is handed.
+        one of them is now a file the server reads and the panel is handed.  The
+        suggestions are the application's, declared on its descriptor.
         """
         contract = panel_contract()
         return {
             "protocol": contract["protocol"],
             "limits": panel_limits(),
             "labels": dict(contract["label_keys"]),
-            "suggestions": _copy_json(contract["suggestions"]),
+            "suggestions": [item.to_json() for item in self.panel_suggestions],
             "notices": dict(contract["notices"]),
             "panel_states": dict(contract["panel_states"]),
             "progress_states": _copy_json(contract["progress_states"]),
-            "layout": dict(contract["layout"]),
-            "approval_visibility": dict(contract["approval_visibility"]),
             "terminal_error_codes": list(contract["terminal_error_codes"]),
             "terminal_panel_state_by_code": dict(contract["terminal_panel_state_by_code"]),
             "session_expires_at": self.expires_at,

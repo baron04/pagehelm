@@ -1,6 +1,7 @@
 import {describe, expect, it, vi} from 'vitest'
 import {
-  MIN_HEIGHT, MIN_WIDTH, clamp, defaultGeometry, loadOpen, rememberOpen,
+  DOCK_INSET, DRAWER_MIN_WIDTH, MIN_HEIGHT, MIN_WIDTH, clamp, clampDrawer, defaultGeometry,
+  drawerPushes, loadOpen, rememberOpen,
 } from '../src/state/geometry'
 
 function withViewport(width: number, height: number, run: () => void) {
@@ -72,14 +73,23 @@ describe('the window stays reachable', () => {
 })
 
 describe('a window nobody has moved yet', () => {
-  it('opens at the right edge, below the middle, and clear of the floor', () => {
+  it('opens with its bottom-right corner on the launcher', () => {
     withViewport(1440, 900, () => {
       const {left, top, width, height} = defaultGeometry()
-      expect(1440 - (left + width)).toBeLessThanOrEqual(24)
-      // Below the middle of the viewport...
-      expect(top + height / 2).toBeGreaterThan(450)
-      // ...and clear of its floor, which is where the composer lives.
-      expect(900 - (top + height)).toBeGreaterThanOrEqual(60)
+      expect(1440 - (left + width)).toBe(DOCK_INSET)
+      expect(900 - (top + height)).toBe(DOCK_INSET)
+    })
+  })
+
+  it('is placed by the viewport at the time it is asked, not an earlier one', () => {
+    // A panel mounted while the document was still being laid out must not keep the
+    // top-left corner that a zero-sized viewport clamped it to.
+    withViewport(0, 0, () => {
+      expect(defaultGeometry().left).toBe(0)
+    })
+    withViewport(1280, 800, () => {
+      const {left, width} = defaultGeometry()
+      expect(1280 - (left + width)).toBe(DOCK_INSET)
     })
   })
 
@@ -89,5 +99,19 @@ describe('a window nobody has moved yet', () => {
       expect(top).toBeGreaterThanOrEqual(0)
       expect(top + height).toBeLessThanOrEqual(600)
     })
+  })
+})
+
+describe('a drawer', () => {
+  it('stays between its minimum and a share of the viewport that leaves the page usable', () => {
+    withViewport(1440, 900, () => {
+      expect(clampDrawer(100)).toBe(DRAWER_MIN_WIDTH)
+      expect(clampDrawer(5000)).toBeLessThanOrEqual(1440 * 0.6)
+    })
+  })
+
+  it('narrows the page only on a viewport wide enough to share', () => {
+    withViewport(1440, 900, () => expect(drawerPushes()).toBe(true))
+    withViewport(800, 600, () => expect(drawerPushes()).toBe(false))
   })
 })

@@ -1,10 +1,10 @@
 """The panel contract is one file, and these are the checks that keep it that way.
 
-F8b was two sets of constants drifting apart until the panel enforced bounds the server did
-not have. The answer is not "be careful": it is that the bounds, the copy, the state names
-and the palette live in `panel_contract.json` and `design_tokens.json`, the server reads
-them, the panel is handed them, and the assertions below refuse anything only one side
-knows about.
+F8b was two sets of constants drifting apart until the panel enforced limits the server did
+not have. The answer is not "be careful": it is that the text limits, the copy and the state
+names live in `panel_contract.json`, the server reads them, the panel is handed them, and
+the assertions below refuse anything only one side knows about. The palette is not here:
+it is the frontend's, and `frontend/tests/tokens.unit.test.ts` checks it.
 """
 from __future__ import annotations
 
@@ -13,16 +13,15 @@ import re
 import unittest
 from pathlib import Path
 
-from web_operation_agent.transport.panel_view import (collapse_timeline, describe_action, design_tokens,
-                                            label_keys, panel_contract, panel_limits,
-                                            project_event, project_history_record,
-                                            token_custom_properties)
+from web_operation_agent.transport.panel_view import (PanelSuggestion, collapse_timeline,
+                                            describe_action, label_keys, panel_contract,
+                                            panel_limits, panel_suggestions, project_event,
+                                            project_history_record)
 from web_operation_agent.execution.product import AgentTurnStatus
 from web_operation_agent.transport import RemoteSessionChannel
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionCommand,
                                          ActionEnvelope, TaskEvent)
 
-WEB_RUNTIME = Path(__file__).resolve().parents[2] / "web_runtime"
 FRONTEND = Path(__file__).resolve().parents[4] / "frontend"
 
 
@@ -47,48 +46,46 @@ def _action(command: dict, *, sequence: int = 1, turn_id: str = "turn-1") -> Tas
                                 action=envelope)
 
 
-def _luminance(colour: str) -> float:
-    value = colour.lstrip("#")
-    channels = (int(value[index:index + 2], 16) for index in (0, 2, 4))
-
-    def linear(channel: int) -> float:
-        scaled = channel / 255
-        return scaled / 12.92 if scaled <= 0.04045 else ((scaled + 0.055) / 1.055) ** 2.4
-
-    red, green, blue = (linear(channel) for channel in channels)
-    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
-
-
-def _contrast(foreground: str, background: str) -> float:
-    first, second = _luminance(foreground), _luminance(background)
-    high, low = max(first, second), min(first, second)
-    return (high + 0.05) / (low + 0.05)
-
-
 class PanelContractTests(unittest.TestCase):
     def test_the_contract_loads_and_every_reference_inside_it_resolves(self):
         contract = panel_contract()
-        self.assertEqual(contract["protocol"], 1)
+        self.assertEqual(contract["protocol"], 2)
         for state, tone in contract["panel_states"].items():
             self.assertIn(tone, contract["tones"], state)
         for name, mapping in contract["progress_states"].items():
             self.assertIn(mapping["panel_state"], contract["panel_states"], name)
-        self.assertGreater(contract["layout"]["overlay_z_index"], 2_147_483_640)
 
-    def test_the_empty_state_offers_only_promises_the_server_owns(self):
-        """The suggestion chips are capability disclosure; they live here, not in a component.
+    def test_the_contract_holds_only_what_the_server_reads(self):
+        """What only the panel reads is the frontend's (`frontend/src/presentation.json`)."""
+        for key in ("layout", "approval_visibility", "approval_kinds", "entry",
+                    "entry_kinds", "suggestions"):
+            self.assertNotIn(key, panel_contract())
 
-        Each text must also fit the bound a typed goal is clipped to -- picking a chip
-        should never land in the composer already truncated.
+    def test_the_empty_state_offers_only_what_the_application_declares(self):
+        """The suggestion chips are capability disclosure, so the application declares them.
+
+        Each text must fit the limit a typed goal is clipped to -- picking a chip should
+        never land in the composer already truncated -- and name a qualified workflow.
         """
-        contract = panel_contract()
-        suggestions = contract["suggestions"]
-        self.assertTrue(suggestions)
-        maximum = contract["limits"]["goal_max_chars"]
-        for item in suggestions:
-            self.assertTrue(str(item.get("text", "")).strip(), item)
-            self.assertTrue(str(item.get("kind", "")).strip(), item)
-            self.assertLessEqual(len(item["text"]), maximum, item["text"])
+        maximum = panel_limits()["goal_max_chars"]
+        offered = (PanelSuggestion(text="列出所有联系人", kind="列举", workflow="enumerate"),)
+        configuration = RemoteSessionChannel(
+            "suggestions", ("https://app.test",), panel_suggestions=offered
+        )._panel_configuration()
+        self.assertEqual(configuration["suggestions"],
+                         [{"text": "列出所有联系人", "kind": "列举", "workflow": "enumerate"}])
+        self.assertEqual(RemoteSessionChannel(
+            "none", ("https://app.test",))._panel_configuration()["suggestions"], [])
+        for bad in ({"text": "x" * (maximum + 1), "kind": "k", "workflow": "filter"},
+                    {"text": "", "kind": "k", "workflow": "filter"},
+                    {"text": "t", "kind": "k", "workflow": "delete"},
+                    {"text": "t\x07", "kind": "k", "workflow": "write"}):
+            with self.assertRaises(ValueError, msg=bad):
+                PanelSuggestion(**bad)
+        with self.assertRaises(ValueError):
+            panel_suggestions(offered * 2)
+        with self.assertRaises(TypeError):
+            panel_suggestions([offered[0]])
 
     def test_session_lifecycle_metadata_is_not_rendered_as_an_empty_turn(self):
         payload = {"state": "session_recovered", "message": "会话已重新连接"}
@@ -225,10 +222,9 @@ class PanelContractTests(unittest.TestCase):
         contract = panel_contract()
         self.assertEqual(configuration["limits"], contract["limits"])
         self.assertEqual(configuration["labels"], contract["label_keys"])
-        self.assertEqual(configuration["suggestions"], contract["suggestions"])
+        self.assertEqual(configuration["suggestions"], [])
         self.assertEqual(configuration["notices"], contract["notices"])
         self.assertEqual(configuration["progress_states"], contract["progress_states"])
-        self.assertEqual(configuration["layout"], contract["layout"])
         self.assertEqual(configuration["terminal_error_codes"],
                          contract["terminal_error_codes"])
 
@@ -242,108 +238,6 @@ class PanelContractTests(unittest.TestCase):
         self.assertIn("src/web_operation_agent/web_runtime", alias)
         for literal in ('"awaiting_confirmation"', "'awaiting_confirmation'"):
             self.assertNotIn(literal, source)
-
-
-class DesignTokenTests(unittest.TestCase):
-    def test_both_themes_meet_their_declared_contrast(self):
-        """The palette is checkable, so a colour cannot be made inaccessible unnoticed."""
-        tokens = design_tokens()
-        failures = []
-        for theme, palette in tokens["themes"].items():
-            for requirement in tokens["contrast_requirements"]:
-                ratio = _contrast(palette[requirement["foreground"]],
-                                  palette[requirement["background"]])
-                if ratio < requirement["minimum"]:
-                    failures.append(
-                        f"{theme}: {requirement['foreground']} on {requirement['background']}"
-                        f" is {ratio:.2f}, needs {requirement['minimum']}")
-        self.assertEqual(failures, [])
-
-    def test_the_two_themes_declare_the_same_tokens(self):
-        light, dark = design_tokens()["themes"]["light"], design_tokens()["themes"]["dark"]
-        self.assertEqual(set(light), set(dark))
-
-    def test_the_brand_disc_is_the_same_object_in_both_themes(self):
-        """The launcher disc is one brand moment; a theme must not quietly fork it."""
-        themes = design_tokens()["themes"]
-        for name in ("brand-top", "brand-mid", "brand-bottom", "brand-ink"):
-            self.assertEqual(themes["light"][name], themes["dark"][name], name)
-
-    def test_the_generated_properties_carry_both_themes(self):
-        css = token_custom_properties()
-        self.assertIn("--woa-accent: #1d4ed8;", css)
-        self.assertIn("prefers-color-scheme: dark", css)
-        self.assertIn("--woa-accent: #7aa2ff;", css)
-
-    def test_the_built_stylesheet_is_generated_from_the_same_palette(self):
-        generated = FRONTEND / "src" / "styles" / "_tokens.generated.scss"
-        if not generated.is_file():
-            self.skipTest("the frontend tokens are not built in this checkout")
-        text = generated.read_text(encoding="utf-8")
-        for name, value in design_tokens()["themes"]["light"].items():
-            self.assertIn(f"--woa-{name}: {value};", text)
-
-    @staticmethod
-    def _without_comments(text: str) -> str:
-        blanked = lambda m: "\n" * m.group(0).count("\n")  # noqa: E731 -- line numbers survive
-        text = re.sub(r"/\*.*?\*/", blanked, text, flags=re.S)
-        return re.sub(r"^\s*//.*$", "", text, flags=re.M)
-
-    def test_the_handwritten_styles_quote_the_scale_rather_than_restate_it(self):
-        """P3 put every size, radius and colour onto the scale; this keeps them there.
-
-        The scan skips comments -- prose names the hex it argues against -- and reads
-        the panel stylesheet and the entry script. Four rules, each earned by a defect:
-        font-size and line-height are token references, border-radius too (a percentage
-        is allowed only for a true circle); no solid colour is written inline anywhere,
-        the shadow rgba surviving because a shadow is light, not colour; the white that
-        lights a highlight comes from the sheen tokens, except inside the brand disc --
-        the one object allowed its own fixed light, which the test above pins as equal
-        across themes; and the entry, which cannot inherit a token file because it
-        renders outside any panel, states no colour in its own words, only in the
-        palette generated for it from the same file.
-        """
-        stylesheet = FRONTEND / "src" / "styles" / "panel.scss"
-        entry = FRONTEND / "src" / "runtime" / "entry.ts"
-        disc = re.compile(r"\.woa-(launcher__disc|mark)\b")
-        problems: list[str] = []
-        current_selector = ""
-        for lineno, line in enumerate(self._without_comments(
-                stylesheet.read_text(encoding="utf-8")).splitlines(), 1):
-            opened = re.match(r"([^{};]*)\{", line)
-            if opened:
-                current_selector = opened.group(1)
-            if not line.strip():
-                continue
-            for prop, prefix in (("font-size", "--woa-font-size"),
-                                 ("line-height", "--woa-line-height")):
-                value = re.search(rf"\b{prop}\s*:\s*([^;]+)", line)
-                if value and not value.group(1).startswith(f"var({prefix}"):
-                    problems.append(f"panel.scss:{lineno} {prop}: {value.group(1)}")
-            radius = re.search(r"\bborder-radius\s*:\s*([^;]+)", line)
-            if radius and not all(
-                    token.startswith("var(--woa-radius") or token == "50%"
-                    for token in radius.group(1).split()):
-                problems.append(f"panel.scss:{lineno} border-radius: {radius.group(1)}")
-            if re.search(r"#[0-9a-fA-F]{3,8}\b", line):
-                problems.append(f"panel.scss:{lineno} colour literal: {line.strip()}")
-            if re.search(r"rgba\(\s*255,\s*255,\s*255", line) and not disc.search(current_selector):
-                problems.append(f"panel.scss:{lineno} white highlight outside the brand disc")
-        entry_text = self._without_comments(entry.read_text(encoding="utf-8"))
-        if re.search(r"#[0-9a-fA-F]{3,8}\b", entry_text):
-            problems.append("entry.ts states a colour of its own")
-        self.assertEqual(problems, [])
-
-    def test_every_token_the_stylesheet_reaches_for_is_declared(self):
-        """A reference to a token nobody declares falls back to nothing, quietly."""
-        referenced = set(re.findall(r"var\((--woa-[a-z0-9-]+)",
-                                    token_custom_properties()))
-        declared = set(re.findall(r"^\s*(--woa-[a-z0-9-]+):", token_custom_properties(),
-                                  flags=re.M))
-        stylesheet = FRONTEND / "src" / "styles" / "panel.scss"
-        used = set(re.findall(r"var\((--woa-[a-z0-9-]+)",
-                              self._without_comments(stylesheet.read_text(encoding="utf-8"))))
-        self.assertEqual(used - declared - referenced, set())
 
 
 class ASessionEndIsSaidNotCoded(unittest.TestCase):

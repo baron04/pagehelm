@@ -1,0 +1,63 @@
+{
+  "comment": [
+    "How the panel and the standing entry present themselves: nothing here is read by the",
+    "server. The stacking order, the visibility gate on a confirmation card, which",
+    "confirmations can be declined, and the entry's own words before any panel exists."
+  ],
+  "layout": {
+    "comment": [
+      "Where the launcher and the standing entry sit, and at what size: the two occupy",
+      "the same spot so the swap from one to the other moves nothing under the pointer.",
+      "A window nobody has moved opens with its corner on the launcher's."
+    ],
+    "overlay_z_index": 2147483646,
+    "launcher_inset": 20,
+    "launcher_size": 52
+  },
+  "approval_visibility": {
+    "min_visible_ratio": 0.9,
+    "min_visible_ms": 400
+  },
+  "approval_kinds": {
+    "comment": [
+      "What a confirmation card asks. A write authorises one exact change and can be",
+      "declined. A navigation has one affirmative action; a pre-existing draft can replace",
+      "the waiting turn, while an empty composer remains locked."
+    ],
+    "write": {
+      "declinable": true
+    },
+    "navigation": {
+      "declinable": false
+    }
+  },
+  "entry": {
+    "comment": [
+      "The standing entry: what the page shows where the assistant will be, before a panel",
+      "exists -- while the first connection is still being made, and whenever starting",
+      "failed. A person who can only reach a feature through one entry must always find",
+      "that entry (P7.5 CR-43). A sentence is a cause, then what happens next; the HTTP",
+      "status stays at the end for whoever has to report it. `final_statuses` are the",
+      "failures another attempt cannot fix, so none is made on its own."
+    ],
+    "badge": "助手",
+    "label_connecting": "AI 助手正在连接",
+    "label_unavailable": "AI 助手暂时不可用",
+    "connecting": "正在连接助手…",
+    "retry": "重试",
+    "causes": {
+      "401": "登录状态已变化，请重新登录后再使用助手",
+      "403": "当前账号未获授权使用助手",
+      "404": "助手服务未就绪",
+      "409": "助手正忙",
+      "429": "助手已达并发上限",
+      "default": "助手暂时不可用"
+    },
+    "final_statuses": [
+      401,
+      403
+    ],
+    "retrying": "正在重试",
+    "stopped": "可以点重试"
+  }
+}

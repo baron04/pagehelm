@@ -107,6 +107,7 @@ export function Composer(props: ComposerProps): React.JSX.Element {
       {atLimit && <p className="woa-composer__limit">
         {labels.composerAtLimit} · {limits.composer_max_chars}
       </p>}
+      <p className="woa-composer__disclaimer">{labels.aiDisclaimer}</p>
     </form>
   )
 }

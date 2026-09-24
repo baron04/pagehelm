@@ -461,7 +461,7 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
   的类型化查询。英文源码对中文意图的端到端召回仍依赖 Agent 生成合适英文检索词；当前没有
   本地 embedding、跨语言召回或最终回答正确率基准。源码也不能说明 Studio/租户配置后的当前
   有效页面与权限，更不能单独解释某条业务记录的实际事件原因。
-- 页面内助手是一个独立的 React 19 项目（[frontend/](../../frontend/)），以 npm 入口挂进宿主页的 Shadow DOM。它是纯视图：不持会话、不发自己的请求、不存时间线——时间线是服务端把会话事件投影出来的，因此整页导航之后由服务端回放，而不是随旧文档一起丢掉。上限、文案、状态名与调色板全部来自服务端拥有的 `panel_contract.json` 与 `design_tokens.json`，面板自行声明任何一项都会被契约测试判红。
+- 页面内助手是一个独立的 React 19 项目（[frontend/](../../frontend/)），以 npm 入口挂进宿主页的 Shadow DOM。它是纯视图：不持会话、不发自己的请求、不存时间线——时间线是服务端把会话事件投影出来的，因此整页导航之后由服务端回放，而不是随旧文档一起丢掉。服务端也要读的文本上限、服务端下发的文案与状态名来自服务端拥有的 `panel_contract.json`，面板自行声明任何一项都会被契约测试判红；只有浏览器读的东西——配色与尺寸（`frontend/src/styles/design_tokens.json`）、层级、启动按钮位置、确认卡片可见性门槛、启动提示文案（`frontend/src/presentation.json`）和窗口几何——属于前端，服务端既不读也不存。空状态建议由应用在描述符上声明（`panel_suggestions`），核心包不内置。
 
   面板与宿主页共用同一个 JavaScript realm（不用 iframe，2026-09-11 定）。代价写在 `SECURITY.md`：宿主页里的脚本可以完成一次审批；CSP 与 Trusted Types 是宿主页的响应头，面板按"永不需要放宽"来写并有回归测试（不用 `innerHTML`、不注入内联样式或脚本、样式走 `CSSStyleSheet.replaceSync`），但开不开由宿主页决定。确认卡仍然拒绝非真实手势、以及它无法证明当时可见的按下——这堵住的是视觉欺骗，不是伪造。
 
@@ -497,7 +497,7 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
 - Embedded Gateway：[gateway.py](../../src/web_operation_agent/transport/gateway.py)
 - 浏览器端入口 `assistant.js`（启动监督者 + Runtime，构建源在 [frontend/src/runtime/](../../frontend/src/runtime/)）：[boot.ts](../../frontend/src/runtime/boot.ts)、[runtime.ts](../../frontend/src/runtime/runtime.ts)
 - 助手面板（React 19 + Shadow DOM，构建源在 [frontend/](../../frontend/)）：[mount.tsx](../../frontend/src/mount.tsx)
-- 面板与 Runtime 的契约、上限与文案（服务端唯一来源）：[panel_contract.json](../../src/web_operation_agent/web_runtime/panel_contract.json)
+- 面板与 Runtime 的契约、上限与服务端下发的文案（服务端唯一来源）：[panel_contract.json](../../src/web_operation_agent/web_runtime/panel_contract.json)
 - Runtime 侧的面板宿主与传输失败分类：[panelHost.ts](../../frontend/src/runtime/panelHost.ts)
 - 服务端把会话事件投影成面板时间线：[panel_view.py](../../src/web_operation_agent/panel_view.py)
 - 会话协议与幂等通道：[protocol.py](../../src/web_operation_agent/transport/protocol.py)、[channel.py](../../src/web_operation_agent/transport/channel.py)、[registry.py](../../src/web_operation_agent/transport/registry.py)

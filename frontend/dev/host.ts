@@ -12,6 +12,7 @@
  * Development only. `vite build` never sees this directory.
  */
 import {DEFAULT_CONFIGURATION, type ApprovalRequest, type TimelineEntry} from '../src/contract/panel'
+import {SAMPLE_SUGGESTIONS} from './application'
 import type {PanelHost, PanelSnapshot} from '../src/bridge/host'
 
 let sequence = 0
@@ -168,7 +169,7 @@ export function createDevHost(): DevHost {
   }
 
   const host: DevHost = {
-    configuration: DEFAULT_CONFIGURATION,
+    configuration: {...DEFAULT_CONFIGURATION, suggestions: SAMPLE_SUGGESTIONS},
     snapshot: () => state,
     subscribe(listener) {
       listeners.add(listener)

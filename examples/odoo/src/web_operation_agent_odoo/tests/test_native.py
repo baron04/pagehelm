@@ -16,6 +16,7 @@ from web_operation_agent.state import SQLiteExpiringNonceStore, SQLiteSessionSto
 from web_operation_agent.state.identity import PrincipalContext
 from web_operation_agent.transport.protocol import RemoteProtocolError
 from web_operation_agent_odoo.adapter import OdooApplicationAdapter
+from web_operation_agent_odoo.server.application import PANEL_SUGGESTIONS
 
 from web_operation_agent_odoo.native import (
     OdooDelegation, OdooDelegationDirectory, OdooSessionEvent, OdooSessionEventError,
@@ -277,6 +278,11 @@ class OrdinaryBrowserHostContract(unittest.TestCase):
                 self.assertEqual(payload["schema_version"], 1)
                 self.assertIn("clientToken", payload["config"])
                 self.assertNotIn("actor_id", json.dumps(payload))
+                # The empty panel offers what Odoo declares on its descriptor, not the core's.
+                session = next(iter(host._sessions.values())).session
+                self.assertEqual(
+                    session.channel._panel_configuration()["suggestions"],
+                    [item.to_json() for item in PANEL_SUGGESTIONS])
                 with urllib.request.urlopen(
                         host.bootstrap_server.base_url + "/internal/metrics") as response:
                     metrics = json.loads(response.read())

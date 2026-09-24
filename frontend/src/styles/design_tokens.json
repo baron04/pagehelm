@@ -1,9 +1,9 @@
 {
   "comment": [
-    "One palette, two renderers: the React panel compiles these into :root custom",
-    "properties, and traceview writes the same properties into its replay page. Contrast",
-    "ratios are asserted by tests/test_panel_contract.py, so a colour cannot be changed",
-    "into an inaccessible one without a gate going red.",
+    "One palette and scale, two pages, both built here: the panel compiles these into",
+    "custom properties on its shadow host, and the trace replay page is built with the",
+    "same properties inlined. Contrast ratios are asserted by tests/tokens.unit.test.ts,",
+    "so a colour cannot be changed into an inaccessible one without a gate going red.",
     "Dark is defined outright, not derived by inversion."
   ],
   "scale": {
@@ -15,6 +15,7 @@
     "font-size-micro": "10px",
     "line-height": "1.5",
     "line-height-code": "1.6",
+    "radius-flush": "0px",
     "radius-inline": "4px",
     "radius-control": "6px",
     "radius-card": "8px",

@@ -1,4 +1,6 @@
 import type {Labels, PanelState} from '../contract/panel'
+import presentation from '../presentation.json'
+import {DOCK_INSET} from '../state/geometry'
 import {Mark} from './Mark'
 
 export type LauncherState = 'idle' | 'working' | 'awaiting' | 'closed'
@@ -26,7 +28,10 @@ export function Launcher({state, unread, labels, onOpen}: {
 }): React.JSX.Element {
   return (
     <button type="button" className="woa-launcher" data-state={state}
-            aria-label={labels.expand} onClick={onOpen}>
+            aria-label={labels.expand} onClick={onOpen}
+            style={{right: `${DOCK_INSET}px`, bottom: `${DOCK_INSET}px`,
+                    width: `${presentation.layout.launcher_size}px`,
+                    height: `${presentation.layout.launcher_size}px`}}>
       <span className="woa-launcher__ring" aria-hidden="true">
         <svg viewBox="0 0 60 60">
           {state === 'working' && (

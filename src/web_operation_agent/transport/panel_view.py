@@ -12,6 +12,7 @@ page.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from functools import lru_cache
 from importlib.resources import files
 from typing import Any
@@ -20,7 +21,6 @@ from ..privacy import redact_sensitive_assignments, redact_session_handoffs
 from ..schemas import TaskEvent
 
 _CONTRACT_RESOURCE = ("web_runtime", "panel_contract.json")
-_TOKENS_RESOURCE = ("web_runtime", "design_tokens.json")
 
 
 @lru_cache(maxsize=1)
@@ -34,10 +34,6 @@ def panel_contract() -> dict:
 
 def _validate_contract(contract: dict) -> None:
     states, tones = contract["panel_states"], set(contract["tones"])
-    overlay_z_index = contract.get("layout", {}).get("overlay_z_index")
-    if (isinstance(overlay_z_index, bool) or not isinstance(overlay_z_index, int)
-            or not 1 <= overlay_z_index <= 2_147_483_646):
-        raise ValueError("panel overlay_z_index must be an integer from 1 to 2147483646")
     unknown_tone = sorted(set(states.values()) - tones)
     if unknown_tone:
         raise ValueError(f"panel state tone is not in the contract: {unknown_tone[0]}")
@@ -64,30 +60,6 @@ def _validate_contract(contract: dict) -> None:
         raise ValueError(f"progress message names an unknown state: {unknown_message[0]}")
 
 
-@lru_cache(maxsize=1)
-def design_tokens() -> dict:
-    """The one palette. The panel compiles it into CSS; traceview writes the same values."""
-    raw = files("web_operation_agent").joinpath(*_TOKENS_RESOURCE).read_text(encoding="utf-8")
-    return json.loads(raw)
-
-
-def token_custom_properties() -> str:
-    """Render the palette as CSS custom properties for a renderer that has no build step."""
-    tokens = design_tokens()
-
-    def block(values: dict[str, str], indent: str = "      ") -> str:
-        return "\n".join(f"{indent}--woa-{name}: {value};" for name, value in values.items())
-
-    return (
-        ":root {\n"
-        f"{block(tokens['scale'])}\n{block(tokens['themes']['light'])}\n"
-        "      color-scheme: light;\n    }\n"
-        "    @media (prefers-color-scheme: dark) {\n      :root {\n"
-        f"{block(tokens['themes']['dark'], '        ')}\n"
-        "        color-scheme: dark;\n      }\n    }"
-    )
-
-
 def progress_message(state: str) -> str:
     """The server-owned prose for a progress state that publishes none of its own."""
     return str(panel_contract()["progress_messages"].get(state) or "")
@@ -106,6 +78,53 @@ def panel_labels(overrides: dict[str, str] | None = None) -> dict[str, str]:
 
 def label_keys() -> frozenset[str]:
     return frozenset(panel_contract()["label_keys"])
+
+
+#: The workflow kinds a suggestion can stand for; the panel picks its glyph by these.
+SUGGESTION_WORKFLOWS = frozenset({"enumerate", "filter", "write"})
+MAX_PANEL_SUGGESTIONS = 6
+
+
+@dataclass(frozen=True)
+class PanelSuggestion:
+    """One goal the empty panel offers, declared by the application that can fulfil it.
+
+    Suggestions are capability disclosure, so they belong to the application: the core
+    package cannot know what a deployment's records are called or which of them exist.
+    ``text`` fills the composer when picked, ``kind`` is the short label beside it, and
+    ``workflow`` says which qualified workflow the goal exercises.
+    """
+
+    text: str
+    kind: str
+    workflow: str
+
+    def __post_init__(self) -> None:
+        limits = panel_limits()
+        for name, value, maximum in (("text", self.text, limits["goal_max_chars"]),
+                                     ("kind", self.kind, limits["label_max_chars"])):
+            if (not isinstance(value, str) or not value.strip() or len(value) > maximum
+                    or any(ord(character) < 32 for character in value)):
+                raise ValueError(
+                    f"panel suggestion {name} must contain 1-{maximum} display characters")
+        if self.workflow not in SUGGESTION_WORKFLOWS:
+            raise ValueError(f"panel suggestion workflow must be one of "
+                             f"{sorted(SUGGESTION_WORKFLOWS)}")
+
+    def to_json(self) -> dict[str, str]:
+        return {"text": self.text, "kind": self.kind, "workflow": self.workflow}
+
+
+def panel_suggestions(value: Any) -> tuple[PanelSuggestion, ...]:
+    """Validate an application's suggestions: a bounded tuple of distinct goals."""
+    if not isinstance(value, tuple) or not all(
+            isinstance(item, PanelSuggestion) for item in value):
+        raise TypeError("panel_suggestions must be a tuple of PanelSuggestion")
+    if len(value) > MAX_PANEL_SUGGESTIONS:
+        raise ValueError(f"at most {MAX_PANEL_SUGGESTIONS} panel suggestions are shown")
+    if len({item.text for item in value}) != len(value):
+        raise ValueError("panel suggestions must not repeat a goal")
+    return value
 
 
 def _clip(value: Any, limit: int) -> str:

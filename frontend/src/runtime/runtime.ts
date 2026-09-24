@@ -325,8 +325,6 @@ export class EmbeddedWebRuntime {
       throw new Error('hello response did not include the panel configuration')
     }
     this.panelConfiguration = reply.panel
-    this.panelContainer?.style.setProperty(
-      'z-index', String(reply.panel.layout?.overlay_z_index || ''), 'important')
     this._armExpiry()
   }
 

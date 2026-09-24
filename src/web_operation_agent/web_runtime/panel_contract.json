@@ -1,9 +1,11 @@
 {
-  "protocol": 1,
+  "protocol": 2,
   "comment": [
-    "The one source of truth for everything the assistant panel and the embedded Runtime",
-    "must agree on. The server validates against this file, the panel imports it, and",
+    "The one source of truth for what the server and the assistant panel must agree on:",
+    "the states the server projects, the limits it clips by, and the copy it sends. The",
+    "server validates against this file, the panel imports it, and",
     "tests/test_panel_contract.py refuses any value that only one side knows about.",
+    "What only the panel reads is the frontend's (frontend/src/presentation.json).",
     "A constant that lives in two places drifts; F8b is what that costs."
   ],
   "panel_states": {
@@ -25,9 +27,6 @@
     "replaced": "neutral"
   },
   "tones": ["neutral", "ready", "active", "warning", "success", "error"],
-  "layout": {
-    "overlay_z_index": 2147483646
-  },
   "progress_states": {
     "waiting_for_runtime": {"panel_state": "connecting", "tone": "neutral", "terminal": false},
     "session_recovered": {"panel_state": "ready", "tone": "warning", "terminal": false},
@@ -58,7 +57,6 @@
     "approval_recorded": "已收到你的确认",
     "cancelled": "已停止，这次任务还没有开始执行"
   },
-  "entry_kinds": ["goal", "progress", "action", "result", "approval", "notice"],
   "limits": {
     "composer_max_chars": 2000,
     "history_page_size": 80,
@@ -73,7 +71,7 @@
   },
   "label_keys": {
     "assistant": "AI 助手",
-    "product": "WEB OPERATOR",
+    "product": "AI 助手",
     "timeline": "任务进度",
     "input": "描述你想完成的目标",
     "placeholder": "描述你想完成的目标",
@@ -82,6 +80,7 @@
     "collapse": "关闭助手",
     "expand": "展开助手",
     "keyHint": "Enter 发送 · Shift + Enter 换行",
+    "aiDisclaimer": "内容由 AI 生成，仅供参考",
     "approvalTitle": "执行前请确认",
     "approvalEffect": "将执行",
     "approvalValidFor": "有效期剩余",
@@ -101,6 +100,8 @@
     "goalPrefix": "目标：",
     "loadingTimeline": "正在载入任务进度",
     "newChat": "新对话",
+    "dockDrawer": "并排显示",
+    "dockFloat": "浮动显示",
     "loadOlder": "加载更早",
     "jumpLatest": "回到最新",
     "emptyGreeting": "告诉我你想完成什么",
@@ -137,11 +138,6 @@
     "statusEnded": "已结束",
     "statusReplaced": "已由另一页面接管"
   },
-  "suggestions": [
-    {"text": "列出所有待开票的销售订单", "kind": "列举"},
-    {"text": "Acme 有哪些草稿报价单", "kind": "条件查询"},
-    {"text": "把报价单 S00002 确认成销售订单", "kind": "写入"}
-  ],
   "notices": {
     "backpressure": "当前任务较多，请稍后重试。",
     "session_closed": "与助手的连接已断开，正在重新连接。",
@@ -197,44 +193,5 @@
     "invalid_lease": "error",
     "principal_mismatch": "error",
     "origin_refused": "error"
-  },
-  "approval_visibility": {
-    "min_visible_ratio": 0.9,
-    "min_visible_ms": 400
-  },
-  "approval_kinds": {
-    "comment": [
-      "What a confirmation card asks. A write authorises one exact change and can be",
-      "declined. A navigation has one affirmative action; a pre-existing draft can replace",
-      "the waiting turn, while an empty composer remains locked."
-    ],
-    "write": {"declinable": true},
-    "navigation": {"declinable": false}
-  },
-  "entry": {
-    "comment": [
-      "The standing entry: what the page shows where the assistant will be, before a panel",
-      "exists -- while the first connection is still being made, and whenever starting",
-      "failed. A person who can only reach a feature through one entry must always find",
-      "that entry (P7.5 CR-43). A sentence is a cause, then what happens next; the HTTP",
-      "status stays at the end for whoever has to report it. `final_statuses` are the",
-      "failures another attempt cannot fix, so none is made on its own."
-    ],
-    "badge": "助手",
-    "label_connecting": "AI 助手正在连接",
-    "label_unavailable": "AI 助手暂时不可用",
-    "connecting": "正在连接助手…",
-    "retry": "重试",
-    "causes": {
-      "401": "登录状态已变化，请重新登录后再使用助手",
-      "403": "当前账号未获授权使用助手",
-      "404": "助手服务未就绪",
-      "409": "助手正忙",
-      "429": "助手已达并发上限",
-      "default": "助手暂时不可用"
-    },
-    "final_statuses": [401, 403],
-    "retrying": "正在重试",
-    "stopped": "可以点重试"
   }
 }

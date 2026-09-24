@@ -70,9 +70,8 @@ button:disabled { cursor: not-allowed; }
 
 /* ─────────────────────────────────────────────── launcher */
 .woa-launcher {
+  /* Placed and sized from presentation.json, which the standing entry shares. */
   position: absolute;
-  right: 20px; bottom: 20px;
-  width: 52px; height: 52px;
   pointer-events: auto;
   border-radius: 50%;
   padding: 0;
@@ -140,6 +139,31 @@ button:disabled { cursor: not-allowed; }
 @keyframes woa-window-in {
   from { opacity: 0; transform: translateY(10px) scale(0.97); }
 }
+/* A docked window grows out of the launcher it replaces, from the corner they share. */
+.woa-window[data-docked] {
+  transform-origin: bottom right;
+  animation-name: woa-window-from-launcher;
+}
+@keyframes woa-window-from-launcher {
+  from { opacity: 0; transform: scale(0.9); }
+}
+/* A drawer is the full height of the viewport at its right edge. It slides in from that
+   edge; the page beside it is narrowed at once rather than animated, since a page that
+   re-lays itself out every frame would be the slow part. */
+.woa-window[data-mode='drawer'] {
+  top: 0; right: 0; bottom: 0;
+  height: auto;
+  min-height: 0;
+  border-radius: var(--woa-radius-flush);
+  box-shadow: -1px 0 0 var(--woa-line-strong), -12px 0 32px rgba(20, 23, 28, 0.08);
+  animation-name: woa-drawer-in;
+}
+@keyframes woa-drawer-in {
+  from { opacity: 0; transform: translateX(24px); }
+}
+.woa-window[data-mode='drawer'] .woa-titlebar { cursor: default; }
+.woa-window[data-mode='drawer'] .woa-handle[data-handle='w'] { top: 0; bottom: 0; }
+.woa-window[data-dragging='w'] { transition: none; }
 .woa-window[data-dragging] { user-select: none; }
 
 /* Resize affordances: a 6px hot zone on each edge, larger at the corners. */
@@ -192,10 +216,10 @@ button:disabled { cursor: not-allowed; }
 .woa-titlebar {
   position: relative;
   flex: none;
-  height: 40px;
+  height: 46px;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
   padding: 0 8px 0 12px;
   cursor: grab;
   background: linear-gradient(180deg, var(--woa-surface), var(--woa-bg));
@@ -206,22 +230,51 @@ button:disabled { cursor: not-allowed; }
 
 .woa-brand { display: flex; align-items: center; gap: 8px; margin-right: auto; }
 .woa-brand__word {
-  font-size: var(--woa-font-size-micro);
+  font-size: var(--woa-font-size);
   font-weight: 600;
-  letter-spacing: 0.115em;
-  color: var(--woa-ink-muted);
+  color: var(--woa-ink);
   user-select: none;
 }
 .woa-mark { color: var(--woa-ink); }
 
 .woa-icon-button {
-  width: 24px; height: 24px;
+  width: 28px; height: 28px;
   display: inline-flex; align-items: center; justify-content: center;
   border-radius: var(--woa-radius-control);
   color: var(--woa-ink-faint);
   flex: none;
 }
 .woa-icon-button:hover { background: var(--woa-surface-muted); color: var(--woa-ink); }
+.woa-titlebar .woa-icon-button { color: var(--woa-ink-muted); }
+
+/* A control that is only a glyph says what it does when pointed at or reached by keyboard.
+   Drawn here rather than by `title`: the browser's own tip waits a second and looks like no
+   part of the panel. It hangs below the control, its right edge on the control's, so the one
+   in the window's corner is not cut off by the window. */
+.woa-icon-button[data-tip] { position: relative; }
+.woa-icon-button[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute; top: calc(100% + 6px); right: 0;
+  z-index: 4;
+  padding: 3px 8px;
+  border-radius: var(--woa-radius-control);
+  background: var(--woa-ink);
+  color: var(--woa-bg);
+  font-size: var(--woa-font-size-meta);
+  line-height: var(--woa-line-height);
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity var(--woa-motion-fast) var(--woa-motion-easing),
+              transform var(--woa-motion-fast) var(--woa-motion-easing);
+}
+.woa-icon-button[data-tip]:hover::after {
+  opacity: 1; transform: none;
+  transition-delay: 350ms;
+}
+.woa-icon-button[data-tip]:focus-visible::after { opacity: 1; transform: none; }
 
 /* ─────────────────────────────────────────────── thread */
 .woa-thread-shell {
@@ -719,7 +772,7 @@ button.woa-step__line:focus-visible {
 /* ─────────────────────────────────────────────── composer */
 .woa-composer {
   flex: none;
-  padding: 8px 12px 12px;
+  padding: 8px 12px 6px;
   background: var(--woa-surface);
   border-top: 1px solid var(--woa-line);
 }
@@ -784,6 +837,15 @@ button.woa-step__line:focus-visible {
   font-size: var(--woa-font-size-meta);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
+}
+/* Every answer here is a model's, so the panel says so once, under where the question goes. */
+.woa-composer__disclaimer {
+  margin: 6px 0 0;
+  text-align: center;
+  font-size: var(--woa-font-size-meta);
+  line-height: var(--woa-line-height);
+  color: var(--woa-ink-faint);
+  user-select: none;
 }
 
 /* ─────────────────────────────────────────────── empty state */

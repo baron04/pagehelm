@@ -28,6 +28,7 @@ from .channel_ingress import ChannelIngress
 from .channel_panel import ChannelPanel
 from .channel_server import ChannelServer
 from .channel_state import ChannelState
+from .panel_view import PanelSuggestion, panel_suggestions as validate_panel_suggestions
 from .protocol import _now_ms
 
 
@@ -84,8 +85,10 @@ class RemoteSessionChannel(ChannelIngress, ChannelPanel, ChannelServer, ChannelS
                  principal: PrincipalContext | None = None,
                  limits: RemoteSessionLimits | None = None,
                  durable_store: SQLiteSessionStore | None = None,
-                 principal_validator: Callable[[PrincipalContext], None] | None = None):
+                 principal_validator: Callable[[PrincipalContext], None] | None = None,
+                 panel_suggestions: tuple[PanelSuggestion, ...] = ()):
         self.session_id = session_id
+        self.panel_suggestions = validate_panel_suggestions(panel_suggestions)
         self.allowed_origins = frozenset(allowed_origins)
         self.principal = principal
         if principal_validator is not None and not callable(principal_validator):

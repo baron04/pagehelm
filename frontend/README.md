@@ -1,7 +1,8 @@
 # @woa/panel — the assistant panel
 
 The panel the Web Operation Agent shows inside a host application's page: a floating window
-that takes a goal, shows what the agent did, and asks before anything is written.
+or a right-edge drawer that takes a goal, shows what the agent did, and asks before anything
+is written.
 
 This directory builds two modules. Only one is named by the host page:
 
@@ -17,19 +18,29 @@ from the browser's own source view.
 
 The panel is a view. It holds no session, makes no network call of its own, and keeps no timeline:
 the embedded Runtime hands it the server's projection and it renders that. Everything it
-renders *by* -- the bounds, the copy, the state names, the palette -- comes from two files
-the server owns:
+renders *by* that the server also reads -- the text limits, the copy it sends, the state
+names -- comes from two files the server owns:
 
 | File | What it decides |
 |---|---|
-| `../src/web_operation_agent/web_runtime/panel_contract.json` | protocol version, panel states and tones, the progress-state map, bounds, every user-visible string |
-| `../src/web_operation_agent/web_runtime/design_tokens.json` | the palette and scale, for both themes, with the contrast each pair must meet |
+| `../src/web_operation_agent/web_runtime/panel_contract.json` | protocol version, panel states and tones, the progress-state map, text and paging limits, the labels and notices the server sends |
 | `../src/web_operation_agent/web_runtime/browser_contract.json` | viewport extraction, observation-size, and bounded-scroll limits shared with the Python wire schema |
 
-Those are imported here through the `@contract` alias, never copied. Two sets of constants
-drifting apart is the defect this arrangement exists to prevent, and
-`src/web_operation_agent/tests/test_panel_contract.py` fails if the panel starts declaring
-something the server does not send.
+Those are imported here through the `@contract` alias, never copied. What only the browser
+reads is this directory's alone:
+
+| File | What it decides |
+|---|---|
+| `src/presentation.json` | the stacking order, the launcher's corner and size (shared by the standing entry), the visibility gate on a confirmation card, which confirmations can be declined, and the standing entry's own words |
+| `src/styles/design_tokens.json` | the palette and scale for both themes, with the contrast each pair must meet (`tests/tokens.unit.test.ts`) |
+| `src/state/geometry.ts` | the window's sizes, placement, and floating or drawer mode |
+| `trace/trace_replay.html` | the replay page the server fills with a past run's data; `npm run build` inlines the tokens into it |
+
+The empty state's suggestions are neither: they disclose what one application can do, so the
+application declares them on its descriptor (`panel_suggestions`) and the hello reply carries
+them. The core offers none. Two sets of constants drifting apart is the defect this
+arrangement exists to prevent, and `src/web_operation_agent/tests/test_panel_contract.py`
+fails if the panel starts declaring something the server does not send.
 
 ## Working on it
 
@@ -38,6 +49,7 @@ npm ci               # Node ^20.19 || >=22.12, which is what Vite 8 requires
 npm run dev          # http://localhost:5173 — the panel over a stand-in host page
 npm run storybook    # every state, including the ones a normal run rarely reaches
 npm test             # unit tests: the markdown grammar, geometry, the host contract
+npm run test:browser # Chromium checks of the built panel (e2e/); needs npm run build first
 npm run lint
 npm run build        # dist/panel/panel.js and dist/runtime/assistant.js
 ```
@@ -63,10 +75,12 @@ gateway comes to serve them. Both are generated artifacts: they are not committe
 checkout without Node has no panel -- the gateway then refuses the request by name rather
 than serving something older.
 
-The browser behaviour is tested from the Python side, in Chromium, against the built
-bundle: `src/web_operation_agent/tests/test_panel_ui.py`. That is where the states, the
-keyboard paths, the narrow layouts and the strict-CSP construction are asserted. Storybook
-is for looking; those tests are the gate.
+The browser behaviour is tested here, in Chromium, against the built bundle: `e2e/` holds
+Playwright tests that mount `dist/panel/panel.js` over a scripted host (`npm run build`, then
+`npm run test:browser`; `npx playwright install chromium` once for the browser). That is
+where the states, the keyboard paths, the narrow layouts and the strict-CSP construction are
+asserted, and where a Storybook build is checked to show the shipped panel. Storybook is for
+looking; those tests are the gate.
 
 ## Shape
 

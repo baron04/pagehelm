@@ -3,7 +3,8 @@ WORKDIR /build/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
-COPY src/web_operation_agent/web_runtime/design_tokens.json src/web_operation_agent/web_runtime/panel_contract.json /build/src/web_operation_agent/web_runtime/
+COPY src/web_operation_agent/web_runtime/panel_contract.json src/web_operation_agent/web_runtime/browser_contract.json /build/src/web_operation_agent/web_runtime/
+COPY src/web_operation_agent/tests/golden/redaction_cases.json /build/src/web_operation_agent/tests/golden/
 RUN npm run build
 
 FROM python@sha256:519591d6871b7bc437060736b9f7456b8731f1499a57e22e6c285135ae657bf7 AS builder
@@ -11,6 +12,7 @@ WORKDIR /build/source
 COPY . .
 COPY --from=panel /build/frontend/dist/panel ./frontend/dist/panel
 COPY --from=panel /build/frontend/dist/runtime ./frontend/dist/runtime
+COPY --from=panel /build/frontend/dist/trace ./frontend/dist/trace
 RUN python scripts/build_runtime.py --skip-build \
     && python scripts/build_panel.py --skip-build \
     && python -m pip install --no-cache-dir --prefix=/install . ./examples/odoo

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from ..origins import normalize_origin, validate_page_write_guard
+from ..transport.panel_view import PanelSuggestion, panel_suggestions
 
 
 APPLICATION_ADAPTER_VERSION = 2
@@ -41,6 +42,9 @@ class ApplicationDescriptor:
     #: otherwise, and posts to `<path>/end` when the turn ends. Empty for an application
     #: without one.
     page_write_guard: str = ""
+    #: Goals the empty assistant panel offers, in order. They disclose what this application
+    #: has been shown to do, so the application declares them; empty offers none.
+    panel_suggestions: tuple[PanelSuggestion, ...] = ()
 
     def __post_init__(self) -> None:
         if self.schema_version != APPLICATION_ADAPTER_VERSION:
@@ -67,6 +71,7 @@ class ApplicationDescriptor:
                 or not _SHA256.fullmatch(self.catalog_sha256):
             raise ValueError("catalog_sha256 is invalid")
         validate_page_write_guard(self.page_write_guard)
+        panel_suggestions(self.panel_suggestions)
         object.__setattr__(self, "display_name", self.display_name.strip())
         object.__setattr__(self, "origin", normalized_origin)
 
@@ -80,6 +85,8 @@ class ApplicationDescriptor:
             "page_controller_module": self.page_controller_module,
             "catalog_sha256": self.catalog_sha256,
             **({"page_write_guard": self.page_write_guard} if self.page_write_guard else {}),
+            **({"panel_suggestions": [item.to_json() for item in self.panel_suggestions]}
+               if self.panel_suggestions else {}),
         }
 
     def validate_page_controller(self, value: str) -> str:
