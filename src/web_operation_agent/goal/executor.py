@@ -41,8 +41,8 @@ _CJK = re.compile(r"[㐀-鿿]")
 _READY_WAITS = 12
 #: Attribute values a runtime uses to mark the current tab of a set.
 _SELECTED_ATTRS = ("aria-selected", "selected", "aria-pressed", "aria-checked")
-#: Element roles a handoff may highlight. Nothing here is pressed.
-_HIGHLIGHT_ROLES = frozenset({"button", "link", "textbox", "combobox", "spinbutton"})
+#: Element roles a handoff never highlights: navigation, not the control asked for.
+_NO_HIGHLIGHT_ROLES = frozenset({"tab", "menuitem", "menu", "menubar", "tablist", "navigation"})
 
 
 def _norm(text: str) -> str:
@@ -462,12 +462,16 @@ class GoalTurnExecutor:
 
     def _highlight(self, s: _TurnState, control: str) -> str:
         wanted = _norm(control)
-        element = next((e for e in s.obs.elements
-                        if e.role in _HIGHLIGHT_ROLES and _norm(e.name) == wanted), None)
+        candidates = [e for e in s.obs.elements if e.role not in _NO_HIGHLIGHT_ROLES]
+        # A button by its exact name first, then any control (a field's input is named by
+        # its label) by exact name, then by prefix.
+        element = next((e for e in candidates if e.role == "button" and _norm(e.name) == wanted),
+                       None)
         if element is None:
-            element = next((e for e in s.obs.elements
-                            if e.role in _HIGHLIGHT_ROLES and wanted
-                            and _norm(e.name).startswith(wanted)), None)
+            element = next((e for e in candidates if _norm(e.name) == wanted), None)
+        if element is None:
+            element = next((e for e in candidates
+                            if wanted and _norm(e.name).startswith(wanted)), None)
         if element is None:
             return ""
         receipt = self._dispatch(s, "highlight", {"ref": element.ref, "epoch": s.obs.epoch})

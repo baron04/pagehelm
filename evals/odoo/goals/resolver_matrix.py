@@ -377,8 +377,14 @@ case("h-send", "sale.order", "handoff", "none", handoff("sale.order", "S00005", 
      page={"url": r"^/odoo/sales/5$", "highlight": "Send by Email"})
 case("h-unknown-control", "sale.order", "handoff", "none", handoff("sale.order", "S00006", "Teleport"),
      page={"highlight": "Teleport"})
-case("h-no-record", "res.partner", "handoff", "none", handoff("res.partner", "", "New"),
-     problem=r"no record was named")
+case("h-new-record", "res.partner", "handoff", "create", handoff("res.partner", "", "New"),
+     page={"url": r"^/odoo/customers$", "highlight": "New"})
+case("h-new-quotation", "sale.order", "handoff", "create", handoff("sale.order", "", ""),
+     page={"url": r"^/odoo/sales$", "highlight": "New"})
+case("h-new-named", "sale.order", "handoff", "create", handoff("sale.order", "Test Quote", "New"),
+     page={"url": r"^/odoo/sales$", "highlight": "New"})
+case("h-field", "sale.order", "handoff", "field", handoff("sale.order", "S00002", "Expiration"),
+     page={"url": r"^/odoo/sales/2$", "highlight": "Expiration"})
 
 
 def _check(expect: dict, resolved) -> list[str]:

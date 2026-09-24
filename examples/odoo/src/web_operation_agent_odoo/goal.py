@@ -509,6 +509,20 @@ class OdooGoalPort:
             return self._list_page(d, index)
         if entity is None:
             return Resolved(kind=d.kind, problem="the entity named is not in the index")
+        if not d.record and d.kind == "handoff":
+            # "Create a new X": the control lives on the entity's list page -- the widest
+            # one, whose action restricts nothing (Quotations rather than Sales Orders),
+            # since a new record starts in the state the narrower pages exclude.
+            candidates = [a for a in self._actions if a["model"] == entity.key]
+            action = next((a for a in candidates if a.get("breadcrumbs")
+                           and not _literal_domain(str(a.get("domain") or ""))),
+                          candidates[0] if candidates else None)
+            page = index.page(f"p{action['action_id']}") if action else None
+            if action is None or page is None:
+                return Resolved(kind="handoff", problem="no page shows this entity")
+            return Resolved(kind="handoff", page=PagePlan(
+                url=self._action_url(action), label=page.breadcrumb,
+                expected_path=self._action_url(action), highlight=d.action or "New"))
         if not d.record:
             if d.kind == "page":
                 page = self._default_page(entity.key, index)
@@ -523,6 +537,11 @@ class OdooGoalPort:
             return Resolved(kind=d.kind, problem="no record was named")
         found = self._find_record(entity.key, d.record)
         via = d.via
+        if found is None and d.kind == "handoff":
+            # A record that does not exist and a change asked for: the name is the record
+            # to be created, and the control is the list page's own "New".
+            return self._resolve_one(Deliverable(kind="handoff", entity=d.entity, action="New"),
+                                     index)
         if found is None:
             # The reference may belong to a record that links to this entity ("S00006" is
             # an order; the person asked about its customer). Re-home the reference when
@@ -554,7 +573,13 @@ class OdooGoalPort:
         if d.kind == "fact":
             return self._facts(model, rid, name, d.fields)
         if d.kind == "handoff":
-            plan = self._record_page(model, rid, name, section="", highlight=d.action)
+            meta = self._models.get(model) or self._model_meta(model)
+            control = d.action
+            if d.fields and not any(_norm(a) == _norm(d.action) for a in meta.actions):
+                # The change is to a field, and the model named the field alongside a
+                # button it guessed: the field is what the person will edit.
+                control = d.fields[0]
+            plan = self._record_page(model, rid, name, section="", highlight=control)
             return Resolved(kind="handoff", page=plan)
         plan = self._record_page(model, rid, name, section=d.section, highlight="")
         return Resolved(kind="page", page=plan)
