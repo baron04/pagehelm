@@ -434,6 +434,23 @@ A record's tab and a handoff control are named for the core, which selects or hi
 on the live page. The demo enables this path with `goal_turns=True` (the default) for
 read-only provider sessions.
 
+Lines: for each menu-reachable model, the one2many fields its form embeds with a nested list
+(`order_line`, `invoice_line_ids`) become line entities, with the parent link first and the
+nested list's fields after it, so "the lines of S00004" is a list or count over
+`sale.order.line` with `Order Reference = S00004`. Dates: a datetime condition is bounded at
+the user's local midnight converted to UTC (Odoo stores UTC); a date field compares as a
+calendar day; a search-view filter whose domain calls `context_today()` or `time.strftime()`
+is evaluated with the turn's date. A `search_default_*` whose filter the served search view
+does not carry falls back to the selection key of the same name (`in_invoice` on Bills). An
+aggregate declared without a page counts every record of the entity the user may read; a
+declared page adds its action domain and its non-personal default filters.
+
+The zero-model matrix (`python -m evals.odoo.goals.resolver_matrix --credentials
+.private/odoo-reader`) resolves 128 hand-written declarations against the reference fixture
+and checks values, counts, sums, groups, routes, tabs, controls and honest problems. Run it
+before any model-backed evaluation; its relative-period cases assume the fixture's
+September 2026 data and clock.
+
 ## Session parameters
 
 The adapter declares `session_id`, `access_token` and `token` through

@@ -12,6 +12,8 @@ _CATALOG = {
         {"model": "sale.order", "label": "Sales Order", "operations": ["read"], "transient": False},
         {"model": "res.partner", "label": "Contact", "operations": ["read"], "transient": False},
         {"model": "product.tag", "label": "Product Tag", "operations": ["read"], "transient": False},
+        {"model": "sale.order.line", "label": "Sales Order Line", "operations": ["read"],
+         "transient": False},
         {"model": "mail.compose.message", "label": "Compose", "operations": ["read"],
          "transient": True},
     ],
@@ -57,6 +59,18 @@ _FIELDS = {
         "message_ids": {"string": "Messages", "type": "one2many"},
         "payment_term_id": {"string": "Payment Terms", "type": "many2one",
                             "relation": "account.payment.term"},
+        "date_order": {"string": "Order Date", "type": "datetime", "searchable": True},
+        "order_line": {"string": "Order Lines", "type": "one2many", "relation": "sale.order.line"},
+        "product_variant_count": {"string": "# Product Variants", "type": "integer",
+                                  "searchable": False},
+    },
+    "sale.order.line": {
+        "order_id": {"string": "Order Reference", "type": "many2one", "relation": "sale.order"},
+        "product_id": {"string": "Product", "type": "many2one", "relation": "product.product"},
+        "product_uom_qty": {"string": "Quantity", "type": "float"},
+        "price_subtotal": {"string": "Subtotal", "type": "monetary"},
+        "currency_id": {"string": "Currency", "type": "many2one", "relation": "res.currency"},
+        "sequence": {"string": "Sequence", "type": "integer"},
     },
     "res.partner": {
         "name": {"string": "Name", "type": "char"},
@@ -74,12 +88,17 @@ _VIEWS = {
         "form": '<form><header><button name="action_confirm" type="object" string="Confirm"/>'
                 '<button name="action_quotation_send" string="Send by Email" type="object"/>'
                 '</header><field name="user_id"/><field name="payment_term_id"/>'
-                '<notebook><page string="Order Lines"/><page string="Other Info"/></notebook>'
+                '<notebook><page string="Order Lines"><field name="order_line"><list>'
+                '<field name="sequence"/><field name="product_id"/><field name="product_uom_qty"/>'
+                '<field name="price_subtotal"/></list></field></page>'
+                '<page string="Other Info"><field name="date_order"/></page></notebook>'
                 '</form>',
         "search": '<search><filter string="My Orders" name="my" domain="[(\'user_id\', \'=\', uid)]"/>'
                   '<filter string="Quotations" name="draft" domain="[(\'state\', \'in\', (\'draft\', \'sent\'))]"/>'
+                  '<filter string="Late" name="late" domain="[(\'date_order\', \'&lt;\', context_today().strftime(\'%Y-%m-%d\'))]"/>'
                   '<filter string="Salesperson" name="salesperson" context="{\'group_by\': \'user_id\'}"/>'
                   '</search>'},
+    "sale.order.line": {"list": "<list/>", "form": "<form/>", "search": "<search/>"},
     "res.partner": {
         "list": '<list><field name="name"/><field name="email"/></list>',
         "form": '<form><notebook><page string="Contacts &amp; Addresses"/>'
@@ -94,10 +113,17 @@ _VIEWS = {
 class _Client:
     def __init__(self):
         self.calls: list[tuple[str, str]] = []
+        self.domains: list[list] = []
+
+    @staticmethod
+    def time_zone():
+        return "Asia/Shanghai"
 
     def call(self, model, method, args, kwargs=None):
         self.calls.append((model, method))
         kwargs = kwargs or {}
+        if method in ("search_count", "read_group", "search_read"):
+            self.domains.append(args[0])
         if method == "catalog":
             return _CATALOG
         if method == "fields_get":
@@ -118,7 +144,9 @@ class _Client:
             if model == "sale.order":
                 return [{"id": 6, "partner_id": [11, "Gemini Furniture"],
                          "amount_total": 2947.5, "currency_id": [1, "USD"], "state": "sale",
-                         "payment_term_id": [6, "End of Following Month"]}]
+                         "payment_term_id": [6, "End of Following Month"], "order_line": [13]}]
+            if model == "sale.order.line":
+                return [{"id": 13, "display_name": "S00006 - Desk"}]
             return [{"id": 11, "comment": "<p>VIP &amp; <b>friendly</b></p>", "email": False}]
         if method == "search_count":
             domain = args[0]
@@ -130,9 +158,13 @@ class _Client:
             if args[2]:
                 return [{"partner_id": [11, "Gemini Furniture"], "__count": 13},
                         {"partner_id": [16, "Lumber Inc"], "__count": 1}]
-            return [{"amount_total": 92750.0}]
+            return [{str(args[1][0]).split(":")[0]: 92750.0}]
         if method == "search_read":
-            return [{"id": 6, "display_name": "S00006", "currency_id": [1, "USD"]}]
+            if model == "sale.order.line":
+                return [{"id": 13, "display_name": "S00006 - Desk", "product_id": [12, "Desk"],
+                         "product_uom_qty": 1.0, "price_subtotal": 750.0, "currency_id": [1, "USD"]}]
+            return [{"id": 6, "display_name": "S00006", "currency_id": [1, "USD"],
+                     "amount_total": 2947.5, "date_order": "2026-08-12 13:50:00"}]
         raise AssertionError(f"unexpected {model}.{method}")
 
 
@@ -252,6 +284,91 @@ class OdooGoalPortTests(unittest.TestCase):
         self.assertTrue(all(method in {"catalog", "fields_get", "get_views", "name_search",
                                        "read", "search_count", "read_group", "search_read"}
                             for _model, method in self.client.calls))
+
+
+
+class OdooGoalPortConditionTests(unittest.TestCase):
+    def setUp(self):
+        self.client = _Client()
+        self.port = OdooGoalPort(self.client)
+        self.index = self.port.index()
+
+    def _resolve(self, deliverable):
+        return self.port.resolve(GoalSpec.from_json({"deliverables": [deliverable]}))
+
+    def _last_domain(self):
+        return self.client.domains[-1]
+
+    def test_line_entities_come_from_the_record_form_with_the_link_first(self):
+        keys = [e.key for e in self.index.entities]
+        self.assertEqual(keys[keys.index("sale.order") + 1], "sale.order.line")
+        line = self.index.entity("sale.order.line")
+        self.assertEqual([f.label for f in line.fields],
+                         ["Order Reference", "Product", "Quantity", "Subtotal"])
+        self.assertIn("订单行", line.aliases)
+
+    def test_a_date_period_becomes_utc_bounds_in_the_users_zone(self):
+        self._resolve({"kind": "aggregate", "entity": "sale.order", "page": {"key": "p331"},
+                       "metric": {"op": "count",
+                                  "filters": [{"field": "Order Date", "values": ["2026-08"]}]}})
+        self.assertEqual(self._last_domain()[-2:],
+                         [["date_order", ">=", "2026-07-31 16:00:00"],
+                          ["date_order", "<", "2026-08-31 16:00:00"]])
+        self._resolve({"kind": "aggregate", "entity": "sale.order", "page": {"key": "p331"},
+                       "metric": {"op": "count",
+                                  "filters": [{"field": "Order Date", "values": ["2026-09-10"],
+                                               "op": ">"}]}})
+        self.assertEqual(self._last_domain()[-1], ["date_order", ">=", "2026-09-10 16:00:00"])
+        result = self._resolve({"kind": "aggregate", "entity": "sale.order", "page": {"key": "p331"},
+                                "metric": {"op": "count",
+                                           "filters": [{"field": "Order Date", "values": ["someday"]}]}})
+        self.assertIn("not a date or period", result.deliverables[0].problem)
+
+    def test_a_page_filter_that_names_today_is_written_for_this_turn(self):
+        self._resolve({"kind": "aggregate", "entity": "sale.order", "page": {"key": "p331"},
+                       "metric": {"op": "count", "page_filters": ["Late"]}})
+        clause = self._last_domain()[-1]
+        self.assertEqual(list(clause[:2]), ["date_order", "<"])
+        self.assertRegex(clause[2], r"^\d{4}-\d{2}-\d{2}$")
+
+    def test_numbers_take_operators_and_unstored_fields_are_refused(self):
+        self._resolve({"kind": "aggregate", "entity": "sale.order", "page": {"key": "p331"},
+                       "metric": {"op": "count",
+                                  "filters": [{"field": "Total", "values": ["500", "1,000"],
+                                               "op": "between"}]}})
+        self.assertEqual(self._last_domain()[-2:],
+                         [["amount_total", ">=", 500.0], ["amount_total", "<=", 1000.0]])
+        result = self._resolve({"kind": "aggregate", "entity": "sale.order", "page": {"key": "p331"},
+                                "metric": {"op": "count",
+                                           "filters": [{"field": "Product Variants", "values": ["1"],
+                                                        "op": ">"}]}})
+        self.assertIn("cannot be used as a condition", result.deliverables[0].problem)
+
+    def test_an_entity_without_a_page_counts_every_record_of_it(self):
+        result = self._resolve({"kind": "aggregate", "entity": "sale.order.line",
+                                "metric": {"op": "sum", "field": "Subtotal",
+                                           "filters": [{"field": "Order Reference", "values": ["S00006"]}]}})
+        agg = result.deliverables[0].aggregate
+        self.assertEqual(agg.subject, "Sales Order Line · Order Reference = S00006")
+        self.assertEqual(self.client.domains[0], [["order_id", "in", [6]]])
+        self.assertEqual(agg.sums, (("Subtotal", "92,750.00 USD"),))
+
+    def test_a_list_shows_columns_and_orders_records(self):
+        result = self._resolve({"kind": "list", "entity": "sale.order.line",
+                                "fields": ["Product", "Quantity", "Subtotal"],
+                                "sort": "Subtotal", "descending": True, "limit": 5,
+                                "metric": {"op": "count",
+                                           "filters": [{"field": "Order Reference", "values": ["S00006"]}]}})
+        agg = result.deliverables[0].aggregate
+        self.assertEqual(agg.records,
+                         ("S00006 - Desk — Product: Desk; Quantity: 1.00; Subtotal: 750.00 USD",))
+        self.assertIn("by Subtotal desc", agg.subject)
+        self.assertIsNone(result.deliverables[0].page)
+
+    def test_an_x2many_fact_lists_the_first_names(self):
+        result = self._resolve({"kind": "fact", "entity": "sale.order", "record": "S00006",
+                                "fields": ["Order Lines"]})
+        self.assertEqual(result.deliverables[0].facts[0].value, "1 records: S00006 - Desk")
 
 
 if __name__ == "__main__":

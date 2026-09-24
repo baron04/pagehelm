@@ -33,7 +33,7 @@ class IndexField:
     def __post_init__(self) -> None:
         object.__setattr__(self, "key", _label(self.key, "field key"))
         object.__setattr__(self, "label", _label(self.label, "field label"))
-        object.__setattr__(self, "choices", tuple(_label(c, "choice") for c in self.choices)[:24])
+        object.__setattr__(self, "choices", tuple(_label(c, "choice") for c in self.choices)[:8])
 
 
 @dataclass(frozen=True)
@@ -77,6 +77,8 @@ class IndexPage:
     filters: tuple[str, ...] = ()
     groups: tuple[str, ...] = ()
     aliases: tuple[str, ...] = ()
+    #: Key of the page whose filters and groups this page shares, when it lists none.
+    filters_as: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "key", _label(self.key, "page key"))
@@ -154,6 +156,8 @@ class ApplicationIndex:
                 parts.append("filters: " + ", ".join(page.filters))
             if page.groups:
                 parts.append("groups: " + ", ".join(page.groups))
+            if page.filters_as and not (page.filters or page.groups):
+                parts.append(f"filters/groups: as {page.filters_as}")
             lines.append(" | ".join(parts))
         return "\n".join(lines)
 

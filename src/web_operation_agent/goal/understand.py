@@ -2,6 +2,14 @@
 
 The model is not choosing among tools or planning steps here. It is translating a request
 into the index's vocabulary, which is the one thing in this turn that needs language.
+
+The prompt is kept small on purpose. With the index at about 20 KB a small model declared,
+on a fifth of the development requests, that "the message contains only the index", or
+misread the record numbers in the request -- whichever message the request was placed in,
+cached prefix or not. At 15 KB the same model read every request. The index is therefore
+compiled compactly (an adapter's concern), the system text below stays short, and new
+declaration vocabulary goes into the field descriptions of `spec.DECLARE_GOAL_TOOL` rather
+than into more prose here.
 """
 from __future__ import annotations
 

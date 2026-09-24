@@ -8,9 +8,11 @@ command or a write; the core does the former and nothing does the latter.
 from __future__ import annotations
 
 import ast
+from datetime import date, datetime, time as time_of_day, timedelta, timezone
 import html
 import re
 import threading
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from web_operation_agent.business.runtime import BusinessToolError
 from web_operation_agent.goal.index import (ApplicationIndex, IndexEntity, IndexField,
@@ -33,7 +35,7 @@ _SKIP_FIELDS = frozenset({"company_id", "currency_id", "id", "__last_update", "s
                           "color", "display_name", "write_date", "create_date",
                           "create_uid", "write_uid", "country_code", "locked",
                           "authorized_transaction_ids", "tax_country_id"})
-_MAX_FIELDS = 28
+_MAX_FIELDS = 16
 _RECORD_LIMIT = 20
 _GROUP_LIMIT = 20
 
@@ -53,7 +55,34 @@ ALIASES = {
     "Contact": ("联系人", "客户", "供应商"), "Sales Order": ("销售订单", "报价单"),
     "Journal Entry": ("发票", "账单", "凭证"), "Product": ("产品",),
     "Product Variant": ("产品变体",), "Payments": ("付款",),
+    "Sales Order Line": ("订单行", "订单明细", "报价单明细"),
+    "Journal Item": ("发票行", "账单明细", "凭证行"),
 }
+#: Line fields that are bookkeeping for the form, not values a person asks about.
+_SKIP_LINE_FIELDS = frozenset({"sequence", "display_type", "is_downpayment", "product_updatable",
+                               "product_uom_category_id", "product_uom_readonly",
+                               "technical_price_unit", "qty_delivered_method",
+                               "company_currency_id", "tax_calculation_rounding_method",
+                               "analytic_distribution", "partner_id", "product_type"})
+_MAX_LINE_FIELDS = 14
+
+#: Relative periods a date condition may name, in the index's language and in Chinese.
+_PERIODS = {
+    "today": "today", "今天": "today", "yesterday": "yesterday", "昨天": "yesterday",
+    "this week": "this_week", "本周": "this_week", "last week": "last_week", "上周": "last_week",
+    "this month": "this_month", "本月": "this_month", "这个月": "this_month",
+    "last month": "last_month", "上月": "last_month", "上个月": "last_month",
+    "this quarter": "this_quarter", "本季度": "this_quarter",
+    "last quarter": "last_quarter", "上季度": "last_quarter", "上个季度": "last_quarter",
+    "this year": "this_year", "今年": "this_year", "last year": "last_year", "去年": "last_year",
+    "overdue": "overdue", "逾期": "overdue", "过期": "overdue",
+}
+_LAST_DAYS = re.compile(r"^(?:last|past|最近|过去)\s*(\d{1,3})\s*(?:days|天)$", re.I)
+_DAY = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+_MONTH = re.compile(r"^(\d{4})-(\d{2})$")
+_YEAR = re.compile(r"^(\d{4})$")
+_RANGE = re.compile(r"^(\d{4}-\d{2}-\d{2})\s*(?:\.\.|~|to|至|到)\s*(\d{4}-\d{2}-\d{2})$")
+
 
 
 def _literal_domain(text: str) -> list | None:
@@ -95,15 +124,94 @@ def _money(amount: float, currency: str) -> str:
     return f"{amount:,.2f} {currency}".strip()
 
 
+def _month_start(day: date) -> date:
+    return day.replace(day=1)
+
+
+def _add_months(day: date, months: int) -> date:
+    month = day.month - 1 + months
+    return date(day.year + month // 12, month % 12 + 1, 1)
+
+
+def _period(value: str, today: date) -> tuple[date | None, date | None] | None:
+    """A named or written period as [start, end) dates; None when it is not one."""
+    text = " ".join(value.strip().lower().split())
+    name = _PERIODS.get(text)
+    if name == "today":
+        return today, today + timedelta(days=1)
+    if name == "yesterday":
+        return today - timedelta(days=1), today
+    if name == "this_week":
+        start = today - timedelta(days=today.weekday())
+        return start, start + timedelta(days=7)
+    if name == "last_week":
+        start = today - timedelta(days=today.weekday() + 7)
+        return start, start + timedelta(days=7)
+    if name == "this_month":
+        return _month_start(today), _add_months(today, 1)
+    if name == "last_month":
+        return _add_months(today, -1), _month_start(today)
+    if name in ("this_quarter", "last_quarter"):
+        quarter_start = date(today.year, 3 * ((today.month - 1) // 3) + 1, 1)
+        if name == "last_quarter":
+            quarter_start = _add_months(quarter_start, -3)
+        return quarter_start, _add_months(quarter_start, 3)
+    if name == "this_year":
+        return date(today.year, 1, 1), date(today.year + 1, 1, 1)
+    if name == "last_year":
+        return date(today.year - 1, 1, 1), date(today.year, 1, 1)
+    if name == "overdue":
+        return None, today
+    match = _LAST_DAYS.match(text)
+    if match:
+        days = int(match.group(1))
+        return today - timedelta(days=days), today + timedelta(days=1)
+    match = _RANGE.match(text)
+    if match:
+        start, end = date.fromisoformat(match.group(1)), date.fromisoformat(match.group(2))
+        return start, end + timedelta(days=1)
+    match = _DAY.match(text)
+    if match:
+        start = date.fromisoformat(text)
+        return start, start + timedelta(days=1)
+    match = _MONTH.match(text)
+    if match:
+        start = date(int(match.group(1)), int(match.group(2)), 1)
+        return start, _add_months(start, 1)
+    match = _YEAR.match(text)
+    if match:
+        return date(int(text), 1, 1), date(int(text) + 1, 1, 1)
+    return None
+
+
+_TODAY_CALLS = re.compile(r"(?:context_today\(\)|time)\.strftime\('([^']+)'\)")
+
+
+def _domain_at(text: str, today: date) -> list | None:
+    """A search-view domain, with the application's "today" written in for this turn."""
+    if not text or not text.strip():
+        return []
+    literal = _literal_domain(text)
+    if literal is not None:
+        return literal
+    substituted = _TODAY_CALLS.sub(lambda m: repr(today.strftime(m.group(1))), text)
+    return _literal_domain(substituted)
+
+
 class Ambiguous(tuple):
     """Several records match a reference; the tuple holds their display names."""
 
 
 class _SearchFilter:
-    __slots__ = ("name", "label", "domain", "group_by")
+    __slots__ = ("name", "label", "domain", "group_by", "raw")
 
-    def __init__(self, name: str, label: str, domain: list | None, group_by: str):
+    def __init__(self, name: str, label: str, domain: list | None, group_by: str,
+                 raw: str = ""):
         self.name, self.label, self.domain, self.group_by = name, label, domain, group_by
+        self.raw = raw
+
+    def domain_at(self, today: date) -> list | None:
+        return self.domain if self.domain is not None else _domain_at(self.raw, today)
 
 
 class _ModelMeta:
@@ -111,10 +219,14 @@ class _ModelMeta:
 
     def __init__(self, model: str, label: str, fields: dict, list_fields: list[str],
                  form_fields: list[str], sections: tuple[str, ...],
-                 actions: tuple[str, ...], filters: list[_SearchFilter]):
+                 actions: tuple[str, ...], filters: list[_SearchFilter],
+                 form_arch: str = "", parent: str = ""):
         self.model, self.label, self.fields = model, label, fields
         self.list_fields, self.form_fields = list_fields, form_fields
         self.sections, self.actions, self.filters = sections, actions, filters
+        self.form_arch = form_arch
+        #: For a line entity: the model whose record owns the lines.
+        self.parent = parent
 
     def field_by_label(self, label: str) -> str | None:
         wanted = _norm(label)
@@ -208,21 +320,37 @@ class OdooGoalPort:
         detailed = {a["model"] for a in actions if a.get("breadcrumbs")}
         for model in entity_models:
             self._models[model] = self._model_meta(model, detailed=model in detailed)
+        for model in list(entity_models):
+            if model not in detailed:
+                continue
+            for line in self._line_metas(self._models[model]):
+                self._models[line.model] = line
+                detailed.add(line.model)
+                entity_models.insert(entity_models.index(model) + 1, line.model)
+        rendered_filters: dict[tuple, str] = {}
         for action in actions:
             meta = self._models[action["model"]]
             breadcrumb = " / ".join(action.get("breadcrumbs") or ()) or (
-                f"{action['name']} ({meta.label})")
-            filters, groups = [], []
+                action["name"] if _norm(action["name"]) != _norm(meta.label)
+                else f"{action['name']} ({meta.label})")
+            filters, groups, same_as = [], [], ""
             if action.get("breadcrumbs"):
                 self._page_filters[action["action_id"]] = self._search_filters(
                     action["model"], action["action_id"])
                 for item in self._page_filters[action["action_id"]]:
                     (groups if item.group_by else filters).append(item.label)
+                # Pages of one entity usually share a search view; the index names its
+                # filters once and lets the other pages point at that page.
+                signature = (action["model"], tuple(filters), tuple(groups))
+                if signature in rendered_filters:
+                    same_as, filters, groups = rendered_filters[signature], [], []
+                elif filters or groups:
+                    rendered_filters[signature] = f"p{action['action_id']}"
             pages.append(IndexPage(
                 key=f"p{action['action_id']}", label=action["name"], breadcrumb=breadcrumb,
                 entity=action["model"], views=tuple(action.get("view_modes") or ()),
                 filters=tuple(dict.fromkeys(filters)), groups=tuple(dict.fromkeys(groups)),
-                aliases=self._aliases.get(action["name"], ())))
+                aliases=self._aliases.get(action["name"], ()), filters_as=same_as))
         entities = []
         for model in entity_models:
             meta = self._models[model]
@@ -266,7 +394,40 @@ class OdooGoalPort:
                 r'<button[^>]*?\btype="object"[^>]*?\bstring="([^"]+)"', arch["form"])
             + re.findall(r'<button[^>]*?\bstring="([^"]+)"[^>]*?\btype="object"', arch["form"])))
         return _ModelMeta(model, label, fields, list_fields, form_fields, sections, actions,
-                          _parse_filters(arch["search"]))
+                          _parse_filters(arch["search"]), form_arch=arch["form"])
+
+    def _line_metas(self, meta: _ModelMeta) -> list[_ModelMeta]:
+        """The line entities a record's form embeds, with the fields that form shows."""
+        out = []
+        for name, info in meta.fields.items():
+            comodel = str(info.get("relation") or "")
+            if (info.get("type") != "one2many" or comodel not in self._model_labels
+                    or comodel in self._models or f'<field name="{name}"' not in meta.form_arch):
+                continue
+            # The embedded list's own fields are self-closing, so the first closing tag
+            # after the x2many field ends its block.
+            block = re.search(rf'<field name="{name}"[^>]*>(.*?)</field>', meta.form_arch, re.S)
+            if block is None:
+                continue
+            inner = [f for f in dict.fromkeys(re.findall(r'<field name="([^"]+)"', block.group(1)))
+                     if f not in _SKIP_LINE_FIELDS]
+            if not inner:
+                continue
+            fields = self._client.call(comodel, "fields_get", [], {
+                "attributes": ["string", "type", "relation", "selection", "searchable"]})
+            parent_link = next((f for f, i in fields.items()
+                                if i.get("type") == "many2one" and i.get("relation") == meta.model),
+                               None)
+            shown = ([parent_link] if parent_link else []) + [f for f in inner if f in fields]
+            try:
+                views = self._client.call(comodel, "get_views", [[[False, "search"]]], {})
+                filters = _parse_filters((views.get("views", {}).get("search") or {}).get("arch", ""))
+            except BusinessToolError:
+                filters = []
+            out.append(_ModelMeta(comodel, self._model_labels.get(comodel, comodel), fields,
+                                  shown[:_MAX_LINE_FIELDS + 1], [], (), (), filters,
+                                  parent=meta.model))
+        return out
 
     def _index_fields(self, meta: _ModelMeta) -> list[IndexField]:
         out: list[IndexField] = []
@@ -305,6 +466,34 @@ class OdooGoalPort:
                 resolved.append(Resolved(kind=deliverable.kind,
                                          problem=f"the application refused a read: {exc}"[:200]))
         return Resolution(deliverables=tuple(resolved), reads=tuple(self._reads))
+
+    def _today(self) -> date:
+        zone = ""
+        time_zone = getattr(self._client, "time_zone", None)
+        if callable(time_zone):
+            try:
+                zone = str(time_zone() or "")
+            except BusinessToolError:
+                zone = ""
+        try:
+            return datetime.now(ZoneInfo(zone)).date() if zone else date.today()
+        except ZoneInfoNotFoundError:
+            return date.today()
+
+    def _utc_boundary(self, day: date) -> str:
+        zone = ""
+        time_zone = getattr(self._client, "time_zone", None)
+        if callable(time_zone):
+            try:
+                zone = str(time_zone() or "")
+            except BusinessToolError:
+                zone = ""
+        try:
+            local = datetime.combine(day, time_of_day(), ZoneInfo(zone)) if zone else \
+                datetime.combine(day, time_of_day(), timezone.utc)
+        except ZoneInfoNotFoundError:
+            local = datetime.combine(day, time_of_day(), timezone.utc)
+        return local.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
     def _call(self, model: str, method: str, args: list, kwargs: dict | None = None):
         self._reads.append((method, model))
@@ -461,7 +650,14 @@ class OdooGoalPort:
         if kind == "html":
             return _plain_text(str(value)) or "(empty)"
         if kind in ("one2many", "many2many"):
-            return f"{len(value)} records"
+            ids = [int(v) for v in value][:10] if isinstance(value, (list, tuple)) else []
+            names = []
+            if ids and info.get("relation"):
+                rows = self._call(str(info["relation"]), "read", [ids], {"fields": ["display_name"]})
+                names = [str(r.get("display_name") or "") for r in rows]
+            total = len(value) if isinstance(value, (list, tuple)) else 0
+            suffix = "…" if total > len(names) else ""
+            return f"{total} records: " + ", ".join(names) + suffix if names else f"{total} records"
         return str(value)
 
     # -- pages ------------------------------------------------------------------------
@@ -563,16 +759,19 @@ class OdooGoalPort:
     def _aggregate(self, d: Deliverable, index: ApplicationIndex) -> Resolved:
         page = index.page(d.page.key) if d.page.key else None
         entity = index.entity(d.entity) if d.entity else None
-        if page is None and entity is not None:
-            page = self._default_page(entity.key, index)
-        if page is None:
-            return Resolved(kind=d.kind, problem="no page scope for this count")
-        model = page.entity
+        if page is None and entity is None:
+            return Resolved(kind=d.kind, problem="no entity or page names this scope")
+        # A declared page scopes the numbers by its own domain and default filters; an
+        # entity alone means every record of it the person may read. The page a list
+        # opens afterwards is chosen separately.
+        model = page.entity if page is not None else entity.key
         meta = self._models.get(model) or self._model_meta(model)
         self._models.setdefault(model, meta)
-        action = next((a for a in self._actions if f"p{a['action_id']}" == page.key), None)
+        today = self._today()
+        action = (next((a for a in self._actions if f"p{a['action_id']}" == page.key), None)
+                  if page is not None else None)
         domain = list(_literal_domain(str(action.get("domain") or "")) or []) if action else []
-        described = [page.label]
+        described = [page.label if page is not None else meta.label]
         # The page's own default filters apply too, except ones about the current user.
         context = _literal_dict(str(action.get("context") or "")) if action else {}
         for key, value in context.items():
@@ -580,9 +779,19 @@ class OdooGoalPort:
                 continue
             pool = self._page_filters.get(action["action_id"], meta.filters) if action \
                 else meta.filters
-            item = next((f for f in pool if f.name == key[len("search_default_"):]), None)
-            if item is not None and item.domain and "uid" not in str(item.domain):
-                domain += item.domain
+            name = key[len("search_default_"):]
+            item = next((f for f in pool if f.name == name), None)
+            resolved = item.domain_at(today) if item is not None else None
+            if resolved is None and item is None:
+                # The action's own search view was not served to this user, but the
+                # default names a choice of one of the model's selection fields, which
+                # is how these filters are conventionally written ("in_invoice").
+                resolved = next(([[field, "=", name]] for field, info in meta.fields.items()
+                                 if info.get("type") == "selection"
+                                 and any(k == name for k, _l in info.get("selection") or ())),
+                                None)
+            if resolved and "uid" not in str(resolved):
+                domain += resolved
         metric = d.metric or Metric(op="count")
         page_filters = self._page_filters.get(action["action_id"], meta.filters) if action \
             else meta.filters
@@ -590,12 +799,14 @@ class OdooGoalPort:
             wanted = _norm(name)
             item = next((f for f in page_filters if _norm(f.label) == wanted), None) \
                 or meta.filter_by_name(name)
-            if item is None or item.domain is None:
+            resolved = item.domain_at(today) if item is not None else None
+            if resolved is None or "uid" in str(resolved):
                 return Resolved(kind=d.kind, problem=f"filter {name!r} is not usable here")
-            domain += item.domain
+            domain += resolved
             described.append(item.label)
         for condition in metric.filters:
-            clause, text = self._condition(meta, condition.field, condition.values)
+            clause, text = self._condition(meta, condition.field, condition.values,
+                                           op=condition.op, today=today)
             if clause is None:
                 return Resolved(kind=d.kind, problem=text)
             domain += clause
@@ -605,17 +816,40 @@ class OdooGoalPort:
             described.append(f"~{d.page.search}")
         subject = " · ".join(described)
         if d.kind == "list":
-            rows = self._call(model, "search_read", [domain], {
-                "fields": ["display_name"], "limit": _RECORD_LIMIT + 1})
-            names = tuple(str(r.get("display_name") or "") for r in rows[:_RECORD_LIMIT])
+            columns = [f for f in (meta.field_by_label(label) for label in d.fields) if f]
+            columns = list(dict.fromkeys(columns))
+            read_fields = ["display_name"] + columns
+            if any(meta.fields[f].get("type") == "monetary" for f in columns) \
+                    and "currency_id" in meta.fields:
+                read_fields.append("currency_id")
+            limit = d.limit or _RECORD_LIMIT
+            kwargs: dict = {"fields": read_fields, "limit": limit + 1}
+            if d.sort:
+                order_field = meta.field_by_label(d.sort)
+                if order_field is None:
+                    return Resolved(kind=d.kind, problem=f"cannot sort by {d.sort!r}")
+                kwargs["order"] = f"{order_field} {'desc' if d.descending else 'asc'}, id"
+                described.append(f"by {meta.fields[order_field].get('string', d.sort)}"
+                                 + (" desc" if d.descending else ""))
+            rows = self._call(model, "search_read", [domain], kwargs)
+            names = []
+            for row in rows[:limit]:
+                cells = [f"{meta.fields[f].get('string') or f}: {self._display(row.get(f), meta.fields[f], row)}"
+                         for f in columns]
+                names.append(str(row.get("display_name") or "")
+                             + (" — " + "; ".join(cells) if cells else ""))
             total = self._call(model, "search_count", [domain], {})
-            plan = self._list_page(Deliverable(kind="page", entity=model, page=d.page), index)
+            plan = self._list_page(Deliverable(kind="page", entity=model, page=d.page), index) \
+                if (page is not None or self._default_page(model, index) is not None) else None
+            page_plan = plan.page if plan is not None else None
             if not names:
-                return Resolved(kind="list", page=plan.page,
-                                problem=f"no {meta.label} matches {d.page.search!r}")
-            return Resolved(kind="list", page=plan.page,
-                            aggregate=Aggregate(subject=subject, count=int(total),
-                                                records=names, complete=len(rows) <= _RECORD_LIMIT))
+                return Resolved(kind="list", page=page_plan,
+                                problem=f"no {meta.label} matches "
+                                        + (repr(d.page.search) if d.page.search else "these conditions"))
+            return Resolved(kind="list", page=page_plan,
+                            aggregate=Aggregate(subject=" · ".join(described), count=int(total),
+                                                records=tuple(names),
+                                                complete=len(rows) <= limit))
         count = int(self._call(model, "search_count", [domain], {}))
         widened = None
         if count == 0 and action and _literal_domain(str(action.get("domain") or "")):
@@ -645,11 +879,13 @@ class OdooGoalPort:
             field = meta.field_by_label(metric.group_by)
             if field is None:
                 return Resolved(kind=d.kind, problem=f"cannot group by {metric.group_by!r}")
-            rows = self._call(model, "read_group", [domain, [field], [field]], {
+            spec = f"{field}:month" if meta.fields[field].get("type") in ("date", "datetime") \
+                else field
+            rows = self._call(model, "read_group", [domain, [field], [spec]], {
                 "lazy": False, "orderby": "__count desc",
                 "limit": metric.top or _GROUP_LIMIT})
             for row in rows:
-                value = row.get(field)
+                value = row.get(spec, row.get(field))
                 name = (value[1] if isinstance(value, (list, tuple)) and len(value) > 1
                         else str(value))
                 groups_out.append((str(name), int(row.get("__count") or 0)))
@@ -660,15 +896,29 @@ class OdooGoalPort:
             subject=subject, count=count, sums=tuple(sums), groups=tuple(groups_out),
             note=note))
 
-    def _condition(self, meta: _ModelMeta, label: str, values: tuple[str, ...]):
+    def _condition(self, meta: _ModelMeta, label: str, values: tuple[str, ...], *,
+                   op: str = "", today: date | None = None):
         field = meta.field_by_label(label)
         if field is None:
             return None, f"no field {label!r} on {meta.label}"
         info = meta.fields[field]
         kind = info.get("type")
-        text = f"{info.get('string') or field} = {' / '.join(values)}"
+        text = f"{info.get('string') or field} {op or '='} {' / '.join(values)}"
         if not values:
             return None, f"no value for {label!r}"
+        if info.get("searchable") is False:
+            # A computed, unstored field: the application would silently ignore the
+            # condition and count everything, which is worse than saying no.
+            return None, f"{info.get('string') or field} cannot be used as a condition"
+        if kind in ("date", "datetime"):
+            return self._date_condition(field, info, values, op, today or self._today())
+        if op == "!=" and kind in ("many2one", "selection"):
+            clause, text = self._condition(meta, label, values, today=today)
+            if clause is None:
+                return clause, text
+            negated = [[c[0], "not in" if c[1] in ("in", "child_of") else "!=", c[2]]
+                       if isinstance(c, list) and len(c) == 3 else c for c in clause]
+            return negated, text.replace(" = ", " != ", 1)
         if kind == "many2one":
             ids = []
             for value in values:
@@ -696,12 +946,52 @@ class OdooGoalPort:
             return [[field, "=", truthy]], text
         if kind in ("integer", "float", "monetary"):
             try:
-                return [[field, "=", float(values[0])]], text
+                numbers = [float(v.replace(",", "")) for v in values]
             except ValueError:
                 return None, f"{values[0]!r} is not a number"
+            if op == "between" and len(numbers) >= 2:
+                return [[field, ">=", numbers[0]], [field, "<=", numbers[1]]], text
+            return [[field, op if op in ("<", "<=", ">", ">=", "!=") else "=", numbers[0]]], text
+        operator = {"=": "=ilike", "!=": "not ilike"}.get(op, "ilike")
         if len(values) == 1:
-            return [[field, "ilike", values[0]]], text
-        return ["|"] * (len(values) - 1) + [[field, "ilike", v] for v in values], text
+            return [[field, operator, values[0]]], text
+        return ["|"] * (len(values) - 1) + [[field, operator, v] for v in values], text
+
+    def _date_condition(self, field: str, info: dict, values: tuple[str, ...], op: str,
+                        today: date):
+        label = info.get("string") or field
+        is_datetime = info.get("type") == "datetime"
+
+        def bound(day: date) -> str:
+            return self._utc_boundary(day) if is_datetime else day.isoformat()
+
+        if op == "between" and len(values) >= 2:
+            first, second = _period(values[0], today), _period(values[1], today)
+            if first is None or second is None or first[0] is None or second[1] is None:
+                return None, f"{values[0]!r}..{values[1]!r} is not a date range"
+            return ([[field, ">=", bound(first[0])], [field, "<", bound(second[1])]],
+                    f"{label} between {values[0]} and {values[1]}")
+        period = _period(values[0], today)
+        if period is None:
+            return None, f"{values[0]!r} is not a date or period"
+        start, end = period
+        text = f"{label} {op or 'in'} {values[0]}"
+        if op in ("<", "<="):
+            edge = (end if op == "<=" else start)
+            if edge is None:
+                edge = end
+            return [[field, "<", bound(edge)]], text
+        if op in (">", ">="):
+            edge = (start if op == ">=" else end)
+            if edge is None:
+                edge = start
+            return [[field, ">=", bound(edge)]], text
+        clauses = []
+        if start is not None:
+            clauses.append([field, ">=", bound(start)])
+        if end is not None:
+            clauses.append([field, "<", bound(end)])
+        return clauses, text
 
 
 def _parse_filters(arch: str) -> list[_SearchFilter]:
@@ -715,7 +1005,7 @@ def _parse_filters(arch: str) -> list[_SearchFilter]:
         domain = _literal_domain(html.unescape(attrs.get("domain", ""))) \
             if not group_by else []
         filters.append(_SearchFilter(attrs.get("name", ""), html.unescape(attrs["string"]),
-                                     domain, group_by))
+                                     domain, group_by, html.unescape(attrs.get("domain", ""))))
     return filters
 
 

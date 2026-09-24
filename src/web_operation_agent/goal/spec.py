@@ -42,19 +42,30 @@ def _texts(value: object, name: str, *, limit: int = 8) -> tuple[str, ...]:
     return tuple(out)
 
 
+FILTER_OPS = ("", "=", "!=", "<", "<=", ">", ">=", "between", "contains")
+
+
 @dataclass(frozen=True)
 class Filter:
     field: str
-    #: One or several values, in the words of the index (choice labels) or the person.
+    #: One or several values, in the words of the index (choice labels) or the person. A
+    #: date field also takes a day, month or year (2026-09-12, 2026-09, 2026), a range
+    #: (2026-09-01..2026-09-30) or a relative period (today, this month, last quarter,
+    #: last 30 days, overdue).
     values: tuple[str, ...]
+    #: Comparison for numbers, dates and text; empty means equality or membership.
+    op: str = ""
 
     @classmethod
     def from_json(cls, value: object) -> "Filter":
         if not isinstance(value, dict):
             raise ValueError("filter must be an object")
         values = value.get("values", value.get("value"))
+        op = _text(value.get("op"), "filter op").lower()
+        if op not in FILTER_OPS:
+            raise ValueError(f"filter op must be one of {', '.join(o for o in FILTER_OPS if o)}")
         return cls(field=_text(value.get("field"), "filter field", allow_empty=False),
-                   values=_texts(values, "filter values", limit=6))
+                   values=_texts(values, "filter values", limit=6), op=op)
 
 
 @dataclass(frozen=True)
@@ -131,6 +142,10 @@ class Deliverable:
     page: PageSpec = field(default_factory=PageSpec)
     section: str = ""
     action: str = ""
+    #: For a list: the field to order by, its direction, and how many records to show.
+    sort: str = ""
+    descending: bool = False
+    limit: int = 0
 
     @classmethod
     def from_json(cls, value: object) -> "Deliverable":
@@ -140,6 +155,9 @@ class Deliverable:
         if kind not in KINDS:
             raise ValueError(f"deliverable kind must be one of {', '.join(KINDS)}")
         metric = value.get("metric")
+        limit = value.get("limit", 0) or 0
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0 or limit > 50:
+            raise ValueError("limit must be an integer from 0 to 50")
         return cls(kind=kind,
                    entity=_text(value.get("entity"), "entity"),
                    record=_text(value.get("record"), "record"),
@@ -148,7 +166,9 @@ class Deliverable:
                    metric=Metric.from_json(metric) if metric else None,
                    page=PageSpec.from_json(value.get("page")),
                    section=_text(value.get("section"), "section"),
-                   action=_text(value.get("action"), "action"))
+                   action=_text(value.get("action"), "action"),
+                   sort=_text(value.get("sort"), "sort"),
+                   descending=bool(value.get("descending", False)), limit=limit)
 
     def to_json(self) -> dict:
         out: dict = {"kind": self.kind}
@@ -157,10 +177,16 @@ class Deliverable:
                 out[name] = getattr(self, name)
         if self.fields:
             out["fields"] = list(self.fields)
+        if self.sort:
+            out["sort"] = self.sort
+            out["descending"] = self.descending
+        if self.limit:
+            out["limit"] = self.limit
         if self.metric is not None:
             out["metric"] = {
                 "op": self.metric.op, "field": self.metric.field,
-                "filters": [{"field": f.field, "values": list(f.values)}
+                "filters": [{"field": f.field, "values": list(f.values),
+                             **({"op": f.op} if f.op else {})}
                             for f in self.metric.filters],
                 "page_filters": list(self.metric.page_filters),
                 "group_by": self.metric.group_by, "top": self.metric.top}
@@ -187,6 +213,9 @@ class GoalSpec:
         if not isinstance(value, dict):
             raise ValueError("goal must be an object")
         raw = value.get("deliverables") or []
+        if isinstance(raw, dict):
+            # A single deliverable written as an object rather than a one-item array.
+            raw = [raw]
         if not isinstance(raw, list):
             raise ValueError("deliverables must be an array")
         deliverables = tuple(Deliverable.from_json(d) for d in raw[:_MAX_DELIVERABLES])
@@ -217,7 +246,7 @@ DECLARE_GOAL_TOOL = {
                         "properties": {
                             "kind": {"type": "string", "enum": list(KINDS)},
                             "entity": {"type": "string",
-                                       "description": "entity key from the index"},
+                                       "description": "entity key from the index (a record's lines are their own entity)"},
                             "record": {"type": "string",
                                        "description": "the record named by the person, in their words"},
                             "via": {"type": "string",
@@ -234,7 +263,11 @@ DECLARE_GOAL_TOOL = {
                                         "properties": {
                                             "field": {"type": "string"},
                                             "values": {"type": "array",
-                                                       "items": {"type": "string"}}},
+                                                       "items": {"type": "string"},
+                                                       "description": "choice labels, names, numbers; for a date field: 2026-09-12, 2026-09, 2026, 2026-09-01..2026-09-30, today, this month, last month, this quarter, last quarter, this year, last year, last 30 days, overdue"},
+                                            "op": {"type": "string",
+                                                   "enum": [o for o in FILTER_OPS if o],
+                                                   "description": "comparison for numbers, dates or text"}},
                                         "required": ["field", "values"]}},
                                     "page_filters": {"type": "array",
                                                      "items": {"type": "string"}},
@@ -255,7 +288,11 @@ DECLARE_GOAL_TOOL = {
                             "section": {"type": "string",
                                         "description": "section (tab) name on the record's page"},
                             "action": {"type": "string",
-                                       "description": "business control name on the record's page (handoff)"}},
+                                       "description": "business control name on the record's page (handoff)"},
+                            "sort": {"type": "string",
+                                     "description": "list: field label to order by (the largest, the latest)"},
+                            "descending": {"type": "boolean"},
+                            "limit": {"type": "integer", "description": "list: how many records to show"}},
                         "required": ["kind"]}},
                 "write_intent": {"type": "boolean"},
                 "unsupported": {"type": "string",

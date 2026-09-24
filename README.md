@@ -29,8 +29,17 @@ agent.
   as not done rather than guessing, apart from three deterministic fallbacks (a reference
   found on an entity that links to the named one, a label containing a link field's label,
   the page's own "My …" facet when the person asks for everyone's records), and a zero
-  count inside a page's scope is reported together with the entity-wide count. Only the
-  Odoo adapter implements the index and resolver so far.
+  count inside a page's scope is reported together with the entity-wide count. Conditions
+  take comparison operators on numbers, dates and text; a date condition accepts a day,
+  month, year, range or a named period (today, this month, last quarter, last 30 days,
+  overdue), and a page filter that names "today" is evaluated for the turn in the user's
+  time zone. The lines a record's form embeds (order lines, invoice lines) are entities of
+  their own, so they can be listed, counted and summed by their link to the record. A
+  condition on an unstored computed field is refused rather than silently ignored. The
+  resolver's reach is measured by a zero-model matrix over the reference fixture
+  (`evals/odoo/goals/resolver_matrix.py`: 128 declarations across entities, deliverable
+  kinds and condition types, all read-only RPC). Only the Odoo adapter implements the
+  index and resolver so far.
 - A server-side ReAct loop receives every tool result and a fresh page observation before
   its next decision, with step, time, token, and provider-spend limits.
 - Application-owned Skills and typed tools provide current business facts. When explicitly
