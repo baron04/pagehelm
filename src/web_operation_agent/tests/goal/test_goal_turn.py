@@ -198,7 +198,8 @@ class GoalTurnTests(unittest.TestCase):
             text="把 S00005 发邮件给客户")
         self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
         self.assertIn("标出「Send by Email」", execution.user_answer)
-        self.assertIn("不能替你点击", execution.user_answer)
+        self.assertIn("请你核对后自行点击", execution.user_answer)
+        self.assertNotRegex(execution.user_answer, r"不能|无法|做不到|未能")
         browser = _Browser.instances[0]
         self.assertNotIn("click", [a for a, _ in browser.actions])
         self.assertIn("highlight", [a for a, _ in browser.actions])

@@ -461,7 +461,8 @@ class GoalTurnExecutor:
         return self._tab_selected(s.obs, _norm(tab.name))
 
     def _highlight(self, s: _TurnState, control: str) -> str:
-        wanted = _norm(control)
+        # The declaration may carry the index's type annotation ("Due Date(date)").
+        wanted = _norm(re.sub(r"\((?:date|money|number|html|bool|text)\)$", "", control.strip()))
         candidates = [e for e in s.obs.elements if e.role not in _NO_HIGHLIGHT_ROLES]
         # A button by its exact name first, then any control (a field's input is named by
         # its label) by exact name, then by prefix.
@@ -613,11 +614,13 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool) -> list[
         plan = resolved.page
         if resolved.kind == "handoff":
             if outcome.highlighted:
-                lines.append((f"已打开 {plan.label} 并在页面上标出「{outcome.highlighted}」。"
-                              "助手不能替你点击或提交，请核对后自行操作。") if zh else
-                             (f"Opened {plan.label} and highlighted “{outcome.highlighted}”. "
-                              "The assistant cannot press or submit it for you; please check "
-                              "and act yourself."))
+                # A handoff is a completed preparation, not a refusal: the reply says what
+                # is ready and who acts next, without the words a refusal uses.
+                lines.append((f"已打开 {plan.label} 并在页面上标出「{outcome.highlighted}」，"
+                              "请你核对后自行点击；助手只做准备，提交由你完成。") if zh else
+                             (f"Opened {plan.label} and highlighted “{outcome.highlighted}”; "
+                              "please check it and press it yourself. The assistant prepares, "
+                              "you submit."))
             else:
                 lines.append((f"已打开 {plan.label}，但没有找到「{plan.highlight}」这个控件，"
                               "助手无法替你完成这项操作。") if zh else
