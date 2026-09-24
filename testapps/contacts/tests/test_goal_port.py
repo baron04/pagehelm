@@ -86,6 +86,25 @@ class ContactsGoalPortTests(unittest.TestCase):
             self.assertEqual(result.deliverables[1].aggregate.count, 3)
             self.assertIn("no verified search", result.deliverables[2].problem)
 
+    def test_create_handoff_is_actor_scoped_and_does_not_search_proposed_name(self):
+        with MinimalContactsApplication() as application:
+            writer, _principal, writer_context = self._bound(application, "ada-lovelace")
+            reader, _reader_principal, reader_context = self._bound(
+                application, "rosalind-franklin")
+            spec = GoalSpec.from_json({"deliverables": [{
+                "kind": "handoff", "entity": "contacts", "page": {"key": "contacts"},
+                "record": "New Person", "action": "create"}], "write_intent": True})
+            writer_port, reader_port = ContactsGoalPort(writer), ContactsGoalPort(reader)
+            self.assertEqual(writer_port.index(context=writer_context).pages[0].operations,
+                             ("create",))
+            self.assertEqual(reader_port.index(context=reader_context).pages[0].operations,
+                             ())
+            permitted = writer_port.resolve(spec, context=writer_context).deliverables[0]
+            self.assertEqual((permitted.page.url, permitted.page.highlight),
+                             ("/contacts/new", "Name"))
+            denied = reader_port.resolve(spec, context=reader_context).deliverables[0]
+            self.assertIn("not available", denied.problem)
+
 
 if __name__ == "__main__":
     unittest.main()

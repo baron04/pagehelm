@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "suite_id": "odoo-goals-zh-v3",
+  "status": "FROZEN",
+  "entry_path": "/odoo",
+  "note": "2026-09-24 冻结的新资格测试集。题目和判分在首次模型运行前写定；均以只读普通用户执行。事实值由参考库 SQL 核对，页面名称由 ir.actions.act_window 核对。它由实施者编写，因此不是独立出题的最终留出集。失败项保留，不看结果改题；旧 v2 仅作开发集。",
+  "categories": {
+    "where": "新配置页面定位",
+    "fact": "未见记录的事实",
+    "multi": "一句多问",
+    "section": "记录页页签",
+    "view": "列表视图切换",
+    "aggregate": "条件统计",
+    "impossible": "不存在的记录"
+  },
+  "tasks": [
+    {"id": "v3-product-categories", "category": "where", "prompt": "产品分类在哪里维护？", "parts": [{"quote": "打开产品分类页面", "check": {"breadcrumb_last_contains": "Product Categories"}}]},
+    {"id": "v3-sales-teams", "category": "where", "prompt": "销售团队在哪儿看？", "parts": [{"quote": "打开销售团队页面", "check": {"breadcrumb_last_contains": "Sales Teams"}}]},
+    {"id": "v3-taxes", "category": "where", "prompt": "税率在哪里管理？", "parts": [{"quote": "打开税率页面", "check": {"breadcrumb_last_contains": "Taxes"}}]},
+    {"id": "v3-journals", "category": "where", "prompt": "会计日记账从哪里进去？", "parts": [{"quote": "打开日记账页面", "check": {"breadcrumb_last_contains": "Journals"}}]},
+    {"id": "v3-s7-customer", "category": "fact", "prompt": "S00007 是卖给哪家公司的？", "parts": [{"quote": "S00007 的客户是 Gemini Furniture", "check": {"answer_regex": "Gemini Furniture"}}]},
+    {"id": "v3-s11-total", "category": "fact", "prompt": "S00011 的订单总额是多少？", "parts": [{"quote": "S00011 总额 1096.50", "check": {"answer_regex": "1,?096\\.50"}}]},
+    {"id": "v3-inv3-residual", "category": "fact", "prompt": "INV/2026/00003 还欠多少钱？", "parts": [{"quote": "未付余额 19250", "check": {"answer_regex": "19,?250(?:\\.00)?"}}]},
+    {"id": "v3-conference-chair-price", "category": "fact", "prompt": "Conference Chair 的售价是多少？", "parts": [{"quote": "售价 33", "check": {"answer_regex": "(?<![\\d.])33(?:\\.0+)?(?![\\d.])"}}]},
+    {"id": "v3-cabinet-category", "category": "fact", "prompt": "Large Cabinet 归在哪个产品分类？", "parts": [{"quote": "产品分类 Office Furniture", "check": {"answer_regex": "Office Furniture"}}]},
+    {"id": "v3-s9-two-facts", "category": "multi", "prompt": "S00009 的客户是谁，总金额又是多少？", "parts": [{"quote": "客户 Gemini Furniture", "check": {"answer_regex": "Gemini Furniture"}}, {"quote": "总额 654", "check": {"answer_regex": "(?<![\\d.])654(?:\\.0+)?(?![\\d.])"}}]},
+    {"id": "v3-s8-other-info", "category": "section", "prompt": "打开 S00008 的其他信息页签给我看", "parts": [{"quote": "S00008 的 Other Info 页签", "check": {"breadcrumb_last_contains": "S00008", "active_tab": "Other Info"}}]},
+    {"id": "v3-lamp-sales-tab", "category": "section", "prompt": "去看看 Office Lamp 的销售设置页签", "parts": [{"quote": "Office Lamp 的 Sales 页签", "check": {"breadcrumb_last_contains": "Office Lamp", "active_tab": "Sales"}}]},
+    {"id": "v3-customers-kanban", "category": "view", "prompt": "客户列表切成看板给我看", "parts": [{"quote": "Customers 看板", "check": {"breadcrumb_last_contains": "Customers", "view_type": "kanban"}}]},
+    {"id": "v3-quotes-pivot", "category": "view", "prompt": "报价单用透视表查看", "parts": [{"quote": "Quotations 透视表", "check": {"breadcrumb_last_contains": "Quotations", "view_type": "pivot"}}]},
+    {"id": "v3-confirmed-orders-count", "category": "aggregate", "prompt": "现在共有多少张已确认的销售订单？", "parts": [{"quote": "已确认销售订单 15 张", "check": {"answer_regex": "(?<![\\d])15(?![\\d])"}}]},
+    {"id": "v3-acme-invoice-count", "category": "aggregate", "prompt": "Acme Corporation 一共有几张客户发票？", "parts": [{"quote": "Acme Corporation 客户发票 3 张", "check": {"answer_regex": "(?<![\\d])3(?![\\d])"}}]},
+    {"id": "v3-missing-order", "category": "impossible", "prompt": "S99999 的客户是谁？", "parts": [{"quote": "不存在的订单不能给出客户", "check": {"impossible": true}}]}
+  ]
+}

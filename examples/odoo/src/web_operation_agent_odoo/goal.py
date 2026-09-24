@@ -353,6 +353,8 @@ class OdooGoalPort:
         catalog = self._client.call("woa.runtime.descriptor", "catalog", [], {})
         self._model_labels = {m["model"]: m.get("label") or m["model"]
                               for m in catalog.get("models", [])}
+        model_operations = {m["model"]: frozenset(m.get("operations") or ())
+                            for m in catalog.get("models", [])}
         transient = {m["model"] for m in catalog.get("models", []) if m.get("transient")}
         actions = []
         for action in catalog.get("actions", []):
@@ -424,7 +426,9 @@ class OdooGoalPort:
                 entity=action["model"], views=tuple(action.get("view_modes") or ()),
                 filters=tuple(dict.fromkeys(filters)), groups=tuple(dict.fromkeys(groups)),
                 aliases=self._aliases.get(action["name"], ()), filters_as=same_as,
-                scope=tuple(dict.fromkeys(scope))))
+                scope=tuple(dict.fromkeys(scope)),
+                operations=(("create",) if "create" in model_operations.get(action["model"], ())
+                            and "form" in (action.get("view_modes") or ()) else ())))
         entities = []
         for model in entity_models:
             meta = self._models[model]
@@ -645,7 +649,10 @@ class OdooGoalPort:
             return Resolved(kind=d.kind, problem="the entity named is not in the index",
                             repair=("entity must be one of the index's entity keys: "
                                     + ", ".join(e.key for e in index.entities[:30])))
-        if not d.record and d.kind == "handoff" and not described:
+        if d.kind == "handoff" and not described and (
+                not d.record or _norm(d.action) in ("new", "create")):
+            # A creation names no existing record; the name given, if any, is the new
+            # record's or its customer's, and is not looked up.
             return self._creation(d, entity, index)
         if not d.record and not described:
             if d.kind == "page":
@@ -771,9 +778,15 @@ class OdooGoalPort:
         page = index.page(f"p{action['action_id']}") if action else None
         if action is None or page is None:
             return Resolved(kind="handoff", problem="no page shows this entity")
+        if "create" not in page.operations:
+            # The catalog says this actor may not create records of this entity: the
+            # control is not pointed at, and the reply says so.
+            return Resolved(kind="handoff", problem="creation is not available to this actor")
+        control = "New" if _norm(d.action) in ("", "new", "create") else d.action
         return Resolved(kind="handoff", page=PagePlan(
             url=self._action_url(action), label=page.breadcrumb,
-            expected_path=self._action_url(action), highlight=d.action or "New"))
+            expected_path=self._action_url(action), highlight=control,
+            highlight_effect="create"))
 
     def _lines_list(self, model: str, line_field: str, owner: tuple, d: Deliverable,
                     index: ApplicationIndex) -> Resolved:

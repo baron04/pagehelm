@@ -369,6 +369,7 @@ class GoalTurnTests(unittest.TestCase):
                                                     highlight="Send by Email"))],
             text="把 S00005 发邮件给客户")
         self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+        self.assertEqual(execution.agent.success_claim, "not_claimed")
         self.assertIn("标出「Send by Email」", execution.user_answer)
         self.assertIn("请你核对后自行点击", execution.user_answer)
         self.assertNotRegex(execution.user_answer, r"不能|无法|做不到|未能")
@@ -376,6 +377,19 @@ class GoalTurnTests(unittest.TestCase):
         self.assertNotIn("click", [a for a, _ in browser.actions])
         self.assertIn("highlight", [a for a, _ in browser.actions])
         self.assertIn("page_handoff_ready", [e["event"] for e in events])
+
+    def test_write_intent_cannot_be_settled_by_opening_a_page(self):
+        execution, _channel, _chat, _port, events = self._run(
+            [("declare_goal", {"deliverables": [{"kind": "page", "page": {"key": "p1"}}],
+                               "write_intent": True})],
+            [Resolved(kind="page", page=PagePlan(
+                url="/orders", label="Sales / Orders", expected_path="/orders"))],
+            text="新建一张订单")
+        self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
+        self.assertEqual(execution.agent.success_claim, "not_claimed")
+        self.assertIn("尚未执行你请求的更改", execution.user_answer)
+        self.assertIn("已打开", execution.user_answer)
+        self.assertIn("goal_write_intent_unfulfilled", [e["event"] for e in events])
 
     def test_facets_are_applied_by_name_on_the_live_page(self):
         execution, *_ = self._run(

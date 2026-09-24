@@ -79,6 +79,8 @@ class IndexPage:
     views: tuple[str, ...] = ()
     filters: tuple[str, ...] = ()
     groups: tuple[str, ...] = ()
+    #: Actor-visible operations the adapter can guide to, not permission to execute them.
+    operations: tuple[str, ...] = ()
     aliases: tuple[str, ...] = ()
     #: Key of the page whose filters and groups this page shares, when it lists none.
     filters_as: str = ""
@@ -95,6 +97,7 @@ class IndexPage:
         object.__setattr__(self, "views", tuple(_label(v, "view") for v in self.views)[:8])
         object.__setattr__(self, "filters", tuple(_label(f, "filter") for f in self.filters)[:24])
         object.__setattr__(self, "groups", tuple(_label(g, "group") for g in self.groups)[:24])
+        object.__setattr__(self, "operations", tuple(_label(o, "operation") for o in self.operations)[:8])
         object.__setattr__(self, "aliases", tuple(_label(a, "alias") for a in self.aliases)[:12])
 
 
@@ -153,7 +156,7 @@ class ApplicationIndex:
                 parts.append("actions: " + ", ".join(entity.actions))
             lines.append(" | ".join(parts))
         lines.append("")
-        lines.append("PAGES (key: breadcrumb [aliases] | entity | views | filters | groups | shows only)")
+        lines.append("PAGES (key: breadcrumb [aliases] | entity | views | filters | groups | shows only | operations)")
         for page in self.pages:
             parts = [f"{page.key}: {page.breadcrumb}"
                      + (f" [{', '.join(page.aliases)}]" if page.aliases else ""),
@@ -168,6 +171,8 @@ class ApplicationIndex:
                 parts.append(f"filters/groups: as {page.filters_as}")
             if page.scope:
                 parts.append("shows only: " + ", ".join(page.scope))
+            if page.operations:
+                parts.append("operations: " + ", ".join(page.operations))
             lines.append(" | ".join(parts))
         return "\n".join(lines)
 

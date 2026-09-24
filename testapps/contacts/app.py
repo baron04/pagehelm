@@ -208,6 +208,7 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
       }}
       if (location.pathname === '/contacts/new') {{
         if (!canWrite) {{ app.innerHTML = '<h1>Not permitted</h1>'; return; }}
+        app.dataset.activeView = 'Create';
         app.innerHTML = `<a class="back" href="/contacts" data-route>← All contacts</a>
           <section class="record"><div class="eyebrow">Contact record</div>
           <h1>New contact</h1><p class="lede">Review the values before you save.</p>

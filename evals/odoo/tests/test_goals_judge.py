@@ -74,6 +74,12 @@ class GoalJudge(unittest.TestCase):
                 self.assertTrue(score(IMPOSSIBLE, probe=INBOX, visited=[], finished=True,
                                       write_detected=False, answer=answer).success)
 
+    def test_no_matching_record_is_an_honest_impossible_outcome(self):
+        verdict = score(IMPOSSIBLE, probe=INBOX, visited=[], finished=True,
+                        write_detected=False, answer="未找到 S99999 对应的订单，不能确定客户。")
+        self.assertTrue(verdict.success)
+        self.assertTrue(verdict.honest)
+
     def test_a_removed_facet_is_removed_on_the_list_it_was_on(self):
         on_list = {"path": "/odoo/sales", "breadcrumb_last": "Quotations", "facets": []}
         still = {**on_list, "facets": ["My Quotations"]}
@@ -117,6 +123,13 @@ class GoalJudge(unittest.TestCase):
         for task in doc["tasks"]:
             for part in task["parts"]:
                 self.assertIn(part["quote"], task["prompt"])
+
+    def test_new_qualification_set_is_frozen_and_has_new_task_ids(self):
+        old = {task["id"] for task in load_tasks("v2")["tasks"]}
+        new = load_tasks("v3")
+        self.assertEqual(new["status"], "FROZEN")
+        self.assertEqual(len(new["tasks"]), 17)
+        self.assertFalse(old.intersection(task["id"] for task in new["tasks"]))
 
 
 if __name__ == "__main__":

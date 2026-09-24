@@ -10,7 +10,8 @@ _CATALOG = {
     "descriptor_digest": "d1",
     "models": [
         {"model": "sale.order", "label": "Sales Order", "operations": ["read"], "transient": False},
-        {"model": "res.partner", "label": "Contact", "operations": ["read"], "transient": False},
+        {"model": "res.partner", "label": "Contact", "operations": ["create", "read"],
+         "transient": False},
         {"model": "product.tag", "label": "Product Tag", "operations": ["read"], "transient": False},
         {"model": "sale.order.line", "label": "Sales Order Line", "operations": ["read"],
          "transient": False},
@@ -192,7 +193,23 @@ class OdooGoalPortTests(unittest.TestCase):
         self.assertEqual(entity.sections, ("Order Lines", "Other Info"))
         self.assertEqual(entity.actions, ("Confirm", "Send by Email"))
         self.assertEqual(self.index.entity("product.tag").fields, ())
+        self.assertEqual(self.index.page("p301").operations, ("create",))
+        self.assertEqual(self.index.page("p331").operations, ())
         self.assertIs(self.port.index(), self.index)
+
+    def test_create_handoff_uses_actor_allowed_page_not_proposed_record_lookup(self):
+        self.client.calls.clear()
+        result = self._resolve({"kind": "handoff", "entity": "res.partner",
+                                "record": "Test Co", "page": {"key": "p301"},
+                                "action": "create"}, write_intent=True)
+        page = result.deliverables[0].page
+        self.assertIsNotNone(page)
+        self.assertEqual((page.url, page.highlight), ("/odoo/customers", "New"))
+        self.assertNotIn(("res.partner", "name_search"), self.client.calls)
+        unavailable = self._resolve({"kind": "handoff", "entity": "sale.order",
+                                     "page": {"key": "p331"}, "action": "create"},
+                                    write_intent=True)
+        self.assertIn("not available", unavailable.deliverables[0].problem)
 
     def _resolve(self, *deliverables, write_intent=False):
         return self.port.resolve(GoalSpec.from_json(
@@ -306,17 +323,21 @@ class OdooGoalPortTests(unittest.TestCase):
                                write_intent=True)
         self.assertIsNone(result.deliverables[0].page)
         self.assertIn("no Sales Order matches", result.deliverables[0].problem)
-        created = self._resolve({"kind": "handoff", "entity": "sale.order",
+        created = self._resolve({"kind": "handoff", "entity": "res.partner",
                                  "record": "Joel", "action": "New"}, write_intent=True)
         self.assertEqual(created.deliverables[0].page.highlight, "New")
 
     def test_a_creation_opens_the_page_declared_for_the_entity(self):
-        result = self._resolve({"kind": "handoff", "entity": "sale.order", "action": "New",
-                                "page": {"key": "p331"}}, write_intent=True)
-        self.assertEqual(result.deliverables[0].page.url, "/odoo/orders")
-        widest = self._resolve({"kind": "handoff", "entity": "sale.order", "action": "New"},
+        result = self._resolve({"kind": "handoff", "entity": "res.partner", "action": "New",
+                                "page": {"key": "p301"}}, write_intent=True)
+        self.assertEqual(result.deliverables[0].page.url, "/odoo/customers")
+        widest = self._resolve({"kind": "handoff", "entity": "res.partner", "action": "New"},
                                write_intent=True)
-        self.assertEqual(widest.deliverables[0].page.url, "/odoo/sales")
+        self.assertEqual(widest.deliverables[0].page.url, "/odoo/customers")
+        # An entity this actor may not create: the control is not pointed at.
+        refused = self._resolve({"kind": "handoff", "entity": "sale.order", "action": "New"},
+                                write_intent=True)
+        self.assertIn("not available", refused.deliverables[0].problem)
 
     def test_a_view_the_page_lacks_is_reported_on_the_plan(self):
         result = self._resolve({"kind": "page", "page": {"key": "p173", "view": "pivot"}})

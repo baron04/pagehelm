@@ -211,6 +211,28 @@ class MinimalDemoBrowserTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_create_view_marker_and_name_field_are_visible_without_submitting(self):
+        from playwright.sync_api import sync_playwright
+
+        with MinimalContactsApplication() as application, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                context = browser.new_context()
+                context.add_cookies([{"name": DEMO_SESSION_COOKIE,
+                                      "value": DEMO_SESSION_VALUE,
+                                      "url": application.origin}])
+                page = context.new_page()
+                page.goto(application.origin + "/contacts", wait_until="domcontentloaded")
+                before = len(application.contacts)
+                page.get_by_role("link", name="New contact").click()
+                page.wait_for_url("**/contacts/new")
+                self.assertEqual(page.locator("main#app").get_attribute("data-active-view"),
+                                 "Create")
+                self.assertTrue(page.get_by_role("textbox", name="Name").is_visible())
+                self.assertEqual(len(application.contacts), before)
+            finally:
+                browser.close()
+
     def test_evaluation_probe_rejects_raw_page_values(self):
         script = (("finish", {"done": False, "why": "probe only"}),)
         with tempfile.TemporaryDirectory() as directory, patch(

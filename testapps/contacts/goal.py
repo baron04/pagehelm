@@ -28,7 +28,7 @@ class ContactsGoalPort:
         self._adapter = adapter
         self._executor = adapter.business_tools._executor
 
-    def _require_actor(self, context: OperationContext | None) -> None:
+    def _require_actor(self, context: OperationContext | None) -> frozenset[str]:
         if context is None:
             raise PrincipalError("a goal read needs an actor-bound operation context")
         context.require_live(application_id=APPLICATION_ID,
@@ -41,9 +41,10 @@ class ContactsGoalPort:
                 or assertion.tenant_id != principal.tenant_id
                 or "contacts:read" not in permissions):
             raise PrincipalError("goal read actor differs from delegated API actor")
+        return frozenset(permissions)
 
     def index(self, *, context: OperationContext | None = None) -> ApplicationIndex:
-        self._require_actor(context)
+        permissions = self._require_actor(context)
         assert context is not None
         digest = hashlib.sha256(("contacts-goal-v1\0"
                                  + context.principal.actor_authority_digest).encode()).hexdigest()
@@ -54,15 +55,19 @@ class ContactsGoalPort:
                         IndexField("name", "Name", "text"),
                         IndexField("email", "Email", "text"))),),
             pages=(IndexPage(key="contacts", label="Contacts", breadcrumb="Contacts",
-                             entity="contacts", views=("list",)),),
+                             entity="contacts", views=("list",),
+                             operations=(("create",) if "contacts:write" in permissions
+                                         else ())),),
             source_digest=digest)
 
     def resolve(self, spec: GoalSpec, *, context: OperationContext | None = None,
                 current_path: str = "") -> Resolution:
-        self._require_actor(context)
+        permissions = self._require_actor(context)
         rows = self._executor._contact_rows()
         return Resolution(
-            deliverables=tuple(self._resolve_one(d, rows) for d in spec.deliverables),
+            deliverables=tuple(self._resolve_one(
+                d, rows, can_create="contacts:write" in permissions)
+                for d in spec.deliverables),
             reads=(("GET", "/api/contacts"),))
 
     @staticmethod
@@ -83,11 +88,19 @@ class ContactsGoalPort:
         return None, ("record reference is ambiguous" if partial else
                       "record is not visible to this actor")
 
-    def _resolve_one(self, d: Deliverable, rows: list[dict]) -> Resolved:
+    def _resolve_one(self, d: Deliverable, rows: list[dict], *, can_create: bool) -> Resolved:
         if _norm(d.entity) not in {"", "contacts", "contact", "联系人", "通讯录"}:
             return Resolved(kind=d.kind, problem="entity is not in this application's index")
         if d.via or d.section or d.page.filters_on or d.page.filters_off or d.page.group_by:
             return Resolved(kind=d.kind, problem="requested relation or page part is unsupported")
+        if d.kind == "handoff" and _norm(d.action) == "create":
+            if d.page.key and _norm(d.page.key) != "contacts":
+                return Resolved(kind=d.kind, problem="page is not in the index")
+            if not can_create:
+                return Resolved(kind=d.kind, problem="creation is not available to this actor")
+            return Resolved(kind=d.kind, page=PagePlan(
+                url="/contacts/new", expected_path="/contacts/new", label="New contact",
+                highlight="Name", highlight_effect="create"))
         if d.kind == "fact":
             record, problem = self._record(d.record, rows) if d.record else (None, "no record was named")
             if record is None:

@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[3]
 TASKSETS = {
     "v2": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v2.json", "d01fb4e3fa3d92b7e6916f3d36d6df35961a32442e7d9f2212c4c5eee152b57b"),
     "v4": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v4-holdout.json", "5fe83d925961164375d49ee7f9fe72d696f4370dae2b58be8c1a3dd7161e32e9"),
+    "v3": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v3.json", "63ad3017827fce2dd055b4f0248672c3180e783eb8ba1b94a7fd979237b0c15b"),
     "v5": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v5-holdout.json", "01f20f8e91dbb215e397d667a2729debd20df95528a54d924373e1ca465ae1f5"),
 }
 
@@ -124,13 +125,13 @@ def sheet(rows: list[dict], doc: dict, destination: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--taskset", "--version", choices=tuple(TASKSETS), default="v2")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--model-env", type=Path, default=ROOT / ".env")
     parser.add_argument("--credentials", type=Path, default=ROOT / ".private" / "odoo-reader")
     parser.add_argument("--container", default="woa-odoo-reference-db-1")
     parser.add_argument("--database", default="woa_reference")
     parser.add_argument("--repeats", type=int, default=1)
-    parser.add_argument("--version", choices=tuple(TASKSETS), default="v2")
     parser.add_argument("--task", action="append", default=[])
     parser.add_argument("--lane", default="1/1")
     arguments = parser.parse_args()
@@ -139,7 +140,7 @@ def main() -> int:
         if "=" in line and not line.lstrip().startswith("#"):
             key, value = line.split("=", 1)
             env[key.strip()] = value.strip()
-    doc = load_tasks(arguments.version)
+    doc = load_tasks(arguments.taskset)
     lane, lanes = (int(part) for part in arguments.lane.split("/"))
     arguments.output.mkdir(parents=True, exist_ok=True)
     (arguments.output / "attempts").mkdir(exist_ok=True)

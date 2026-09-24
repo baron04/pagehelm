@@ -95,6 +95,7 @@ class _TurnState:
     terminal_reason: str = ""
     detail: str = ""
     chinese: bool = False
+    write_intent: bool = False
     cancelled: Callable[[], bool] = lambda: False
 
 
@@ -290,6 +291,8 @@ class GoalTurnExecutor:
         s.ledger.append("goal_declared", step=s.step, spec=spec.to_json(), **projection)
         if second_reading is not None and spec.deliverables:
             spec = self._agree(s, chat, index, spec, today, second_reading)
+        s.write_intent = spec.write_intent or any(
+            d.kind == "handoff" for d in spec.deliverables)
         if not spec.deliverables:
             s.terminal_reason = "agent_refused"
             why = spec.unsupported or ""
@@ -354,7 +357,21 @@ class GoalTurnExecutor:
             achieved = all(_achieved(r, o) for r, o in
                            zip(resolution.deliverables, outcomes, strict=True))
             s.terminal_reason = "agent_finished" if achieved else "agent_refused"
-        return self._reply(s, resolution.deliverables, outcomes)
+        # Reaching a read-only page cannot settle a request to mutate the application.
+        # A declared handoff has its own explicit "you must act" reply; a page/fact-only
+        # declaration for a write must also state that the requested change did not happen.
+        unfulfilled_write = spec.write_intent and not any(
+            d.kind == "handoff" for d in spec.deliverables)
+        if unfulfilled_write:
+            s.ledger.append("goal_write_intent_unfulfilled", step=s.step)
+            if s.terminal_reason == "agent_finished":
+                s.terminal_reason = "agent_refused"
+        reply = self._reply(s, resolution.deliverables, outcomes)
+        if unfulfilled_write:
+            reply += ("\n\n这里只是找到了相关信息或页面，尚未执行你请求的更改；请核对后自行操作。"
+                      if s.chinese else
+                      "\n\nI only found the relevant information or page. I did not make the requested change; please review it and act yourself.")
+        return reply
 
     def _agree(self, s: _TurnState, chat, index, first: GoalSpec, today, second_reading) -> GoalSpec:
         """A second, independent reading of the request; when it disagrees with the
@@ -761,6 +778,7 @@ class GoalTurnExecutor:
                           page_actions=s.page_actions,
                           navigation_control=s.approvals.navigation_result(),
                           success_claim=("not_claimed" if terminal != "agent_finished"
+                                         or s.write_intent
                                          else "verified"),
                           detail=s.detail)
         s.ledger.append("run_finished", task_ref=s.run_id, arm="goal",

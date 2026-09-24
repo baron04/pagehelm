@@ -16,7 +16,8 @@ from dataclasses import dataclass, field
 
 #: Words a reply uses when it did not finish. A reply that says any of these is not
 #: claiming the goal.
-_NOT_FINISHED = re.compile(r"未完成|没有全部完成|无法|不能|做不到|未能|不支持|没有权限|not done|"
+_NOT_FINISHED = re.compile(r"未完成|没有全部完成|无法|不能|做不到|未能|不支持|没有权限|"
+                           r"未找到|没有找到|不存在|not found|no matching|not done|"
                            r"cannot|could not|unable|not supported|does not have permission",
                            re.I)
 _UNAVAILABLE = re.compile(r"没找到|没有找到|未找到|找不到|不存在|没有这|未接入|没接入|无权|"
