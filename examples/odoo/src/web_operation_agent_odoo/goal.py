@@ -395,12 +395,23 @@ class OdooGoalPort:
             breadcrumb = " / ".join(action.get("breadcrumbs") or ()) or (
                 action["name"] if _norm(action["name"]) != _norm(meta.label)
                 else f"{action['name']} ({meta.label})")
-            filters, groups, same_as = [], [], ""
+            filters, groups, same_as, scope = [], [], "", []
             if action.get("breadcrumbs"):
                 self._page_filters[action["action_id"]] = self._search_filters(
                     action["model"], action["action_id"])
                 for item in self._page_filters[action["action_id"]]:
                     (groups if item.group_by else filters).append(item.label)
+                # The filters the page switches on by itself, except personal ones,
+                # are the scope it shows: the model must know the page is narrower
+                # than its entity.
+                context = _literal_dict(str(action.get("context") or ""))
+                for key, value in context.items():
+                    if str(key).startswith("search_default_") and value:
+                        item = next((f for f in self._page_filters[action["action_id"]]
+                                     if f.name == key[len("search_default_"):]), None)
+                        if item is not None and not item.group_by \
+                                and "uid" not in str(item.raw):
+                            scope.append(item.label)
                 # Pages of one entity usually share a search view; the index names its
                 # filters once and lets the other pages point at that page.
                 signature = (action["model"], tuple(filters), tuple(groups))
@@ -412,7 +423,8 @@ class OdooGoalPort:
                 key=f"p{action['action_id']}", label=action["name"], breadcrumb=breadcrumb,
                 entity=action["model"], views=tuple(action.get("view_modes") or ()),
                 filters=tuple(dict.fromkeys(filters)), groups=tuple(dict.fromkeys(groups)),
-                aliases=self._aliases.get(action["name"], ()), filters_as=same_as))
+                aliases=self._aliases.get(action["name"], ()), filters_as=same_as,
+                scope=tuple(dict.fromkeys(scope))))
         entities = []
         for model in entity_models:
             meta = self._models[model]
@@ -1829,6 +1841,9 @@ class OdooGoalPort:
                 return [[field, ">=", numbers[0]], [field, "<=", numbers[1]]], text
             return [[field, op if op in ("<", "<=", ">", ">=", "!=") else "=", numbers[0]]], text
         operator = {"=": "=ilike", "!=": "not ilike"}.get(op, "ilike")
+        if op == "starts with":
+            # A prefix: the pattern form of "equals", anchored at the start.
+            operator, values = "=ilike", tuple(v.replace("%", "") + "%" for v in values)
         if len(values) == 1:
             return [[field, operator, values[0]]], text
         return ["|"] * (len(values) - 1) + [[field, operator, v] for v in values], text

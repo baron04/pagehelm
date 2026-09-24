@@ -79,6 +79,10 @@ class IndexPage:
     aliases: tuple[str, ...] = ()
     #: Key of the page whose filters and groups this page shares, when it lists none.
     filters_as: str = ""
+    #: Filters the page applies on its own when opened, by name: the page shows a
+    #: narrower set than its entity (customers among contacts), and a declaration that
+    #: means every record of the entity names the entity without this page.
+    scope: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "key", _label(self.key, "page key"))
@@ -145,7 +149,7 @@ class ApplicationIndex:
                 parts.append("actions: " + ", ".join(entity.actions))
             lines.append(" | ".join(parts))
         lines.append("")
-        lines.append("PAGES (key: breadcrumb [aliases] | entity | views | filters | groups)")
+        lines.append("PAGES (key: breadcrumb [aliases] | entity | views | filters | groups | shows only)")
         for page in self.pages:
             parts = [f"{page.key}: {page.breadcrumb}"
                      + (f" [{', '.join(page.aliases)}]" if page.aliases else ""),
@@ -158,6 +162,8 @@ class ApplicationIndex:
                 parts.append("groups: " + ", ".join(page.groups))
             if page.filters_as and not (page.filters or page.groups):
                 parts.append(f"filters/groups: as {page.filters_as}")
+            if page.scope:
+                parts.append("shows only: " + ", ".join(page.scope))
             lines.append(" | ".join(parts))
         return "\n".join(lines)
 

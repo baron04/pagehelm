@@ -683,6 +683,13 @@ case("h-value-text-in-a-tab", "account.move", "handoff", "field",
 case("h-value-on-a-button-is-ignored", "sale.order", "handoff", "none", valued("sale.order", "S00002", "Confirm", "yes"),
      page={"highlight": "Confirm", "fill": ""})
 
+case("l-prefix-condition", "product.template", "list", "text",
+     lst("product.template", page="Products", filters=[F("Internal Reference", ["E-COM"], "starts with")]),
+     records_len=6, records_any=[r"Cabinet with Doors"])
+case("l-entity-without-page-ignores-page-defaults", "res.partner", "list", "text",
+     lst("res.partner", filters=[F("Email", ["example.com"], "contains"), F("Company Type", ["Company"])]),
+     records_len=7, records_any=[r"Wood Corner", r"Lumber Inc"])
+
 
 def _check(expect: dict, resolved) -> list[str]:
     errors = []

@@ -45,7 +45,7 @@ def _texts(value: object, name: str, *, limit: int = 8) -> tuple[str, ...]:
     return tuple(out)
 
 
-FILTER_OPS = ("", "=", "!=", "<", "<=", ">", ">=", "between", "contains")
+FILTER_OPS = ("", "=", "!=", "<", "<=", ">", ">=", "between", "contains", "starts with")
 
 
 @dataclass(frozen=True)
@@ -286,7 +286,7 @@ DECLARE_GOAL_TOOL = {
                                                        "description": "choice labels, names, numbers; for a date field: 2026-09-12, 2026-09, 2026, 2026-09-01..2026-09-30, today, this month, last month, this quarter, last quarter, this year, last year, last 30 days, overdue. A day or month said without a year is in the current year"},
                                             "op": {"type": "string",
                                                    "enum": [o for o in FILTER_OPS if o],
-                                                   "description": "comparison for numbers, dates or text"}},
+                                                   "description": "comparison for numbers, dates or text; 'starts with' for a prefix (a code beginning with E-COM)"}},
                                         "required": ["field", "values"]}},
                                     "page_filters": {"type": "array",
                                                      "items": {"type": "string"}},
@@ -297,7 +297,7 @@ DECLARE_GOAL_TOOL = {
                                 "type": "object",
                                 "properties": {
                                     "key": {"type": "string",
-                                            "description": "page key from the index (prefer a page with a menu breadcrumb); empty when the record's own page is meant"},
+                                            "description": "page key from the index, only when the person means that page's own scope (customers, vendors, quotations are scopes); empty when every record of the entity is meant, or when the record's own page is meant"},
                                     "view": {"type": "string"},
                                     "filters_on": {"type": "array", "items": {"type": "string"}},
                                     "filters_off": {"type": "array", "items": {"type": "string"}},
@@ -317,7 +317,7 @@ DECLARE_GOAL_TOOL = {
                         "required": ["kind"]}},
                 "write_intent": {"type": "boolean"},
                 "unsupported": {"type": "string",
-                                "description": "why nothing can be declared, when deliverables is empty"}},
+                                "description": "why nothing can be declared, when deliverables is empty: the request needs data the index does not hold (an external system, a bank, a source not listed), which no related entity may stand in for"}},
             "required": ["deliverables"]}}}
 
 

@@ -30,7 +30,7 @@ agent.
   found on an entity that links to the named one, a label containing a link field's label,
   the page's own "My …" facet when the person asks for everyone's records), and a zero
   count inside a page's scope is reported together with the entity-wide count. Conditions
-  take comparison operators on numbers, dates and text; a date condition accepts a day,
+  take comparison operators on numbers, dates and text, including a prefix ("starts with"); a date condition accepts a day,
   month, year, range or a named period (today, this month, last quarter, last 30 days,
   overdue), and a page filter that names "today" is evaluated for the turn in the user's
   time zone. The lines a record's form embeds (order lines, invoice lines) are entities of
