@@ -286,7 +286,7 @@ does either checks the host first. It is a disposable application to point the a
 
 `down` stops it; `down --destroy` discards the volumes as well.
 
-An existing fixture keeps working after the addon changes: Odoo loads the addon's code from disk, and `woa_runtime` 1.5's page write guard creates its one table the first time the Runtime opens a window. Restart Odoo to load new backend asset declarations, including the search-model facet bridge; the local pilot loaded it on restart without a database module upgrade. `-u woa_runtime` records a new module version when needed; it changes `ir_module_module`, which the P8.7 fingerprint includes.
+An existing fixture keeps working after the addon changes: Odoo loads the addon's code from disk, and `woa_runtime` 1.5's page write guard creates its one table the first time the Runtime opens a window. One web-client write the guard refuses quietly: opening a record that has an attachment makes the client mark it as the record's main attachment (`ir.attachment.register_as_main_attachment`); nothing is saved, and the client gets an empty result instead of the refusal dialog, which would otherwise cover the page and its controls. Restart Odoo to load new backend asset declarations, including the search-model facet bridge; the local pilot loaded it on restart without a database module upgrade. `-u woa_runtime` records a new module version when needed; it changes `ir_module_module`, which the P8.7 fingerprint includes.
 
 The guard uses per-browser-session transaction advisory locks: normal requests share the
 lock through commit; `/begin` takes it exclusively before acknowledging the read-only
@@ -445,8 +445,18 @@ does not carry falls back to the selection key of the same name (`in_invoice` on
 aggregate declared without a page counts every record of the entity the user may read; a
 declared page adds its action domain and its non-personal default filters.
 
+A record given as conditions instead of a name (`record` empty, `metric.filters` on
+customer, amount, status or date, `page.key` for the scope) is located by `search_read`
+within the page's domain and non-personal defaults, then beyond the defaults and beyond the
+page's domain when nothing is inside; exactly one row is the record, none or several is a
+problem with the candidates, and `sort` picks the first of an ordered match ("the higher
+one"). On a line entity, a condition on the link to the owner whose value the link cannot
+find (an invoice number on order lines, "Move" for the journal entry, an amount or a date
+that describes the order) is rewritten onto the owner found by that value, on that owner's
+own line entity. A bare number as search words is the first money field the pages show.
+
 The zero-model matrix (`python -m evals.odoo.goals.resolver_matrix --credentials
-.private/odoo-reader`) resolves 128 hand-written declarations against the reference fixture
+.private/odoo-reader`) resolves 184 hand-written declarations against the reference fixture
 and checks values, counts, sums, groups, routes, tabs, controls and honest problems. Run it
 before any model-backed evaluation; its relative-period cases assume the fixture's
 September 2026 data and clock.

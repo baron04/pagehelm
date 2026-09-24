@@ -38,6 +38,10 @@ MAX_TTL_S = 120
 EXEMPT_PREFIXES = ("/woa/page-guard/", "/web/assets/", "/websocket")
 REFUSAL = ("The assistant is operating this page, so changes are paused and nothing was "
            "saved. Try again after the assistant finishes.")
+#: Bookkeeping the web client does on its own when a record opens (marking the record's
+#: main attachment), which nobody asked for. Refused like any write, but answered with an
+#: empty result rather than the refusal, whose dialog would otherwise cover the page.
+QUIET_PATHS = ("/web/dataset/call_kw/ir.attachment/register_as_main_attachment",)
 
 
 def session_digest(sid: str) -> str:
@@ -156,4 +160,6 @@ class IrHttp(models.AbstractModel):
             cr.rollback()
             cr.execute("SET TRANSACTION READ ONLY")
             _logger.info("WOA page guard refused a write: %s", request.httprequest.path)
+            if request.httprequest.path in QUIET_PATHS:
+                return None
             raise UserError(REFUSAL) from None

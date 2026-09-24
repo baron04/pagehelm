@@ -287,6 +287,50 @@ class OdooGoalPortTests(unittest.TestCase):
                             for _model, method in self.client.calls))
 
 
+    def test_a_described_record_is_picked_out_by_its_conditions(self):
+        result = self._resolve({"kind": "handoff", "entity": "sale.order", "record": "",
+                                "action": "Confirm", "page": {"key": "p332"},
+                                "metric": {"op": "count",
+                                           "filters": [{"field": "Customer", "values": ["Gemini Furniture"]},
+                                                       {"field": "Status", "values": ["Quotation Sent"]}]}},
+                               write_intent=True)
+        page = result.deliverables[0].page
+        self.assertEqual((page.url, page.highlight), ("/odoo/orders/6", "Confirm"))
+        self.assertTrue(any(["partner_id", "child_of", [11]] in d and ["state", "in", ["sent"]] in d
+                            for d in self.client.domains))
+
+    def test_a_named_record_that_does_not_exist_is_never_turned_into_a_creation(self):
+        result = self._resolve({"kind": "handoff", "entity": "sale.order",
+                                "record": "the quotation sent to Joel", "action": "Confirm"},
+                               write_intent=True)
+        self.assertIsNone(result.deliverables[0].page)
+        self.assertIn("no Sales Order matches", result.deliverables[0].problem)
+        created = self._resolve({"kind": "handoff", "entity": "sale.order",
+                                 "record": "Joel", "action": "New"}, write_intent=True)
+        self.assertEqual(created.deliverables[0].page.highlight, "New")
+
+    def test_a_creation_opens_the_page_declared_for_the_entity(self):
+        result = self._resolve({"kind": "handoff", "entity": "sale.order", "action": "New",
+                                "page": {"key": "p331"}}, write_intent=True)
+        self.assertEqual(result.deliverables[0].page.url, "/odoo/orders")
+        widest = self._resolve({"kind": "handoff", "entity": "sale.order", "action": "New"},
+                               write_intent=True)
+        self.assertEqual(widest.deliverables[0].page.url, "/odoo/sales")
+
+    def test_a_view_the_page_lacks_is_reported_on_the_plan(self):
+        result = self._resolve({"kind": "page", "page": {"key": "p173", "view": "pivot"}})
+        plan = result.deliverables[0].page
+        self.assertEqual((plan.view, plan.missing_view), ("", "pivot"))
+        self.assertTrue(plan.url.startswith("/odoo/action-"))
+
+    def test_field_labels_match_by_whole_words_and_field_names(self):
+        meta = self.port._models["sale.order"]
+        self.assertEqual(meta.field_by_label("Order Date"), "date_order")
+        self.assertEqual(meta.field_by_label("Product Variants"), "product_variant_count")
+        self.assertEqual(meta.field_by_label("Customer name"), "partner_id")
+        self.assertIsNone(meta.field_by_label("Validity Date"))
+        self.assertEqual(meta.field_by_label("Date Order"), "date_order")
+
 
 class OdooGoalPortConditionTests(unittest.TestCase):
     def setUp(self):

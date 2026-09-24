@@ -36,11 +36,18 @@ A request that asks several things gets one deliverable per thing, in the order 
 
 
 def understand(chat, *, prompt: str, index: ApplicationIndex, run_id: str,
-               timeout_s: float | None = None, cancelled=None) -> tuple[GoalSpec, dict]:
-    """Ask once. Returns the parsed declaration and a bounded audit projection."""
+               timeout_s: float | None = None, cancelled=None,
+               today: str = "") -> tuple[GoalSpec, dict]:
+    """Ask once. Returns the parsed declaration and a bounded audit projection.
+
+    `today` is the application's current date, so that a month or day the person says
+    without a year is declared in the right year; it sits after the index, whose cached
+    prefix it must not break.
+    """
     messages = [
         {"role": "system", "content": UNDERSTAND_SYSTEM},
         {"role": "user", "content": ("APPLICATION INDEX\n" + index.render()
+                                     + (f"\n\nTODAY\n{today}" if today else "")
                                      + "\n\nREQUEST\n" + prompt.strip())},
     ]
     kwargs = {"max_tokens": 1_500, "timeout_s": timeout_s}

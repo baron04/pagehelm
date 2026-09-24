@@ -34,12 +34,25 @@ agent.
   month, year, range or a named period (today, this month, last quarter, last 30 days,
   overdue), and a page filter that names "today" is evaluated for the turn in the user's
   time zone. The lines a record's form embeds (order lines, invoice lines) are entities of
-  their own, so they can be listed, counted and summed by their link to the record. A
-  condition on an unstored computed field is refused rather than silently ignored. The
-  resolver's reach is measured by a zero-model matrix over the reference fixture
-  (`evals/odoo/goals/resolver_matrix.py`: 128 declarations across entities, deliverable
-  kinds and condition types, all read-only RPC). Only the Odoo adapter implements the
-  index and resolver so far.
+  their own, so they can be listed, counted and summed by their link to the record, and
+  the owner may be given as a condition the link itself cannot resolve (an invoice number
+  on order lines, an amount or a date that describes the order). A record the person
+  describes rather than names ("the quotation sent to Joel Willis", "last month's
+  customer invoice", "the 31,750 credit note") is picked out by its conditions within the
+  declared page's scope, or beyond the page's defaults when they hide it; only exactly one
+  match is acted on, and none or several is said so, with the candidates. A named record
+  that does not exist is never turned into a creation; a creation opens the page declared
+  for the entity, else its widest page. A list that finds exactly one record binds a
+  later deliverable of the same turn that names none. The declaration is made knowing the
+  application's current date, so a month or day said without a year lands in the right
+  year. Field labels match by whole words
+  or by the field's own name, never by substring. A view the page lacks is stated in the
+  reply while the page opens in its own view. A condition on an unstored computed field
+  is refused rather than silently ignored, unless its value names one of the page's own
+  filters. The resolver's reach is measured by a zero-model matrix over the reference
+  fixture (`evals/odoo/goals/resolver_matrix.py`: 184 declarations across entities,
+  deliverable kinds and condition types, all read-only RPC). Only the Odoo adapter
+  implements the index and resolver so far.
 - A server-side ReAct loop receives every tool result and a fresh page observation before
   its next decision, with step, time, token, and provider-spend limits.
 - Application-owned Skills and typed tools provide current business facts. When explicitly

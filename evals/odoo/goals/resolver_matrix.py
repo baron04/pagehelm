@@ -457,9 +457,208 @@ case("h-field", "sale.order", "handoff", "field", handoff("sale.order", "S00002"
      page={"url": r"^/odoo/sales/2$", "highlight": "Expiration"})
 
 
+# -- records described, not named ------------------------------------------------------------
+def described(kind, entity, filters, page="", action="", fields=(), via="", section="", search=""):
+    d = {"kind": kind, "entity": entity, "record": "", "via": via, "fields": list(fields),
+         "section": section, "action": action, "page": {"key": page, "search": search},
+         "metric": {"op": "count", "filters": list(filters)}}
+    return {"deliverables": [d], "write_intent": kind == "handoff"}
+
+
+case("h-described-by-customer-and-status", "sale.order", "handoff", "described",
+     described("handoff", "sale.order", [F("Customer", ["Joel Willis"]), F("Status", ["Quotation Sent"])],
+               page="Quotations", action="Confirm"),
+     page={"url": r"^/odoo/sales/19$", "highlight": "Confirm"})
+case("h-described-by-amount", "sale.order", "handoff", "described",
+     described("handoff", "sale.order", [F("Customer", ["Acme"]), F("Total", ["1740"]),
+                                         F("Status", ["Quotation"])],
+               page="Quotations", action="Send by Email"),
+     page={"url": r"^/odoo/sales/1$", "highlight": "Send by Email"})
+case("h-described-by-invoice-status", "sale.order", "handoff", "described",
+     described("handoff", "sale.order", [F("Invoice Status", ["To Invoice"])],
+               page="Sales Orders", action="Create Invoice"),
+     page={"url": r"^/odoo/orders/7$"})
+case("h-described-last-month-invoice", "account.move", "handoff", "described",
+     described("handoff", "account.move", [F("Invoice Date", ["last month"])],
+               page="Invoices", action="Pay"),
+     page={"url": r"^/odoo/customer-invoices/4$", "highlight": "Pay"})
+case("h-described-in-description-and-record", "sale.order", "handoff", "described",
+     {"deliverables": [{"kind": "handoff", "entity": "sale.order",
+                        "record": "the quotation sent to Joel Willis", "action": "Confirm",
+                        "metric": {"op": "count", "filters": [F("Customer", ["Joel Willis"]),
+                                                              F("Status", ["Quotation Sent"])]},
+                        "page": {"key": "Quotations"}}], "write_intent": True},
+     page={"url": r"^/odoo/sales/19$", "highlight": "Confirm"})
+case("h-described-record-not-found-is-refused", "sale.order", "handoff", "described",
+     handoff("sale.order", "the quotation sent to Joel Willis", "Confirm"),
+     problem=r"no Sales Order matches")
+case("h-described-ambiguous", "sale.order", "handoff", "described",
+     described("handoff", "sale.order", [F("Customer", ["Gemini Furniture"])],
+               page="Sales Orders", action="Confirm"),
+     problem=r"several", candidates_min=2)
+case("h-described-none", "sale.order", "handoff", "described",
+     described("handoff", "sale.order", [F("Total", ["999"])], page="Quotations", action="Confirm"),
+     problem=r"no Sales Order matches")
+case("f-described-via-partner", "account.move", "fact", "described",
+     described("fact", "account.move", [F("Invoice Date", ["2026-09"]), F("Total", ["30"])],
+               page="Bills", via="Partner", fields=["Email"]),
+     facts={"Email": r"@example\.com$"})
+case("f-described-amount-beyond-page", "account.move", "fact", "described",
+     described("fact", "account.move", [F("Total", ["31750"]), F("Type", ["Customer Credit Note"])],
+               page="Invoices", fields=["Partner"]),
+     facts={"Partner": r"^Acme Corporation$"})
+case("p-described-section", "account.move", "page", "described",
+     described("page", "account.move", [F("Total", ["31750"]), F("Type", ["Customer Credit Note"])],
+               page="Credit Notes", section="Invoice Lines"),
+     page={"url": r"^/odoo/[a-z-]+/12$", "section": "Invoice Lines"})
+case("p-described-by-search-words", "res.partner", "page", "described",
+     described("page", "res.partner", [], page="Customers", section="Internal Notes", search="Azure"),
+     page={"url": r"^/odoo/customers/15$", "section": "Internal Notes"})
+
+# -- lines of a record named or described through its own entity ------------------------------
+case("l-lines-of-described-order", "sale.order.line", "list", "described",
+     described("list", "sale.order", [F("Order Date", ["2026-08-22"])], page="Quotations",
+               fields=["Order Lines", "Product", "Subtotal"]),
+     records_len=2, records_any=[r"Subtotal"])
+case("l-lines-of-named-order-by-field", "sale.order.line", "list", "via-lines",
+     lst("sale.order", page="Quotations", fields=["Order Lines"]) | {"deliverables": [
+         {"kind": "list", "entity": "sale.order", "record": "S00004", "fields": ["Order Lines"]}]},
+     records_len=4)
+case("p-section-reads-the-lines", "account.move.line", "page", "section",
+     page(entity="account.move", record="BILL/2026/09/0001", section="Invoice Lines"),
+     page={"section": "Invoice Lines"}, records_len=2)
+
+# -- creation on the page declared, field names by whole words, filters switched off -----------
+case("h-new-on-declared-page", "account.move", "handoff", "create",
+     {"deliverables": [{"kind": "handoff", "entity": "account.move", "action": "New",
+                        "page": {"key": "Bills"}}], "write_intent": True},
+     page={"url": r"^/odoo/vendor-bills$", "highlight": "New"})
+case("h-new-on-declared-credit-notes", "account.move", "handoff", "create",
+     {"deliverables": [{"kind": "handoff", "entity": "account.move", "action": "New",
+                        "page": {"key": "Credit Notes"}}], "write_intent": True},
+     page={"url": r"^/odoo/credit-notes$", "highlight": "New"})
+case("f-field-by-its-name", "sale.order", "fact", "none",
+     fact("sale.order", "S00001", ["Validity Date"]), facts={"Expiration": r"^\d{4}-\d{2}-\d{2}"})
+case("f-field-by-whole-words", "account.move", "fact", "none",
+     fact("account.move", "BILL/2025/06/0001", ["Invoice Date"]),
+     facts={"Invoice/Bill Date": r"^2025-06-17"})
+case("f-field-trailing-word-is-not-a-field", "account.move", "fact", "none",
+     fact("account.move", "BILL/2025/06/0001", ["Validity Date"]), problem=r"none of the fields")
+case("l-filter-on-and-off", "product.template", "list", "page-filter",
+     lst("product.template", page="Products") | {"deliverables": [
+         {"kind": "list", "entity": "product.template",
+          "page": {"key": "Products", "filters_on": ["Sales"], "filters_off": ["Purchase"]}}]},
+     count=1)
+case("p-view-the-page-lacks", "product.tag", "page", "view",
+     page(key="Product Tags", view="pivot"), page={"missing_view": "pivot", "view": ""})
+
+
+# -- lines whose owner is given as a condition the link cannot resolve ---------------------------
+case("l-lines-invoice-number-on-order-lines", "account.move.line", "list", "via-lines",
+     lst("sale.order.line", filters=[F("Order Reference", ["INV/2026/00002"])], fields=["Quantity"]),
+     records_len=2)
+case("l-lines-link-named-as-the-model", "account.move.line", "list", "via-lines",
+     lst("account.move.line", filters=[F("Move", ["BILL/2026/09/0001"])], fields=["Quantity"]),
+     records_len=2)
+case("a-lines-sum-link-named-as-the-model", "account.move.line", "aggregate", "via-lines",
+     agg("account.move.line", "", op="sum", field="Quantity", filters=[F("Move", ["BILL/2026/09/0001"])]),
+     count=2)
+case("l-lines-owner-described-by-amount", "sale.order.line", "list", "described",
+     lst("sale.order.line", filters=[F("Order Reference", ["1541.50"])], fields=["Product", "Quantity"]),
+     records_len=2, records_any=[r"Quantity"])
+case("l-lines-owner-described-by-date", "sale.order.line", "list", "described",
+     lst("sale.order.line", filters=[F("Order Reference", ["2026-08-22"])], fields=["Product"]),
+     records_len=2)
+case("l-lines-product-words", "sale.order.line", "list", "text",
+     lst("sale.order.line", filters=[F("Order Reference", ["S00007"]), F("Product", ["Office"])]),
+     records_len=2, records_any=[r"Office Lamp", r"Office Chair"])
+case("l-partner-company-filter-by-value", "res.partner", "list", "page-filter",
+     lst("res.partner", page="Customers", search="example.com",
+         filters=[F("Company Type", ["Company"])]),
+     records_any=[r"Azure Interior"])
+case("h-described-sorted", "sale.order", "handoff", "described",
+     {"deliverables": [{"kind": "handoff", "entity": "sale.order", "action": "Customer",
+                        "sort": "Total", "descending": True, "page": {"key": "Quotations"},
+                        "metric": {"op": "count", "filters": [F("Customer", ["Ready Mat"]),
+                                                              F("Status", ["Quotation"])]}}],
+      "write_intent": True},
+     page={"url": r"^/odoo/sales/2$", "highlight": "Customer"})
+case("h-after-a-list-that-found-one", "sale.order", "handoff", "described",
+     {"deliverables": [{"kind": "list", "entity": "sale.order", "page": {"key": "Orders to Invoice"}},
+                       {"kind": "handoff", "entity": "sale.order", "action": "Create Invoice"}],
+      "write_intent": True},
+     page={"url": r"^/odoo/orders/7$"}, deliverable=1)
+
+
+# -- owner described through the line entity, page vocabulary as fields, emptiness, tabs ---------
+case("l-lines-owner-by-status-word", "sale.order.line", "list", "described",
+     lst("sale.order.line", page="Quotations", filters=[F("Order Reference", ["Quotation Sent"])],
+         fields=["Product", "Quantity"]),
+     records_len=3, records_any=[r"Quantity"])
+case("l-lines-owner-by-period-and-total", "sale.order.line", "list", "described",
+     lst("sale.order.line", filters=[F("Order Reference", ["last month"]), F("Total", ["1541.5"])],
+         fields=["Product", "Quantity"]),
+     records_len=2)
+case("l-lines-owner-by-parent-page-and-date", "account.move.line", "list", "described",
+     lst("account.move.line", page="Invoices", page_filters=["Invoices"],
+         filters=[F("Invoice Date", ["2026-08-28"])], fields=["Product", "Unit Price"]),
+     records_len=2, records_any=[r"Unit Price"])
+case("l-lines-owner-described-not-found", "sale.order.line", "list", "described",
+     lst("sale.order.line", filters=[F("Order Reference", ["last year"])], fields=["Product"]),
+     problem=r"no Sales Order matches")
+case("a-date-filter-name-as-field", "account.move", "aggregate", "date-abs",
+     agg("account.move", "Bills", filters=[F("Accounting Date", ["2025-06-01", "2025-06-30"], "between")]),
+     count=1)
+case("p-described-by-date-filter-name", "account.move", "page", "described",
+     described("page", "account.move", [F("Accounting Date", ["2026-09"]), F("Total", ["30"])],
+               page="Bills", via="Partner", section="Internal Notes"),
+     page={"url": r"^/odoo/customers/15$", "section": "Internal Notes"})
+case("f-unknown-page-filter-on-a-page-without-filters", "account.move", "fact", "described",
+     {"deliverables": [{"kind": "fact", "entity": "account.move", "via": "Partner", "fields": ["Email"],
+                        "metric": {"op": "count", "filters": [F("Total", ["30"]), F("Invoice Date", ["2026-09"])],
+                                   "page_filters": ["Vendor Bills"]},
+                        "page": {"key": "Bills"}}]},
+     facts={"Email": r"@example\.com$"})
+case("a-lines-with-a-product", "account.move.line", "aggregate", "link",
+     agg("account.move.line", "Refunds", filters=[F("Product", ["not empty"], "!=")]), count=2)
+case("h-field-in-a-tab", "account.move", "handoff", "field",
+     handoff("account.move", "BILL/2025/06/0001", "Payment Reference"),
+     page={"url": r"^/odoo/vendor-bills/7$", "highlight": "Payment Reference"})
+case("h-wizard-button", "sale.order", "handoff", "none", handoff("sale.order", "S00007", "Create Invoice"),
+     page={"url": r"^/odoo/orders/7$", "highlight": "Create Invoice"})
+
+case("l-lines-owner-described-in-one-value", "sale.order.line", "list", "described",
+     lst("sale.order.line", page="Sales Orders", filters=[F("Order Reference", ["1541.50 USD last month"])],
+         fields=["Product", "Quantity"]),
+     records_len=2)
+case("l-lines-owner-number-under-another-field", "account.move.line", "list", "via-lines",
+     lst("account.move.line", page="Invoices", filters=[F("Invoice", ["INV/2026/00003"])],
+         fields=["Product", "Quantity", "Subtotal"]),
+     records_any=[r"Subtotal"])
+
+case("l-lines-owner-in-record-text", "account.move.line", "list", "described",
+     {"deliverables": [{"kind": "list", "entity": "account.move.line", "record": "11750",
+                        "fields": ["Product", "Quantity"], "page": {"key": "Credit Notes"}}]},
+     records_any=[r"Quantity"])
+case("l-lines-after-a-list-that-found-one", "sale.order.line", "list", "described",
+     {"deliverables": [{"kind": "list", "entity": "sale.order", "page": {"key": "Quotations"},
+                        "metric": {"op": "count", "filters": [F("Status", ["Quotation Sent"])]}},
+                       {"kind": "list", "entity": "sale.order.line", "fields": ["Product", "Quantity"]}]},
+     records_len=3, deliverable=1)
+case("a-number-with-its-operator", "account.move.line", "aggregate", "numeric",
+     agg("account.move.line", "", filters=[F("Journal Entry", ["RINV/2026/00004"]), F("Subtotal", [">20000"])]),
+     count=1)
+case("h-locate-drops-words-that-match-nothing", "sale.order", "handoff", "described",
+     {"deliverables": [{"kind": "handoff", "entity": "sale.order", "action": "Confirm",
+                        "page": {"key": "Quotations", "search": "order dated"},
+                        "metric": {"op": "count", "filters": [F("Order Date", ["2026-08-22"])]}}],
+      "write_intent": True},
+     page={"url": r"^/odoo/orders/11$"})
+
+
 def _check(expect: dict, resolved) -> list[str]:
     errors = []
-    d = resolved.deliverables[0]
+    d = resolved.deliverables[expect.get("deliverable", 0)]
     if "problem" in expect:
         if not re.search(expect["problem"], d.problem or ""):
             errors.append(f"problem {d.problem!r} !~ {expect['problem']!r}")

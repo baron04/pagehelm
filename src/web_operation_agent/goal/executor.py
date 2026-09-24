@@ -244,10 +244,11 @@ class GoalTurnExecutor:
         s.step += 1
         elapsed = time.time() - s.started_at
         try:
+            today = getattr(self.goal_port, "today", None)
             spec, projection = understand(
                 chat, prompt=s.message.text, index=index, run_id=s.run_id,
                 timeout_s=max(1.0, self.config.wall_budget_s - elapsed),
-                cancelled=s.cancelled)
+                cancelled=s.cancelled, today=str(today() or "") if callable(today) else "")
         except ValueError as exc:
             s.ledger.append("goal_declaration_invalid", step=s.step, detail=str(exc)[:200])
             s.terminal_reason = "agent_refused"
@@ -655,6 +656,11 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool) -> list[
                               + ", ".join(plan.facets_off))
             suffix = f"（{'；'.join(extras)}）" if extras and zh else (
                 f" ({'; '.join(extras)})" if extras else "")
+            if plan.missing_view:
+                # The page is open, in the only kind of view it has; the one asked for
+                # is not something this page offers, and the reply says so.
+                suffix += (f"，但这个页面不支持 {plan.missing_view} 视图" if zh
+                           else f", but this page does not support a {plan.missing_view} view")
             lines.append((f"已打开：{what}{suffix}") if zh else f"Opened: {what}{suffix}")
         elif outcome.reached and all(u.startswith("filter ") for u in outcome.unmet):
             # The page is open; a filter or group it asked for has no such choice there.

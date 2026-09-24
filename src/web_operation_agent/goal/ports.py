@@ -57,6 +57,9 @@ class PagePlan:
     highlight: str = ""
     #: What pressing that control does, when the adapter knows.
     highlight_effect: str = ""
+    #: A view the person asked for that this page does not offer; the page opens in
+    #: its own view and the reply says the asked-for one is not available.
+    missing_view: str = ""
 
 
 @dataclass(frozen=True)

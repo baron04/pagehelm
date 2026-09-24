@@ -7,6 +7,8 @@ command or a write; the core does the former and nothing does the latter.
 """
 from __future__ import annotations
 
+from dataclasses import replace
+
 import ast
 from datetime import date, datetime, time as time_of_day, timedelta, timezone
 import html
@@ -64,6 +66,9 @@ ALIASES = {
     "Sales Order Line": ("订单行", "订单明细", "报价单明细"),
     "Journal Item": ("发票行", "账单明细", "凭证行"),
 }
+#: Values that ask whether a field is set at all, in the index's language and in Chinese.
+_EMPTY = frozenset({"empty", "notset", "none", "unset", "空", "为空", "没有"})
+_NOT_EMPTY = frozenset({"notempty", "set", "any", "nonempty", "非空", "不为空", "有"})
 #: Line fields that are bookkeeping for the form, not values a person asks about.
 _SKIP_LINE_FIELDS = frozenset({"sequence", "display_type", "is_downpayment", "product_updatable",
                                "product_uom_category_id", "product_uom_readonly",
@@ -89,6 +94,12 @@ _MONTH = re.compile(r"^(\d{4})-(\d{2})$")
 _YEAR = re.compile(r"^(\d{4})$")
 _RANGE = re.compile(r"^(\d{4}-\d{2}-\d{2})\s*(?:\.\.|~|to|至|到)\s*(\d{4}-\d{2}-\d{2})$")
 
+
+
+def _describes_record(d: Deliverable) -> bool:
+    """The deliverable carries conditions that can pick a record out without its name."""
+    return bool((d.metric is not None and d.metric.filters) or d.page.filters_on
+                or d.page.search)
 
 
 def _literal_domain(text: str) -> list | None:
@@ -208,17 +219,28 @@ def _domain_at(text: str, today: date) -> list | None:
     return _literal_domain(substituted)
 
 
+class _Scope:
+    """What a declaration's page, filters and conditions select, as a domain."""
+
+    def __init__(self, *, model, meta, page, action, domain, described, default_clauses):
+        self.model, self.meta, self.page, self.action = model, meta, page, action
+        self.domain, self.described, self.default_clauses = domain, described, default_clauses
+
+
 class Ambiguous(tuple):
     """Several records match a reference; the tuple holds their display names."""
 
 
 class _SearchFilter:
-    __slots__ = ("name", "label", "domain", "group_by", "raw")
+    __slots__ = ("name", "label", "domain", "group_by", "raw", "date_field")
 
     def __init__(self, name: str, label: str, domain: list | None, group_by: str,
-                 raw: str = ""):
+                 raw: str = "", date_field: str = ""):
         self.name, self.label, self.domain, self.group_by = name, label, domain, group_by
         self.raw = raw
+        #: For a date filter ("Invoice Date", "Accounting Date"): the field it offers
+        #: periods of; it narrows nothing by itself.
+        self.date_field = date_field
 
     def domain_at(self, today: date) -> list | None:
         return self.domain if self.domain is not None else _domain_at(self.raw, today)
@@ -245,15 +267,28 @@ class _ModelMeta:
         for name, meta in self.fields.items():
             if _norm(meta.get("string", "")) == wanted or name == label:
                 return name
-        # A label that contains the words asked for ("# Product Variants" for "Product
-        # Variants") beats one the words merely contain ("Product"); among each, the
-        # closest length wins.
-        containing = sorted(((len(_norm(m.get("string", ""))), n) for n, m in self.fields.items()
-                             if wanted in _norm(m.get("string", ""))))
-        if containing:
-            return containing[0][1]
+        asked = _tokens(label)
+        if not asked:
+            return None
+        # Whole words, never substrings: "ID" is not inside "Validity". A field whose
+        # own name says exactly the words asked for (validity_date for "Validity Date",
+        # invoice_date for "Invoice Date") is meant even when its label differs.
+        named = [n for n in self.fields if _tokens(n.replace("_", " ")) == asked]
+        if len(named) == 1:
+            return named[0]
+        # A label whose words include every word asked for ("Invoice/Bill Date" for
+        # "Invoice Date", "# Product Variants" for "Product Variants"); the fewest extra
+        # words, then the shortest, wins.
+        covering = sorted(((len(_tokens(m.get("string", "")) - asked), len(_norm(m.get("string", ""))), n)
+                           for n, m in self.fields.items() if asked <= _tokens(m.get("string", ""))))
+        if covering:
+            return covering[0][2]
+        # Or the words asked for begin with a label and qualify it ("Customer name",
+        # "Total amount"); a trailing word alone ("Date" in "Validity Date") names nothing.
+        first = next(iter(re.findall(r"[0-9a-z\u3400-\u9fff]+", label.casefold())), "")
         contained = sorted(((-len(_norm(m.get("string", ""))), n) for n, m in self.fields.items()
-                            if _norm(m.get("string", "")) and _norm(m.get("string", "")) in wanted))
+                            if first in _tokens(m.get("string", ""))
+                            and _tokens(m.get("string", "")) <= asked))
         return contained[0][1] if contained else None
 
     def link_by_label(self, label: str) -> str | None:
@@ -295,6 +330,9 @@ class OdooGoalPort:
         self._reads: list[tuple[str, str]] = []
         #: A one2many's static domain the next aggregate applies to its line scope.
         self._line_scope: list | None = None
+        #: The one record a list in this turn found, for a later deliverable that names
+        #: none ("the order still to invoice: I want to invoice it now").
+        self._found_one: tuple | None = None
 
     # -- index ----------------------------------------------------------------------
     def index(self, *, context: OperationContext | None = None) -> ApplicationIndex:
@@ -406,10 +444,12 @@ class OdooGoalPort:
         form_fields = list(dict.fromkeys(_FIELD_TAG.findall(arch["form"])))
         sections = tuple(dict.fromkeys(
             html.unescape(s) for s in re.findall(r'<page[^>]*?\sstring="([^"]+)"', arch["form"])))
+        # Buttons that call a method and buttons that open an action (a wizard such as
+        # "Create Invoice") are both controls the person can be pointed at.
         actions = tuple(dict.fromkeys(
             html.unescape(s) for s in re.findall(
-                r'<button[^>]*?\btype="object"[^>]*?\bstring="([^"]+)"', arch["form"])
-            + re.findall(r'<button[^>]*?\bstring="([^"]+)"[^>]*?\btype="object"', arch["form"])))
+                r'<button[^>]*?\btype="(?:object|action)"[^>]*?\bstring="([^"]+)"', arch["form"])
+            + re.findall(r'<button[^>]*?\bstring="([^"]+)"[^>]*?\btype="(?:object|action)"', arch["form"])))
         return _ModelMeta(model, label, fields, list_fields, form_fields, sections, actions,
                           _parse_filters(arch["search"]), form_arch=arch["form"])
 
@@ -477,6 +517,7 @@ class OdooGoalPort:
                 current_path: str = "") -> Resolution:
         index = self.index(context=context)
         self._reads = []
+        self._found_one = None
         resolved = []
         for deliverable in spec.deliverables:
             try:
@@ -485,6 +526,10 @@ class OdooGoalPort:
                 resolved.append(Resolved(kind=deliverable.kind,
                                          problem=f"the application refused a read: {exc}"[:200]))
         return Resolution(deliverables=tuple(resolved), reads=tuple(self._reads))
+
+    def today(self) -> str:
+        """The current date where the application's users are, for the declaration."""
+        return self._today().isoformat()
 
     def _today(self) -> date:
         zone = ""
@@ -519,7 +564,10 @@ class OdooGoalPort:
         return self._client.call(model, method, args, kwargs or {})
 
     def _resolve_one(self, d: Deliverable, index: ApplicationIndex) -> Resolved:
-        if d.kind == "page" and not d.record and d.page.key:
+        d = self._line_record_from_conditions(d)
+        if isinstance(d, Resolved):
+            return d
+        if d.kind == "page" and not d.record and d.page.key and not (d.metric and d.metric.filters):
             return self._list_page(d, index)
         if d.record and d.entity in self._models and self._parent_link(d.entity) is not None \
                 and self._embedded_lines(self._parent_link(d.entity)[0], d.entity) is not None:
@@ -544,28 +592,39 @@ class OdooGoalPort:
                 descending=d.descending, limit=d.limit, page=d.page,
                 metric=Metric(op="count", filters=(Filter(field=via, values=(d.record,)),)
                               + (d.metric.filters if d.metric else ()))), index)
+        entity = index.entity(d.entity) if d.entity else None
+        described = _describes_record(d)
+        if (d.kind in ("fact", "page", "handoff") and entity is not None and not d.record
+                and not described and self._found_one is not None
+                and self._found_one[0] == entity.key and _norm(d.action) not in ("new", "create")):
+            d = replace(d, record=self._found_one[2])
+        if d.kind == "list" and entity is not None and (d.record or described):
+            # "The order of 22 August, its products and subtotals": a list of the lines
+            # of one record, the record named or described, the line field among the
+            # columns asked for.
+            line_field = next((f for f, i in self._models[entity.key].fields.items()
+                               if i.get("type") == "one2many" and i.get("relation") in self._models
+                               and self._embedded_lines(entity.key, str(i["relation"])) is not None
+                               and any(_norm(i.get("string", "")) == _norm(label)
+                                       for label in d.fields)), None) \
+                if entity.key in self._models else None
+            if line_field is not None:
+                owner = self._find_record(entity.key, d.record) if d.record else None
+                if not (isinstance(owner, tuple) and not isinstance(owner, Ambiguous)):
+                    owner = self._locate(d, index) if described else Resolved(
+                        kind=d.kind, problem=f"no {entity.label} matches {d.record!r}")
+                if isinstance(owner, Resolved):
+                    return owner
+                return self._lines_list(entity.key, line_field, owner, d, index)
         if d.kind in ("aggregate", "list"):
             return self._aggregate(d, index)
-        entity = index.entity(d.entity) if d.entity else None
         if d.kind == "page" and entity is None and d.page.key:
             return self._list_page(d, index)
         if entity is None:
             return Resolved(kind=d.kind, problem="the entity named is not in the index")
-        if not d.record and d.kind == "handoff":
-            # "Create a new X": the control lives on the entity's list page -- the widest
-            # one, whose action restricts nothing (Quotations rather than Sales Orders),
-            # since a new record starts in the state the narrower pages exclude.
-            candidates = [a for a in self._actions if a["model"] == entity.key]
-            action = next((a for a in candidates if a.get("breadcrumbs")
-                           and not _literal_domain(str(a.get("domain") or ""))),
-                          candidates[0] if candidates else None)
-            page = index.page(f"p{action['action_id']}") if action else None
-            if action is None or page is None:
-                return Resolved(kind="handoff", problem="no page shows this entity")
-            return Resolved(kind="handoff", page=PagePlan(
-                url=self._action_url(action), label=page.breadcrumb,
-                expected_path=self._action_url(action), highlight=d.action or "New"))
-        if not d.record:
+        if not d.record and d.kind == "handoff" and not described:
+            return self._creation(d, entity, index)
+        if not d.record and not described:
             if d.kind == "page":
                 page = self._default_page(entity.key, index)
                 return self._list_page(Deliverable(kind="page", entity=d.entity,
@@ -577,15 +636,21 @@ class OdooGoalPort:
                                        index) if page else Resolved(
                     kind=d.kind, problem="no page shows this entity")
             return Resolved(kind=d.kind, problem="no record was named")
-        found = self._find_record(entity.key, d.record)
+        found = self._find_record(entity.key, d.record) if d.record else None
         via = d.via
-        if d.kind == "handoff" and (found is None or (isinstance(found, Ambiguous)
-                                                        and _norm(d.action) in ("", "new", "create"))):
-            # A record that does not exist and a change asked for: the name is the record
-            # to be created (or the customer it is for), and the control is the list
-            # page's own "New".
-            return self._resolve_one(Deliverable(kind="handoff", entity=d.entity, action="New"),
-                                     index)
+        if described and not (isinstance(found, tuple) and not isinstance(found, Ambiguous)):
+            # Not a name but a description ("the quotation sent to Joel Willis", "the
+            # 31,750 credit note"): the conditions pick the record out, or say why not.
+            found = self._locate(d, index)
+            if isinstance(found, Resolved):
+                return found
+        if d.kind == "handoff" and _norm(d.action) in ("", "new", "create") and (
+                found is None or isinstance(found, Ambiguous)):
+            # A change asked for and the name is no existing record: it is the record to
+            # be created (or the customer it is for), and the control is the list page's
+            # own "New". A change to a record that was named but not found is refused,
+            # never turned into a creation.
+            return self._creation(d, entity, index)
         if found is None:
             # The reference may belong to a record that links to this entity ("S00006" is
             # an order; the person asked about its customer). Re-home the reference when
@@ -641,7 +706,60 @@ class OdooGoalPort:
             plan = self._record_page(model, rid, name, section="", highlight=control)
             return Resolved(kind="handoff", page=plan)
         plan = self._record_page(model, rid, name, section=d.section, highlight="")
+        if d.section and model in self._models:
+            # "Its invoice lines": the section that embeds the record's lines is shown,
+            # and the lines are read out too, since a request for a record's lines
+            # is usually a question about them.
+            line_field = next((f for f, i in self._models[model].fields.items()
+                               if i.get("type") == "one2many" and i.get("relation") in self._models
+                               and _norm(i.get("string", "")) == _norm(d.section)
+                               and self._embedded_lines(model, str(i["relation"])) is not None),
+                              None)
+            if line_field is not None:
+                lines = self._lines_list(model, line_field, (model, rid, name), d, index)
+                if lines.aggregate is not None:
+                    return Resolved(kind="page", page=plan, aggregate=lines.aggregate)
         return Resolved(kind="page", page=plan)
+
+    def _creation(self, d: Deliverable, entity, index: ApplicationIndex) -> Resolved:
+        """"Create a new X": the control is "New" on the entity's list page -- the one
+        declared when it shows this entity (Bills rather than Invoices), else the widest
+        one, whose action restricts nothing (Quotations rather than Sales Orders), since
+        a new record starts in the state the narrower pages exclude."""
+        candidates = [a for a in self._actions if a["model"] == entity.key]
+        action = next((a for a in candidates if f"p{a['action_id']}" == d.page.key
+                       and a.get("breadcrumbs")), None)
+        if action is None:
+            action = next((a for a in candidates if a.get("breadcrumbs")
+                           and not _literal_domain(str(a.get("domain") or ""))),
+                          candidates[0] if candidates else None)
+        page = index.page(f"p{action['action_id']}") if action else None
+        if action is None or page is None:
+            return Resolved(kind="handoff", problem="no page shows this entity")
+        return Resolved(kind="handoff", page=PagePlan(
+            url=self._action_url(action), label=page.breadcrumb,
+            expected_path=self._action_url(action), highlight=d.action or "New"))
+
+    def _lines_list(self, model: str, line_field: str, owner: tuple, d: Deliverable,
+                    index: ApplicationIndex) -> Resolved:
+        """The lines a record's form embeds, as a list of the line entity."""
+        line_model = str(self._models[model].fields[line_field]["relation"])
+        line_meta = self._models[line_model]
+        parent = next((f for f, i in line_meta.fields.items()
+                       if i.get("type") == "many2one" and i.get("relation") == model), None)
+        if parent is None:
+            return Resolved(kind=d.kind, problem=f"{line_meta.label} has no link to {model}")
+        embedded = self._embedded_lines(model, line_model)
+        if embedded is not None and embedded[1]:
+            self._line_scope = list(embedded[1])
+        parent_label = str(line_meta.fields[parent].get("string") or parent)
+        line_label = _norm(self._models[model].fields[line_field].get("string", ""))
+        columns = tuple(f for f in d.fields if _norm(f) != line_label)
+        return self._aggregate(Deliverable(
+            kind="list", entity=line_model, fields=columns, sort=d.sort,
+            descending=d.descending, limit=d.limit,
+            metric=Metric(op="count", filters=(Filter(field=parent_label, values=(owner[2],)),))),
+            index)
 
     # -- records ----------------------------------------------------------------------
     def _rehome(self, model: str, reference: str, index: ApplicationIndex):
@@ -859,6 +977,9 @@ class OdooGoalPort:
                     field = meta.field_by_label(highlight)
                 if field is not None and field in meta.form_fields:
                     control = str(meta.fields[field].get("string") or field)
+                    if not tab:
+                        # A field inside a tab is reached by selecting that tab first.
+                        tab = _tab_of(meta.form_arch, field)
         label = name if not tab else f"{name} · {tab}"
         return PagePlan(url=url, label=label, expected_path=url, section=tab,
                         highlight=control)
@@ -871,9 +992,11 @@ class OdooGoalPort:
             return Resolved(kind="page", problem="the page named is not in the index")
         if d.page.search and d.kind == "page":
             # "Show me Large Desk's card": the words name one record of the page's entity.
+            # With a section asked for, a record is certainly meant, and the one record
+            # the words pick out is it ("Azure" for Azure Interior).
             found = self._find_record(page.entity, d.page.search)
             if (isinstance(found, tuple) and not isinstance(found, Ambiguous)
-                    and _norm(_strip_code(found[2])) == _norm(d.page.search)):
+                    and (d.section or _norm(_strip_code(found[2])) == _norm(d.page.search))):
                 if page.entity not in self._models:
                     self._models[page.entity] = self._model_meta(page.entity)
                 return Resolved(kind="page", page=self._record_page(
@@ -899,7 +1022,8 @@ class OdooGoalPort:
             url = f"{url}?view_type={view}"
         return Resolved(kind="page", problem=problem, page=PagePlan(
             url=url, label=page.breadcrumb, expected_path=expected, view=view,
-            facets_on=tuple(dict.fromkeys(on)), facets_off=tuple(dict.fromkeys(off))))
+            facets_on=tuple(dict.fromkeys(on)), facets_off=tuple(dict.fromkeys(off)),
+            missing_view=d.page.view if problem else ""))
 
     @staticmethod
     def _facet_name(page: IndexPage, label: str, *, group: bool = False) -> str | None:
@@ -918,31 +1042,51 @@ class OdooGoalPort:
         return None
 
     # -- aggregates -------------------------------------------------------------------
-    def _aggregate(self, d: Deliverable, index: ApplicationIndex) -> Resolved:
+    def _scope(self, d: Deliverable, index: ApplicationIndex, *, search: bool):
+        """The records a deliverable's page, filters and conditions describe.
+
+        Returns a `_Scope`, or a `Resolved` problem when a name in the declaration has no
+        meaning here. The page scopes by its own domain and default filters (except ones
+        about the current user); an entity alone means every record of it the person may
+        read. Page filters switched on narrow, ones switched off exclude; conditions are
+        field comparisons; search words, when asked for, are what the search box would do.
+        """
         page = index.page(d.page.key) if d.page.key else None
         entity = index.entity(d.entity) if d.entity else None
         if page is None and entity is None:
             return Resolved(kind=d.kind, problem="no entity or page names this scope")
+        prefix = ""
         if page is not None and entity is not None and page.entity != entity.key:
-            # The lines of an order declared with the orders page: the entity named is
-            # the one asked about; the page was the way there, not the scope.
-            page = None
-        # A declared page scopes the numbers by its own domain and default filters; an
-        # entity alone means every record of it the person may read. The page a list
-        # opens afterwards is chosen separately.
-        model = page.entity if page is not None else entity.key
+            parent = self._parent_link(entity.key)
+            if parent is not None and parent[0] == page.entity:
+                # The lines of the records a page shows (the product lines of vendor
+                # refunds): the page's scope reaches the lines through their link.
+                prefix = parent[1] + "."
+            else:
+                # The lines of an order declared with the orders page: the entity named
+                # is the one asked about; the page was the way there, not the scope.
+                page = None
+        model = page.entity if page is not None and not prefix else entity.key
         meta = self._models.get(model) or self._model_meta(model)
         self._models.setdefault(model, meta)
         today = self._today()
         action = (next((a for a in self._actions if f"p{a['action_id']}" == page.key), None)
                   if page is not None else None)
-        domain = list(_literal_domain(str(action.get("domain") or "")) or []) if action else []
+
+        def through(clauses):
+            return [[prefix + c[0], c[1], c[2]] if prefix and isinstance(c, (list, tuple))
+                    and len(c) == 3 else c for c in clauses]
+
+        domain = through(_literal_domain(str(action.get("domain") or "")) or []) if action else []
+        if prefix and not self._line_scope:
+            embedded = self._embedded_lines(page.entity, entity.key)
+            if embedded is not None and embedded[1]:
+                self._line_scope = list(embedded[1])
         if self._line_scope:
             # The lines as the record's form embeds them (product lines, not tax lines).
             domain += self._line_scope
             self._line_scope = None
         described = [page.label if page is not None else meta.label]
-        # The page's own default filters apply too, except ones about the current user.
         context = _literal_dict(str(action.get("context") or "")) if action else {}
         default_clauses: list = []
         for key, value in context.items():
@@ -957,36 +1101,73 @@ class OdooGoalPort:
                 # The action's own search view was not served to this user, but the
                 # default names a choice of one of the model's selection fields, which
                 # is how these filters are conventionally written ("in_invoice").
-                resolved = next(([[field, "=", name]] for field, info in meta.fields.items()
+                page_meta = self._models.get(page.entity, meta) if page is not None else meta
+                resolved = next(([[field, "=", name]] for field, info in page_meta.fields.items()
                                  if info.get("type") == "selection"
                                  and any(k == name for k, _l in info.get("selection") or ())),
                                 None)
             if resolved and "uid" not in str(resolved):
-                domain += resolved
-                default_clauses += resolved
+                domain += through(resolved)
+                default_clauses += through(resolved)
         metric = d.metric or Metric(op="count")
         page_filters = self._page_filters.get(action["action_id"], meta.filters) if action \
             else meta.filters
-        # Page filters declared on the page ("filters_on") scope the numbers too.
         declared_page_filters = list(metric.page_filters) + [
             f for f in d.page.filters_on if f not in metric.page_filters]
         for name in declared_page_filters:
             wanted = _norm(name)
             item = next((f for f in page_filters if _norm(f.label) == wanted), None) \
                 or meta.filter_by_name(name)
+            if item is not None and item.date_field and item.domain is None:
+                # A date filter switched on without a period narrows nothing.
+                continue
+            if item is None and page is not None and not page.filters:
+                # The page serves no filters, so the name is the model's own words for
+                # the page's scope ("Vendor Bills" on Bills), which the page already has.
+                continue
             resolved = item.domain_at(today) if item is not None else None
             if resolved is None or "uid" in str(resolved):
                 return Resolved(kind=d.kind, problem=f"filter {name!r} is not usable here")
-            domain += resolved
+            domain += through(resolved)
             described.append(item.label)
+        for name in d.page.filters_off:
+            # A filter switched off excludes what it would select ("Can be Sold" on,
+            # "Can be Purchased" off): its clauses, negated as one expression.
+            wanted = _norm(name)
+            item = next((f for f in page_filters if _norm(f.label) == wanted), None) \
+                or meta.filter_by_name(name)
+            resolved = item.domain_at(today) if item is not None else None
+            if resolved is None or "uid" in str(resolved):
+                return Resolved(kind=d.kind, problem=f"filter {name!r} is not usable here")
+            clauses = through([c for c in resolved if isinstance(c, (list, tuple))])
+            if any(c in ("|", "!") for c in resolved) or not clauses:
+                return Resolved(kind=d.kind, problem=f"filter {name!r} cannot be excluded")
+            domain += ["!"] + ["&"] * (len(clauses) - 1) + clauses
+            described.append(f"not {item.label}")
         for condition in metric.filters:
+            if not condition.values:
+                # A field named with nothing to compare against says nothing.
+                continue
             exact_field = any(_norm(i.get("string", "")) == _norm(condition.field)
+                              and i.get("searchable") is not False
                               for i in meta.fields.values())
+            if not exact_field:
+                # A date filter's name ("Accounting Date") stands for the field it offers.
+                dated = next((f for f in page_filters + meta.filters
+                              if f.date_field in meta.fields and _norm(f.label) == _norm(condition.field)),
+                             None)
+                if dated is not None:
+                    condition = Filter(field=str(meta.fields[dated.date_field].get("string")
+                                                 or dated.date_field),
+                                       values=condition.values, op=condition.op)
+                    exact_field = True
             if not exact_field:
                 # Not a field by its exact label: perhaps the page's own filter, named by
                 # its label or under a generic word ("filter": "To pay").
                 named = [f for f in page_filters
-                         if any(_norm(f.label) == _norm(v) for v in condition.values)]
+                         if any(_norm(f.label) == _norm(v) or (len(_norm(v)) >= 4
+                                and _norm(f.label).startswith(_norm(v).rstrip("y")))
+                                for v in condition.values)]
                 if named and named[0].domain_at(today) is not None:
                     domain += named[0].domain_at(today)
                     described.append(named[0].label)
@@ -997,7 +1178,7 @@ class OdooGoalPort:
                 return Resolved(kind=d.kind, problem=text)
             domain += clause
             described.append(text)
-        if d.kind == "list" and d.page.search:
+        if search and d.page.search:
             clause, text = self._search_clause(meta, model, domain, d.page.search)
             if clause is None and default_clauses:
                 # Nothing within the page's default filters (customers only): the words
@@ -1009,6 +1190,57 @@ class OdooGoalPort:
                     described.append("beyond the page's default filters")
             domain += clause or [["display_name", "ilike", d.page.search]]
             described.append(text)
+        return _Scope(model=model, meta=meta, page=page, action=action, domain=domain,
+                      described=described, default_clauses=default_clauses)
+
+    def _locate(self, d: Deliverable, index: ApplicationIndex):
+        """The one record a description picks out ("the quotation sent to Joel Willis",
+        "last month's customer invoice"): exactly one record within the scope, or, when
+        the page's own defaults or domain hide it, exactly one beyond them. Anything else
+        is a problem the reply states, never a guess."""
+        scope = self._scope(d, index, search=True)
+        if isinstance(scope, Resolved):
+            return scope
+        meta, model = scope.meta, scope.model
+        subject = " · ".join(scope.described)
+        domains = [list(scope.domain)]
+        if scope.default_clauses:
+            domains.append([c for c in scope.domain if c not in scope.default_clauses])
+        page_domain = _literal_domain(str(scope.action.get("domain") or "")) if scope.action else None
+        if page_domain:
+            domains.append([c for c in domains[-1] if c not in page_domain])
+        rows: list = []
+        kwargs: dict = {"fields": ["display_name"], "limit": 4}
+        if d.sort:
+            # "The higher one", "the latest": ordered, the first is the one meant.
+            order_field = meta.field_by_label(d.sort)
+            if order_field is None:
+                return Resolved(kind=d.kind, problem=f"cannot sort by {d.sort!r}")
+            kwargs = {"fields": ["display_name"], "limit": 1,
+                      "order": f"{order_field} {'desc' if d.descending else 'asc'}, id"}
+        for domain in domains:
+            rows = self._call(model, "search_read", [domain], kwargs)
+            if rows:
+                break
+        if not rows and d.page.search and (d.metric and d.metric.filters or d.page.filters_on):
+            # The words matched nothing but the conditions may ("order dated" beside a
+            # date): the conditions alone.
+            return self._locate(replace(d, page=replace(d.page, search="")), index)
+        if not rows:
+            return Resolved(kind=d.kind, problem=f"no {meta.label} matches {subject}")
+        if len(rows) > 1:
+            return Resolved(kind=d.kind, problem=f"{subject} matches several {meta.label} records",
+                            candidates=tuple(str(r.get("display_name") or "") for r in rows))
+        return model, int(rows[0]["id"]), str(rows[0].get("display_name") or "")
+
+    # -- aggregates -------------------------------------------------------------------
+    def _aggregate(self, d: Deliverable, index: ApplicationIndex) -> Resolved:
+        scope = self._scope(d, index, search=d.kind == "list")
+        if isinstance(scope, Resolved):
+            return scope
+        model, meta, page, action = scope.model, scope.meta, scope.page, scope.action
+        domain, described, default_clauses = scope.domain, scope.described, scope.default_clauses
+        metric = d.metric or Metric(op="count")
         subject = " · ".join(described)
         if d.kind == "list" and default_clauses and not self._call(model, "search_count", [domain], {}):
             # The page's own default filters (customers only) hid every match; the
@@ -1041,6 +1273,8 @@ class OdooGoalPort:
                 names.append(str(row.get("display_name") or "")
                              + (" — " + "; ".join(cells) if cells else ""))
             total = self._call(model, "search_count", [domain], {})
+            if len(rows) == 1:
+                self._found_one = (model, int(rows[0]["id"]), str(rows[0].get("display_name") or ""))
             # The list is the deliverable; the page it opens afterwards carries no facets,
             # whose failure would otherwise mark a correct answer as unfinished.
             bare = PageSpec(key=d.page.key if page is not None else "")
@@ -1121,6 +1355,13 @@ class OdooGoalPort:
         clause = [["display_name", "ilike", words]]
         if self._call(model, "search_count", [domain + clause], {}):
             return clause, f"~{words}"
+        number = re.fullmatch(r"[0-9][0-9,]*(?:\.[0-9]+)?", words.strip())
+        if number:
+            # A bare number that names nothing is an amount (an order's total).
+            field = self._amount_field(meta, words.strip(), domain)
+            if field is not None:
+                return ([[field, "=", float(words.replace(",", ""))]],
+                        f"{meta.fields[field].get('string')} = {words}")
         # No name contains the words; they may name a linked record instead ("United
         # States" on customers is their country). Only a record actually named by the
         # words counts, and several links to the same record are one hit, on the field
@@ -1150,6 +1391,211 @@ class OdooGoalPort:
         if len(matched) == 1:
             return [[matched[0], "ilike", words]], f"{meta.fields[matched[0]].get('string')} ~ {words}"
         return None, f"~{words}"
+
+    def _line_record_from_conditions(self, d: Deliverable):
+        """On a line entity, the conditions that are really about the owning record.
+
+        A condition on the link to the owner, or on a name the line entity does not have,
+        names the owner ("Order Reference = S00004", "Move = INV/2026/00002" -- even an
+        invoice number on order lines) or describes it ("last month", "1541.50",
+        "Quotation Sent"); a condition on a field the owner has ("Total") is the owner's
+        too, and so are the owner page's filters. The owner is found by name, else picked
+        out by those conditions like any described record; the deliverable is rewritten
+        onto the owner's own lines, linked by its exact name, keeping the conditions that
+        are the lines' own. Returns the deliverable, or a `Resolved` problem when the
+        owner is described but not found.
+        """
+        meta = self._models.get(d.entity) if d.entity else None
+        parent = self._parent_link(d.entity) if meta is not None else None
+        if parent is None or (d.metric is None and not d.record and self._found_one is None):
+            return d
+        if d.metric is None:
+            d = replace(d, metric=Metric(op="count"))
+        parent_meta = self._models.get(parent[0])
+        owners = [m for m, mm in self._models.items()
+                  if m != d.entity and any(
+                      i.get("type") == "one2many" and i.get("relation") in self._models
+                      and i.get("relation") != m
+                      and self._embedded_lines(m, str(i["relation"])) is not None
+                      for i in mm.fields.values())]
+        owners = [parent[0]] + [m for m in owners if m != parent[0]]
+
+        def proper(hit):
+            return isinstance(hit, tuple) and not isinstance(hit, Ambiguous)
+
+        def owner_named(value):
+            for model in owners:
+                hit = self._find_record(model, value)
+                if proper(hit):
+                    return hit
+            return None
+
+        owner = owner_named(d.record) if d.record else None
+        line_filters, parent_filters, words = [], [], []
+        if d.record and owner is None and d.kind in ("list", "aggregate") and not proper(
+                self._find_record(d.entity, d.record)):
+            # The "record" is a description of the owner ("11750"), not a name of anything.
+            words.append(d.record)
+        for condition in d.metric.filters:
+            field = meta.field_by_label(condition.field)
+            is_link = field == parent[1]
+            single = len(condition.values) == 1 and condition.op in ("", "=", "contains")
+            value = condition.values[0] if single else ""
+            if field is not None and not is_link:
+                # A document number under some other field's name ("Invoice" for the
+                # invoice date field) still names the owner.
+                hit = owner_named(value) if single and re.search(r"[0-9]", value) \
+                    and meta.fields[field].get("type") not in ("integer", "float", "monetary") else None
+                if hit is not None:
+                    owner = owner or hit
+                    continue
+                line_filters.append(condition)
+                continue
+            if single and d.record and _norm(value) == _norm(d.record):
+                continue
+            if single and is_link:
+                direct = self._find_record(str(meta.fields[field]["relation"]), value)
+                if proper(direct):
+                    line_filters.append(condition)
+                    continue
+            hit = owner_named(value) if single else None
+            if hit is not None:
+                owner = owner or hit
+                continue
+            if field is None and parent_meta is not None \
+                    and parent_meta.field_by_label(condition.field) is not None:
+                parent_filters.append(condition)
+            elif single:
+                words.append(value)
+            elif is_link:
+                line_filters.append(condition)
+        if owner is None and not words and not parent_filters and self._found_one is not None \
+                and self._found_one[0] in owners and not d.record:
+            # "The order still to invoice -- its lines": the one record a list in this
+            # turn found is the owner.
+            owner = self._found_one
+        if owner is None and not words and not parent_filters:
+            if len(line_filters) == len(d.metric.filters):
+                return d
+            return replace(d, metric=replace(d.metric, filters=tuple(line_filters)))
+        if owner is None:
+            page = self.index().page(d.page.key) if d.page.key else None
+            on_parent_page = page is not None and page.entity == parent[0]
+            mapped, search = [], []
+            for value in words:
+                parsed, leftover = self._owner_conditions(parent_meta, value) if parent_meta \
+                    else ([], value)
+                mapped += parsed
+                if leftover:
+                    search.append(leftover)
+            page_filters = tuple(d.page.filters_on) + tuple(d.metric.page_filters) \
+                if on_parent_page else ()
+            probe = Deliverable(
+                kind="list", entity=parent[0], sort=d.sort, descending=d.descending,
+                page=PageSpec(key=page.key if on_parent_page else "", filters_on=page_filters,
+                              search=" ".join(search)),
+                metric=Metric(op="count", filters=tuple(parent_filters) + tuple(mapped)))
+            located = self._locate(probe, self.index())
+            movable = [f for f in line_filters if parent_meta is not None
+                       and parent_meta.field_by_label(f.field) is not None
+                       and meta.fields[meta.field_by_label(f.field)].get("type")
+                       in ("monetary", "float", "integer", "date", "datetime")]
+            if isinstance(located, Resolved) and located.candidates and movable:
+                # Several owners: an amount or date the lines also have ("Total") was
+                # the owner's, said once for both.
+                retry = replace(probe, metric=replace(probe.metric,
+                                                      filters=probe.metric.filters + tuple(movable)))
+                again = self._locate(retry, self.index())
+                if not isinstance(again, Resolved):
+                    located = again
+                    line_filters = [f for f in line_filters if f not in movable]
+            if isinstance(located, Resolved):
+                return located
+            owner = located
+        line_model = d.entity
+        if owner[0] != parent[0]:
+            line_model = next((str(i["relation"]) for i in self._models[owner[0]].fields.values()
+                               if i.get("type") == "one2many" and i.get("relation") in self._models
+                               and self._embedded_lines(owner[0], str(i["relation"])) is not None),
+                              d.entity)
+        link = self._parent_link(line_model)
+        if link is None:
+            return d
+        line_meta = self._models[line_model]
+        link_label = str(line_meta.fields[link[1]].get("string") or link[1])
+        embedded = self._embedded_lines(link[0], line_model)
+        if embedded is not None and embedded[1]:
+            self._line_scope = list(embedded[1])
+        kind = "aggregate" if d.kind == "aggregate" or d.metric.op == "sum" else "list"
+        return replace(d, kind=kind, entity=line_model,
+                       record="", page=PageSpec(search=d.page.search),
+                       metric=replace(d.metric, page_filters=(),
+                                      filters=(Filter(field=link_label, values=(owner[2],)),)
+                                      + tuple(line_filters)))
+
+    def _amount_field(self, meta: _ModelMeta, number: str, domain: list | None = None) -> str | None:
+        """The money field a bare number refers to: among the money fields the pages
+        show, a total before the rest, the first that some record actually carries."""
+        # The record's total, whether or not the pages show it as a plain field, then
+        # the money fields the pages do show.
+        totals = [f for f, i in meta.fields.items()
+                  if i.get("type") == "monetary" and _norm(str(i.get("string") or "")) == "total"]
+        shown = totals + [f for f in dict.fromkeys(meta.list_fields + meta.form_fields)
+                          if meta.fields.get(f, {}).get("type") == "monetary" and f not in totals]
+        shown.sort(key=lambda f: (_norm(str(meta.fields[f].get("string") or f)) != "total",
+                                  "total" not in _tokens(str(meta.fields[f].get("string") or f))))
+        try:
+            amount = float(number.replace(",", ""))
+        except ValueError:
+            return None
+        for field in shown[:4]:
+            if self._call(meta.model, "search_count", [(domain or []) + [[field, "=", amount]]], {}):
+                return field
+        return None
+
+    def _owner_conditions(self, meta: _ModelMeta, value: str) -> tuple[list[Filter], str]:
+        """What a descriptive value says about a record, as conditions plus leftover words.
+
+        "1541.50 USD last month" is the record's total and its main date; a choice label
+        ("Quotation Sent") is the field offering it; whatever remains is search words.
+        """
+        shown = [f for f in dict.fromkeys(meta.list_fields + meta.form_fields) if f in meta.fields]
+        dates = [f for f in shown if meta.fields[f].get("type") in ("date", "datetime")]
+        amounts = [f for f in shown if meta.fields[f].get("type") == "monetary"]
+        filters: list[Filter] = []
+        rest = " " + value.strip() + " "
+        today = self._today()
+        # Periods: the longest named period first, then a day, month, year or range.
+        for phrase in sorted(_PERIODS, key=len, reverse=True):
+            if dates and re.search(rf"(?<![0-9a-z]){re.escape(phrase)}(?![0-9a-z])", rest, re.I):
+                filters.append(Filter(field=str(meta.fields[dates[0]].get("string") or dates[0]),
+                                      values=(phrase,)))
+                rest = re.sub(rf"(?<![0-9a-z]){re.escape(phrase)}(?![0-9a-z])", " ", rest, flags=re.I)
+                break
+        for pattern in (_RANGE, _DAY, _MONTH, _LAST_DAYS):
+            match = re.search(pattern.pattern.strip("^$"), rest, re.I) if dates else None
+            if match and _period(match.group(0).strip(), today) is not None:
+                filters.append(Filter(field=str(meta.fields[dates[0]].get("string") or dates[0]),
+                                      values=(match.group(0).strip(),)))
+                rest = rest.replace(match.group(0), " ")
+                break
+        money = re.search(r"(?<![0-9.])([0-9][0-9,]*\.[0-9]+|[0-9]{2,}[0-9,]*)\s*(?:[A-Z]{3}|\$|€|美元|元|块)?(?![0-9])", rest)
+        amount_field = self._amount_field(meta, money.group(1)) if money and amounts else None
+        if amount_field is not None:
+            filters.append(Filter(field=str(meta.fields[amount_field].get("string") or amount_field),
+                                  values=(money.group(1),)))
+            rest = rest.replace(money.group(0), " ")
+        words = " ".join(rest.split())
+        wanted = _norm(words)
+        if wanted:
+            for f in shown:
+                info = meta.fields[f]
+                if info.get("type") == "selection" and any(_norm(str(lab)) == wanted
+                                                           for _k, lab in info.get("selection") or ()):
+                    filters.append(Filter(field=str(info.get("string") or f), values=(words,)))
+                    words = ""
+                    break
+        return filters, words
 
     def _lines_of_named_record(self, d: Deliverable, index: ApplicationIndex):
         """A line entity declared with a record reference that names the record owning
@@ -1233,6 +1679,13 @@ class OdooGoalPort:
             # A computed, unstored field: the application would silently ignore the
             # condition and count everything, which is worse than saying no.
             return None, f"{info.get('string') or field} cannot be used as a condition"
+        emptiness = _norm(values[0]) if len(values) == 1 else ""
+        if emptiness in _EMPTY or emptiness in _NOT_EMPTY:
+            # "Lines with a product", "orders without a salesperson".
+            # "not empty", or "not equal to empty": the field is set; "empty": it is not.
+            wanted_set = emptiness in _NOT_EMPTY or op == "!="
+            return ([[field, "!=" if wanted_set else "=", False]],
+                    f"{info.get('string') or field} {'set' if wanted_set else 'not set'}")
         if kind in ("date", "datetime"):
             return self._date_condition(field, info, values, op, today or self._today())
         if op == "!=" and kind in ("many2one", "selection"):
@@ -1246,8 +1699,13 @@ class OdooGoalPort:
             ids = []
             for value in values:
                 found = self._find_record(str(info["relation"]), value)
-                if found is None or isinstance(found, Ambiguous):
-                    return None, f"no {info.get('string')} matches {value!r}"
+                if found is None or isinstance(found, Ambiguous) or op == "contains":
+                    # Not one record's name: the records whose names contain the words
+                    # ("Office" among products), which the search box would also find.
+                    clause = ["|"] * (len(values) - 1) + [[field, "ilike", v] for v in values]
+                    if found is None and not self._call(meta.model, "search_count", [clause], {}):
+                        return None, f"no {info.get('string')} matches {value!r}"
+                    return clause, f"{info.get('string') or field} ~ {' / '.join(values)}"
                 ids.append(found[1])
             operator = "child_of" if info.get("relation") == "res.partner" else "in"
             return [[field, operator, ids]], text
@@ -1268,6 +1726,10 @@ class OdooGoalPort:
             truthy = _norm(values[0]) in ("true", "yes", "1", "是")
             return [[field, "=", truthy]], text
         if kind in ("integer", "float", "monetary"):
+            lead = re.match(r"^\s*(>=|<=|!=|>|<|=)\s*(.+)$", values[0]) if len(values) == 1 else None
+            if lead and not op:
+                # ">20000" written as the value.
+                op, values = lead.group(1), (lead.group(2),)
             spans = [re.split(r"\s*(?:\.\.|~|到|至)\s*", v) for v in values]
             if len(values) == 1 and len(spans[0]) == 2:
                 values, op = (spans[0][0], spans[0][1]), "between"
@@ -1320,6 +1782,14 @@ class OdooGoalPort:
         return clauses, text
 
 
+def _tab_of(form_arch: str, field: str) -> str:
+    """The notebook page whose body holds the field, or empty when it is outside any."""
+    for match in re.finditer(r'<page\b[^>]*?\sstring="([^"]+)"[^>]*>(.*?)</page>', form_arch or "", re.S):
+        if re.search(rf'<field\b[^>]*\bname="{re.escape(field)}"', match.group(2)):
+            return html.unescape(match.group(1))
+    return ""
+
+
 def _parse_filters(arch: str) -> list[_SearchFilter]:
     filters = []
     for tag in re.findall(r"<filter\b[^>]*>", arch or ""):
@@ -1331,7 +1801,8 @@ def _parse_filters(arch: str) -> list[_SearchFilter]:
         domain = _literal_domain(html.unescape(attrs.get("domain", ""))) \
             if not group_by else []
         filters.append(_SearchFilter(attrs.get("name", ""), html.unescape(attrs["string"]),
-                                     domain, group_by, html.unescape(attrs.get("domain", ""))))
+                                     domain, group_by, html.unescape(attrs.get("domain", "")),
+                                     attrs.get("date", "")))
     return filters
 
 
