@@ -149,6 +149,21 @@ case("f-via-customer-email", "sale.order", "fact", "via",
 case("f-via-bill-vendor-city", "account.move", "fact", "via",
      fact("account.move", "BILL/2026/09/0001", ["City"], via="Partner"),
      facts={"City": r"^Fremont$"})
+case("f-via-lines", "sale.order", "list", "via-lines",
+     fact("sale.order", "S00004", ["Product", "Quantity"], via="Order Lines"),
+     records_len=4, records_any=[r"Office Lamp.*Quantity: 10\.00"])
+case("a-filter-by-name", "account.move", "aggregate", "page-filter",
+     agg("account.move", "Invoicing / Customers / Invoices", filters=[F("filter", ["To pay"])]),
+     count=4)
+case("l-record-via-lines", "sale.order.line", "list", "via-lines",
+     {"deliverables": [{"kind": "list", "entity": "sale.order.line", "record": "S00004",
+                        "via": "Order Reference", "fields": ["Product", "Quantity"]}]},
+     records_len=4, records_any=[r"Office Lamp.*Quantity: 10\.00"])
+case("l-search-as-link-value", "res.partner", "list", "text",
+     lst("res.partner", page="Invoicing / Vendors / Vendors", search="United States"),
+     records_len=1, first_record=r"^Azure Interior")
+case("p-menu-page-wins", "sale.order", "page", "none", page(key="Quotations"),
+     page={"url": r"^/odoo/sales$"})
 case("f-rehome-order-customer", "res.partner", "fact", "rehome",
      fact("res.partner", "S00006", ["Email"]), facts={"Email": r"^lumber-inv92@"})
 

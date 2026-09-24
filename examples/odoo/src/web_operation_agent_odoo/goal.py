@@ -18,7 +18,7 @@ from web_operation_agent.business.runtime import BusinessToolError
 from web_operation_agent.goal.index import (ApplicationIndex, IndexEntity, IndexField,
                                              IndexPage)
 from web_operation_agent.goal.ports import Aggregate, Fact, PagePlan, Resolution, Resolved
-from web_operation_agent.goal.spec import Deliverable, GoalSpec, Metric
+from web_operation_agent.goal.spec import Deliverable, Filter, GoalSpec, Metric
 from web_operation_agent.state.identity import OperationContext
 
 #: Modules whose actions are the framework's own, not the business application's.
@@ -307,10 +307,15 @@ class OdooGoalPort:
                 continue
             actions.append(action)
         # Menu-reachable pages first, then the ones the application gave a path of their
-        # own (its primary pages), then the rest; each group in action order.
+        # own (its primary pages), then the rest; each group in action order. A page with
+        # no menu that repeats a menu page's name and entity is the same page reached
+        # another way, and only confuses the choice.
         actions.sort(key=lambda a: (not a.get("breadcrumbs"),
                                     str(a.get("route") or "").startswith("action-"),
                                     a.get("action_id", 0)))
+        menu_names = {(_norm(a["name"]), a["model"]) for a in actions if a.get("breadcrumbs")}
+        actions = [a for a in actions if a.get("breadcrumbs")
+                   or (_norm(a["name"]), a["model"]) not in menu_names]
         self._actions = actions
         pages, entity_models = [], []
         for action in actions:
@@ -502,6 +507,14 @@ class OdooGoalPort:
     def _resolve_one(self, d: Deliverable, index: ApplicationIndex) -> Resolved:
         if d.kind == "page" and not d.record and d.page.key:
             return self._list_page(d, index)
+        if d.kind == "list" and d.record and d.via:
+            # "The lines of S00004", declared on the line entity with the parent named as
+            # the record and the link field as via: a list with that link as condition.
+            return self._aggregate(Deliverable(
+                kind="list", entity=d.entity, fields=d.fields, sort=d.sort,
+                descending=d.descending, limit=d.limit, page=d.page,
+                metric=Metric(op="count", filters=(Filter(field=d.via, values=(d.record,)),)
+                              + (d.metric.filters if d.metric else ()))), index)
         if d.kind in ("aggregate", "list"):
             return self._aggregate(d, index)
         entity = index.entity(d.entity) if d.entity else None
@@ -561,6 +574,21 @@ class OdooGoalPort:
             link = meta.link_by_label(via)
             info = meta.fields.get(link or "", {})
             if link is None:
+                lines = meta.field_by_label(via)
+                line_info = meta.fields.get(lines or "", {})
+                if line_info.get("type") == "one2many" and line_info.get("relation") in self._models:
+                    # "The lines of S00004": a list of the line entity linked to the record.
+                    line_meta = self._models[line_info["relation"]]
+                    parent = next((f for f, i in line_meta.fields.items()
+                                   if i.get("type") == "many2one" and i.get("relation") == model),
+                                  None)
+                    if parent is not None:
+                        parent_label = str(line_meta.fields[parent].get("string") or parent)
+                        return self._aggregate(Deliverable(
+                            kind="list", entity=line_info["relation"], fields=d.fields,
+                            sort=d.sort, descending=d.descending, limit=d.limit,
+                            metric=Metric(op="count", filters=(Filter(field=parent_label,
+                                                                       values=(name,)),))), index)
                 return Resolved(kind=d.kind, problem=f"{via!r} is not a link field")
             rows = self._call(model, "read", [[rid]], {"fields": [link]})
             target = rows[0].get(link) if rows else None
@@ -830,6 +858,17 @@ class OdooGoalPort:
             domain += resolved
             described.append(item.label)
         for condition in metric.filters:
+            exact_field = any(_norm(i.get("string", "")) == _norm(condition.field)
+                              for i in meta.fields.values())
+            if not exact_field:
+                # Not a field by its exact label: perhaps the page's own filter, named by
+                # its label or under a generic word ("filter": "To pay").
+                named = [f for f in page_filters
+                         if any(_norm(f.label) == _norm(v) for v in condition.values)]
+                if named and named[0].domain_at(today) is not None:
+                    domain += named[0].domain_at(today)
+                    described.append(named[0].label)
+                    continue
             clause, text = self._condition(meta, condition.field, condition.values,
                                            op=condition.op, today=today)
             if clause is None:
@@ -837,8 +876,30 @@ class OdooGoalPort:
             domain += clause
             described.append(text)
         if d.kind == "list" and d.page.search:
-            domain += [["display_name", "ilike", d.page.search]]
-            described.append(f"~{d.page.search}")
+            clause = [["display_name", "ilike", d.page.search]]
+            if not self._call(model, "search_count", [domain + clause], {}):
+                # No name contains the words; they may name a linked record instead
+                # ("United States" on customers is their country). One link field with
+                # exactly one such record decides; more than one is left alone.
+                hits = []
+                for field, info in meta.fields.items():
+                    if info.get("type") != "many2one" or field not in meta.list_fields + meta.form_fields:
+                        continue
+                    found = self._find_record(str(info["relation"]), d.page.search)
+                    # Only a record actually named by the words counts ("United States"
+                    # is a country; it is not the currency whose long name contains it).
+                    if (isinstance(found, tuple) and not isinstance(found, Ambiguous)
+                            and _norm(_strip_code(found[2])) == _norm(d.page.search)):
+                        hits.append((field, found))
+                if len(hits) == 1:
+                    field, (_m, rid, _n) = hits[0]
+                    clause = [[field, "child_of" if meta.fields[field].get("relation") == "res.partner" else "in", [rid]]]
+                    described.append(f"{meta.fields[field].get('string') or field} = {d.page.search}")
+                else:
+                    described.append(f"~{d.page.search}")
+            else:
+                described.append(f"~{d.page.search}")
+            domain += clause
         subject = " · ".join(described)
         if d.kind == "list":
             columns = [f for f in (meta.field_by_label(label) for label in d.fields) if f]

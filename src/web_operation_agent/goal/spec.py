@@ -244,7 +244,8 @@ DECLARE_GOAL_TOOL = {
                     "items": {
                         "type": "object",
                         "properties": {
-                            "kind": {"type": "string", "enum": list(KINDS)},
+                            "kind": {"type": "string", "enum": list(KINDS),
+                                     "description": "a question (what is, how many, how much, which ones, list) is answered: fact, aggregate or list. page only when asked to open, show or find where something is. handoff when asked to change something."},
                             "entity": {"type": "string",
                                        "description": "entity key from the index (a record's lines are their own entity)"},
                             "record": {"type": "string",
@@ -252,7 +253,7 @@ DECLARE_GOAL_TOOL = {
                             "via": {"type": "string",
                                     "description": "link field label to follow from that record, when a related record is meant"},
                             "fields": {"type": "array", "items": {"type": "string"},
-                                       "description": "field labels asked about (fact)"},
+                                       "description": "field labels asked about (fact), or columns to show (list). The lines of an order or invoice are a list of the line entity with a condition on its link field to the record, not a page section."},
                             "metric": {
                                 "type": "object",
                                 "properties": {
@@ -278,7 +279,7 @@ DECLARE_GOAL_TOOL = {
                                 "type": "object",
                                 "properties": {
                                     "key": {"type": "string",
-                                            "description": "page key from the index; empty when the record's own page is meant"},
+                                            "description": "page key from the index (prefer a page with a menu breadcrumb); empty when the record's own page is meant"},
                                     "view": {"type": "string"},
                                     "filters_on": {"type": "array", "items": {"type": "string"}},
                                     "filters_off": {"type": "array", "items": {"type": "string"}},
