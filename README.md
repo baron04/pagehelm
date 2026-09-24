@@ -122,10 +122,11 @@ agent.
   the embedded Runtime marks rendering pending and the server does not report arrival; a
   later observation must show the replacement view. An application adapter may also report
   a blocking page error; that state cannot settle a page target. When the target matches a
-  ready observation,
-  observation, the server reports the reached state. An explicit request for a conventional
-  List, Kanban, Calendar, Pivot, or Graph view also requires that view to be selected, even
-  if the Agent declared only a path; a fresh observation may be needed after the switch.
+  ready observation, the server reports the reached state. An explicit request for a conventional
+  List, Kanban, Calendar, Pivot, or Graph view also requires that view to be observed,
+  even if the Agent declared only a path. An application may report its actually rendered
+  view without a visible view-switch control; a URL or candidate alone is not evidence.
+  A fresh observation may be needed after the switch.
   For a pure navigation request it accepts
   only `finish` and `set_target` (other calls are refused without dispatch; the tool list stays
   the same for prefix caching). A request that also needs a fact may continue reading or

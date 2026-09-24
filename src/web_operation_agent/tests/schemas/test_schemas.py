@@ -65,6 +65,16 @@ def _reasons_emitted_by(*classes) -> set[str]:
 
 
 class WireTypes(unittest.TestCase):
+    def test_active_view_is_optional_bounded_and_round_trips(self):
+        base = dict(schema_version=1, epoch=1, url="https://app.test/orders",
+                    title="Orders", landmarks=[], elements=[])
+        self.assertNotIn("active_view", S.PageObservation(**base).to_json())
+        page = S.PageObservation(**base, active_view="List")
+        self.assertEqual(S.PageObservation.from_json(page.to_json()).active_view, "List")
+        for bad in (None, 4, "x" * 121):
+            with self.subTest(bad=bad), self.assertRaises(S.SchemaError):
+                S.PageObservation(**base, active_view=bad)
+
     def test_selected_controls_are_bounded_optional_presentation_facts(self):
         page = S.PageObservation(schema_version=1, epoch=1,
                                  url="https://app.test/orders", title="Orders",

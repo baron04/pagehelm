@@ -59,6 +59,8 @@ export interface PageObservation {
   render_state?: 'pending' | 'ready' | 'blocked'
   /** Bounded selected names from visible exclusive groups, even when controls are omitted. */
   selected_controls?: string[]
+  /** Application-reported view actually rendered; no switch control is required. */
+  active_view?: string
   /** Present only when the application inspected its active filter/group state. */
   page_facets?: Array<{kind: 'filter' | 'group'; name: string}>
   /** Choices supplied by this application's current page, not proof they are active. */

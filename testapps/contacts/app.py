@@ -172,6 +172,7 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
       render();
     }}
     function render() {{
+      app.removeAttribute('data-active-view');
       if ({str(adversarial_form_fixture).lower()} &&
           location.pathname === '/contacts/adversarial') {{
         app.innerHTML = `<a class="back" href="/contacts" data-route>← All contacts</a>
@@ -261,6 +262,7 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
         document.title = `${{contact.name}} · Minimal Contacts`;
         return;
       }}
+      app.dataset.activeView = 'List';
       app.innerHTML = `<div class="eyebrow">Developer demo</div><h1>Contacts</h1>
         <p class="lede">A small first-party app whose current records come from a typed API.
         Ask the embedded assistant to list a contact or open a record.</p>${{

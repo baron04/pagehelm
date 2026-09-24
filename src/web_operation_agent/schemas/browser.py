@@ -139,6 +139,8 @@ class PageObservation:
     # Bounded, viewport-visible selected controls from exclusive groups. Unlike elements,
     # these facts need no action ref and survive PageController omitting a large view's toolbar.
     selected_controls: list[str] = field(default_factory=list)
+    # Application-reported view actually rendered, independent of a view-switch button.
+    active_view: str = ""
     # None means the application has not supplied typed facet state; [] means it did
     # inspect the page and found no active filters or groups.
     page_facets: list[dict[str, str]] | None = None
@@ -182,6 +184,9 @@ class PageObservation:
         _require(all(isinstance(name, str) and 0 < len(name) <= MAX_SELECTED_CONTROL_CHARS
                      for name in self.selected_controls),
                  "selected_controls entries must be short non-empty strings")
+        _require(isinstance(self.active_view, str)
+                 and len(self.active_view) <= MAX_SELECTED_CONTROL_CHARS,
+                 "active_view must be a bounded string")
         if self.page_facets is not None:
             _require(isinstance(self.page_facets, list), "page_facets must be an array")
             _require(len(self.page_facets) <= MAX_PAGE_FACETS,
@@ -235,6 +240,8 @@ class PageObservation:
             out["render_state"] = self.render_state
         if self.selected_controls:
             out["selected_controls"] = copy.deepcopy(self.selected_controls)
+        if self.active_view:
+            out["active_view"] = self.active_view
         if self.page_facets is not None:
             out["page_facets"] = copy.deepcopy(self.page_facets)
         if self.facet_candidates is not None:
@@ -247,6 +254,7 @@ class PageObservation:
     def from_json(d: dict) -> "PageObservation":
         allowed = {"schema_version", "epoch", "url", "title", "landmarks", "elements",
                    "content", "messages", "truncated", "render_state", "selected_controls",
+                   "active_view",
                    "page_facets", "facet_candidates", "record_route"}
         required = {"schema_version", "epoch", "url", "title", "landmarks", "elements"}
         d = _strict_object(d, "PageObservation", allowed=allowed, required=required)
@@ -263,6 +271,7 @@ class PageObservation:
                                truncated=d.get("truncated", False),
                                render_state=d.get("render_state", "unknown"),
                                selected_controls=copy.deepcopy(d.get("selected_controls", [])),
+                               active_view=d.get("active_view", ""),
                                page_facets=copy.deepcopy(d.get("page_facets")),
                                facet_candidates=copy.deepcopy(d.get("facet_candidates")),
                                record_route=d.get("record_route", ""))

@@ -28,6 +28,17 @@ describe('the product PageController extraction policy', () => {
 })
 
 describe('Page.describe bounds an observation before it crosses the browser boundary', () => {
+  it('accepts a bounded application-reported rendered view without a switch control', () => {
+    const read = (value: unknown) => new Page(controller(), () => null, createRedactor(),
+      undefined, undefined, undefined, undefined, undefined, () => value).describe({
+      url: 'https://app.test/items', title: 'Items', content: '',
+    }, 1).observation
+    expect(read('List').active_view).toBe('List')
+    expect(read('List').selected_controls).toEqual([])
+    for (const invalid of [null, 1, 'x'.repeat(121), 'password']) {
+      expect(read(invalid).active_view).toBeUndefined()
+    }
+  })
   it('accepts only a bounded application record route as an observation', () => {
     const make = (route: unknown) => new Page(controller(), () => null,
       createRedactor(), undefined, undefined, undefined, () => route).describe({

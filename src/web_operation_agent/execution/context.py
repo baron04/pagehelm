@@ -354,6 +354,8 @@ def _render_observation(obs: PageObservation, max_elements: int = RENDER_ELEMENT
                      "report that the page could not be opened.")
     if obs.selected_controls:
         lines.append("selected controls: " + " | ".join(obs.selected_controls))
+    if obs.active_view:
+        lines.append("active view: " + obs.active_view)
     if obs.page_facets is not None:
         lines.append("active page facets: " + (" | ".join(
             f'{item["kind"]}: {item["name"]}' for item in obs.page_facets) or "none"))

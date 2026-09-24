@@ -201,6 +201,16 @@ class TargetParsing(unittest.TestCase):
         self.assertEqual(unmet_conditions(TargetState(PARTNER), page,
                                           required_selected=("Graph",)),
                          ('selected control "Graph"',))
+        page.selected_controls = []
+        page.active_view = "List"
+        self.assertEqual(unmet_conditions(TargetState(PARTNER), page,
+                                          required_selected=("List",)), ())
+        self.assertEqual(unmet_conditions(TargetState(PARTNER, ("List",)), page), ())
+        self.assertEqual(unmet_conditions(TargetState(PARTNER, ("Details",)), page),
+                         ('selected control "Details"',))
+        self.assertEqual(unmet_conditions(TargetState(PARTNER), page,
+                                          required_selected=("Kanban",)),
+                         ('selected control "Kanban"',))
 
     def test_a_target_is_exact_or_refused(self):
         target = parse_target({"path": "/contacts/workflows/partner/",

@@ -175,6 +175,21 @@ class MinimalDemoBrowserTests(unittest.TestCase):
         self.assertEqual(summary["panel"]["final_page_probe"], {"form_visible": True})
         self.assertEqual(summary["application_state"]["records_created"], 0)
 
+    def test_list_view_marker_is_rendered_by_the_second_application(self):
+        script = (("finish", {"done": False, "why": "probe only"}),)
+        with tempfile.TemporaryDirectory() as directory, patch(
+                "testapps.contacts.demo._chat",
+                return_value=(ScriptedDemoChat(script), None)):
+            summary = run_demo(DemoConfig(
+                tasks=("Inspect contacts",), headless=True,
+                start_path="/contacts", output_dir=Path(directory),
+                keep_open_seconds=0, turn_timeout_s=30,
+                final_page_probe=lambda page: {"list_rendered": page.locator(
+                    "main#app").get_attribute("data-active-view") == "List"},
+            ))
+        self.assertEqual(summary["panel"]["final_page_probe"],
+                         {"list_rendered": True})
+
     def test_evaluation_probe_rejects_raw_page_values(self):
         script = (("finish", {"done": False, "why": "probe only"}),)
         with tempfile.TemporaryDirectory() as directory, patch(

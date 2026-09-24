@@ -39,6 +39,12 @@ export function getElementByIndex(selectorMap, index) {
   return element
 }
 
+// The synthetic REST app reports a rendered view via its own main-element marker.
+// This deliberately shares no Odoo selector or route inference with the product core.
+export function readActiveView() {
+  return document.querySelector('main#app')?.getAttribute('data-active-view') || undefined
+}
+
 export class PageController {
   constructor(_options = {}) {
     this.selectorMap = new Map()

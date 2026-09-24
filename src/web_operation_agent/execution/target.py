@@ -230,6 +230,12 @@ def unmet_conditions(target: TargetState, obs: PageObservation, *,
         selected_names = ({_normalise_name(element.name or "")
                            for element in obs.elements if _is_selected(element)}
                           | {_normalise_name(name) for name in obs.selected_controls})
+        # A view can be rendered without a switcher (for example a list-only action).
+        # Only conventional view names may be satisfied by this separate fact;
+        # application-reported view state must not satisfy an arbitrary tab target.
+        view_names = {_normalise_name(name) for name, _ in _VIEW_REQUESTS}
+        if obs.active_view and _normalise_name(obs.active_view) in view_names:
+            selected_names.add(_normalise_name(obs.active_view))
         for name in dict.fromkeys((*target.selected, *required_selected)):
             if _normalise_name(name) not in selected_names:
                 unmet.append(f"selected control \"{name}\"")
