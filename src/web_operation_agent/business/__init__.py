@@ -14,6 +14,7 @@ from .forms import (ApplicationFormDescriptor, ApplicationFormField, Application
                     DESCRIBE_FORM_TOOL, FORM_TOOL_SCHEMAS, FORM_TOOLS, FormChoice,
                     NoApplicationForms, PREPARE_FORM_SCHEMA, PREPARE_FORM_TOOL)
 from .page_entries import (FIND_PAGE_ENTRIES_SCHEMA, FIND_PAGE_ENTRIES_TOOL,
-                           PageEntry, PageEntryCatalog, PageEntryPort, PageEntryTools)
+                           PageEntry, PageEntryCatalog, PageEntryPort, PageEntryTools,
+                           PagePart)
 
 __all__ = [name for name in globals() if not name.startswith("_")]

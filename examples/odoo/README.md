@@ -154,7 +154,9 @@ also run over the synthetic Contacts REST adapter:
 5. `find_page_entries` ranks the actor's window actions, including entries without a menu.
    Only a reviewed destination independent of `active_id`/`active_ids`/`active_model` gets
    a route; all other candidates remain informational. A discovered action does not grant
-   navigation or bypass the normal page policy.
+   navigation or bypass the normal page policy. With `detail_query`, it also ranks form
+   fields and notebook tabs from the delegated actor's default form view and `fields_get`.
+   These are location hints only; an action-specific view and live visibility can differ.
 
 The action is a discovery hint, not a query scope: its dynamic domain/context is never
 evaluated by this path. A generic query therefore covers the actor-visible model rows named in

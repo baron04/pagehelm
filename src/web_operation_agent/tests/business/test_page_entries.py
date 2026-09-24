@@ -4,7 +4,7 @@ from __future__ import annotations
 import unittest
 
 from web_operation_agent.business.page_entries import (
-    FIND_PAGE_ENTRIES_SCHEMA, PageEntry, PageEntryCatalog, PageEntryTools)
+    FIND_PAGE_ENTRIES_SCHEMA, PageEntry, PageEntryCatalog, PageEntryTools, PagePart)
 from web_operation_agent.business.runtime import (
     BusinessToolContractError, BusinessToolRequestError)
 
@@ -30,6 +30,11 @@ class _Port:
             scope="pages visible to this actor",
         )
 
+    def parts(self, entry, *, context=None):
+        return (PagePart(reference="notes", label="Internal Notes", kind="tab"),
+                PagePart(reference="terms", label="Payment Terms", kind="field"),
+                PagePart(reference="payment", label="Online payment", kind="field"))
+
 
 class PageEntryTests(unittest.TestCase):
     def test_only_qualified_entry_returns_navigation_authority(self):
@@ -47,7 +52,7 @@ class PageEntryTests(unittest.TestCase):
 
     def test_schema_cannot_supply_native_route_or_method(self):
         props = FIND_PAGE_ENTRIES_SCHEMA["function"]["parameters"]["properties"]
-        self.assertEqual(set(props), {"query", "limit"})
+        self.assertEqual(set(props), {"query", "detail_query", "limit"})
         with self.assertRaises(BusinessToolRequestError):
             PageEntryTools(_Port(), application_id="fixture").execute({
                 "query": "inventory", "route": "/admin"})
@@ -56,6 +61,24 @@ class PageEntryTests(unittest.TestCase):
         result = PageEntryTools(_Port(), application_id="fixture").execute({
             "query": "Units of Measure Categories"})
         self.assertEqual(result.content["candidates"], [])
+
+    def test_detail_query_returns_bounded_hints_not_selectors(self):
+        result = PageEntryTools(_Port(), application_id="fixture").execute({
+            "query": "inventory", "detail_query": "Internal Notes"})
+        candidate = result.content["candidates"][0]
+        self.assertTrue(candidate["part_metadata_checked"])
+        self.assertEqual([(part["kind"], part["label"])
+                          for part in candidate["part_matches"]],
+                         [("tab", "Internal Notes")])
+        self.assertFalse(result.content["candidates"][1]["part_metadata_checked"])
+        self.assertTrue(result.content["part_matches_are_hints"])
+        self.assertEqual(result.allowed_routes, ("/inventory",))
+        self.assertNotIn("notes", result.render())
+        terms = PageEntryTools(_Port(), application_id="fixture").execute({
+            "query": "inventory", "detail_query": "Payment Terms"})
+        self.assertEqual([part["label"] for part in
+                          terms.content["candidates"][0]["part_matches"]],
+                         ["Payment Terms"])
 
     def test_equal_names_prioritize_an_openable_entry(self):
         class DuplicatePort:
@@ -69,6 +92,9 @@ class PageEntryTests(unittest.TestCase):
                         PageEntry(reference="b", label="Product Variants",
                                   search_text="products", route="/variants"),
                     ), complete=True, scope="actor pages")
+
+            def parts(self, entry, *, context=None):
+                return ()
 
         result = PageEntryTools(DuplicatePort(), application_id="fixture").execute({
             "query": "Product Variants"})
@@ -85,6 +111,9 @@ class PageEntryTests(unittest.TestCase):
         class MalformedPort:
             def catalog(self, *, context=None):
                 return {"entries": []}
+
+            def parts(self, entry, *, context=None):
+                return ()
 
         with self.assertRaises(BusinessToolContractError):
             PageEntryTools(MalformedPort(), application_id="fixture").execute({

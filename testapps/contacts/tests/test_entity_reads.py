@@ -80,6 +80,10 @@ class ContactsEntityReadContractTests(unittest.TestCase):
         self.assertEqual(result.allowed_routes, ("/contacts",))
         self.assertEqual(adapter.ports.routes.validate_tool_route("/contacts"),
                          "/contacts")
+        detail = adapter.business_tools._executor._page_entries.execute({
+            "query": "Contacts", "detail_query": "Email"})
+        self.assertEqual(detail.content["candidates"][0]["part_matches"][0]["label"],
+                         "Email")
 
     def test_a_rest_backed_test_adapter_can_supply_the_same_exact_sum_contract(self):
         class RestMetricPort(_ContactsEntityReadPort):

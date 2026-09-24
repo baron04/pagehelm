@@ -93,7 +93,7 @@ from web_operation_agent.business.entities import (
 )
 from web_operation_agent.business.page_entries import (
     FIND_PAGE_ENTRIES_SCHEMA, FIND_PAGE_ENTRIES_TOOL,
-    PageEntry, PageEntryCatalog, PageEntryTools)
+    PageEntry, PageEntryCatalog, PageEntryTools, PagePart)
 from web_operation_agent.state.identity import (IdentityAssertion, PrincipalContext,
                                           PrincipalError, PRINCIPAL_CONTEXT_VERSION,
                                           bind_matching_identity)
@@ -528,10 +528,19 @@ class _ContactsPageEntryPort:
             entries=(PageEntry(
                 reference="contacts-list", label="Contacts",
                 search_text="address book people 联系人 通讯录",
+                subject_reference="contact",
                 breadcrumbs=("Contacts",), views=("list",), route="/contacts"),),
             complete=True,
             scope=self._executor._scope(context) + "; reviewed page entry",
         )
+
+    def parts(self, entry: PageEntry, *, context=None) -> tuple[PagePart, ...]:
+        if entry.reference != "contacts-list":
+            return ()
+        return (PagePart(reference="name", label="Name", kind="field",
+                         search_text="contact name 姓名"),
+                PagePart(reference="email", label="Email", kind="field",
+                         search_text="email address 邮箱"))
 
 
 class _ContactsFormPort:

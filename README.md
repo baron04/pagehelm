@@ -51,7 +51,12 @@ agent.
   standalone destination; an unreviewed or current-record-dependent action is information
   only. Ordinary page policy and fresh page-state verification still govern navigation.
   Odoo translates its window-action catalog and Contacts its REST application's page map
-  through the same core contract. This does not make every application page operable.
+  through the same core contract. An optional detail query also ranks form-field and tab
+  hints for at most the first two openable candidates from actor-visible adapter metadata,
+  without adding another Agent tool. Odoo uses the actor's default form view and field labels;
+  Contacts uses its page map. These are
+  not selectors or evidence that the requested part is present on the live, possibly
+  action-specific view. This does not make every application page operable.
 - An optional application-neutral current-form contract supports a no-Skill fallback for
   safe scalar form filling. `describe_form` intersects the latest viewport controls with
   actor-scoped adapter metadata and returns only short-lived opaque IDs; `prepare_form`
