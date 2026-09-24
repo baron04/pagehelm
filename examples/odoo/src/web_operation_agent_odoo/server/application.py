@@ -11,6 +11,7 @@ from web_operation_agent.business.entities import (DESCRIBE_ENTITY_TOOL,
                                                    DISCOVER_ENTITIES_TOOL,
                                                    QUERY_ENTITY_RECORDS_TOOL,
                                                    RESOLVE_RECORD_REFERENCE_TOOL)
+from web_operation_agent.business.page_entries import FIND_PAGE_ENTRIES_TOOL
 from web_operation_agent.business.errors import BusinessToolError
 from web_operation_agent.business.runtime import (BusinessSkill,
                                                   BusinessToolContractError,
@@ -65,6 +66,7 @@ TOOL_OPERATIONS = {
     "describe_entity": ("runtime_record", "read"),
     "query_entity_records": ("runtime_record", "read"),
     "resolve_record_reference": ("runtime_record", "read"),
+    "find_page_entries": ("runtime_page", "read"),
     "prepare_customer_form": ("customer", "read"),
     "prepare_customer_edit_form": ("customer", "read"),
     "create_customer": ("customer", "create"),
@@ -241,6 +243,7 @@ class OdooApplicationAdapter:
             DESCRIBE_ENTITY_TOOL: "generic_records:read",
             QUERY_ENTITY_RECORDS_TOOL: "generic_records:read",
             RESOLVE_RECORD_REFERENCE_TOOL: "generic_records:read",
+            FIND_PAGE_ENTRIES_TOOL: "generic_records:read",
         })
         required_scopes[PREPARE_CUSTOMER_FORM_TOOL] = "customers:read"
         if allow_mutations:
@@ -261,6 +264,7 @@ class OdooApplicationAdapter:
             (QUERY_ENTITY_RECORDS_TOOL, ("business.generic_record", "business.identifier")),
             (RESOLVE_RECORD_REFERENCE_TOOL,
              ("business.generic_record", "business.identifier", "application.route")),
+            (FIND_PAGE_ENTRIES_TOOL, ("application.metadata", "application.route")),
         ))
         if allow_mutations:
             declarations.append((

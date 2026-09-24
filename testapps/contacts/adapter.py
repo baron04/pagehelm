@@ -91,6 +91,9 @@ from web_operation_agent.business.entities import (
     ReferenceLookupTools,
     ReferenceMatch,
 )
+from web_operation_agent.business.page_entries import (
+    FIND_PAGE_ENTRIES_SCHEMA, FIND_PAGE_ENTRIES_TOOL,
+    PageEntry, PageEntryCatalog, PageEntryTools)
 from web_operation_agent.state.identity import (IdentityAssertion, PrincipalContext,
                                           PrincipalError, PRINCIPAL_CONTEXT_VERSION,
                                           bind_matching_identity)
@@ -109,6 +112,7 @@ SCOPES = {
     "list_contacts": "contacts:read",
     **{name: "contacts:read" for name in ENTITY_READ_TOOLS},
     RESOLVE_RECORD_REFERENCE_TOOL: "contacts:read",
+    FIND_PAGE_ENTRIES_TOOL: "contacts:read",
     CREATE_CONTACT: "contacts:write",
 }
 # The application already owns this permission.  Prefilling does not persist, but the form
@@ -176,17 +180,21 @@ class _ContactsToolExecutor:
         self._entity_reads = EntityReadTools(entity_port, application_id=APPLICATION_ID)
         self._reference_lookup = ReferenceLookupTools(
             entity_port, entity_port, application_id=APPLICATION_ID)
+        self._page_entries = PageEntryTools(
+            _ContactsPageEntryPort(self), application_id=APPLICATION_ID)
 
     def tool_schemas(self) -> tuple[dict, ...]:
         # A read-only composition does not merely refuse the write; it never offers it. A
         # tool in the surface that the run will always refuse just invites a wasted turn.
-        return (_READ_SCHEMA,) + ENTITY_READ_SCHEMAS + (RESOLVE_RECORD_REFERENCE_SCHEMA,) + (
+        return (_READ_SCHEMA,) + ENTITY_READ_SCHEMAS + (
+            RESOLVE_RECORD_REFERENCE_SCHEMA, FIND_PAGE_ENTRIES_SCHEMA) + (
             (_WRITE_SCHEMA,) if self.allow_mutations else ())
 
     def tool_effects(self) -> dict[str, str]:
         effects = {"list_contacts": "read"}
         effects.update({name: "read" for name in ENTITY_READ_TOOLS})
         effects[RESOLVE_RECORD_REFERENCE_TOOL] = "read"
+        effects[FIND_PAGE_ENTRIES_TOOL] = "read"
         if self.allow_mutations:
             effects[CREATE_CONTACT] = "write"
         return effects
@@ -204,6 +212,8 @@ class _ContactsToolExecutor:
             return self._entity_reads.execute(name, args, context=context)
         if name == RESOLVE_RECORD_REFERENCE_TOOL:
             return self._reference_lookup.execute(args, context=context)
+        if name == FIND_PAGE_ENTRIES_TOOL:
+            return self._page_entries.execute(args, context=context)
         if name != "list_contacts" or set(args) - {"name_contains"}:
             raise BusinessToolError("invalid contact query")
         query = args.get("name_contains", "")
@@ -503,6 +513,27 @@ class _ContactsEntityReadPort:
         )
 
 
+class _ContactsPageEntryPort:
+    """The synthetic app's ordinary contact list, without an ORM action table."""
+
+    def __init__(self, executor: _ContactsToolExecutor):
+        self._executor = executor
+
+    def catalog(self, *, context=None) -> PageEntryCatalog:
+        actor_binding = _ContactsEntityReadPort._actor_binding(context)
+        digest = hashlib.sha256(
+            ("contacts-page-entries-v1\0" + actor_binding).encode()).hexdigest()
+        return PageEntryCatalog(
+            binding_digest=digest,
+            entries=(PageEntry(
+                reference="contacts-list", label="Contacts",
+                search_text="address book people 联系人 通讯录",
+                breadcrumbs=("Contacts",), views=("list",), route="/contacts"),),
+            complete=True,
+            scope=self._executor._scope(context) + "; reviewed page entry",
+        )
+
+
 class _ContactsFormPort:
     """Translate the synthetic app's create page to the generic current-form contract.
 
@@ -690,6 +721,7 @@ class MinimalContactsAdapter:
              ("business.generic_record", "business.identifier")),
             (RESOLVE_RECORD_REFERENCE_TOOL,
              ("business.generic_record", "business.identifier", "application.route")),
+            (FIND_PAGE_ENTRIES_TOOL, ("application.metadata", "application.route")),
         ))
         if allow_mutations:
             declarations.append(
@@ -704,7 +736,7 @@ class MinimalContactsAdapter:
             if allow_mutations else ())
         routes = DeclaredRoutePort(
             application_id=APPLICATION_ID,
-            tool_route_patterns=(r"/contacts/new", r"/contacts/[a-z0-9-]+"),
+            tool_route_patterns=(r"/contacts", r"/contacts/new", r"/contacts/[a-z0-9-]+"),
         )
         self.business_tools = BusinessToolRuntime(
             tuple(skills), executor, application_id=APPLICATION_ID,

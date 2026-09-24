@@ -34,6 +34,10 @@ Web Operation Agent 是一个 alpha 阶段的框架，用于在第一方 Web 应
   选定；空结果不等于全局不存在。Odoo 使用当前 actor 的原生名称检索，不套用较窄的
   `query_customers` 集合过滤；Contacts 在 REST 数据上实现同一合同。这只是记录定位能力，
   不保证已回答用户问题或完成页面操作。
+- 另有只读的 `find_page_entries`，按当前 actor 的页面/动作元数据返回候选，包括没有菜单
+  面包屑的入口。只有 Adapter 已审查且不依赖当前记录的独立页面才附带可打开路径；未审查
+  或依赖上下文的动作只作信息展示。实际导航仍受页面策略和新观察核验。Odoo 的窗口动作
+  与 Contacts 的 REST 应用页面表使用同一个核心合同；这不意味着所有页面都可操作。
 - 可选的应用无关当前表单合同为无 Skill 场景提供安全的标量字段预填兜底。
   `describe_form` 只取最新视口控件与同 actor Adapter 元数据的交集，并返回短期不透明 ID；
   `prepare_form` 重新核对两侧事实，把准确的原生绑定只保留在服务端；`prefill_form` 按草稿

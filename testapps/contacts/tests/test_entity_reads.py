@@ -72,6 +72,15 @@ class ContactsEntityReadContractTests(unittest.TestCase):
                              "grace-hopper")
             self.assertEqual(result.allowed_routes, ("/contacts/grace-hopper",))
 
+    def test_page_entry_contract_uses_the_rest_application_not_odoo_actions(self):
+        adapter = MinimalContactsAdapter("http://127.0.0.1:1", api_token="delegated")
+        result = adapter.business_tools._executor._page_entries.execute({
+            "query": "联系人"})
+        self.assertEqual(result.content["candidates"][0]["ui_path"], "/contacts")
+        self.assertEqual(result.allowed_routes, ("/contacts",))
+        self.assertEqual(adapter.ports.routes.validate_tool_route("/contacts"),
+                         "/contacts")
+
     def test_a_rest_backed_test_adapter_can_supply_the_same_exact_sum_contract(self):
         class RestMetricPort(_ContactsEntityReadPort):
             def fields(self, entity, *, context=None):

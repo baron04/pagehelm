@@ -345,9 +345,9 @@ class AdapterContract(unittest.TestCase):
                          {"read"})
         self.assertEqual({operation.entity for operation in operations.values()},
                          {"customer", "customer_invoice", "product", "sales_order",
-                          "runtime_record"})
+                          "runtime_record", "runtime_page"})
         self.assertEqual(sorted(bound.business_tools.tool_names),
-                         ["describe_entity", "discover_entities",
+                         ["describe_entity", "discover_entities", "find_page_entries",
                           "prepare_customer_form", "query_customer_invoices",
                           "query_customers", "query_entity_records", "query_products",
                           "query_quotations", "query_sale_orders",

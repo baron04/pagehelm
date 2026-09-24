@@ -151,6 +151,10 @@ also run over the synthetic Contacts REST adapter:
    then uses the delegated actor's native name search across at most three catalog matches.
    It returns at most five record candidates and does not apply the narrower customer-rank
    filter. Ambiguity is retained; no empty lookup proves global nonexistence.
+5. `find_page_entries` ranks the actor's window actions, including entries without a menu.
+   Only a reviewed destination independent of `active_id`/`active_ids`/`active_model` gets
+   a route; all other candidates remain informational. A discovered action does not grant
+   navigation or bypass the normal page policy.
 
 The action is a discovery hint, not a query scope: its dynamic domain/context is never
 evaluated by this path. A generic query therefore covers the actor-visible model rows named in
@@ -218,6 +222,7 @@ Nothing here is removed on the strength of "source could derive it". A Skill can
 | `describe_entity` | opaque catalog entity | safe `fields_get` translation under the current actor | — |
 | `query_entity_records` | opaque catalog entity | bounded actor-visible records; exact counts; fixed order | — |
 | `resolve_record_reference` | opaque catalog entity | bounded actor-visible name/number candidates | eligible record route, if available |
+| `find_page_entries` | actor-visible window action | bounded page candidates, including no-menu actions | reviewed standalone route only |
 | `prepare_customer_form` | `res.partner` | exact customer form draft; transient until user submission | `/odoo/customers/new` |
 | `prepare_customer_edit_form` | `res.partner` | exact existing-customer fields; confirmed before Odoo can autosave | `/odoo/customers/<id>` |
 | `create_customer` | `res.partner` | one customer, opt-in | `/odoo/customers/<id>` |

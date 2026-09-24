@@ -13,12 +13,13 @@ import zipfile
 
 DISTRIBUTIONS = {
     "web-operation-agent (core)": {
-        "glob": "dist/*.whl",
+        "glob": "dist/web_operation_agent-[0-9]*.whl",
         "required": [
             "web_operation_agent/state/store.py",
             "web_operation_agent/transport/registry.py",
             "web_operation_agent/business/operations.py",
             "web_operation_agent/business/entities.py",
+            "web_operation_agent/business/page_entries.py",
             "web_operation_agent/business/forms.py",
             "web_operation_agent/composition/binding.py",
             "web_operation_agent/composition/ports.py",
@@ -55,13 +56,14 @@ DISTRIBUTIONS = {
         "forbidden_name_substrings": ["odoo", "demo", "contacts", "testapps"],
     },
     "web-operation-agent-odoo": {
-        "glob": "examples/odoo/dist/*.whl",
+        "glob": "examples/odoo/dist/web_operation_agent_odoo-[0-9]*.whl",
         "required": [
             "web_operation_agent_odoo/__init__.py",
             "web_operation_agent_odoo/route.py",
             "web_operation_agent_odoo/adapter.py",
             "web_operation_agent_odoo/sourcemap.py",
             "web_operation_agent_odoo/server/generic_forms.py",
+            "web_operation_agent_odoo/server/page_entries.py",
             "web_operation_agent_odoo/demo/form_qualify.py",
             "web_operation_agent_odoo/policies/odoo.json",
             "web_operation_agent_odoo/skills/sale-orders-query.json",
