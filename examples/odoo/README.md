@@ -413,6 +413,27 @@ before they can become prefill drafts.
 `WOA_ODOO_STORAGE_STATE` and `WOA_ODOO_PAGE_CONTROLLER_MODULE` are set; without them the gate
 reports BLOCKED, which is not a pass.
 
+## Goal turns
+
+`OdooGoalPort` (`web_operation_agent_odoo.goal`) implements the core's `GoalPort` for the
+goal-directed turn. Its index is compiled once per adapter from the runtime descriptor
+catalog, `get_views` (with each action's own search view) and `fields_get`, all under the
+delegated user: readable, non-transient window actions become pages, minus the framework's
+own modules and actions whose domain or context needs a current record; the models of
+menu-reachable pages become detailed entities with their list and form fields, form tabs
+and header buttons, other models appear by label only. A short Chinese alias list covers
+the labels the reference tasks use; Odoo's own language packs are not required.
+
+Resolution is read-only JSON-RPC: `name_search` for a reference (an exact display-name match
+wins, a company beats its contacts, several remaining candidates are returned as ambiguous),
+`read` for facts, `search_count`, `read_group` and `search_read` for counts, sums, groups and
+lists over the page action's literal domain plus the declared conditions (a page's
+`search_default_*` filters apply unless they name the current user), and record routes from
+the first form-capable action whose literal domain admits the record, else `/odoo/<model>/<id>`.
+A record's tab and a handoff control are named for the core, which selects or highlights them
+on the live page. The demo enables this path with `goal_turns=True` (the default) for
+read-only provider sessions.
+
 ## Session parameters
 
 The adapter declares `session_id`, `access_token` and `token` through

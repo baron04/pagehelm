@@ -13,6 +13,24 @@ agent.
 
 ## Current capabilities
 
+- A goal-directed turn asks the model once: given the application's index (entities,
+  fields, pages, views, filters, groups, sections and controls, compiled by the adapter
+  under the acting user), declare what the person wants. The server then resolves the
+  declaration without further model calls: records by the application's own name search,
+  field values by typed reads, counts and sums by scoped queries, pages by reviewed action
+  routes, tabs by their visible name, filters and groups by the page's own facet state, and
+  a requested change by highlighting its control for the person. Every page switch is still
+  confirmed, every page command runs under the application's page write control, and no
+  control that could write is pressed. The reply is rendered from resolved values, never
+  from model prose, so a fact the turn reports is one it read. The Odoo demo and the goal
+  evaluation runner take this path for read-only sessions; mutation sessions and the
+  scripted apparatus keep the step-by-step loop below. The declaration is one model output
+  and can name the wrong entity, field, scope or search words; the resolver reports those
+  as not done rather than guessing, apart from three deterministic fallbacks (a reference
+  found on an entity that links to the named one, a label containing a link field's label,
+  the page's own "My …" facet when the person asks for everyone's records), and a zero
+  count inside a page's scope is reported together with the entity-wide count. Only the
+  Odoo adapter implements the index and resolver so far.
 - A server-side ReAct loop receives every tool result and a fresh page observation before
   its next decision, with step, time, token, and provider-spend limits.
 - Application-owned Skills and typed tools provide current business facts. When explicitly
@@ -335,6 +353,7 @@ source compilation, fixture provisioning, and qualification.
 - A reached page state is checked against the declared path, selected controls and any declared active filters or groups, plus explicit requests for the five conventional views and filter/group changes above. An application may first resolve a reviewed, deployment-bound route alias to its installed path; that does not grant navigation or count as a rendered page. Removing a filter additionally requires that exact filter to have been observed active on the same path earlier in the turn, followed by typed evidence that it is absent. The application must supply typed active-facet state; a same-named menu choice or column never counts. The pending-render signal catches a changed SPA URL with the old page projection; an adapter-reported blocking error and a wrong view also prevent arrival. These guards do not prove that all asynchronous loading has finished or verify record identity, other view names, or that the model declared an implicit facet request such as “look at orders by salesperson.” The new facet action has scripted contract tests, not a repeated model-backed success rate. The earlier 37-task Chinese development run must not be presented as the P8.8 holdout result.
 - An empty typed read no longer ends the turn automatically: the Agent receives the exact query result and can check whether the entity and filters match the question. This does not yet prove that a model-selected query covers the user's intent. In the earlier 37-goal run, the old automatic answer incorrectly reported two existing records as absent; one of those reads had searched a customer name for an order number.
 - Reaching a declared page target no longer blocks further reading or observation for requests classified as more than pure navigation. Apart from the explicit view and facet checks above, a target still covers only the conditions the Agent declared, so a question or other presentation requirement omitted from that declaration can remain unmet.
+- The goal-directed turn has a development result on the 37-task Chinese set only, obtained while it was being built; it is not a holdout result, and the index and resolver contract has one adapter behind it. It reaches a page by its address, verifies the rendered view, record route, tab and facet state, and waits for two consecutive rendered observations, but does not prove that every asynchronous part of a page has loaded. A list page's free-text search is answered from a scoped read rather than typed into the page's search box.
 
 The second Chinese goal holdout is frozen with 84 normal goals and 10 honest-limitation goals; see [evaluation details](evals/odoo/README.md). It has offline oracle checks, but has not been model-run or fully walked in a browser. Select it with `--version v5` in the goal runner.
 

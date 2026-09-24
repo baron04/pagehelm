@@ -44,6 +44,7 @@ from .descriptors import OdooRuntimeDescriptorReader
 from .identity import OdooApiKeyStore, OdooPageSessionIdentityResolver
 from .generic_forms import OdooFormPort
 from ..click_policy import OdooReviewedClickPolicy, load_review
+from ..goal import OdooGoalPort
 from .specs import (ANSWER_LABELS_ZH, APPLICATION_ID, ARCHIVE_CUSTOMER_TOOL,
                     COLLECTIONS, CREATE_CUSTOMER_TOOL, MUTATION_SPECS, MUTATION_TOOLS,
                     PREPARE_CUSTOMER_EDIT_TOOL, PREPARE_CUSTOMER_FORM_TOOL,
@@ -316,6 +317,7 @@ class OdooApplicationAdapter:
             data=data,
             forms=forms,
         )
+        self.goal_port = OdooGoalPort(executor)
         self.descriptor = ApplicationDescriptor(
             schema_version=APPLICATION_ADAPTER_VERSION,
             application_id=APPLICATION_ID,

@@ -44,6 +44,7 @@ from web_operation_agent.modeling.client import ChatModel, ProviderError, SpendM
 from web_operation_agent.business.mutation import SQLiteMutationJournal
 from web_operation_agent.execution.product import (AgentTurnExecution,
                                          AgentTurnExecutor)
+from web_operation_agent.goal.executor import GoalTurnExecutor
 
 from ..adapter import OdooApplicationAdapter
 from ..turn import odoo_turn_config
@@ -196,6 +197,9 @@ class OdooDemoConfig:
     #: an experiment's arms; a deployment compiles its own capability and ships its Skills.
     extra_skills: tuple = ()
     source_override: Any = None
+    #: Run each turn as a declared goal (one model call, then server resolution) rather
+    #: than the step-by-step tool loop. The loop remains the path for Skill-driven writes.
+    goal_turns: bool = True
 
     def __post_init__(self) -> None:
         for name in ("api_key_path", "storage_state_path", "output_dir"):
@@ -713,14 +717,28 @@ def run_demo(config: OdooDemoConfig, *,
                 disabled_actions=turn_config.disabled_actions - {"click"},
                 click_policy=None,
                 supported_scope=EVALUATION_CLICK_SCOPE)
-        executor = AgentTurnExecutor(
-            channel=channel,
-            config=turn_config,
-            chat=chat,
-            application=bound,
-            control=ReadOnlyControl(),
-            run_id_factory=lambda _message: "odoo-" + uuid.uuid4().hex[:16],
-        )
+        # The scripted apparatus replays the tool loop's own transcript; goal turns are
+        # the provider path for read-only sessions. Mutation sessions keep the loop, whose
+        # Skill-driven proposal, approval and readback this path does not carry.
+        if config.goal_turns and not config.allow_mutations and not config.scripted:
+            executor = GoalTurnExecutor(
+                channel=channel,
+                config=turn_config,
+                chat=chat,
+                application=bound,
+                goal_port=adapter.goal_port,
+                control=ReadOnlyControl(),
+                run_id_factory=lambda _message: "odoo-" + uuid.uuid4().hex[:16],
+            )
+        else:
+            executor = AgentTurnExecutor(
+                channel=channel,
+                config=turn_config,
+                chat=chat,
+                application=bound,
+                control=ReadOnlyControl(),
+                run_id_factory=lambda _message: "odoo-" + uuid.uuid4().hex[:16],
+            )
         conversation = LiveConversationRunner(channel, executor=executor)
         holder["conversation"] = conversation
         return conversation
