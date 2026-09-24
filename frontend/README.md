@@ -4,17 +4,15 @@ The panel the Web Operation Agent shows inside a host application's page: a floa
 or a right-edge drawer that takes a goal, shows what the agent did, and asks before anything
 is written.
 
-This directory builds two modules. Only one is named by the host page:
+This directory builds one file, `assistant.js`, the one script a host page includes: the
+boot supervisor and the Runtime (the panel's shell, the transport, the page observer
+and executor) and this window's view, described below. It is what the Odoo plugin's script
+tag loads, and nothing is fetched after it. It is served by the agent, minified, since it
+carries React and loads on every page of the host application.
 
-- **`assistant.js`** -- the boot supervisor and the Runtime: the standing entry note, the
-  transport, the page observer and executor. It is what the Odoo plugin's script tag loads.
-  It contains no React, and the lint forbids importing any.
-- **`panel.js`** -- this window's view, described below. The Runtime imports it once the
-  server has said what may be shown; until then the entry note is the whole interface.
-
-`assistant.js` is served by the agent and deliberately left unminified: it runs inside
-someone else's application, and whoever integrates it should be able to read what it does
-from the browser's own source view.
+The Runtime still holds no view. It hands the panel a host and a container through
+`src/runtime/panelBridge.ts`, the one Runtime module the lint lets reach the panel; nothing
+else under `src/runtime/` may import React or the panel's components.
 
 The panel is a view. It holds no session, makes no network call of its own, and keeps no timeline:
 the embedded Runtime hands it the server's projection and it renders that. Everything it
@@ -31,7 +29,7 @@ reads is this directory's alone:
 
 | File | What it decides |
 |---|---|
-| `src/presentation.json` | the stacking order, the launcher's corner and size (shared by the standing entry), the visibility gate on a confirmation card, which confirmations can be declined, and the standing entry's own words |
+| `src/presentation.json` | the stacking order, the launcher's corner and size, the visibility gate on a confirmation card, which confirmations can be declined, and the panel's own words for a start that failed |
 | `src/styles/design_tokens.json` | the palette and scale for both themes, with the contrast each pair must meet (`tests/tokens.unit.test.ts`) |
 | `src/state/geometry.ts` | the window's sizes, placement, and floating or drawer mode |
 | `trace/trace_replay.html` | the replay page the server fills with a past run's data; `npm run build` inlines the tokens into it |
@@ -51,7 +49,7 @@ npm run storybook    # every state, including the ones a normal run rarely reach
 npm test             # unit tests: the markdown grammar, geometry, the host contract
 npm run test:browser # Chromium checks of the built panel (e2e/); needs npm run build first
 npm run lint
-npm run build        # dist/panel/panel.js and dist/runtime/assistant.js
+npm run build        # dist/runtime/assistant.js and the trace replay page
 ```
 
 `npm run dev` serves `index.html`, a page that stands in for a host application, and mounts
@@ -63,20 +61,19 @@ still blocks the composer until it is answered. The buttons along the top drive 
 read, a write with a confirmation, an indeterminate outcome, and a session taken over by
 another page.
 
-Neither `index.html` nor `dev/` reaches the product: `vite build` runs in library mode with
-`src/index.ts` as its only entry.
+Neither `index.html` nor `dev/` reaches the product: the product build takes
+`src/runtime/index.ts` as its only entry.
 
-`npm run build` runs the two library builds: `vite.config.ts` produces `dist/panel/panel.js`,
-`vite.runtime.config.ts` produces `dist/runtime/assistant.js`, each a single ES module with
-its dynamic imports inlined. `python scripts/build_panel.py` and `python
-scripts/build_runtime.py` run those builds and copy the results into the Python package --
-the panel with a manifest the gateway reads, the runtime beside it -- which is how the
-gateway comes to serve them. Both are generated artifacts: they are not committed, and a
-checkout without Node has no panel -- the gateway then refuses the request by name rather
-than serving something older.
+`npm run build` runs the library build: `vite.runtime.config.ts` produces
+`dist/runtime/assistant.js`, a single ES module with its dynamic imports inlined, and the
+trace replay page is built beside it. `python scripts/build_runtime.py` copies
+`assistant.js` into the Python package, which is how the gateway comes to serve it; `python
+scripts/build_panel.py` builds the frontend and copies the trace replay page. Both are
+generated artifacts: they are not committed, and a checkout without Node has no assistant --
+the gateway then refuses the request by name rather than serving something older.
 
 The browser behaviour is tested here, in Chromium, against the built bundle: `e2e/` holds
-Playwright tests that mount `dist/panel/panel.js` over a scripted host (`npm run build`, then
+Playwright tests that mount the panel from `dist/runtime/assistant.js` over a scripted host (`npm run build`, then
 `npm run test:browser`; `npx playwright install chromium` once for the browser). That is
 where the states, the keyboard paths, the narrow layouts and the strict-CSP construction are
 asserted, and where a Storybook build is checked to show the shipped panel. Storybook is for
@@ -86,8 +83,8 @@ looking; those tests are the gate.
 
 ```
 src/
-  runtime/    assistant.js's world: the standing entry note, the boot supervisor, the
-              transport, the observer and executor -- no React, and the lint keeps it that way
+  runtime/    assistant.js's world: the panel's shell, the boot supervisor, the
+              transport, the observer and executor -- no view; panelBridge.ts alone mounts it
   contract/   a typed view over panel_contract.json — no values of its own
   bridge/     the host contract, checked once at mount, never probed at a call site
   state/      the store subscription, window geometry, the reveal, the visibility gate

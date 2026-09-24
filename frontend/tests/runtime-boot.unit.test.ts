@@ -1,10 +1,10 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import {
-  BootFailure, CONNECTING_GRACE_MS, RENEW_RETRY_MS, RETRY_MS, STABLE_MS, Supervisor,
+  BootFailure, RENEW_RETRY_MS, RETRY_MS, STABLE_MS, Supervisor,
   endpointSource,
   inlineSource, type Bootstrap, type SessionSource, type Supervised,
 } from '../src/runtime/boot'
-import type {EntryFailure, StandingEntry} from '../src/runtime/entry'
+import type {StartFailure, StartStatus} from '../src/runtime/startStatus'
 import type {RuntimeConfig} from '../src/runtime/types'
 
 function config(sessionId = 's1'): RuntimeConfig {
@@ -34,17 +34,18 @@ class FakeRuntime implements Supervised {
   }
 }
 
-class FakeEntry implements StandingEntry {
+class FakeStatus implements StartStatus {
   log: string[] = []
-  failure: EntryFailure | null = null
+  failure: StartFailure | null = null
   retry: (() => void) | null = null
   connecting() { this.log.push('connecting') }
-  unavailable(failure: EntryFailure, retry: () => void) {
+  unavailable(failure: StartFailure, retry: () => void) {
     this.log.push(`unavailable:${failure.status}:${failure.retrying}`)
     this.failure = failure
     this.retry = retry
   }
-  remove() { this.log.push('remove') }
+  started() { this.log.push('started') }
+  rested() { this.log.push('rested') }
 }
 
 type Outcome = Bootstrap | BootFailure | Promise<Bootstrap>
@@ -64,13 +65,14 @@ function source(outcomes: Outcome[], renewable = true): SessionSource & {calls: 
   }
 }
 
-function harness(src: SessionSource, runtimes: Array<FakeRuntime | null> = []) {
-  const entry = new FakeEntry()
+function harness(src: SessionSource, runtimes: Array<FakeRuntime | null> = [], eager = true) {
+  const status = new FakeStatus()
   const started: FakeRuntime[] = []
   const running: Supervised[] = []
   const supervisor = new Supervisor({
     source: src,
-    entry,
+    status,
+    eager: () => eager,
     start: async () => {
       const next = runtimes.length ? runtimes.shift() : new FakeRuntime()
       if (next) started.push(next)
@@ -78,7 +80,7 @@ function harness(src: SessionSource, runtimes: Array<FakeRuntime | null> = []) {
     },
     onRunning: runtime => { running.push(runtime) },
   })
-  return {supervisor, entry, started, running}
+  return {supervisor, status, started, running}
 }
 
 /** Let promises and microtasks settle without moving the clock. */
@@ -92,26 +94,16 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers() })
 
 describe('starting', () => {
-  it('comes up without ever showing the entry when the first attempt is quick', async () => {
-    const h = harness(source([{config: config()}]))
-    h.supervisor.start()
-    await flush()
-    expect(h.supervisor.state.kind).toBe('running')
-    expect(h.running).toHaveLength(1)
-    await vi.advanceTimersByTimeAsync(CONNECTING_GRACE_MS * 2)
-    expect(h.entry.log).toEqual(['remove'])
-  })
-
-  it('says it is connecting when the first attempt outlasts the grace, then gets out of the way', async () => {
+  it('says it is connecting at once, and leaves what to show meanwhile to the panel', async () => {
     let finish: (value: Bootstrap) => void = () => {}
     const slow = new Promise<Bootstrap>(resolve => { finish = resolve })
     const h = harness(source([slow]))
     h.supervisor.start()
-    await vi.advanceTimersByTimeAsync(CONNECTING_GRACE_MS + 1)
-    expect(h.entry.log).toEqual(['connecting'])
+    // The panel shows nothing for the first moments and a skeleton after; it is told now.
+    expect(h.status.log).toEqual(['connecting'])
     finish({config: config()})
     await flush()
-    expect(h.entry.log).toEqual(['connecting', 'remove'])
+    expect(h.status.log).toEqual(['connecting', 'started'])
     expect(h.supervisor.state.kind).toBe('running')
   })
 
@@ -137,7 +129,7 @@ describe('failing', () => {
     for (const delay of RETRY_MS) await vi.advanceTimersByTimeAsync(delay)
     expect(src.calls).toBe(RETRY_MS.length + 1)
     expect(h.supervisor.state.kind).toBe('retrying')
-    expect(h.entry.log.at(-1)).toBe('unavailable:503:true')
+    expect(h.status.log.at(-1)).toBe('unavailable:503:true')
     await vi.advanceTimersByTimeAsync(RETRY_MS.at(-1)!)
     expect(src.calls).toBe(RETRY_MS.length + 2)
   })
@@ -148,7 +140,7 @@ describe('failing', () => {
     h.supervisor.start()
     await flush()
     expect(h.supervisor.state.kind).toBe('unavailable')
-    expect(h.entry.log).toEqual(['unavailable:403:false'])
+    expect(h.status.log).toEqual(['connecting', 'unavailable:403:false'])
     await vi.advanceTimersByTimeAsync(60_000)
     expect(src.calls).toBe(1)
   })
@@ -159,18 +151,18 @@ describe('failing', () => {
     await flush()
     expect(h.supervisor.state.kind).toBe('retrying')
     expect(h.running).toHaveLength(0)
-    expect(h.entry.failure).toEqual({status: null, retrying: true})
+    expect(h.status.failure).toEqual({status: null, retrying: true})
   })
 
-  it('starts again from the entry when the person asks, and comes up', async () => {
+  it('starts again from the panel when the person asks, and comes up', async () => {
     const src = source([new BootFailure('refused', 403), {config: config()}])
     const h = harness(src)
     h.supervisor.start()
     await flush()
-    h.entry.retry?.()
+    h.status.retry?.()
     await flush()
     expect(h.supervisor.state.kind).toBe('running')
-    expect(h.entry.log.at(-1)).toBe('remove')
+    expect(h.status.log.at(-1)).toBe('started')
   })
 
   it('carries the status of a transport error thrown by the Runtime itself', () => {
@@ -212,7 +204,7 @@ describe('when the session ends under the page', () => {
     h.started.at(-1)?.end('error')
     await flush()
     expect(h.supervisor.state.kind).toBe('retrying')
-    expect(h.entry.log.at(-1)).toBe('unavailable:null:true')
+    expect(h.status.log.at(-1)).toBe('unavailable:null:true')
   })
 
   it('reconnects at once again after a session that ran long enough to be trusted', async () => {
@@ -332,5 +324,68 @@ describe('endpointSource', () => {
     const empty = endpointSource({bootstrap: '/b', instanceId: 'x',
       fetchImpl: (async () => ok({})) as unknown as typeof fetch})
     await expect(empty.obtain()).rejects.toBeInstanceOf(BootFailure)
+  })
+})
+
+describe('with nothing under way, a session is made when asked for and let go when idle', () => {
+  it('leaves a failed start to the Retry beside its reason', async () => {
+    const src = source([new BootFailure('down', 503), {config: config()}])
+    const h = harness(src, [], false)
+    h.supervisor.connect()
+    await flush()
+    expect(h.supervisor.state.kind).toBe('unavailable')
+    expect(h.status.log.at(-1)).toBe('unavailable:503:false')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(src.calls).toBe(1)
+    h.status.retry?.()
+    await flush()
+    expect(h.supervisor.state.kind).toBe('running')
+  })
+
+  it('does not replace a session that ended; the next message makes a new one', async () => {
+    const src = source([{config: config('first')}, {config: config('second')}])
+    const h = harness(src, [], false)
+    h.supervisor.connect()
+    await flush()
+    await vi.advanceTimersByTimeAsync(STABLE_MS)
+    h.started[0]!.end('ended')
+    await flush()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(h.supervisor.state.kind).toBe('idle')
+    expect(h.status.log.at(-1)).toBe('rested')
+    expect(src.calls).toBe(1)
+    h.supervisor.connect()
+    await flush()
+    expect(src.calls).toBe(2)
+    expect(h.supervisor.state.kind).toBe('running')
+  })
+
+  it('lets an idle session go without replacing it, and never one that is busy', async () => {
+    const h = harness(source([{config: config()}]), [], false)
+    h.supervisor.connect()
+    await flush()
+    const runtime = h.started[0]!
+    runtime.renewable = false
+    h.supervisor.rest()
+    expect(h.supervisor.state.kind).toBe('running')
+    expect(runtime.stopCalls).toBe(0)
+    runtime.renewable = true
+    h.supervisor.rest()
+    await flush()
+    expect(h.supervisor.state.kind).toBe('idle')
+    expect(runtime.stopCalls).toBe(1)
+    expect(h.status.log.at(-1)).toBe('rested')
+    expect(h.started).toHaveLength(1)
+  })
+
+  it('ignores a request for a session while one is up or on its way', async () => {
+    const src = source([{config: config()}])
+    const h = harness(src, [], false)
+    h.supervisor.connect()
+    h.supervisor.connect()
+    await flush()
+    h.supervisor.connect()
+    await flush()
+    expect(src.calls).toBe(1)
   })
 })

@@ -3,8 +3,9 @@
  *
  * Every state can be rendered without a live session this way: the states a real run
  * reaches rarely -- indeterminate, replaced, obscured confirmation -- are exactly the ones
- * worth pinning. The panel under test is the build (`dist/panel/panel.js`), not the source:
- * what ships is what is checked.
+ * worth pinning. The panel under test is the build (`dist/runtime/assistant.js`, the one file
+ * a host page includes), not the source: what ships is what is checked. Loading it with no
+ * bootstrap declared on the page starts nothing; the driver mounts its panel directly.
  */
 import {existsSync, readFileSync} from 'node:fs'
 import {createServer, type Server} from 'node:http'
@@ -17,7 +18,7 @@ import {SAMPLE_SUGGESTIONS} from '../dev/application'
 import type {Labels, PanelConfiguration} from '../src/contract/panel'
 
 const here = fileURLToPath(new URL('.', import.meta.url))
-export const PANEL_BUNDLE = resolve(here, '../dist/panel/panel.js')
+export const PANEL_BUNDLE = resolve(here, '../dist/runtime/assistant.js')
 
 /**
  * The hello reply's panel configuration, as `RemoteSessionChannel._panel_configuration()`
@@ -53,7 +54,7 @@ const DRIVER_HTML = `<!doctype html>
 // External on purpose: under `script-src 'self'` an inline module would be refused, and the
 // refusal would be the harness's, not the panel's.
 const DRIVER_JS = `
-import {mountPanel} from './panel.js'
+import {mountPanelView as mountPanel} from './assistant.js'
 
 // If the panel installs its own global handler this stops being the page's.
 const pageHandler = () => {}
@@ -155,7 +156,7 @@ function serve(state: Snapshot, csp: string): Promise<Server> {
       response.writeHead(200, headers)
       response.end(body)
     }
-    if (request.url === '/panel.js') return reply(bundle, 'text/javascript; charset=utf-8')
+    if (request.url === '/assistant.js') return reply(bundle, 'text/javascript; charset=utf-8')
     if (request.url === '/driver.js') return reply(DRIVER_JS, 'text/javascript; charset=utf-8')
     if (request.url === '/' || request.url === '/index.html') {
       return reply(page, 'text/html; charset=utf-8')

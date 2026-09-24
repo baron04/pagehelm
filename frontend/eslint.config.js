@@ -56,16 +56,29 @@ export default [
     },
   },
   {
-    // The Runtime is what loads and speaks before any view exists, and the entry note it
-    // renders is the whole interface until the server says otherwise. React arriving in
-    // this directory would quietly merge the two modules the build keeps separate, so
-    // the import itself is what gets refused here, not just the mistake it would cause.
+    // The Runtime and the panel ship in one file, but the Runtime still holds no view: it
+    // hands the panel a host and a container, and the panel renders. `panelBridge.ts` is the
+    // one place that mounts it; nothing else in this directory reaches for React or for the
+    // panel's components.
     files: ['src/runtime/**/*.ts'],
+    ignores: ['src/runtime/panelBridge.ts'],
     rules: {
       'no-restricted-imports': ['error', {
         patterns: [{
-          group: ['react', 'react/*', 'react-dom', 'react-dom/*'],
-          message: 'the Runtime holds no view: panel.js imports React, not src/runtime',
+          group: ['react', 'react/*', 'react-dom', 'react-dom/*',
+                  '../mount', '../components/*', '../state/*'],
+          message: 'the Runtime holds no view: mount the panel through panelBridge.ts',
+        }],
+      }],
+    },
+  },
+  {
+    files: ['src/runtime/panelBridge.ts'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        patterns: [{
+          group: ['react', 'react/*', 'react-dom', 'react-dom/*', '../components/*'],
+          message: 'panelBridge.ts mounts the panel through ../mount and nothing else',
         }],
       }],
     },

@@ -6,16 +6,13 @@
  * application frameworks own and sometimes replace body children -- and reattaching it
  * afterwards still shows a blink where page and panel both repaint.
  */
+import {mountPanel as mountPanelView} from '../mount'
 import presentation from '../presentation.json'
 import {contained} from './contain'
 import type {PanelHost} from './panelHost'
 
 /** What `mountPanel` returns: the one handle the Runtime keeps on the panel it mounted. */
 export interface PanelHandle { destroy(): void }
-
-interface PanelModule {
-  mountPanel(options: {host: PanelHost; allowedOrigins: string[]; container: Element}): PanelHandle
-}
 
 export function createPanelContainer(): HTMLDivElement {
   const container = document.createElement('div')
@@ -58,9 +55,13 @@ export function keepAttached(container: HTMLElement, alive: () => boolean): Muta
   return observer
 }
 
-/** Load the panel module and mount it into the container, fed by `host`. */
-export async function mountPanel(moduleUrl: string, host: PanelHost,
-                                 container: Element): Promise<PanelHandle> {
-  const panel = await import(/* @vite-ignore */ moduleUrl) as PanelModule
-  return panel.mountPanel({host, allowedOrigins: [location.origin], container})
+/**
+ * Mount the panel into the container, fed by `host`. The panel is part of this same script:
+ * a host page includes one file and nothing is fetched afterwards.
+ */
+export function mountPanel(host: PanelHost, container: HTMLElement): PanelHandle {
+  return mountPanelView({host, allowedOrigins: [location.origin], container})
 }
+
+/** The panel on its own, for the panel's browser tests: they mount it over a scripted host. */
+export {mountPanelView}

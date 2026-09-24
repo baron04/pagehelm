@@ -2,12 +2,11 @@
 """Build ``assistant.js`` and place it where the Python package can serve it.
 
 ``assistant.js`` is the one script a host page includes to have the assistant: the boot
-supervisor and the Runtime, whose source lives entirely under ``frontend/src/runtime/``.
-This script is the only thing that turns it into ``web_operation_agent/web_runtime/
-assistant.js``, the generated artifact the gateway reads from disk. It is not committed, for the same reason
-the built panel is not: a checkout without Node has no Runtime, reported as a named
-prerequisite rather than served from whatever happens to be lying in the directory --
-the same rule ``build_panel.py`` and the PageAgent bundle gate already apply.
+supervisor, the Runtime and the panel, built from ``frontend/``. This script is the only
+thing that turns it into ``web_operation_agent/web_runtime/assistant.js``, the generated
+artifact the gateway reads from disk. It is not committed: a checkout without Node has no
+assistant, reported as a named prerequisite rather than served from whatever happens to be
+lying in the directory -- the same rule the PageAgent bundle gate applies.
 """
 from __future__ import annotations
 

@@ -66,6 +66,32 @@ test.describe('the launcher', () => {
 })
 
 test.describe('the default state', () => {
+  test('a conversation being fetched shows nothing at first, then a skeleton, never the greeting', async ({open}) => {
+    // A tab that already has a conversation fetches it when the panel opens. A quick fetch
+    // shows nothing in between; a slow one shows three lines -- long, short, medium -- after
+    // 300 ms. The greeting belongs to a new conversation and would be a lie here.
+    const panel = await open(snapshot({
+      connection: {state: 'connecting', busy: false, stopping: false, online: true}}))
+    const page = panel.page
+    await page.locator('.woa-launcher').click()
+    await page.locator('.woa-window').waitFor()
+    await expect(page.locator('.woa-empty')).toHaveCount(0)
+    await expect(page.locator('.woa-skeleton')).toHaveCount(0)
+    await expect(page.locator('.woa-skeleton i')).toHaveCount(3, {timeout: 2000})
+    const widths = await page.locator('.woa-skeleton i').evaluateAll(
+      nodes => nodes.map(node => node.getBoundingClientRect().width))
+    expect(widths[0]).toBeGreaterThan(widths[2]!)
+    expect(widths[2]).toBeGreaterThan(widths[1]!)
+    // The composer is there throughout: the person can start writing while it loads.
+    await expect(page.locator('#woa-composer-input')).toBeEnabled()
+    await panel.set({
+      connection: {state: 'ready', busy: false, stopping: false, online: true},
+      entries: [entry('e1', 'goal', '列出订单'), entry('e2', 'result', '三张。', {panel_state: 'success'})]})
+    await expect(page.locator('.woa-skeleton')).toHaveCount(0)
+    await expect(page.locator('.woa-user')).toHaveText('列出订单')
+    expect(panel.errors).toEqual([])
+  })
+
   test('a suggestion under the pointer takes the accent tint and keeps its icon tile', async ({open}) => {
     // It used to turn white and lift, and its white icon tile vanished into it.
     const panel = await open(snapshot())

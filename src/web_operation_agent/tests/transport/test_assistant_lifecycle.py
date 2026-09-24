@@ -6,7 +6,13 @@ them until the page was black (P7.5 J5.05).
 
 I2 -- the assistant is never silently absent. A person who can only reach a feature through
 one entry must always find that entry, and it must say why when the assistant is not there
-(P7.5 CR-43, reported three times with three different causes).
+(P7.5 CR-43, reported three times with three different causes). The entry is the panel's own
+launcher, up from the moment the script runs; why a start failed is said in the panel.
+
+A session is made when it is needed, not when the page loads: when the person sends
+something, when they open a conversation this tab already has, or -- without anyone asking --
+when a turn is under way, as it is on a page the agent itself opened. The cases that need a
+session up from the start put the tab in that last state, the way such a page finds it.
 
 Everything here is real except the application: the gateway, the session registry,
 `assistant.js` as built, PageController and Chromium. The host page includes `assistant.js`
@@ -31,7 +37,6 @@ from pathlib import Path
 from web_operation_agent.transport.gateway import RUNTIME_PATH, EmbeddedGateway
 from web_operation_agent.transport import RemoteSessionRegistry
 
-PANEL_ROOT = Path(__file__).resolve().parents[2] / "web_runtime" / "panel"
 _PAGE_CONTROLLER_PATH = os.environ.get("WOA_PAGE_CONTROLLER_MODULE", "")
 PAGE_CONTROLLER = Path(_PAGE_CONTROLLER_PATH).expanduser() if _PAGE_CONTROLLER_PATH else None
 
@@ -48,10 +53,9 @@ HOST_PAGE = """<!doctype html>
 </head><body><main><h1>Orders</h1><button>New order</button></main></body></html>
 """
 
-#: At any moment after the grace period, one of these is on the page (I2): the standing
-#: entry, or the panel's launcher or window, wherever in the shadow trees it is mounted.
+#: At any moment, one of these is on the page (I2): the panel's launcher or window, wherever
+#: in the shadow trees it is mounted.
 PRESENT = """() => {
-  if (document.getElementById('woa-assistant-entry')) return true
   const seek = root => {
     if (root.querySelector('.woa-launcher, .woa-window')) return true
     return [...root.querySelectorAll('*')].some(node => node.shadowRoot && seek(node.shadowRoot))
@@ -74,6 +78,7 @@ class _Host:
         self.registry = registry
         self.gateway: EmbeddedGateway | None = None
         self.statuses: list[int] = []   # consumed one per request; empty means succeed
+        self.bootstraps = 0             # every request, whatever it was answered
         self.shared_session = False     # every page gets the same session
         self.sessions: list[str] = []
         self.lock = threading.Lock()
@@ -117,6 +122,7 @@ class _Host:
                     return self.reply(404, b"{}", "application/json")
                 self.rfile.read(int(self.headers.get("Content-Length") or 0))
                 with owner.lock:
+                    owner.bootstraps += 1
                     status = owner.statuses.pop(0) if owner.statuses else 200
                 if status != 200:
                     return self.reply(status, b'{"error": "injected"}', "application/json")
@@ -158,8 +164,6 @@ class _Host:
 
 
 @unittest.skipUnless(RUNTIME_PATH.is_file(), "assistant.js is not built; run scripts/build_runtime.py")
-@unittest.skipUnless((PANEL_ROOT / "panel.js").is_file(),
-                     "the assistant panel is not built; run scripts/build_panel.py")
 @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
                      "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
 class TheAssistantIsNeverSilentAndNeverLoud(unittest.TestCase):
@@ -197,7 +201,7 @@ class TheAssistantIsNeverSilentAndNeverLoud(unittest.TestCase):
         self.assertEqual(page_errors, [])
 
     def watch_presence(self, page, seconds: float):
-        """I2: sample the page for `seconds`; the assistant or its entry is always there."""
+        """I2: sample the page for `seconds`; the assistant is always there."""
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
             self.assertTrue(page.evaluate(PRESENT), "the assistant was silently absent")
@@ -206,50 +210,135 @@ class TheAssistantIsNeverSilentAndNeverLoud(unittest.TestCase):
     def launcher(self, page):
         return page.locator(".woa-launcher")
 
-    def entry_sentence(self, page) -> str:
-        page.locator("#woa-assistant-entry").wait_for(state="attached", timeout=8000)
-        return page.evaluate("""() => document.getElementById('woa-assistant-entry')
-          .shadowRoot.querySelector('.note p').textContent""")
+    def running(self, page, timeout: int = 15_000) -> None:
+        """A session is up: the launcher alone no longer says so, since it is there from the start."""
+        page.wait_for_function(
+            "() => window.__WOA_ASSISTANT__?.state?.kind === 'running'", timeout=timeout)
 
-    def entry_note_hidden(self, page) -> bool:
-        return page.evaluate("""() => document.getElementById('woa-assistant-entry')
-          .shadowRoot.querySelector('.note').hidden""")
+    def start_notice(self, page):
+        return page.locator(".woa-inline-error[data-code='start_failed'] .woa-inline-error__text")
 
-    def test_a_refused_bootstrap_leaves_an_entry_that_says_why(self):
+    def start_sentence(self, page) -> str:
+        """Why the start failed, read the way a person reads it: open the panel and look."""
+        if page.locator(".woa-window").count() == 0:
+            self.launcher(page).click()
+        self.start_notice(page).wait_for(timeout=8000)
+        return self.start_notice(page).text_content()
+
+    #: What a page the agent opened in the middle of a turn finds in this tab's storage.
+    TURN_UNDER_WAY = {"woa.assistant.engagement.v1": "active"}
+
+    def send(self, page, text: str = "列出所有待开票的销售订单") -> None:
+        """What the person does: open the panel if it is not, type, and press Enter."""
+        if page.locator(".woa-window").count() == 0:
+            self.launcher(page).click()
+        composer = page.locator("#woa-composer-input")
+        composer.fill(text)
+        composer.press("Enter")
+
+    def test_nothing_is_connected_until_the_person_sends_something(self):
+        page, errors = self.open()
+        self.launcher(page).wait_for(timeout=8000)
+        # Opening the panel on a tab with no conversation makes no session either.
+        self.launcher(page).click()
+        page.locator(".woa-window").wait_for(timeout=8000)
+        page.wait_for_timeout(2500)
+        self.assertEqual(self.host.bootstraps, 0)
+        self.assertEqual(page.evaluate("() => window.__WOA_ASSISTANT__.state.kind"), "idle")
+        self.send(page)
+        self.running(page)
+        self.assertEqual(self.host.bootstraps, 1)
+        self.assertEqual(len(self.host.sessions), 1)
+        self.watch_presence(page, 1)
+        self.assert_quiet(page, errors)
+
+    def test_a_refused_bootstrap_says_why_in_the_panel(self):
         self.host.statuses = [403]
         page, errors = self.open()
-        self.assertEqual(self.entry_sentence(page), "当前账号未获授权使用助手（403）。")
-        self.assertTrue(self.entry_note_hidden(page))
-        page.evaluate("""() => document.getElementById('woa-assistant-entry')
-          .shadowRoot.querySelector('.badge').click()""")
-        self.assertFalse(self.entry_note_hidden(page))
+        self.launcher(page).wait_for(timeout=8000)
+        # Nothing is asked of the application, so nothing can fail, until something is sent.
+        page.wait_for_timeout(1500)
+        self.assertEqual(self.host.bootstraps, 0)
+        self.send(page)
+        self.assertEqual(self.start_sentence(page), "当前账号未获授权使用助手（403）。")
+        # What was sent stays on screen, marked as not delivered.
+        page.locator(".woa-undelivered").wait_for(timeout=5000)
         # Nothing another attempt could fix is retried on its own.
         page.wait_for_timeout(2500)
+        self.assertEqual(self.host.bootstraps, 1)
         self.assertEqual(self.host.sessions, [])
         self.watch_presence(page, 1)
         self.assert_quiet(page, errors)
 
-    def test_an_outage_is_shown_then_recovered_from_without_the_person(self):
-        self.host.statuses = [503, 503]
+    def test_an_outage_is_shown_and_retry_sends_what_was_waiting(self):
+        self.host.statuses = [503]
         page, errors = self.open()
-        self.assertIn("正在重试（503）", self.entry_sentence(page))
-        self.watch_presence(page, 1)
-        self.launcher(page).wait_for(timeout=15_000)
-        page.locator("#woa-assistant-entry").wait_for(state="detached", timeout=5000)
+        self.send(page, "列出订单")
+        self.assertIn("可以点重试（503）", self.start_sentence(page))
+        # The person asked, so the person retries: nothing is attempted behind their back.
+        page.wait_for_timeout(2500)
+        self.assertEqual(self.host.bootstraps, 1)
+        page.locator(".woa-inline-error__retry").click()
+        self.running(page)
+        # Once a session is up, what was said about starting is gone, and the message went.
+        self.start_notice(page).wait_for(state="detached", timeout=5000)
         self.assertEqual(len(self.host.sessions), 1)
+        page.locator(".woa-undelivered").wait_for(state="detached", timeout=5000)
+        self.watch_presence(page, 1)
         self.assert_quiet(page, errors)
 
-    def test_a_session_that_ends_under_the_page_is_replaced_by_a_new_one(self):
-        """The agent restarted, or the session expired: the page reconnects on its own."""
+    def test_a_session_that_ends_while_idle_is_replaced_by_the_next_message(self):
+        """The agent restarted, or the session expired, with nothing under way: nothing is
+        made again until it is needed, and then it is."""
         page, errors = self.open()
-        self.launcher(page).wait_for(timeout=15_000)
+        self.send(page)
+        self.running(page)
         page.wait_for_timeout(10_500)   # a session that has run long enough to be trusted
         self.host.registry.retire(self.host.sessions[0], "session_closed")
+        page.wait_for_function("() => window.__WOA_ASSISTANT__?.state?.kind === 'idle'",
+                               timeout=20_000)
+        page.wait_for_timeout(3000)
+        self.assertEqual(len(self.host.sessions), 1)
+        self.send(page, "再列一次")
         page.wait_for_function(
             "() => window.__WOA_ASSISTANT__?.state?.kind === 'running'"
             " && window.__WOA_ASSISTANT__.state.runtime.sessionId === 'lifecycle-2'",
             timeout=20_000)
-        self.launcher(page).wait_for(timeout=10_000)
+        self.watch_presence(page, 1)
+        self.assert_quiet(page, errors)
+
+    def test_a_page_opened_in_the_middle_of_a_turn_reconnects_without_being_asked(self):
+        """The agent opened another page while its turn was under way. Nobody may be watching,
+        and the turn cannot go on until the new page is connected: it connects at once.
+
+        Nothing answers the message here, so the turn it starts stays under way; a reload
+        stands for the document the agent navigated to.
+        """
+        page, errors = self.open()
+        self.send(page)
+        self.running(page)
+        page.wait_for_function(
+            "() => window.__WOA_ASSISTANT__.state.runtime.panelHost.snapshot().connection.busy",
+            timeout=10_000)
+        self.assertEqual(self.host.bootstraps, 1)
+        page.reload(wait_until="domcontentloaded")
+        self.running(page)
+        self.assertEqual(self.host.bootstraps, 2)
+        # Nobody opened the panel or sent anything on the new page.
+        self.assertEqual(page.locator(".woa-window").count(), 0)
+        self.watch_presence(page, 1)
+        self.assert_quiet(page, errors)
+
+    def test_a_tab_with_a_conversation_connects_when_the_panel_is_opened(self):
+        """A conversation this tab has, with nothing under way, is fetched when the panel is
+        opened to show it -- not on every page the person visits."""
+        page, errors = self.open(session_storage={"woa.assistant.engagement.v1": "engaged"})
+        self.launcher(page).wait_for(timeout=8000)
+        page.wait_for_timeout(2500)
+        self.assertEqual(self.host.bootstraps, 0)
+        self.launcher(page).click()
+        self.running(page)
+        self.assertEqual(self.host.bootstraps, 1)
         self.watch_presence(page, 1)
         self.assert_quiet(page, errors)
 
@@ -259,8 +348,8 @@ class TheAssistantIsNeverSilentAndNeverLoud(unittest.TestCase):
         existing panel and reconnect loop alive past the former thirty-second cutoff."""
         self.host.close()
         self.host = self.make_host(same_origin=False)
-        page, errors = self.open()
-        self.launcher(page).wait_for(timeout=15_000)
+        page, errors = self.open(session_storage=self.TURN_UNDER_WAY)
+        self.running(page)
         page.wait_for_timeout(10_500)
         self.host.registry.retire(self.host.sessions[0], "session_closed")
         page.wait_for_timeout(32_000)
@@ -272,10 +361,15 @@ class TheAssistantIsNeverSilentAndNeverLoud(unittest.TestCase):
         self.watch_presence(page, 1)
         self.assert_quiet(page, errors)
 
-    def test_a_session_that_never_holds_keeps_a_capped_retry_cadence(self):
-        """Every new session ends at once: retries continue, but the delay stays bounded."""
+    def test_a_session_that_never_holds_is_not_asked_for_again_and_again(self):
+        """Every new session ends at once. The page tries again only while a turn depends on
+        it; once a session has come back with nothing under way, it stops and says why."""
         page, errors = self.open()
-        self.launcher(page).wait_for(timeout=15_000)
+        self.send(page)
+        self.running(page)
+        page.wait_for_function(
+            "() => window.__WOA_ASSISTANT__.state.runtime.panelHost.snapshot().connection.busy",
+            timeout=10_000)
         stop = threading.Event()
 
         def retire_every_session():
@@ -287,15 +381,13 @@ class TheAssistantIsNeverSilentAndNeverLoud(unittest.TestCase):
         reaper = threading.Thread(target=retire_every_session, daemon=True)
         reaper.start()
         self.addCleanup(stop.set)
-        deadline = time.monotonic() + 40
-        while len(self.host.sessions) <= 4 and time.monotonic() < deadline:
-            time.sleep(0.2)
-        self.assertGreater(len(self.host.sessions), 4)
+        page.wait_for_function(
+            "() => window.__WOA_ASSISTANT__?.state?.kind === 'unavailable'", timeout=30_000)
         count = len(self.host.sessions)
         page.wait_for_timeout(9000)
-        self.assertGreater(len(self.host.sessions), count)
-        self.assertLessEqual(len(self.host.sessions), count + 2)
-        self.assertIn("正在重试", self.entry_sentence(page))
+        self.assertEqual(len(self.host.sessions), count)
+        self.assertLessEqual(count, 3)
+        self.assertIn("可以点重试", self.start_sentence(page))
         self.assert_quiet(page, errors)
 
     def test_a_session_another_page_took_over_is_left_to_that_page(self):
@@ -305,11 +397,11 @@ class TheAssistantIsNeverSilentAndNeverLoud(unittest.TestCase):
         client with a new Runtime, and the server hands it the session.
         """
         self.host.shared_session = True
-        first, first_errors = self.open()
-        self.launcher(first).wait_for(timeout=15_000)
+        first, first_errors = self.open(session_storage=self.TURN_UNDER_WAY)
+        self.running(first)
         stored = first.evaluate("() => Object.fromEntries(Object.entries(sessionStorage))")
-        second, second_errors = self.open(session_storage=stored)
-        self.launcher(second).wait_for(timeout=15_000)
+        second, second_errors = self.open(session_storage={**stored, **self.TURN_UNDER_WAY})
+        self.running(second)
         first.wait_for_function(
             "() => window.__WOA_ASSISTANT__?.state?.kind === 'settled'", timeout=15_000)
         first.wait_for_timeout(3000)

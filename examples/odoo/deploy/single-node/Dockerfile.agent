@@ -10,7 +10,6 @@ RUN npm run build
 FROM python@sha256:519591d6871b7bc437060736b9f7456b8731f1499a57e22e6c285135ae657bf7 AS builder
 WORKDIR /build/source
 COPY . .
-COPY --from=panel /build/frontend/dist/panel ./frontend/dist/panel
 COPY --from=panel /build/frontend/dist/runtime ./frontend/dist/runtime
 COPY --from=panel /build/frontend/dist/trace ./frontend/dist/trace
 RUN python scripts/build_runtime.py --skip-build \

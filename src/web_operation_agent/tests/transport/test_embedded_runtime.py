@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 import os
 import shutil
@@ -22,7 +21,6 @@ from web_operation_agent.tests.support.execution import _Chat, _Control
 
 
 RUNTIME = Path(__file__).resolve().parents[2] / "web_runtime" / "assistant.js"
-PANEL_ROOT = Path(__file__).resolve().parents[2] / "web_runtime" / "panel"
 #: What only the browser side reads -- the stacking order among it -- is the frontend's.
 PRESENTATION = json.loads((Path(__file__).resolve().parents[4] / "frontend" / "src"
                            / "presentation.json").read_text(encoding="utf-8"))
@@ -31,16 +29,21 @@ PAGE_CONTROLLER = Path(_PAGE_CONTROLLER_PATH).expanduser() if _PAGE_CONTROLLER_P
 
 
 def _runtime_bytes() -> bytes:
-    """`assistant.js` as built. Like the panel, it is a build artifact: a checkout that has
+    """`assistant.js` as built. It is a build artifact: a checkout that has
     not built it skips with the prerequisite named, rather than failing on a missing file."""
     if not RUNTIME.is_file():
         raise unittest.SkipTest("assistant.js is not built; run scripts/build_runtime.py")
     return RUNTIME.read_bytes()
 
 
-def _runtime_source_b64() -> str:
-    """`assistant.js` as a data URL body: one self-contained module, panel host included."""
-    return base64.b64encode(_runtime_bytes()).decode()
+def _runtime_module_url() -> str:
+    """`assistant.js` as a module URL Node can import: one self-contained module, panel included.
+
+    A file URL, not a data URL: with the panel inside it, the module is large enough that
+    Node's data-URL decoder overflows its stack reading it.
+    """
+    _runtime_bytes()
+    return RUNTIME.as_uri()
 
 
 def _panel_configuration_js() -> str:
@@ -52,9 +55,9 @@ def _panel_configuration_js() -> str:
 class EmbeddedRuntimeTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute DOM freshness tests")
     def test_action_fingerprint_rejects_target_or_route_changes_only(self):
-        source = _runtime_source_b64()
+        source = _runtime_module_url()
         script = f"""
-          const mod = await import('data:text/javascript;base64,{source}');
+          const mod = await import('{source}');
           const h = mod.runtimeInternals;
           const pageLocation = {{href:'https://app.test/companies', origin:'https://app.test'}};
           globalThis.location = pageLocation;
@@ -142,8 +145,8 @@ class EmbeddedRuntimeTests(unittest.TestCase):
             from playwright.sync_api import sync_playwright
         except ImportError:
             self.skipTest("Playwright is not installed")
-        if not (PANEL_ROOT / "panel.js").is_file():
-            self.skipTest("the assistant panel is not built; run scripts/build_panel.py")
+        if not RUNTIME.is_file():
+            self.skipTest("assistant.js is not built; run scripts/build_runtime.py")
 
         registry = RemoteSessionRegistry()
         app = _FixtureApplication(PAGE_CONTROLLER)
@@ -274,8 +277,8 @@ class EmbeddedRuntimeTests(unittest.TestCase):
             from playwright.sync_api import sync_playwright
         except ImportError:
             self.skipTest("Playwright is not installed")
-        if not (PANEL_ROOT / "panel.js").is_file():
-            self.skipTest("the assistant panel is not built; run scripts/build_panel.py")
+        if not RUNTIME.is_file():
+            self.skipTest("assistant.js is not built; run scripts/build_runtime.py")
 
         registry = RemoteSessionRegistry()
         app = _FixtureApplication(PAGE_CONTROLLER)
@@ -330,9 +333,9 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         was in none of them, so an expired credential looked like a network fault and
         retried forever -- which is what the `embedded.js` 401/404/409 carry-over names.
         """
-        host = _runtime_source_b64()
+        host = _runtime_module_url()
         script = f"""
-          const mod = await import('data:text/javascript;base64,{host}');
+          const mod = await import('{host}');
           const configuration = {_panel_configuration_js()};
           const rows = [
             ['session closed', mod.classifyTransportError({{code:'session_closed'}}, configuration)],
@@ -379,9 +382,9 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         The echo exists because submitting needs a fresh observation first and can fail.
         It stops existing the moment the session's own `message_accepted` arrives.
         """
-        host = _runtime_source_b64()
+        host = _runtime_module_url()
         script = f"""
-          const mod = await import('data:text/javascript;base64,{host}');
+          const mod = await import('{host}');
           const configuration = {_panel_configuration_js()};
           const noop = () => {{}};
           const host = new mod.PanelHost({{configuration, actions:{{
@@ -405,9 +408,9 @@ class EmbeddedRuntimeTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the panel host")
     def test_panel_host_merges_by_event_id_and_holds_a_render_budget(self):
         """The panel's timeline is the server's projection, merged idempotently."""
-        host = _runtime_source_b64()
+        host = _runtime_module_url()
         script = f"""
-          const mod = await import('data:text/javascript;base64,{host}');
+          const mod = await import('{host}');
           const configuration = {_panel_configuration_js()};
           const noop = () => {{}};
           const host = new mod.PanelHost({{configuration, actions:{{
@@ -445,9 +448,9 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         cannot produce two questions, and that a document which reloaded between deciding
         and posting finishes the post instead of asking again.
         """
-        source = _runtime_source_b64()
+        source = _runtime_module_url()
         script = f"""
-          const mod = await import('data:text/javascript;base64,{source}');
+          const mod = await import('{source}');
           const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
           runtime.sessionId = 'session-1';
           runtime.stored = {{approvals:{{}}}};
@@ -502,9 +505,9 @@ class EmbeddedRuntimeTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_a_session_with_no_panel_denies_rather_than_proceeding(self):
         """Nobody to ask means the write does not happen. Approval fails closed."""
-        source = _runtime_source_b64()
+        source = _runtime_module_url()
         script = f"""
-          const mod = await import('data:text/javascript;base64,{source}');
+          const mod = await import('{source}');
           const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
           runtime.sessionId = 'session-1';
           runtime.stored = {{approvals:{{}}}};
@@ -526,9 +529,9 @@ class EmbeddedRuntimeTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_first_party_shell_can_submit_through_the_same_panel_api(self):
-        source = _runtime_source_b64()
+        source = _runtime_module_url()
         script = f"""
-          const mod = await import('data:text/javascript;base64,{source}');
+          const mod = await import('{source}');
           globalThis.location = {{href:'https://app.test/home'}};
           const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
           runtime.stopped = false;
@@ -580,17 +583,18 @@ class EmbeddedRuntimeTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_a_failed_startup_step_leaves_a_panel_that_says_so(self):
-        """CR-43: the panel is mounted before the steps that can fail, not after them.
+        """CR-43: the panel takes the session before the steps that can fail, not after them.
 
         The user reported "AI 助手入口看不到了" several times with a different cause each
         time. They shared one shape: startup threw somewhere between the hello and the
         panel, and because the panel was mounted last, the page ended up with no assistant
         at all -- no entry, no reason, nothing to press. A panel that cannot connect can
-        still say so.
+        still say so. The panel itself is up from the moment the script runs now; what must
+        still come first is the session binding to it, so a failure becomes its state.
         """
-        source = _runtime_source_b64()
+        source = _runtime_module_url()
         script = f"""
-          const mod = await import('data:text/javascript;base64,{source}');
+          const mod = await import('{source}');
           globalThis.location = {{href:'https://app.test/home'}};
           const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
           runtime.stopped = false;
@@ -601,8 +605,8 @@ class EmbeddedRuntimeTests(unittest.TestCase):
           const states = [];
           const notices = [];
           runtime._hello = async () => {{ order.push('hello'); }};
-          runtime._mountPanel = async () => {{
-            order.push('mount');
+          runtime._attachPanel = () => {{
+            order.push('attach');
             runtime.panelHost = {{
               setConnection(patch) {{ if ('state' in patch) states.push(patch.state); }},
               raise(code) {{ notices.push(code); }},
@@ -623,7 +627,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         proc = subprocess.run(["node", "--input-type=module", "-e", script],
                               text=True, capture_output=True, timeout=10, check=True)
         result = json.loads(proc.stdout)
-        self.assertEqual(result["order"], ["hello", "mount", "observe"])
+        self.assertEqual(result["order"], ["hello", "attach", "observe"])
         self.assertTrue(result["mounted"], "the panel must exist once the server has spoken")
         self.assertTrue(result["threw"], "the caller still learns that startup failed")
         # And it is the panel that says which way: a session the server no longer has is
@@ -640,10 +644,10 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         and the loader's reconnection was handed `null` -- which it then watched, throwing
         into Odoo's error handler every two seconds.
         """
-        source = _runtime_source_b64()
+        source = _runtime_module_url()
         script = f"""
           globalThis.window = {{}};
-          const mod = await import('data:text/javascript;base64,{source}');
+          const mod = await import('{source}');
           const make = () => {{
             const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
             runtime.stopped = false;
@@ -673,9 +677,9 @@ class EmbeddedRuntimeTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_product_turn_terminal_states_release_the_panel(self):
         """Each terminal status maps through the server's table, not a copy of it here."""
-        source = _runtime_source_b64()
+        source = _runtime_module_url()
         script = f"""
-          const mod = await import('data:text/javascript;base64,{source}');
+          const mod = await import('{source}');
           const configuration = {_panel_configuration_js()};
           const rows = [];
           for (const [state, mapping] of Object.entries(configuration.progress_states)) {{
@@ -720,9 +724,9 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         """Stopping is a request, not an outcome: the turn stays in flight until the server
         says how it ended. A pending approval is denied by the server on cancellation, not
         dismissed locally, so the card clears only once that denial is recorded."""
-        source = _runtime_source_b64()
+        source = _runtime_module_url()
         script = f"""
-          const mod = await import('data:text/javascript;base64,{source}');
+          const mod = await import('{source}');
           const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
           runtime.stopped = false;
           runtime.sessionId = 'session-1';
@@ -779,9 +783,9 @@ class EmbeddedRuntimeTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_pending_stop_retries_idempotently_after_runtime_restart(self):
-        source = _runtime_source_b64()
+        source = _runtime_module_url()
         script = f"""
-          const mod = await import('data:text/javascript;base64,{source}');
+          const mod = await import('{source}');
           const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
           runtime.stopped = false;
           runtime.sessionId = 'session-1';
@@ -806,9 +810,9 @@ class EmbeddedRuntimeTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_hello_echoes_only_the_server_supplied_principal_binding(self):
-        source = _runtime_source_b64()
+        source = _runtime_module_url()
         script = f"""
-          const mod = await import('data:text/javascript;base64,{source}');
+          const mod = await import('{source}');
           globalThis.location = {{origin:'https://app.example.test'}};
           const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
           runtime.sessionId = 'session-1';
@@ -837,9 +841,9 @@ class EmbeddedRuntimeTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_idle_runtime_accepts_only_same_session_principal_renewal(self):
-        source = _runtime_source_b64()
+        source = _runtime_module_url()
         script = f"""
-          const mod = await import('data:text/javascript;base64,{source}');
+          const mod = await import('{source}');
           const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
           runtime.stopped = false;
           runtime.endpoint = 'https://agent.test';
@@ -880,9 +884,9 @@ class EmbeddedRuntimeTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_goto_uses_opt_in_spa_navigation_and_keeps_document_default(self):
-        source = _runtime_source_b64()
+        source = _runtime_module_url()
         script = f"""
-          const mod = await import('data:text/javascript;base64,{source}');
+          const mod = await import('{source}');
           const pageLocation = {{href:'https://app.test/start', origin:'https://app.test',
             assign(value) {{ assigned = value; this.href = value; }}}};
           globalThis.location = pageLocation;
@@ -931,9 +935,9 @@ class EmbeddedRuntimeTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the browser module helpers")
     def test_redaction_and_pagecontroller_index_adapter(self):
-        source = _runtime_source_b64()
+        source = _runtime_module_url()
         script = f"""
-          const mod = await import('data:text/javascript;base64,{source}');
+          const mod = await import('{source}');
           const h = mod.runtimeInternals;
           h.configureSensitiveQueryKeys([
             'externalLoginKey', 'externaLoginKey', 'externLoginKey', 'jsessionid']);
@@ -1061,9 +1065,9 @@ class EmbeddedRuntimeTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed for runtime fault injection")
     def test_runtime_recovery_security_and_deadline_faults(self):
-        source = _runtime_source_b64()
+        source = _runtime_module_url()
         script = """
-          const mod = await import('data:text/javascript;base64,__SOURCE__');
+          const mod = await import('__SOURCE__');
           const h = mod.runtimeInternals;
 
           const tokenWal = await h.navigationWal(
@@ -1449,8 +1453,8 @@ class EmbeddedRuntimeTests(unittest.TestCase):
             from playwright.sync_api import sync_playwright
         except ImportError:
             self.skipTest("Playwright is not installed")
-        if not (PANEL_ROOT / "panel.js").is_file():
-            self.skipTest("the assistant panel is not built; run scripts/build_panel.py")
+        if not RUNTIME.is_file():
+            self.skipTest("assistant.js is not built; run scripts/build_runtime.py")
 
         registry = RemoteSessionRegistry()
         app = _FixtureApplication(PAGE_CONTROLLER)
@@ -1507,8 +1511,8 @@ class EmbeddedRuntimeTests(unittest.TestCase):
             from playwright.sync_api import sync_playwright
         except ImportError:
             self.skipTest("Playwright is not installed")
-        if not (PANEL_ROOT / "panel.js").is_file():
-            self.skipTest("the assistant panel is not built; run scripts/build_panel.py")
+        if not RUNTIME.is_file():
+            self.skipTest("assistant.js is not built; run scripts/build_runtime.py")
 
         registry = RemoteSessionRegistry()
         app = _FixtureApplication(PAGE_CONTROLLER)

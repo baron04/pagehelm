@@ -23,7 +23,7 @@ export function InlineError({notice, configuration, labels, limits, onRetry, off
   // A code with no guidance of its own is *not* a dropped connection. Borrowing the
   // reconnecting line for it told people their network had failed whenever the server
   // did, which is both wrong and unactionable.
-  const message = (configuration.notices[notice.code]
+  const message = (notice.message ?? configuration.notices[notice.code]
     ?? configuration.notices[offline ? 'offline' : 'unexpected']
     ?? configuration.notices.reconnecting
     ?? '').slice(0, limits.notice_max_chars)

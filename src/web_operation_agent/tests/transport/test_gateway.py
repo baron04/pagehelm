@@ -154,23 +154,13 @@ class GatewayTests(unittest.TestCase):
         else:
             self.assertEqual(status, 404)
             self.assertIn(b"runtime_unavailable", body)
-        status, headers, body = self.request("GET", "/v1/runtime/panel/panel.js")
-        if status == 200:
-            self.assertEqual(headers["Access-Control-Allow-Origin"], "*")
-            self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
-            self.assertIn("immutable", headers["Cache-Control"])
-            self.assertNotIn(b"clientToken", body)
-            self.assertNotIn(b"ControlPlan", body)
-        else:
-            self.assertEqual(status, 404)
-            self.assertIn(b"panel_unavailable", body)
-        # Path traversal out of the panel directory is refused by the manifest, not by
-        # string surgery on the request path.
-        self.assertEqual(
-            self.request("GET", "/v1/runtime/panel/../../assistant.js")[0], 404)
+        # The panel is part of `assistant.js`: no second module is served, and nothing
+        # under the runtime path is answered from the directory by accident.
+        for path in ("/v1/runtime/panel/panel.js", "/v1/runtime/panel/../../assistant.js"):
+            self.assertEqual(self.request("GET", path)[0], 404, path)
 
     def test_an_unbuilt_runtime_is_named_rather_than_answered_with_an_error(self):
-        """`assistant.js` is a build artifact, like the panel, and is missing the same way."""
+        """`assistant.js` is a build artifact, and a missing one is named as such."""
         from pathlib import Path
 
         from web_operation_agent.transport import gateway as embedded_gateway

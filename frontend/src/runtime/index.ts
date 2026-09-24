@@ -23,6 +23,7 @@ import type {ActionCommand, ElementRef, JsonObject} from './types'
 export {EmbeddedWebRuntime, startEmbeddedRuntime} from './runtime'
 export {PanelHost, backoffAfter, classifyTransportError} from './panelHost'
 export {Supervisor, autoBoot} from './boot'
+export {mountPanelView} from './panelBridge'
 
 let internal: Redactor = createRedactor()
 

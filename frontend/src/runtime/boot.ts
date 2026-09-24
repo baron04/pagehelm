@@ -10,17 +10,23 @@
  *
  * Two invariants hold throughout. Nothing here reaches the host page's error handlers (I1):
  * every callback goes through `contain.ts`. And the assistant is never silently absent (I2):
- * until a panel is up, the standing entry (`entry.ts`) says what is happening.
+ * the panel (`shell.ts`) is up from the moment this script runs, before and between sessions,
+ * and says what is happening when one is being made or could not be.
  */
 import {detach, later, listen, report, type Cancel} from './contain'
-import {ENTRY_TEXT, standingEntry, type StandingEntry} from './entry'
+import {engagementRecord} from './engagement'
 import {startEmbeddedRuntime} from './runtime'
+import {createShell} from './shell'
+import {START_TEXT, panelStartStatus, type StartStatus} from './startStatus'
 import type {RuntimeConfig} from './types'
 
 /** A capped ladder: connection faults retry for the life of the page without request storms. */
 export const RETRY_MS: readonly number[] = [1000, 3000, 8000]
-/** How long the first attempt may take before the entry says the assistant is on its way. */
-export const CONNECTING_GRACE_MS = 800
+/**
+ * How long a session with nothing to do is kept before it is let go. The next thing the
+ * person sends makes a new one; the conversation is the server's and comes back with it.
+ */
+export const KEEP_ALIVE_MS = 5 * 60_000
 /** How soon to ask again when a renewal could not happen yet. */
 export const RENEW_RETRY_MS = 5000
 /**
@@ -54,7 +60,7 @@ export class BootFailure extends Error {
 
   /** Another attempt cannot fix it: the person has to sign in again or be granted access. */
   get final(): boolean {
-    return this.status !== null && ENTRY_TEXT.final_statuses.includes(this.status)
+    return this.status !== null && START_TEXT.final_statuses.includes(this.status)
   }
 }
 
@@ -139,7 +145,13 @@ export type BootState =
 export interface SupervisorDeps {
   source: SessionSource
   start(config: RuntimeConfig): Promise<Supervised | null>
-  entry: StandingEntry
+  status: StartStatus
+  /**
+   * Whether to make or keep a session without the person asking: while a turn is under way,
+   * or for a session handed to the page whole. Otherwise a failed start waits for Retry and
+   * a session that ends is not replaced until the person next sends something.
+   */
+  eager?(): boolean
   /** Told of every Runtime that comes up. */
   onRunning?(runtime: Supervised): void
 }
@@ -147,7 +159,6 @@ export interface SupervisorDeps {
 export class Supervisor {
   private current: BootState = {kind: 'idle'}
   private pending: Cancel | null = null
-  private grace: Cancel | null = null
   private renewal: Cancel | null = null
   private unwatch: Cancel | null = null
   private runningSince = 0
@@ -163,12 +174,8 @@ export class Supervisor {
     const kind = this.current.kind
     if (kind === 'starting' || kind === 'running' || kind === 'settled') return
     this.cancel('pending')
-    // Nothing on screen yet says what is happening: after a short grace, the entry does.
-    if (kind === 'idle') {
-      this.grace = later('entry grace', CONNECTING_GRACE_MS, () => {
-        if (this.current.kind === 'starting') this.deps.entry.connecting()
-      })
-    }
+    // The panel decides what to show while this takes: nothing at first, then a skeleton.
+    if (kind === 'idle') this.deps.status.connecting()
     this.current = {kind: 'starting', attempt}
     detach('start', this.attempt(attempt))
   }
@@ -178,6 +185,29 @@ export class Supervisor {
     this.flaps = 0
     this.start(0)
   }
+
+  /** Something needs a session -- a message sent, a conversation opened: make one if none is up. */
+  connect(): void {
+    const kind = this.current.kind
+    if (kind === 'idle' || kind === 'retrying' || kind === 'unavailable') this.retry()
+  }
+
+  /**
+   * Let an idle session go. The Runtime stops without its session ending on the server, and
+   * the panel stays as it is, ready for the next message to make a new one.
+   */
+  rest(): void {
+    if (this.current.kind !== 'running') return
+    const {runtime} = this.current
+    if (!runtime.canRenewSession()) return
+    this.current = {kind: 'idle'}
+    this.cancel('renewal')
+    this.cancel('unwatch')
+    try { runtime.stop() } catch (error) { report('rest', error) }
+    this.deps.status.rested()
+  }
+
+  private get eager(): boolean { return this.deps.eager?.() ?? true }
 
   private async attempt(attempt: number): Promise<void> {
     let runtime: Supervised | null
@@ -199,8 +229,7 @@ export class Supervisor {
   }
 
   private running(runtime: Supervised, bootstrap: Bootstrap): void {
-    this.cancel('grace')
-    this.deps.entry.remove()
+    this.deps.status.started()
     this.current = {kind: 'running', runtime}
     this.runningSince = Date.now()
     this.unwatch = runtime.onStopped(() => this.stopped(runtime))
@@ -210,15 +239,15 @@ export class Supervisor {
 
   private failed(failure: BootFailure, attempt: number): void {
     report('start', failure)
-    this.cancel('grace')
     // Authentication and authorization refusals need a new sign-in or grant. Everything
-    // else keeps trying for as long as the page exists; a transient outage must not make the
-    // assistant disappear or require the person to keep pressing Retry.
-    const retrying = !failure.final
+    // else keeps trying while a turn depends on it; a transient outage must not strand a turn
+    // the person is not watching. With nothing under way, the person is the one who asked,
+    // and Retry beside the reason is theirs to press.
+    const retrying = !failure.final && this.eager
     this.current = retrying
       ? {kind: 'retrying', attempt: attempt + 1, failure}
       : {kind: 'unavailable', failure}
-    this.deps.entry.unavailable({status: failure.status, retrying}, () => this.retry())
+    this.deps.status.unavailable({status: failure.status, retrying}, () => this.retry())
     const delay = RETRY_MS[Math.min(attempt, RETRY_MS.length - 1)] ?? 1000
     if (retrying) {
       this.pending = later('retry', delay, () => this.start(attempt + 1))
@@ -252,7 +281,9 @@ export class Supervisor {
     }
     this.flaps = 0
     this.current = {kind: 'idle'}
-    this.start(0)
+    // With a turn under way the page reconnects on its own; otherwise the next message does.
+    if (this.eager) this.start(0)
+    else this.deps.status.rested()
   }
 
   private scheduleRenewal(runtime: Supervised, bootstrap: Bootstrap, delay?: number): void {
@@ -282,7 +313,7 @@ export class Supervisor {
     })
   }
 
-  private cancel(which: 'pending' | 'grace' | 'renewal' | 'unwatch'): void {
+  private cancel(which: 'pending' | 'renewal' | 'unwatch'): void {
     this[which]?.()
     this[which] = null
   }
@@ -334,6 +365,12 @@ export function sourceFromPage(doc: Document = document, win: Window = window): 
  * Boot the assistant this page asked for, once per page. `window.__WOA_RUNTIME_READY__`
  * resolves with the first Runtime that comes up and is never rejected, so no outage of the
  * assistant can reach the host's `unhandledrejection` handler.
+ *
+ * The panel goes up at once; a session does not. One is made when the person sends
+ * something, or opens a conversation this tab already has, or -- without anyone asking --
+ * when a turn is under way (`engagement.ts`). A session handed to the page whole, as a demo
+ * or a test does, is made at once and kept: whoever handed it over is driving it. A session
+ * with nothing to do is let go after `KEEP_ALIVE_MS`.
  */
 export function autoBoot(win: Window = window): Supervisor | null {
   if (win.top !== win || win.__WOA_ASSISTANT__) return win.__WOA_ASSISTANT__ ?? null
@@ -341,18 +378,64 @@ export function autoBoot(win: Window = window): Supervisor | null {
   if (!source) return null
   let settle: (runtime: unknown) => void = () => {}
   win.__WOA_RUNTIME_READY__ = new Promise(resolve => { settle = resolve })
-  const supervisor = new Supervisor({
+  const handedOver = !source.renewable
+  const engagement = engagementRecord()
+  const eager = () => handedOver || engagement.read() === 'active'
+  // What the person sent while no session could take it: it goes to the first one that does.
+  let waiting = ''
+  // The panel's verbs while no Runtime is bound. Sending makes a session, and opening the
+  // panel on a conversation this tab has makes one to show it; the rest wait for one.
+  const shell = createShell({
+    submit(text) {
+      waiting = text
+      shell.host.setOptimistic({turnId: '', text, failed: false})
+      supervisor.connect()
+    },
+    panelVisibility(open) {
+      if (open && engagement.read() !== 'none') supervisor.connect()
+    },
+    cancel() {}, decide() {}, newConversation() {}, loadOlder() {},
+  })
+  const supervisor: Supervisor = new Supervisor({
     source,
-    start: startEmbeddedRuntime,
-    entry: standingEntry(win.document),
-    onRunning: runtime => settle(runtime),
+    start: config => startEmbeddedRuntime(config, shell),
+    status: panelStartStatus(shell.host),
+    eager,
+    onRunning: runtime => {
+      settle(runtime)
+      if (!waiting) return
+      const text = waiting
+      waiting = ''
+      shell.host.submit(text)
+    },
   })
   win.__WOA_ASSISTANT__ = supervisor
+  // Keep the tab's record current, and let a session go once it has had nothing to do for a
+  // while: every change the panel shows while it is idle starts the wait again.
+  let resting: Cancel | null = null
+  shell.host.subscribe(snapshot => {
+    // Only a live session speaks for the turn. One that is ending says it is no longer busy,
+    // which is not the same as the turn being over: the next session may have to resume it.
+    const state = supervisor.state
+    const running = state.kind === 'running' && !state.runtime.stopped
+    engagement.note(snapshot, running)
+    resting?.()
+    resting = null
+    if (!running || handedOver || engagement.read() === 'active') return
+    resting = later('keep alive', KEEP_ALIVE_MS, () => {
+      resting = null
+      supervisor.rest()
+    })
+  })
   // The network coming back is the moment a failed start is worth trying again.
   listen('boot online', win, 'online', () => {
     const kind = supervisor.state.kind
-    if (kind === 'retrying' || kind === 'unavailable') supervisor.retry()
+    if (eager() && (kind === 'retrying' || kind === 'unavailable')) supervisor.retry()
   })
+  if (!eager()) {
+    shell.host.rest()
+    return supervisor
+  }
   if (win.document.readyState === 'loading') {
     listen('boot', win.document, 'DOMContentLoaded', () => supervisor.start(), {once: true})
   } else {

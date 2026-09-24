@@ -18,8 +18,8 @@ export const MIN_HEIGHT = 360
 export const DEFAULT_WIDTH = 420
 export const DEFAULT_HEIGHT = 680
 /**
- * How far the launcher sits from the viewport's right and bottom edges. The launcher, the
- * standing entry before it, and a window nobody has moved all take their corner from here.
+ * How far the launcher sits from the viewport's right and bottom edges. The launcher and a
+ * window nobody has moved both take their corner from here.
  */
 export const DOCK_INSET = presentation.layout.launcher_inset
 export const DRAWER_DEFAULT_WIDTH = 420

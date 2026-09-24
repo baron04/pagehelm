@@ -6,10 +6,16 @@
  * turns the panel's intents into authenticated requests, and classifies every transport
  * failure once so that no call site has to guess whether a code is terminal.
  *
+ * It lives as long as the page, not as long as a session: the panel is up from the moment the
+ * script runs, and a Runtime that connects binds its verbs to this host, and unbinds them when
+ * it stops. Until one does, the page's own verbs answer -- start a session, then pass the
+ * intent on.
+ *
  * Two rules it exists to enforce:
  *   * the timeline is whatever the server projects, never anything this file accumulated
  *     locally -- a full page navigation replays it from `/timeline` (F8a);
- *   * every bound and every user-visible string comes from the hello reply (F8b).
+ *   * every bound and every user-visible string is the server's contract (F8b): the one
+ *     compiled into this script, checked against the hello reply's protocol.
  */
 import type {
   ConnectionState, HostNotice, PanelHost as PanelHostContract, PanelSnapshot,
@@ -107,8 +113,13 @@ const REQUIRED_ACTIONS = ['submit', 'cancel', 'decide', 'newConversation', 'load
 type Optimistic = NonNullable<PanelSnapshot['optimistic']>
 
 export class PanelHost implements PanelHostContract {
-  readonly configuration: PanelConfiguration
+  private current: PanelConfiguration
+  /** The page's own verbs, answering while no Runtime is bound. */
   private readonly actions: PanelActions
+  /** The connected Runtime's verbs, while one is. */
+  private bound: PanelActions | null = null
+  /** What Retry on a failed start does; without one, Retry reloads the page. */
+  private retryStart: (() => void) | null = null
   private readonly listeners = new Set<(snapshot: PanelSnapshot) => void>()
   private state: PanelSnapshot = {
     connection: {state: 'connecting', busy: false, stopping: false, online: true},
@@ -127,25 +138,46 @@ export class PanelHost implements PanelHostContract {
   private recoveredHistoryVisible = true
 
   constructor({configuration, actions}: {configuration: PanelConfiguration; actions: PanelActions}) {
-    if (!configuration || typeof configuration.protocol !== 'number') {
-      throw new Error('panel host requires the server panel configuration')
-    }
-    if (configuration.protocol !== PANEL_PROTOCOL) {
-      throw new Error(
-        `runtime speaks panel protocol ${PANEL_PROTOCOL}, server sent ${configuration.protocol}`)
-    }
-    for (const name of REQUIRED_ACTIONS) {
-      if (typeof actions?.[name] !== 'function') {
-        throw new Error(`panel host actions are missing ${name}()`)
-      }
-    }
-    this.configuration = configuration
+    requireProtocol(configuration)
+    requireActions(actions)
+    this.current = configuration
     this.actions = actions
   }
 
+  get configuration(): PanelConfiguration { return this.current }
+
+  private get verbs(): PanelActions { return this.bound ?? this.actions }
+
+  /** A Runtime takes the panel's intents. Returns the release, which undoes only its own bind. */
+  bind(actions: PanelActions): () => void {
+    requireActions(actions)
+    this.bound = actions
+    return () => { if (this.bound === actions) this.bound = null }
+  }
+
+  /**
+   * The server's side of the contract, from a hello reply. The copy and the bounds are the
+   * ones compiled in; what the server adds is when this session's identity and the session
+   * itself expire, and -- until the page declares its own -- the application's suggestions.
+   */
+  adoptServerConfiguration(server: PanelConfiguration): void {
+    requireProtocol(server)
+    this.current = {
+      ...this.current,
+      session_expires_at: server.session_expires_at,
+      principal_expires_at: server.principal_expires_at,
+      suggestions: this.current.suggestions.length
+        ? this.current.suggestions : (server.suggestions ?? []),
+    }
+    this.commit({})
+  }
+
+  /** What Retry does for a start that failed; `null` once a session is up. */
+  setRetryStart(retry: (() => void) | null): void { this.retryStart = retry }
+
   snapshot(): PanelSnapshot { return this.state }
 
-  panelVisibility(open: boolean): void { this.actions.panelVisibility?.(open) }
+  panelVisibility(open: boolean): void { this.verbs.panelVisibility?.(open) }
 
   subscribe(listener: (snapshot: PanelSnapshot) => void): () => void {
     this.listeners.add(listener)
@@ -194,6 +226,18 @@ export class PanelHost implements PanelHostContract {
     })
   }
 
+  /**
+   * No session, and none needed: what a session said about itself -- its state, a notice, a
+   * card it held, a conversation it closed -- no longer applies. The conversation on screen
+   * stays; the next message makes a new session.
+   */
+  rest(): void {
+    this.commit({
+      connection: {...this.state.connection, state: 'ready', busy: false, stopping: false},
+      notice: null, pendingApproval: null, closed: false,
+    })
+  }
+
   setPendingApproval(request: ApprovalRequest | null | undefined): void {
     this.commit({pendingApproval: request ?? null})
   }
@@ -225,8 +269,11 @@ export class PanelHost implements PanelHostContract {
     if (this.state.optimistic?.turnId === turnId) this.commit({optimistic: null})
   }
 
-  raise(code: string, {retryable = true, turnId = ''}: {retryable?: boolean; turnId?: string} = {}): void {
-    const notice: HostNotice = turnId ? {code, retryable, turnId} : {code, retryable}
+  raise(code: string, {retryable = true, turnId = '', message = ''}:
+        {retryable?: boolean; turnId?: string; message?: string} = {}): void {
+    const notice: HostNotice = {code, retryable}
+    if (turnId) notice.turnId = turnId
+    if (message) notice.message = message
     this.commit({notice})
   }
 
@@ -237,38 +284,61 @@ export class PanelHost implements PanelHostContract {
   // -- driven by the panel ---------------------------------------------------------
   submit(text: string): void {
     this.clearNotice()
-    this.actions.submit(String(text || ''))
+    this.verbs.submit(String(text || ''))
   }
 
   retrySubmit(): void {
     const pending = this.state.optimistic
     if (!pending) return
     this.commit({optimistic: {...pending, failed: false}})
-    this.actions.submit(pending.text)
+    this.verbs.submit(pending.text)
   }
 
-  cancel(): void { this.actions.cancel() }
+  cancel(): void { this.verbs.cancel() }
 
   decide(approvalId: string, decision: 'approved' | 'denied'): void {
-    this.actions.decide(String(approvalId), decision)
+    this.verbs.decide(String(approvalId), decision)
   }
 
   newConversation(): void {
     this.clearTimeline()
     this.clearNotice()
-    this.actions.newConversation()
+    this.verbs.newConversation()
   }
 
   loadOlder(): void {
     if (this.state.loadingOlder || !this.state.hasOlder) return
     const oldest = this.state.entries[0]
     this.setLoadingOlder(true)
-    this.actions.loadOlder(oldest ? oldest.id : '')
+    this.verbs.loadOlder(oldest ? oldest.id : '')
   }
 
   dismissNotice(): void { this.clearNotice() }
 
   reload(): void {
+    if (this.retryStart) {
+      this.clearNotice()
+      this.retryStart()
+      return
+    }
     if (typeof location !== 'undefined') location.reload()
+  }
+}
+
+function requireProtocol(configuration: PanelConfiguration | null | undefined): void {
+  if (!configuration || typeof configuration.protocol !== 'number') {
+    throw new Error('panel host requires the server panel configuration')
+  }
+  if (configuration.protocol !== PANEL_PROTOCOL) {
+    throw new Error(
+      `runtime speaks panel protocol ${PANEL_PROTOCOL}, server sent ${configuration.protocol}`)
+  }
+}
+
+function requireActions(actions: PanelActions | null | undefined): void {
+  for (const name of REQUIRED_ACTIONS) {
+    if (typeof actions?.[name] !== 'function') {
+      throw new Error(`panel host actions are missing ${name}()`)
+    }
   }
 }

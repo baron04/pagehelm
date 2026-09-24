@@ -24,7 +24,6 @@ export interface RuntimeConfig {
   /** Same-origin path of the application's page write guard; see `writeGuard.ts`. */
   pageWriteGuard?: string
   panel?: boolean
-  panelModule?: string
 }
 
 export type JsonObject = Record<string, unknown>

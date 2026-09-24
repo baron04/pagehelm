@@ -1,12 +1,10 @@
 import {describe, expect, it} from 'vitest'
 import raw from '@contract/panel_contract.json'
-import rawTokens from '../src/styles/design_tokens.json'
 import presentation from '../src/presentation.json'
 import {
   DEFAULT_CONFIGURATION, PANEL_PROTOCOL, declinable, isPanelState, statusLabelKey, toneOf,
 } from '../src/contract/panel'
 import {requirePanelHost} from '../src/bridge/host'
-import {ENTRY_DARK, ENTRY_LIGHT} from '../src/runtime/entry-palette.generated'
 
 const actions = {
   snapshot: () => ({}), subscribe: () => () => undefined, submit: () => undefined,
@@ -79,22 +77,5 @@ describe('the host contract is checked where it is assembled', () => {
   // copies used to invite.
   it('states the protocol as the contract states it, not as the generator last ran', () => {
     expect(PANEL_PROTOCOL).toBe(raw.protocol)
-  })
-
-  const entryRoles: Array<[keyof typeof ENTRY_LIGHT, keyof typeof rawTokens.themes.light]> = [
-    ['ink', 'ink'], ['muted', 'ink-muted'], ['card', 'surface-raised'], ['line', 'line'],
-    ['lineStrong', 'line-strong'], ['accent', 'accent'], ['button', 'surface-muted'],
-    ['warning', 'warning'], ['shadow', 'shadow-2'],
-  ]
-
-  // The standing entry renders before the panel's shadow root exists, so it cannot inherit
-  // the custom properties and carries generated literals instead. This fails when someone
-  // edits `design_tokens.json` and forgets the build -- the drift the hand-copied palette
-  // (`#2557dd` next to an accent of `#1d4ed8`) used to hide.
-  it('gives the entry the palette as the tokens state it now, not as the generator last ran', () => {
-    for (const [entry, token] of entryRoles) {
-      expect(ENTRY_LIGHT[entry]).toBe(rawTokens.themes.light[token])
-      expect(ENTRY_DARK[entry]).toBe(rawTokens.themes.dark[token])
-    }
   })
 })

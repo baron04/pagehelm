@@ -13,7 +13,6 @@ import math
 import re
 import threading
 from collections.abc import Callable, Mapping
-from functools import lru_cache
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -33,35 +32,14 @@ SESSION_PATH = re.compile(
     r"(hello|observations|claims|results|messages|approvals|cancellations|events|timeline|conversation)$"
 )
 WEB_RUNTIME = Path(__file__).resolve().parent.parent / "web_runtime"
-#: The one script a host page includes to have the assistant: the boot supervisor and the
-#: Runtime, built from `frontend/src/runtime/` by `scripts/build_runtime.py`. The panel is a
-#: separate module under `PANEL_PREFIX` that the Runtime loads once the server has spoken.
-#: An explicit map keeps the directory from becoming a served tree by accident.
+#: The one script a host page includes to have the assistant: the boot supervisor, the
+#: Runtime and the panel, built from `frontend/` by `scripts/build_runtime.py`. Nothing else
+#: is fetched after it. An explicit map keeps the directory from becoming a served tree by
+#: accident.
 RUNTIME_PATH = WEB_RUNTIME / "assistant.js"
 RUNTIME_MODULES = {
     "/v1/runtime/assistant.js": RUNTIME_PATH,
 }
-PANEL_ROOT = WEB_RUNTIME / "panel"
-PANEL_PREFIX = "/v1/runtime/panel/"
-_PANEL_ASSET = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,80})?$")
-
-
-@lru_cache(maxsize=1)
-def _panel_manifest() -> dict:
-    """What the built panel ships, by published path.
-
-    A checkout without Node has no panel.  That is reported as a named prerequisite rather
-    than served from whatever happens to be lying in the directory -- the same rule the
-    PageAgent bundle gate applies.
-    """
-    try:
-        manifest = json.loads((PANEL_ROOT / "manifest.json").read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    assets = manifest.get("assets")
-    return assets if isinstance(assets, dict) else {}
-
-
 _SENSITIVE_QUERY_KEY = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{1,63}\Z")
 
 
@@ -367,27 +345,14 @@ def _handler(registry: RemoteSessionRegistry, *, sse_wait_s: float,
             if path in RUNTIME_MODULES:
                 source = RUNTIME_MODULES[path]
                 if not source.is_file():
-                    # A build artifact, like the panel: named as a prerequisite rather than
-                    # answered with a server error, or with some older copy.
+                    # A build artifact: named as a prerequisite rather than answered with a
+                    # server error, or with some older copy.
                     self._json(404, {
                         "error": ("the assistant runtime is not built in this installation; "
                                   "run scripts/build_runtime.py"),
                         "code": "runtime_unavailable"})
                     return
                 self._static(source, "text/javascript; charset=utf-8", cache="no-cache")
-                return
-            if path.startswith(PANEL_PREFIX):
-                relative = path[len(PANEL_PREFIX):]
-                entry = _panel_manifest().get(relative)
-                if entry is None or not _PANEL_ASSET.fullmatch(relative):
-                    self._json(404, {
-                        "error": ("the assistant panel is not built in this installation; "
-                                  "run scripts/build_panel.py"),
-                        "code": "panel_unavailable"})
-                    return
-                # Content-hashed by the build, so it is safe to keep for a year.
-                self._static(PANEL_ROOT / relative, entry["media_type"],
-                             cache="public, max-age=31536000, immutable")
                 return
             match = self._route()
             if not match or match.group(2) not in {"events", "timeline"}:

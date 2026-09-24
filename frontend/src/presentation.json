@@ -1,14 +1,13 @@
 {
   "comment": [
-    "How the panel and the standing entry present themselves: nothing here is read by the",
-    "server. The stacking order, the visibility gate on a confirmation card, which",
-    "confirmations can be declined, and the entry's own words before any panel exists."
+    "How the panel presents itself: nothing here is read by the server. The stacking order,",
+    "the visibility gate on a confirmation card, which confirmations can be declined, and the",
+    "panel's own words for a start that failed, which happens before any server has spoken."
   ],
   "layout": {
     "comment": [
-      "Where the launcher and the standing entry sit, and at what size: the two occupy",
-      "the same spot so the swap from one to the other moves nothing under the pointer.",
-      "A window nobody has moved opens with its corner on the launcher's."
+      "Where the launcher sits, and at what size. A window nobody has moved opens with its",
+      "corner on the launcher's."
     ],
     "overlay_z_index": 2147483646,
     "launcher_inset": 20,
@@ -31,20 +30,13 @@
       "declinable": false
     }
   },
-  "entry": {
+  "start": {
     "comment": [
-      "The standing entry: what the page shows where the assistant will be, before a panel",
-      "exists -- while the first connection is still being made, and whenever starting",
-      "failed. A person who can only reach a feature through one entry must always find",
-      "that entry (P7.5 CR-43). A sentence is a cause, then what happens next; the HTTP",
-      "status stays at the end for whoever has to report it. `final_statuses` are the",
-      "failures another attempt cannot fix, so none is made on its own."
+      "Why the assistant could not start, said in the panel. A start fails before any server",
+      "has spoken, so these words cannot be the server's. A sentence is a cause, then what happens",
+      "next; the HTTP status stays at the end for whoever has to report it. `final_statuses` are",
+      "the failures another attempt cannot fix, so none is made on its own."
     ],
-    "badge": "助手",
-    "label_connecting": "AI 助手正在连接",
-    "label_unavailable": "AI 助手暂时不可用",
-    "connecting": "正在连接助手…",
-    "retry": "重试",
     "causes": {
       "401": "登录状态已变化，请重新登录后再使用助手",
       "403": "当前账号未获授权使用助手",

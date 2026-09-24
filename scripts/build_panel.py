@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
-"""Build the React panel and place it where the Python package can serve it.
+"""Build the frontend, and place the trace replay page where the Python package can serve it.
 
-The built panel is a generated artifact, so it is not committed. It is produced here and
-copied into ``web_operation_agent/web_runtime/panel/`` with a manifest the gateway reads.
-The trace replay page is built by the same frontend and copied beside it as
-``web_runtime/trace_replay.html``, the page ``traceview.py`` fills with a run's data.
-A checkout without Node has no panel; the gateway then refuses to serve the panel document
-with a named prerequisite rather than falling back to some older copy -- the same rule the
-PageAgent bundle gate already applies.
+The panel ships inside ``assistant.js`` (``scripts/build_runtime.py`` places that). What this
+script places is the trace replay page, built by the same frontend with the design tokens
+inlined, as ``web_runtime/trace_replay.html`` -- the page ``traceview.py`` fills with a run's
+data. It is a generated artifact, so it is not committed. It also removes the separate panel
+directory earlier builds wrote, so nothing stale ships in the wheel.
 """
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
 import shutil
 import subprocess
 import sys
@@ -21,12 +17,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / "frontend"
-DIST = FRONTEND / "dist" / "panel"
-TARGET = ROOT / "src" / "web_operation_agent" / "web_runtime" / "panel"
+#: Where earlier builds put the panel as a module of its own. It is part of `assistant.js` now.
+RETIRED_PANEL = ROOT / "src" / "web_operation_agent" / "web_runtime" / "panel"
 TRACE_DIST = FRONTEND / "dist" / "trace" / "trace_replay.html"
 TRACE_TARGET = ROOT / "src" / "web_operation_agent" / "web_runtime" / "trace_replay.html"
-SERVABLE = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
-            ".woff2": "font/woff2", ".svg": "image/svg+xml"}
 
 
 def run(*command: str) -> None:
@@ -39,49 +33,18 @@ def main() -> int:
     parser.add_argument("--install", action="store_true",
                         help="run npm ci first (CI and fresh checkouts)")
     parser.add_argument("--skip-build", action="store_true",
-                        help="only sync an already built frontend/dist/panel")
+                        help="only sync an already built frontend/dist")
     args = parser.parse_args()
 
     if (args.install or not args.skip_build) and not shutil.which("npm"):
-        print("npm is unavailable; the panel cannot be built here", file=sys.stderr)
+        print("npm is unavailable; the frontend cannot be built here", file=sys.stderr)
         return 2
     if args.install:
         run("npm", "ci")
     if not args.skip_build:
         run("npm", "run", "build")
-    if not DIST.is_dir():
-        print(f"no build output at {DIST}", file=sys.stderr)
-        return 1
-
-    if TARGET.exists():
-        shutil.rmtree(TARGET)
-    TARGET.mkdir(parents=True)
-    assets: dict[str, dict] = {}
-    for source in sorted(DIST.rglob("*")):
-        if not source.is_file():
-            continue
-        relative = source.relative_to(DIST).as_posix()
-        media_type = SERVABLE.get(source.suffix)
-        if media_type is None:
-            print(f"refusing to ship {relative}: {source.suffix} is not a servable panel asset",
-                  file=sys.stderr)
-            return 1
-        destination = TARGET / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        body = source.read_bytes()
-        destination.write_bytes(body)
-        assets[relative] = {
-            "media_type": media_type,
-            "bytes": len(body),
-            "sha256": hashlib.sha256(body).hexdigest(),
-        }
-    if "panel.js" not in assets:
-        print("the panel build produced no panel.js", file=sys.stderr)
-        return 1
-    (TARGET / "manifest.json").write_text(
-        json.dumps({"schema_version": 1, "assets": assets}, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8")
-    print(f"panel -> {TARGET} ({len(assets)} assets)")
+    if RETIRED_PANEL.exists():
+        shutil.rmtree(RETIRED_PANEL)
     if not TRACE_DIST.is_file():
         print(f"the frontend build produced no trace replay page at {TRACE_DIST}",
               file=sys.stderr)

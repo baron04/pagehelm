@@ -70,7 +70,7 @@ button:disabled { cursor: not-allowed; }
 
 /* ─────────────────────────────────────────────── launcher */
 .woa-launcher {
-  /* Placed and sized from presentation.json, which the standing entry shares. */
+  /* Placed and sized from presentation.json. */
   position: absolute;
   pointer-events: auto;
   border-radius: 50%;
@@ -444,8 +444,9 @@ button:disabled { cursor: not-allowed; }
   background: var(--woa-surface-muted);
   animation: woa-sheen 1.5s ease-in-out infinite;
 }
-.woa-skeleton i:nth-child(1) { width: 48%; }
-.woa-skeleton i:nth-child(2) { width: 86%; animation-delay: 0.1s; }
+/* Long, short, medium. */
+.woa-skeleton i:nth-child(1) { width: 86%; }
+.woa-skeleton i:nth-child(2) { width: 48%; animation-delay: 0.1s; }
 .woa-skeleton i:nth-child(3) { width: 66%; animation-delay: 0.2s; }
 @keyframes woa-sheen { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
 

@@ -25,8 +25,8 @@ import {Page, loadPageController, type PageControllerApi, type PageFacetReader,
   type PageHighlight, type PageRecordRouteReader, type PageBlockerReader,
   type ActiveViewReader, type FacetCandidateReader, type FacetApplier} from './page'
 import type {ElementLookup} from './pageModel'
-import {createPanelContainer, keepAttached, mountPanel, type PanelHandle} from './panelBridge'
-import {PanelHost, backoffAfter, classifyTransportError, type TransportVerdict} from './panelHost'
+import {createShell, type PanelShell} from './shell'
+import {backoffAfter, classifyTransportError, type PanelHost, type TransportVerdict} from './panelHost'
 import {createRedactor, type Redactor} from './redaction'
 import * as results from './results'
 import {renderState, type PendingView} from './renderState'
@@ -94,10 +94,12 @@ export class EmbeddedWebRuntime {
   panelEnabled = true
   panelContainer: HTMLDivElement | null = null
   panelHost: PanelHost | null = null
-  panelHandle: PanelHandle | null = null
   panelConfiguration: PanelConfiguration | null = null
   panelCursor = ''
-  private panelObserver: MutationObserver | null = null
+  /** The shell this Runtime made for itself, when none was handed to it; it goes with it. */
+  private ownShell: PanelShell | null = null
+  /** Gives the panel's intents back to the shell. */
+  private releasePanel: (() => void) | null = null
   private cancelExpiry: Cancel | null = null
   private stopListening: Cancel[] = []
   private redactorInstance: Redactor | null = null
@@ -110,7 +112,7 @@ export class EmbeddedWebRuntime {
   /** A message the person sent in place of an unanswered confirmation. */
   private replacementText = ''
 
-  constructor(config: RuntimeConfig) {
+  constructor(config: RuntimeConfig, shell: PanelShell | null = null) {
     if (!config?.endpoint || !config?.sessionId || !config?.clientToken) {
       throw new Error('endpoint, sessionId and clientToken are required')
     }
@@ -132,10 +134,11 @@ export class EmbeddedWebRuntime {
     this.stored = loadSession(this.sessionId, String(config.sessionGeneration || ''), this.redactor)
     this.panelEnabled = config.panel !== false
     if (this.panelEnabled && typeof document !== 'undefined') {
-      // Created before PageController so the agent's view of the page can exclude it; the
-      // panel is mounted into it once hello returns the server's configuration.
-      this.panelContainer = createPanelContainer()
-      this.panelObserver = keepAttached(this.panelContainer, () => !this.stopped)
+      // The page's shell when it has one; otherwise this Runtime's own. Either way it exists
+      // before PageController, so the agent's view of the page can exclude it.
+      if (!shell) this.ownShell = shell = createShell()
+      this.panelContainer = shell.container
+      this.panelHost = shell.host
     }
     this.stopListening = [
       listen('pageshow', window, 'pageshow', (event: PageTransitionEvent) => {
@@ -263,10 +266,10 @@ export class EmbeddedWebRuntime {
 
   async _startConnectedRuntime(): Promise<this> {
     await this._hello()
-    // The panel goes up as soon as the server has said what it says, before the steps
-    // below: a failed startup step then becomes a panel state and a notice instead of an
-    // assistant that is simply not there.
-    await this._mountPanel()
+    // The panel takes this session's intents as soon as the server has spoken, before the
+    // steps below: a failed startup step then becomes a panel state and a notice instead of
+    // an assistant that is simply not there.
+    this._attachPanel()
     // A definite result cached before a reload must reach the server before a newer page
     // observation, or the older observation it carries would be rejected as stale and the
     // server could not tell whether the action ran.
@@ -328,33 +331,29 @@ export class EmbeddedWebRuntime {
     this._armExpiry()
   }
 
-  async _mountPanel(): Promise<void> {
-    if (!this.panelEnabled || !this.panelContainer || this.panelHandle) return
+  _attachPanel(): void {
+    if (!this.panelHost || this.releasePanel) return
     if (!this.panelConfiguration) throw new Error('panel host requires the server panel configuration')
-    this.panelHost = new PanelHost({
-      configuration: this.panelConfiguration,
-      actions: {
-        submit: text => { detach('submit', this.submitOrReplaceTask(text)) },
-        cancel: () => { detach('cancel', this.cancelTask()) },
-        decide: (approvalId, decision) => {
-          const request = this.panelHost?.snapshot().pendingApproval
-          if (!request || request.approval_id !== approvalId) return
-          detach('decide', this._postApproval(request, decision).catch(error => this._raise(error)))
-        },
-        newConversation: () => {
-          detach('new conversation', this._post('/conversation', {action: 'new'})
-            .then(() => this._refreshTimeline())
-            .catch(error => this._raise(error)))
-        },
-        loadOlder: before => {
-          detach('load older', this._loadOlder(before).catch(error => this._raise(error)))
-        },
-        panelVisibility: open => { if (!open) this._clearHighlight() },
+    this.panelHost.adoptServerConfiguration(this.panelConfiguration)
+    this.panelHost.setRetryStart(null)
+    this.releasePanel = this.panelHost.bind({
+      submit: text => { detach('submit', this.submitOrReplaceTask(text)) },
+      cancel: () => { detach('cancel', this.cancelTask()) },
+      decide: (approvalId, decision) => {
+        const request = this.panelHost?.snapshot().pendingApproval
+        if (!request || request.approval_id !== approvalId) return
+        detach('decide', this._postApproval(request, decision).catch(error => this._raise(error)))
       },
+      newConversation: () => {
+        detach('new conversation', this._post('/conversation', {action: 'new'})
+          .then(() => this._refreshTimeline())
+          .catch(error => this._raise(error)))
+      },
+      loadOlder: before => {
+        detach('load older', this._loadOlder(before).catch(error => this._raise(error)))
+      },
+      panelVisibility: open => { if (!open) this._clearHighlight() },
     })
-    this.panelHandle = await mountPanel(
-      this.config.panelModule || `${this.endpoint}/v1/runtime/panel/panel.js`,
-      this.panelHost, this.panelContainer)
   }
 
   // -- how long this session may live ---------------------------------------------------
@@ -436,8 +435,6 @@ export class EmbeddedWebRuntime {
     this.stopped = true
     this.cancelExpiry?.()
     this.cancelExpiry = null
-    this.panelObserver?.disconnect()
-    this.panelObserver = null
     this.eventAbortController?.abort()
     this.eventAbortController = null
     for (const stop of this.stopListening?.splice(0) ?? []) stop()
@@ -447,13 +444,17 @@ export class EmbeddedWebRuntime {
     this.controller = null
     controller?.dispose()
     if (removePanel) {
-      this.panelHandle?.destroy()
-      this.panelHandle = null
+      // The panel's intents go back to the page's shell, which stays; a shell of this
+      // Runtime's own goes with it.
+      this.releasePanel?.()
+      this.releasePanel = null
+      this.ownShell?.destroy()
+      this.ownShell = null
+      this.panelHost = null
       this.panelConfiguration = null
       this.panelCursor = ''
-      this.panelContainer?.remove()
       this.panelContainer = null
-      // Stopped for good, panel and all: the page is free for the next Runtime.
+      // Stopped for good: the page is free for the next Runtime.
       this._releasePage()
     }
   }
@@ -1178,13 +1179,14 @@ export class EmbeddedWebRuntime {
  * Start the one Runtime this page may have, or return `null` if a live one already exists.
  *
  * The page-wide latch holds the Runtime that owns it, so the Runtime can release exactly
- * its own claim when it is stopped for good. A start that fails takes its panel with it:
- * saying why is the standing entry's job (`boot.ts`), and a panel left behind would be a
- * second assistant root the next attempt cannot see.
+ * its own claim when it is stopped for good. A start that fails gives the panel back: the
+ * page's shell stays and says why (`boot.ts`), and a shell of the Runtime's own goes with it,
+ * since one left behind would be a second assistant root the next attempt cannot see.
  */
-export async function startEmbeddedRuntime(config: RuntimeConfig): Promise<EmbeddedWebRuntime | null> {
+export async function startEmbeddedRuntime(config: RuntimeConfig,
+                                           shell: PanelShell | null = null): Promise<EmbeddedWebRuntime | null> {
   if (window.__WOA_EMBEDDED_RUNTIME_STARTED__) return null
-  const runtime = new EmbeddedWebRuntime(config)
+  const runtime = new EmbeddedWebRuntime(config, shell)
   window.__WOA_EMBEDDED_RUNTIME_STARTED__ = runtime
   try {
     return await runtime.start()

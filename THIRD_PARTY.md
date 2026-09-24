@@ -92,11 +92,11 @@ The other shipped frontend resource,
 standalone HTML/CSS/JavaScript template with no external scripts, stylesheets,
 fonts, or images.
 
-## The assistant panel bundle
+## The assistant bundle
 
-`scripts/build_panel.py` compiles `frontend/` into
-`src/web_operation_agent/web_runtime/panel/panel.js`, which the wheel carries and the
-gateway serves. The bundle is generated, never committed, and a wheel built without it
+`scripts/build_runtime.py` compiles `frontend/` into
+`src/web_operation_agent/web_runtime/assistant.js` -- the Runtime and the panel in one
+file -- which the wheel carries and the gateway serves. The bundle is generated, never committed, and a wheel built without it
 is refused by `scripts/check_wheel_contents.py` rather than shipping quietly -- but the
 bytes it contains are a redistribution, and these are the components inside them:
 

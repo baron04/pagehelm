@@ -84,14 +84,13 @@ describe('the generated sources', () => {
 
 describe('the handwritten styles', () => {
   /*
-   * P3 put every size, radius and colour onto the scale; this keeps them there. Four rules,
+   * P3 put every size, radius and colour onto the scale; this keeps them there. Three rules,
    * each earned by a defect: font-size and line-height are token references, border-radius
    * too (a percentage is allowed only for a true circle); no solid colour is written inline
    * anywhere, the shadow rgba surviving because a shadow is light, not colour; the white
    * that lights a highlight comes from the sheen tokens, except inside the brand disc -- the
    * one object allowed its own fixed light, which the test above pins as equal across
-   * themes; and the entry, which cannot inherit a token file because it renders outside any
-   * panel, states no colour in its own words, only in the palette generated for it.
+   * themes.
    */
   it('quote the scale rather than restate it', () => {
     const disc = /\.woa-(launcher__disc|mark)\b/
@@ -119,9 +118,6 @@ describe('the handwritten styles', () => {
         problems.push(`${at} white highlight outside the brand disc`)
       }
     })
-    if (/#[0-9a-fA-F]{3,8}\b/.test(withoutComments(read('src/runtime/entry.ts')))) {
-      problems.push('entry.ts states a colour of its own')
-    }
     expect(problems).toEqual([])
   })
 

@@ -9,6 +9,7 @@ import {formatFullTime, formatTime} from '../state/clock'
 import {Answer} from './Answer'
 import {CopyButton} from './CopyButton'
 import {guarded} from './ErrorBoundary'
+import {Skeleton} from './Skeleton'
 import {iconProps} from './icon'
 
 /** Inside this many pixels of the floor counts as "at the newest line". */
@@ -430,6 +431,8 @@ export function Thread(props: ThreadProps): React.JSX.Element {
   }, [snapshot.entries.length, pin])
 
   const empty = turns.length === 0 && !snapshot.optimistic
+  // A conversation this tab already has, being fetched: not the greeting of a new one.
+  const loading = empty && snapshot.connection.state === 'connecting'
 
   return (
     <div className="woa-thread-shell" data-scrolled={scrolled ? 'true' : undefined}>
@@ -438,12 +441,10 @@ export function Thread(props: ThreadProps): React.JSX.Element {
       {/* One box holding everything that can change height, so a single ResizeObserver
           sees every kind of growth instead of one effect per kind. */}
       <div className="woa-thread__content" ref={content}
-           data-empty={empty ? 'true' : undefined}>
+           data-empty={empty && !loading ? 'true' : undefined}>
       <div ref={top} aria-hidden="true" />
-      {snapshot.loadingOlder && (
-        <div className="woa-skeleton" aria-hidden="true"><i /><i /><i /></div>
-      )}
-      {empty ? props.children : (
+      {snapshot.loadingOlder && <Skeleton />}
+      {loading ? <Skeleton /> : empty ? props.children : (
         <ol className="woa-turns">
           {turns.map(turn => (
             <li className="woa-turn" key={turn.id || 'session'}

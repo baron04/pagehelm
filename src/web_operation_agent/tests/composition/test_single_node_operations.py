@@ -74,6 +74,8 @@ class SingleNodeOperationsTests(unittest.TestCase):
         dockerfile = AGENT_DOCKERFILE.read_text(encoding="utf-8")
 
         self.assertIn("/build/frontend/dist/runtime ./frontend/dist/runtime", dockerfile)
+        # The panel is part of assistant.js; the frontend build writes no dist/panel to copy.
+        self.assertNotIn("frontend/dist/panel", dockerfile)
         self.assertIn("python scripts/build_runtime.py --skip-build", dockerfile)
         self.assertLess(
             dockerfile.index("python scripts/build_runtime.py --skip-build"),
@@ -117,8 +119,7 @@ class SingleNodeOperationsTests(unittest.TestCase):
         for path in (
                 "/woa_runtime/static/src/loader.js",
                 "/woa_runtime/static/src/page-controller.js",
-                "/assistant/v1/runtime/assistant.js",
-                "/assistant/v1/runtime/panel/panel.js"):
+                "/assistant/v1/runtime/assistant.js"):
             self.assertIn(path, script)
 
     def _bundle(self, root: Path):

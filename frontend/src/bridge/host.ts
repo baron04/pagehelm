@@ -22,6 +22,11 @@ export interface ConnectionState {
 export interface HostNotice {
   code: string
   retryable: boolean
+  /**
+   * The words, when they cannot be the server's: a start that failed happened before any
+   * server spoke, so its sentence is the panel's own (`presentation.json`).
+   */
+  message?: string
   /** Set when the failure belongs to one message rather than the session. */
   turnId?: string
 }

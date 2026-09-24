@@ -27,15 +27,14 @@ DISTRIBUTIONS = {
             "web_operation_agent/xmlscan.py",
             "web_operation_agent/policies/model_options.json",
             "web_operation_agent/policies/prices.json",
+            # The Runtime and the panel, in the one file a host page includes. A wheel
+            # without it cannot serve the assistant at all, so its absence is a packaging
+            # failure, not something to discover at runtime.
             "web_operation_agent/web_runtime/assistant.js",
             "web_operation_agent/web_runtime/browser_contract.json",
             "web_operation_agent/web_runtime/panel_contract.json",
             # Built from `frontend/trace/` by scripts/build_panel.py, palette inlined.
             "web_operation_agent/web_runtime/trace_replay.html",
-            # The built panel. A wheel without it cannot serve the assistant at all, so its
-            # absence is a packaging failure, not something to discover at runtime.
-            "web_operation_agent/web_runtime/panel/manifest.json",
-            "web_operation_agent/web_runtime/panel/panel.js",
             # The pinned PageController contract. Without it an installed package carries no
             # statement of which build it is qualified against, which is the state this file
             # was added to end.
@@ -50,6 +49,9 @@ DISTRIBUTIONS = {
             # Replaced by `assistant.js`, built from `frontend/src/runtime/`.
             "web_operation_agent/web_runtime/embedded.js",
             "web_operation_agent/web_runtime/panel_host.js",
+            # The panel as a module of its own; it is part of `assistant.js`.
+            "web_operation_agent/web_runtime/panel/panel.js",
+            "web_operation_agent/web_runtime/panel/manifest.json",
             # The design tokens are the frontend's; the built pages carry them already.
             "web_operation_agent/web_runtime/design_tokens.json",
         ],
