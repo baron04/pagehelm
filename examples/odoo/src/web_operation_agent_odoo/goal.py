@@ -42,7 +42,7 @@ _FIELD_TAG = re.compile(r'<field\b[^>]*?\bname="([^"]+)"')
 #: what a small model can name.
 _KIND_RANK = {"link": 0, "choice": 1, "money": 2, "number": 3, "date": 4, "text": 5,
               "html": 6, "bool": 7}
-_RECORD_LIMIT = 20
+_RECORD_LIMIT = 40
 _GROUP_LIMIT = 20
 
 #: Chinese aliases for the labels this index is expected to carry. Odoo's own zh_CN pack
@@ -114,6 +114,10 @@ def _literal_dict(text: str) -> dict:
 
 def _norm(text: str) -> str:
     return "".join(ch for ch in html.unescape(text or "").casefold() if not ch.isspace())
+
+
+def _tokens(text: str) -> set[str]:
+    return {t for t in re.split(r"[^0-9a-z\u3400-\u9fff]+", (text or "").casefold()) if t}
 
 
 def _strip_code(name: str) -> str:
@@ -517,6 +521,11 @@ class OdooGoalPort:
     def _resolve_one(self, d: Deliverable, index: ApplicationIndex) -> Resolved:
         if d.kind == "page" and not d.record and d.page.key:
             return self._list_page(d, index)
+        if d.record and d.entity in self._models and self._parent_link(d.entity) is not None \
+                and self._embedded_lines(self._parent_link(d.entity)[0], d.entity) is not None:
+            lines = self._lines_of_named_record(d, index)
+            if lines is not None:
+                return lines
         if d.kind == "list" and d.record and d.via:
             # "The lines of S00004", declared on the line entity with the parent named as
             # the record and the link field as via: a list with that link as condition.
@@ -713,8 +722,7 @@ class OdooGoalPort:
             return None
         parents = [line_meta.parent] if line_meta.parent else [
             m for m, meta in self._models.items()
-            if any(i.get("type") == "one2many" and i.get("relation") == line_model
-                   for i in meta.fields.values())]
+            if m != line_model and self._embedded_lines(m, line_model) is not None]
         for parent in parents:
             link = next((f for f, i in line_meta.fields.items()
                          if i.get("type") == "many2one" and i.get("relation") == parent), None)
@@ -835,6 +843,20 @@ class OdooGoalPort:
                 if _norm(item) == wanted:
                     control = item
                     break
+            else:
+                # Not a button: the field the person wants to change, named loosely
+                # ("Expiration Date" for Expiration, "Invoice Date" for Invoice/Bill Date).
+                asked = _tokens(highlight)
+                field = next((n for n, i in meta.fields.items()
+                              if _norm(str(i.get("string") or "")) == wanted), None)
+                if field is None:
+                    field = next((n for n, i in meta.fields.items()
+                                  if n in meta.form_fields and asked
+                                  and asked <= _tokens(str(i.get("string") or ""))), None)
+                if field is None:
+                    field = meta.field_by_label(highlight)
+                if field is not None and field in meta.form_fields:
+                    control = str(meta.fields[field].get("string") or field)
         label = name if not tab else f"{name} · {tab}"
         return PagePlan(url=url, label=label, expected_path=url, section=tab,
                         highlight=control)
@@ -1085,6 +1107,15 @@ class OdooGoalPort:
 
     def _search_clause(self, meta: _ModelMeta, model: str, domain: list, words: str):
         """What search words mean on this entity within `domain`, or None when nothing."""
+        today = self._today()
+        if _period(words, today) is not None:
+            shown_dates = [f for f in dict.fromkeys(meta.list_fields + meta.form_fields)
+                           if meta.fields.get(f, {}).get("type") in ("date", "datetime")]
+            if shown_dates:
+                field = shown_dates[0]
+                clause, text = self._date_condition(field, meta.fields[field], (words,), "", today)
+                if clause is not None:
+                    return clause, text
         clause = [["display_name", "ilike", words]]
         if self._call(model, "search_count", [domain + clause], {}):
             return clause, f"~{words}"
@@ -1118,6 +1149,51 @@ class OdooGoalPort:
             return [[matched[0], "ilike", words]], f"{meta.fields[matched[0]].get('string')} ~ {words}"
         return None, f"~{words}"
 
+    def _lines_of_named_record(self, d: Deliverable, index: ApplicationIndex):
+        """A line entity declared with a record reference that names the record owning
+        the lines (S00004 on order lines; an invoice number even on order lines): the
+        deliverable is about that record's lines."""
+        found = self._find_record(d.entity, d.record)
+        if isinstance(found, tuple) and not isinstance(found, Ambiguous):
+            return None
+        parent_link = self._parent_link(d.entity)
+        line_model, owner = d.entity, None
+        # Every record entity whose form embeds lines, the declared entity's owner first.
+        owners: dict[str, str] = {}
+        for model, meta in self._models.items():
+            for info in meta.fields.values():
+                relation = str(info.get("relation") or "")
+                if (info.get("type") == "one2many" and relation in self._models
+                        and relation != model and self._embedded_lines(model, relation) is not None):
+                    owners.setdefault(model, relation)
+        for model in [parent_link[0]] + [m for m in owners if m != parent_link[0]]:
+            hit = self._find_record(model, d.record)
+            if isinstance(hit, tuple) and not isinstance(hit, Ambiguous):
+                owner = hit
+                if model != parent_link[0]:
+                    line_model = owners[model]
+                break
+        if owner is None:
+            return None
+        link = self._parent_link(line_model)
+        if link is None:
+            return None
+        line_meta = self._models[line_model]
+        link_label = str(line_meta.fields[link[1]].get("string") or link[1])
+        embedded = self._embedded_lines(link[0], line_model)
+        if embedded is not None and embedded[1]:
+            self._line_scope = list(embedded[1])
+        filters = (Filter(field=link_label, values=(owner[2],)),) + (d.metric.filters if d.metric else ())
+        if d.metric is not None and (d.metric.op == "sum" or d.kind == "aggregate"):
+            return self._aggregate(Deliverable(
+                kind="aggregate", entity=line_model,
+                metric=Metric(op=d.metric.op, field=d.metric.field, filters=filters,
+                              group_by=d.metric.group_by, top=d.metric.top)), index)
+        return self._aggregate(Deliverable(
+            kind="list", entity=line_model, fields=d.fields, sort=d.sort,
+            descending=d.descending, limit=d.limit, page=PageSpec(search=d.page.search),
+            metric=Metric(op="count", filters=filters)), index)
+
     def _embedded_lines(self, parent_model: str, line_model: str):
         """(one2many field, its static domain, numeric columns) as the parent's form embeds them."""
         meta = self._models.get(parent_model)
@@ -1136,6 +1212,8 @@ class OdooGoalPort:
             columns = [f for f in inner
                        if line_meta.fields[f].get("type") in ("float", "integer", "monetary")
                        and f not in _SKIP_LINE_FIELDS][:4]
+            if not columns:
+                continue
             return field, (domain or []), columns
         return None
 

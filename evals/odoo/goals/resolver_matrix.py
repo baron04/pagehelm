@@ -325,6 +325,22 @@ case("l-via-parent-fallback", "account.move.line", "list", "via-lines",
      {"deliverables": [{"kind": "list", "entity": "account.move.line", "record": "INV/2026/00001",
                         "via": "Move", "fields": ["Product"]}]},
      records_len=2, records_any=[r"Large Meeting Table", r"Four Person Desk"])
+case("f-line-entity-named-by-parent", "sale.order.line", "list", "via-lines",
+     {"deliverables": [{"kind": "fact", "entity": "sale.order.line", "record": "S00004",
+                        "via": "Order Reference", "fields": ["Quantity"]}]},
+     records_len=4, records_any=[r"Office Lamp.*Quantity: 10\.00"])
+case("a-line-metric-named-by-invoice", "account.move.line", "aggregate", "via-lines",
+     {"deliverables": [{"kind": "fact", "entity": "sale.order.line", "record": "INV/2026/00001",
+                        "via": "Order Reference", "fields": ["Quantity"],
+                        "metric": {"op": "sum", "field": "Quantity",
+                                   "filters": [{"field": "Product", "values": ["Large Meeting Table"]}]}}]},
+     count=1, sums={"Quantity": r"^5\.00$"})
+case("l-search-words-are-a-period", "account.move", "list", "date-abs",
+     lst("account.move", page="Invoicing / Customers / Invoices", search="2026-09"), records_len=3)
+case("h-field-named-loosely", "sale.order", "handoff", "field",
+     handoff("sale.order", "S00002", "Expiration Date"), page={"highlight": "Expiration"})
+case("h-field-named-by-tokens", "account.move", "handoff", "field",
+     handoff("account.move", "BILL/2026/09/0001", "Invoice Date"), page={"highlight": "Invoice/Bill Date"})
 case("l-search-names-a-customer", "sale.order", "list", "text",
      lst("sale.order", page=Q, search="Ready Mat"), records_len=2,
      records_any=[r"^S00002", r"^S00003"])

@@ -646,6 +646,14 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool) -> list[
             suffix = f"（{'；'.join(extras)}）" if extras and zh else (
                 f" ({'; '.join(extras)})" if extras else "")
             lines.append((f"已打开：{what}{suffix}") if zh else f"Opened: {what}{suffix}")
+        elif outcome.reached and all(u.startswith("filter ") for u in outcome.unmet):
+            # The page is open; a filter or group it asked for has no such choice there.
+            # Said as what the page lacks, not as the assistant failing, because the
+            # page itself was delivered.
+            names = "、".join(u[len("filter "):] for u in outcome.unmet) if zh else \
+                ", ".join(u[len("filter "):] for u in outcome.unmet)
+            lines.append((f"已打开：{plan.label}（页面上没有这个筛选项：{names}）") if zh
+                         else f"Opened: {plan.label} (the page has no such filter: {names})")
         else:
             unmet = "、".join(outcome.unmet) if zh else ", ".join(outcome.unmet)
             lines.append((f"打开 {plan.label} 未完成：{unmet or '页面未到达'}。") if zh
