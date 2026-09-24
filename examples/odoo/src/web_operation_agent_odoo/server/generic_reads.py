@@ -10,6 +10,7 @@ import json
 import math
 import re
 from decimal import Decimal
+from itertools import chain
 
 from web_operation_agent.business.entities import (
     EntityAggregate,
@@ -33,6 +34,30 @@ from .descriptors import OdooRuntimeDescriptorReader
 _FIELD_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}\Z")
 _MODEL_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_.]{0,127}\Z")
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _bounded_entity_search_text(parts) -> tuple[str, bool]:
+    """Keep deterministic discovery text within the core descriptor bound.
+
+    A truncated catalog must not claim complete search coverage. The separate page-entry
+    catalog still retains every actor-visible action for direct page lookup.
+    """
+    words = []
+    length = 0
+    seen = set()
+    for raw in parts:
+        value = " ".join(raw.split())
+        if not value or value.casefold() in seen:
+            continue
+        size = len(value) + (1 if words else 0)
+        if length + size > 2_000:
+            return " ".join(words), False
+        words.append(value)
+        seen.add(value.casefold())
+        length += size
+    return " ".join(words), True
+
+
 _SENSITIVE_FIELD = re.compile(
     r"(?:password|passwd|pwd|secret|token|api[_-]?key|private[_-]?key|"
     r"access[_-]?key|credential|signature|cookie|session)", re.I)
@@ -139,28 +164,33 @@ class OdooEntityReadPort:
             if action.readable and action.model and odoo_model_allowed(action.model):
                 actions_by_model.setdefault(action.model, []).append(action)
         entities = []
+        searchable_complete = True
         for model in catalog.models:
             actions = actions_by_model.get(model.model)
             if (not actions or model.transient or "read" not in model.operations
                     or not odoo_model_allowed(model.model)):
                 continue
             ordered = tuple(sorted(actions, key=lambda item: item.action_id))
+            search_text, search_complete = _bounded_entity_search_text(
+                chain((model.model.replace(".", " "), model.label),
+                      (item.name for item in ordered),
+                      (crumb for item in ordered for crumb in item.breadcrumbs)))
+            searchable_complete = searchable_complete and search_complete
             entities.append(EntityDescriptor(
                 reference=model.model,
-                label=model.label,
-                search_text=(model.model.replace(".", " ") + " " + " ".join(
-                    [item.name for item in ordered]
-                    + [crumb for item in ordered for crumb in item.breadcrumbs])),
+                label=model.label.strip()[:160],
+                search_text=search_text,
                 page_hints=tuple(EntityPageHint(
-                    name=item.name,
-                    breadcrumbs=tuple(item.breadcrumbs),
-                    views=tuple(item.view_modes),
-                ) for item in ordered),
+                    name=(item.name.strip() or model.label.strip())[:160],
+                    breadcrumbs=tuple(crumb.strip()[:240]
+                                      for crumb in item.breadcrumbs[:10]),
+                    views=tuple(item.view_modes[:10]),
+                ) for item in ordered[:10]),
             ))
         return EntityCatalog(
             binding_digest=catalog.descriptor_digest,
             entities=tuple(entities),
-            complete=catalog.complete,
+            complete=catalog.complete and searchable_complete,
             scope="current actor's readable, page-backed, non-sensitive business entities",
         )
 

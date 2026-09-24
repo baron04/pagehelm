@@ -28,6 +28,7 @@ from web_operation_agent_odoo.server.application import OdooApplicationAdapter
 from web_operation_agent_odoo.server.descriptors import _catalog_digest
 from web_operation_agent_odoo.server.generic_reads import (
     OdooEntityReadPort, OdooReferenceLookupPort)
+from web_operation_agent_odoo.server.page_entries import OdooPageEntryPort
 
 
 def _catalog():
@@ -116,6 +117,79 @@ class _FakeClient:
 
 
 class GenericDiscoveryTests(unittest.TestCase):
+    def test_many_actions_keep_entity_discovery_bounded_without_losing_page_entries(self):
+        client = _FakeClient()
+        payload = client.catalog_payload
+        payload["omitted_models"] = []
+        for index in range(11):
+            action = copy.deepcopy(payload["actions"][0])
+            action.update(action_id=100 + index,
+                          xml_id=f"stock.action_transfer_{index}",
+                          route=f"inventory/transfers/{index}",
+                          name=f"Transfers variant {index}")
+            payload["actions"].append(action)
+        payload["descriptor_digest"] = _catalog_digest(
+            payload["models"], payload["actions"],
+            payload["omitted_models"], payload["omitted_actions"])
+
+        port = OdooEntityReadPort(client)
+        entity = next(item for item in port.catalog().entities
+                      if item.reference == "stock.picking")
+        self.assertEqual(len(entity.page_hints), 10)
+        self.assertIn("Transfers variant 10", entity.search_text)
+        self.assertTrue(port.catalog().complete)
+        pages = OdooPageEntryPort(client).catalog()
+        self.assertEqual(sum(item.subject_reference == "stock.picking"
+                             for item in pages.entries), 12)
+        self.assertEqual(pages.binding_digest,
+                         OdooPageEntryPort(client).catalog().binding_digest)
+        discovered = EntityReadTools(port, application_id="odoo").execute(
+            DISCOVER_ENTITIES_TOOL, {"query": "Transfers variant 10"})
+        self.assertEqual(discovered.content["candidates"][0]["label"], "Transfers")
+
+        payload["actions"].reverse()
+        payload["descriptor_digest"] = _catalog_digest(
+            payload["models"], payload["actions"],
+            payload["omitted_models"], payload["omitted_actions"])
+        reordered = next(item for item in port.catalog().entities
+                         if item.reference == "stock.picking")
+        self.assertEqual(reordered.page_hints, entity.page_hints)
+        self.assertEqual(reordered.search_text, entity.search_text)
+
+    def test_long_action_metadata_is_bounded_and_marks_search_incomplete(self):
+        client = _FakeClient()
+        payload = client.catalog_payload
+        payload["omitted_models"] = []
+        payload["models"][0]["label"] = "Transfers " + "z" * 170
+        for index in range(12):
+            action = copy.deepcopy(payload["actions"][0])
+            action.update(action_id=100 + index,
+                          xml_id=f"stock.action_long_{index}",
+                          route=f"inventory/long/{index}",
+                          name=f"Transfers {index} " + "x" * 170,
+                          breadcrumbs=[f"Operations {part:02d} / " + "y" * 300
+                                       for part in range(12)],
+                          view_modes=[f"view{part}" for part in range(11)])
+            payload["actions"].append(action)
+        payload["descriptor_digest"] = _catalog_digest(
+            payload["models"], payload["actions"],
+            payload["omitted_models"], payload["omitted_actions"])
+
+        catalog = OdooEntityReadPort(client).catalog()
+        entity = next(item for item in catalog.entities
+                      if item.reference == "stock.picking")
+        self.assertLessEqual(len(entity.search_text), 2_000)
+        self.assertLessEqual(len(entity.label), 160)
+        self.assertEqual(len(entity.page_hints), 10)
+        self.assertTrue(all(len(hint.name) <= 160 and
+                            len(hint.breadcrumbs) <= 10 and
+                            len(hint.views) <= 10 and
+                            all(len(crumb) <= 240 for crumb in hint.breadcrumbs)
+                            for hint in entity.page_hints))
+        self.assertFalse(catalog.complete)
+        self.assertEqual(sum(item.subject_reference == "stock.picking"
+                             for item in OdooPageEntryPort(client).catalog().entries), 13)
+
     def test_discovery_returns_only_action_backed_non_sensitive_non_transient_models(self):
         client = _FakeClient()
         executor = EntityReadTools(OdooEntityReadPort(client), application_id="odoo")
