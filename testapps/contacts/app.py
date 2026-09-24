@@ -255,6 +255,7 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
       if (match) {{
         const contact = contacts.find(item => item.id === match[1]);
         if (!contact) {{ app.innerHTML = '<h1>Contact not found</h1>'; return; }}
+        app.dataset.activeView = 'Detail';
         app.innerHTML = `<a class="back" href="/contacts" data-route>← All contacts</a>
           <section class="record"><div class="eyebrow">Contact record</div>
           <h1>${{contact.name}}</h1><dl><dt>Email</dt><dd>${{contact.email}}</dd>

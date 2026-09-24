@@ -190,6 +190,27 @@ class MinimalDemoBrowserTests(unittest.TestCase):
         self.assertEqual(summary["panel"]["final_page_probe"],
                          {"list_rendered": True})
 
+    def test_record_view_marker_is_rendered_after_spa_navigation(self):
+        from playwright.sync_api import sync_playwright
+
+        with MinimalContactsApplication() as application, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                context = browser.new_context()
+                context.add_cookies([{"name": DEMO_SESSION_COOKIE,
+                                      "value": DEMO_SESSION_VALUE,
+                                      "url": application.origin}])
+                page = context.new_page()
+                page.goto(application.origin + "/contacts", wait_until="domcontentloaded")
+                self.assertEqual(page.locator("main#app").get_attribute("data-active-view"),
+                                 "List")
+                page.locator('a[href="/contacts/grace-hopper"]').click()
+                page.wait_for_url("**/contacts/grace-hopper")
+                self.assertEqual(page.locator("main#app").get_attribute("data-active-view"),
+                                 "Detail")
+            finally:
+                browser.close()
+
     def test_evaluation_probe_rejects_raw_page_values(self):
         script = (("finish", {"done": False, "why": "probe only"}),)
         with tempfile.TemporaryDirectory() as directory, patch(

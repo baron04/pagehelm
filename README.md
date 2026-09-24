@@ -61,8 +61,11 @@ agent.
   is refused rather than silently ignored, unless its value names one of the page's own
   filters. The resolver's reach is measured by a zero-model matrix over the reference
   fixture (`evals/odoo/goals/resolver_matrix.py`: 184 declarations across entities,
-  deliverable kinds and condition types, all read-only RPC). Only the Odoo adapter
-  implements the index and resolver so far.
+  deliverable kinds and condition types, all read-only RPC). Odoo implements the full
+  reference index and resolver; the structurally different Contacts REST test application
+  implements the same core port for actor-scoped facts, counts, lists and basic pages, and
+  explicitly refuses unsupported page controls and handoffs. A turn is marked complete only
+  when every declared deliverable settles.
 - A server-side ReAct loop receives every tool result and a fresh page observation before
   its next decision, with step, time, token, and provider-spend limits.
 - Application-owned Skills and typed tools provide current business facts. When explicitly
@@ -385,7 +388,7 @@ source compilation, fixture provisioning, and qualification.
 - A reached page state is checked against the declared path, selected controls and any declared active filters or groups, plus explicit requests for the five conventional views and filter/group changes above. An application may first resolve a reviewed, deployment-bound route alias to its installed path; that does not grant navigation or count as a rendered page. Removing a filter additionally requires that exact filter to have been observed active on the same path earlier in the turn, followed by typed evidence that it is absent. The application must supply typed active-facet state; a same-named menu choice or column never counts. The pending-render signal catches a changed SPA URL with the old page projection; an adapter-reported blocking error and a wrong view also prevent arrival. These guards do not prove that all asynchronous loading has finished or verify record identity, other view names, or that the model declared an implicit facet request such as “look at orders by salesperson.” The new facet action has scripted contract tests, not a repeated model-backed success rate. The earlier 37-task Chinese development run must not be presented as the P8.8 holdout result.
 - An empty typed read no longer ends the turn automatically: the Agent receives the exact query result and can check whether the entity and filters match the question. This does not yet prove that a model-selected query covers the user's intent. In the earlier 37-goal run, the old automatic answer incorrectly reported two existing records as absent; one of those reads had searched a customer name for an order number.
 - Reaching a declared page target no longer blocks further reading or observation for requests classified as more than pure navigation. Apart from the explicit view and facet checks above, a target still covers only the conditions the Agent declared, so a question or other presentation requirement omitted from that declaration can remain unmet.
-- The goal-directed turn has a development result on the 37-task Chinese set only, obtained while it was being built; it is not a holdout result, and the index and resolver contract has one adapter behind it. It reaches a page by its address, verifies the rendered view, record route, tab and facet state, and waits for two consecutive rendered observations, but does not prove that every asynchronous part of a page has loaded. A list page's free-text search is answered from a scoped read rather than typed into the page's search box.
+- The goal-directed turn has a development result on the 37-task Chinese set only, obtained while it was being built; it is not a holdout result. Odoo and the smaller Contacts REST app now implement the index/resolver contract, but this does not establish broad cross-application accuracy. The server requires every declared deliverable to settle and refuses a page that has not produced two stable rendered observations. It does not prove that every asynchronous part of a page has loaded. A list page's free-text search is answered from a scoped read rather than typed into the page's search box.
 
 The second Chinese goal holdout is frozen with 84 normal goals and 10 honest-limitation goals; see [evaluation details](evals/odoo/README.md). It has offline oracle checks, but has not been model-run or fully walked in a browser. Select it with `--version v5` in the goal runner.
 

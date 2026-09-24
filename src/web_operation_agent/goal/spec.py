@@ -21,7 +21,9 @@ def _text(value: object, name: str, *, allow_empty: bool = True) -> str:
         value = ""
     if not isinstance(value, str):
         raise ValueError(f"{name} must be a string")
-    value = " ".join(value.split())[:_MAX_TEXT]
+    value = " ".join(value.split())
+    if len(value) > _MAX_TEXT:
+        raise ValueError(f"{name} exceeds {_MAX_TEXT} characters")
     if not value and not allow_empty:
         raise ValueError(f"{name} must not be empty")
     return value
@@ -34,6 +36,8 @@ def _texts(value: object, name: str, *, limit: int = 8) -> tuple[str, ...]:
         value = [value]
     if not isinstance(value, list):
         raise ValueError(f"{name} must be an array of strings")
+    if len(value) > limit:
+        raise ValueError(f"{name} exceeds {limit} entries")
     out = []
     for item in value[:limit]:
         # A number written as a number is still a value the person said.
@@ -96,8 +100,10 @@ class Metric:
         raw_filters = value.get("filters") or []
         if not isinstance(raw_filters, list):
             raise ValueError("metric filters must be an array")
+        if len(raw_filters) > 6:
+            raise ValueError("metric filters exceed six entries")
         return cls(op=op, field=_text(value.get("field"), "metric field"),
-                   filters=tuple(Filter.from_json(f) for f in raw_filters[:6]),
+                   filters=tuple(Filter.from_json(f) for f in raw_filters),
                    page_filters=_texts(value.get("page_filters"), "page filters"),
                    group_by=_text(value.get("group_by"), "group_by"), top=top)
 
@@ -235,7 +241,9 @@ class GoalSpec:
         if not isinstance(raw, list):
             raise ValueError("deliverables must be an array")
         raw = [json.loads(item) if isinstance(item, str) else item for item in raw]
-        deliverables = tuple(Deliverable.from_json(d) for d in raw[:_MAX_DELIVERABLES])
+        if len(raw) > _MAX_DELIVERABLES:
+            raise ValueError("deliverables exceed the supported four entries")
+        deliverables = tuple(Deliverable.from_json(d) for d in raw)
         return cls(deliverables=deliverables,
                    write_intent=bool(value.get("write_intent", False)),
                    unsupported=_text(value.get("unsupported"), "unsupported"))

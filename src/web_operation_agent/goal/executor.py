@@ -298,7 +298,12 @@ class GoalTurnExecutor:
                              ("This request is outside what the assistant can do."
                               + (f" ({why})" if why else "")))
         s.step += 1
-        resolution = self._resolve(s, spec)
+        try:
+            resolution = self._resolve(s, spec)
+        except _ContractBroken:
+            s.terminal_reason = "agent_refused"
+            return self._say(s, "应用未能完整解析这次请求。" if s.chinese
+                             else "The application could not resolve this request completely.")
         problems = _repairable(spec, resolution)
         if problems:
             # The one repair: the resolver found something a different declaration
@@ -321,8 +326,12 @@ class GoalTurnExecutor:
                 s.ledger.append("goal_declared", step=s.step, spec=repaired.to_json(),
                                 attempt=2, **projection)
                 s.step += 1
-                second = self._resolve(s, repaired)
-                accepted = _unresolved(repaired, second) < _unresolved(spec, resolution)
+                try:
+                    second = self._resolve(s, repaired)
+                except _ContractBroken:
+                    second = None
+                accepted = second is not None and \
+                    _unresolved(repaired, second) < _unresolved(spec, resolution)
                 s.ledger.append("goal_repaired", step=s.step, accepted=accepted,
                                 unresolved_before=_unresolved(spec, resolution),
                                 unresolved_after=_unresolved(repaired, second))
@@ -342,7 +351,8 @@ class GoalTurnExecutor:
                 continue
             outcomes.append(self._reach(s, resolved.page))
         if not s.terminal_reason:
-            achieved = any(_achieved(r, o) for r, o in zip(resolution.deliverables, outcomes))
+            achieved = all(_achieved(r, o) for r, o in
+                           zip(resolution.deliverables, outcomes, strict=True))
             s.terminal_reason = "agent_finished" if achieved else "agent_refused"
         return self._reply(s, resolution.deliverables, outcomes)
 
@@ -359,8 +369,11 @@ class GoalTurnExecutor:
         s.step += 1
         try:
             second, projection = second_reading.result()
-        except (ValueError, ProviderError) as exc:
-            s.ledger.append("goal_second_reading_failed", step=s.step, detail=str(exc)[:200])
+        except Exception as exc:  # noqa: BLE001 -- the second reading is optional; whatever
+            # stopped it (a malformed reply, a dropped call, a transport fault) leaves
+            # the first reading in place and is recorded.
+            s.ledger.append("goal_second_reading_failed", step=s.step,
+                            detail=f"{type(exc).__name__}: {exc}"[:200])
             return first
         differences = first.differences(second)
         s.ledger.append("goal_second_reading", step=s.step, spec=second.to_json(),
@@ -392,6 +405,15 @@ class GoalTurnExecutor:
         resolution = self.goal_port.resolve(
             spec, context=s.approvals.context(s.step, "resolve"),
             current_path=_path_of(s.obs.url))
+        if (len(resolution.deliverables) != len(spec.deliverables)
+                or any(actual.kind != declared.kind for declared, actual in
+                       zip(spec.deliverables, resolution.deliverables, strict=True))):
+            # The adapter must answer each declared deliverable with one of the same
+            # kind; anything else is a broken port, reported as such, not acted on.
+            s.ledger.append("goal_resolution_contract_refused", step=s.step,
+                            declared=len(spec.deliverables),
+                            resolved=len(resolution.deliverables))
+            raise _ContractBroken()
         s.ledger.append("goal_resolved", step=s.step,
                         kinds=[d.kind for d in resolution.deliverables],
                         problems=[d.problem for d in resolution.deliverables],
@@ -437,6 +459,7 @@ class GoalTurnExecutor:
         two consecutive observations agree.
         """
         confirmed = 0
+        last_confirmed_epoch = -1
         for _ in range(_READY_WAITS):
             obs = s.obs
             path_ok = not expected_path or _path_of(obs.url) == expected_path
@@ -447,13 +470,18 @@ class GoalTurnExecutor:
             if path_ok and obs.render_state != "pending" and rendered:
                 # Seen rendered twice, half a second apart: the header controls and tabs
                 # of a form arrive a beat after its route does.
-                confirmed += 1
+                if obs.epoch != last_confirmed_epoch:
+                    confirmed += 1
+                    last_confirmed_epoch = obs.epoch
                 if confirmed >= 2:
                     return True
+            else:
+                confirmed = 0
+                last_confirmed_epoch = -1
             receipt = self._dispatch(s, "wait_for", {"ms": 500})
             if receipt is None:
                 return False
-        return bool(not expected_path or _path_of(s.obs.url) == expected_path)
+        return False
 
     def _reach(self, s: _TurnState, plan: PagePlan) -> _PageOutcome:
         out = _PageOutcome()
@@ -786,8 +814,7 @@ def _status_for(terminal_reason: str) -> AgentTurnStatus:
 
 
 def _achieved(resolved: Resolved, outcome: _PageOutcome | None) -> bool:
-    if resolved.problem and resolved.kind in ("fact", "aggregate", "list") and not (
-            resolved.facts or resolved.aggregate):
+    if resolved.problem:
         return False
     if resolved.kind in ("fact",) and resolved.facts:
         return True
@@ -796,6 +823,10 @@ def _achieved(resolved: Resolved, outcome: _PageOutcome | None) -> bool:
     if outcome is not None:
         return outcome.reached and not outcome.unmet
     return False
+
+
+class _ContractBroken(Exception):
+    """The port answered a declaration with deliverables that do not match it."""
 
 
 def _unresolved(spec: GoalSpec, resolution: Resolution) -> int:

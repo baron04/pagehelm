@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import threading
+from dataclasses import replace
 import tempfile
 import unittest
 from pathlib import Path
@@ -212,7 +213,11 @@ class GoalTurnTests(unittest.TestCase):
 
     def test_a_fact_and_a_page_are_answered_from_one_model_call(self):
         execution, channel, chat, port, events = self._run(
-            [_declaration(kind="fact", entity="order", record="S00006", fields=["Customer"])],
+            [("declare_goal", {"deliverables": [
+                {"kind": "fact", "entity": "order", "record": "S00006",
+                 "fields": ["Customer"]},
+                {"kind": "page", "entity": "order", "record": "S00006",
+                 "section": "Other Info"}]})],
             [Resolved(kind="fact", facts=(Fact("S00006", "Customer", "Lumber Inc"),)),
              Resolved(kind="page", page=PagePlan(url="/orders/6", label="S00006 · Other Info",
                                                  expected_path="/orders/6",
@@ -395,6 +400,60 @@ class GoalTurnTests(unittest.TestCase):
         self.assertIn("未完成", execution.user_answer)
         self.assertIn("section Notes", execution.user_answer)
 
+    def test_one_deliverable_cannot_complete_a_two_part_request(self):
+        execution, *_ = self._run(
+            [("declare_goal", {"deliverables": [
+                {"kind": "fact", "entity": "order", "record": "S00006",
+                 "fields": ["Customer"]},
+                {"kind": "fact", "entity": "order", "record": "S00006",
+                 "fields": ["Payment Terms"]}]})],
+            [Resolved(kind="fact", facts=(Fact("S00006", "Customer", "Lumber Inc"),)),
+             Resolved(kind="fact", problem="Payment Terms is not on this record")])
+        self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
+        self.assertEqual(execution.agent.success_claim, "not_claimed")
+        self.assertIn("Lumber Inc", execution.user_answer)
+        self.assertIn("无法完成这一项", execution.user_answer)
+
+    def test_adapter_cannot_drop_a_declared_deliverable(self):
+        execution, *_ = self._run(
+            [("declare_goal", {"deliverables": [
+                {"kind": "fact", "entity": "order", "record": "S00006",
+                 "fields": ["Customer"]},
+                {"kind": "page", "page": {"key": "p1"}}]})],
+            [Resolved(kind="fact", facts=(Fact("S00006", "Customer", "Lumber Inc"),))])
+        self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
+        self.assertNotIn("Lumber Inc", execution.user_answer)
+
+    def test_changed_url_without_stable_render_is_not_arrival(self):
+        class _NeverReadyBrowser(_Browser):
+            def _observation(self):
+                return replace(super()._observation(), render_state="pending")
+
+        with (patch.object(executor_module, "RemoteBrowserClient", _NeverReadyBrowser),
+              patch.object(executor_module, "_READY_WAITS", 2)):
+            execution, *_ = self._run(
+                [_declaration(kind="page", page={"key": "p1"})],
+                [Resolved(kind="page", page=PagePlan(
+                    url="/orders", label="Sales / Orders", expected_path="/orders"))],
+                text="打开订单")
+        self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
+        self.assertIn("未完成", execution.user_answer)
+
+    def test_interrupted_render_observations_do_not_count_as_consecutive(self):
+        class _FlappingBrowser(_Browser):
+            def _observation(self):
+                state = "pending" if self.epoch % 2 == 0 else "ready"
+                return replace(super()._observation(), render_state=state)
+
+        with (patch.object(executor_module, "RemoteBrowserClient", _FlappingBrowser),
+              patch.object(executor_module, "_READY_WAITS", 4)):
+            execution, *_ = self._run(
+                [_declaration(kind="page", page={"key": "p1"})],
+                [Resolved(kind="page", page=PagePlan(
+                    url="/orders", label="Sales / Orders", expected_path="/orders"))],
+                text="打开订单")
+        self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
+
     def test_an_aggregate_is_rendered_with_its_scope(self):
         execution, *_ = self._run(
             [_declaration(kind="aggregate", entity="order", page={"key": "p1"},
@@ -450,6 +509,11 @@ class DeclarationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             GoalSpec.from_json({"deliverables": [{"kind": "aggregate",
                                                   "metric": {"op": "count", "top": 99}}]})
+        with self.assertRaisesRegex(ValueError, "four entries"):
+            GoalSpec.from_json({"deliverables": [{"kind": "page"}] * 5})
+        with self.assertRaisesRegex(ValueError, "exceeds"):
+            GoalSpec.from_json({"deliverables": [{"kind": "fact",
+                                                  "record": "x" * 121}]})
         self.assertEqual(DECLARE_GOAL_TOOL["function"]["name"], "declare_goal")
 
     def test_the_index_renders_one_line_per_entity_and_page(self):
