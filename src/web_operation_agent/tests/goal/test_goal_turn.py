@@ -58,11 +58,22 @@ class _Port:
 
 
 def _obs(epoch: int, url: str, *, tabs=(), selected=(), facets=None, candidates=None,
-         buttons=(), render_state="ready") -> PageObservation:
+         buttons=(), render_state="ready", fields=None, suggestions=()) -> PageObservation:
     elements = [ElementRef(ref=f"t{i}", role="tab", name=name, tag="a", epoch=epoch)
                 for i, name in enumerate(tabs)]
     elements += [ElementRef(ref=f"b{i}", role="button", name=name, tag="button", epoch=epoch)
                  for i, name in enumerate(buttons)]
+    # A field's label comes before its input, as on a real form; a value must go into
+    # the input, never the label.
+    elements += [ElementRef(ref=f"l{i}", role="label", name=name, tag="label", epoch=epoch)
+                 for i, name in enumerate(fields or {})]
+    # Inputs carry the application's field identifier and no accessible name of their
+    # own, as a component form renders them.
+    elements += [ElementRef(ref=f"f{i}", role="textbox", name="", tag="input", epoch=epoch,
+                            attrs={"field": name.lower(), **({"value": value} if value else {})})
+                 for i, (name, value) in enumerate((fields or {}).items())]
+    elements += [ElementRef(ref=f"s{i}", role="option", name=name, tag="li", epoch=epoch)
+                 for i, name in enumerate(suggestions)]
     return PageObservation(schema_version=1, epoch=epoch, url=url, title="App",
                            landmarks=["main"], elements=elements, content="page",
                            render_state=render_state, selected_controls=list(selected),
@@ -83,6 +94,9 @@ class _Browser:
         self.selected: list[str] = []
         self.facets: list[dict] = [{"kind": "filter", "name": "My Orders"}]
         self.buttons = ("Confirm", "Send by Email")
+        #: Form fields by label, with what they currently show.
+        self.fields: dict[str, str] = {"Expiration": "", "Customer": "Gemini Furniture"}
+        self.suggestions: tuple[str, ...] = ()
         self.__class__.instances.append(self)
 
     def start(self):
@@ -94,7 +108,8 @@ class _Browser:
                       {"ref": "fc_2", "kind": "group", "name": "Salesperson",
                        "active": any(f["name"] == "Salesperson" for f in self.facets)}]
         return _obs(self.epoch, self.url, tabs=self.tabs, selected=self.selected,
-                    facets=list(self.facets), candidates=candidates, buttons=self.buttons)
+                    facets=list(self.facets), candidates=candidates, buttons=self.buttons,
+                    fields=self.fields, suggestions=self.suggestions)
 
     def execute(self, action, args=None, expect_navigation=False):
         args = dict(args or {})
@@ -107,6 +122,18 @@ class _Browser:
             ref = args["ref"]
             if ref.startswith("t"):
                 self.selected = [self.tabs[int(ref[1:])]]
+            elif ref.startswith("s"):
+                # Choosing a suggestion puts that record's name into the link field.
+                self.fields["Customer"] = self.suggestions[int(ref[1:])]
+                self.suggestions = ()
+        elif action == "fill":
+            label = list(self.fields)[int(args["ref"][1:])]
+            if label == "Customer":
+                # A link field offers the records whose names contain the typed text.
+                self.suggestions = tuple(n for n in ("Lumber Inc", "Azure Interior")
+                                         if args["value"].casefold() in n.casefold())
+            else:
+                self.fields[label] = args["value"]
         elif action == "apply_facet":
             name = {"fc_1": "My Orders", "fc_2": "Salesperson"}[args["ref"]]
             if args["active"]:
@@ -238,6 +265,57 @@ class GoalTurnTests(unittest.TestCase):
         self.assertIn("write_intent", chat.messages[1][1]["content"])
         self.assertIn("标出「Send by Email」", execution.user_answer)
         self.assertTrue(next(e for e in events if e["event"] == "goal_repaired")["accepted"])
+
+    def test_a_handoff_with_a_value_fills_the_field_and_leaves_saving_to_the_person(self):
+        execution, _channel, _chat, _port, events = self._run(
+            [_declaration(kind="handoff", entity="order", record="S00005",
+                          action="Expiration", value="2026-10-31")],
+            [Resolved(kind="handoff", page=PagePlan(url="/orders/5", label="S00005",
+                                                    expected_path="/orders/5",
+                                                    highlight="Expiration", fill="2026-10-31",
+                                                    fill_kind="text", fill_label="2026-10-31",
+                                                    fill_field="expiration"))],
+            text="S00005 的有效期延长到十月底")
+        browser = _Browser.instances[0]
+        self.assertEqual(browser.fields["Expiration"], "2026-10-31")
+        self.assertEqual([a for a, _ in browser.actions if a not in ("wait_for", "goto")],
+                         ["fill", "highlight"])
+        self.assertNotIn("submit", [a for a, _ in browser.actions])
+        self.assertIn("已在「Expiration」填入「2026-10-31」并标出", execution.user_answer)
+        self.assertIn("自行保存", execution.user_answer)
+        self.assertNotIn("未回显", execution.user_answer)
+        filled = next(e for e in events if e["event"] == "goal_field_filled")
+        self.assertTrue(filled["verified"])
+
+    def test_a_linked_record_is_typed_then_chosen_among_the_fields_own_suggestions(self):
+        execution, _channel, _chat, _port, _events = self._run(
+            [_declaration(kind="handoff", entity="order", record="S00005",
+                          action="Customer", value="Azure Interior")],
+            [Resolved(kind="handoff", page=PagePlan(url="/orders/5", label="S00005",
+                                                    expected_path="/orders/5",
+                                                    highlight="Customer", fill="Azure Interior",
+                                                    fill_kind="link", fill_label="Azure Interior",
+                                                    fill_field="customer"))],
+            text="S00005 的客户换成 Azure Interior")
+        browser = _Browser.instances[0]
+        self.assertEqual(browser.fields["Customer"], "Azure Interior")
+        self.assertEqual([a for a, _ in browser.actions if a not in ("wait_for", "goto")],
+                         ["fill", "click", "highlight"])
+        self.assertIn("填入「Azure Interior」", execution.user_answer)
+
+    def test_a_value_that_cannot_be_entered_is_said_and_left_to_the_person(self):
+        execution, _channel, _chat, _port, _events = self._run(
+            [_declaration(kind="handoff", entity="order", record="S00005",
+                          action="Customer", value="Nobody")],
+            [Resolved(kind="handoff", page=PagePlan(url="/orders/5", label="S00005",
+                                                    expected_path="/orders/5",
+                                                    highlight="Customer", fill="Nobody",
+                                                    fill_kind="link", fill_label="Nobody",
+                                                    fill_field="customer"))],
+            text="S00005 的客户换成 Nobody")
+        self.assertEqual(_Browser.instances[0].fields["Customer"], "Gemini Furniture")
+        self.assertIn("没能填入「Nobody」", execution.user_answer)
+        self.assertIn("标出「Customer」", execution.user_answer)
 
     def test_a_handoff_highlights_and_never_presses(self):
         execution, _channel, _chat, _port, events = self._run(

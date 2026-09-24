@@ -195,6 +195,24 @@ describe('hydrateFormFacts adds a bounded application field identifier', () => {
     expect(elements[0]?.attrs.field).toBeUndefined()
   })
 
+  it('reports what a text field currently shows, redacted and bounded', () => {
+    const elements = elementsFrom('[0]<input type=text name=validity_date />', 1, redactor)
+    elements[0]!.role = 'textbox'
+    const element = {closest: () => null, value: '2026-10-31', name: 'validity_date',
+      hasAttribute: () => false, getAttribute: () => null}
+    hydrateFormFacts(elements, {}, () => element, redactor)
+    expect(elements[0]?.attrs.value).toBe('2026-10-31')
+  })
+
+  it('never reports the value of a field whose name marks it sensitive', () => {
+    const elements = elementsFrom('[0]<input type=text name=password />', 1, redactor)
+    elements[0]!.role = 'textbox'
+    const element = {closest: () => null, value: 'hunter2', name: 'password',
+      hasAttribute: () => false, getAttribute: () => null}
+    hydrateFormFacts(elements, {}, () => element, redactor)
+    expect(elements[0]?.attrs.value).toBeUndefined()
+  })
+
   it('reports disabled and read-only state from the live control', () => {
     const elements = elementsFrom('[0]<input type=text name=company />', 1, redactor)
     elements[0]!.role = 'textbox'

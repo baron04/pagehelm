@@ -274,6 +274,13 @@ export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
       // recheck the live element at execution time because the DOM may change afterwards.
       if (element?.disabled) item.attrs.disabled = 'true'
       if (element?.readOnly) item.attrs.readonly = 'true'
+      // What a text field currently shows, so the server can check a value it entered
+      // before handing the form to the person. Redacted like any other observed text,
+      // bounded, and never for a field whose name marks it sensitive.
+      if (item.role !== 'select' && typeof element?.value === 'string' && element.value
+          && !redactor.isSensitiveName(String(element.name || ''))) {
+        item.attrs.value = redactor.redactString(element.value).slice(0, 120)
+      }
       const owner = typeof element?.closest === 'function' ? element.closest('[name]') : null
       const rawField = explicitAttribute(owner || element, 'name')
       if (rawField !== null && /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/.test(rawField)

@@ -145,6 +145,8 @@ class Deliverable:
     page: PageSpec = field(default_factory=PageSpec)
     section: str = ""
     action: str = ""
+    #: For a handoff on a field: the new value the person gave, in the field's form.
+    value: str = ""
     #: For a list: the field to order by, its direction, and how many records to show.
     sort: str = ""
     descending: bool = False
@@ -170,12 +172,13 @@ class Deliverable:
                    page=PageSpec.from_json(value.get("page")),
                    section=_text(value.get("section"), "section"),
                    action=_text(value.get("action"), "action"),
+                   value=_text(value.get("value"), "value"),
                    sort=_text(value.get("sort"), "sort"),
                    descending=bool(value.get("descending", False)), limit=limit)
 
     def to_json(self) -> dict:
         out: dict = {"kind": self.kind}
-        for name in ("entity", "record", "via", "section", "action"):
+        for name in ("entity", "record", "via", "section", "action", "value"):
             if getattr(self, name):
                 out[name] = getattr(self, name)
         if self.fields:
@@ -305,6 +308,8 @@ DECLARE_GOAL_TOOL = {
                                         "description": "section (tab) name on the record's page"},
                             "action": {"type": "string",
                                        "description": "handoff: the button name from the index for a business action, the label of the field the person wants to change, or New for creating a record"},
+                            "value": {"type": "string",
+                                      "description": "handoff on a field: the new value the person gave, in the field's own form (a date as 2026-10-31, a number, a choice label from the index, a record's name); empty when the person gave no value"},
                             "sort": {"type": "string",
                                      "description": "list: field label to order by (the largest, the latest)"},
                             "descending": {"type": "boolean"},

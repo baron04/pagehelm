@@ -664,6 +664,26 @@ case("a-unknown-page-filter-lists-the-filters", "sale.order", "aggregate", "none
      problem=r"not usable", repair=r"its filters are: .*My Orders")
 
 
+# -- handoffs that carry the value to enter ----------------------------------------------------
+def valued(entity, record, action, value):
+    return {"deliverables": [{"kind": "handoff", "entity": entity, "record": record,
+                              "action": action, "value": value}], "write_intent": True}
+
+
+case("h-value-date", "sale.order", "handoff", "field", valued("sale.order", "S00005", "Expiration", "2026-10-31"),
+     page={"url": r"^/odoo/sales/5$", "highlight": "Expiration", "fill": "2026-10-31", "fill_kind": "text",
+           "fill_field": "validity_date"})
+case("h-value-link", "sale.order", "handoff", "field", valued("sale.order", "S00003", "Customer", "Azure Interior"),
+     page={"highlight": "Customer", "fill": "Azure Interior", "fill_kind": "link"})
+case("h-value-link-unknown", "sale.order", "handoff", "field", valued("sale.order", "S00003", "Customer", "Nobody Inc"),
+     page={"highlight": "Customer", "fill": ""}, repair=r"no Customer is named")
+case("h-value-text-in-a-tab", "account.move", "handoff", "field",
+     valued("account.move", "BILL/2025/06/0001", "Payment Reference", "PO-2025-0617"),
+     page={"highlight": "Payment Reference", "fill": "PO-2025-0617", "fill_kind": "text"})
+case("h-value-on-a-button-is-ignored", "sale.order", "handoff", "none", valued("sale.order", "S00002", "Confirm", "yes"),
+     page={"highlight": "Confirm", "fill": ""})
+
+
 def _check(expect: dict, resolved) -> list[str]:
     errors = []
     d = resolved.deliverables[expect.get("deliverable", 0)]

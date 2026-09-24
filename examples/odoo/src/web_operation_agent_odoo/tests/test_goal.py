@@ -138,6 +138,7 @@ class _Client:
             query = args[0]
             table = {"sale.order": [[6, "S00006"], [7, "S00007"]],
                      "res.partner": [[11, "Gemini Furniture"], [21, "Gemini Furniture, Ed"]],
+                     "account.payment.term": [[6, "End of Following Month"], [7, "Immediate Payment"]],
                      "product.tag": []}
             return [row for row in table.get(model, []) if query.casefold() in row[1].casefold()]
         if method == "read":
@@ -322,6 +323,27 @@ class OdooGoalPortTests(unittest.TestCase):
         plan = result.deliverables[0].page
         self.assertEqual((plan.view, plan.missing_view), ("", "pivot"))
         self.assertTrue(plan.url.startswith("/odoo/action-"))
+
+    def test_a_handoff_value_becomes_what_to_enter_only_when_certain(self):
+        def plan(action, value):
+            result = self._resolve({"kind": "handoff", "entity": "sale.order", "record": "S00006",
+                                    "action": action, "value": value}, write_intent=True)
+            return result.deliverables[0]
+        dated = plan("Order Date", "2026-10-31").page
+        self.assertEqual((dated.fill, dated.fill_kind), ("2026-10-31", "text"))
+        self.assertEqual(plan("Order Date", "2026-10").page.fill, "")
+        meta = self.port._models["sale.order"]
+        self.assertEqual(self.port._fill_for(meta, "state", "Quotation Sent"),
+                         ("sent", "choice", "Quotation Sent"))
+        self.assertEqual(self.port._fill_for(meta, "state", "Lost"), ("", "", ""))
+        linked = plan("Payment Terms", "End of Following Month").page
+        self.assertEqual((linked.fill, linked.fill_kind), ("End of Following Month", "link"))
+        nobody = plan("Payment Terms", "Nobody")
+        self.assertEqual(nobody.page.fill, "")
+        self.assertIn("no Payment Terms is named 'Nobody'", nobody.repair)
+        self.assertEqual(self.port._fill_for(meta, "amount_total", "1,200.50")[0], "1200.50")
+        self.assertEqual(self.port._fill_for(meta, "amount_total", "a lot")[0], "")
+        self.assertEqual(plan("Confirm", "").page.fill, "")
 
     def test_field_labels_match_by_whole_words_and_field_names(self):
         meta = self.port._models["sale.order"]

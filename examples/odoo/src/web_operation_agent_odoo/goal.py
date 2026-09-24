@@ -716,8 +716,16 @@ class OdooGoalPort:
                 # The change is to a field, and the model named the field alongside a
                 # button it guessed: the field is what the person will edit.
                 control = d.fields[0]
-            plan = self._record_page(model, rid, name, section="", highlight=control)
-            return Resolved(kind="handoff", page=plan)
+            plan = self._record_page(model, rid, name, section="", highlight=control,
+                                     value=d.value)
+            repair = ""
+            if d.value and not plan.fill:
+                field = meta.field_by_label(control) if meta is not None else None
+                info = meta.fields.get(field or "", {}) if meta is not None else {}
+                if info.get("type") == "many2one":
+                    repair = (f"no {info.get('string') or control} is named {d.value!r}; "
+                              "value must be the exact name of an existing record")
+            return Resolved(kind="handoff", page=plan, repair=repair)
         plan = self._record_page(model, rid, name, section=d.section, highlight="")
         if d.section and model in self._models:
             # "Its invoice lines": the section that embeds the record's lines is shown,
@@ -946,8 +954,45 @@ class OdooGoalPort:
                 return index.page(f"p{action['action_id']}")
         return None
 
+    def _fill_for(self, meta: _ModelMeta, field: str, value: str) -> tuple[str, str, str]:
+        """(what to put in, how, its visible label) for a value the person gave a field,
+        or empty when the value cannot be typed with certainty: a date at day precision,
+        a number, a choice the field offers, the exact name of one existing record, or
+        plain text. A checkbox and a value that names no record are left to the person."""
+        info = meta.fields.get(field, {})
+        kind = info.get("type")
+        value = value.strip()
+        if not value:
+            return "", "", ""
+        if kind in ("date", "datetime"):
+            period = _period(value, self._today())
+            if period is None or period[0] is None or period[1] is None \
+                    or (period[1] - period[0]).days != 1:
+                return "", "", ""
+            return period[0].isoformat(), "text", period[0].isoformat()
+        if kind == "selection":
+            wanted = _norm(value)
+            for key, label in info.get("selection") or ():
+                if _norm(str(label)) == wanted or key == value:
+                    return str(key), "choice", str(label)
+            return "", "", ""
+        if kind == "many2one":
+            found = self._find_record(str(info["relation"]), value)
+            if not (isinstance(found, tuple) and not isinstance(found, Ambiguous)):
+                return "", "", ""
+            return found[2], "link", found[2]
+        if kind in ("integer", "float", "monetary"):
+            try:
+                float(value.replace(",", ""))
+            except ValueError:
+                return "", "", ""
+            return value.replace(",", ""), "text", value
+        if kind in ("char", "text", "html"):
+            return value, "text", value
+        return "", "", ""
+
     def _record_page(self, model: str, rid: int, name: str, *, section: str,
-                     highlight: str) -> PagePlan:
+                     highlight: str, value: str = "") -> PagePlan:
         meta = self._models.get(model)
         candidates = [a for a in self._actions
                       if a["model"] == model and "form" in (a.get("view_modes") or ())]
@@ -976,6 +1021,8 @@ class OdooGoalPort:
                     break
             tab = tab or section
         control = highlight
+        fill = ("", "", "")
+        fill_field = ""
         if highlight and meta is not None:
             wanted = _norm(highlight)
             for item in meta.actions:
@@ -999,9 +1046,13 @@ class OdooGoalPort:
                     if not tab:
                         # A field inside a tab is reached by selecting that tab first.
                         tab = _tab_of(meta.form_arch, field)
+                    if value:
+                        fill = self._fill_for(meta, field, value)
+                        fill_field = field if fill[0] else ""
         label = name if not tab else f"{name} · {tab}"
         return PagePlan(url=url, label=label, expected_path=url, section=tab,
-                        highlight=control)
+                        highlight=control, fill=fill[0], fill_kind=fill[1], fill_label=fill[2],
+                        fill_field=fill_field)
 
     def _list_page(self, d: Deliverable, index: ApplicationIndex) -> Resolved:
         page = index.page(d.page.key) if d.page.key else None

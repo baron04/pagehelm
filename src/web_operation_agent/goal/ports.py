@@ -60,6 +60,17 @@ class PagePlan:
     #: A view the person asked for that this page does not offer; the page opens in
     #: its own view and the reply says the asked-for one is not available.
     missing_view: str = ""
+    #: A value to put into the highlighted field before handing over: what to type or
+    #: choose, how ("text" typed, "choice" picked from a native select by option value,
+    #: "link" typed then picked from the field's own suggestions), and how the page
+    #: labels it. The person saves; the assistant never submits.
+    fill: str = ""
+    fill_kind: str = ""
+    fill_label: str = ""
+    #: The application's own identifier for that field, as the page exposes it on the
+    #: input (a form's inputs are often unlabelled in the accessible tree; their field
+    #: identifier is what tells them apart).
+    fill_field: str = ""
 
 
 @dataclass(frozen=True)

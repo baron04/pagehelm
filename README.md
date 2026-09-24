@@ -49,7 +49,13 @@ agent.
   entity does not have, a description that matched several records, a change asked for
   with nothing to point at), it says so in the index's terms and the model declares once
   more; the second declaration is taken only when fewer deliverables stay unresolved, and
-  there is no third. Field labels match by whole words
+  there is no third. A handoff that carries the value the person gave for a field enters
+  it first (typed text, a date at day precision, a choice the field offers, or a linked
+  record typed by name and chosen among the field's own suggestions) and checks what the
+  field then shows; saving stays with the person, the page write guard holds throughout,
+  and the reply says to discard the change if it is not wanted, since the form saves
+  itself on leaving. A value that cannot be entered with certainty is left to the person
+  and said so. Field labels match by whole words
   or by the field's own name, never by substring. A view the page lacks is stated in the
   reply while the page opens in its own view. A condition on an unstored computed field
   is refused rather than silently ignored, unless its value names one of the page's own

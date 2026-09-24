@@ -44,6 +44,10 @@ _READY_WAITS = 12
 _SELECTED_ATTRS = ("aria-selected", "selected", "aria-pressed", "aria-checked")
 #: Element roles a handoff never highlights: navigation, not the control asked for.
 _NO_HIGHLIGHT_ROLES = frozenset({"tab", "menuitem", "menu", "menubar", "tablist", "navigation"})
+#: Roles of elements a value can be entered into.
+_INPUT_ROLES = frozenset({"textbox", "combobox", "select", "searchbox", "spinbutton"})
+#: Roles a field's own suggestion list uses for the records it proposes.
+_SUGGESTION_ROLES = frozenset({"option", "menuitem", "listitem", "link"})
 
 
 def _norm(text: str) -> str:
@@ -65,6 +69,11 @@ class _PageOutcome:
     unmet: list[str] = field(default_factory=list)
     url: str = ""
     highlighted: str = ""
+    #: The value put into the highlighted field, as the page labels it; whether the
+    #: page showed it afterwards; and a value that was meant but could not be entered.
+    filled: str = ""
+    fill_verified: bool = False
+    fill_failed: str = ""
 
 
 @dataclass
@@ -414,6 +423,13 @@ class GoalTurnExecutor:
                 out.unmet.append(f"filter {name} off")
         if plan.section and not self._select_tab(s, plan.section):
             out.unmet.append(f"section {plan.section}")
+        if plan.highlight and plan.fill:
+            # The value goes in first, so the highlight marks a field already showing it.
+            element = self._find_input(s, plan)
+            if element is not None:
+                out.filled, out.fill_verified = self._fill(s, element, plan)
+            if not out.filled:
+                out.fill_failed = plan.fill_label or plan.fill
         if plan.highlight:
             control = self._highlight(s, plan.highlight)
             if control:
@@ -505,10 +521,82 @@ class GoalTurnExecutor:
             self._dispatch(s, "wait_for", {"ms": 400})
         return self._tab_selected(s.obs, _norm(tab.name))
 
-    def _highlight(self, s: _TurnState, control: str) -> str:
+    def _fill(self, s: _TurnState, element, plan: PagePlan) -> tuple[str, bool]:
+        """Put the plan's value into the field and say what the page then shows.
+
+        Typed text and numbers go in as they are; a choice is picked from a native
+        select by its option value, else by its visible label; a linked record is typed
+        by name and then chosen among the suggestions the field itself offers, so only a
+        record the application proposes is ever chosen. Nothing here saves: the page
+        write guard holds throughout, and saving is the person's.
+        """
+        shown = plan.fill_label or plan.fill
+        if plan.fill_kind == "choice":
+            receipt = self._dispatch(s, "select", {"ref": element.ref, "epoch": s.obs.epoch,
+                                                   "value": plan.fill})
+            if receipt is None or not receipt.ok:
+                if s.terminal_reason:
+                    return "", False
+                again = self._find_input(s, plan)
+                if again is None:
+                    return "", False
+                receipt = self._dispatch(s, "select", {"ref": again.ref, "epoch": s.obs.epoch,
+                                                       "value": plan.fill_label})
+                if receipt is None or not receipt.ok:
+                    return "", False
+        else:
+            receipt = self._dispatch(s, "fill", {"ref": element.ref, "epoch": s.obs.epoch,
+                                                 "value": plan.fill})
+            if receipt is None or not receipt.ok:
+                return "", False
+            if plan.fill_kind == "link":
+                self._dispatch(s, "wait_for", {"ms": 600})
+                if s.terminal_reason:
+                    return "", False
+                wanted = _norm(plan.fill)
+                options = [e for e in s.obs.elements
+                           if e.role in _SUGGESTION_ROLES and e.name and _norm(e.name) == wanted]
+                if not options:
+                    options = [e for e in s.obs.elements
+                               if e.role in _SUGGESTION_ROLES and e.name
+                               and _norm(e.name).startswith(wanted)]
+                if len(options) != 1:
+                    s.ledger.append("goal_fill_suggestion_missing", step=s.step,
+                                    suggestions=len(options))
+                    return "", False
+                receipt = self._dispatch(s, "click", {"ref": options[0].ref, "epoch": s.obs.epoch})
+                if receipt is None or not receipt.ok:
+                    return "", False
+        self._dispatch(s, "wait_for", {"ms": 400})
+        if s.terminal_reason:
+            return "", False
+        current = self._find_input(s, plan)
+        value = str((current.attrs.get("value") if current is not None else "") or "")
+        verified = bool(value) and (_norm(value) == _norm(shown)
+                                    or set(re.findall(r"\d+", shown)) <= set(re.findall(r"\d+", value))
+                                    and bool(re.findall(r"\d+", shown)))
+        s.ledger.append("goal_field_filled", step=s.step, control=plan.highlight,
+                        kind=plan.fill_kind, verified=verified, shown=bool(value))
+        return shown, verified
+
+    def _find_input(self, s: _TurnState, plan: PagePlan):
+        """The input the plan's value goes into: the one carrying the application's
+        field identifier when the page exposes it, else the input the label names."""
+        if plan.fill_field:
+            inputs = [e for e in s.obs.elements if e.role in _INPUT_ROLES
+                      and str(e.attrs.get("field") or "") == plan.fill_field]
+            if len(inputs) == 1:
+                return inputs[0]
+        return self._find_control(s, plan.highlight, input=True)
+
+    def _find_control(self, s: _TurnState, control: str, *, input: bool = False):
+        """The page element a control name means: for a highlight, any non-navigation
+        element (a field's label marks the field well); for a value to enter, only the
+        input itself, since a label is not something that can be typed into."""
         # The declaration may carry the index's type annotation ("Due Date(date)").
         wanted = _norm(re.sub(r"\((?:date|money|number|html|bool|text)\)$", "", control.strip()))
-        candidates = [e for e in s.obs.elements if e.role not in _NO_HIGHLIGHT_ROLES]
+        candidates = [e for e in s.obs.elements
+                      if (e.role in _INPUT_ROLES if input else e.role not in _NO_HIGHLIGHT_ROLES)]
         # A button by its exact name first, then any control (a field's input is named by
         # its label) by exact name, then by prefix.
         element = next((e for e in candidates if e.role == "button" and _norm(e.name) == wanted),
@@ -524,6 +612,10 @@ class GoalTurnExecutor:
             asked = _tokens(control)
             element = next((e for e in candidates
                             if e.name and _tokens(e.name) and _tokens(e.name) <= asked), None)
+        return element
+
+    def _highlight(self, s: _TurnState, control: str) -> str:
+        element = self._find_control(s, control)
         if element is None:
             return ""
         receipt = self._dispatch(s, "highlight", {"ref": element.ref, "epoch": s.obs.epoch})
@@ -531,7 +623,8 @@ class GoalTurnExecutor:
             return ""
         s.ledger.append("page_handoff_ready", step=s.step, command_id=receipt.command_id,
                         observation_epoch=s.obs.epoch, submitted=False, persisted=False)
-        return element.name
+        # A label's first line is its name; a help marker on a later line is not.
+        return (element.name.strip().splitlines() or [""])[0].strip()
 
     @staticmethod
     def _view_shown(obs: PageObservation, view: str) -> bool:
@@ -684,7 +777,26 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool) -> list[
     if resolved.page is not None and outcome is not None:
         plan = resolved.page
         if resolved.kind == "handoff":
-            if outcome.highlighted:
+            if outcome.highlighted and outcome.filled:
+                # The field holds the value; saving is the person's. A form that saves
+                # itself on leaving the page needs a deliberate discard when unwanted.
+                check = "" if outcome.fill_verified else ("（页面未回显，请核对）" if zh
+                                                          else " (not shown back by the page; please check)")
+                lines.append((f"已打开 {plan.label}，已在「{outcome.highlighted}」填入"
+                              f"「{outcome.filled}」{check}并标出，请你核对后自行保存；"
+                              "助手只做准备，提交由你完成。不需要这次修改就点放弃。") if zh else
+                             (f"Opened {plan.label} and entered “{outcome.filled}” in "
+                              f"“{outcome.highlighted}”{check}; please check it and save it "
+                              "yourself. The assistant prepares, you submit. Discard it if "
+                              "the change is not wanted."))
+            elif outcome.highlighted and outcome.fill_failed:
+                lines.append((f"已打开 {plan.label} 并在页面上标出「{outcome.highlighted}」，"
+                              f"但没能填入「{outcome.fill_failed}」，请你自行填写并保存；"
+                              "助手只做准备，提交由你完成。") if zh else
+                             (f"Opened {plan.label} and highlighted “{outcome.highlighted}”, "
+                              f"but could not enter “{outcome.fill_failed}”; please enter and "
+                              "save it yourself. The assistant prepares, you submit."))
+            elif outcome.highlighted:
                 # A handoff is a completed preparation, not a refusal: the reply says what
                 # is ready and who acts next, without the words a refusal uses.
                 lines.append((f"已打开 {plan.label} 并在页面上标出「{outcome.highlighted}」，"
