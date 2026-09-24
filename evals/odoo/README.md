@@ -28,6 +28,28 @@ that an explanation is adequate, so limitation answers need separate review.
 Detail oracles expect each product and its values on one text or table row; list
 exclusions cover records in the supplied reference data.
 
+Before a v4 model run, `python -m evals.odoo.goals.qualification --output
+.artifacts/v4-qualification.json` must pass. It independently checks all 58 answer
+oracles against read-only SQL witnesses, all 58 page and handoff targets in a
+browser signed in as the ordinary reader, and the 15 limitation preconditions.
+The answer witnesses check fixture data, not actor ACLs; the browser walk checks
+target reachability, not whether the Agent will navigate correctly. The run command
+then requires `--qualification .artifacts/v4-qualification.json` and refuses a
+different candidate commit, fixture fingerprint, Odoo container, mounted addon
+content, or application date. It also stops if any of those change between attempts. Supply `--model-env`
+and `--credentials` explicitly when running from a separate worktree. For an
+isolated deployment, also supply its `--base-url`, `--page-controller-module`,
+`--container`, and `--app-container`. The browser's evaluation clock is fixed to
+the sealed reference date; the application clock must independently report that
+same date throughout the batch. The date check detects drift but does not freeze
+Odoo's clock. Do not run the relative-time holdout against a deployment reporting
+any other date. The automatic answer regexes are provisional; a blind human
+review of answer scope and limitation wording is required before claiming a final
+success rate. A bound run may be split into lanes as long as every lane carries the same binding,
+and reports reachable and limitation outcomes separately. The prior independent Odoo offline
+suite still has five failures in `test_p74b_defect_paths` on both this candidate
+and main; they are not counted as passing qualification.
+
 ## Arms and capabilities
 
 | Arm | Capability | Used for |

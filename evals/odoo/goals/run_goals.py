@@ -16,6 +16,7 @@ import json
 import time
 from pathlib import Path
 
+from evals.odoo.goals.binding import bind_output, make_binding, recheck, recheck_checkout
 from evals.odoo.goals.judge import score
 from evals.odoo.goals.probe import FINAL_STATE_PROBE
 from evals.odoo.p87_gate import fingerprint
@@ -56,6 +57,7 @@ def run_attempt(task: dict, doc: dict, *, env: dict, credentials: Path, output: 
             scripted=False, headless=True, output_dir=output, model_env=model_env,
             keep_open_seconds=0, turn_timeout_s=180.0,
             evaluation=True, evaluation_page_click=False,
+            evaluation_reference_date=doc.get("reference_date", ""),
             confirm_navigation_in_page=True,
             final_page_probe=lambda page: page.evaluate(FINAL_STATE_PROBE)))
     except Exception as exc:  # noqa: BLE001 -- one attempt's failure is a recorded result
@@ -74,7 +76,8 @@ def run_attempt(task: dict, doc: dict, *, env: dict, credentials: Path, output: 
     answer = turn.get("answer", "")
     terminal = turn.get("terminal_reason") or ("harness_error" if error else "")
     verdict = score(task, probe=probe, visited=visited, answer=answer,
-                    finished=terminal == "agent_finished", write_detected=write_detected)
+                    finished=terminal == "agent_finished", refused=terminal == "agent_refused",
+                    write_detected=write_detected)
     return {
         "task": task["id"], "category": task.get("category", ""), "prompt": task["prompt"], "terminal_reason": terminal,
         "answer": answer, "probe": probe, "visited": visited,
@@ -128,22 +131,51 @@ def main() -> int:
     parser.add_argument("--taskset", "--version", choices=tuple(TASKSETS), default="v2")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--model-env", type=Path, default=ROOT / ".env")
+    parser.add_argument("--base-url", help="browser-visible URL of the isolated Odoo deployment")
+    parser.add_argument("--page-controller-module", help="controller module URL for that deployment")
     parser.add_argument("--credentials", type=Path, default=ROOT / ".private" / "odoo-reader")
     parser.add_argument("--container", default="woa-odoo-reference-db-1")
+    parser.add_argument("--app-container", default="woa-odoo-reference-odoo-1")
     parser.add_argument("--database", default="woa_reference")
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--task", action="append", default=[])
     parser.add_argument("--lane", default="1/1")
+    parser.add_argument("--preflight-only", action="store_true")
+    parser.add_argument("--qualification", type=Path)
     arguments = parser.parse_args()
     env = {}
     for line in arguments.model_env.read_text().splitlines():
         if "=" in line and not line.lstrip().startswith("#"):
             key, value = line.split("=", 1)
             env[key.strip()] = value.strip()
+    if arguments.base_url:
+        env["WOA_ODOO_BASE_URL"] = arguments.base_url
+    if arguments.page_controller_module:
+        env["WOA_ODOO_PAGE_CONTROLLER_MODULE"] = arguments.page_controller_module
     doc = load_tasks(arguments.taskset)
+    binding = None
+    if arguments.taskset == "v4":
+        binding = make_binding(
+            root=ROOT, task_digest=TASKSETS["v4"][1],
+            reference_date=doc["reference_date"], db_container=arguments.container,
+            database=arguments.database, app_container=arguments.app_container,
+            source_release=env["WOA_ODOO_SOURCE_RELEASE"])
+    if arguments.preflight_only:
+        print(json.dumps({"taskset": arguments.taskset, "binding": binding},
+                         ensure_ascii=False, sort_keys=True))
+        return 0
+    if binding is not None:
+        if arguments.repeats != 1 or arguments.task or arguments.lane != "1/1":
+            raise RuntimeError("the sealed v4 holdout requires one complete, single-lane run")
+        from evals.odoo.goals.qualification import verify_qualification
+        if arguments.qualification is None:
+            raise RuntimeError("v4 requires --qualification from the zero-model oracle walk")
+        verify_qualification(arguments.qualification, binding=binding, tasks=doc["tasks"])
     lane, lanes = (int(part) for part in arguments.lane.split("/"))
     arguments.output.mkdir(parents=True, exist_ok=True)
     (arguments.output / "attempts").mkdir(exist_ok=True)
+    if binding is not None:
+        bind_output(arguments.output, binding)
     rows = []
     position = -1
     for repeat in range(1, arguments.repeats + 1):
@@ -153,6 +185,10 @@ def main() -> int:
             position += 1
             if position % lanes != lane - 1:
                 continue
+            if binding is not None:
+                recheck_checkout(binding, ROOT)
+                recheck(binding, app_container=arguments.app_container,
+                        db_container=arguments.container, database=arguments.database)
             path = arguments.output / "attempts" / f"r{repeat}-{task['id']}.json"
             if path.exists():
                 row = json.loads(path.read_text())
@@ -173,10 +209,20 @@ def main() -> int:
                 print(json.dumps({"stopped": "write_detected", "task": row["task"]}),
                       flush=True)
                 return 3
+            if binding is not None:
+                recheck_checkout(binding, ROOT)
+                recheck(binding, app_container=arguments.app_container,
+                        db_container=arguments.container, database=arguments.database)
     (arguments.output / f"projection-lane{lane}of{lanes}.json").write_text(
         json.dumps(rows, ensure_ascii=False, indent=1) + "\n")
     sheet(rows, doc, arguments.output / f"grading-lane{lane}of{lanes}.html")
+    normal = [row for row in rows if row["category"] != "impossible"]
+    impossible = [row for row in rows if row["category"] == "impossible"]
     print(json.dumps({"attempts": len(rows), "success": sum(row["success"] for row in rows),
+                      "reachable_success": sum(row["success"] for row in normal),
+                      "reachable_total": len(normal),
+                      "limitation_success": sum(row["success"] for row in impossible),
+                      "limitation_total": len(impossible),
                       "honest": sum(row["honest"] for row in rows),
                       "false_claims": sum(len(row["false_claims"]) for row in rows),
                       "provider_calls": sum(row["provider_calls"] for row in rows),

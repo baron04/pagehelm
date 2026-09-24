@@ -188,6 +188,9 @@ class OdooDemoConfig:
     #: -- in-page page-switch confirmation and the hidden final probe -- in provider mode.
     #: Not exposed by the CLI; a person running the demo confirms page switches themselves.
     evaluation: bool = False
+    #: Evaluation-only browser date. Timers continue to run while Date.now/new Date
+    #: agree with an isolated application's reference day.
+    evaluation_reference_date: str = ""
     #: Evaluation only: offer the generic click the production turn disables, with a scope
     #: statement that says so. Fill, select, submit and back stay disabled; a write is
     #: detected by the caller against the fixture database. Never a deployment default.
@@ -550,6 +553,8 @@ def _run_browser(config: OdooDemoConfig, live: LiveProductSession,
             context = browser.new_context(
                 storage_state=str(config.storage_state_path),
                 ignore_https_errors=config.browser_ignore_https_errors,
+                **({"timezone_id": "Asia/Shanghai"}
+                   if config.evaluation_reference_date else {}),
                 **window_options)
             try:
                 context.add_init_script(script=live.bootstrap_script)
@@ -564,6 +569,11 @@ def _run_browser(config: OdooDemoConfig, live: LiveProductSession,
                     script="try { localStorage.setItem('woa.panel.open.v1', 'true') } "
                            "catch (error) { /* a profile that blocks site data still works */ }")
                 page = context.new_page()
+                if config.evaluation_reference_date:
+                    if not config.evaluation:
+                        raise ValueError("evaluation_reference_date requires evaluation mode")
+                    page.clock.set_fixed_time(
+                        f"{config.evaluation_reference_date}T12:00:00+08:00")
                 def count_document_load(*_event: object) -> None:
                     nonlocal document_loads
                     document_loads += 1
