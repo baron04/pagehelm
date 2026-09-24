@@ -39,6 +39,13 @@ agent.
   collections and measures; the server binds computed numbers to the executed query and
   refuses a complete answer that substitutes another collection. This does not yet verify
   that the declared collection, subject, or filters match the user's intent.
+  A separate `resolve_record_reference` read can locate bounded name/number candidates in
+  actor-readable entities without first calling discovery, field description, and a record
+  query. It returns ambiguous matches rather than selecting a record, and an empty result
+  is not a global nonexistence claim. Odoo uses the actor's native name search without the
+  narrower `query_customers` collection filter; Contacts implements the same contract over
+  its REST data. This is a record-location primitive, not a completed-answer or page-action
+  guarantee.
 - An optional application-neutral current-form contract supports a no-Skill fallback for
   safe scalar form filling. `describe_form` intersects the latest viewport controls with
   actor-scoped adapter metadata and returns only short-lived opaque IDs; `prepare_form`

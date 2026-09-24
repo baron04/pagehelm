@@ -7,6 +7,7 @@ from dataclasses import replace
 
 from web_operation_agent.business.entities import (
     ENTITY_READ_TOOLS, EntityAggregate, EntityField, EntityReadTools,
+    ReferenceLookupTools,
 )
 from web_operation_agent.business.runtime import (
     BusinessToolPermissionError,
@@ -51,6 +52,25 @@ class ContactsEntityReadContractTests(unittest.TestCase):
             field_label="Name", filter_operator="contains", filter_value="ada",
             expected_record_id="c-1", expected_value="Ada Lovelace",
         )
+
+    def test_reference_lookup_uses_the_rest_adapter_and_returns_bounded_routes(self):
+        port = _ContactsEntityReadPort(_FakeContactsExecutor())
+        tools = ReferenceLookupTools(port, port, application_id=APPLICATION_ID)
+        result = tools.execute({
+            "entity_query": "联系人", "reference": "Ada Lovelace"})
+        self.assertEqual(result.content["candidates"][0]["record_id"], "c-1")
+        self.assertEqual(result.allowed_routes, ("/contacts/c-1",))
+        self.assertEqual(result.content["returned_count"], 1)
+
+    def test_reference_lookup_reads_the_live_rest_application(self):
+        with MinimalContactsApplication() as application:
+            adapter = MinimalContactsAdapter(
+                application.origin, api_token=DEMO_API_TOKEN)
+            result = adapter.business_tools._executor._reference_lookup.execute({
+                "entity_query": "contacts", "reference": "Grace Hopper"})
+            self.assertEqual(result.content["candidates"][0]["record_id"],
+                             "grace-hopper")
+            self.assertEqual(result.allowed_routes, ("/contacts/grace-hopper",))
 
     def test_a_rest_backed_test_adapter_can_supply_the_same_exact_sum_contract(self):
         class RestMetricPort(_ContactsEntityReadPort):

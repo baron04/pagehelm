@@ -19,13 +19,15 @@ from typing import Protocol, runtime_checkable
 from ..answer.answering import StructuredQueryAnswer
 from ..answer.evidence import ComputationEvidence, Origin, QueryEvidence, RecordEvidence
 from ..state.identity import OperationContext
-from .errors import BusinessToolContractError, BusinessToolRequestError
+from .errors import (BusinessToolContractError, BusinessToolPermissionError,
+                     BusinessToolRequestError)
 from .tools.contracts import BusinessToolResult
 
 
 DISCOVER_ENTITIES_TOOL = "discover_entities"
 DESCRIBE_ENTITY_TOOL = "describe_entity"
 QUERY_ENTITY_RECORDS_TOOL = "query_entity_records"
+RESOLVE_RECORD_REFERENCE_TOOL = "resolve_record_reference"
 ENTITY_READ_TOOLS = frozenset({
     DISCOVER_ENTITIES_TOOL, DESCRIBE_ENTITY_TOOL, QUERY_ENTITY_RECORDS_TOOL,
 })
@@ -165,6 +167,31 @@ QUERY_ENTITY_RECORDS_SCHEMA = {
 ENTITY_READ_SCHEMAS = (
     DISCOVER_ENTITIES_SCHEMA, DESCRIBE_ENTITY_SCHEMA, QUERY_ENTITY_RECORDS_SCHEMA,
 )
+
+RESOLVE_RECORD_REFERENCE_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": RESOLVE_RECORD_REFERENCE_TOOL,
+        "description": (
+            "Find a named or numbered record in the signed-in actor's readable application "
+            "entities. Give the kind of entity and the reference separately. Returns "
+            "bounded candidates, not proof that an absent record does not exist. Use a "
+            "candidate's opaque entity ID for follow-up typed reads."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "entity_query": {"type": "string", "minLength": 1, "maxLength": 120,
+                                 "description": "Entity kind, such as customer or invoice."},
+                "reference": {"type": "string", "minLength": 1, "maxLength": 120,
+                              "description": "A name or document number from the request."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 5},
+            },
+            "required": ["entity_query", "reference"],
+            "additionalProperties": False,
+        },
+    },
+}
 
 
 def _text(value: object, name: str, maximum: int, *, empty: bool = False) -> str:
@@ -1013,13 +1040,140 @@ class EntityReadTools:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ReferenceMatch:
+    """One actor-visible match supplied by an application, not a chosen target."""
+
+    record_id: str
+    label: str
+    route: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "record_id", _text(
+            self.record_id, "reference record ID", 120))
+        object.__setattr__(self, "label", _text(self.label, "reference label", 200))
+        if self.route:
+            object.__setattr__(self, "route", _text(self.route, "reference route", 300))
+
+
+@runtime_checkable
+class ReferenceLookupPort(Protocol):
+    """Adapter-owned bounded lookup under the same actor as entity discovery."""
+
+    def lookup(self, entity: EntityDescriptor, reference: str, *, limit: int,
+               context: OperationContext | None = None
+               ) -> tuple[tuple[ReferenceMatch, ...], bool]: ...
+
+
+class ReferenceLookupTools:
+    """Resolve names/numbers without giving the Agent native model or query authority."""
+
+    def __init__(self, entity_port: EntityReadPort, lookup_port: ReferenceLookupPort, *,
+                 application_id: str):
+        if not isinstance(entity_port, EntityReadPort) or not isinstance(
+                lookup_port, ReferenceLookupPort):
+            raise TypeError("reference lookup requires entity and lookup ports")
+        self._entity_reads = EntityReadTools(entity_port, application_id=application_id)
+        self._lookup = lookup_port
+        self._application_id = application_id
+
+    def execute(self, args: dict, *, context: OperationContext | None = None
+                ) -> BusinessToolResult:
+        args = _exact_args(args, {"entity_query", "reference", "limit"},
+                           RESOLVE_RECORD_REFERENCE_TOOL)
+        entity_query = _request_text(args.get("entity_query"), "entity_query", 120)
+        reference = _request_text(args.get("reference"), "reference", 120)
+        limit = _bounded_int(args.get("limit"), name="limit", default=5,
+                             minimum=1, maximum=5)
+        catalog = self._entity_reads._catalog(context)
+        ranked = []
+        for entity_id, entity in self._entity_reads._entities(catalog, context):
+            score = _score(entity_query, f"{entity.label} {entity.search_text}")
+            if score > 0:
+                ranked.append((score, entity_id, entity))
+        ranked.sort(key=lambda item: (-item[0], item[2].label.casefold(), item[1]))
+        matches = []
+        lookup_truncated = False
+        permission_omissions = 0
+        for score, entity_id, entity in ranked[:3]:
+            try:
+                response = self._lookup.lookup(
+                    entity, reference, limit=limit, context=context)
+            except BusinessToolPermissionError:
+                permission_omissions += 1
+                continue
+            except (BusinessToolContractError, BusinessToolRequestError):
+                raise
+            except (TypeError, ValueError) as exc:
+                raise BusinessToolContractError(
+                    "the application returned invalid reference matches") from exc
+            if not isinstance(response, tuple) or len(response) != 2:
+                raise BusinessToolContractError(
+                    "the application returned invalid reference matches")
+            found, truncated = response
+            if (not isinstance(found, tuple) or len(found) > limit
+                    or any(not isinstance(item, ReferenceMatch) for item in found)
+                    or not isinstance(truncated, bool)
+                    or len({item.record_id for item in found}) != len(found)):
+                raise BusinessToolContractError(
+                    "the application returned invalid reference matches")
+            lookup_truncated |= truncated
+            for item in found:
+                exact = item.label.casefold() == reference.casefold()
+                matches.append((exact, score, entity_id, entity, item))
+        matches.sort(key=lambda item: (
+            -int(item[0]), -item[1], item[3].label.casefold(),
+            item[4].label.casefold(), item[4].record_id))
+        visible = matches[:limit]
+        truncated = (lookup_truncated or len(ranked) > 3 or len(matches) > limit
+                     or permission_omissions > 0
+                     or not catalog.complete)
+        observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        return BusinessToolResult(
+            content={
+                "entity_query": entity_query,
+                "reference": reference,
+                "candidates": [{
+                    "entity_id": entity_id,
+                    "entity_label": entity.label,
+                    "record_id": item.record_id,
+                    "record_label": item.label,
+                    "exact_label": exact,
+                    **({"ui_path": item.route} if item.route else {}),
+                } for exact, _score_value, entity_id, entity, item in visible],
+                "searched_entity_count": min(3, len(ranked)) - permission_omissions,
+                "permission_omissions": permission_omissions,
+                "matching_entity_count": len(ranked),
+                "returned_count": len(visible),
+                "truncated_or_incomplete": truncated,
+                "scope": catalog.scope,
+                "observed_at": observed_at,
+            },
+            audit={
+                "application": self._application_id,
+                "operation": RESOLVE_RECORD_REFERENCE_TOOL,
+                "catalog_digest": catalog.binding_digest,
+                "searched_entity_count": min(3, len(ranked)) - permission_omissions,
+                "permission_omissions": permission_omissions,
+                "returned_count": len(visible),
+                "truncated_or_incomplete": truncated,
+                "observed_at": observed_at,
+                **EntityReadTools._identity_audit(context),
+            },
+            allowed_routes=tuple(dict.fromkeys(
+                item.route for *_rest, item in visible if item.route)),
+        )
+
+
 __all__ = [
     "DESCRIBE_ENTITY_SCHEMA", "DESCRIBE_ENTITY_TOOL",
     "DISCOVER_ENTITIES_SCHEMA", "DISCOVER_ENTITIES_TOOL",
     "ENTITY_READ_SCHEMAS", "ENTITY_READ_TOOLS",
     "QUERY_ENTITY_RECORDS_SCHEMA", "QUERY_ENTITY_RECORDS_TOOL",
+    "RESOLVE_RECORD_REFERENCE_SCHEMA", "RESOLVE_RECORD_REFERENCE_TOOL",
     "EntityCatalog", "EntityCell", "EntityChoice", "EntityDescriptor",
     "EntityAggregate",
     "EntityField", "EntityFilter", "EntityPageHint", "EntityQuery",
     "EntityQueryPage", "EntityReadPort", "EntityReadTools", "EntityRecord",
+    "ReferenceLookupPort", "ReferenceLookupTools", "ReferenceMatch",
 ]

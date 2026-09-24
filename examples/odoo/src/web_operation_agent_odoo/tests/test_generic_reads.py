@@ -18,6 +18,7 @@ from web_operation_agent.business.entities import (
     QUERY_ENTITY_RECORDS_SCHEMA,
     QUERY_ENTITY_RECORDS_TOOL,
     EntityReadTools,
+    ReferenceLookupTools,
 )
 from web_operation_agent.tests.support.entity_read_contract import (
     assert_entity_read_contract,
@@ -25,7 +26,8 @@ from web_operation_agent.tests.support.entity_read_contract import (
 from web_operation_agent.state.identity import OperationContext, PrincipalContext
 from web_operation_agent_odoo.server.application import OdooApplicationAdapter
 from web_operation_agent_odoo.server.descriptors import _catalog_digest
-from web_operation_agent_odoo.server.generic_reads import OdooEntityReadPort
+from web_operation_agent_odoo.server.generic_reads import (
+    OdooEntityReadPort, OdooReferenceLookupPort)
 
 
 def _catalog():
@@ -163,6 +165,60 @@ class GenericDiscoveryTests(unittest.TestCase):
             client.catalog_payload["omitted_actions"])
         with self.assertRaisesRegex(BusinessToolRequestError, "absent or stale"):
             executor.execute(DESCRIBE_ENTITY_TOOL, {"entity_id": entity_id})
+
+
+class OdooReferenceLookupTests(unittest.TestCase):
+    def test_partial_name_search_runs_only_after_exact_search_misses(self):
+        class Client:
+            def __init__(self):
+                self.operators = []
+
+            def call(self, model, method, args, kwargs):
+                self.operators.append(kwargs["operator"])
+                return [] if kwargs["operator"] == "=" else [[11, "Gemini Furniture"]]
+
+        client = Client()
+        matches, truncated = OdooReferenceLookupPort(client).lookup(
+            type("Entity", (), {"reference": "res.partner"})(), "Gemini", limit=5)
+        self.assertEqual(client.operators, ["=", "ilike"])
+        self.assertEqual(matches[0].record_id, "11")
+        self.assertFalse(truncated)
+
+    def test_actor_name_search_does_not_inherit_customer_rank_filter(self):
+        client = _FakeClient()
+        client.catalog_payload["models"].append({
+            "model": "res.partner", "label": "Contact",
+            "operations": ["read"], "transient": False})
+        client.catalog_payload["actions"].append({
+            "action_id": 13, "xml_id": "base.action_partner_form",
+            "name": "Customers", "route": "customers", "model": "res.partner",
+            "readable": True, "view_modes": ["list", "form"],
+            "breadcrumbs": ["Sales / Customers"], "domain": "[]", "context": "{}"})
+        client.catalog_payload["descriptor_digest"] = _catalog_digest(
+            client.catalog_payload["models"], client.catalog_payload["actions"],
+            client.catalog_payload["omitted_models"],
+            client.catalog_payload["omitted_actions"])
+        original = client.call
+
+        def call(model, method, args, kwargs=None):
+            if (model, method) == ("res.partner", "name_search"):
+                client.calls.append((model, method, args, kwargs))
+                return [[11, "Gemini Furniture"]]
+            return original(model, method, args, kwargs)
+
+        client.call = call
+        tools = ReferenceLookupTools(
+            OdooEntityReadPort(client), OdooReferenceLookupPort(client),
+            application_id="odoo")
+        result = tools.execute({
+            "entity_query": "customers", "reference": "Gemini Furniture"})
+        self.assertEqual(result.content["candidates"][0]["record_id"], "11")
+        self.assertEqual(result.content["candidates"][0]["ui_path"],
+                         "/odoo/res.partner/11")
+        self.assertEqual([call for call in client.calls if call[1] == "name_search"], [
+            ("res.partner", "name_search", ["Gemini Furniture"],
+             {"operator": "=", "limit": 6}),
+        ])
 
 
 class GenericDescriptionAndQueryTests(unittest.TestCase):

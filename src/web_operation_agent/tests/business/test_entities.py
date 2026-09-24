@@ -15,6 +15,8 @@ from web_operation_agent.business.entities import (
     DISCOVER_ENTITIES_TOOL,
     QUERY_ENTITY_RECORDS_SCHEMA,
     QUERY_ENTITY_RECORDS_TOOL,
+    RESOLVE_RECORD_REFERENCE_SCHEMA,
+    RESOLVE_RECORD_REFERENCE_TOOL,
     EntityCatalog,
     EntityAggregate,
     EntityCell,
@@ -25,9 +27,12 @@ from web_operation_agent.business.entities import (
     EntityQueryPage,
     EntityReadTools,
     EntityRecord,
+    ReferenceLookupTools,
+    ReferenceMatch,
 )
 from web_operation_agent.business.runtime import (
     BusinessToolContractError,
+    BusinessToolPermissionError,
     BusinessToolRequestError,
 )
 from web_operation_agent.state.identity import OperationContext, PrincipalContext
@@ -119,6 +124,69 @@ class EntityRecordRoutes(unittest.TestCase):
         for bad in ("work/items/42", "//evil.example/x", "https://evil.example/x"):
             with self.subTest(route=bad), self.assertRaises(ValueError):
                 EntityRecord(reference="r", display_id="1", cells=(), route=bad)
+
+
+class ReferenceLookupContractTests(unittest.TestCase):
+    class _Lookup:
+        def __init__(self):
+            self.calls = []
+
+        def lookup(self, entity, reference, *, limit, context=None):
+            self.calls.append((entity.reference, reference, limit))
+            if reference == "Prepare release":
+                return ((ReferenceMatch("42", "Prepare release", "/work/items/42"),), False)
+            if reference == "duplicate":
+                return ((ReferenceMatch("42", "duplicate", "/work/items/42"),
+                         ReferenceMatch("43", "duplicate", "/work/items/43")), False)
+            return (), False
+
+    def setUp(self):
+        self.lookup = self._Lookup()
+        self.tools = ReferenceLookupTools(
+            _Port(), self.lookup, application_id="fixture.app")
+
+    def test_one_call_resolves_actor_catalog_entity_and_record_without_native_names(self):
+        result = self.tools.execute({
+            "entity_query": "work items", "reference": "Prepare release"})
+        self.assertEqual(self.lookup.calls, [
+            ("internal.work.item", "Prepare release", 5)])
+        self.assertEqual(result.content["candidates"][0]["record_id"], "42")
+        self.assertRegex(result.content["candidates"][0]["entity_id"],
+                         r"^entity_[0-9a-f]{32}$")
+        self.assertEqual(result.allowed_routes, ("/work/items/42",))
+        self.assertNotIn("internal.work.item", result.render())
+        self.assertNotIn("model", RESOLVE_RECORD_REFERENCE_SCHEMA["function"]
+                         ["parameters"]["properties"])
+
+    def test_ambiguity_and_empty_are_not_autoselected_or_global_not_found(self):
+        ambiguous = self.tools.execute({
+            "entity_query": "work items", "reference": "duplicate"})
+        self.assertEqual(ambiguous.content["returned_count"], 2)
+        self.assertEqual(ambiguous.allowed_routes,
+                         ("/work/items/42", "/work/items/43"))
+        empty = self.tools.execute({
+            "entity_query": "work items", "reference": "missing"})
+        self.assertEqual(empty.content["candidates"], [])
+        self.assertNotIn("not_found", empty.content)
+        self.assertEqual(empty.content["searched_entity_count"], 1)
+
+    def test_malformed_port_results_and_unbounded_requests_fail(self):
+        with self.assertRaises(BusinessToolRequestError):
+            self.tools.execute({"entity_query": "work items", "reference": "x", "limit": 6})
+        self.lookup.lookup = lambda *args, **kwargs: (("unvalidated",), False)
+        with self.assertRaises(BusinessToolContractError):
+            self.tools.execute({"entity_query": "work items", "reference": "x"})
+
+    def test_a_permission_refusal_does_not_become_a_not_found_claim(self):
+        def refused(*args, **kwargs):
+            raise BusinessToolPermissionError("record lookup denied")
+
+        self.lookup.lookup = refused
+        result = self.tools.execute({
+            "entity_query": "work items", "reference": "Prepare release"})
+        self.assertEqual(result.content["candidates"], [])
+        self.assertEqual(result.content["permission_omissions"], 1)
+        self.assertTrue(result.content["truncated_or_incomplete"])
 
 
 class EntityReadContractTests(unittest.TestCase):

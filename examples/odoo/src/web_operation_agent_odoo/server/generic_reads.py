@@ -22,6 +22,7 @@ from web_operation_agent.business.entities import (
     EntityQuery,
     EntityQueryPage,
     EntityRecord,
+    ReferenceMatch,
 )
 from web_operation_agent.business.runtime import BusinessToolContractError
 
@@ -337,6 +338,40 @@ class OdooEntityReadPort:
         )
 
 
+class OdooReferenceLookupPort:
+    """Use the actor's native name search, without a customer-only domain or sudo."""
+
+    def __init__(self, client):
+        self._client = client
+
+    def lookup(self, entity: EntityDescriptor, reference: str, *, limit: int,
+               context=None) -> tuple[tuple[ReferenceMatch, ...], bool]:
+        rows = self._client.call(entity.reference, "name_search", [reference], {
+            "operator": "=", "limit": limit + 1,
+        })
+        if rows == []:
+            rows = self._client.call(entity.reference, "name_search", [reference], {
+                "operator": "ilike", "limit": limit + 1,
+            })
+        if not isinstance(rows, list) or len(rows) > limit + 1:
+            raise BusinessToolContractError("Odoo returned invalid name-search matches")
+        matches = []
+        seen = set()
+        for row in rows:
+            if (not isinstance(row, (tuple, list)) or len(row) != 2
+                    or isinstance(row[0], bool) or not isinstance(row[0], int)
+                    or row[0] <= 0 or row[0] in seen
+                    or not isinstance(row[1], str) or not row[1].strip()
+                    or len(row[1]) > 200 or _CONTROL.search(row[1])):
+                raise BusinessToolContractError("Odoo returned invalid name-search matches")
+            seen.add(row[0])
+            matches.append(ReferenceMatch(
+                record_id=str(row[0]), label=" ".join(row[1].split()),
+                route=_record_route(entity.reference, row[0]),
+            ))
+        return tuple(matches[:limit]), len(matches) > limit
+
+
 def _record_route(model: str, record_id: int) -> str:
     """Odoo 18's own address for one record, `/odoo/<model>/<id>`, or none.
 
@@ -352,4 +387,4 @@ def _record_route(model: str, record_id: int) -> str:
     return route
 
 
-__all__ = ["OdooEntityReadPort", "odoo_model_allowed"]
+__all__ = ["OdooEntityReadPort", "OdooReferenceLookupPort", "odoo_model_allowed"]

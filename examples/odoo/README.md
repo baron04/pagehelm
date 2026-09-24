@@ -147,6 +147,10 @@ also run over the synthetic Contacts REST adapter:
    eight projected fields, a 20-row page and a bounded offset. The core fixes the limits; the
    Odoo adapter translates generic operators, fixes ordering to `id asc`, runs exact matching
    and actor-visible total counts, and returns query plus field-level record evidence.
+4. `resolve_record_reference` takes an entity description and a name or document number,
+   then uses the delegated actor's native name search across at most three catalog matches.
+   It returns at most five record candidates and does not apply the narrower customer-rank
+   filter. Ambiguity is retained; no empty lookup proves global nonexistence.
 
 The action is a discovery hint, not a query scope: its dynamic domain/context is never
 evaluated by this path. A generic query therefore covers the actor-visible model rows named in
@@ -210,9 +214,10 @@ Nothing here is removed on the strength of "source could derive it". A Skill can
 | `query_products` | `product.template` | saleable products | `/odoo/products` |
 | `query_quotations` | `sale.order` | draft and sent quotations | `/odoo/sales` |
 | `query_customer_invoices` | `account.move` | customer invoices, excluding credit notes | `/odoo/customer-invoices` |
-| `discover_entities` | opaque catalog entity | current actor's readable, menu-backed non-sensitive entities | — |
+| `discover_entities` | opaque catalog entity | current actor's readable, action-backed non-sensitive entities | — |
 | `describe_entity` | opaque catalog entity | safe `fields_get` translation under the current actor | — |
 | `query_entity_records` | opaque catalog entity | bounded actor-visible records; exact counts; fixed order | — |
+| `resolve_record_reference` | opaque catalog entity | bounded actor-visible name/number candidates | eligible record route, if available |
 | `prepare_customer_form` | `res.partner` | exact customer form draft; transient until user submission | `/odoo/customers/new` |
 | `prepare_customer_edit_form` | `res.partner` | exact existing-customer fields; confirmed before Odoo can autosave | `/odoo/customers/<id>` |
 | `create_customer` | `res.partner` | one customer, opt-in | `/odoo/customers/<id>` |

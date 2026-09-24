@@ -350,7 +350,8 @@ class AdapterContract(unittest.TestCase):
                          ["describe_entity", "discover_entities",
                           "prepare_customer_form", "query_customer_invoices",
                           "query_customers", "query_entity_records", "query_products",
-                          "query_quotations", "query_sale_orders"])
+                          "query_quotations", "query_sale_orders",
+                          "resolve_record_reference"])
         self.assertEqual(bound.business_tools.mutation_tool_names, frozenset())
         self.assertIsInstance(bound.ports.forms, OdooFormPort)
 

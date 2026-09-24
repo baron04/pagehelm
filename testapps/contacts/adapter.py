@@ -77,6 +77,8 @@ from web_operation_agent.business.entities import (
     ENTITY_READ_SCHEMAS,
     ENTITY_READ_TOOLS,
     QUERY_ENTITY_RECORDS_TOOL,
+    RESOLVE_RECORD_REFERENCE_SCHEMA,
+    RESOLVE_RECORD_REFERENCE_TOOL,
     EntityCatalog,
     EntityCell,
     EntityDescriptor,
@@ -86,6 +88,8 @@ from web_operation_agent.business.entities import (
     EntityQueryPage,
     EntityReadTools,
     EntityRecord,
+    ReferenceLookupTools,
+    ReferenceMatch,
 )
 from web_operation_agent.state.identity import (IdentityAssertion, PrincipalContext,
                                           PrincipalError, PRINCIPAL_CONTEXT_VERSION,
@@ -104,6 +108,7 @@ CREATE_CONTACT = "create_contact"
 SCOPES = {
     "list_contacts": "contacts:read",
     **{name: "contacts:read" for name in ENTITY_READ_TOOLS},
+    RESOLVE_RECORD_REFERENCE_TOOL: "contacts:read",
     CREATE_CONTACT: "contacts:write",
 }
 # The application already owns this permission.  Prefilling does not persist, but the form
@@ -167,18 +172,21 @@ class _ContactsToolExecutor:
         self.allow_mutations = bool(allow_mutations)
         if self.allow_mutations and not api_token:
             raise ValueError("a write needs a delegated credential to write with")
-        self._entity_reads = EntityReadTools(
-            _ContactsEntityReadPort(self), application_id=APPLICATION_ID)
+        entity_port = _ContactsEntityReadPort(self)
+        self._entity_reads = EntityReadTools(entity_port, application_id=APPLICATION_ID)
+        self._reference_lookup = ReferenceLookupTools(
+            entity_port, entity_port, application_id=APPLICATION_ID)
 
     def tool_schemas(self) -> tuple[dict, ...]:
         # A read-only composition does not merely refuse the write; it never offers it. A
         # tool in the surface that the run will always refuse just invites a wasted turn.
-        return (_READ_SCHEMA,) + ENTITY_READ_SCHEMAS + (
+        return (_READ_SCHEMA,) + ENTITY_READ_SCHEMAS + (RESOLVE_RECORD_REFERENCE_SCHEMA,) + (
             (_WRITE_SCHEMA,) if self.allow_mutations else ())
 
     def tool_effects(self) -> dict[str, str]:
         effects = {"list_contacts": "read"}
         effects.update({name: "read" for name in ENTITY_READ_TOOLS})
+        effects[RESOLVE_RECORD_REFERENCE_TOOL] = "read"
         if self.allow_mutations:
             effects[CREATE_CONTACT] = "write"
         return effects
@@ -194,6 +202,8 @@ class _ContactsToolExecutor:
     def execute(self, name: str, args: dict, *, context=None) -> BusinessToolResult:
         if name in ENTITY_READ_TOOLS:
             return self._entity_reads.execute(name, args, context=context)
+        if name == RESOLVE_RECORD_REFERENCE_TOOL:
+            return self._reference_lookup.execute(args, context=context)
         if name != "list_contacts" or set(args) - {"name_contains"}:
             raise BusinessToolError("invalid contact query")
         query = args.get("name_contains", "")
@@ -436,6 +446,21 @@ class _ContactsEntityReadPort:
             raise BusinessToolError("the synthetic entity is no longer available")
         return self._FIELDS
 
+    def lookup(self, entity: EntityDescriptor, reference: str, *, limit: int,
+               context=None) -> tuple[tuple[ReferenceMatch, ...], bool]:
+        if entity.reference != "contacts":
+            raise BusinessToolError("the synthetic entity is no longer available")
+        source = self._executor._contact_rows()
+        rows = [row for row in source if row["name"].casefold() == reference.casefold()]
+        if not rows:
+            rows = [row for row in source
+                    if reference.casefold() in row["name"].casefold()]
+        rows.sort(key=lambda row: (row["name"].casefold() != reference.casefold(),
+                                   row["id"]))
+        return tuple(ReferenceMatch(
+            record_id=str(row["id"]), label=row["name"],
+            route=f"/contacts/{row['id']}") for row in rows[:limit]), len(rows) > limit
+
     @staticmethod
     def _matches(row: dict, condition) -> bool:
         actual = row[condition.field.reference]
@@ -663,6 +688,8 @@ class MinimalContactsAdapter:
             (DESCRIBE_ENTITY_TOOL, ("application.metadata",)),
             (QUERY_ENTITY_RECORDS_TOOL,
              ("business.generic_record", "business.identifier")),
+            (RESOLVE_RECORD_REFERENCE_TOOL,
+             ("business.generic_record", "business.identifier", "application.route")),
         ))
         if allow_mutations:
             declarations.append(
