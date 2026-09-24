@@ -94,6 +94,9 @@ from web_operation_agent.business.entities import (
 from web_operation_agent.business.page_entries import (
     FIND_PAGE_ENTRIES_SCHEMA, FIND_PAGE_ENTRIES_TOOL,
     PageEntry, PageEntryCatalog, PageEntryTools, PagePart)
+from web_operation_agent.business.goal_candidates import (
+    GoalCandidateTools, RESOLVE_GOAL_CANDIDATES_SCHEMA,
+    RESOLVE_GOAL_CANDIDATES_TOOL)
 from web_operation_agent.state.identity import (IdentityAssertion, PrincipalContext,
                                           PrincipalError, PRINCIPAL_CONTEXT_VERSION,
                                           bind_matching_identity)
@@ -113,6 +116,7 @@ SCOPES = {
     **{name: "contacts:read" for name in ENTITY_READ_TOOLS},
     RESOLVE_RECORD_REFERENCE_TOOL: "contacts:read",
     FIND_PAGE_ENTRIES_TOOL: "contacts:read",
+    RESOLVE_GOAL_CANDIDATES_TOOL: "contacts:read",
     CREATE_CONTACT: "contacts:write",
 }
 # The application already owns this permission.  Prefilling does not persist, but the form
@@ -182,12 +186,16 @@ class _ContactsToolExecutor:
             entity_port, entity_port, application_id=APPLICATION_ID)
         self._page_entries = PageEntryTools(
             _ContactsPageEntryPort(self), application_id=APPLICATION_ID)
+        self._goal_candidates = GoalCandidateTools(
+            self._entity_reads, self._reference_lookup, self._page_entries,
+            application_id=APPLICATION_ID)
 
     def tool_schemas(self) -> tuple[dict, ...]:
         # A read-only composition does not merely refuse the write; it never offers it. A
         # tool in the surface that the run will always refuse just invites a wasted turn.
         return (_READ_SCHEMA,) + ENTITY_READ_SCHEMAS + (
-            RESOLVE_RECORD_REFERENCE_SCHEMA, FIND_PAGE_ENTRIES_SCHEMA) + (
+            RESOLVE_RECORD_REFERENCE_SCHEMA, FIND_PAGE_ENTRIES_SCHEMA,
+            RESOLVE_GOAL_CANDIDATES_SCHEMA) + (
             (_WRITE_SCHEMA,) if self.allow_mutations else ())
 
     def tool_effects(self) -> dict[str, str]:
@@ -195,6 +203,7 @@ class _ContactsToolExecutor:
         effects.update({name: "read" for name in ENTITY_READ_TOOLS})
         effects[RESOLVE_RECORD_REFERENCE_TOOL] = "read"
         effects[FIND_PAGE_ENTRIES_TOOL] = "read"
+        effects[RESOLVE_GOAL_CANDIDATES_TOOL] = "read"
         if self.allow_mutations:
             effects[CREATE_CONTACT] = "write"
         return effects
@@ -214,6 +223,8 @@ class _ContactsToolExecutor:
             return self._reference_lookup.execute(args, context=context)
         if name == FIND_PAGE_ENTRIES_TOOL:
             return self._page_entries.execute(args, context=context)
+        if name == RESOLVE_GOAL_CANDIDATES_TOOL:
+            return self._goal_candidates.execute(args, context=context)
         if name != "list_contacts" or set(args) - {"name_contains"}:
             raise BusinessToolError("invalid contact query")
         query = args.get("name_contains", "")
@@ -731,6 +742,8 @@ class MinimalContactsAdapter:
             (RESOLVE_RECORD_REFERENCE_TOOL,
              ("business.generic_record", "business.identifier", "application.route")),
             (FIND_PAGE_ENTRIES_TOOL, ("application.metadata", "application.route")),
+            (RESOLVE_GOAL_CANDIDATES_TOOL,
+             ("application.metadata", "application.route", "business.identifier")),
         ))
         if allow_mutations:
             declarations.append(

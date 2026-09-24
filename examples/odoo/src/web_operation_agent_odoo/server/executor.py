@@ -10,6 +10,9 @@ from web_operation_agent.business.entities import (ENTITY_READ_SCHEMAS,
                                                    EntityReadTools, ReferenceLookupTools)
 from web_operation_agent.business.page_entries import (
     FIND_PAGE_ENTRIES_SCHEMA, FIND_PAGE_ENTRIES_TOOL, PageEntryTools)
+from web_operation_agent.business.goal_candidates import (
+    GoalCandidateTools, RESOLVE_GOAL_CANDIDATES_SCHEMA,
+    RESOLVE_GOAL_CANDIDATES_TOOL)
 
 from .identity import OdooApiKeyStore
 from .generic_reads import OdooEntityReadPort, OdooReferenceLookupPort
@@ -45,6 +48,9 @@ class OdooBusinessToolExecutor(OdooReadTools, OdooMutationTools, OdooRpcClient):
             application_id=APPLICATION_ID)
         self._page_entries = PageEntryTools(
             OdooPageEntryPort(self), application_id=APPLICATION_ID)
+        self._goal_candidates = GoalCandidateTools(
+            self._entity_reads, self._reference_lookup, self._page_entries,
+            application_id=APPLICATION_ID)
 
     # -- tool catalog -------------------------------------------------------------------
     def tool_schemas(self) -> tuple[dict, ...]:
@@ -52,6 +58,7 @@ class OdooBusinessToolExecutor(OdooReadTools, OdooMutationTools, OdooRpcClient):
         writes = tuple(spec.schema for spec in MUTATION_SPECS)
         return reads + ENTITY_READ_SCHEMAS + (RESOLVE_RECORD_REFERENCE_SCHEMA,
                                               FIND_PAGE_ENTRIES_SCHEMA,
+                                              RESOLVE_GOAL_CANDIDATES_SCHEMA,
                                               PREPARE_CUSTOMER_FORM_SCHEMA) + (
             (PREPARE_CUSTOMER_EDIT_SCHEMA,) + writes if self.allow_mutations else ())
 
@@ -60,6 +67,7 @@ class OdooBusinessToolExecutor(OdooReadTools, OdooMutationTools, OdooRpcClient):
         effects.update({name: "read" for name in ENTITY_READ_TOOLS})
         effects[RESOLVE_RECORD_REFERENCE_TOOL] = "read"
         effects[FIND_PAGE_ENTRIES_TOOL] = "read"
+        effects[RESOLVE_GOAL_CANDIDATES_TOOL] = "read"
         effects[PREPARE_CUSTOMER_FORM_TOOL] = "read"
         if self.allow_mutations:
             # Preparing an edit reads the record and types into the page; the application,
@@ -75,4 +83,6 @@ class OdooBusinessToolExecutor(OdooReadTools, OdooMutationTools, OdooRpcClient):
             return self._reference_lookup.execute(args, context=context)
         if name == FIND_PAGE_ENTRIES_TOOL:
             return self._page_entries.execute(args, context=context)
+        if name == RESOLVE_GOAL_CANDIDATES_TOOL:
+            return self._goal_candidates.execute(args, context=context)
         return OdooReadTools.execute(self, name, args, context=context)

@@ -350,7 +350,7 @@ class AdapterContract(unittest.TestCase):
                          ["describe_entity", "discover_entities", "find_page_entries",
                           "prepare_customer_form", "query_customer_invoices",
                           "query_customers", "query_entity_records", "query_products",
-                          "query_quotations", "query_sale_orders",
+                          "query_quotations", "query_sale_orders", "resolve_goal_candidates",
                           "resolve_record_reference"])
         self.assertEqual(bound.business_tools.mutation_tool_names, frozenset())
         self.assertIsInstance(bound.ports.forms, OdooFormPort)
@@ -730,6 +730,10 @@ class AdapterContract(unittest.TestCase):
                     now_ms=1001, scopes=("customers:read",))
 
         self.assertEqual(principal.scopes, ("customers:read",))
+        offered = {schema["function"]["name"] for schema in
+                   adapter.business_tools.available_schemas(
+                       allow_mutations=False, actor_scopes=principal.scopes)}
+        self.assertNotIn("resolve_goal_candidates", offered)
         with self.assertRaisesRegex(PrincipalError, "subset"):
             adapter.bind_principal(
                 page, delegation_id="trial", lifetime_s=30,

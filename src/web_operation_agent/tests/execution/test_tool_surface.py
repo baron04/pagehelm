@@ -4,8 +4,13 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from web_operation_agent.business.runtime import BusinessToolRuntime
+from web_operation_agent.business.goal_candidates import (
+    RESOLVE_GOAL_CANDIDATES_SCHEMA, RESOLVE_GOAL_CANDIDATES_TOOL)
+from web_operation_agent.execution.business_tools import business_tool
 from web_operation_agent.execution.session import ServerAgentSession, TaskSpec
 from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.tests.support.execution import _Browser, _Chat, _Control, _obs
@@ -21,7 +26,7 @@ def _schema(name):
 class _GenericExecutor:
     @staticmethod
     def tool_schemas():
-        return tuple(_schema(name) for name in (
+        return (RESOLVE_GOAL_CANDIDATES_SCHEMA,) + tuple(_schema(name) for name in (
             "discover_entities", "resolve_record_reference", "find_page_entries",
             "query_records", "describe_entity", "prepare_record_form"))
 
@@ -45,6 +50,39 @@ class ToolSurfaceTests(unittest.TestCase):
             self.assertTrue({"find_page_entries", "resolve_record_reference",
                              "discover_entities", "query_records", "compute",
                              "prefill_form"} <= names)
+
+    def test_goal_candidate_lookup_does_not_prematurely_freeze_numeric_goal(self):
+        tools = BusinessToolRuntime((), _GenericExecutor(), numeric_goal_binding=True)
+        with tempfile.TemporaryDirectory() as directory:
+            session = ServerAgentSession(
+                task=TaskSpec("goal", "哪个客户订单最多？"),
+                chat=_Chat([]), browser=_Browser([_obs(1)]),
+                control=_Control([[], []]),
+                ledger=SessionLedger(Path(directory) / "audit.jsonl", "goal"),
+                business_tools=tools)
+            schemas = {item["function"]["name"]: item
+                       for item in session.tool_schemas()}
+            self.assertNotIn("answer_goals", schemas[RESOLVE_GOAL_CANDIDATES_TOOL]
+                             ["function"]["parameters"]["properties"])
+            self.assertIn("answer_goals", schemas["query_records"]
+                          ["function"]["parameters"]["required"])
+            metric_tools = schemas["query_records"]["function"]["parameters"][
+                "properties"]["answer_goals"]["items"]["properties"][
+                    "target_read_tool"]["enum"]
+            self.assertNotIn(RESOLVE_GOAL_CANDIDATES_TOOL, metric_tools)
+            with patch("web_operation_agent.execution.business_tools.execute_business_read") as run:
+                business_tool(session, SimpleNamespace(step=1), {},
+                              RESOLVE_GOAL_CANDIDATES_TOOL, {"goals": [
+                                  {"delivery": "answer", "subject_query": "orders"}]})
+            self.assertTrue(run.called)
+            self.assertFalse(session._answers.first_business_read_seen)
+            with (patch("web_operation_agent.execution.business_tools.execute_business_read") as run,
+                  patch.object(session, "_reply", return_value=None) as reply):
+                business_tool(session, SimpleNamespace(step=2), {}, "query_records", {
+                    "answer_goals": [{"target_read_tool": RESOLVE_GOAL_CANDIDATES_TOOL,
+                                      "measures": ["count"]}]})
+            self.assertFalse(run.called)
+            self.assertIn("Invalid answer goals", reply.call_args.args[2])
 
 
 if __name__ == "__main__":

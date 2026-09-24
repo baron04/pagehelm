@@ -57,6 +57,12 @@ agent.
   Contacts uses its page map. These are
   not selectors or evidence that the requested part is present on the live, possibly
   action-specific view. This does not make every application page operable.
+- A read-only `resolve_goal_candidates` call can combine up to three answer, page or
+  handoff candidate lookups using those existing actor-scoped entity, record, field and
+  page catalogs. It neither chooses a candidate nor freezes a complete user goal; the
+  Agent must still bind the intended scope, read or observe the result, and verify the
+  final state. This composition has passed zero-model Odoo and Contacts checks, but has
+  not been shown to improve model accuracy or end-to-end latency.
 - An optional application-neutral current-form contract supports a no-Skill fallback for
   safe scalar form filling. `describe_form` intersects the latest viewport controls with
   actor-scoped adapter metadata and returns only short-lived opaque IDs; `prepare_form`

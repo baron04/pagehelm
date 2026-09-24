@@ -90,6 +90,26 @@ class ContactsEntityReadContractTests(unittest.TestCase):
         self.assertEqual(detail.content["candidates"][0]["part_matches"][0]["label"],
                          "Email")
 
+    def test_goal_candidates_combine_rest_record_field_and_page_metadata(self):
+        with MinimalContactsApplication() as application:
+            adapter = MinimalContactsAdapter(
+                application.origin, api_token=DEMO_API_TOKEN)
+            result = adapter.business_tools._executor.execute(
+                "resolve_goal_candidates", {"goals": [
+                    {"delivery": "answer", "subject_query": "Contacts",
+                     "reference": "Grace Hopper", "detail_query": "Email"},
+                    {"delivery": "page", "subject_query": "Contacts",
+                     "detail_query": "Email"}]})
+            answer, page = result.content["goals"]
+            self.assertEqual(answer["record_candidates"][0]["record_id"],
+                             "grace-hopper")
+            self.assertEqual(answer["field_candidates"][0]["fields"][0]["label"],
+                             "Email")
+            self.assertEqual(page["page_candidates"][0]["part_matches"][0]["label"],
+                             "Email")
+            self.assertIn("/contacts/grace-hopper", result.allowed_routes)
+            self.assertIn("/contacts", result.allowed_routes)
+
     def test_rest_adapter_keeps_page_and_data_reads_for_location_requests(self):
         adapter = MinimalContactsAdapter("http://127.0.0.1:1", api_token="delegated")
         with tempfile.TemporaryDirectory() as tmp:

@@ -5,6 +5,7 @@ import json
 import time
 
 from ..answer.goal_scope import parse_answer_goals
+from ..business.goal_candidates import RESOLVE_GOAL_CANDIDATES_TOOL
 from .business_mutations import execute_business_mutation, observe_after_business_mutation
 from .business_reads import execute_business_read
 from .form_tools import apply_form_draft, prefill_form
@@ -28,7 +29,10 @@ def business_tool(session, turn: "_Turn", call: dict, name: str, args: dict) -> 
     if session.business_tools.is_mutation(name):
         return execute_business_mutation(
             session, turn, call, name, args, operation_context, operation_identity)
-    if session.business_tools.numeric_goal_binding and isinstance(args, dict):
+    # Goal candidate discovery is metadata preparation, not the first business-data read:
+    # a count/sum collection cannot be frozen before the candidate identity is known.
+    if (session.business_tools.numeric_goal_binding
+            and name != RESOLVE_GOAL_CANDIDATES_TOOL and isinstance(args, dict)):
         raw_goals = args.get("answer_goals")
         if raw_goals is None and not session._answers.first_business_read_seen:
             return session._reply(
@@ -38,7 +42,8 @@ def business_tool(session, turn: "_Turn", call: dict, name: str, args: dict) -> 
         if raw_goals is not None:
             try:
                 goals = parse_answer_goals(
-                    raw_goals, read_tools=session.business_tools.read_tool_names)
+                    raw_goals, read_tools=(session.business_tools.read_tool_names
+                                           - {RESOLVE_GOAL_CANDIDATES_TOOL}))
             except ValueError as exc:
                 return session._reply(turn, call, "Invalid answer goals: " + str(exc))
             if session._answers.first_business_read_seen:

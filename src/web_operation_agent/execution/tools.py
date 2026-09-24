@@ -11,6 +11,7 @@ from copy import deepcopy
 
 from ..answer import answer_protocol, page_answer
 from ..business.forms import FORM_TOOL_SCHEMAS
+from ..business.goal_candidates import RESOLVE_GOAL_CANDIDATES_TOOL
 from .knowledge_tools import capability_check_available
 from .prompts import (APPLICATION_ENTRY_TOOL, ASK_USER_TOOL, CAPABILITY_TOOL,
                       LOAD_SKILL_TOOL, SOURCE_CANDIDATE_TOOL, SOURCE_NAV_TOOL,
@@ -86,6 +87,7 @@ class ToolSurface:
                 actor_scopes=(principal.scopes if principal is not None else None))
             read_names = session.business_tools.read_tool_names & {
                 schema["function"]["name"] for schema in business_schemas}
+            metric_read_names = read_names - {RESOLVE_GOAL_CANDIDATES_TOOL}
             goal_property = {
                 "type": "array", "minItems": 0, "maxItems": 4,
                 "description": (
@@ -96,7 +98,7 @@ class ToolSurface:
                 "items": {"type": "object", "additionalProperties": False,
                           "properties": {
                               "target_read_tool": {"type": "string",
-                                                   "enum": sorted(read_names)},
+                                                   "enum": sorted(metric_read_names)},
                               "measures": {"type": "array", "minItems": 1,
                                            "maxItems": 2, "uniqueItems": True,
                                            "items": {"type": "string",
@@ -107,6 +109,7 @@ class ToolSurface:
             for schema in business_schemas:
                 if (session.business_tools.numeric_goal_binding
                       and not session._answers.first_business_read_seen
+                      and schema["function"]["name"] != RESOLVE_GOAL_CANDIDATES_TOOL
                       and schema["function"]["name"] in read_names):
                     schema = deepcopy(schema)
                     parameters = schema["function"]["parameters"]

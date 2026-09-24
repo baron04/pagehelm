@@ -8,6 +8,7 @@ from ..answer import answer_protocol
 from ..transport.browser import TransportError, TurnCancelled
 from ..business.errors import BusinessToolError, BusinessToolPermissionError
 from ..business.entities import QUERY_ENTITY_RECORDS_TOOL
+from ..business.goal_candidates import RESOLVE_GOAL_CANDIDATES_TOOL
 from .knowledge_tools import finish_with_clarification
 from .goal_metrics import materialize_goal_metrics
 from .prompts import CLARIFICATION_CHOICE_LIMIT, _assistant_call, _tool_result, _trim
@@ -65,7 +66,10 @@ def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: d
                 stage="read_done", tool=name,
                 count=tool_result.query_answer.matched_count,
                 scope=session._scope_label(tool_result.query_answer.scope))
-        successful_business_tools += 1
+        # Candidate metadata is not a completed business-data read. A plain model reply
+        # after this tool alone must not be projected as a successful answer.
+        if name != RESOLVE_GOAL_CANDIDATES_TOOL:
+            successful_business_tools += 1
         first_step = session._read_digests.setdefault(tool_result.content_digest, step)
         if first_step != step:
             # The application answered exactly as it did before. Handing the whole

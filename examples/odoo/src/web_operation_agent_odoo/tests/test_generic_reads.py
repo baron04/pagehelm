@@ -20,6 +20,8 @@ from web_operation_agent.business.entities import (
     EntityReadTools,
     ReferenceLookupTools,
 )
+from web_operation_agent.business.goal_candidates import GoalCandidateTools
+from web_operation_agent.business.page_entries import PageEntryTools
 from web_operation_agent.tests.support.entity_read_contract import (
     assert_entity_read_contract,
 )
@@ -117,6 +119,27 @@ class _FakeClient:
 
 
 class GenericDiscoveryTests(unittest.TestCase):
+    def test_goal_candidates_combine_odoo_entity_field_and_page_metadata(self):
+        client = _FakeClient()
+        entity_port = OdooEntityReadPort(client)
+        goals = GoalCandidateTools(
+            EntityReadTools(entity_port, application_id="odoo"),
+            ReferenceLookupTools(entity_port, OdooReferenceLookupPort(client),
+                                 application_id="odoo"),
+            PageEntryTools(OdooPageEntryPort(client), application_id="odoo"),
+            application_id="odoo")
+        result = goals.execute({"goals": [
+            {"delivery": "answer", "subject_query": "Transfers",
+             "detail_query": "Status"},
+            {"delivery": "page", "subject_query": "Transfers"}]})
+        answer, page = result.content["goals"]
+        self.assertEqual(answer["entity_candidates"][0]["label"], "Transfers")
+        self.assertEqual(answer["field_candidates"][0]["fields"][0]["label"],
+                         "Status")
+        self.assertEqual(page["page_candidates"][0]["label"], "Transfers")
+        self.assertFalse(any(call[1] in {"write", "create", "unlink"}
+                             for call in client.calls))
+
     def test_many_actions_keep_entity_discovery_bounded_without_losing_page_entries(self):
         client = _FakeClient()
         payload = client.catalog_payload
