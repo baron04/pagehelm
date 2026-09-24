@@ -14,7 +14,15 @@ honest-limitation goals. Its digest is recorded in the adjacent seal and pinned 
 Asia/Shanghai; an evaluation run must hold the application's clock to that date.
 The handoff oracle requires the final page, the named live control's outline, and an
 unchanged database fingerprint. Select it with `--version v4` when running
-`python -m evals.odoo.goals.run_goals`. The holdout has not been model-run.
+`python -m evals.odoo.goals.run_goals`. Its first complete model run, bound to
+candidate `0f45d29`, recorded 46/131 under the original judge (37/116 reachable,
+9/15 honest limitations), 10 false-claim marks, and no writes. A post-run judge
+correction recognizes three successful handoffs whose expected safety sentence
+said the assistant could not click for the user, yielding 49/131. Separately,
+52 failed attempts received a `stale_observation` action receipt during Odoo's
+initial `/odoo` redirect; no successful attempt did. This suite has now been
+used and is not a fresh holdout for a subsequent candidate. The raw run remains
+an immediate-submit result, not a settled-page accuracy estimate.
 
 The second holdout is `tasksets/odoo-goals-zh-v5-holdout.json`, selected with
 `--version v5`: 84 normal goals (18 record lists, 16 detail-line answers, 16 field

@@ -580,6 +580,16 @@ def _run_browser(config: OdooDemoConfig, live: LiveProductSession,
                 page.on("domcontentloaded", count_document_load)
                 page.goto(config.base_url.rstrip("/") + config.entry_path,
                           wait_until="domcontentloaded", timeout=60_000)
+                # The bare Odoo entry point redirects asynchronously to its first
+                # application action. Waiting only for the assistant module lets an
+                # evaluation submit a goal against the pre-redirect observation;
+                # the first action is then correctly rejected as stale. A person
+                # cannot use the rendered page before this action appears either.
+                if config.entry_path.rstrip("/") == "/odoo":
+                    page.wait_for_function(
+                        "() => location.pathname !== '/odoo' && "
+                        "!!document.querySelector('.o_breadcrumb')",
+                        timeout=60_000)
                 page.wait_for_function("window.__WOA_RUNTIME_READY__ !== undefined",
                                        timeout=60_000)
                 page.evaluate(
