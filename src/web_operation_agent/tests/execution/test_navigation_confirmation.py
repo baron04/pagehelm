@@ -155,6 +155,37 @@ class TheSessionAsksBeforeLeavingThePage(unittest.TestCase):
                              {"kind": "navigation", "url": "http://app/y"})
             self.assertEqual([name for name, _ in browser.done], ["click", "observe"])
 
+    def test_pending_navigation_after_a_write_keeps_the_write_receipt(self):
+        """"Create a contact, then open it" reports the write, and the page it opened.
+
+        A single-page application draws the new view after the look taken at the action, so
+        the arrival settles one observation later. Settling it used to replace the write's
+        receipt with a bare navigation, and the answer lost "completed the approved action".
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            pending = _obs(2, "http://app/y")
+            pending.render_state = "pending"
+            ready = _obs(3, "http://app/y")
+            ready.title = "Destination"
+            browser = _Browser([_obs(1), pending, ready])
+            session = _session(
+                tmp,
+                chat=_Chat([("click", {"ref": "e1"}), ("observe", {}),
+                            ("finish", {"outcome": "acted"})]),
+                browser=browser, person=_Person("approved"))
+            session._answer_mode = True
+            # The write this turn already completed, as the mutation path records it.
+            session._answer_action_receipt = {
+                "kind": "mutation", "effect": "Create exactly one contact",
+                "targets": ["Name: Radia Perlman"]}
+
+            result = session.run()
+
+            self.assertEqual(result.terminal_reason, "agent_finished")
+            self.assertEqual(result.verified_answer["action"], {
+                "kind": "mutation", "effect": "Create exactly one contact",
+                "targets": ["Name: Radia Perlman"], "navigation_url": "http://app/y"})
+
     def test_successful_link_click_can_be_reported_as_completed_navigation(self):
         with tempfile.TemporaryDirectory() as tmp:
             browser = _Browser([_obs(1), _obs(2, "http://app/y")])

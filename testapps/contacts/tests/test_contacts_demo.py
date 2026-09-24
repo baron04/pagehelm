@@ -12,8 +12,8 @@ from web_operation_agent.modeling.client import ProviderError, require_chat_port
 from testapps.contacts.app import (DEMO_API_TOKEN, DEMO_SESSION_COOKIE,
                                    DEMO_SESSION_VALUE, MinimalContactsApplication)
 from testapps.contacts.adapter import MinimalContactsAdapter
-from testapps.contacts.demo import (DemoConfig, ScriptedDemoChat, WRITE_WALKTHROUGH,
-                                    _confirm_navigation_in_page, run_demo)
+from testapps.contacts.demo import (DemoConfig, READ_WALKTHROUGH, ScriptedDemoChat,
+                                    WRITE_WALKTHROUGH, _confirm_navigation_in_page, run_demo)
 from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.composition.sources import SourceCapability
 from web_operation_agent.business.runtime import (BusinessMutationIndeterminate,
@@ -146,7 +146,8 @@ class MinimalDemoBrowserTests(unittest.TestCase):
             ))
             self.assertEqual(summary["mode"], "scripted_apparatus")
             self.assertEqual(summary["model_usage"]["provider_calls"], 0)
-            self.assertEqual(summary["model_usage"]["scripted_decisions"], 4)
+            self.assertEqual(summary["model_usage"]["scripted_decisions"],
+                             len(READ_WALKTHROUGH))
             self.assertEqual(len(summary["turns"]), 1)
             self.assertEqual(summary["turns"][0]["status"], "finished")
             self.assertEqual(summary["turns"][0]["terminal_reason"], "agent_finished")
@@ -156,7 +157,9 @@ class MinimalDemoBrowserTests(unittest.TestCase):
             self.assertIn("grace@example.test", summary["last_page_text"])
             audit = next(Path(directory).glob("*/audit.jsonl"))
             events = [json.loads(line)["event"] for line in audit.read_text().splitlines()]
-            self.assertIn("business_skill_loaded", events)
+            # The request matches exactly one read Skill, so the server loads it before the
+            # first model call; the script's own load_skill then gets the same card back.
+            self.assertIn("business_skill_auto_loaded", events)
             self.assertIn("business_tool_result", events)
             self.assertIn("action_receipt", events)
 
@@ -656,8 +659,8 @@ class TheWriteChainAnAuthorCopies(unittest.TestCase):
         with MinimalContactsApplication() as application:
             adapter, bound = self._composed(application, allow_mutations=False)
             self.assertEqual(sorted(bound.business_tools.tool_names), [
-                "describe_entity", "discover_entities", "list_contacts",
-                "query_entity_records",
+                "describe_entity", "discover_entities", "find_page_entries", "list_contacts",
+                "query_entity_records", "resolve_record_reference",
             ])
             self.assertEqual(bound.business_tools.mutation_tool_names, frozenset())
             self.assertEqual(bound.ports.postconditions.supported_tools, frozenset())
@@ -957,6 +960,7 @@ class TheApplicationsOwnAuthorityInARealBrowser(unittest.TestCase):
             # The model tries the page next. It may go there, and what it sees there cannot
             # become a fact in the answer.
             ("goto", {"url": "/contacts/grace-hopper"}),
+            ("wait_for", {"ms": 500}),
             ("finish", {"outcome": "acted"}),
         )
         cases = (
@@ -971,13 +975,17 @@ class TheApplicationsOwnAuthorityInARealBrowser(unittest.TestCase):
                                           actor=actor, forged_scopes=scopes)
                 events = _audit_events(directory)
                 turn = summary["turns"][0]
-                self.assertEqual(chat.calls, 4, "the refusal comes back to the model")
+                self.assertEqual(chat.calls, len(script), "the refusal comes back to the model")
                 if layer == "application":
                     # This actor is refused every read, its pages included, so the turn has
                     # nothing to answer from and ends on the refusal, as it did before.
                     self.assertEqual(turn["terminal_reason"], "permission_denied")
                     self.assertIn("not permitted", turn["answer"])
-                    self.assertEqual(turn["page_actions"], 0)
+                    # Its goto is refused before dispatch; the one page action the script
+                    # still takes is the wait after it, and nothing was opened.
+                    receipts = [row for row in events if row["event"] == "action_receipt"]
+                    self.assertEqual([row["tool"] for row in receipts], ["wait_for"])
+                    self.assertFalse(any(row["navigated"] for row in receipts))
                 else:
                     # The principal is narrower than the application, which still shows this
                     # person its own pages. The turn reports what it did and states the part
@@ -1021,6 +1029,7 @@ class TheApplicationsOwnAuthorityInARealBrowser(unittest.TestCase):
             ("load_skill", {"skill_id": "minimal.contacts.query"}),
             ("list_contacts", {"name_contains": "Grace Hopper"}),
             ("goto", {"url": "/contacts/grace-hopper"}),
+            ("wait_for", {"ms": 500}),
             ("finish", {"outcome": "acted"}),
         )
         with tempfile.TemporaryDirectory() as directory:

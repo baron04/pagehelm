@@ -49,11 +49,15 @@ _MODEL_ENV_KEYS = (
 
 #: What the fixed walkthrough does, read-only and with the write enabled. The write script
 #: is what an author reads to see the shape of the chain from the model's side: load the
-#: Skill, look first, propose once, then open only the route the result handed back.
+#: Skill, look first, propose once, then open only the route the result handed back. This
+#: single-page application loads a route's data before drawing it, so the look taken right
+#: after `goto` still shows the old view; waiting once is what the page tells the model to do,
+#: and only the fresh view counts as arriving.
 READ_WALKTHROUGH: tuple[tuple[str, dict], ...] = (
     ("load_skill", {"skill_id": "minimal.contacts.query"}),
     ("list_contacts", {"name_contains": "Grace Hopper"}),
     ("goto", {"url": "/contacts/grace-hopper"}),
+    ("wait_for", {"ms": 500}),
     ("finish", {"outcome": "acted"}),
 )
 WRITE_WALKTHROUGH: tuple[tuple[str, dict], ...] = (
@@ -61,6 +65,7 @@ WRITE_WALKTHROUGH: tuple[tuple[str, dict], ...] = (
     ("list_contacts", {"name_contains": "Radia"}),
     ("create_contact", {"name": "Radia Perlman", "email": "radia@example.test"}),
     ("goto", {"url": "/contacts/radia-perlman"}),
+    ("wait_for", {"ms": 500}),
     ("finish", {"outcome": "acted"}),
 )
 

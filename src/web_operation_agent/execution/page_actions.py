@@ -26,6 +26,20 @@ from .runstate import _Next, _StepEnd, _Turn
 from .target import required_highlight_control
 
 
+def _record_navigation(session, url: str) -> None:
+    """Report an arrival, keeping an approved write the turn already completed.
+
+    "Create a contact, then open it" reports both: the write stays the action the answer
+    states, and the page it opened is added to it. An arrival settled later -- a single-page
+    application drawing the new view after the look taken at `goto` -- is the same arrival.
+    """
+    current = session._answer_action_receipt
+    if current is not None and current["kind"] == "mutation":
+        current["navigation_url"] = url
+    else:
+        session._answer_action_receipt = {"kind": "navigation", "url": url}
+
+
 def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
     """Everything a page action is: refuse it, route it, dispatch it, report what it did.
 
@@ -465,8 +479,7 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
             and receipt.ok and receipt.observation is not None
             and receipt.observation.epoch > prior_page_epoch
             and write["state"] == WRITE_NONE):
-        session._answer_action_receipt = {
-            "kind": "navigation", "url": session._pending_navigation_url}
+        _record_navigation(session, session._pending_navigation_url)
         session._pending_navigation_url = ""
     if ((name in ("goto", "back") or (name == "click" and receipt.navigated))
             and receipt.ok and receipt.observation is not None
@@ -476,10 +489,7 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
     elif ((name in ("goto", "back") or (name == "click" and receipt.navigated))
             and receipt.ok and receipt.observation is not None
             and receipt.observation.epoch > prior_page_epoch):
-        if session._answer_action_receipt is not None and session._answer_action_receipt["kind"] == "mutation":
-            session._answer_action_receipt["navigation_url"] = obs.url
-        else:
-            session._answer_action_receipt = {"kind": "navigation", "url": obs.url}
+        _record_navigation(session, obs.url)
     elif (name == "click" and receipt.ok and not receipt.navigated
           and receipt.observation is not None
           and receipt.observation.epoch > prior_page_epoch
