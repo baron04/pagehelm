@@ -10,7 +10,9 @@ from __future__ import annotations
 from copy import deepcopy
 
 from ..answer import answer_protocol, page_answer
+from ..business.entities import DISCOVER_ENTITIES_TOOL, RESOLVE_RECORD_REFERENCE_TOOL
 from ..business.forms import FORM_TOOL_SCHEMAS
+from ..business.page_entries import FIND_PAGE_ENTRIES_TOOL
 from .knowledge_tools import capability_check_available
 from .prompts import (APPLICATION_ENTRY_TOOL, ASK_USER_TOOL, CAPABILITY_TOOL,
                       LOAD_SKILL_TOOL, SOURCE_CANDIDATE_TOOL, SOURCE_NAV_TOOL,
@@ -64,8 +66,9 @@ class ToolSurface:
         # Offered for the whole turn wherever it can ever apply, rather than from the first
         # typed result on: a tool list that changes invalidates every cached message after
         # it. Without evidence the server refuses the call, as it always has.
-        if (session.business_tools is not None
-                or session.evidence.has_application_evidence()):
+        if (not session._page_location_only and
+                (session.business_tools is not None
+                 or session.evidence.has_application_evidence())):
             tools += [answer_protocol.COMPUTE_TOOL]
         tools += [SOURCE_TOOL, SOURCE_HISTORY_TOOL, SOURCE_NAV_TOOL] \
             if session.runtime_source else []
@@ -84,6 +87,11 @@ class ToolSurface:
             business_schemas = session.business_tools.available_schemas(
                 allow_mutations=session._approvals.mutations_enabled,
                 actor_scopes=(principal.scopes if principal is not None else None))
+            if session._page_location_only:
+                page_reads = {DISCOVER_ENTITIES_TOOL, RESOLVE_RECORD_REFERENCE_TOOL,
+                              FIND_PAGE_ENTRIES_TOOL}
+                business_schemas = [schema for schema in business_schemas
+                                    if schema["function"]["name"] in page_reads]
             read_names = session.business_tools.read_tool_names & {
                 schema["function"]["name"] for schema in business_schemas}
             goal_property = {
@@ -105,19 +113,34 @@ class ToolSurface:
                           "required": ["target_read_tool", "measures"]},
             }
             for schema in business_schemas:
-                if (session.business_tools.numeric_goal_binding
-                        and not session._answers.first_business_read_seen
+                if (session._page_location_only
+                        and session.business_tools.numeric_goal_binding
                         and schema["function"]["name"] in read_names):
+                    # The dispatch contract still requires an explicit first-read
+                    # declaration. A location-only turn can only declare no numeric
+                    # goal; keep this schema stable after the first metadata read.
+                    schema = deepcopy(schema)
+                    parameters = schema["function"]["parameters"]
+                    parameters["properties"]["answer_goals"] = {
+                        "type": "array", "items": {"type": "object"}, "maxItems": 0,
+                        "description": "Page-location request: pass []. No numeric answer goal."}
+                    parameters["required"] = list(dict.fromkeys(
+                        [*(parameters.get("required") or []), "answer_goals"]))
+                elif (session.business_tools.numeric_goal_binding
+                      and not session._answers.first_business_read_seen
+                      and schema["function"]["name"] in read_names):
                     schema = deepcopy(schema)
                     parameters = schema["function"]["parameters"]
                     parameters["properties"]["answer_goals"] = goal_property
                     parameters["required"] = list(dict.fromkeys(
                         [*(parameters.get("required") or []), "answer_goals"]))
                 tools.append(schema)
-        if session.allow_form_prefill and session._application_form_tools is not None:
+        if (not session._page_location_only and session.allow_form_prefill
+                and session._application_form_tools is not None):
             tools += list(FORM_TOOL_SCHEMAS)
-        if session.allow_form_prefill and (session._application_form_tools is not None
-                                           or session.business_tools is not None):
+        if (not session._page_location_only and session.allow_form_prefill
+                and (session._application_form_tools is not None
+                     or session.business_tools is not None)):
             # Same reason as compute: offered while a draft can exist, refused without one.
             tools += [PREFILL_FORM_TOOL]
         # A reached target does not shrink this list: the loop refuses every tool but

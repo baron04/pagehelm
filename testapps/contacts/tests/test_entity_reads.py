@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import time
+import tempfile
 import unittest
 from dataclasses import replace
+from pathlib import Path
 
 from web_operation_agent.business.entities import (
     ENTITY_READ_TOOLS, EntityAggregate, EntityField, EntityReadTools,
@@ -14,6 +16,9 @@ from web_operation_agent.business.runtime import (
     BusinessToolRequestError,
 )
 from web_operation_agent.state.identity import OperationContext, PrincipalContext
+from web_operation_agent.execution.session import ServerAgentSession, TaskSpec
+from web_operation_agent.state.ledger import SessionLedger
+from web_operation_agent.tests.support.execution import _Browser, _Chat, _Control, _obs
 from web_operation_agent.tests.support.entity_read_contract import (
     assert_entity_read_contract,
 )
@@ -84,6 +89,22 @@ class ContactsEntityReadContractTests(unittest.TestCase):
             "query": "Contacts", "detail_query": "Email"})
         self.assertEqual(detail.content["candidates"][0]["part_matches"][0]["label"],
                          "Email")
+
+    def test_rest_adapter_uses_the_same_page_location_surface(self):
+        adapter = MinimalContactsAdapter("http://127.0.0.1:1", api_token="delegated")
+        with tempfile.TemporaryDirectory() as tmp:
+            session = ServerAgentSession(
+                task=TaskSpec("contacts-location", "联系人在哪里管理？"),
+                chat=_Chat([]), browser=_Browser([_obs(1)]),
+                control=_Control([[], []]),
+                ledger=SessionLedger(Path(tmp) / "audit.jsonl", "contacts-location"),
+                business_tools=adapter.business_tools)
+            names = {schema["function"]["name"] for schema in session.tool_schemas()}
+            self.assertTrue(session._page_location_only)
+            self.assertTrue({"find_page_entries", "resolve_record_reference",
+                             "discover_entities"} <= names)
+            self.assertNotIn("query_entity_records", names)
+            self.assertNotIn("list_contacts", names)
 
     def test_a_rest_backed_test_adapter_can_supply_the_same_exact_sum_contract(self):
         class RestMetricPort(_ContactsEntityReadPort):

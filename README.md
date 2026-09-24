@@ -85,6 +85,12 @@ agent.
   bounded conversation history is included for referential or clarification follow-ups;
   Skills are selected from the current task; and deployment source remains a lazy cited
   lookup instead of being injected wholesale.
+- For an unambiguous "where is this page?" request, when the actor has the generic page
+  directory and record resolver, the server fixes a smaller business-tool subset for that
+  turn: page/record discovery and browser navigation remain, while data queries, numeric
+  computation, and draft tools are omitted. Factual, mixed, unsupported, or ambiguous
+  requests keep the full surface. This is a prompt-size optimization, not a permission rule;
+  it has not yet been shown to improve model accuracy or end-to-end latency.
 - Browser actions are checked against the current observation and application route policy.
   Page observations are viewport-bound and expose at most 200 live controls; a bounded
   read-only scroll obtains the next fresh observation instead of scanning an unbounded DOM.
