@@ -11,14 +11,16 @@ class RouteGrammar(unittest.TestCase):
     def test_it_accepts_the_three_shapes_odoo_actually_serves(self):
         for route in ("/odoo/sales", "/odoo/orders/7", "/odoo/customers/44",
                       "/odoo/customers/new",
-                      "/odoo/res.partner/11", "/odoo/product.template/2"):
+                      "/odoo/res.partner/11", "/odoo/product.template/2",
+                      "/odoo/action-uom.product_uom_categ_form_action"):
             with self.subTest(route=route):
                 self.assertEqual(ODOO_ROUTE_PORT.validate_tool_route(route), route)
 
     def test_it_refuses_anything_outside_the_web_client(self):
         for route in ("/web/login", "/odoo", "/odoo/sales/0", "/odoo/Sales",
                       "//evil.test/odoo/sales", "/odoo/sales/../secret",
-                      "/jsonrpc", "/odoo/sales/7/8/9"):
+                      "/jsonrpc", "/odoo/sales/7/8/9",
+                      "/odoo/action-uom.product_uom_categ_form_action/../secret"):
             with self.subTest(route=route):
                 with self.assertRaises(ValueError):
                     ODOO_ROUTE_PORT.validate_tool_route(route)

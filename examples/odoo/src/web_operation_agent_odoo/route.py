@@ -28,6 +28,10 @@ ODOO_ROUTE_PORT = DeclaredRoutePort(
     application_id="odoo",
     tool_route_patterns=(
         r"/odoo/[a-z][a-z0-9-]*",
+        # Window actions without a custom path use their deployment XML ID in the
+        # web-client URL. The page directory must be able to return these reviewed
+        # destinations through the same typed-tool route contract.
+        r"/odoo/action-[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*",
         r"/odoo/[a-z][a-z0-9-]*(?:/[a-z][a-z0-9-]*)*/new",
         r"/odoo/[a-z][a-z0-9-]*/[1-9][0-9]{0,9}",
         r"/odoo/[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+/[1-9][0-9]{0,9}",

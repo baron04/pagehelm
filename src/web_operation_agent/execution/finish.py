@@ -311,7 +311,18 @@ class FinishHandler:
                                 result.agent_said, steps=step))
 
         if name == "finish":
-            done = bool(args.get("done"))
+            # Providers do not always enforce the advertised required tool fields. An
+            # omitted or string-valued `done` is neither consent to claim completion
+            # nor an explicit decision to give up. Return a repairable tool error.
+            if not isinstance(args.get("done"), bool):
+                self.ledger.append("finish_arguments_refused", step=step,
+                                   reason="done_must_be_boolean")
+                messages += [_assistant_call(call), _tool_result(
+                    call, "finish requires done=true or done=false as a boolean. "
+                    "No completion or refusal was recorded. Call finish again with "
+                    "an explicit done value and a short why.")]
+                return self._resume(turn, messages, obs, successful_business_tools)
+            done = args["done"]
             if done and self.page_actions and (self._required_page_controls
                                                 or self._required_page_effects):
                 missing_page_state = self._page_goal_unmet(obs)

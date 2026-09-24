@@ -649,6 +649,22 @@ class TargetSettlement(unittest.TestCase):
         self.assertNotIn('e3 tab "Terms" aria-selected=true', feedback)
         self.assertIn("click", {tool["function"]["name"] for tool in chat.tools[2]})
 
+    def test_missing_done_after_reaching_a_page_requests_repair(self):
+        chat = _Chat([("set_target", {"path": PARTNER}),
+                      ("click", {"ref": "e1"}),
+                      ("finish", {}),
+                      ("finish", {"done": True, "why": "done"})])
+        session = _session(self.tmp, chat, _WorkspaceBrowser())
+
+        result = session.run()
+
+        self.assertEqual(result.terminal_reason, "agent_finished")
+        self.assertEqual(len(chat.seen), 4)
+        self.assertIn("No completion or refusal was recorded",
+                      chat.seen[3][-1]["content"])
+        self.assertEqual(len(_events(session, "finish_arguments_refused")), 1)
+        self.assertEqual(result.verified_answer["action"]["kind"], "target_state")
+
     def test_a_half_declared_multistep_is_not_ended_by_the_server(self):
         # The paid gate's failure: the model declared only the desk for a request that
         # also asked for the Terms tab. The server may report the desk; it may not end

@@ -57,6 +57,22 @@ class TheReplyIsTheAnswer(unittest.TestCase):
         self.assertEqual(result.terminal_reason, "agent_refused")
         self.assertEqual(result.agent_said, "这项查询目前不支持。")
 
+    def test_missing_done_is_repaired_not_interpreted_as_giving_up(self):
+        result, ledger = _run([("finish", {}),
+                               ("finish", {"done": True, "why": "已完成。"})])
+        self.assertEqual(result.terminal_reason, "agent_finished")
+        self.assertEqual(result.agent_said, "已完成。")
+        self.assertEqual([row["reason"] for row in
+                          ledger.of_kind("finish_arguments_refused")],
+                         ["done_must_be_boolean"])
+
+    def test_string_done_is_not_coerced_to_true(self):
+        result, ledger = _run([("finish", {"done": "false", "why": "错误类型"}),
+                               ("finish", {"done": False, "why": "确实无法完成。"})])
+        self.assertEqual(result.terminal_reason, "agent_refused")
+        self.assertEqual(result.agent_said, "确实无法完成。")
+        self.assertEqual(len(ledger.of_kind("finish_arguments_refused")), 1)
+
     def test_finish_without_an_earlier_reply_is_unchanged(self):
         result, ledger = _run([("finish", {"done": True, "why": "好的。"})])
         self.assertEqual(result.agent_said, "好的。")

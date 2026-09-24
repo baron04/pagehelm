@@ -8,6 +8,7 @@ from web_operation_agent.business.page_entries import PageEntryTools
 from web_operation_agent.business.errors import BusinessToolContractError
 from web_operation_agent_odoo.server.descriptors import _catalog_digest
 from web_operation_agent_odoo.server.page_entries import OdooPageEntryPort
+from web_operation_agent_odoo.route import ODOO_ROUTE_PORT
 
 from .test_descriptors import _payload
 
@@ -53,6 +54,27 @@ class OdooPageEntryTests(unittest.TestCase):
         self.assertEqual(result.content["candidates"][0]["label"], "Sales Orders")
         self.assertEqual(result.content["candidates"][0]["ui_path"], "/odoo/orders")
         self.assertEqual(result.allowed_routes, ("/odoo/orders",))
+
+    def test_reviewed_xml_id_action_route_is_valid_for_typed_results(self):
+        payload = _payload()
+        payload["models"].append({
+            "model": "uom.category", "label": "Units of Measure Category",
+            "operations": ["read"], "transient": False})
+        payload["actions"][0].update({
+            "action_id": 90, "xml_id": "uom.product_uom_categ_form_action",
+            "name": "Units of Measure Categories",
+            "route": "action-uom.product_uom_categ_form_action",
+            "model": "uom.category", "view_modes": ["list", "form"],
+            "breadcrumbs": [], "domain": "[]", "context": "{}",
+        })
+        _digest(payload)
+
+        result = self._find(payload, "Units of Measure Categories")
+
+        self.assertEqual(result.allowed_routes,
+                         ("/odoo/action-uom.product_uom_categ_form_action",))
+        for route in result.allowed_routes:
+            self.assertEqual(ODOO_ROUTE_PORT.validate_tool_route(route), route)
 
     def test_current_record_dependency_has_no_standalone_route(self):
         payload = _payload()
