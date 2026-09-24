@@ -30,12 +30,15 @@ def _text(value: object, name: str, *, allow_empty: bool = True) -> str:
 def _texts(value: object, name: str, *, limit: int = 8) -> tuple[str, ...]:
     if value is None:
         return ()
-    if isinstance(value, str):
+    if isinstance(value, (str, int, float)) and not isinstance(value, bool):
         value = [value]
     if not isinstance(value, list):
         raise ValueError(f"{name} must be an array of strings")
     out = []
     for item in value[:limit]:
+        # A number written as a number is still a value the person said.
+        if isinstance(item, (int, float)) and not isinstance(item, bool):
+            item = str(item)
         text = _text(item, name)
         if text:
             out.append(text)
@@ -210,14 +213,25 @@ class GoalSpec:
     def from_json(cls, value: object) -> "GoalSpec":
         if isinstance(value, str):
             value = json.loads(value)
+        if isinstance(value, list):
+            # The deliverables alone, without the wrapping object.
+            value = {"deliverables": value}
         if not isinstance(value, dict):
             raise ValueError("goal must be an object")
-        raw = value.get("deliverables") or []
+        raw = value.get("deliverables")
+        if raw is None and value.get("kind"):
+            # One deliverable written as the whole declaration.
+            raw = [value]
+        raw = raw or []
+        if isinstance(raw, str):
+            raw = json.loads(raw)
         if isinstance(raw, dict):
-            # A single deliverable written as an object rather than a one-item array.
-            raw = [raw]
+            # A single deliverable written as an object rather than a one-item array, or
+            # several keyed by anything.
+            raw = [raw] if raw.get("kind") else list(raw.values())
         if not isinstance(raw, list):
             raise ValueError("deliverables must be an array")
+        raw = [json.loads(item) if isinstance(item, str) else item for item in raw]
         deliverables = tuple(Deliverable.from_json(d) for d in raw[:_MAX_DELIVERABLES])
         return cls(deliverables=deliverables,
                    write_intent=bool(value.get("write_intent", False)),

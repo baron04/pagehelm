@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 
+from ..modeling.provider import ProviderError
 from .index import ApplicationIndex
 from .spec import DECLARE_GOAL_TOOL, GoalSpec
 
@@ -43,16 +44,27 @@ def understand(chat, *, prompt: str, index: ApplicationIndex, run_id: str,
                                      + "\n\nREQUEST\n" + prompt.strip())},
     ]
     kwargs = {"max_tokens": 1_500, "timeout_s": timeout_s}
-    if cancelled is not None:
-        reply = chat.complete_cancellable(messages, [DECLARE_GOAL_TOOL], run_id,
-                                          cancelled=cancelled, **kwargs)
-    else:
-        reply = chat.complete(messages, [DECLARE_GOAL_TOOL], run_id, **kwargs)
-    payload, source = _declaration_from(reply)
-    spec = GoalSpec.from_json(payload)
+    attempts = 0
+    while True:
+        attempts += 1
+        try:
+            if cancelled is not None:
+                reply = chat.complete_cancellable(messages, [DECLARE_GOAL_TOOL], run_id,
+                                                  cancelled=cancelled, **kwargs)
+            else:
+                reply = chat.complete(messages, [DECLARE_GOAL_TOOL], run_id, **kwargs)
+            payload, source = _declaration_from(reply)
+            spec = GoalSpec.from_json(payload)
+            break
+        except (ValueError, ProviderError) as exc:
+            # One more try: a small model now and then answers in prose, returns a
+            # malformed object, or the provider drops the call. A second failure ends it.
+            if attempts >= 2 or (isinstance(exc, ProviderError)
+                                 and not getattr(exc, "retryable", True)):
+                raise
     return spec, {"source": source, "deliverables": len(spec.deliverables),
                   "kinds": [d.kind for d in spec.deliverables],
-                  "write_intent": spec.write_intent}
+                  "write_intent": spec.write_intent, "attempts": attempts}
 
 
 def _declaration_from(reply: dict) -> tuple[dict, str]:

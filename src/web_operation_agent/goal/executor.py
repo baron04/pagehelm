@@ -24,6 +24,7 @@ from ..execution.product import (AgentAnswerContext, AgentTurnError, AgentTurnEr
 from ..execution.runstate import RunResult
 from ..modeling.chat import require_chat_port
 from ..modeling.egress import AuditedChat
+from ..modeling.provider import ProviderError
 from ..privacy import redact_sensitive_assignments, redact_session_handoffs
 from ..schemas.browser import PageObservation
 from ..transport.protocol import RemoteProtocolError
@@ -248,6 +249,12 @@ class GoalTurnExecutor:
             s.terminal_reason = "agent_refused"
             return self._say(s, "没能理解这个请求要做什么，请换个说法。" if s.chinese
                              else "I could not work out what this request asks for.")
+        except ProviderError as exc:
+            s.ledger.append("provider_failed", step=s.step,
+                            provider_error_code=getattr(exc, "code", "provider_error"))
+            s.terminal_reason, s.detail = "provider_error", str(exc)[:200]
+            return self._say(s, "模型服务暂时没有响应，请稍后再试。" if s.chinese
+                             else "The model service did not respond; please try again.")
         s.ledger.append("goal_declared", step=s.step, spec=spec.to_json(), **projection)
         if not spec.deliverables:
             s.terminal_reason = "agent_refused"

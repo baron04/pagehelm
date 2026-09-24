@@ -185,7 +185,8 @@ class OdooGoalPortTests(unittest.TestCase):
         self.assertIn("销售订单", self.index.page("p331").aliases)
         entity = self.index.entity("sale.order")
         labels = [f.label for f in entity.fields]
-        self.assertEqual(labels[:4], ["Order Reference", "Customer", "Total", "Status"])
+        # Links and choices first, then amounts, dates and text: what people ask about.
+        self.assertEqual(labels[:5], ["Customer", "Salesperson", "Payment Terms", "Status", "Total"])
         self.assertNotIn("Messages", labels)
         self.assertEqual(entity.sections, ("Order Lines", "Other Info"))
         self.assertEqual(entity.actions, ("Confirm", "Send by Email"))
@@ -304,7 +305,7 @@ class OdooGoalPortConditionTests(unittest.TestCase):
         self.assertEqual(keys[keys.index("sale.order") + 1], "sale.order.line")
         line = self.index.entity("sale.order.line")
         self.assertEqual([f.label for f in line.fields],
-                         ["Order Reference", "Product", "Quantity", "Subtotal"])
+                         ["Order Reference", "Product", "Subtotal", "Quantity"])
         self.assertIn("订单行", line.aliases)
 
     def test_a_date_period_becomes_utc_bounds_in_the_users_zone(self):

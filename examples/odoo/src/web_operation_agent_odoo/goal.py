@@ -18,7 +18,7 @@ from web_operation_agent.business.runtime import BusinessToolError
 from web_operation_agent.goal.index import (ApplicationIndex, IndexEntity, IndexField,
                                              IndexPage)
 from web_operation_agent.goal.ports import Aggregate, Fact, PagePlan, Resolution, Resolved
-from web_operation_agent.goal.spec import Deliverable, Filter, GoalSpec, Metric
+from web_operation_agent.goal.spec import Deliverable, Filter, GoalSpec, Metric, PageSpec
 from web_operation_agent.state.identity import OperationContext
 
 #: Modules whose actions are the framework's own, not the business application's.
@@ -35,7 +35,13 @@ _SKIP_FIELDS = frozenset({"company_id", "currency_id", "id", "__last_update", "s
                           "color", "display_name", "write_date", "create_date",
                           "create_uid", "write_uid", "country_code", "locked",
                           "authorized_transaction_ids", "tax_country_id"})
-_MAX_FIELDS = 16
+_MAX_FIELDS = 20
+_FIELD_TAG = re.compile(r'<field\b[^>]*?\bname="([^"]+)"')
+#: The order in which a person asks about fields: who and what first, amounts and dates
+#: next, free text last. The index shows the first fields of an entity, so this decides
+#: what a small model can name.
+_KIND_RANK = {"link": 0, "choice": 1, "money": 2, "number": 3, "date": 4, "text": 5,
+              "html": 6, "bool": 7}
 _RECORD_LIMIT = 20
 _GROUP_LIMIT = 20
 
@@ -64,7 +70,7 @@ _SKIP_LINE_FIELDS = frozenset({"sequence", "display_type", "is_downpayment", "pr
                                "technical_price_unit", "qty_delivered_method",
                                "company_currency_id", "tax_calculation_rounding_method",
                                "analytic_distribution", "partner_id", "product_type"})
-_MAX_LINE_FIELDS = 14
+_MAX_LINE_FIELDS = 24
 
 #: Relative periods a date condition may name, in the index's language and in Chinese.
 _PERIODS = {
@@ -283,6 +289,8 @@ class OdooGoalPort:
         self._page_filters: dict[int, list[_SearchFilter]] = {}
         self._model_labels: dict[str, str] = {}
         self._reads: list[tuple[str, str]] = []
+        #: A one2many's static domain the next aggregate applies to its line scope.
+        self._line_scope: list | None = None
 
     # -- index ----------------------------------------------------------------------
     def index(self, *, context: OperationContext | None = None) -> ApplicationIndex:
@@ -380,7 +388,7 @@ class OdooGoalPort:
     def _model_meta(self, model: str, *, detailed: bool = True) -> _ModelMeta:
         label = self._model_labels.get(model, model)
         fields = self._client.call(model, "fields_get", [], {
-            "attributes": ["string", "type", "relation", "selection", "searchable"]})
+            "attributes": ["string", "type", "relation", "selection", "searchable", "domain"]})
         if not detailed:
             return _ModelMeta(model, label, fields, [], [], (), (), [])
         try:
@@ -390,8 +398,8 @@ class OdooGoalPort:
             views = {"views": {}}
         arch = {kind: (views.get("views", {}).get(kind) or {}).get("arch", "")
                 for kind in ("list", "form", "search")}
-        list_fields = list(dict.fromkeys(re.findall(r'<field name="([^"]+)"', arch["list"])))
-        form_fields = list(dict.fromkeys(re.findall(r'<field name="([^"]+)"', arch["form"])))
+        list_fields = list(dict.fromkeys(_FIELD_TAG.findall(arch["list"])))
+        form_fields = list(dict.fromkeys(_FIELD_TAG.findall(arch["form"])))
         sections = tuple(dict.fromkeys(
             html.unescape(s) for s in re.findall(r'<page[^>]*?\sstring="([^"]+)"', arch["form"])))
         actions = tuple(dict.fromkeys(
@@ -407,19 +415,18 @@ class OdooGoalPort:
         for name, info in meta.fields.items():
             comodel = str(info.get("relation") or "")
             if (info.get("type") != "one2many" or comodel not in self._model_labels
-                    or comodel in self._models or f'<field name="{name}"' not in meta.form_arch):
-                continue
-            # The embedded list's own fields are self-closing, so the first closing tag
-            # after the x2many field ends its block.
-            block = re.search(rf'<field name="{name}"[^>]*>(.*?)</field>', meta.form_arch, re.S)
-            if block is None:
-                continue
-            inner = [f for f in dict.fromkeys(re.findall(r'<field name="([^"]+)"', block.group(1)))
-                     if f not in _SKIP_LINE_FIELDS]
-            if not inner:
+                    or comodel in self._models
+                    or not re.search(rf'<field\b[^>]*?\bname="{name}"', meta.form_arch)):
                 continue
             fields = self._client.call(comodel, "fields_get", [], {
-                "attributes": ["string", "type", "relation", "selection", "searchable"]})
+                "attributes": ["string", "type", "relation", "selection", "searchable", "domain"]})
+            # The line fields the form shows are the ones named in it that belong to the
+            # line model and not to the record (an embedded list's tags are not nested in
+            # a way a regex can bound reliably).
+            inner = [f for f in dict.fromkeys(_FIELD_TAG.findall(meta.form_arch))
+                     if f in fields and f not in meta.fields and f not in _SKIP_LINE_FIELDS]
+            if not inner:
+                continue
             parent_link = next((f for f, i in fields.items()
                                 if i.get("type") == "many2one" and i.get("relation") == meta.model),
                                None)
@@ -437,7 +444,10 @@ class OdooGoalPort:
     def _index_fields(self, meta: _ModelMeta) -> list[IndexField]:
         out: list[IndexField] = []
         seen: set[str] = set()
-        for name in meta.list_fields + meta.form_fields:
+        shown = list(dict.fromkeys(meta.list_fields + meta.form_fields))
+        ordered = sorted(shown, key=lambda n: (_KIND_RANK.get(_kind_of(meta.fields.get(n, {})) or "", 9),
+                                               shown.index(n)))
+        for name in ordered:
             if len(out) >= _MAX_FIELDS:
                 break
             info = meta.fields.get(name)
@@ -510,10 +520,20 @@ class OdooGoalPort:
         if d.kind == "list" and d.record and d.via:
             # "The lines of S00004", declared on the line entity with the parent named as
             # the record and the link field as via: a list with that link as condition.
+            # A via that is not a field of the line entity means its parent link.
+            line_meta = self._models.get(d.entity) if d.entity else None
+            via = d.via
+            parent = self._parent_link(d.entity) if line_meta is not None else None
+            if line_meta is not None and line_meta.field_by_label(via) is None and parent is not None:
+                via = str(line_meta.fields[parent[1]].get("string") or parent[1])
+            if parent is not None:
+                embedded = self._embedded_lines(parent[0], d.entity)
+                if embedded is not None and embedded[1]:
+                    self._line_scope = list(embedded[1])
             return self._aggregate(Deliverable(
                 kind="list", entity=d.entity, fields=d.fields, sort=d.sort,
                 descending=d.descending, limit=d.limit, page=d.page,
-                metric=Metric(op="count", filters=(Filter(field=d.via, values=(d.record,)),)
+                metric=Metric(op="count", filters=(Filter(field=via, values=(d.record,)),)
                               + (d.metric.filters if d.metric else ()))), index)
         if d.kind in ("aggregate", "list"):
             return self._aggregate(d, index)
@@ -665,6 +685,9 @@ class OdooGoalPort:
             elif field not in fields:
                 fields.append(field)
         if not fields:
+            lines = self._line_facts(model, rid, name, missing)
+            if lines is not None:
+                return lines
             return Resolved(kind="fact",
                             problem="none of the fields asked for exist on this record")
         read_fields = list(fields)
@@ -682,6 +705,56 @@ class OdooGoalPort:
         if missing:
             problem = "not on this record: " + ", ".join(missing)
         return Resolved(kind="fact", facts=tuple(facts), problem=problem)
+
+    def _parent_link(self, line_model: str) -> tuple[str, str] | None:
+        """(parent model, link field) for an entity some record's form embeds as lines."""
+        line_meta = self._models.get(line_model)
+        if line_meta is None:
+            return None
+        parents = [line_meta.parent] if line_meta.parent else [
+            m for m, meta in self._models.items()
+            if any(i.get("type") == "one2many" and i.get("relation") == line_model
+                   for i in meta.fields.values())]
+        for parent in parents:
+            link = next((f for f, i in line_meta.fields.items()
+                         if i.get("type") == "many2one" and i.get("relation") == parent), None)
+            if link is not None:
+                return parent, link
+        return None
+
+    def _line_facts(self, model: str, rid: int, name: str, labels: list[str]):
+        """Values of the record's lines that the labels name ("Office Lamp" on S00004)."""
+        meta = self._models.get(model)
+        if meta is None:
+            return None
+        for field, info in meta.fields.items():
+            comodel = str(info.get("relation") or "")
+            line_meta = self._models.get(comodel)
+            if info.get("type") != "one2many" or line_meta is None:
+                continue
+            parent = next((f for f, i in line_meta.fields.items()
+                           if i.get("type") == "many2one" and i.get("relation") == model), None)
+            embedded = self._embedded_lines(model, comodel)
+            if parent is None or embedded is None:
+                continue
+            _field, line_domain, columns = embedded
+            read_fields = ["display_name"] + columns + (
+                ["currency_id"] if "currency_id" in line_meta.fields else [])
+            by_name = [f for f in ("product_id", "name") if f in line_meta.fields]
+            facts = []
+            for label in labels:
+                match = ["|"] * (len(by_name) - 1) + [[f, "ilike", label] for f in by_name]
+                rows = self._call(comodel, "search_read",
+                                  [[[parent, "=", rid]] + list(line_domain) + match],
+                                  {"fields": read_fields, "limit": 5})
+                for row in rows:
+                    for column in columns:
+                        facts.append(Fact(subject=f"{name} · {label}",
+                                          label=str(line_meta.fields[column].get("string") or column),
+                                          value=self._display(row.get(column), line_meta.fields[column], row)))
+            if facts:
+                return Resolved(kind="fact", facts=tuple(facts))
+        return None
 
     def _display(self, value, info: dict, row: dict) -> str:
         kind = info.get("type")
@@ -735,6 +808,9 @@ class OdooGoalPort:
                                        not a.get("breadcrumbs")))
         chosen = None
         for action in candidates:
+            if not action.get("breadcrumbs"):
+                # Without a menu page the record's own route is the address people see.
+                continue
             domain = _literal_domain(str(action.get("domain") or ""))
             if domain is None:
                 continue
@@ -769,6 +845,15 @@ class OdooGoalPort:
             page = self._default_page(d.entity, index)
         if page is None:
             return Resolved(kind="page", problem="the page named is not in the index")
+        if d.page.search and d.kind == "page":
+            # "Show me Large Desk's card": the words name one record of the page's entity.
+            found = self._find_record(page.entity, d.page.search)
+            if (isinstance(found, tuple) and not isinstance(found, Ambiguous)
+                    and _norm(_strip_code(found[2])) == _norm(d.page.search)):
+                if page.entity not in self._models:
+                    self._models[page.entity] = self._model_meta(page.entity)
+                return Resolved(kind="page", page=self._record_page(
+                    found[0], found[1], found[2], section=d.section, highlight=""))
         action = next((a for a in self._actions if f"p{a['action_id']}" == page.key), None)
         if action is None:
             return Resolved(kind="page", problem="the page named is not in the index")
@@ -814,6 +899,10 @@ class OdooGoalPort:
         entity = index.entity(d.entity) if d.entity else None
         if page is None and entity is None:
             return Resolved(kind=d.kind, problem="no entity or page names this scope")
+        if page is not None and entity is not None and page.entity != entity.key:
+            # The lines of an order declared with the orders page: the entity named is
+            # the one asked about; the page was the way there, not the scope.
+            page = None
         # A declared page scopes the numbers by its own domain and default filters; an
         # entity alone means every record of it the person may read. The page a list
         # opens afterwards is chosen separately.
@@ -824,9 +913,14 @@ class OdooGoalPort:
         action = (next((a for a in self._actions if f"p{a['action_id']}" == page.key), None)
                   if page is not None else None)
         domain = list(_literal_domain(str(action.get("domain") or "")) or []) if action else []
+        if self._line_scope:
+            # The lines as the record's form embeds them (product lines, not tax lines).
+            domain += self._line_scope
+            self._line_scope = None
         described = [page.label if page is not None else meta.label]
         # The page's own default filters apply too, except ones about the current user.
         context = _literal_dict(str(action.get("context") or "")) if action else {}
+        default_clauses: list = []
         for key, value in context.items():
             if not (str(key).startswith("search_default_") and value):
                 continue
@@ -845,10 +939,14 @@ class OdooGoalPort:
                                 None)
             if resolved and "uid" not in str(resolved):
                 domain += resolved
+                default_clauses += resolved
         metric = d.metric or Metric(op="count")
         page_filters = self._page_filters.get(action["action_id"], meta.filters) if action \
             else meta.filters
-        for name in metric.page_filters:
+        # Page filters declared on the page ("filters_on") scope the numbers too.
+        declared_page_filters = list(metric.page_filters) + [
+            f for f in d.page.filters_on if f not in metric.page_filters]
+        for name in declared_page_filters:
             wanted = _norm(name)
             item = next((f for f in page_filters if _norm(f.label) == wanted), None) \
                 or meta.filter_by_name(name)
@@ -876,31 +974,25 @@ class OdooGoalPort:
             domain += clause
             described.append(text)
         if d.kind == "list" and d.page.search:
-            clause = [["display_name", "ilike", d.page.search]]
-            if not self._call(model, "search_count", [domain + clause], {}):
-                # No name contains the words; they may name a linked record instead
-                # ("United States" on customers is their country). One link field with
-                # exactly one such record decides; more than one is left alone.
-                hits = []
-                for field, info in meta.fields.items():
-                    if info.get("type") != "many2one" or field not in meta.list_fields + meta.form_fields:
-                        continue
-                    found = self._find_record(str(info["relation"]), d.page.search)
-                    # Only a record actually named by the words counts ("United States"
-                    # is a country; it is not the currency whose long name contains it).
-                    if (isinstance(found, tuple) and not isinstance(found, Ambiguous)
-                            and _norm(_strip_code(found[2])) == _norm(d.page.search)):
-                        hits.append((field, found))
-                if len(hits) == 1:
-                    field, (_m, rid, _n) = hits[0]
-                    clause = [[field, "child_of" if meta.fields[field].get("relation") == "res.partner" else "in", [rid]]]
-                    described.append(f"{meta.fields[field].get('string') or field} = {d.page.search}")
-                else:
-                    described.append(f"~{d.page.search}")
-            else:
-                described.append(f"~{d.page.search}")
-            domain += clause
+            clause, text = self._search_clause(meta, model, domain, d.page.search)
+            if clause is None and default_clauses:
+                # Nothing within the page's default filters (customers only): the words
+                # may still name something the page's entity holds once those are lifted.
+                lifted = [c for c in domain if c not in default_clauses]
+                clause, text = self._search_clause(meta, model, lifted, d.page.search)
+                if clause is not None:
+                    domain, default_clauses = lifted, []
+                    described.append("beyond the page's default filters")
+            domain += clause or [["display_name", "ilike", d.page.search]]
+            described.append(text)
         subject = " · ".join(described)
+        if d.kind == "list" and default_clauses and not self._call(model, "search_count", [domain], {}):
+            # The page's own default filters (customers only) hid every match; the
+            # person asked about the page's entity, so the answer says so and looks past
+            # the defaults.
+            for clause in default_clauses:
+                domain.remove(clause)
+            described.append("beyond the page's default filters")
         if d.kind == "list":
             columns = [f for f in (meta.field_by_label(label) for label in d.fields) if f]
             columns = list(dict.fromkeys(columns))
@@ -925,7 +1017,10 @@ class OdooGoalPort:
                 names.append(str(row.get("display_name") or "")
                              + (" — " + "; ".join(cells) if cells else ""))
             total = self._call(model, "search_count", [domain], {})
-            plan = self._list_page(Deliverable(kind="page", entity=model, page=d.page), index) \
+            # The list is the deliverable; the page it opens afterwards carries no facets,
+            # whose failure would otherwise mark a correct answer as unfinished.
+            bare = PageSpec(key=d.page.key if page is not None else "")
+            plan = self._list_page(Deliverable(kind="page", entity=model, page=bare), index) \
                 if (page is not None or self._default_page(model, index) is not None) else None
             page_plan = plan.page if plan is not None else None
             if not names:
@@ -938,6 +1033,12 @@ class OdooGoalPort:
                                                 complete=len(rows) <= limit))
         count = int(self._call(model, "search_count", [domain], {}))
         widened = None
+        if count == 0 and default_clauses:
+            for clause in default_clauses:
+                domain.remove(clause)
+            count = int(self._call(model, "search_count", [domain], {}))
+            if count:
+                described.append("beyond the page's default filters")
         if count == 0 and action and _literal_domain(str(action.get("domain") or "")):
             # Nothing in this page's scope; the same conditions over the whole entity say
             # whether the records exist at all (quotations, when the page shows orders).
@@ -981,6 +1082,62 @@ class OdooGoalPort:
         return Resolved(kind="aggregate", aggregate=Aggregate(
             subject=subject, count=count, sums=tuple(sums), groups=tuple(groups_out),
             note=note))
+
+    def _search_clause(self, meta: _ModelMeta, model: str, domain: list, words: str):
+        """What search words mean on this entity within `domain`, or None when nothing."""
+        clause = [["display_name", "ilike", words]]
+        if self._call(model, "search_count", [domain + clause], {}):
+            return clause, f"~{words}"
+        # No name contains the words; they may name a linked record instead ("United
+        # States" on customers is their country). Only a record actually named by the
+        # words counts, and several links to the same record are one hit, on the field
+        # the list shows.
+        shown = list(dict.fromkeys(meta.list_fields + meta.form_fields))
+        hits: dict[tuple, str] = {}
+        for field, info in meta.fields.items():
+            if info.get("type") != "many2one" or field not in shown:
+                continue
+            found = self._find_record(str(info["relation"]), words)
+            if (isinstance(found, tuple) and not isinstance(found, Ambiguous)
+                    and _norm(_strip_code(found[2])) == _norm(words)):
+                key = (found[0], found[1])
+                if key not in hits or (field in meta.list_fields and hits[key] not in meta.list_fields):
+                    hits[key] = field
+        if len(hits) == 1:
+            (_m, rid), field = next(iter(hits.items()))
+            operator = "child_of" if meta.fields[field].get("relation") == "res.partner" else "in"
+            clause = [[field, operator, [rid]]]
+            if self._call(model, "search_count", [domain + clause], {}):
+                return clause, f"{meta.fields[field].get('string') or field} = {words}"
+        # Or the words are in one text field the pages show (a city).
+        texts = [f for f in shown if meta.fields.get(f, {}).get("type") == "char"
+                 and f != "name" and meta.fields[f].get("searchable") is not False]
+        matched = [f for f in texts
+                   if self._call(model, "search_count", [domain + [[f, "ilike", words]]], {})]
+        if len(matched) == 1:
+            return [[matched[0], "ilike", words]], f"{meta.fields[matched[0]].get('string')} ~ {words}"
+        return None, f"~{words}"
+
+    def _embedded_lines(self, parent_model: str, line_model: str):
+        """(one2many field, its static domain, numeric columns) as the parent's form embeds them."""
+        meta = self._models.get(parent_model)
+        line_meta = self._models.get(line_model)
+        if meta is None or line_meta is None:
+            return None
+        for field, info in meta.fields.items():
+            if (info.get("type") != "one2many" or info.get("relation") != line_model
+                    or field not in meta.form_fields):
+                continue
+            domain = info.get("domain")
+            domain = _literal_domain(domain) if isinstance(domain, str) else (
+                domain if isinstance(domain, list) else [])
+            inner = [f for f in dict.fromkeys(_FIELD_TAG.findall(meta.form_arch))
+                     if f in line_meta.fields and f not in meta.fields]
+            columns = [f for f in inner
+                       if line_meta.fields[f].get("type") in ("float", "integer", "monetary")
+                       and f not in _SKIP_LINE_FIELDS][:4]
+            return field, (domain or []), columns
+        return None
 
     def _condition(self, meta: _ModelMeta, label: str, values: tuple[str, ...], *,
                    op: str = "", today: date | None = None):
@@ -1031,8 +1188,11 @@ class OdooGoalPort:
             truthy = _norm(values[0]) in ("true", "yes", "1", "是")
             return [[field, "=", truthy]], text
         if kind in ("integer", "float", "monetary"):
+            spans = [re.split(r"\s*(?:\.\.|~|到|至)\s*", v) for v in values]
+            if len(values) == 1 and len(spans[0]) == 2:
+                values, op = (spans[0][0], spans[0][1]), "between"
             try:
-                numbers = [float(v.replace(",", "")) for v in values]
+                numbers = [float(str(v).replace(",", "")) for v in values]
             except ValueError:
                 return None, f"{values[0]!r} is not a number"
             if op == "between" and len(numbers) >= 2:

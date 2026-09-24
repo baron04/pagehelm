@@ -310,6 +310,42 @@ case("a-sol-subtotal-gt", "sale.order.line", "aggregate", "number",
 case("a-aml-count-invoice", "account.move.line", "aggregate", "link",
      agg("account.move.line", "", filters=[F("Journal Entry", ["INV/2026/00002"])]), count=3)
 
+case("a-number-range", "sale.order", "aggregate", "number",
+     agg("sale.order", O, filters=[F("Status", ["Sales Order"]), F("Total", ["500..1000"])]), count=6)
+case("a-page-filters-on-declared-on-page", "account.move", "aggregate", "page-filter",
+     {"deliverables": [{"kind": "aggregate", "entity": "account.move",
+                        "page": {"key": BILLS, "filters_on": ["Posted"]},
+                        "metric": {"op": "count"}}]}, count=2)
+case("l-entity-over-page", "sale.order.line", "list", "via-lines",
+     {"deliverables": [{"kind": "list", "entity": "sale.order.line", "record": "S00004",
+                        "via": "Order Reference", "fields": ["Product", "Quantity"],
+                        "page": {"key": O, "search": "Office Lamp"}}]},
+     records_len=1, records_any=[r"Office Lamp.*Quantity: 10\.00"])
+case("l-via-parent-fallback", "account.move.line", "list", "via-lines",
+     {"deliverables": [{"kind": "list", "entity": "account.move.line", "record": "INV/2026/00001",
+                        "via": "Move", "fields": ["Product"]}]},
+     records_len=2, records_any=[r"Large Meeting Table", r"Four Person Desk"])
+case("l-search-names-a-customer", "sale.order", "list", "text",
+     lst("sale.order", page=Q, search="Ready Mat"), records_len=2,
+     records_any=[r"^S00002", r"^S00003"])
+case("l-search-in-a-text-field", "res.partner", "list", "text",
+     lst("res.partner", page=CUST, search="Tracy"), records_any=[r"^Ready Mat", r"^The Jackson Group"])
+case("l-page-defaults-kept-when-not-empty", "res.partner", "list", "page-filter",
+     {"deliverables": [{"kind": "list", "entity": "res.partner",
+                        "page": {"key": CUST, "filters_on": ["Individuals"]}}]},
+     records_any=[r"^Acme Corporation, "])
+case("p-search-names-a-record", "product.template", "page", "record",
+     page(key=PROD) | {"deliverables": [{"kind": "page", "page": {"key": PROD, "view": "kanban", "search": "Large Desk"}}]},
+     page={"url": r"^/odoo/products/13$"})
+case("p-menu-less-record-model-route", "account.move", "page", "via",
+     page(entity="account.move", record="INV/2026/00001", via="Payment Terms"),
+     page={"url": r"^/odoo/account\.payment\.term/6$"})
+case("f-line-as-field", "account.move", "fact", "via-lines",
+     fact("account.move", "INV/2026/00001", ["Large Meeting Table"]), facts={"Quantity": r"^5\.00$"})
+case("f-invoice-payment-status", "account.move", "fact", "none",
+     fact("account.move", "INV/2026/00002", ["Payment Status", "Type"]),
+     facts={"Payment Status": r"^Not Paid$", "Type": r"^Customer Invoice$"})
+
 # -- lists ----------------------------------------------------------------------------------
 case("l-sol-order-lines", "sale.order.line", "list", "link",
      lst("sale.order.line", fields=["Product", "Quantity", "Unit Price", "Subtotal"],
@@ -432,7 +468,8 @@ def _check(expect: dict, resolved) -> list[str]:
     if "note" in expect and (a is None or not re.search(expect["note"], a.note)):
         errors.append(f"note {a.note if a else None!r}")
     if "records_len" in expect and (a is None or len(a.records) != expect["records_len"]):
-        errors.append(f"records {len(a.records) if a else None} != {expect['records_len']}")
+        errors.append(f"records {len(a.records) if a else None} != {expect['records_len']}"
+                      + (f" (problem: {d.problem})" if a is None and d.problem else ""))
     for pattern in expect.get("records_any", []):
         if a is None or not any(re.search(pattern, r) for r in a.records):
             errors.append(f"no record ~ {pattern!r}: {list(a.records)[:3] if a else None}")

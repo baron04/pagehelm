@@ -260,7 +260,8 @@ class GoalTurnTests(unittest.TestCase):
         self.assertEqual(_Browser.instances[0].actions, [])
 
     def test_a_reply_without_a_declaration_is_refused_not_guessed(self):
-        execution, *_ = self._run([(None, {"content": "Sure, let me look."})], [])
+        execution, *_ = self._run([(None, {"content": "Sure, let me look."}),
+                                   (None, {"content": "Still just looking."})], [])
         self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
         self.assertEqual(_Browser.instances[0].actions, [])
 
@@ -306,8 +307,13 @@ class DeclarationTests(unittest.TestCase):
         self.assertEqual(spec.deliverables[0].page.key, "p1")
         self.assertEqual(projection["source"], "content")
         with self.assertRaises(ValueError):
-            understand(_Chat([(None, {"content": "no idea"})]), prompt="?", index=_index(),
-                       run_id="r")
+            understand(_Chat([(None, {"content": "no idea"}), (None, {"content": "none"})]),
+                       prompt="?", index=_index(), run_id="r")
+        chat = _Chat([(None, {"content": "hmm"}),
+                      ("declare_goal", {"deliverables": {"kind": "page", "page": {"key": "p1"}}})])
+        spec, projection = understand(chat, prompt="打开订单", index=_index(), run_id="r")
+        self.assertEqual(spec.deliverables[0].page.key, "p1")
+        self.assertEqual(projection["attempts"], 2)
 
 
 if __name__ == "__main__":
