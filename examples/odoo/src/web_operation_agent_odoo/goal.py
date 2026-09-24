@@ -579,9 +579,11 @@ class OdooGoalPort:
             return Resolved(kind=d.kind, problem="no record was named")
         found = self._find_record(entity.key, d.record)
         via = d.via
-        if found is None and d.kind == "handoff":
+        if d.kind == "handoff" and (found is None or (isinstance(found, Ambiguous)
+                                                        and _norm(d.action) in ("", "new", "create"))):
             # A record that does not exist and a change asked for: the name is the record
-            # to be created, and the control is the list page's own "New".
+            # to be created (or the customer it is for), and the control is the list
+            # page's own "New".
             return self._resolve_one(Deliverable(kind="handoff", entity=d.entity, action="New"),
                                      index)
         if found is None:

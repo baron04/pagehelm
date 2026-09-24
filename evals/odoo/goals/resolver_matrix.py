@@ -450,6 +450,9 @@ case("h-new-quotation", "sale.order", "handoff", "create", handoff("sale.order",
      page={"url": r"^/odoo/sales$", "highlight": "New"})
 case("h-new-named", "sale.order", "handoff", "create", handoff("sale.order", "Test Quote", "New"),
      page={"url": r"^/odoo/sales$", "highlight": "New"})
+case("h-new-for-a-customer", "account.move", "handoff", "create",
+     handoff("account.move", "Azure Interior", "New"),
+     page={"url": r"^/odoo/customer-invoices$", "highlight": "New"})
 case("h-field", "sale.order", "handoff", "field", handoff("sale.order", "S00002", "Expiration"),
      page={"url": r"^/odoo/sales/2$", "highlight": "Expiration"})
 

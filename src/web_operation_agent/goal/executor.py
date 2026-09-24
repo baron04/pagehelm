@@ -51,6 +51,10 @@ def _norm(text: str) -> str:
                    ).replace("&amp;", "&")
 
 
+def _tokens(text: str) -> set[str]:
+    return {t for t in re.split(r"[^0-9a-z\u3400-\u9fff]+", (text or "").casefold()) if t}
+
+
 def _path_of(url: str) -> str:
     return urlsplit(url).path or "/"
 
@@ -480,6 +484,12 @@ class GoalTurnExecutor:
         if element is None:
             element = next((e for e in candidates
                             if wanted and _norm(e.name).startswith(wanted)), None)
+        if element is None:
+            # The form labels a field by fewer words than the index does ("Bill Date"
+            # for Invoice/Bill Date): a control whose words are all in the name asked.
+            asked = _tokens(control)
+            element = next((e for e in candidates
+                            if e.name and _tokens(e.name) and _tokens(e.name) <= asked), None)
         if element is None:
             return ""
         receipt = self._dispatch(s, "highlight", {"ref": element.ref, "epoch": s.obs.epoch})
