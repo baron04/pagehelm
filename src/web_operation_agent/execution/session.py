@@ -36,8 +36,6 @@ from ..transport.browser import BrowserExecutor
 from ..business.runtime import (BUSINESS_SKILL_MATCHER_VERSION, BusinessSkill,
                                BusinessSkillSelection, FormDraft, BusinessToolRuntime)
 from ..business.forms import ApplicationFormPort, ApplicationFormTools
-from ..business.entities import DISCOVER_ENTITIES_TOOL, RESOLVE_RECORD_REFERENCE_TOOL
-from ..business.page_entries import FIND_PAGE_ENTRIES_TOOL
 from ..business.errors import BusinessToolPermissionError
 from ..business.text import trigger_requests_action
 from ..planning.contract import (ContractPlanner, PlanningFailed, _segment_from_template,
@@ -70,8 +68,7 @@ from .target import (MAX_TARGET_DECLARATIONS, TargetState, describe_target, pars
                      required_page_controls, required_page_effects, unmet_conditions)
 from ..business.writes import PRE_DISPATCH_ERRORS, WatchState, WriteWatch
 from .prompts import (AGENT_SYSTEM, SCOPE_FIRST_SYSTEM, TOOL_SCHEMAS, _CAPABILITY_QUESTION,
-                      _NAVIGATION_EXTRA_GOAL, _NAVIGATION_ONLY, _PAGE_LOCATION_FACT,
-                      _PAGE_LOCATION_ONLY, _PLAN_PREAMBLE,
+                      _NAVIGATION_EXTRA_GOAL, _NAVIGATION_ONLY, _PLAN_PREAMBLE,
                       _REFERENCE_FOLLOWUP, _assistant_call, _tool_result, _trim)
 from ..schemas import (BROWSER_ACTIONS, ActionReceipt, ControlPlan, OperationContract,
                        PageObservation, digest, empty_contract)
@@ -470,27 +467,6 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
             not skill.read_only and skill.skill_id in selection.trigger_matches
             and any(trigger_requests_action(trigger, task.prompt) for trigger in skill.triggers)
             for skill in selection.skills)
-        # A fixed, conservative surface chosen before the first model call. This is a
-        # latency optimization, not an authorization mode or an intent classifier for
-        # arbitrary requests. Compound, factual and unrecognised goals keep all tools.
-        location_goal = continuation_prompt if clarification_context_used else task.prompt
-        page_read_tools = {DISCOVER_ENTITIES_TOOL, RESOLVE_RECORD_REFERENCE_TOOL,
-                           FIND_PAGE_ENTRIES_TOOL}
-        actor_read_tools = ({schema["function"]["name"] for schema in
-                             business_tools.available_schemas(
-                                 allow_mutations=False,
-                                 actor_scopes=(principal.scopes if principal else None))}
-                            if business_tools is not None else set())
-        self._page_location_only = bool(
-            business_tools is not None
-            and page_read_tools <= actor_read_tools
-            and not self._explicit_mutation_intent
-            and _PAGE_LOCATION_ONLY.fullmatch(location_goal)
-            and not _NAVIGATION_EXTRA_GOAL.search(location_goal)
-            and not _PAGE_LOCATION_FACT.search(location_goal))
-        if self._page_location_only:
-            self.ledger.append("tool_surface_mode", mode="page_location_only",
-                               retained_business_tools=sorted(page_read_tools))
         self._loaded_business_skill_ids: set[str] = set()
         self._auto_loaded_business_skill_ids: set[str] = set()
         if (self.deterministic_read_navigation and self._navigation_only

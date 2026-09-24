@@ -90,7 +90,7 @@ class ContactsEntityReadContractTests(unittest.TestCase):
         self.assertEqual(detail.content["candidates"][0]["part_matches"][0]["label"],
                          "Email")
 
-    def test_rest_adapter_uses_the_same_page_location_surface(self):
+    def test_rest_adapter_keeps_page_and_data_reads_for_location_requests(self):
         adapter = MinimalContactsAdapter("http://127.0.0.1:1", api_token="delegated")
         with tempfile.TemporaryDirectory() as tmp:
             session = ServerAgentSession(
@@ -100,11 +100,9 @@ class ContactsEntityReadContractTests(unittest.TestCase):
                 ledger=SessionLedger(Path(tmp) / "audit.jsonl", "contacts-location"),
                 business_tools=adapter.business_tools)
             names = {schema["function"]["name"] for schema in session.tool_schemas()}
-            self.assertTrue(session._page_location_only)
             self.assertTrue({"find_page_entries", "resolve_record_reference",
-                             "discover_entities"} <= names)
-            self.assertNotIn("query_entity_records", names)
-            self.assertNotIn("list_contacts", names)
+                             "discover_entities", "query_entity_records",
+                             "list_contacts"} <= names)
 
     def test_a_rest_backed_test_adapter_can_supply_the_same_exact_sum_contract(self):
         class RestMetricPort(_ContactsEntityReadPort):

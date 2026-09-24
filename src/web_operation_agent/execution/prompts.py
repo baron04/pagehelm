@@ -40,10 +40,6 @@ _PAGE_LOCATION_ONLY = re.compile(
     r"[^.!?]{1,160}\s*[?]?\s*$",
     re.I,
 )
-_PAGE_LOCATION_FACT = re.compile(
-    r"(?:是谁|是什么|有多少|多少钱|几(?:个|张|笔|件)|总额|合计|"
-    r"\b(?:how\s+many|how\s+much|who\s+is|what\s+is)\b)", re.I)
-
 _NAVIGATION_ONLY = re.compile(
     r"^\s*(?:(?:请(?:帮我)?|帮我)\s*)?(?:打开|进入|前往|跳转到|跳转至)\s*"
     r"[^，。！？,!?]{1,200}\s*[。.!！]?\s*$|"
