@@ -36,19 +36,28 @@ A request that asks several things gets one deliverable per thing, in the order 
 
 
 def understand(chat, *, prompt: str, index: ApplicationIndex, run_id: str,
-               timeout_s: float | None = None, cancelled=None,
-               today: str = "") -> tuple[GoalSpec, dict]:
+               timeout_s: float | None = None, cancelled=None, today: str = "",
+               previous: GoalSpec | None = None,
+               problems: tuple[str, ...] = ()) -> tuple[GoalSpec, dict]:
     """Ask once. Returns the parsed declaration and a bounded audit projection.
 
     `today` is the application's current date, so that a month or day the person says
     without a year is declared in the right year; it sits after the index, whose cached
-    prefix it must not break.
+    prefix it must not break. With `previous` and `problems`, this is the one repair the
+    turn allows: the first declaration and what the resolver found wrong with it (a
+    field the entity does not have, several records a description matched) are shown,
+    and the model declares again.
     """
+    tail = ""
+    if previous is not None and problems:
+        tail = ("\n\nYOUR DECLARATION\n" + json.dumps(previous.to_json(), ensure_ascii=False)
+                + "\n\nPROBLEMS\n" + "\n".join(f"- {p}" for p in problems[:4])
+                + "\n\nDeclare again, correcting these and keeping what was right.")
     messages = [
         {"role": "system", "content": UNDERSTAND_SYSTEM},
         {"role": "user", "content": ("APPLICATION INDEX\n" + index.render()
                                      + (f"\n\nTODAY\n{today}" if today else "")
-                                     + "\n\nREQUEST\n" + prompt.strip())},
+                                     + "\n\nREQUEST\n" + prompt.strip() + tail)},
     ]
     kwargs = {"max_tokens": 1_500, "timeout_s": timeout_s}
     attempts = 0
@@ -64,10 +73,12 @@ def understand(chat, *, prompt: str, index: ApplicationIndex, run_id: str,
             spec = GoalSpec.from_json(payload)
             break
         except (ValueError, ProviderError) as exc:
-            # One more try: a small model now and then answers in prose, returns a
-            # malformed object, or the provider drops the call. A second failure ends it.
-            if attempts >= 2 or (isinstance(exc, ProviderError)
-                                 and not getattr(exc, "retryable", True)):
+            # One more try: a small model now and then answers in prose or returns a
+            # malformed object; a provider that drops the call gets two more tries. A
+            # failure after that ends it.
+            limit = 3 if isinstance(exc, ProviderError) else 2
+            if attempts >= limit or (isinstance(exc, ProviderError)
+                                     and not getattr(exc, "retryable", True)):
                 raise
     return spec, {"source": source, "deliverables": len(spec.deliverables),
                   "kinds": [d.kind for d in spec.deliverables],

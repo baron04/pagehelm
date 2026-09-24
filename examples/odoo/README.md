@@ -453,7 +453,7 @@ problem with the candidates, and `sort` picks the first of an ordered match ("th
 one"). On a line entity, a condition on the link to the owner whose value the link cannot
 find (an invoice number on order lines, "Move" for the journal entry, an amount or a date
 that describes the order) is rewritten onto the owner found by that value, on that owner's
-own line entity. A bare number as search words is the first money field the pages show.
+own line entity. A bare number as search words is the record's total, or the first money field the pages show that some record carries. A problem the declarer could fix carries a `repair` hint on the resolved deliverable (the entity's field labels, the page's filter labels, the records a description matched); the core shows it to the model for its one second declaration.
 
 The zero-model matrix (`python -m evals.odoo.goals.resolver_matrix --credentials
 .private/odoo-reader`) resolves 184 hand-written declarations against the reference fixture

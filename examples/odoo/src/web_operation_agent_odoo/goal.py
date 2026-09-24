@@ -96,6 +96,13 @@ _RANGE = re.compile(r"^(\d{4}-\d{2}-\d{2})\s*(?:\.\.|~|to|至|到)\s*(\d{4}-\d{2
 
 
 
+def _fields_of(index: ApplicationIndex, model: str) -> str:
+    entity = index.entity(model) if model else None
+    if entity is None:
+        return ""
+    return ", ".join(f.label for f in entity.fields[:20])
+
+
 def _describes_record(d: Deliverable) -> bool:
     """The deliverable carries conditions that can pick a record out without its name."""
     return bool((d.metric is not None and d.metric.filters) or d.page.filters_on
@@ -621,7 +628,9 @@ class OdooGoalPort:
         if d.kind == "page" and entity is None and d.page.key:
             return self._list_page(d, index)
         if entity is None:
-            return Resolved(kind=d.kind, problem="the entity named is not in the index")
+            return Resolved(kind=d.kind, problem="the entity named is not in the index",
+                            repair=("entity must be one of the index's entity keys: "
+                                    + ", ".join(e.key for e in index.entities[:30])))
         if not d.record and d.kind == "handoff" and not described:
             return self._creation(d, entity, index)
         if not d.record and not described:
@@ -657,7 +666,11 @@ class OdooGoalPort:
             # exactly one such entity holds it, and follow the link.
             rehomed = self._rehome(entity.key, d.record, index)
             if rehomed is None:
-                return Resolved(kind=d.kind, problem=f"no {entity.label} matches {d.record!r}")
+                return Resolved(kind=d.kind, problem=f"no {entity.label} matches {d.record!r}",
+                                repair=(f"no {entity.label} is named {d.record!r}; if the person "
+                                        "described the record rather than naming it, leave "
+                                        "record empty and put the description in "
+                                        "metric.filters (customer, amount, status, date)"))
             found, via = rehomed
             if d.via:
                 via = d.via
@@ -818,7 +831,13 @@ class OdooGoalPort:
             if lines is not None:
                 return lines
             return Resolved(kind="fact",
-                            problem="none of the fields asked for exist on this record")
+                            problem="none of the fields asked for exist on this record",
+                            repair=(f"{meta.label} has no field named "
+                                    + ", ".join(repr(m) for m in missing)
+                                    + "; its fields are: " + (_fields_of(self.index(), model)
+                                                              or ", ".join(
+                                        str(i.get("string") or f)
+                                        for f, i in list(meta.fields.items())[:30]))))
         read_fields = list(fields)
         if any(meta.fields[f].get("type") == "monetary" for f in fields) \
                 and "currency_id" in meta.fields:
@@ -1127,7 +1146,10 @@ class OdooGoalPort:
                 continue
             resolved = item.domain_at(today) if item is not None else None
             if resolved is None or "uid" in str(resolved):
-                return Resolved(kind=d.kind, problem=f"filter {name!r} is not usable here")
+                return Resolved(kind=d.kind, problem=f"filter {name!r} is not usable here",
+                                repair=(f"{name!r} is not a filter of this page; its filters "
+                                        "are: " + ", ".join(f.label for f in page_filters[:20])
+                                        + "; a condition on a field goes in metric.filters"))
             domain += through(resolved)
             described.append(item.label)
         for name in d.page.filters_off:
@@ -1175,7 +1197,15 @@ class OdooGoalPort:
             clause, text = self._condition(meta, condition.field, condition.values,
                                            op=condition.op, today=today)
             if clause is None:
-                return Resolved(kind=d.kind, problem=text)
+                if meta.field_by_label(condition.field) is None:
+                    repair = (f"{condition.field!r} is not a field of {meta.label}; its fields "
+                              "are: " + (_fields_of(index, model) or ", ".join(
+                                  str(i.get("string") or f) for f, i in list(meta.fields.items())[:30])))
+                else:
+                    repair = (f"the value {' / '.join(condition.values)!r} cannot be used on "
+                              f"{condition.field}: {text}; use a choice label from the index, "
+                              "a number, or a date (2026-09-12, 2026-09, last month)")
+                return Resolved(kind=d.kind, problem=text, repair=repair)
             domain += clause
             described.append(text)
         if search and d.page.search:
@@ -1227,10 +1257,17 @@ class OdooGoalPort:
             # date): the conditions alone.
             return self._locate(replace(d, page=replace(d.page, search="")), index)
         if not rows:
-            return Resolved(kind=d.kind, problem=f"no {meta.label} matches {subject}")
+            return Resolved(kind=d.kind, problem=f"no {meta.label} matches {subject}",
+                            repair=(f"no {meta.label} matches {subject}; re-read the request: "
+                                    "another page scope (invoices versus bills, quotations "
+                                    "versus orders), field or value may be meant"))
         if len(rows) > 1:
+            names = tuple(str(r.get("display_name") or "") for r in rows)
             return Resolved(kind=d.kind, problem=f"{subject} matches several {meta.label} records",
-                            candidates=tuple(str(r.get("display_name") or "") for r in rows))
+                            candidates=names,
+                            repair=(f"{subject} matches several records ({', '.join(names)}); "
+                                    "add a condition the request gives (amount, date, status, "
+                                    "customer) or sort with limit 1 to pick one"))
         return model, int(rows[0]["id"]), str(rows[0].get("display_name") or "")
 
     # -- aggregates -------------------------------------------------------------------

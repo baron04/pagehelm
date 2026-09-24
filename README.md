@@ -45,7 +45,11 @@ agent.
   for the entity, else its widest page. A list that finds exactly one record binds a
   later deliverable of the same turn that names none. The declaration is made knowing the
   application's current date, so a month or day said without a year lands in the right
-  year. Field labels match by whole words
+  year. When the resolver finds something a different declaration would fix (a field the
+  entity does not have, a description that matched several records, a change asked for
+  with nothing to point at), it says so in the index's terms and the model declares once
+  more; the second declaration is taken only when fewer deliverables stay unresolved, and
+  there is no third. Field labels match by whole words
   or by the field's own name, never by substring. A view the page lacks is stated in the
   reply while the page opens in its own view. A condition on an unstored computed field
   is refused rather than silently ignored, unless its value names one of the page's own

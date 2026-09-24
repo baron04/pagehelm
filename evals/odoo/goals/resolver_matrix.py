@@ -491,11 +491,11 @@ case("h-described-in-description-and-record", "sale.order", "handoff", "describe
      page={"url": r"^/odoo/sales/19$", "highlight": "Confirm"})
 case("h-described-record-not-found-is-refused", "sale.order", "handoff", "described",
      handoff("sale.order", "the quotation sent to Joel Willis", "Confirm"),
-     problem=r"no Sales Order matches")
+     problem=r"no Sales Order matches", repair=r"metric\.filters")
 case("h-described-ambiguous", "sale.order", "handoff", "described",
      described("handoff", "sale.order", [F("Customer", ["Gemini Furniture"])],
                page="Sales Orders", action="Confirm"),
-     problem=r"several", candidates_min=2)
+     problem=r"several", candidates_min=2, repair=r"S000\d+.*add a condition")
 case("h-described-none", "sale.order", "handoff", "described",
      described("handoff", "sale.order", [F("Total", ["999"])], page="Quotations", action="Confirm"),
      problem=r"no Sales Order matches")
@@ -543,7 +543,8 @@ case("f-field-by-whole-words", "account.move", "fact", "none",
      fact("account.move", "BILL/2025/06/0001", ["Invoice Date"]),
      facts={"Invoice/Bill Date": r"^2025-06-17"})
 case("f-field-trailing-word-is-not-a-field", "account.move", "fact", "none",
-     fact("account.move", "BILL/2025/06/0001", ["Validity Date"]), problem=r"none of the fields")
+     fact("account.move", "BILL/2025/06/0001", ["Validity Date"]), problem=r"none of the fields",
+     repair=r"its fields are: .*Partner")
 case("l-filter-on-and-off", "product.template", "list", "page-filter",
      lst("product.template", page="Products") | {"deliverables": [
          {"kind": "list", "entity": "product.template",
@@ -655,6 +656,13 @@ case("h-locate-drops-words-that-match-nothing", "sale.order", "handoff", "descri
       "write_intent": True},
      page={"url": r"^/odoo/orders/11$"})
 
+case("a-unknown-field-says-which-exist", "sale.order", "aggregate", "none",
+     agg("sale.order", "Quotations", filters=[F("Validity", ["2026-10"])]),
+     problem=r"no field", repair=r"is not a field of Sales Order; its fields are: .*Customer")
+case("a-unknown-page-filter-lists-the-filters", "sale.order", "aggregate", "none",
+     agg("sale.order", "Sales Orders", page_filters=["Signed"]),
+     problem=r"not usable", repair=r"its filters are: .*My Orders")
+
 
 def _check(expect: dict, resolved) -> list[str]:
     errors = []
@@ -666,6 +674,8 @@ def _check(expect: dict, resolved) -> list[str]:
         errors.append(f"unexpected problem {d.problem!r}")
     if "candidates_min" in expect and len(d.candidates) < expect["candidates_min"]:
         errors.append(f"candidates {d.candidates}")
+    if "repair" in expect and not re.search(expect["repair"], d.repair or ""):
+        errors.append(f"repair {d.repair!r} !~ {expect['repair']!r}")
     for label, pattern in expect.get("facts", {}).items():
         found = next((f for f in d.facts if f.label == label), None)
         if found is None:

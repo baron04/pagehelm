@@ -32,7 +32,7 @@ from ..state.conversation import ConversationState
 from ..state.identity import PrincipalError
 from ..state.ledger import SessionLedger
 from ..transport.browser import RemoteBrowserClient, TransportError, TurnCancelled
-from .ports import GoalPort, PagePlan, Resolved
+from .ports import GoalPort, PagePlan, Resolution, Resolved
 from .spec import GoalSpec
 from .understand import understand
 
@@ -269,13 +269,36 @@ class GoalTurnExecutor:
                              ("This request is outside what the assistant can do."
                               + (f" ({why})" if why else "")))
         s.step += 1
-        resolution = self.goal_port.resolve(
-            spec, context=s.approvals.context(s.step, "resolve"),
-            current_path=_path_of(s.obs.url))
-        s.ledger.append("goal_resolved", step=s.step,
-                        kinds=[d.kind for d in resolution.deliverables],
-                        problems=[d.problem for d in resolution.deliverables],
-                        reads=[list(r) for r in resolution.reads])
+        resolution = self._resolve(s, spec)
+        problems = _repairable(spec, resolution)
+        if problems:
+            # The one repair: the resolver found something a different declaration
+            # would fix and says what; the model declares once more with that in
+            # front of it. The second declaration replaces the first only when fewer
+            # deliverables stay unresolved, so a repair never makes the turn worse.
+            s.ledger.append("goal_repair_requested", step=s.step, problems=list(problems))
+            s.step += 1
+            elapsed = time.time() - s.started_at
+            try:
+                repaired, projection = understand(
+                    chat, prompt=s.message.text, index=index, run_id=s.run_id,
+                    timeout_s=max(1.0, self.config.wall_budget_s - elapsed),
+                    cancelled=s.cancelled, today=str(today() or "") if callable(today) else "",
+                    previous=spec, problems=problems)
+            except (ValueError, ProviderError) as exc:
+                s.ledger.append("goal_repair_failed", step=s.step, detail=str(exc)[:200])
+                repaired = None
+            if repaired is not None and repaired.deliverables:
+                s.ledger.append("goal_declared", step=s.step, spec=repaired.to_json(),
+                                attempt=2, **projection)
+                s.step += 1
+                second = self._resolve(s, repaired)
+                accepted = _unresolved(repaired, second) < _unresolved(spec, resolution)
+                s.ledger.append("goal_repaired", step=s.step, accepted=accepted,
+                                unresolved_before=_unresolved(spec, resolution),
+                                unresolved_after=_unresolved(repaired, second))
+                if accepted:
+                    spec, resolution = repaired, second
         outcomes: list[_PageOutcome | None] = []
         for resolved in resolution.deliverables:
             if resolved.page is None:
@@ -289,6 +312,16 @@ class GoalTurnExecutor:
             achieved = any(_achieved(r, o) for r, o in zip(resolution.deliverables, outcomes))
             s.terminal_reason = "agent_finished" if achieved else "agent_refused"
         return self._reply(s, resolution.deliverables, outcomes)
+
+    def _resolve(self, s: _TurnState, spec: GoalSpec) -> Resolution:
+        resolution = self.goal_port.resolve(
+            spec, context=s.approvals.context(s.step, "resolve"),
+            current_path=_path_of(s.obs.url))
+        s.ledger.append("goal_resolved", step=s.step,
+                        kinds=[d.kind for d in resolution.deliverables],
+                        problems=[d.problem for d in resolution.deliverables],
+                        reads=[list(r) for r in resolution.reads])
+        return resolution
 
     # -- pages ------------------------------------------------------------------------
     def _dispatch(self, s: _TurnState, action: str, args: dict, *, navigating: bool = False):
@@ -597,6 +630,26 @@ def _achieved(resolved: Resolved, outcome: _PageOutcome | None) -> bool:
     if outcome is not None:
         return outcome.reached and not outcome.unmet
     return False
+
+
+def _unresolved(spec: GoalSpec, resolution: Resolution) -> int:
+    """Deliverables that came to nothing, plus a change asked for with nothing to point at."""
+    count = sum(1 for d in resolution.deliverables
+                if d.problem and not (d.facts or d.aggregate or d.page))
+    if spec.write_intent and not any(d.kind == "handoff" for d in spec.deliverables):
+        count += 1
+    return count
+
+
+def _repairable(spec: GoalSpec, resolution: Resolution) -> tuple[str, ...]:
+    """What to tell the model before its one second declaration; empty when nothing
+    about the declaration, as opposed to the data, is what failed."""
+    problems = [d.repair for d in resolution.deliverables if d.repair]
+    if spec.write_intent and not any(d.kind == "handoff" for d in spec.deliverables):
+        problems.append("the person asks for a change (write_intent is true) but no "
+                        "deliverable is a handoff: declare a handoff on the record meant, "
+                        "with action set to the button or the field label to change")
+    return tuple(dict.fromkeys(problems))
 
 
 def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool) -> list[str]:
