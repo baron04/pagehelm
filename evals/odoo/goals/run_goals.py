@@ -24,6 +24,7 @@ from web_operation_agent_odoo.demo.demo import OdooDemoConfig, run_demo
 ROOT = Path(__file__).resolve().parents[3]
 TASKSETS = {
     "v2": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v2.json", "d01fb4e3fa3d92b7e6916f3d36d6df35961a32442e7d9f2212c4c5eee152b57b"),
+    "v4": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v4-holdout.json", "5fe83d925961164375d49ee7f9fe72d696f4370dae2b58be8c1a3dd7161e32e9"),
 }
 
 
@@ -128,6 +129,7 @@ def main() -> int:
     parser.add_argument("--container", default="woa-odoo-reference-db-1")
     parser.add_argument("--database", default="woa_reference")
     parser.add_argument("--repeats", type=int, default=1)
+    parser.add_argument("--version", choices=tuple(TASKSETS), default="v2")
     parser.add_argument("--task", action="append", default=[])
     parser.add_argument("--lane", default="1/1")
     arguments = parser.parse_args()
@@ -136,7 +138,7 @@ def main() -> int:
         if "=" in line and not line.lstrip().startswith("#"):
             key, value = line.split("=", 1)
             env[key.strip()] = value.strip()
-    doc = load_tasks()
+    doc = load_tasks(arguments.version)
     lane, lanes = (int(part) for part in arguments.lane.split("/"))
     arguments.output.mkdir(parents=True, exist_ok=True)
     (arguments.output / "attempts").mkdir(exist_ok=True)

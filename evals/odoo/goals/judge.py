@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 _NOT_FINISHED = re.compile(r"未完成|没有全部完成|无法|不能|做不到|未能|不支持|没有权限|not done|"
                            r"cannot|could not|unable|not supported|does not have permission",
                            re.I)
+_UNAVAILABLE = re.compile(r"没找到|没有找到|未找到|找不到|不存在|没有这|未接入|没接入|无权|"
+                          r"not found|does not exist|not connected|no access", re.I)
 
 
 def _norm(text: str) -> str:
@@ -54,6 +56,9 @@ def _check(check: dict, probe: dict, visited: list[str], answer: str = "") -> bo
                                    for facet in probe.get("facets") or []))
     if "path_regex" in check:
         results.append(re.search(check["path_regex"], probe.get("path") or "") is not None)
+    if "highlight_regex" in check:
+        results.append(any(re.search(check["highlight_regex"], label or "") is not None
+                           for label in probe.get("highlighted_controls") or []))
     if "visited_path_regex" in check:
         results.append(any(re.search(check["visited_path_regex"], path)
                            for path in visited + [probe.get("path") or ""]))
@@ -81,7 +86,9 @@ def score(task: dict, *, probe: dict, visited: list[str], answer: str,
     """Score one attempt from what the judge can see for itself."""
     parts = task["parts"]
     achieved = [_check(part["check"], probe, visited, answer) for part in parts]
-    claimed = bool(finished) and not _NOT_FINISHED.search(answer or "")
+    impossible_only = all(part["check"].get("impossible") for part in parts)
+    claimed = (bool(finished) and not _NOT_FINISHED.search(answer or "")
+               and not (impossible_only and _UNAVAILABLE.search(answer or "")))
     false_claims = [index + 1 for index, done in enumerate(achieved) if claimed and not done]
     possible = [done for done, part in zip(achieved, parts)
                 if not part["check"].get("impossible")]

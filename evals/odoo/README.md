@@ -6,6 +6,16 @@ This directory holds the evaluation apparatus for the Odoo reference integration
 
 The machine protocol is `p74-odoo-v2`. The development batches run under `p74-odoo-v1` are archived in `.workbench` with their recomputed reports; a v2 reader does not read v1 ledgers. The held-out set is sealed and has not been run.
 
+The separate one-sentence Chinese goal holdout is
+[`tasksets/odoo-goals-zh-v4-holdout.json`](tasksets/odoo-goals-zh-v4-holdout.json):
+116 reachable goals in 58 entity/delivery/condition cells (two per cell) and 15
+honest-limitation goals. Its digest is recorded in the adjacent seal and pinned by
+`evals.odoo.goals.run_goals`. The relative-time truth is based on 2026-09-24 in
+Asia/Shanghai; an evaluation run must hold the application's clock to that date.
+The handoff oracle requires the final page, the named live control's outline, and an
+unchanged database fingerprint. Select it with `--version v4` when running
+`python -m evals.odoo.goals.run_goals`. The holdout has not been model-run.
+
 ## Arms and capabilities
 
 | Arm | Capability | Used for |

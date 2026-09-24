@@ -14,7 +14,21 @@ FINAL_STATE_PROBE = """() => {
   }
   const facets = [...document.querySelectorAll('.o_searchview_facet')].map(text);
   const dialog = [...document.querySelectorAll('.modal-body')].map(text).join(' | ');
+  const highlighted = [...document.querySelectorAll('[style*="outline"]')]
+    .filter(e => e.style.getPropertyPriority('outline') === 'important' &&
+                 /highlight/i.test(e.style.getPropertyValue('outline')))
+    .map(e => {
+      const labelledBy = (e.getAttribute('aria-labelledby') || '').split(/\\s+/)
+        .map(id => document.getElementById(id)).filter(Boolean).map(text).join(' ');
+      const fieldId = e.id || e.querySelector('[id]')?.id || '';
+      const forLabel = fieldId ? document.querySelector(`label[for="${CSS.escape(fieldId)}"]`) : null;
+      const wrapLabel = e.closest('.o_wrap_field')?.querySelector('.o_form_label');
+      return [labelledBy, forLabel && text(forLabel), wrapLabel && text(wrapLabel),
+              e.getAttribute('aria-label'),
+              e.getAttribute('title'), text(e)].filter(Boolean).join(' | ');
+    }).filter(Boolean);
   return {path: location.pathname, query: location.search,
           breadcrumb: crumbs.join(' / '), breadcrumb_last: crumbs.length ? crumbs[crumbs.length - 1] : '',
-          active_tabs: tabs, view_type: view, facets: facets, dialog: dialog};
+          active_tabs: tabs, view_type: view, facets: facets, dialog: dialog,
+          highlighted_controls: highlighted};
 }"""
