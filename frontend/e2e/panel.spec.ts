@@ -154,6 +154,8 @@ test.describe('a confirmation', () => {
     const panel = await open(snapshot())
     await panel.raiseApproval()
     await expect(panel.page.locator('.woa-approval')).toContainText('S00002')
+    // A change is guarded: the write card's title carries the shield.
+    await expect(panel.page.locator('.woa-approval h2 svg.lucide-shield-alert')).toHaveCount(1)
     expect((await panel.active()).text).toBe(labels.deny)
     // Tab is trapped between the two answers; nothing else is reachable from the card.
     await panel.page.keyboard.press('Tab')
@@ -173,6 +175,9 @@ test.describe('a confirmation', () => {
     const card = panel.page.locator('.woa-approval')
     await expect(card).toHaveAttribute('data-kind', 'navigation')
     await expect(card).toContainText(labels.navigationTitle)
+    // A move is a route to another page, not a guarded change.
+    await expect(card.locator('h2 svg.lucide-route')).toHaveCount(1)
+    await expect(card.locator('h2 svg.lucide-shield-alert')).toHaveCount(0)
     await expect(card).toContainText(labels.navigationHint)
     await expect(card).toContainText('/odoo/customers/13')
     await expect(panel.page.getByTestId('woa-deny')).toHaveCount(0)
@@ -244,6 +249,21 @@ test.describe('a confirmation', () => {
       .toBeVisible()
     await expect(panel.page.locator('.woa-approval__blocked[data-expired]')).toContainText('已超时')
     await expect(composer, 'the person can type again').toBeEnabled()
+  })
+
+  test('the time left shows only once it is short', async ({open}) => {
+    // A clock ticking from the first second pressed a person who had minutes. It shows for
+    // the last one.
+    const panel = await open(snapshot())
+    await panel.raiseApproval()
+    await expect(panel.page.locator('.woa-approval__time')).toHaveCount(0)
+    await panel.set({pendingApproval: {...PENDING, expires_at: Date.now() + 90_000}})
+    await panel.page.waitForTimeout(1200)
+    await expect(panel.page.locator('.woa-approval__time')).toHaveCount(0)
+    await panel.set({pendingApproval: {...PENDING, expires_at: Date.now() + 50_000}})
+    await expect(panel.page.locator('.woa-approval__time')).toContainText(labels.approvalValidFor)
+    await expect(panel.page.locator('.woa-approval__time')).toHaveAttribute('data-urgent', 'true')
+    expect(panel.errors).toEqual([])
   })
 
   test('one that is not visible refuses and says why', async ({open}) => {
@@ -605,6 +625,33 @@ test.describe('the work process', () => {
     await expect(panel.page.locator('.woa-step')).toHaveCount(2)
     expect(panel.errors).toEqual([])
   })
+  test('a turn\'s time leaves out the time it waited for the person to confirm', async ({open}) => {
+    // Nine seconds of work around a minute and a half spent waiting on the confirmation card:
+    // the time shown is the assistant's, not the person's.
+    const line = (id: string, second: number, kind: string, text: string,
+                  extra: Record<string, string> = {}) =>
+      entry(id, kind, text, {turn_id: 't1', at: 1_757_000_000_000 + second * 1000, ...extra})
+    const panel = await open(snapshot({entries: [
+      line('g1', 0, 'goal', '确认报价单 S00002'),
+      line('g2', 4, 'progress', '正在准备这次更改'),
+      line('g3', 5, 'approval', '需要确认后才能继续'),
+      line('g4', 95, 'progress', '已收到你的确认'),
+      line('g5', 99, 'result', '已确认。', {panel_state: 'success'}),
+    ]}))
+    await panel.page.locator('.woa-launcher').click()
+    await expect(panel.page.locator('.woa-work__summary')).toContainText(`${labels.elapsedPrefix} 9s`)
+
+    // Nobody answered: the wait runs to the end of the turn, and none of it counts.
+    await panel.set({entries: [
+      line('g1', 0, 'goal', '打开 Azure Interior'),
+      line('g2', 3, 'action', '已找到唯一客户 Azure Interior'),
+      line('g3', 3, 'approval', '需要确认后才能打开页面'),
+      line('g4', 303, 'result', '页面切换没有得到确认。', {panel_state: 'cancelled'}),
+    ]})
+    await expect(panel.page.locator('.woa-work__summary')).toContainText(`${labels.elapsedPrefix} 3s`)
+    expect(panel.errors).toEqual([])
+  })
+
   test('a running turn folds its steps into one live line, one press from the whole run', async ({open}) => {
     // While it runs, the person needs to tell working from stuck: what it is doing now, and
     // for how long. Every step in the flow grew a list that pushed the question off screen.
@@ -1621,8 +1668,8 @@ test.describe('U07', () => {
   for (const scheme of ['light', 'dark'] as const) {
     test(`the ${scheme} scheme follows the system and keeps text legible`, async ({open}) => {
       const text = ['.woa-user', '.woa-md', '#woa-composer-input', '.woa-composer__disclaimer',
-                    '.woa-approval__effect',
-                    '.woa-approval__label', '.woa-approval__fine',
+                    '.woa-approval h2', '.woa-approval__effect',
+                    '.woa-approval__targets li',
                     '[data-testid="woa-deny"]', '[data-testid="woa-approve"]']
       const panel = await open(conversation(), {colorScheme: scheme})
       const page = panel.page
@@ -1817,7 +1864,8 @@ test.describe('U07', () => {
     await panel.raiseApproval()
     const facts = await panel.page.evaluate(() => {
       const root = document.querySelector('#woa-assistant')!.shadowRoot!
-      const text = (id: string | null) => (id && root.getElementById(id)?.textContent) || ''
+      const text = (ids: string | null) => (ids ?? '').split(/\s+/)
+        .map(id => (id && root.getElementById(id)?.textContent) || '').join(' ')
       const card = root.querySelector('[role="alertdialog"]')!
       const input = root.querySelector('#woa-composer-input')!
       const thread = root.querySelector('.woa-thread')!
@@ -1838,6 +1886,8 @@ test.describe('U07', () => {
     expect(facts.input_label).toBe(labels.input)
     expect(facts.card_title).toContain(labels.approvalTitle)
     expect(facts.card_description).toContain('S00002')
+    // What the buttons mean is said to a screen reader even where it is not shown.
+    expect(facts.card_description).toContain(labels.approvalHint)
     expect(panel.errors).toEqual([])
   })
 })

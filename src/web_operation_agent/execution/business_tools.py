@@ -23,7 +23,10 @@ def business_tool(session, turn: "_Turn", call: dict, name: str, args: dict) -> 
         return session._reply(
             turn, call, "This deployment has not enabled approved business writes "
             "for this turn. The tool was not dispatched.")
-    operation_context = session._approvals.context(turn.step, name)
+    # A write waits on the person's approval first, so its context outlives that wait.
+    operation_context = session._approvals.context(
+        turn.step, name, hold_ms=(session._approvals.approval_hold_ms
+                                  if session.business_tools.is_mutation(name) else 0))
     operation_identity = (operation_context.audit_projection()
                           if operation_context is not None else {})
     if session.business_tools.is_mutation(name):

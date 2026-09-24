@@ -668,8 +668,8 @@ button.woa-step__line:focus-visible {
   border-radius: 50%;
   border: 1.6px solid var(--woa-line-strong);
   border-top-color: var(--woa-accent);
-  /* A calm pace: a spinner this small turning faster than once a second reads as urgency. */
-  animation: woa-spin 1.1s linear infinite;
+  /* A calm pace: a spinner this small turning much faster than this reads as urgency. */
+  animation: woa-spin 1.6s linear infinite;
 }
 @media (prefers-reduced-motion: reduce) {
   .woa-spinner { animation-duration: 3s; }
@@ -865,19 +865,19 @@ button.woa-step__line:focus-visible {
 }
 
 /* ─────────────────────────────────────────────── approval */
+/* A confirmation is the one moment a write can happen, so it keeps a frame nothing in an
+   answer can draw -- but a small one: a header line, what will happen, to what, and two
+   answers at its foot. In the conversation, as the last thing in the one box that scrolls,
+   so what led to it stays readable above it. */
 .woa-approval {
   position: relative;
-  /* In the conversation, not stacked on top of it: the card used to take up to 62% of the
-     window and squeeze the thread into a sliver with a scrollbar of its own, so a person
-     answering a confirmation could no longer read what led to it. One box scrolls now, and
-     the card is the last thing in it. */
-  margin: 6px 0 4px;
+  margin: 4px 0;
   border-radius: var(--woa-radius-card);
   background: var(--woa-surface-raised);
   /* A real border, not an inset shadow: an inset shadow is painted beneath the card's
      children, so the answers pinned to its foot covered the edge beside and below them. */
   border: 1px solid var(--woa-line-strong);
-  box-shadow: var(--woa-shadow-2);
+  box-shadow: var(--woa-shadow-1);
   overflow: hidden;
   animation: woa-rise var(--woa-motion-base) var(--woa-motion-easing);
 }
@@ -885,86 +885,81 @@ button.woa-step__line:focus-visible {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: none; }
 }
-/* The warning is carried by the shield, not by a stripe along the top. */
-.woa-approval__edge { display: none; }
-.woa-approval__inner { padding: 16px; }
+.woa-approval__inner { padding: 12px 14px; }
 
+/* The header is a caption, not a headline: the effect below it is what is being asked. */
 .woa-approval h2 {
-  margin: 0;
-  display: flex; align-items: center; gap: 8px;
-  font-size: var(--woa-font-size); font-weight: 600;
-  letter-spacing: -0.006em;
-}
-.woa-approval h2 > svg {
-  flex: none;
-  box-sizing: content-box;
-  padding: 5px;
-  border-radius: 50%;
+  margin: 0 0 6px;
+  display: flex; align-items: center; gap: 6px;
+  font-size: var(--woa-font-size-meta); font-weight: 500;
+  line-height: var(--woa-line-height);
   color: var(--woa-warning);
-  background: var(--woa-warning-soft);
 }
+.woa-approval h2 > svg { flex: none; }
 .woa-approval__time {
   margin-left: auto;
   display: inline-flex; align-items: center; gap: 4px;
-  padding: 2px 8px;
-  border-radius: var(--woa-radius-pill);
-  background: var(--woa-surface-muted);
-  font-weight: 500; font-size: var(--woa-font-size-meta);
+  font-weight: 400;
   color: var(--woa-ink-faint);
   font-variant-numeric: tabular-nums;
 }
-.woa-approval__time[data-urgent] { color: var(--woa-warning); background: var(--woa-warning-soft); }
+.woa-approval__time[data-urgent] { color: var(--woa-warning); }
 
-.woa-approval__label {
-  margin: 14px 0 6px;
-  font-size: var(--woa-font-size-meta);
-  color: var(--woa-ink-faint);
-}
 .woa-approval__effect {
   margin: 0;
-  font-size: var(--woa-font-size-title); font-weight: 600; line-height: var(--woa-line-height);
+  font-size: var(--woa-font-size); font-weight: 600; line-height: var(--woa-line-height);
   overflow-wrap: anywhere;
 }
+/* Record identifiers, not prose: a monospaced block is harder to pass a sentence off as. */
 .woa-approval__targets {
-  list-style: none; margin: 0; padding: 0;
-  display: flex; flex-direction: column; gap: 1px;
+  list-style: none;
+  margin: 8px 0 0; padding: 6px 10px;
   border-radius: var(--woa-radius-control);
-  overflow: hidden;
-  background: var(--woa-line);
+  background: var(--woa-surface-muted);
+  /* The dark theme's muted surface is within a shade of the card's; the hairline keeps the
+     record a block of its own in both. */
+  box-shadow: inset 0 0 0 1px var(--woa-line);
 }
-/* Record identifiers, not prose: a monospaced stack is harder to pass a sentence off as. */
 .woa-approval__targets li {
   font-family: var(--woa-mono-stack);
   font-size: var(--woa-font-size-meta);
+  line-height: var(--woa-line-height-code);
   letter-spacing: -0.01em;
-  padding: 8px 12px;
-  background: var(--woa-surface-muted);
+  color: var(--woa-ink-muted);
   overflow-wrap: anywhere;
 }
 .woa-approval__fine {
-  margin: 12px 0 0;
+  margin: 8px 0 0;
   font-size: var(--woa-font-size-meta); line-height: var(--woa-line-height);
   color: var(--woa-ink-faint);
 }
+/* Read to a screen reader, not shown: it restates what the two buttons already mean. */
+.woa-approval__fine[data-quiet] {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 .woa-approval__blocked {
-  margin: 12px 0 0;
-  display: flex; gap: 8px; align-items: flex-start;
+  margin: 8px 0 0;
+  display: flex; gap: 6px; align-items: flex-start;
   font-size: var(--woa-font-size-meta); line-height: var(--woa-line-height);
   color: var(--woa-warning);
 }
-.woa-approval__blocked svg { flex: none; margin-top: 1px; }
+.woa-approval__blocked svg { flex: none; margin-top: 2px; }
 
 .woa-approval__actions {
-  /* The two answers side by side, the same size: neither is the smaller, easier-to-miss one.
-     A card with one answer gives it the whole width. */
-  display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 8px;
-  /* When the card is short enough to scroll -- a narrow or zoomed window -- the two
-     answers stay pinned at its foot. Focusing the first one then has nothing to scroll
-     to, so the heading and the time left are not pushed out of view to reach it. */
+  display: flex; justify-content: flex-end; gap: 8px;
+  /* When the card is taller than the window can show -- a narrow or zoomed one -- the two
+     answers stay pinned at its foot. Focusing the first one then has nothing to scroll to,
+     so the header and the time left are not pushed out of view to reach it. */
   position: sticky; bottom: 0;
-  margin: 14px -16px -16px; padding: 12px 16px 16px;
+  margin: 4px -14px -12px; padding: 8px 14px 12px;
   background: var(--woa-surface-raised);
 }
+.woa-approval__actions .woa-btn { height: 32px; padding: 0 14px; }
 .woa-approval__spacer { display: none; }
 
 .woa-btn {
@@ -985,7 +980,13 @@ button.woa-step__line:focus-visible {
   color: var(--woa-accent-ink);
 }
 .woa-btn--primary:hover:not(:disabled) { background: var(--woa-accent-hover); }
-.woa-btn--ghost { background: var(--woa-surface-muted); color: var(--woa-ink); }
+/* A hairline as well as the fill: in the dark theme the muted fill is within a shade of the
+   card it sits on, and the button read as loose text. */
+.woa-btn--ghost {
+  background: var(--woa-surface-muted);
+  box-shadow: inset 0 0 0 1px var(--woa-line);
+  color: var(--woa-ink);
+}
 .woa-btn--ghost:hover:not(:disabled) { background: var(--woa-line); }
 .woa-btn:disabled { opacity: 0.42; }
 
@@ -1189,7 +1190,7 @@ button.woa-step__line:focus-visible {
 /* ─────────────────────────────────────────────── narrow and reduced motion */
 @media (max-width: 360px) {
   /* Stacked, with the safe answer last -- nearest the thumb. */
-  .woa-approval__actions { grid-auto-flow: row; }
+  .woa-approval__actions { flex-direction: column; align-items: stretch; }
   .woa-approval__actions > [data-testid='woa-deny'] { order: 1; }
 }
 

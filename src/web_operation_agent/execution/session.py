@@ -157,6 +157,8 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                  business_tools: BusinessToolRuntime | None = None,
                  business_mutation_approval=None,
                  navigation_confirmation=None,
+                 approval_hold_s: int = 0,
+                 navigation_hold_s: int = 0,
                  allow_clarification: bool = False,
                  allow_form_prefill: bool = False,
                  allow_page_facets: bool = False,
@@ -577,7 +579,8 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
             session_id=session_id, turn_id=turn_id,
             business_approval=business_mutation_approval,
             navigation_confirmation=navigation_confirmation,
-            cancelled=self._cancel_requested)
+            cancelled=self._cancel_requested,
+            approval_hold_s=approval_hold_s, navigation_hold_s=navigation_hold_s)
         self.contract: OperationContract = empty_contract(task.task_ref)
         self.contract_source = "none"
         self.bundle: EvidenceBundle | None = None

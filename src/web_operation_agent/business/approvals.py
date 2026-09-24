@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Callable
 from urllib.parse import urljoin, urlsplit
@@ -52,7 +54,8 @@ class ApprovalWatch:
     def __init__(self, *, ledger: SessionLedger, run_id: str,
                  principal: PrincipalContext | None, session_id: str, turn_id: str,
                  business_approval=None, navigation_confirmation=None,
-                 cancelled: Callable[[], bool]):
+                 cancelled: Callable[[], bool],
+                 approval_hold_s: int = 0, navigation_hold_s: int = 0):
         self.ledger = ledger
         self.run_id = run_id
         self.principal = principal
@@ -62,6 +65,13 @@ class ApprovalWatch:
         self.navigation_confirmation = navigation_confirmation
         self.cancelled = cancelled
         self.deadline_ms = 0
+        #: The longest a person may take over each kind of answer, and how long they have
+        #: taken this turn. Time spent waiting on a person is theirs, not the assistant's:
+        #: it extends the turn's deadline rather than spending it. Without that, a turn
+        #: budget of two minutes held a confirmation to whatever the model had left of it.
+        self.approval_hold_ms = approval_hold_s * 1000
+        self.navigation_hold_ms = navigation_hold_s * 1000
+        self.waited_ms = 0
         self.business_counts = {
             "approval_requested": 0,
             "approval_granted": 0,
@@ -84,8 +94,13 @@ class ApprovalWatch:
     def start_turn(self, deadline_ms: int) -> None:
         self.deadline_ms = deadline_ms
 
-    def context(self, step: int, tool: str) -> OperationContext | None:
-        """Bind a server tool call to the immutable principal and current turn."""
+    def context(self, step: int, tool: str, *, hold_ms: int = 0) -> OperationContext | None:
+        """Bind a server tool call to the immutable principal and current turn.
+
+        `hold_ms` is for an operation that will wait on a person first: its context outlives
+        the turn's present deadline by the longest that wait may take, since the wait moves
+        that deadline too. The principal's own expiry still bounds it.
+        """
         if self.principal is None:
             return None
         if not self.deadline_ms:
@@ -96,8 +111,20 @@ class ApprovalWatch:
             session_id=self.session_id,
             turn_id=self.turn_id,
             operation_id="op-" + hashlib.sha256(operation_seed).hexdigest()[:32],
-            deadline_ms=self.deadline_ms,
+            deadline_ms=self.deadline_ms + hold_ms,
         )
+
+    @contextmanager
+    def awaiting_person(self):
+        """Give the time a person takes to answer back to the turn."""
+        started = time.monotonic()
+        try:
+            yield
+        finally:
+            waited = int((time.monotonic() - started) * 1000)
+            self.waited_ms += waited
+            if self.deadline_ms:
+                self.deadline_ms += waited
 
     def confirm_form_handoff(self, draft: FormDraft, step: int) -> tuple[str, str]:
         """Ask before typing into a form the application saves by itself."""
@@ -112,11 +139,12 @@ class ApprovalWatch:
                            dispatched=False, side_effect_possible=False)
         if self.cancelled():
             return "user_cancelled", "the user stopped this task before the confirmation"
-        context = self.context(step, "form_handoff")
+        context = self.context(step, "form_handoff", hold_ms=self.approval_hold_ms)
         try:
-            grant = (self.business_approval(draft)
-                     if context is None
-                     else self.business_approval(draft, context=context))
+            with self.awaiting_person():
+                grant = (self.business_approval(draft)
+                         if context is None
+                         else self.business_approval(draft, context=context))
         except Exception as exc:
             self.ledger.append(
                 "form_handoff_approval_failed", step=step, draft=draft.redacted(),
@@ -166,9 +194,10 @@ class ApprovalWatch:
                 reason="user_cancelled",
                 detail="the user stopped this task before approval")
         try:
-            grant = (self.business_approval(proposal)
-                     if context is None
-                     else self.business_approval(proposal, context=context))
+            with self.awaiting_person():
+                grant = (self.business_approval(proposal)
+                         if context is None
+                         else self.business_approval(proposal, context=context))
         except Exception as exc:
             self.ledger.append(
                 "business_mutation_approval_failed", step=step,
@@ -277,8 +306,9 @@ class ApprovalWatch:
         if self.cancelled():
             return "user_cancelled", "the user stopped this task before the page switch"
         try:
-            grant = self.navigation_confirmation(
-                plan, context=self.context(step, "navigation"))
+            context = self.context(step, "navigation", hold_ms=self.navigation_hold_ms)
+            with self.awaiting_person():
+                grant = self.navigation_confirmation(plan, context=context)
         except Exception as exc:
             self.navigation_counts["not_confirmed"] += 1
             self.ledger.append("navigation_confirmation_failed", step=step, tool=action,

@@ -128,6 +128,9 @@ class AgentTurnConfig:
     no_progress_repeat_limit: int | None = 2
     plain_business_answer_min_page_actions: int | None = None
     approval_ttl_s: int = 120
+    #: A page switch waits longer than a write: leaving a page is reversible, and the person
+    #: may be finishing something on the page they are asked to leave.
+    navigation_approval_ttl_s: int = 300
     keep_observations: int = 3
     allow_application_entry: bool = False
     allow_business_mutations: bool = False
@@ -199,12 +202,14 @@ class AgentTurnConfig:
                 or not isinstance(self.require_identity, bool)):
             raise ValueError("turn policy flags must be booleans")
         for name in ("step_budget", "wall_budget_s", "approval_ttl_s",
-                     "keep_observations", "max_user_answer_chars"):
+                     "navigation_approval_ttl_s", "keep_observations",
+                     "max_user_answer_chars"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError(f"{name} must be a positive integer")
-        if self.approval_ttl_s > 600:
-            raise ValueError("approval_ttl_s cannot exceed 600 seconds")
+        for name in ("approval_ttl_s", "navigation_approval_ttl_s"):
+            if getattr(self, name) > 600:
+                raise ValueError(f"{name} cannot exceed 600 seconds")
         if self.max_user_answer_chars > panel_limits()["result_max_chars"]:
             raise ValueError("max_user_answer_chars cannot exceed "
                              f"{panel_limits()['result_max_chars']}")

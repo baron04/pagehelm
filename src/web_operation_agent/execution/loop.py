@@ -84,6 +84,11 @@ MAX_PROVIDER_RETRIES_PER_TURN = 2
 PROVIDER_RETRY_MIN_REMAINING_S = 5.0
 
 
+def _spent(session, t0: float) -> float:
+    """The turn's own time: wall-clock since it started, less what a person took to answer."""
+    return time.time() - t0 - session._approvals.waited_ms / 1000
+
+
 def _complete_once_more_if_transient(session, messages: list, step: int, t0: float) -> dict:
     """One model call, repeated once when it failed in a way a repeat may recover.
 
@@ -92,7 +97,7 @@ def _complete_once_more_if_transient(session, messages: list, step: int, t0: flo
     event, so nothing about it is hidden from the turn's record.
     """
     for attempt in (1, 2):
-        elapsed = time.time() - t0
+        elapsed = _spent(session, t0)
         try:
             return session.chat.complete_cancellable(
                 messages, session.tool_schemas(), session.run_id,
@@ -105,7 +110,7 @@ def _complete_once_more_if_transient(session, messages: list, step: int, t0: flo
             if (attempt == 2 or not getattr(exc, "retryable", False)
                     or code not in RETRYABLE_PROVIDER_CODES
                     or used >= MAX_PROVIDER_RETRIES_PER_TURN
-                    or session.wall_budget_s - (time.time() - t0)
+                    or session.wall_budget_s - _spent(session, t0)
                     < PROVIDER_RETRY_MIN_REMAINING_S
                     or session._cancel_requested()):
                 raise
@@ -240,7 +245,7 @@ def run_loop(session) -> RunResult:
         if step >= session.step_budget:
             return session._finish(result, t0, "step_budget", f"used all {session.step_budget} steps",
                                 steps=step)
-        elapsed = time.time() - t0
+        elapsed = _spent(session, t0)
         if elapsed >= session.wall_budget_s:
             return session._finish(result, t0, "wall_clock_budget",
                                 f"exceeded {session.wall_budget_s}s", steps=step)
@@ -293,11 +298,11 @@ def run_loop(session) -> RunResult:
                     retryable=bool(getattr(e, "retryable", False)),
                 )
             reason = ("wall_clock_budget"
-                      if time.time() - t0 >= session.wall_budget_s
+                      if _spent(session, t0) >= session.wall_budget_s
                       else "provider_error")
             return session._finish(result, t0, reason, str(e), steps=step)
 
-        if time.time() - t0 >= session.wall_budget_s:
+        if _spent(session, t0) >= session.wall_budget_s:
             return session._finish(
                 result, t0, "wall_clock_budget",
                 f"provider returned after the {session.wall_budget_s}s deadline",

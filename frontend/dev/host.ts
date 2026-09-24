@@ -87,7 +87,28 @@ export function createDevHost(): DevHost {
     commit({entries: [...state.entries, ...added]})
   const wait = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms))
 
-  let pendingWrite: ApprovalRequest | null = null
+  /** Put a confirmation up, and end the turn if nobody answers it in time, as the server
+      does: at `expires_at` its wait gives up, the turn ends cancelled with its own sentence
+      for why, and the runtime takes the card down when that terminal state arrives. */
+  function ask(request: ApprovalRequest): void {
+    const mine = live
+    commit({
+      pendingApproval: request,
+      connection: {...state.connection, state: 'awaiting_confirmation'},
+    })
+    window.setTimeout(() => {
+      if (mine !== live || state.pendingApproval?.approval_id !== request.approval_id) return
+      push(entry('result', request.kind === 'navigation'
+        ? '页面切换没有得到确认，助手没有离开当前页面。需要时请再说一次。'
+        : '本次确认已过期，因此没有执行写入。请核对当前目标后重新提交。', {
+        tone: 'neutral', panel_state: 'cancelled', authored: 'server',
+      }))
+      commit({
+        pendingApproval: null,
+        connection: {...state.connection, busy: false, stopping: false, state: 'cancelled'},
+      })
+    }, Math.max(0, request.expires_at - Date.now()))
+  }
 
   /** Play steps one after another, the way the server's feed publishes them. Each line is
       the sentence the server's `describe_step` / `describe_action` writes for it. False when
@@ -156,7 +177,7 @@ export function createDevHost(): DevHost {
     await wait(400)
     if (mine !== live) return
     push(entry('approval', '需要确认后才能继续', {tone: 'warning'}))
-    pendingWrite = {
+    ask({
       schema_version: 1,
       approval_id: `approval-${sequence}`,
       effect: '确认报价单 S00002，使其成为销售订单',
@@ -166,31 +187,25 @@ export function createDevHost(): DevHost {
       principal_digest: '',
       turn_id: state.entries.at(-1)?.turn_id ?? 'turn-1',
       operation_id: `operation-${sequence}`,
-    }
-    commit({
-      pendingApproval: pendingWrite,
-      connection: {...state.connection, state: 'awaiting_confirmation'},
     })
   }
 
   async function runNavigation(goal: string): Promise<void> {
     nextTurn()
     commit({connection: {...state.connection, busy: true, state: 'observing'}})
-    push(entry('goal', goal), entry('action', '已找到唯一客户 Azure Interior', {tone: 'active'}))
-    pendingWrite = {
+    push(entry('goal', goal), entry('action', '已找到唯一客户 Azure Interior', {tone: 'active'}),
+         entry('approval', '需要确认后才能打开页面', {tone: 'warning'}))
+    ask({
       schema_version: 1,
       approval_id: `approval-${sequence}`,
       effect: '离开当前页面，打开另一个页面',
       targets: ['将打开：/odoo/customers/13', `你的请求：${goal}`],
-      expires_at: Date.now() + 120_000,
+      // Five minutes, like the real one (`navigation_approval_ttl_s`).
+      expires_at: Date.now() + 300_000,
       principal_digest: '',
       turn_id: state.entries.at(-1)?.turn_id ?? 'turn-1',
       operation_id: `operation-${sequence}`,
       kind: 'navigation',
-    }
-    commit({
-      pendingApproval: pendingWrite,
-      connection: {...state.connection, state: 'awaiting_confirmation'},
     })
   }
 

@@ -301,7 +301,8 @@ class AgentTurnExecutor:
             try:
                 return approval_gate.decide_plan(
                     plan, effect=effect, targets=targets,
-                    ttl_s=self.config.approval_ttl_s, context=context, kind="navigation")
+                    ttl_s=self.config.navigation_approval_ttl_s, context=context,
+                    kind="navigation")
             except RemoteProtocolError as exc:
                 if exc.code != "approval_expired":
                     raise
@@ -339,6 +340,8 @@ class AgentTurnExecutor:
                 if self.config.allow_business_mutations else None),
             navigation_confirmation=(
                 confirm_navigation if self.config.confirm_navigation else None),
+            approval_hold_s=self.config.approval_ttl_s,
+            navigation_hold_s=self.config.navigation_approval_ttl_s,
             allow_clarification=self.config.allow_clarification,
             allow_form_prefill=self.config.allow_form_prefill,
             allow_page_facets=self.config.allow_page_facets,

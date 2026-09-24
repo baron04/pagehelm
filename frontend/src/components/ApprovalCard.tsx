@@ -1,5 +1,5 @@
 import {useEffect, useRef, useState} from 'react'
-import {ShieldAlert, Clock, TriangleAlert} from 'lucide-react'
+import {ShieldAlert, Clock, Route, TriangleAlert} from 'lucide-react'
 import {declinable, type ApprovalRequest, type Labels, type PanelLimits} from '../contract/panel'
 import {useVisibilityGate} from '../state/visibility'
 import {iconProps} from './icon'
@@ -38,9 +38,9 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
 
   useEffect(() => {
     gate.attach(card.current)
-    // The conversation follows its own tail, which can leave the top of a tall card above
-    // the fold -- unreadable, and below the ratio the visibility gate asks for. Bring the
-    // whole card into view if it fits, the least amount that does it.
+    // The conversation follows its own tail, which can leave the top of the card above the
+    // fold -- unreadable, and below the ratio the visibility gate asks for. Bring the whole
+    // card into view if it fits, the least amount that does it.
     card.current?.scrollIntoView({block: 'nearest'})
     ;(canDecline ? cancel : confirm).current?.focus()
     return () => gate.attach(null)
@@ -60,7 +60,8 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
     return () => window.clearInterval(timer)
   }, [approval.expires_at])
 
-  const urgent = approval.expires_at - Date.now() < 30_000
+  // The last minute: long enough to notice and answer, short enough not to hurry anyone.
+  const urgent = approval.expires_at - Date.now() < 60_000
 
   const answer = (decision: 'approved' | 'denied') => (event: React.MouseEvent) => {
     if (busy) return
@@ -100,29 +101,36 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
 
   const titleId = `woa-approval-${approval.approval_id.replace(/[^A-Za-z0-9_-]/g, '')}`
   const effectId = `${titleId}-effect`
+  const hintId = `${titleId}-hint`
 
   return (
     <section className="woa-approval" ref={card} role="alertdialog" aria-modal="false"
              data-kind={approval.kind ?? 'write'}
-             aria-labelledby={titleId} aria-describedby={effectId} onKeyDown={onKeyDown}>
-      <span className="woa-approval__edge" aria-hidden="true" />
+             aria-labelledby={titleId} aria-describedby={`${effectId} ${hintId}`}
+             onKeyDown={onKeyDown}>
+      {/* Three things and two answers: what will happen, to what, and until when. The card
+          keeps a frame model output cannot draw -- the header, the monospaced record, the
+          buttons -- but no labels restating what the layout already says. */}
       <div className="woa-approval__inner">
         <h2 id={titleId}>
-          <ShieldAlert {...iconProps(14)} />
+          {/* A change is guarded; a move is a route to another page. */}
+          {canDecline ? <ShieldAlert {...iconProps(14)} /> : <Route {...iconProps(14)} />}
           {canDecline ? labels.approvalTitle : labels.navigationTitle}
-          {/* Named, because a bare mm:ss next to a running assistant reads as how long
-              it has been working. This is how long the confirmation can still be
-              answered; after it, nothing is executed and the request is made again. */}
-          <span className="woa-approval__time" data-urgent={urgent ? 'true' : undefined}>
-            <Clock {...iconProps(12)} />
-            {labels.approvalValidFor} {countdown}
-          </span>
+          {/* The time left shows only once it is short. The server waits a bounded time for
+              an answer -- the turn is held open until then, and an answer given long after
+              the page was shown is not a fresh one -- but a clock ticking from the first
+              second pressed a person who had minutes. Named when it does show, because a
+              bare mm:ss next to a running assistant reads as how long it has been working. */}
+          {urgent && (
+            <span className="woa-approval__time" data-urgent="true">
+              <Clock {...iconProps(12)} />
+              {labels.approvalValidFor} {countdown}
+            </span>
+          )}
         </h2>
-        <p className="woa-approval__label">{labels.approvalEffect}</p>
         <p className="woa-approval__effect" id={effectId}>
           {approval.effect.slice(0, limits.effect_max_chars)}
         </p>
-        <p className="woa-approval__label">{labels.approvalTargets}</p>
         <ul className="woa-approval__targets">
           {approval.targets.slice(0, limits.max_targets).map((target, index) => (
             <li key={`${index}-${target}`}>{target.slice(0, limits.target_max_chars)}</li>
@@ -142,7 +150,10 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
               <span>{labels.approvalObscured}</span>
             </p>
           )
-          : <p className="woa-approval__fine">
+          // A navigation's note is a warning -- unsaved work on the page may be lost -- so it
+          // shows. A write's restates what the buttons already mean, so it is read, not shown.
+          : <p className="woa-approval__fine" id={hintId}
+               data-quiet={canDecline ? 'true' : undefined}>
               {canDecline ? labels.approvalHint : labels.navigationHint}
             </p>}
         {/* Past the deadline the server takes no answer, so the card offers none: a button

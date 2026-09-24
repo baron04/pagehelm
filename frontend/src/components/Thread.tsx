@@ -38,7 +38,19 @@ function took(fromAt: number, toAt: number): string {
   return seconds < 1 ? '<1s' : spell(seconds)
 }
 
-/** How long the turn took, from the goal the server accepted to the outcome it recorded. */
+/**
+ * How long the turn spent waiting on the person: from each confirmation it put up to
+ * whatever it recorded next -- the answer, or the end of the turn when nobody answered. A
+ * confirmation still waiting runs to `to`, so the turn's clock stands still while it does.
+ */
+function waited(turn: Turn, to: number): number {
+  const after = turn.outcome ? [...turn.steps, turn.outcome] : turn.steps
+  return after.reduce((total, entry, index) => entry.kind !== 'approval' ? total
+    : total + Math.max(0, (after[index + 1]?.at ?? to) - entry.at), 0)
+}
+
+/** How long the turn took, from the goal the server accepted to the outcome it recorded,
+ * less the time it waited for the person -- the assistant's time, not the person's. */
 function elapsed(turn: Turn, now: number): string {
   const from = turn.goal?.at ?? turn.steps[0]?.at ?? 0
   // While the turn is still running the clock is the wall clock. Reading it off the last
@@ -50,8 +62,8 @@ function elapsed(turn: Turn, now: number): string {
   // decides from here, and a digit that flickers ten times a second reads as noise.
   // Round once, then split that same integer into minutes and seconds. Splitting the raw
   // duration first lets 119.6 seconds become the impossible-looking `1m 60s`.
-  const seconds = Math.round((to - from) / 1000)
-  return seconds > IMPLAUSIBLE_S ? '' : spell(seconds)
+  const seconds = Math.round((to - from - waited(turn, to)) / 1000)
+  return seconds < 0 || seconds > IMPLAUSIBLE_S ? '' : spell(seconds)
 }
 
 /** A clock that only ticks while something is running, and stops dead when it is not. */
