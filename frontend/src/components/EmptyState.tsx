@@ -35,7 +35,7 @@ export function EmptyState({labels, suggestions, onPick, compact}: {
           return (
             <li key={item.text}>
               <button type="button" onClick={() => onPick(item.text)}>
-                <Icon {...iconProps(14)} />
+                <span className="woa-suggestions__icon"><Icon {...iconProps(14)} /></span>
                 <span>{item.text}</span>
                 <span className="woa-suggestions__kind">{item.kind}</span>
               </button>

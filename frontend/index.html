@@ -20,6 +20,7 @@
       button { font:inherit; padding:4px 11px; border-radius:6px; cursor:pointer;
         border:1px solid var(--line); background:var(--soft); color:var(--ink); }
       button:hover { border-color:#9aa1ac; }
+      .sheet { overflow-x:auto; }
       table { width:100%; border-collapse:collapse; font-size:12px; }
       th { text-align:left; font-weight:500; color:#7a8291; padding:8px 14px;
         border-bottom:1px solid var(--line); font-size:11px; }
@@ -49,7 +50,7 @@
       <span class="sep"></span>
       <button data-theme-toggle>深色</button>
     </div>
-    <table>
+    <div class="sheet"><table>
       <thead><tr><th>编号</th><th>客户</th><th>创建日期</th><th>销售员</th><th class="n">总计</th><th>状态</th></tr></thead>
       <tbody>
         <tr><td>S00001</td><td>Acme Corporation</td><td>2026-09-02</td><td>Mitchell Admin</td><td class="n">725.50</td><td><span class="pill">报价单</span></td></tr>
@@ -59,7 +60,7 @@
         <tr><td>S00012</td><td>Gemini Furniture</td><td>2026-09-07</td><td>Mitchell Admin</td><td class="n">4,080.00</td><td><span class="pill s">销售订单</span></td></tr>
         <tr><td>S00019</td><td>Ready Mat</td><td>2026-09-09</td><td>Marc Demo</td><td class="n">725.50</td><td><span class="pill s">销售订单</span></td></tr>
       </tbody>
-    </table>
+    </table></div>
     <script type="module" src="/dev/main.ts"></script>
   </body>
 </html>

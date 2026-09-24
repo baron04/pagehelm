@@ -5,6 +5,8 @@ import type {HostNotice, PanelHost} from '../bridge/host'
 import {useHostSnapshot} from '../state/useHost'
 import {loadOpen, rememberOpen, useWindowGeometry, type Handle} from '../state/geometry'
 import {usePageNarrowing} from '../state/pagePush'
+import {isPanelShortcut} from '../state/shortcut'
+import {guarded} from './ErrorBoundary'
 import presentation from '../presentation.json'
 import {ApprovalCard} from './ApprovalCard'
 import {Composer} from './Composer'
@@ -40,10 +42,10 @@ export function PanelWindow({host, allowedOrigins}: {
   const [unread, setUnread] = useState(0)
   const [deciding, setDeciding] = useState(false)
   const [panelFailure, setPanelFailure] = useState<HostNotice | null>(null)
-  const {mode, geometry, docked, drawer, dragging, onPointerDown, toggleMode} =
+  const {mode, fullScreen, geometry, docked, drawer, dragging, onPointerDown, toggleMode} =
     useWindowGeometry(open)
   // Only an open drawer on a wide enough viewport takes room from the page.
-  usePageNarrowing(open && mode === 'drawer' && drawer.pushes ? drawer.width : null)
+  usePageNarrowing(open && mode === 'drawer' && !fullScreen && drawer.pushes ? drawer.width : null)
 
   /**
    * Every call into the host goes through here, for two reasons.
@@ -137,6 +139,47 @@ export function PanelWindow({host, allowedOrigins}: {
     call(() => host.submit(text))
   }, [call, host])
 
+  // The shortcut works wherever focus is. On the host page it reaches the document; inside
+  // the panel it never gets there -- the panel seals its events at its own boundary -- so
+  // the window and the launcher answer it themselves.
+  const openNow = useRef(open)
+  openNow.current = open
+  // A window put away from the keyboard hands focus to the launcher, so the person keeps
+  // their place instead of landing back at the top of the page.
+  const [closedByKeyboard, setClosedByKeyboard] = useState(false)
+  const toggle = useCallback((byKeyboard: boolean) => {
+    const next = !openNow.current
+    setClosedByKeyboard(byKeyboard && !next)
+    setOpen(next)
+    setUnread(0)
+  }, [setOpen])
+  useEffect(() => {
+    const onKey = guarded('panel shortcut', (event: KeyboardEvent) => {
+      if (!isPanelShortcut(event)) return
+      event.preventDefault()
+      toggle(true)
+    })
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [toggle])
+  const onWindowKey = (event: React.KeyboardEvent) => {
+    if (isPanelShortcut(event)) {
+      event.preventDefault()
+      toggle(true)
+    } else if (event.key === 'Escape' && !event.defaultPrevented
+               && !event.nativeEvent.isComposing) {
+      // A confirmation answers Escape itself (as its decline) and marks it handled, so the
+      // window only closes on an Escape nothing inside it wanted; an input method choosing
+      // a character uses Escape too, and that is not a request to leave.
+      event.preventDefault()
+      toggle(true)
+    }
+  }
+
+  const askedBefore = useMemo(
+    () => snapshot.entries.filter(entry => entry.kind === 'goal').map(entry => entry.text),
+    [snapshot.entries])
+
   const placeholder = useMemo(() => {
     if (closed) return labels.composerClosed
     if (blocking) return labels.composerBlockedByApproval
@@ -149,6 +192,12 @@ export function PanelWindow({host, allowedOrigins}: {
         state={launcherStateFor(snapshot.connection.state, pending !== null)}
         unread={pending ? Math.max(1, unread) : unread}
         labels={labels}
+        autoFocus={closedByKeyboard}
+        onKeyDown={event => {
+          if (!isPanelShortcut(event)) return
+          event.preventDefault()
+          toggle(true)
+        }}
         onOpen={() => {
           setOpen(true)
           setUnread(0)
@@ -160,10 +209,10 @@ export function PanelWindow({host, allowedOrigins}: {
   return (
     <section className="woa-window" data-dragging={dragging ?? undefined}
              data-state={state} data-tone={toneOf(state)}
-             aria-label={labels.assistant}
-             data-mode={mode}
-             data-docked={mode === 'float' && docked ? 'true' : undefined}
-             style={mode === 'drawer'
+             aria-label={labels.assistant} onKeyDown={onWindowKey}
+             data-mode={fullScreen ? 'full' : mode}
+             data-docked={mode === 'float' && docked && !fullScreen ? 'true' : undefined}
+             style={fullScreen ? undefined : mode === 'drawer'
                ? {width: `${drawer.width}px`}
                : {
                    left: `${geometry.left}px`,
@@ -171,7 +220,7 @@ export function PanelWindow({host, allowedOrigins}: {
                    width: `${geometry.width}px`,
                    height: `${geometry.height}px`,
                  }}>
-      {(mode === 'drawer' ? DRAWER_HANDLES : HANDLES).map(handle => (
+      {(fullScreen ? [] : mode === 'drawer' ? DRAWER_HANDLES : HANDLES).map(handle => (
         <span key={handle} className="woa-handle" data-handle={handle}
               onPointerDown={onPointerDown(handle)} aria-hidden="true" />
       ))}
@@ -183,14 +232,15 @@ export function PanelWindow({host, allowedOrigins}: {
                 data-tip={labels.newChat} onClick={newConversation}>
           <Plus {...iconProps(16, TITLE_INK)} />
         </button>
-        <button type="button" className="woa-icon-button"
+        {/* A window that is the whole screen has no other way to be shown. */}
+        {!fullScreen && <button type="button" className="woa-icon-button"
                 aria-label={mode === 'float' ? labels.dockDrawer : labels.dockFloat}
                 data-tip={mode === 'float' ? labels.dockDrawer : labels.dockFloat}
                 onClick={toggleMode}>
           {mode === 'float'
             ? <PanelRight {...iconProps(14, TITLE_INK)} />
             : <PictureInPicture2 {...iconProps(14, TITLE_INK)} />}
-        </button>
+        </button>}
         {/* The cross needs no words: closing is what a cross in a window's corner means. */}
         <button type="button" className="woa-icon-button" aria-label={labels.collapse}
                 onClick={() => {
@@ -221,7 +271,8 @@ export function PanelWindow({host, allowedOrigins}: {
       <Composer labels={labels} limits={limits}
                 busy={snapshot.connection.busy} canReplace={canReplace}
                 stopping={snapshot.connection.stopping}
-                disabled={closed || (blocking && !canReplace)}
+                disabled={closed || (blocking && !canReplace)} ended={closed}
+                history={askedBefore}
                 placeholder={placeholder} draft={draft} onDraft={setDraft}
                 onSubmit={submit} onCancel={cancel} />
     </section>

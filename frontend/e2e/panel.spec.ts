@@ -8,6 +8,7 @@
 import type {Page} from '@playwright/test'
 import presentation from '../src/presentation.json' with {type: 'json'}
 import tokens from '../src/styles/design_tokens.json' with {type: 'json'}
+import {formatTime} from '../src/state/clock'
 import {
   CONFIGURATION, PENDING, STRICT_CSP, entry, expect, labels, notices, snapshot, test,
   type Snapshot,
@@ -65,6 +66,22 @@ test.describe('the launcher', () => {
 })
 
 test.describe('the default state', () => {
+  test('a suggestion under the pointer takes the accent tint and keeps its icon tile', async ({open}) => {
+    // It used to turn white and lift, and its white icon tile vanished into it.
+    const panel = await open(snapshot())
+    await panel.page.locator('.woa-launcher').click()
+    const card = panel.page.locator('.woa-suggestions button').first()
+    await card.hover()
+    const paint = () => card.evaluate(node => ({
+      card: getComputedStyle(node).backgroundColor,
+      tile: getComputedStyle(node.querySelector('.woa-suggestions__icon')!).backgroundColor,
+      shadow: getComputedStyle(node).boxShadow,
+    }))
+    await expect.poll(paint).toEqual({card: rgb(tokens.themes.light['accent-soft']),
+                                      tile: rgb(tokens.themes.light.bg), shadow: 'none'})
+    expect(panel.errors).toEqual([])
+  })
+
   test('opening shows it, and a suggestion only fills the composer', async ({open}) => {
     const panel = await open(snapshot())
     await panel.page.locator('.woa-launcher').click()
@@ -289,6 +306,184 @@ test.describe('answers', () => {
   })
 })
 
+test.describe('copying an answer', () => {
+  const ANSWER = '已扫完全部 12 条，命中 2 条。\n\n| 单号 | 金额 |\n| --- | ---: |\n' +
+    '| S00007 | 1,231.00 |\n| S00019 | 725.50 |\n\n这两张都处于 **待开票** 状态。'
+  const TABLE = '单号\t金额\nS00007\t1,231.00\nS00019\t725.50'
+  const clipboard = (page: Page) => page.evaluate(() => navigator.clipboard.readText())
+
+  test('an answer keeps its controls and its time out of sight until pointed at', async ({open}) => {
+    // Even the newest answer shows nothing under it at rest; pointed at, the copy control
+    // appears with when the answer was given, the way a chat on a phone says it.
+    const at = Date.now() - 60_000
+    const panel = await open(snapshot({entries: [
+      entry('e1', 'goal', '列出待开票订单', {at}),
+      entry('e2', 'result', ANSWER, {authored: 'server', panel_state: 'success', at}),
+    ]}))
+    await panel.page.locator('.woa-launcher').click()
+    const actions = panel.page.locator('.woa-answer-actions')
+    await expect(actions).toHaveCSS('opacity', '0')
+    await panel.page.locator('.woa-md').first().hover()
+    await expect(actions).toHaveCSS('opacity', '1')
+    await expect(actions.locator('time')).toHaveText(formatTime(at, Date.now(), labels.locale))
+    expect(panel.errors).toEqual([])
+  })
+
+  test('nothing of the copy control or its tooltip is cut off by a settled turn', async ({open}) => {
+    // A settled turn contains its paint, so whatever overhangs its box is clipped. The copy
+    // control overhangs the text to line its glyph up, and its tooltip hung centred beyond
+    // the control: both were cut at the text's left edge.
+    const panel = await open(snapshot({entries: [
+      entry('e1', 'goal', '列出待开票订单'),
+      entry('e2', 'result', ANSWER, {authored: 'server', panel_state: 'success'}),
+    ]}))
+    await panel.page.locator('.woa-launcher').click()
+    const copy = panel.page.getByRole('button', {name: labels.copyAnswer})
+    await copy.hover()
+    const boxes = await copy.evaluate(node => {
+      const turn = node.closest<HTMLElement>('.woa-turn')!
+      const control = node.getBoundingClientRect()
+      const tip = getComputedStyle(node, '::after')
+      // The tooltip's box as drawn: its offset, then whatever its transform shifts it by.
+      const shift = tip.transform === 'none' ? 0 : new DOMMatrix(tip.transform).m41
+      const tipLeft = control.left + Number.parseFloat(tip.left) + shift
+      return {
+        settled: turn.dataset.settled === 'true' && getComputedStyle(turn).contentVisibility === 'auto',
+        turn: turn.getBoundingClientRect().toJSON() as DOMRect,
+        control: control.toJSON() as DOMRect,
+        tip: {left: tipLeft, right: tipLeft + Number.parseFloat(tip.width)},
+      }
+    })
+    expect(boxes.settled).toBe(true)
+    expect(boxes.control.left).toBeGreaterThanOrEqual(boxes.turn.left)
+    expect(boxes.tip.left).toBeGreaterThanOrEqual(boxes.turn.left)
+    expect(boxes.tip.right).toBeLessThanOrEqual(boxes.turn.right)
+    expect(panel.errors).toEqual([])
+  })
+
+  test('copies the whole answer as plain text, its table as tab-separated rows', async ({open}) => {
+    const panel = await open(snapshot({entries: [
+      entry('e1', 'goal', '列出待开票订单'),
+      entry('e2', 'result', ANSWER, {authored: 'server', panel_state: 'success'}),
+    ]}), {clipboard: true})
+    await panel.page.locator('.woa-launcher').click()
+    const copy = panel.page.getByRole('button', {name: labels.copyAnswer})
+    await copy.click()
+    // Pasted into a document it reads as prose; into a spreadsheet the table splits into cells.
+    expect(await clipboard(panel.page))
+      .toBe(`已扫完全部 12 条，命中 2 条。\n\n${TABLE}\n\n这两张都处于 待开票 状态。`)
+    await expect(panel.page.getByRole('button', {name: labels.copied})).toBeVisible()
+    expect(panel.errors).toEqual([])
+  })
+
+  test('a table carries no copy control of its own', async ({open}) => {
+    // Copying the answer already brings its tables as rows a spreadsheet splits into cells.
+    const panel = await open(snapshot({entries: [
+      entry('e1', 'goal', '列出待开票订单'),
+      entry('e2', 'result', ANSWER, {authored: 'server', panel_state: 'success'}),
+    ]}))
+    await panel.page.locator('.woa-launcher').click()
+    await panel.page.locator('.woa-md table').hover()
+    await expect(panel.page.locator('.woa-md').getByRole('button')).toHaveCount(0)
+    expect(panel.errors).toEqual([])
+  })
+
+  test('still copies where the page is not a secure context', async ({open}) => {
+    // A host served over plain HTTP on an internal address has no asynchronous clipboard;
+    // the older copy command is the way there, and it has to work.
+    const panel = await open(snapshot({entries: [
+      entry('e1', 'goal', '列出待开票订单'),
+      entry('e2', 'result', ANSWER, {authored: 'server', panel_state: 'success'}),
+    ]}), {clipboard: true})
+    await panel.page.evaluate(() => {
+      Object.defineProperty(window, 'isSecureContext', {value: false})
+    })
+    await panel.page.locator('.woa-launcher').click()
+    await panel.page.getByRole('button', {name: labels.copyAnswer}).click({force: true})
+    expect(await clipboard(panel.page))
+      .toBe(`已扫完全部 12 条，命中 2 条。\n\n${TABLE}\n\n这两张都处于 待开票 状态。`)
+    expect(panel.errors).toEqual([])
+  })
+})
+
+test.describe('the keyboard', () => {
+  // ⌘J on a Mac, Ctrl+J elsewhere -- whichever this browser reports being.
+  const modifier = (page: Page) => page.evaluate(
+    () => (/Mac|iPhone|iPad/.test(navigator.platform) ? 'Meta' : 'Control'))
+
+  test('one shortcut opens the panel from the page and puts it away from inside', async ({open}) => {
+    const panel = await open(snapshot())
+    const page = panel.page
+    const mod = await modifier(page)
+    await expect(page.locator('.woa-launcher')).toHaveAttribute(
+      'aria-keyshortcuts', mod === 'Meta' ? 'Meta+J' : 'Control+J')
+    // The launcher says nothing when pointed at: the disc in the corner is its own label.
+    await page.locator('.woa-launcher').hover()
+    await page.waitForTimeout(500)
+    expect(await page.locator('.woa-launcher').evaluate(
+      node => getComputedStyle(node, '::after').content)).toBe('none')
+    await page.locator('body').click({position: {x: 5, y: 5}})
+    await page.keyboard.press(`${mod}+j`)
+    await page.locator('.woa-window').waitFor()
+    // Opened from the keyboard, the caret is where the person types.
+    expect((await panel.active()).id).toBe('woa-composer-input')
+    // Inside the panel the same keys put it away, and focus waits on the launcher.
+    await page.keyboard.press(`${mod}+j`)
+    await expect(page.locator('.woa-window')).toHaveCount(0)
+    expect((await panel.active()).label).toBe(labels.expand)
+    expect(panel.errors).toEqual([])
+  })
+
+  test('escape puts the window away, except inside a confirmation', async ({open}) => {
+    const panel = await open(snapshot())
+    const page = panel.page
+    await page.locator('.woa-launcher').click()
+    await page.locator('#woa-composer-input').fill('草稿留着')
+    await page.keyboard.press('Escape')
+    await expect(page.locator('.woa-window')).toHaveCount(0)
+    await page.locator('.woa-launcher').click()
+    // The draft outlives putting the window away.
+    await expect(page.locator('#woa-composer-input')).toHaveValue('草稿留着')
+
+    // In a confirmation Escape is the card's own answer, and the window stays.
+    await panel.raiseApproval({kind: 'navigation', effect: '离开当前页面，打开另一个页面',
+                               targets: ['将打开：/odoo/customers/13']})
+    await page.keyboard.press('Escape')
+    await expect(page.locator('.woa-window')).toHaveCount(1)
+    expect(panel.errors).toEqual([])
+  })
+
+  test('the arrows walk back through what was asked, until the person types', async ({open}) => {
+    const panel = await open(snapshot({entries: [
+      entry('e1', 'goal', '列出待开票订单'),
+      entry('e2', 'result', '三张。', {panel_state: 'success'}),
+      entry('e3', 'goal', 'Acme 有哪些草稿报价单', {turn_id: 'turn-2'}),
+      entry('e4', 'result', '两张。', {panel_state: 'success', turn_id: 'turn-2'}),
+    ]}))
+    const page = panel.page
+    await page.locator('.woa-launcher').click()
+    const composer = page.locator('#woa-composer-input')
+    await composer.focus()
+    await page.keyboard.press('ArrowUp')
+    await expect(composer).toHaveValue('Acme 有哪些草稿报价单')
+    await page.keyboard.press('ArrowUp')
+    await expect(composer).toHaveValue('列出待开票订单')
+    // The oldest is where it stops.
+    await page.keyboard.press('ArrowUp')
+    await expect(composer).toHaveValue('列出待开票订单')
+    await page.keyboard.press('ArrowDown')
+    await expect(composer).toHaveValue('Acme 有哪些草稿报价单')
+    await page.keyboard.press('ArrowDown')
+    await expect(composer).toHaveValue('')
+    // Once the text is the person's own, the arrows only move the caret.
+    await page.keyboard.type('新的问题')
+    await page.keyboard.press('ArrowUp')
+    await expect(composer).toHaveValue('新的问题')
+    expect(await panel.calls()).toEqual([])
+    expect(panel.errors).toEqual([])
+  })
+})
+
 test.describe('failures', () => {
   test('retry is offered only for a failure that can be retried', async ({open}) => {
     const panel = await open(snapshot({notice: {code: '', retryable: true}}))
@@ -302,6 +497,20 @@ test.describe('failures', () => {
     // It names where the assistant went, because this is the one ending the page does not
     // reconnect from: the person continues in the other page.
     await expect(notice).toContainText('另一个页面')
+    expect(panel.errors).toEqual([])
+  })
+
+  test('an ended session offers nothing to send', async ({open}) => {
+    // A composer that still shows its send control after the session is over reads as a
+    // place to keep typing; the field says it is closed and offers no control at all.
+    const panel = await open(snapshot({
+      connection: {state: 'replaced', busy: false, stopping: false, online: true},
+      closed: true,
+      notice: {code: 'runtime_replaced', retryable: false}}))
+    await panel.page.locator('.woa-launcher').click()
+    await expect(panel.page.locator('.woa-field')).toHaveAttribute('data-ended', 'true')
+    await expect(panel.page.locator('#woa-composer-input')).toBeDisabled()
+    await expect(panel.page.locator('.woa-send')).toHaveCount(0)
     expect(panel.errors).toEqual([])
   })
 
@@ -362,7 +571,7 @@ test.describe('the work process', () => {
     expect(panel.errors).toEqual([])
   })
 
-  test('a turn that only ran shows its time, and one that acted shows its steps', async ({open}) => {
+  test('a turn that only ran shows its time, and one that acted folds its steps into a line', async ({open}) => {
     const panel = await open(snapshot({entries: [
       entry('e1', 'goal', '列出所有待开票的销售订单'),
       entry('e2', 'progress', '正在理解目标'),
@@ -384,42 +593,84 @@ test.describe('the work process', () => {
        text: '打开页面：/odoo/customers/10'},
       {id: 'f4', sequence: 4, turn_id: 't2', at: 1757000003000, kind: 'result', tone: 'neutral',
        text: '已打开。', panel_state: 'success'}]})
-    // A turn that did something shows what it did, without being asked to.
-    await panel.page.locator('.woa-step').first().waitFor()
+    // A landed turn that did something says how much, in one line, and the answer leads.
+    const summary = panel.page.locator('.woa-work__summary')
+    await expect(summary).toContainText(labels.workSteps.replace('{count}', '2'))
+    await expect(summary).toContainText(`${labels.elapsedPrefix} 3s`)
+    await expect(summary).toHaveAttribute('aria-expanded', 'false')
+    await expect(panel.page.locator('.woa-step')).toHaveCount(0)
+    // One press opens the record; nothing about it was thrown away.
+    await summary.click()
+    await expect(summary).toHaveAttribute('aria-expanded', 'true')
     await expect(panel.page.locator('.woa-step')).toHaveCount(2)
     expect(panel.errors).toEqual([])
   })
-  test('a running turn shows its steps in the flow rather than behind a control', async ({open}) => {
-    // What it is doing is the conversation while it runs, not a box to go open.
-    //
-    // A read-only question spends most of its wall clock inside model calls and typed reads.
-    // The panel held one line -- 正在理解目标 -- for all of it, behind a summary that
-    // repeated that same line, and the person could not tell working from stuck.
+  test('a running turn folds its steps into one live line, one press from the whole run', async ({open}) => {
+    // While it runs, the person needs to tell working from stuck: what it is doing now, and
+    // for how long. Every step in the flow grew a list that pushed the question off screen.
+    const running = {state: 'acting', busy: true, stopping: false, online: true}
+    const steps = [
+      entry('e1', 'goal', '检查名为 Acme 的客户是否存在'),
+      entry('e2', 'progress', '正在思考', {tone: 'active'}),
+      entry('e3', 'progress', '正在读取业务数据', {tone: 'active'}),
+      entry('e4', 'progress', '已读取 3 条：客户', {tone: 'active'}),
+    ]
+    const panel = await open(snapshot({connection: running, entries: steps}))
+    const page = panel.page
+    await page.locator('.woa-launcher').click()
+    const live = page.locator('.woa-work__live')
+    await expect(live).toHaveAttribute('aria-expanded', 'false')
+    await expect(live.locator('.woa-work__now')).toHaveText('已读取 3 条：客户')
+    await expect(live.locator('.woa-spinner')).toHaveCount(1)
+    await expect(page.locator('.woa-step')).toHaveCount(0)
+    // A new step takes the line.
+    await panel.set({connection: running,
+                     entries: [...steps, entry('e5', 'progress', '正在整理结果', {tone: 'active'})]})
+    await expect(live.locator('.woa-work__now')).toHaveText('正在整理结果')
+    // Opened, every step in order: the newest is the one being worked on, the rest completed.
+    await live.click()
+    await expect(live).toHaveAttribute('aria-expanded', 'true')
+    expect((await page.locator('.woa-step__text').allInnerTexts()).map(line => line.trim()))
+      .toEqual(['正在思考', '正在读取业务数据', '已读取 3 条：客户', '正在整理结果'])
+    await expect(page.locator(".woa-step[data-status='running']")).toHaveCount(1)
+    await expect(page.locator(".woa-step[data-status='done']")).toHaveCount(3)
+    // Each mark sits on the middle of its text's first line.
+    const offsets = await page.locator('.woa-step').evaluateAll(nodes => nodes.map(node => {
+      const mark = node.querySelector('.woa-step__mark > *')!.getBoundingClientRect()
+      const text = node.querySelector('.woa-step__text')!
+      const line = Number.parseFloat(getComputedStyle(text).lineHeight)
+      const top = text.getBoundingClientRect().top
+      return Math.abs((mark.top + mark.height / 2) - (top + line / 2))
+    }))
+    for (const offset of offsets) expect(offset).toBeLessThanOrEqual(0.5)
+    expect(panel.errors).toEqual([])
+  })
+
+  test('a confirmation waiting on the person turns the live line amber', async ({open}) => {
+    // The ball is in the person's court: the spinner becomes a slow pulse and the line says
+    // what it is waiting for, in the warning colour.
     const panel = await open(snapshot({
       connection: {state: 'acting', busy: true, stopping: false, online: true},
       entries: [
-        entry('e1', 'goal', '检查名为 Acme 的客户是否存在'),
-        entry('e2', 'progress', '正在思考', {tone: 'active'}),
-        entry('e3', 'progress', '正在读取业务数据', {tone: 'active'}),
-        entry('e4', 'progress', '已读取 3 条：客户', {tone: 'active'}),
+        entry('e1', 'goal', '把报价单 S00002 确认成销售订单'),
+        entry('e2', 'progress', '正在准备这次更改', {tone: 'active'}),
+        entry('e3', 'approval', '需要确认后才能继续', {tone: 'warning'}),
       ]}))
     await panel.page.locator('.woa-launcher').click()
-    await panel.page.locator('.woa-step').first().waitFor()
-    // Every step is on screen, in the order it happened, with nothing to go and open.
-    expect((await panel.page.locator('.woa-step__text').allInnerTexts()).map(line => line.trim()))
-      .toEqual(['正在思考', '正在读取业务数据', '已读取 3 条：客户'])
-    // Only the newest node is running; the ones before it completed.
-    await expect(panel.page.locator(".woa-step[data-status='running']")).toHaveCount(1)
-    await expect(panel.page.locator(".woa-step[data-status='running'] .woa-spinner")).toHaveCount(1)
-    await expect(panel.page.locator(".woa-step[data-status='done']")).toHaveCount(2)
+    const live = panel.page.locator('.woa-work__live')
+    await expect(live).toHaveAttribute('data-waiting', 'true')
+    await expect(live.locator('.woa-pulse')).toHaveCount(1)
+    await expect(live.locator('.woa-spinner')).toHaveCount(0)
+    await expect(live.locator('.woa-work__now')).toHaveText('需要确认后才能继续')
+    await expect(live.locator('.woa-work__now')).toHaveCSS('color', rgb(tokens.themes.light.warning))
     expect(panel.errors).toEqual([])
   })
 
   test('a settled turn keeps its timeline and opens a node onto the call', async ({open}) => {
     // P7.5: the record of how an answer was produced outlives the answer.
     //
-    // Folding the steps away once the turn landed took the answer's only checkable part with
-    // it: which call produced the numbers, with what arguments, and what came back.
+    // It is folded to one line once the turn lands, and stays there to be opened: which call
+    // produced the numbers, with what arguments, and what came back.
     const panel = await open(snapshot({entries: [
       entry('e1', 'goal', '未确认报价单里已发送的合计多少钱？', {at: 1_757_000_000_000}),
       entry('e2', 'progress', '正在读取业务数据', {
@@ -432,18 +683,55 @@ test.describe('the work process', () => {
       entry('e4', 'result', '合计：504.00 USD', {panel_state: 'success', at: 1_757_000_006_000}),
     ]}))
     await panel.page.locator('.woa-launcher').click()
+    await panel.page.locator('.woa-work__summary').click()
     await panel.page.locator('.woa-step').first().waitFor()
     await expect(panel.page.locator('.woa-step')).toHaveCount(2)
     await expect(panel.page.locator(".woa-step[data-status='done']")).toHaveCount(2)
-    // Each node says how long that step took, and the first one took three seconds.
-    await expect(panel.page.locator('.woa-step__elapsed').first()).toHaveText('3s')
-    // Opening a node shows what was called and with what -- the panel invents none of it;
-    // every field is projected and bounded by the server.
+    // A node that opens says so; how long it took is inside, not in a column beside it.
+    await expect(panel.page.locator('.woa-step__chevron')).toHaveCount(2)
+    await expect(panel.page.locator('.woa-work__steps')).not.toContainText('3s')
+    // Opening a node shows what was called, with what, and for how long -- the panel invents
+    // none of it; every field is projected and bounded by the server.
     await panel.page.locator('.woa-step__line').first().click()
     const detail = panel.page.locator('.woa-step__detail').first()
     await detail.waitFor()
     await expect(detail).toContainText('query_quotations')
     await expect(detail).toContainText('limit=50')
+    await expect(detail).toContainText(`${labels.stepDuration}3s`)
+    expect(panel.errors).toEqual([])
+  })
+
+  test('a stop is acknowledged at once, and a stopped turn is not marked as a failure', async ({open}) => {
+    // The stop lands at the next safe point, which can be seconds away; until then the line
+    // says the press was heard. A turn the person ended gets a grey stop mark, not a red
+    // cross: nothing went wrong.
+    const steps = [
+      entry('e1', 'goal', '列出所有待开票的销售订单', {at: 1_757_000_000_000}),
+      entry('e2', 'progress', '正在思考', {tone: 'active', at: 1_757_000_001_000}),
+      entry('e3', 'progress', '正在读取业务数据', {
+        tone: 'active', at: 1_757_000_002_000, step: {stage: 'tool', tool: 'query_sale_orders'}}),
+    ]
+    const panel = await open(snapshot({
+      connection: {state: 'acting', busy: true, stopping: false, online: true}, entries: steps}))
+    const page = panel.page
+    await page.locator('.woa-launcher').click()
+    const live = page.locator('.woa-work__live')
+    await expect(live.locator('.woa-work__now')).toHaveText('正在读取业务数据')
+    await panel.set({connection: {state: 'stopping', busy: true, stopping: true, online: true},
+                     entries: steps})
+    await expect(live).toHaveAttribute('data-stopping', 'true')
+    await expect(live.locator('.woa-work__now')).toHaveText(labels.statusStopping)
+
+    await panel.set({connection: {state: 'cancelled', busy: false, stopping: false, online: true},
+                     entries: [...steps, entry('e4', 'result', '已按你的要求停止。', {
+                       panel_state: 'cancelled', authored: 'server', at: 1_757_000_004_000})]})
+    const summary = page.locator('.woa-work__summary')
+    await expect(summary).toHaveAttribute('data-stopped', 'true')
+    await expect(summary).not.toHaveAttribute('data-failed', 'true')
+    await expect(summary.locator('svg').first()).toHaveCSS('color', rgb(tokens.themes.light['ink-faint']))
+    await summary.click()
+    await expect(page.locator(".woa-step[data-status='stopped']")).toHaveCount(1)
+    await expect(page.locator(".woa-step[data-status='failed']")).toHaveCount(0)
     expect(panel.errors).toEqual([])
   })
 
@@ -458,6 +746,10 @@ test.describe('the work process', () => {
             {panel_state: 'refused', at: 1_757_000_004_000}),
     ]}))
     await panel.page.locator('.woa-launcher').click()
+    // Folded, the line already says it ended badly; opened, it says where.
+    const summary = panel.page.locator('.woa-work__summary')
+    await expect(summary).toHaveAttribute('data-failed', 'true')
+    await summary.click()
     await panel.page.locator('.woa-step').first().waitFor()
     await expect(panel.page.locator(".woa-step[data-status='failed']")).toHaveCount(1)
     await expect(panel.page.locator(".woa-step[data-status='failed'] .woa-step__text"))
@@ -562,11 +854,14 @@ test.describe('the work process', () => {
     ]}))
     await panel.page.locator('.woa-launcher').click()
     const thread = panel.page.locator('.woa-thread')
-    // Opening puts the caret in the composer. One reverse Tab reaches the scrollable
-    // transcript and activates the keyboard-only focus treatment.
-    await panel.page.keyboard.press('Shift+Tab')
-    expect(await thread.evaluate(
-      node => node === (node.getRootNode() as ShadowRoot).activeElement)).toBe(true)
+    // Opening puts the caret in the composer. Reverse Tabs -- past the answer's own
+    // controls -- reach the scrollable transcript and its keyboard-only focus treatment.
+    const focusedThread = () => thread.evaluate(
+      node => node === (node.getRootNode() as ShadowRoot).activeElement)
+    for (let step = 0; step < 6 && !(await focusedThread()); step += 1) {
+      await panel.page.keyboard.press('Shift+Tab')
+    }
+    expect(await focusedThread()).toBe(true)
     const style = await thread.evaluate(node => {
       const css = getComputedStyle(node)
       return {outline: css.outlineStyle, shadow: css.boxShadow}
@@ -801,7 +1096,8 @@ test.describe('states and layout', () => {
     // Past the ceiling it scrolls, and it stops at exactly the height the stylesheet
     // declares -- the value the component reads back rather than repeating.
     expect(tall.overflow).toBe('auto')
-    expect(tall.height).toBeLessThanOrEqual(tall.ceiling)
+    // clientHeight is a whole number of pixels; the ceiling is whole lines of a 22.4px line.
+    expect(tall.height).toBeLessThanOrEqual(Math.ceil(tall.ceiling))
     expect(tall.height).toBeGreaterThan(oneLine.height)
     expect(tall.ceiling).toBe(oneLine.ceiling)
     expect(panel.errors).toEqual([])
@@ -850,9 +1146,9 @@ test.describe('states and layout', () => {
     await panel.settle()
     const boxes = await layout(panel.page)
     expect(boxes.mode).toBe('drawer')
-    expect(Math.abs(boxes.window!.x + boxes.window!.w - 1440)).toBeLessThanOrEqual(0.5)
+    expect(Math.abs(boxes.window!.x + boxes.window!.w - boxes.view)).toBeLessThanOrEqual(0.5)
     expect([boxes.window!.y, boxes.window!.h]).toEqual([0, 900])
-    expect(Math.abs(boxes.page - (1440 - boxes.window!.w))).toBeLessThanOrEqual(0.5)
+    expect(Math.abs(boxes.page - (boxes.view - boxes.window!.w))).toBeLessThanOrEqual(0.5)
     expect(boxes.overflow).toBeLessThanOrEqual(0)
 
     // Widened from the edge that faces the page; the page follows, and the width is kept.
@@ -863,13 +1159,13 @@ test.describe('states and layout', () => {
     await panel.page.mouse.up()
     const widened = await layout(panel.page)
     expect(Math.abs(widened.window!.w - (boxes.window!.w + 100))).toBeLessThanOrEqual(1)
-    expect(Math.abs(widened.page - (1440 - widened.window!.w))).toBeLessThanOrEqual(0.5)
+    expect(Math.abs(widened.page - (widened.view - widened.window!.w))).toBeLessThanOrEqual(0.5)
 
     // Closing gives the page its whole width back and leaves its root as it was.
     await panel.page.getByRole('button', {name: labels.collapse}).click()
     await panel.page.locator('.woa-launcher').waitFor({timeout: 3000})
     const closed = await layout(panel.page)
-    expect(closed.page).toBe(1440)
+    expect(closed.page).toBe(closed.view)
     expect(closed.rootStyle).toBeNull()
 
     // Reopened, it is still a drawer at the width it was given.
@@ -884,7 +1180,7 @@ test.describe('states and layout', () => {
     await panel.settle()
     const floating = await layout(panel.page)
     expect(floating.mode).toBe('float')
-    expect(floating.page).toBe(1440)
+    expect(floating.page).toBe(floating.view)
     expect(floating.window!.w).toBe(420)
     expect(panel.errors).toEqual([])
   })
@@ -896,9 +1192,9 @@ test.describe('states and layout', () => {
     await panel.settle()
     const boxes = await layout(panel.page)
     expect(boxes.mode).toBe('drawer')
-    expect(boxes.page).toBe(800)
+    expect(boxes.page).toBe(boxes.view)
     expect(boxes.rootStyle).toBeNull()
-    expect(Math.abs(boxes.window!.x + boxes.window!.w - 800)).toBeLessThanOrEqual(0.5)
+    expect(Math.abs(boxes.window!.x + boxes.window!.w - boxes.view)).toBeLessThanOrEqual(0.5)
     expect(panel.errors).toEqual([])
   })
 
@@ -933,6 +1229,92 @@ test.describe('states and layout', () => {
     await notice.waitFor()
     await expect(notice).toContainText(notices.unexpected!)
     // Nothing reached the page: the host application never hears about this.
+    expect(panel.errors).toEqual([])
+  })
+
+  test('one colour carries the brand, and stopping stays legible under the pointer', async ({open}) => {
+    // Black controls beside blue ones read as two brands. The mark is the accent in the title
+    // bar and white on the launcher's accent disc; stopping is a solid accent disc.
+    const panel = await open(snapshot())
+    const mark = (scope: string) => panel.page.locator(`${scope} .woa-mark`)
+      .evaluate(node => getComputedStyle(node).color)
+    expect(await mark('.woa-launcher')).toBe(rgb(tokens.themes.light['brand-ink']))
+    await panel.page.locator('.woa-launcher').click()
+    expect(await mark('.woa-brand')).toBe(rgb(tokens.themes.light.accent))
+    await panel.set({connection: {state: 'acting', busy: true, stopping: false, online: true}})
+    const stop = panel.page.getByRole('button', {name: labels.stop})
+    const paint = () => stop.evaluate(node => {
+      const style = getComputedStyle(node)
+      return {background: style.backgroundColor, color: style.color}
+    })
+    // The send control becomes the stop control in place, so its colours ease across.
+    await expect.poll(paint).toEqual({background: rgb(tokens.themes.light.accent),
+                                      color: rgb(tokens.themes.light['accent-ink'])})
+    // Under the pointer it deepens; its square never takes the colour of its own disc.
+    await stop.hover()
+    await expect.poll(paint).toEqual({background: rgb(tokens.themes.light['accent-hover']),
+                                      color: rgb(tokens.themes.light['accent-ink'])})
+    expect(panel.errors).toEqual([])
+  })
+
+  test('on a phone the window is the whole screen', async ({open}) => {
+    // A floating window and its margins are wider than a phone held upright. There the
+    // window covers the screen in either mode, neither moves nor resizes, and offers no
+    // mode to switch to; the text box is large enough that focusing it does not zoom.
+    const panel = await open(snapshot(), {width: 375, height: 667})
+    const page = panel.page
+    await page.locator('.woa-launcher').click()
+    const window = page.locator('.woa-window')
+    await window.waitFor()
+    await window.evaluate(node => node.getAnimations().forEach(animation => animation.finish()))
+    expect(await window.getAttribute('data-mode')).toBe('full')
+    // The screen inside the page's own scrollbar, where a browser draws one.
+    const screen = () => page.evaluate(() => ({
+      x: 0, y: 0,
+      width: document.documentElement.clientWidth, height: document.documentElement.clientHeight}))
+    const upright = await screen()
+    expect(await window.boundingBox()).toEqual(upright)
+    await expect(page.getByRole('button', {name: labels.dockDrawer})).toHaveCount(0)
+    await expect(page.locator('.woa-handle')).toHaveCount(0)
+    expect(await page.locator('#woa-composer-input').evaluate(node => getComputedStyle(node).fontSize))
+      .toBe(tokens.scale['font-size-field-touch'])
+    await page.mouse.move(120, 20)
+    await page.mouse.down()
+    await page.mouse.move(40, 200, {steps: 4})
+    await page.mouse.up()
+    expect(await window.boundingBox()).toEqual(upright)
+    // Turned on its side the screen is too short for a window as well.
+    await page.setViewportSize({width: 667, height: 375})
+    const sideways = await screen()
+    await expect.poll(() => window.boundingBox()).toEqual(sideways)
+    // Given room again, the window floats as it did, and can be switched once more.
+    await page.setViewportSize({width: 1280, height: 800})
+    await expect(window).toHaveAttribute('data-mode', 'float')
+    await expect(page.getByRole('button', {name: labels.dockDrawer})).toHaveCount(1)
+    expect((await window.boundingBox())!.width).toBeLessThan(1280)
+    expect(panel.errors).toEqual([])
+  })
+
+  test('the conversation does not narrow when it grows past one screen', async ({open}) => {
+    // Where the scrollbar takes room it keeps it taken: appearing, it re-wrapped every line.
+    const panel = await open(snapshot({entries: [
+      entry('e1', 'goal', '列出所有待开票的销售订单'),
+      entry('e2', 'result', '十六张。', {panel_state: 'success'}),
+    ]}))
+    await panel.page.locator('.woa-launcher').click()
+    const turns = panel.page.locator('.woa-turns')
+    await turns.waitFor()
+    await panel.page.locator('.woa-window')
+      .evaluate(node => node.getAnimations().forEach(animation => animation.finish()))
+    const before = (await turns.boundingBox())!.width
+    const lines = Array.from({length: 60}, (_, index) => `第 ${index} 行。`).join('\n\n')
+    await panel.set({entries: [
+      entry('e1', 'goal', '列出所有待开票的销售订单'),
+      entry('e2', 'result', lines, {panel_state: 'success'}),
+    ]})
+    const thread = panel.page.locator('.woa-thread')
+    await expect.poll(() => thread.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true)
+    expect((await turns.boundingBox())!.width).toBe(before)
     expect(panel.errors).toEqual([])
   })
 
@@ -981,6 +1363,8 @@ function layout(page: Page) {
       mode: panel?.dataset.mode ?? null,
       window: box ? {x: box.x, y: box.y, w: box.width, h: box.height} : null,
       page: document.body.getBoundingClientRect().width,
+      // The viewport inside the page's own scrollbar: what the panel may lay itself out in.
+      view: document.documentElement.clientWidth,
       overflow: document.documentElement.scrollWidth - innerWidth,
       rootStyle: document.documentElement.getAttribute('style'),
     }
@@ -1379,6 +1763,8 @@ test.describe('U07', () => {
     ]}))
     const page = panel.page
     await page.locator('.woa-launcher').click()
+    // The landed turn's steps are folded; opened, each node is a control a keyboard reaches.
+    await page.locator('.woa-work__summary').click()
     await page.locator('.woa-step__line').waitFor()
     // Real Tab presses: only keyboard focus draws the ring a keyboard user sees.
     const ring = () => page.evaluate(() => {
@@ -1507,3 +1893,9 @@ test.describe('under a strict CSP', () => {
     expect(panel.errors).toEqual([])
   })
 })
+
+/** A token's hex colour as computed style reports it. */
+function rgb(hex: string): string {
+  const value = Number.parseInt(hex.slice(1), 16)
+  return `rgb(${value >> 16}, ${(value >> 8) & 255}, ${value & 255})`
+}

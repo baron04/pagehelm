@@ -10,6 +10,10 @@ export interface ComposerProps {
   canReplace: boolean
   stopping: boolean
   disabled: boolean
+  /** The session is over: nothing can be sent from here again, so nothing offers to. */
+  ended: boolean
+  /** The goals already asked in this conversation, oldest first, for ↑ to bring back. */
+  history: readonly string[]
   placeholder: string
   draft: string
   onDraft: (value: string) => void
@@ -22,6 +26,9 @@ export function Composer(props: ComposerProps): React.JSX.Element {
   const input = useRef<HTMLTextAreaElement>(null)
   const [focused, setFocused] = useState(false)
   const [atLimit, setAtLimit] = useState(false)
+  // Which earlier goal the arrows last brought back. Typing ends the walk: from then on the
+  // text is the person's own again and the arrows move the caret.
+  const recall = useRef<number | null>(null)
 
   useLayoutEffect(() => {
     const node = input.current
@@ -61,7 +68,8 @@ export function Composer(props: ComposerProps): React.JSX.Element {
       event.preventDefault()
       send()
     }}>
-      <div className="woa-field" data-focus={focused ? 'true' : undefined}>
+      <div className="woa-field" data-focus={focused ? 'true' : undefined}
+           data-ended={props.ended ? 'true' : undefined}>
         <label className="woa-sr" htmlFor="woa-composer-input">{labels.input}</label>
         <textarea
           id="woa-composer-input"
@@ -75,6 +83,7 @@ export function Composer(props: ComposerProps): React.JSX.Element {
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           onChange={event => {
+            recall.current = null
             onDraft(event.target.value)
             setAtLimit(event.target.value.length >= limits.composer_max_chars)
           }}
@@ -82,23 +91,42 @@ export function Composer(props: ComposerProps): React.JSX.Element {
             if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault()
               send()
+              return
+            }
+            const plain = !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey
+              && !event.nativeEvent.isComposing
+            if (!plain || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return
+            const {history} = props
+            const at = recall.current
+            const untouched = at !== null && draft === history[at]
+            if (event.key === 'ArrowUp' && history.length > 0
+                && (draft === '' || untouched) && at !== 0) {
+              event.preventDefault()
+              const back = at === null ? history.length - 1 : at - 1
+              recall.current = back
+              onDraft(history[back] ?? '')
+            } else if (event.key === 'ArrowDown' && untouched) {
+              event.preventDefault()
+              const forward = at + 1
+              recall.current = forward < history.length ? forward : null
+              onDraft(history[forward] ?? '')
             }
           }}
         />
         {/* Kept for screen readers only: the visible hint was noise for everyone else. */}
         <span className="woa-sr" id="woa-composer-hint">{labels.keyHint}</span>
-        {busy && !canReplace
+        {props.ended ? null : busy && !canReplace
           ? (
             <button type="button" className="woa-send" data-stop="true"
                     aria-label={labels.stop} disabled={stopping} onClick={props.onCancel}>
-              <Square {...iconProps(14, 1.2)} />
+              <Square {...iconProps(12, 1.2)} fill="currentColor" />
             </button>
           )
           : (
             <button type="submit" className="woa-send" aria-label={labels.send}
                     data-off={disabled || !draft.trim() ? 'true' : undefined}
                     disabled={disabled || !draft.trim()}>
-              <ArrowUp {...iconProps(14, 1.2)} />
+              <ArrowUp {...iconProps(16, 1.5)} />
             </button>
           )}
       </div>

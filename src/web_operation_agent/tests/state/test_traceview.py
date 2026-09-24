@@ -17,6 +17,9 @@ from web_operation_agent.state.traceview import (TraceReplayUnavailable, build_t
 
 #: The page's source is the frontend's; what the server fills in is the frontend's build of it.
 SOURCE = Path(__file__).resolve().parents[4] / "frontend" / "trace" / "trace_replay.html"
+#: The palette the page is built with; read here so a palette change is not a test change.
+ACCENT = json.loads((SOURCE.parents[1] / "src" / "styles" / "design_tokens.json")
+                    .read_text(encoding="utf-8"))["themes"]["light"]["accent"]
 BUILT = files("web_operation_agent").joinpath("web_runtime", "trace_replay.html").is_file()
 needs_build = unittest.skipUnless(
     BUILT, "the trace replay page is not built; run scripts/build_panel.py")
@@ -98,7 +101,7 @@ class TraceViewTests(unittest.TestCase):
             self.assertNotIn("__WOA_DESIGN_TOKENS__", page)
             # The replay is built with the product's palette and none of its code: it renders
             # a past run from a static bundle, which is a different job from driving a session.
-            self.assertIn("--woa-accent: #1d4ed8;", page)
+            self.assertIn(f"--woa-accent: {ACCENT};", page)
             self.assertIn("prefers-color-scheme: dark", page)
             self.assertNotIn("createAssistantPanel", page)
             self.assertNotIn("<script src=", page)
@@ -208,7 +211,7 @@ class TraceViewTests(unittest.TestCase):
                 self.assertEqual(
                     page.locator(":root").evaluate(
                         "node => getComputedStyle(node).getPropertyValue('--woa-accent').trim()"),
-                    "#1d4ed8")
+                    ACCENT)
                 page.locator("#play").click()
                 page.locator("#reset").click()
                 self.assertEqual(errors, [])

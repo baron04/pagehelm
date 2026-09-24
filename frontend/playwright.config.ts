@@ -15,5 +15,12 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: true,
   reporter: [['list']],
-  use: {...devices['Desktop Chrome'], headless: true},
+  use: {
+    ...devices['Desktop Chrome'],
+    headless: true,
+    // Headless Chromium hides scrollbars by default, which is no one's real browser: on
+    // Windows and Linux a scrollbar takes room from the layout, and what that room does to
+    // the panel is exactly what a test has to be able to see.
+    launchOptions: {ignoreDefaultArgs: ['--hide-scrollbars']},
+  },
 })

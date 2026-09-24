@@ -1,10 +1,13 @@
 import {memo, useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import {
-  AlertTriangle, ArrowDown, CircleAlert, CircleCheck, CircleX, ShieldQuestion,
+  AlertTriangle, ArrowDown, ChevronDown, CircleAlert, CircleCheck, CircleSlash, CircleX,
 } from 'lucide-react'
 import type {Labels, PanelLimits, TimelineEntry} from '../contract/panel'
 import type {PanelSnapshot} from '../bridge/host'
+import {plainText} from '../markdown/plain'
+import {formatFullTime, formatTime} from '../state/clock'
 import {Answer} from './Answer'
+import {CopyButton} from './CopyButton'
 import {guarded} from './ErrorBoundary'
 import {iconProps} from './icon'
 
@@ -31,8 +34,8 @@ function spell(seconds: number): string {
  */
 function took(fromAt: number, toAt: number): string {
   const seconds = Math.round((toAt - fromAt) / 1000)
-  if (!fromAt || !toAt || toAt < fromAt || seconds < 1 || seconds > IMPLAUSIBLE_S) return ''
-  return spell(seconds)
+  if (!fromAt || !toAt || toAt < fromAt || seconds > IMPLAUSIBLE_S) return ''
+  return seconds < 1 ? '<1s' : spell(seconds)
 }
 
 /** How long the turn took, from the goal the server accepted to the outcome it recorded. */
@@ -91,9 +94,11 @@ function group(entries: TimelineEntry[], busy: boolean): Turn[] {
 }
 
 /** What a node's marker says happened at that point, which is all it is allowed to say. */
-type NodeStatus = 'running' | 'done' | 'failed' | 'waiting'
+type NodeStatus = 'running' | 'done' | 'failed' | 'waiting' | 'stopped'
 
-const FAILED_STATES = new Set(['refused', 'error', 'indeterminate', 'cancelled'])
+const FAILED_STATES = new Set(['refused', 'error', 'indeterminate'])
+/** A turn the person ended -- stopped, declined, or replaced. Nothing went wrong. */
+const STOPPED_STATE = 'cancelled'
 
 function statusOf(turn: Turn, index: number): NodeStatus {
   const step = turn.steps[index]!
@@ -105,19 +110,23 @@ function statusOf(turn: Turn, index: number): NodeStatus {
   // A turn that ended badly ended at its last step: that is the one that gets the mark,
   // and the steps before it really did complete.
   const ended = turn.outcome?.panel_state ?? ''
-  return (FAILED_STATES.has(ended) && index === turn.steps.length - 1) ? 'failed' : 'done'
+  if (index !== turn.steps.length - 1) return 'done'
+  return FAILED_STATES.has(ended) ? 'failed' : ended === STOPPED_STATE ? 'stopped' : 'done'
 }
 
+/**
+ * A node's marker. Completed steps are quiet dots, not a column of green ticks: a tick on
+ * every line stops meaning "succeeded". Colour is kept for what needs noticing -- the step
+ * being worked on, a confirmation waiting on the person, the step a turn failed on.
+ */
 function NodeMark({status}: {status: NodeStatus}): React.JSX.Element {
-  if (status === 'running') return <span className="woa-spinner" aria-hidden="true" />
-  if (status === 'waiting') {
-    return <ShieldQuestion {...iconProps(14)} />
-  }
+  if (status === 'waiting') return <span className="woa-pulse" />
   if (status === 'failed') return <CircleX {...iconProps(14)} />
-  return <CircleCheck {...iconProps(14)} />
+  if (status === 'stopped') return <CircleSlash {...iconProps(14)} />
+  return <span className="woa-dot" />
 }
 
-/** One node of the timeline: what happened, how long it took, and -- opened -- with what. */
+/** One node of the timeline: what happened, and -- opened -- with what and for how long. */
 function StepNode({step, status, duration, labels}: {
   step: TimelineEntry
   status: NodeStatus
@@ -127,10 +136,12 @@ function StepNode({step, status, duration, labels}: {
   const [open, setOpen] = useState(false)
   const facts = step.step
   const detail = facts && (facts.tool || facts.arguments || facts.result)
+  // Most steps take about a second, so a column of durations says nothing; how long one
+  // step took is for whoever opened it to find out what was slow.
   const line = (
     <>
       <span className="woa-step__text">{step.text}</span>
-      {duration && <span className="woa-step__elapsed">{duration}</span>}
+      {detail && <ChevronDown {...iconProps(14)} className="woa-step__chevron" />}
     </>
   )
   return (
@@ -147,18 +158,22 @@ function StepNode({step, status, duration, labels}: {
           {facts?.tool && (<><dt>{labels.stepTool}</dt><dd><code>{facts.tool}</code></dd></>)}
           {facts?.arguments && (<><dt>{labels.stepArguments}</dt><dd>{facts.arguments}</dd></>)}
           {facts?.result && (<><dt>{labels.stepResult}</dt><dd>{facts.result}</dd></>)}
+          {duration && (<><dt>{labels.stepDuration}</dt><dd>{duration}</dd></>)}
         </dl>
       )}
     </li>
   )
 }
 
-const WorkProcess = memo(function WorkProcess({turn, labels}: {
+const WorkProcess = memo(function WorkProcess({turn, labels, stopping}: {
   turn: Turn
   labels: Labels
+  /** The person pressed stop and the turn has not ended yet. */
+  stopping: boolean
 }): React.JSX.Element {
   const now = useClock(turn.running)
   const total = elapsed(turn, now)
+  const [open, setOpen] = useState(false)
   // A turn whose only entry is the server saying it had started -- an old session replayed
   // from before steps were reported -- has nothing a list can add, so it gets no list, just
   // how long it took. Everything else keeps its steps, including after the answer lands.
@@ -166,12 +181,50 @@ const WorkProcess = memo(function WorkProcess({turn, labels}: {
   if (!turn.running && bare) {
     return <p className="woa-took">{labels.elapsedPrefix} {total}</p>
   }
-  // The record stays after the answer. It is the only place a reader can see which tool
-  // produced the numbers above, so hiding it once the answer lands would take away the
-  // thing that makes the answer checkable.
+  // Folded either way, one press from the whole record. While it runs, the line is what it
+  // is doing now and how long it has been at it: enough to tell working from stuck, without
+  // a growing list pushing the question off screen. Once it has landed the answer leads, and
+  // the line says how much work stood behind it.
+  const failed = !turn.running && FAILED_STATES.has(turn.outcome?.panel_state ?? '')
+  // Ended by the person: a grey slashed circle -- cancelled, as a CI run marks it -- not the
+  // red cross of a failure. The words for why are the answer's, directly below.
+  const stopped = !turn.running && turn.outcome?.panel_state === STOPPED_STATE
+  const current = turn.steps.at(-1)!
+  // A stop takes effect at the next safe point, which can be seconds away. Until the turn
+  // ends, the line says it heard the press rather than carrying on about the step.
+  const waiting = turn.running && !stopping && current.kind === 'approval'
+  const header = turn.running
+    ? (
+      <button type="button" className="woa-work__live" aria-expanded={open}
+              data-waiting={waiting ? 'true' : undefined}
+              data-stopping={stopping ? 'true' : undefined} onClick={() => setOpen(!open)}>
+        <span className="woa-work__mark" aria-hidden="true">
+          {waiting ? <span className="woa-pulse" /> : <span className="woa-spinner" />}
+        </span>
+        {/* Keyed by the step, so each new one arrives rather than overwriting the last. */}
+        {stopping
+          ? <span className="woa-work__now" key="stopping">{labels.statusStopping}</span>
+          : <span className="woa-work__now" key={current.id}>{current.text}</span>}
+        <ChevronDown {...iconProps(14)} className="woa-work__chevron" />
+        {total && <span className="woa-work__clock">{total}</span>}
+      </button>
+    )
+    : (
+      <button type="button" className="woa-work__summary" aria-expanded={open}
+              data-failed={failed ? 'true' : undefined} data-stopped={stopped ? 'true' : undefined}
+              onClick={() => setOpen(!open)}>
+        {failed ? <CircleX {...iconProps(14)} />
+          : stopped ? <CircleSlash {...iconProps(14)} /> : <CircleCheck {...iconProps(14)} />}
+        <span>{labels.workSteps.replace('{count}', String(turn.steps.length))}
+          {total && ` · ${labels.elapsedPrefix} ${total}`}</span>
+        <ChevronDown {...iconProps(14)} className="woa-work__chevron" />
+      </button>
+    )
   return (
-    <div className="woa-work" data-running={turn.running ? 'true' : undefined}>
-      <ol className="woa-work__steps">
+    <div className="woa-work" data-running={turn.running ? 'true' : undefined}
+         data-open={open ? 'true' : undefined}>
+      {header}
+      {open && <ol className="woa-work__steps">
         {turn.steps.map((step, index) => {
           const next = turn.steps[index + 1]
           const until = next ? next.at
@@ -181,8 +234,7 @@ const WorkProcess = memo(function WorkProcess({turn, labels}: {
                       duration={took(step.at, until)} labels={labels} />
           )
         })}
-      </ol>
-      {total && <p className="woa-took">{labels.elapsedPrefix} {total}</p>}
+      </ol>}
     </div>
   )
 })
@@ -211,6 +263,17 @@ function Outcome({entry, labels, limits, live, allowedOrigins}: {
                   authored="server" live={false} labels={labels} allowedOrigins={allowedOrigins} />
         </details>
       )}
+      <div className="woa-answer-actions">
+        <CopyButton text={() => plainText(entry.text.slice(0, limits.result_max_chars))}
+                    label={labels.copyAnswer} copiedLabel={labels.copied}
+                    className="woa-icon-button" />
+        {entry.at > 0 && (
+          <time className="woa-answer-time" dateTime={new Date(entry.at).toISOString()}
+                title={formatFullTime(entry.at, labels.locale)}>
+            {formatTime(entry.at, Date.now(), labels.locale)}
+          </time>
+        )}
+      </div>
       </>
     )
   }
@@ -253,6 +316,8 @@ export function Thread(props: ThreadProps): React.JSX.Element {
   const follow = useRef(true)
   const gesture = useRef(0)
   const [detached, setDetached] = useState(false)
+  // Whether anything sits scrolled up under the title bar, which then draws its rule.
+  const [scrolled, setScrolled] = useState(false)
   const [unseen, setUnseen] = useState(0)
   const turns = useMemo(() => group(snapshot.entries, snapshot.connection.busy),
                         [snapshot.entries, snapshot.connection.busy])
@@ -291,6 +356,7 @@ export function Thread(props: ThreadProps): React.JSX.Element {
         follow.current = false
       }
       setDetached(distance > JUMP_REVEAL_DISTANCE)
+      setScrolled(root.scrollTop > 0)
     })
     root.addEventListener('scroll', onScroll, {passive: true})
     root.addEventListener('wheel', note, {passive: true})
@@ -354,7 +420,7 @@ export function Thread(props: ThreadProps): React.JSX.Element {
   const empty = turns.length === 0 && !snapshot.optimistic
 
   return (
-    <div className="woa-thread-shell">
+    <div className="woa-thread-shell" data-scrolled={scrolled ? 'true' : undefined}>
     <div className="woa-thread" ref={scroller} role="log" aria-live="polite"
          aria-label={labels.timeline} tabIndex={0}>
       {/* One box holding everything that can change height, so a single ResizeObserver
@@ -372,7 +438,10 @@ export function Thread(props: ThreadProps): React.JSX.Element {
                 data-settled={turn.running ? undefined : 'true'}>
               {turn.goal && <p className="woa-user">{turn.goal.text}</p>}
               <div className="woa-agent">
-                {turn.steps.length > 0 && <WorkProcess turn={turn} labels={labels} />}
+                {turn.steps.length > 0 && (
+                  <WorkProcess turn={turn} labels={labels}
+                               stopping={turn.running && snapshot.connection.stopping} />
+                )}
                 {turn.outcome && (
                   <Outcome entry={turn.outcome} labels={labels} limits={limits}
                            live={!settledAtMount.current?.has(turn.outcome.id)}

@@ -173,6 +173,8 @@ export interface OpenOptions {
   colorScheme?: 'light' | 'dark'
   csp?: string
   deviceScaleFactor?: number
+  /** Let the page read and write the clipboard, so a copy can be read back. */
+  clipboard?: boolean
 }
 
 /** One mounted panel: the page, the uncaught errors it raised, and the host's record. */
@@ -247,6 +249,7 @@ export const test = base.extend<{open: (state: Snapshot, options?: OpenOptions) 
         reducedMotion: options.reducedMotion ?? 'no-preference',
         colorScheme: options.colorScheme ?? 'light',
         deviceScaleFactor: options.deviceScaleFactor ?? 1,
+        ...(options.clipboard ? {permissions: ['clipboard-read', 'clipboard-write']} : {}),
       })
       cleanups.push(() => context.close())
       const page = await context.newPage()

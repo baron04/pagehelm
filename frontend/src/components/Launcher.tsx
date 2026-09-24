@@ -1,6 +1,7 @@
 import type {Labels, PanelState} from '../contract/panel'
 import presentation from '../presentation.json'
 import {DOCK_INSET} from '../state/geometry'
+import {SHORTCUT_ARIA} from '../state/shortcut'
 import {Mark} from './Mark'
 
 export type LauncherState = 'idle' | 'working' | 'awaiting' | 'closed'
@@ -20,15 +21,19 @@ export function launcherStateFor(state: PanelState, pendingApproval: boolean): L
  * state the header deliberately no longer shows. The mark itself never changes -- a mark
  * that keeps changing stops being one -- so the state lives on the ring around it.
  */
-export function Launcher({state, unread, labels, onOpen}: {
+export function Launcher({state, unread, labels, onOpen, autoFocus, onKeyDown}: {
   state: LauncherState
   unread: number
   labels: Labels
   onOpen: () => void
+  /** Set only when the keyboard put the window away: focus comes back here, not to the page. */
+  autoFocus: boolean
+  onKeyDown: (event: React.KeyboardEvent) => void
 }): React.JSX.Element {
   return (
     <button type="button" className="woa-launcher" data-state={state}
-            aria-label={labels.expand} onClick={onOpen}
+            aria-label={labels.expand} aria-keyshortcuts={SHORTCUT_ARIA}
+            autoFocus={autoFocus} onClick={onOpen} onKeyDown={onKeyDown}
             style={{right: `${DOCK_INSET}px`, bottom: `${DOCK_INSET}px`,
                     width: `${presentation.layout.launcher_size}px`,
                     height: `${presentation.layout.launcher_size}px`}}>

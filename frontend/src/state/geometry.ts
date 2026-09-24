@@ -31,6 +31,13 @@ const DRAWER_MAX_SHARE = 0.6
  * beside it would be too narrow to work in.
  */
 export const DRAWER_PUSH_MIN_VIEWPORT = 900
+/**
+ * Below this viewport width, or this height, the window is the whole screen in either mode.
+ * A phone held upright is narrower than a floating window and its margins; one held on its
+ * side is too short for one. Neither has room for a window beside the page.
+ */
+export const FULL_SCREEN_MAX_WIDTH = 600
+export const FULL_SCREEN_MAX_HEIGHT = 480
 const STORAGE_KEY = 'woa.panel.geometry.v1'
 const DRAWER_KEY = 'woa.panel.drawer.v1'
 const MODE_KEY = 'woa.panel.mode.v1'
@@ -73,7 +80,11 @@ export function rememberOpen(value: boolean): void {
 
 function viewport(): {width: number; height: number} {
   if (typeof window === 'undefined') return {width: 1280, height: 800}
-  return {width: window.innerWidth, height: window.innerHeight}
+  // The page's own scrollbars are not the panel's to cover. The overlay the window lives in
+  // is fixed to the viewport *inside* them, which is what `clientWidth` measures;
+  // `innerWidth` counts the scrollbar too, and put the window's edge under it.
+  const root = document.documentElement
+  return {width: root.clientWidth || window.innerWidth, height: root.clientHeight || window.innerHeight}
 }
 
 /** Keep the window inside the viewport without forgetting what the user asked for. */
@@ -120,6 +131,12 @@ export function clampDrawer(width: number): number {
   return Math.min(Math.max(DRAWER_MIN_WIDTH, width), widest, view.width)
 }
 
+/** Whether this viewport is too small for a window beside the page. */
+export function fillsScreen(): boolean {
+  const view = viewport()
+  return view.width < FULL_SCREEN_MAX_WIDTH || view.height < FULL_SCREEN_MAX_HEIGHT
+}
+
 /** Whether a drawer at this viewport narrows the page or, on a narrow one, covers it. */
 export function drawerPushes(): boolean {
   return viewport().width >= DRAWER_PUSH_MIN_VIEWPORT
@@ -163,6 +180,8 @@ function loadMode(): DockMode {
 
 export interface WindowGeometry {
   mode: DockMode
+  /** The viewport is too small for either mode: the window covers it, and neither moves nor resizes. */
+  fullScreen: boolean
   geometry: Geometry
   /** True until the person moves or resizes the floating window: it then stays on the launcher. */
   docked: boolean
@@ -182,6 +201,7 @@ export function useWindowGeometry(enabled: boolean): WindowGeometry {
   const [drawerWidth, setDrawerWidth] = useState(
     () => clampDrawer(loadDrawer() ?? DRAWER_DEFAULT_WIDTH))
   const [pushes, setPushes] = useState(drawerPushes)
+  const [fullScreen, setFullScreen] = useState(fillsScreen)
   const [dragging, setDragging] = useState<Handle | null>(null)
   // What the user last asked for, so a temporarily narrow viewport does not shrink the
   // window permanently: on the way back out it returns to this size.
@@ -194,6 +214,7 @@ export function useWindowGeometry(enabled: boolean): WindowGeometry {
     setPlaced(current => current && clamp(current, preferred.current ?? current))
     setDrawerWidth(clampDrawer(preferredDrawer.current))
     setPushes(drawerPushes())
+    setFullScreen(fillsScreen())
   }, [])
 
   // Opening is when the launcher's corner is known to be where the person just clicked.
@@ -233,7 +254,7 @@ export function useWindowGeometry(enabled: boolean): WindowGeometry {
   const geometry = placed ?? docked
 
   const onPointerDown = useCallback((handle: Handle) => (event: React.PointerEvent) => {
-    if (!enabled || event.button !== 0) return
+    if (!enabled || fullScreen || event.button !== 0) return
     // The title bar is both the drag handle and the home of the window's own controls.
     // Capturing the pointer here would suppress their click, so a press that started on a
     // control is left alone: the buttons have to keep working.
@@ -299,10 +320,10 @@ export function useWindowGeometry(enabled: boolean): WindowGeometry {
     target.addEventListener('pointermove', onMove)
     target.addEventListener('pointerup', onUp)
     target.addEventListener('pointercancel', onUp)
-  }, [enabled, mode, geometry, drawerWidth])
+  }, [enabled, fullScreen, mode, geometry, drawerWidth])
 
   return {
-    mode, geometry, docked: placed === null,
+    mode, fullScreen, geometry, docked: placed === null,
     drawer: {width: drawerWidth, pushes},
     dragging, onPointerDown, toggleMode,
   }

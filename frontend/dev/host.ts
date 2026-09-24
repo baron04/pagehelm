@@ -18,10 +18,18 @@ import type {PanelHost, PanelSnapshot} from '../src/bridge/host'
 let sequence = 0
 let turn = 1
 
+/**
+ * The scripted turn still allowed to publish. A stop, or a newer turn, retires the one in
+ * flight: it gives up at its next pause, as the server's would, instead of writing its
+ * steps, its confirmation and its answer into whatever came after it.
+ */
+let live = 0
+
 /** Start a new user turn. Deriving it from the entry count guessed wrong. */
-function nextTurn(): string {
+function nextTurn(): number {
   turn += 1
-  return `turn-${turn}`
+  live = turn
+  return turn
 }
 
 function entry(kind: TimelineEntry['kind'], text: string,
@@ -81,18 +89,45 @@ export function createDevHost(): DevHost {
 
   let pendingWrite: ApprovalRequest | null = null
 
+  /** Play steps one after another, the way the server's feed publishes them. Each line is
+      the sentence the server's `describe_step` / `describe_action` writes for it. False when
+      the turn was retired on the way, and nothing more of it should follow. */
+  async function play(
+    mine: number,
+    steps: [number, TimelineEntry['kind'], string, TimelineEntry['step']?][],
+  ): Promise<boolean> {
+    for (const [pause, kind, text, step] of steps) {
+      await wait(pause)
+      if (mine !== live) return false
+      push(entry(kind, text, {tone: 'active', ...(step ? {step} : {})}))
+    }
+    return true
+  }
+
   async function runRead(goal: string): Promise<void> {
-    nextTurn()
+    const mine = nextTurn()
     commit({connection: {...state.connection, busy: true, state: 'observing'}})
     push(entry('goal', goal))
     commit({optimistic: null})
-    await wait(400)
-    push(entry('action', '重新检查当前页面', {tone: 'active'}))
-    await wait(600)
-    push(entry('action', '打开页面：/odoo/sales', {tone: 'active'}))
-    await wait(700)
-    push(entry('action', 'query_sale_orders · 扫完 12 / 12 条', {tone: 'active'}))
+    if (!await play(mine, [
+      [300, 'progress', '正在理解目标'],
+      [500, 'progress', '正在思考', {stage: 'thinking'}],
+      [700, 'progress', '正在选择操作方式',
+       {stage: 'tool', tool: 'load_skill', arguments: 'skill_id=odoo.sales.query'}],
+      [400, 'action', '重新检查当前页面'],
+      [600, 'progress', '正在思考（第 2 步）', {stage: 'thinking'}],
+      [800, 'progress', '正在读取业务数据',
+       {stage: 'tool', tool: 'query_sale_orders',
+        arguments: 'invoice_status=to invoice · limit=50'}],
+      [900, 'progress', '已读取 12 条：待开票的销售订单',
+       {stage: 'read_done', tool: 'query_sale_orders', result: '12 条 · 待开票的销售订单'}],
+      [500, 'progress', '正在计算',
+       {stage: 'tool', tool: 'compute', arguments: 'sum(amount_total) · 3 条'}],
+      [600, 'action', '打开页面：/odoo/sales'],
+      [500, 'action', '等待页面状态更新'],
+    ])) return
     await wait(500)
+    if (mine !== live) return
     push(entry('result', ANSWER, {
       tone: 'success', panel_state: 'success', authored: 'model',
     }))
@@ -100,15 +135,26 @@ export function createDevHost(): DevHost {
   }
 
   async function runWrite(goal: string): Promise<void> {
-    nextTurn()
+    const mine = nextTurn()
     commit({connection: {...state.connection, busy: true, state: 'observing'}})
     push(entry('goal', goal))
     commit({optimistic: null})
-    await wait(500)
-    push(entry('action', '重新检查当前页面', {tone: 'active'}))
-    await wait(600)
-    push(entry('action', 'query_quotations · 扫完 12 / 12 条', {tone: 'active'}))
+    if (!await play(mine, [
+      [300, 'progress', '正在理解目标'],
+      [500, 'progress', '正在思考', {stage: 'thinking'}],
+      [600, 'progress', '正在选择操作方式',
+       {stage: 'tool', tool: 'load_skill', arguments: 'skill_id=odoo.sales.confirm'}],
+      [400, 'action', '重新检查当前页面'],
+      [700, 'progress', '正在读取业务数据',
+       {stage: 'tool', tool: 'query_quotations', arguments: 'name=S00002 · state=draft'}],
+      [700, 'progress', '已读取 1 条：报价单 S00002',
+       {stage: 'read_done', tool: 'query_quotations', result: '1 条 · Acme Corporation · 草稿'}],
+      [500, 'progress', '正在思考（第 3 步）', {stage: 'thinking'}],
+      [600, 'progress', '正在准备这次更改',
+       {stage: 'tool', tool: 'confirm_quotation', arguments: 'order=S00002'}],
+    ])) return
     await wait(400)
+    if (mine !== live) return
     push(entry('approval', '需要确认后才能继续', {tone: 'warning'}))
     pendingWrite = {
       schema_version: 1,
@@ -149,6 +195,7 @@ export function createDevHost(): DevHost {
   }
 
   async function settleWrite(decision: 'approved' | 'denied'): Promise<void> {
+    const mine = live
     commit({
       pendingApproval: null,
       connection: {...state.connection, state: decision === 'approved' ? 'acting' : 'cancelled'},
@@ -160,7 +207,16 @@ export function createDevHost(): DevHost {
       commit({connection: {...state.connection, busy: false, state: 'cancelled'}})
       return
     }
-    await wait(900)
+    if (!await play(mine, [
+      [300, 'progress', '已收到你的确认'],
+      [900, 'progress', '更改已执行，正在核对结果',
+       {stage: 'write_done', tool: 'confirm_quotation', result: 'S00002 · draft → sale'}],
+      [700, 'progress', '已读取 1 条：销售订单 S00002',
+       {stage: 'read_done', tool: 'query_sale_orders', result: '1 条 · 状态：销售订单'}],
+      [500, 'action', '打开页面：/odoo/sales/2'],
+    ])) return
+    await wait(500)
+    if (mine !== live) return
     push(entry('result',
       '报价单 S00002 已确认为销售订单。写入后以同一用户重新读取，确认状态已变更。', {
         tone: 'success', panel_state: 'success', authored: 'server',
@@ -198,11 +254,18 @@ export function createDevHost(): DevHost {
       if (pending) host.submit(pending.text)
     },
     cancel() {
-      commit({connection: {...state.connection, stopping: true, state: 'stopping'}})
+      // The server declines a confirmation the stop overtakes, so the card goes with the turn.
+      live = 0
+      commit({pendingApproval: null,
+              connection: {...state.connection, stopping: true, state: 'stopping'}})
+      push(entry('progress', '正在停止', {tone: 'warning'}))
+      // The answer belongs to the turn that was stopped, even if another began meanwhile.
+      const stopped = `turn-${turn}`
       window.setTimeout(() => {
         push(entry('result', '已按你的要求停止。', {
-          tone: 'neutral', panel_state: 'cancelled', authored: 'server',
+          tone: 'neutral', panel_state: 'cancelled', authored: 'server', turn_id: stopped,
         }))
+        if (live !== 0) return
         commit({
           connection: {...state.connection, busy: false, stopping: false, state: 'cancelled'},
         })
@@ -231,6 +294,19 @@ export function createDevHost(): DevHost {
       commit({notice: null, connection: {...state.connection, state: 'ready', online: true}})
     },
     scenario(name) {
+      // The composer cannot start a turn over one in flight; a scenario button can, so it
+      // ends that turn first, the way a replacing message does, rather than letting two
+      // scripts write into one conversation.
+      if (['read', 'write', 'navigation'].includes(name)
+          && (state.connection.busy || state.pendingApproval)) {
+        live = 0
+        push(entry('result', '已中断上一项操作。', {
+          tone: 'neutral', panel_state: 'cancelled', authored: 'server',
+        }))
+        commit({pendingApproval: null,
+                connection: {...state.connection, busy: false, stopping: false,
+                             state: 'cancelled'}})
+      }
       switch (name) {
         case 'clear':
           sequence = 0
@@ -289,8 +365,13 @@ export function createDevHost(): DevHost {
           for (let index = 0; index < 6; index += 1) {
             nextTurn()
             push(entry('goal', `第 ${index + 1} 轮：列出第 ${index + 1} 页销售订单`))
+            push(entry('progress', '正在思考', {tone: 'active', step: {stage: 'thinking'}}))
             push(entry('action', '重新检查当前页面', {tone: 'active'}))
-            push(entry('action', `query_sale_orders · 扫完 12 / 12 条`, {tone: 'active'}))
+            push(entry('progress', '正在读取业务数据', {tone: 'active', step: {
+              stage: 'tool', tool: 'query_sale_orders', arguments: `page=${index + 1} · limit=12`}}))
+            push(entry('progress', '已读取 12 条：销售订单', {tone: 'active', step: {
+              stage: 'read_done', tool: 'query_sale_orders', result: '12 条 · 其中 3 张待开票'}}))
+            push(entry('action', `打开页面：/odoo/sales?page=${index + 1}`, {tone: 'active'}))
             push(entry('result', `第 ${index + 1} 页共 12 张，其中 3 张待开票。`, {
               tone: 'success', panel_state: 'success', authored: 'server',
             }))

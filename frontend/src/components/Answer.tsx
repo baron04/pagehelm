@@ -1,10 +1,9 @@
 import {memo, useMemo, useState} from 'react'
-import {Check, Copy} from 'lucide-react'
 import type {Block, Inline} from '../markdown/parse'
 import {countCharacters, parseMarkdown} from '../markdown/parse'
 import type {Labels} from '../contract/panel'
 import {useReveal} from '../state/typewriter'
-import {iconProps} from './icon'
+import {CopyButton} from './CopyButton'
 
 /** A budget that walks the tree once per render, revealing a prefix of the visible text. */
 class Budget {
@@ -60,7 +59,6 @@ function renderInline(nodes: Inline[], budget: Budget, allow: (href: string) => 
 }
 
 function CodeBlock({block, labels}: {block: Extract<Block, {type: 'code'}>; labels: Labels}): React.JSX.Element {
-  const [copied, setCopied] = useState(false)
   const lines = block.value.split('\n')
   const [expanded, setExpanded] = useState(lines.length <= 12)
   const shown = expanded ? block.value : lines.slice(0, 12).join('\n')
@@ -68,17 +66,8 @@ function CodeBlock({block, labels}: {block: Extract<Block, {type: 'code'}>; labe
     <figure className="woa-md__block">
       <header>
         <span className="woa-md__lang">{block.lang || 'text'}</span>
-        <button type="button" className="woa-md__copy" onClick={() => {
-          void navigator.clipboard?.writeText(block.value).then(() => {
-            setCopied(true)
-            window.setTimeout(() => setCopied(false), 1500)
-          }).catch(() => setCopied(false))
-        }}>
-          {copied
-            ? <Check {...iconProps(12)} />
-            : <Copy {...iconProps(12)} />}
-          {copied ? labels.copied : labels.copy}
-        </button>
+        <CopyButton text={() => block.value} label={labels.copy} copiedLabel={labels.copied}
+                    className="woa-md__copy" showLabel />
       </header>
       <pre>{shown}</pre>
       {!expanded && (

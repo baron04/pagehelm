@@ -15,19 +15,20 @@ const frame = (children: React.ReactNode, width = 376) => (
 )
 
 const launcherMeta = {title: 'Panel/Launcher', component: Launcher} satisfies Meta<typeof Launcher>
+const launcherKeys = {autoFocus: false, onKeyDown: () => undefined}
 export default launcherMeta
 
 export const LauncherIdle: StoryObj<typeof launcherMeta> = {
-  args: {state: 'idle', unread: 0, labels, onOpen: () => undefined},
+  args: {state: 'idle', unread: 0, labels, onOpen: () => undefined, ...launcherKeys},
 }
 export const LauncherWorking: StoryObj<typeof launcherMeta> = {
-  args: {state: 'working', unread: 0, labels, onOpen: () => undefined},
+  args: {state: 'working', unread: 0, labels, onOpen: () => undefined, ...launcherKeys},
 }
 export const LauncherAwaiting: StoryObj<typeof launcherMeta> = {
-  args: {state: 'awaiting', unread: 1, labels, onOpen: () => undefined},
+  args: {state: 'awaiting', unread: 1, labels, onOpen: () => undefined, ...launcherKeys},
 }
 export const LauncherClosed: StoryObj<typeof launcherMeta> = {
-  args: {state: 'closed', unread: 0, labels, onOpen: () => undefined},
+  args: {state: 'closed', unread: 0, labels, onOpen: () => undefined, ...launcherKeys},
 }
 
 export const Confirmation = {
@@ -59,7 +60,7 @@ export const Default = {
 
 export const ComposerIdle = {
   render: () => frame(
-    <Composer labels={labels} limits={limits} busy={false} canReplace={false}
+    <Composer labels={labels} limits={limits} busy={false} canReplace={false} ended={false} history={[]}
               stopping={false} disabled={false}
               placeholder={labels.placeholder} draft="" onDraft={() => undefined}
               onSubmit={() => undefined} onCancel={() => undefined} />),
@@ -67,7 +68,7 @@ export const ComposerIdle = {
 
 export const ComposerRunning = {
   render: () => frame(
-    <Composer labels={labels} limits={limits} busy canReplace={false}
+    <Composer labels={labels} limits={limits} busy canReplace={false} ended={false} history={[]}
               stopping={false} disabled={false}
               placeholder={labels.placeholder} draft="" onDraft={() => undefined}
               onSubmit={() => undefined} onCancel={() => undefined} />),
