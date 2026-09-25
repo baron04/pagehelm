@@ -19,15 +19,15 @@
   },
   "approval_kinds": {
     "comment": [
-      "What a confirmation card asks. A write authorises one exact change and can be",
-      "declined. A navigation has one affirmative action; a pre-existing draft can replace",
-      "the waiting turn, while an empty composer remains locked."
+      "What a confirmation card asks. A write authorises one exact change; leave to work the",
+      "page (operate) covers the turn's page operations. Both can be declined. For operate, a",
+      "pre-existing draft can also replace the waiting turn, while an empty composer remains locked."
     ],
     "write": {
       "declinable": true
     },
-    "navigation": {
-      "declinable": false
+    "operate": {
+      "declinable": true
     }
   },
   "start": {

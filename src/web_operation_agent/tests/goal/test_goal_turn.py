@@ -259,10 +259,10 @@ class GoalTurnTests(unittest.TestCase):
                          ["goto", "click"])
         self.assertEqual(browser.selected, ["Other Info"])
         self.assertEqual(len(channel.approvals), 1)
-        self.assertEqual(channel.approvals[0].kind, "navigation")
+        self.assertEqual(channel.approvals[0].kind, "operate")
         kinds = [e["event"] for e in events]
         for name in ("goal_index_ready", "goal_declared", "goal_resolved",
-                     "navigation_confirmation_requested", "goal_page_settled",
+                     "operation_confirmation_requested", "goal_page_settled",
                      "run_finished", "product_turn_finished"):
             self.assertIn(name, kinds)
         self.assertEqual(port.specs[0].deliverables[0].record, "S00006")
@@ -683,14 +683,14 @@ class GoalTurnTests(unittest.TestCase):
         self.assertIn("[D1] Four Person Desk Four person workstation — Unit Price: 2,350.00",
                       execution.user_answer)
 
-    def test_a_declined_page_switch_ends_the_turn_without_acting(self):
+    def test_declined_leave_to_work_the_page_ends_the_turn_without_acting(self):
         execution, *_ = self._run(
             [_declaration(kind="page", page={"key": "p1"})],
             [Resolved(kind="page", page=PagePlan(url="/orders", label="Sales / Orders",
                                                  expected_path="/orders"))],
             decision="denied", text="打开订单")
         self.assertEqual(execution.status, AgentTurnStatus.CANCELLED)
-        self.assertEqual(execution.terminal_reason, "navigation_not_confirmed")
+        self.assertEqual(execution.terminal_reason, "operation_not_confirmed")
         # Looking at the page is not acting on it; nothing else was dispatched.
         self.assertEqual([a for a, _ in _Browser.instances[0].actions], ["observe"])
 

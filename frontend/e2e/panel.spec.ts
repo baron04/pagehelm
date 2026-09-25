@@ -193,37 +193,41 @@ test.describe('a confirmation', () => {
     expect(panel.errors).toEqual([])
   })
 
-  test('a page switch has one control and locks an empty composer', async ({open}) => {
-    // With no earlier draft, navigation waits for its one affirmative answer.
+  test('leave to work the page can be given or declined, and locks an empty composer', async ({open}) => {
+    // With no earlier draft, the card waits for an answer: 帮我操作, or 取消.
     const panel = await open(snapshot())
-    await panel.raiseApproval({kind: 'navigation', effect: '离开当前页面，打开另一个页面',
-                               targets: ['将打开：/odoo/customers/13', '你的请求：打开 azur']})
+    await panel.raiseApproval({kind: 'operate', effect: '在页面上帮你完成这件事',
+                               targets: ['你的请求：打开 azur', '会打开页面、点击、填写和选择']})
     const card = panel.page.locator('.woa-approval')
-    await expect(card).toHaveAttribute('data-kind', 'navigation')
-    await expect(card).toContainText(labels.navigationTitle)
-    // A move is a route to another page, not a guarded change.
+    await expect(card).toHaveAttribute('data-kind', 'operate')
+    await expect(card).toContainText(labels.operateTitle)
+    // Working the page is a route through it, not a guarded change.
     await expect(card.locator('h2 svg.lucide-route')).toHaveCount(1)
     await expect(card.locator('h2 svg.lucide-shield-alert')).toHaveCount(0)
-    await expect(card).toContainText(labels.navigationHint)
-    await expect(card).toContainText('/odoo/customers/13')
-    await expect(panel.page.getByTestId('woa-deny')).toHaveCount(0)
-    await expect(panel.page.getByTestId('woa-approve')).toHaveText(labels.navigationConfirm)
-    expect((await panel.active()).testid).toBe('woa-approve')
-    await panel.page.keyboard.press('Escape')
-    expect(await panel.calls()).toEqual([])
+    // Its terms show: it can be stopped, a change is still asked about, unsaved work may go.
+    await expect(card).toContainText(labels.operateHint)
+    await expect(card).toContainText('你的请求：打开 azur')
+    await expect(panel.page.getByTestId('woa-deny')).toHaveText(labels.deny)
+    await expect(panel.page.getByTestId('woa-approve')).toHaveText(labels.operateConfirm)
     await expect(panel.page.locator('#woa-composer-input')).toBeDisabled()
+    // Focus starts on the answer that does nothing, and Escape gives it.
+    expect((await panel.active()).testid).toBe('woa-deny')
+    await panel.page.keyboard.press('Escape')
+    const calls = await panel.calls()
+    expect(calls.map(call => call[0])).toEqual(['decide'])
+    expect(calls[0]?.[2]).toBe('denied')
     expect(panel.errors).toEqual([])
   })
 
-  test('a draft that predates navigation can replace the waiting turn', async ({open}) => {
+  test('a draft that predates the card can replace the waiting turn', async ({open}) => {
     // Sending the preserved draft asks the Runtime to cancel then replace the turn.
     const panel = await open(snapshot())
     await panel.page.locator('.woa-launcher').click()
     const composer = panel.page.locator('#woa-composer-input')
     await composer.fill('改问：Azure Interior 的电话是多少？')
     await panel.set({connection: {state: 'acting', busy: true, stopping: false, online: true}})
-    await panel.raiseApproval({kind: 'navigation', effect: '离开当前页面，打开另一个页面',
-                               targets: ['将打开：/odoo/customers/13', '你的请求：打开 azur']})
+    await panel.raiseApproval({kind: 'operate', effect: '在页面上帮你完成这件事',
+                               targets: ['你的请求：打开 azur', '会打开页面、点击、填写和选择']})
 
     await expect(composer).toBeEnabled()
     await composer.press('Enter')
@@ -254,13 +258,11 @@ test.describe('a confirmation', () => {
     expect(panel.errors).toEqual([])
   })
 
-  test('an expired one stops offering buttons and frees the composer', async ({open}) => {
-    // Past the deadline the server takes no answer, so the card must not ask for one.
-    //
-    // It did: the countdown reached 0:00 and the card sat there looking answerable, with
-    // the composer locked behind it. Pressing it made the runtime treat the 409 as "another
-    // page took this session over", stop, and -- after a reload, which replayed the same
-    // doomed decision -- never mount the panel at all (P7.5 CR-38).
+  test('an expired one goes at once, says nothing, and frees the composer', async ({open}) => {
+    // Past the deadline the server takes no answer and ends the turn as a stop, so the card
+    // goes without a word. A card left up to be pressed once made the runtime treat the 409
+    // as "another page took this session over" (P7.5 CR-38); a notice about the timeout was
+    // ruled out by the owner: a timeout interrupts the message, it does not explain itself.
     const panel = await open(snapshot())
     await panel.raiseApproval()
     const composer = panel.page.locator('textarea')
@@ -269,12 +271,26 @@ test.describe('a confirmation', () => {
     await panel.set({pendingApproval: {...PENDING, expires_at: 0}})
     await panel.page.waitForTimeout(1200)
 
-    await expect(panel.page.locator('[data-testid=woa-approve]')).toHaveCount(0)
-    await expect(panel.page.locator('[data-testid=woa-deny]')).toHaveCount(0)
-    await expect(panel.page.locator('.woa-approval'), 'what was asked stays readable')
-      .toBeVisible()
-    await expect(panel.page.locator('.woa-approval__blocked[data-expired]')).toContainText('已超时')
+    await expect(panel.page.locator('.woa-approval')).toHaveCount(0)
+    await expect(panel.page.locator('.woa-notice, .woa-inline-error')).toHaveCount(0)
     await expect(composer, 'the person can type again').toBeEnabled()
+  })
+
+  test('a turn a card timed out on ends stopped, with no line of its own', async ({open}) => {
+    const panel = await open(snapshot({entries: [
+      entry('e1', 'goal', '打开 Azure Interior 的客户页面'),
+      entry('e2', 'progress', '正在思考'),
+      entry('e3', 'progress', '已读取 1 条：客户 Azure Interior'),
+      entry('e4', 'approval', '需要确认后才能操作页面', {tone: 'warning'}),
+      entry('e5', 'result', '', {panel_state: 'cancelled'}),
+    ]}))
+    await panel.page.locator('.woa-launcher').click()
+    await panel.page.locator('.woa-turn').waitFor()
+    await expect(panel.page.locator('.woa-turn .woa-work__summary svg.lucide-circle-slash'))
+      .toHaveCount(1)
+    await expect(panel.page.locator('.woa-turn .woa-outcome')).toHaveCount(0)
+    await expect(panel.page.locator('.woa-turn .woa-answer-actions')).toHaveCount(0)
+    expect(panel.errors).toEqual([])
   })
 
   test('the time left shows only once it is short', async ({open}) => {
@@ -492,8 +508,8 @@ test.describe('the keyboard', () => {
     await expect(page.locator('#woa-composer-input')).toHaveValue('草稿留着')
 
     // In a confirmation Escape is the card's own answer, and the window stays.
-    await panel.raiseApproval({kind: 'navigation', effect: '离开当前页面，打开另一个页面',
-                               targets: ['将打开：/odoo/customers/13']})
+    await panel.raiseApproval({kind: 'operate', effect: '在页面上帮你完成这件事',
+                               targets: ['你的请求：打开 azur']})
     await page.keyboard.press('Escape')
     await expect(page.locator('.woa-window')).toHaveCount(1)
     expect(panel.errors).toEqual([])
@@ -671,8 +687,8 @@ test.describe('the work process', () => {
     await panel.set({entries: [
       line('g1', 0, 'goal', '打开 Azure Interior'),
       line('g2', 3, 'action', '已找到唯一客户 Azure Interior'),
-      line('g3', 3, 'approval', '需要确认后才能打开页面'),
-      line('g4', 303, 'result', '页面切换没有得到确认。', {panel_state: 'cancelled'}),
+      line('g3', 3, 'approval', '需要确认后才能操作页面'),
+      line('g4', 303, 'result', '没有得到操作页面的确认。', {panel_state: 'cancelled'}),
     ]})
     await expect(panel.page.locator('.woa-work__summary')).toContainText(`${labels.elapsedPrefix} 3s`)
     expect(panel.errors).toEqual([])

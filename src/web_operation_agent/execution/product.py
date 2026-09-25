@@ -128,9 +128,9 @@ class AgentTurnConfig:
     no_progress_repeat_limit: int | None = 2
     plain_business_answer_min_page_actions: int | None = None
     approval_ttl_s: int = 120
-    #: A page switch waits longer than a write: leaving a page is reversible, and the person
-    #: may be finishing something on the page they are asked to leave.
-    navigation_approval_ttl_s: int = 300
+    #: Letting the assistant work the page waits longer than a write: working the page is
+    #: reversible, and the person may be finishing something on the page first.
+    operation_approval_ttl_s: int = 300
     keep_observations: int = 3
     allow_application_entry: bool = False
     allow_business_mutations: bool = False
@@ -151,11 +151,12 @@ class AgentTurnConfig:
     #: prompt tells the model to use it before source. Source stays the fallback for what
     #: no Skill covers. A write Skill is never loaded this way.
     skill_first: bool = True
-    #: Ask the person before the assistant leaves the current page, with one confirmation
-    #: and no decline (owner ruling D7). Leaving a page can discard what was typed there or
-    #: let the application save it on the way out, and loses the page's state. On by
-    #: default; a person who does not want the switch stops the task.
-    confirm_navigation: bool = True
+    #: Ask the person, once per turn and before the first page operation, to let the
+    #: assistant work the page: opening pages, clicking, filling and choosing. Declining it
+    #: ends the turn with the page untouched; so does no answer. Changing data is still
+    #: asked about change by change, whatever the answer here. Working the page can discard
+    #: what was typed there and loses the page's own state, so it is on by default.
+    confirm_page_operations: bool = True
     require_identity: bool = False
     deployment_profile: str = "production"
     #: Where the person is, as an IANA zone name, so "today" and "this month" mean their
@@ -198,16 +199,16 @@ class AgentTurnConfig:
                 or not isinstance(self.allow_page_facets, bool)
                 or not isinstance(self.deterministic_read_navigation, bool)
                 or not isinstance(self.skill_first, bool)
-                or not isinstance(self.confirm_navigation, bool)
+                or not isinstance(self.confirm_page_operations, bool)
                 or not isinstance(self.require_identity, bool)):
             raise ValueError("turn policy flags must be booleans")
         for name in ("step_budget", "wall_budget_s", "approval_ttl_s",
-                     "navigation_approval_ttl_s", "keep_observations",
+                     "operation_approval_ttl_s", "keep_observations",
                      "max_user_answer_chars"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError(f"{name} must be a positive integer")
-        for name in ("approval_ttl_s", "navigation_approval_ttl_s"):
+        for name in ("approval_ttl_s", "operation_approval_ttl_s"):
             if getattr(self, name) > 600:
                 raise ValueError(f"{name} cannot exceed 600 seconds")
         if self.max_user_answer_chars > panel_limits()["result_max_chars"]:
@@ -384,15 +385,13 @@ def render_neutral_user_answer(context: AgentAnswerContext) -> str:
         return ("This confirmation expired or no longer matched the current action, so no "
                 "write was performed. Review the target and submit it again.")
     if context.agent.terminal_reason == "approval_expired":
+        # A card nobody answered in time ends the turn as a stop does, with nothing more to
+        # say: the owner's ruling is that a timeout interrupts the message, not explains it.
+        return _fallback(AgentTurnStatus.CANCELLED, context.message.text)
+    if context.agent.terminal_reason == "operation_not_confirmed":
         if re.search(r"[\u3400-\u9fff]", context.message.text):
-            return "本次确认已过期，因此没有执行写入。请核对当前目标后重新提交。"
-        return ("This confirmation expired, so no write was performed. Review the target "
-                "and submit it again.")
-    if context.agent.terminal_reason == "navigation_not_confirmed":
-        if re.search(r"[\u3400-\u9fff]", context.message.text):
-            return "页面切换没有得到确认，助手没有离开当前页面。需要时请再说一次。"
-        return ("The page switch was not confirmed, so the assistant stayed on the current "
-                "page. Ask again when you are ready.")
+            return "已取消，助手没有动这个页面。"
+        return "Cancelled. The assistant left the page as it was."
     if context.agent.terminal_reason == "no_progress":
         if re.search(r"[\u3400-\u9fff]", context.message.text):
             return "最近几步没有找到新信息或可确认的页面变化，我已停止重复操作。可以补充目标或缩小查询范围。"
@@ -494,7 +493,7 @@ def _status_for(terminal_reason: str) -> AgentTurnStatus:
     if terminal_reason == "no_progress":
         return AgentTurnStatus.REFUSED
     if terminal_reason in {"approval_denied", "approval_expired", "user_cancelled",
-                           "navigation_not_confirmed"}:
+                           "operation_not_confirmed"}:
         return AgentTurnStatus.CANCELLED
     if terminal_reason == "indeterminate_write":
         return AgentTurnStatus.INDETERMINATE

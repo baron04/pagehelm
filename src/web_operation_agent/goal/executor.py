@@ -17,7 +17,7 @@ import time
 from typing import Callable
 from urllib.parse import urlsplit
 
-from ..business.approvals import ApprovalWatch, NavigationPlan
+from ..business.approvals import PAGE_OPERATIONS, ApprovalWatch, OperationPlan
 from ..business.control import ApprovalGate, ApprovalGrant
 from ..business.writes import WriteWatch
 from ..composition.binding import BoundApplication
@@ -209,20 +209,17 @@ class GoalTurnExecutor:
         gate = ApprovalGate(self.channel, ledger)
         cancelled = lambda: self.channel.message_cancelled(turn_message.message_id)  # noqa: E731
 
-        def confirm_navigation(plan: NavigationPlan, *, context=None) -> ApprovalGrant:
+        def confirm_operation(plan: OperationPlan, *, context=None) -> ApprovalGrant:
+            """One card for the turn, as the ReAct turn asks: may it work the page."""
             chinese = bool(_CJK.search(turn_message.text))
-            destination = _path_of(plan.url) if plan.url else (
-                "另一个页面" if chinese else "another page")
-            effect = ("离开当前页面，打开另一个页面" if chinese
-                      else "Leave the current page and open another one")
-            request = redact_sensitive_assignments(
-                redact_session_handoffs(turn_message.text))[:120]
-            targets = ((f"将打开：{destination}", f"你的请求：{request}") if chinese
-                       else (f"Opens: {destination}", f"Your request: {request}"))
+            effect = ("在页面上帮你完成这件事" if chinese
+                      else "Work the page to do this for you")
+            targets = (("会打开页面、点击、填写和选择",) if chinese
+                       else ("Opens pages, clicks, fills and chooses",))
             try:
                 return gate.decide_plan(plan, effect=effect, targets=targets,
-                                        ttl_s=self.config.approval_ttl_s, context=context,
-                                        kind="navigation")
+                                        ttl_s=self.config.operation_approval_ttl_s,
+                                        context=context, kind="operate")
             except RemoteProtocolError as exc:
                 if exc.code != "approval_expired":
                     raise
@@ -236,9 +233,10 @@ class GoalTurnExecutor:
             session_id=(self.channel.session_id if principal is not None else ""),
             turn_id=(turn_message.message_id if principal is not None else ""),
             business_approval=None,
-            navigation_confirmation=(confirm_navigation if self.config.confirm_navigation
-                                     else None),
-            cancelled=cancelled)
+            operation_confirmation=(confirm_operation if self.config.confirm_page_operations
+                                    else None),
+            cancelled=cancelled,
+            operation_hold_s=self.config.operation_approval_ttl_s)
         writes = WriteWatch(control=self.control, ledger=ledger, run_id=run_id,
                             write_guard_declared=bool(self.application.descriptor.page_write_guard))
         state = _TurnState(message=turn_message, run_id=run_id, ledger=ledger,
@@ -562,6 +560,13 @@ class GoalTurnExecutor:
     # -- pages ------------------------------------------------------------------------
     def _dispatch(self, s: _TurnState, action: str, args: dict, *, navigating: bool = False):
         """One page command under write control, with its receipt on the record."""
+        if action in PAGE_OPERATIONS:
+            # Every page operation is under the turn's one leave; asked for at the first.
+            reason, detail = s.approvals.confirm_operation(
+                s.step + 1, s.obs, action=action, url=str(args.get("url") or ""))
+            if reason:
+                s.terminal_reason, s.detail = reason, detail
+                return None
         s.step += 1
         s.ledger.append("tool_call", step=s.step, tool=action, args=dict(args))
         s.writes.expect_decision(False)
@@ -573,8 +578,7 @@ class GoalTurnExecutor:
         except TransportError as exc:
             s.terminal_reason, s.detail = "transport_error", str(exc)[:200]
             return None
-        if navigating:
-            s.approvals.settle_navigation(receipt)
+        s.approvals.settle_operation()
         outcome = s.writes.write_outcome(receipt, s.step, action_may_write=False)
         s.ledger.append("write_outcome", step=s.step, **{k: v for k, v in outcome.items()
                                                           if k != "detail"})
@@ -639,12 +643,12 @@ class GoalTurnExecutor:
         target = plan.url
         if target and (_path_of(s.obs.url) != _path_of(target)
                        or urlsplit(target).query != urlsplit(s.obs.url).query):
-            reason, detail = s.approvals.confirm_navigation(
+            reason, detail = s.approvals.confirm_operation(
                 s.step + 1, s.obs, action="goto", url=target)
             if reason:
                 s.terminal_reason, s.detail = reason, detail
                 out.reached = False
-                out.unmet.append("page switch not confirmed")
+                out.unmet.append("working the page not confirmed")
                 return out
             receipt = self._dispatch(s, "goto", {"url": target}, navigating=True)
             if receipt is not None and not receipt.ok and receipt.error_code == "stale_observation" \
@@ -952,7 +956,7 @@ class GoalTurnExecutor:
                           terminal_reason=terminal, steps_used=s.step, wall_seconds=wall,
                           agent_said=text[:self.config.max_user_answer_chars],
                           page_actions=s.page_actions,
-                          navigation_control=s.approvals.navigation_result(),
+                          operation_control=s.approvals.operation_result(),
                           success_claim=("not_claimed" if terminal != "agent_finished"
                                          or s.write_intent
                                          else "verified"),
@@ -960,7 +964,7 @@ class GoalTurnExecutor:
         s.ledger.append("run_finished", task_ref=s.run_id, arm="goal",
                         terminal_reason=terminal, steps_used=s.step, wall_seconds=wall,
                         agent_said=text[:300], page_actions=s.page_actions,
-                        navigation_control=agent.navigation_control or {})
+                        operation_control=agent.operation_control or {})
         status = _status_for(terminal)
         user_answer = redact_sensitive_assignments(redact_session_handoffs(text)).strip()
         user_answer = user_answer[:self.config.max_user_answer_chars]
@@ -1002,7 +1006,7 @@ def _status_for(terminal_reason: str) -> AgentTurnStatus:
         return AgentTurnStatus.FINISHED
     if terminal_reason == "agent_refused":
         return AgentTurnStatus.REFUSED
-    if terminal_reason in {"user_cancelled", "navigation_not_confirmed"}:
+    if terminal_reason in {"user_cancelled", "operation_not_confirmed", "approval_expired"}:
         return AgentTurnStatus.CANCELLED
     return AgentTurnStatus.FAILED
 

@@ -28,7 +28,7 @@ from zoneinfo import ZoneInfo
 from ..composition.ports import ApplicationRoutePort
 from ..composition.sources import SourceCapability
 from ..answer import answer_protocol
-from ..business.approvals import ApprovalWatch, NavigationPlan
+from ..business.approvals import ApprovalWatch, OperationPlan
 from ..answer.answer_view import (capability_gap_answer, render_payload, unavailable_answer,
                           withdrawn_answer)
 from ..planning.affordance import SourceAffordance, resolve_source_affordances
@@ -156,9 +156,9 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                  application_routes: ApplicationRoutePort | None = None,
                  business_tools: BusinessToolRuntime | None = None,
                  business_mutation_approval=None,
-                 navigation_confirmation=None,
+                 operation_confirmation=None,
                  approval_hold_s: int = 0,
-                 navigation_hold_s: int = 0,
+                 operation_hold_s: int = 0,
                  allow_clarification: bool = False,
                  allow_form_prefill: bool = False,
                  allow_page_facets: bool = False,
@@ -331,8 +331,8 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         self._progress = progress
         self._feed = ProgressFeed(progress, on_failure=self.ledger.append)
         mutations_enabled = business_mutation_approval is not None
-        if navigation_confirmation is not None and not callable(navigation_confirmation):
-            raise TypeError("navigation_confirmation must be callable or None")
+        if operation_confirmation is not None and not callable(operation_confirmation):
+            raise TypeError("operation_confirmation must be callable or None")
         self._capability_question = bool(_CAPABILITY_QUESTION.fullmatch(task.prompt))
         if not isinstance(allow_clarification, bool):
             raise ValueError("allow_clarification must be a boolean")
@@ -578,9 +578,9 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
             ledger=ledger, run_id=self.run_id, principal=principal,
             session_id=session_id, turn_id=turn_id,
             business_approval=business_mutation_approval,
-            navigation_confirmation=navigation_confirmation,
+            operation_confirmation=operation_confirmation,
             cancelled=self._cancel_requested,
-            approval_hold_s=approval_hold_s, navigation_hold_s=navigation_hold_s)
+            approval_hold_s=approval_hold_s, operation_hold_s=operation_hold_s)
         self.contract: OperationContract = empty_contract(task.task_ref)
         self.contract_source = "none"
         self.bundle: EvidenceBundle | None = None
@@ -835,7 +835,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         result.plan_withdrawn = self.plan_state.withdrawn
         result.write_refusals = self.write_refusals
         result.business_control = self._approvals.business_result()
-        result.navigation_control = self._approvals.navigation_result()
+        result.operation_control = self._approvals.operation_result()
         result.policy_blocks = self.policy_blocks
         self.ledger.append("run_finished", **result.to_json())
         return result

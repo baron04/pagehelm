@@ -79,8 +79,8 @@ export function PanelWindow({host, allowedOrigins}: {
   }, [host])
 
   const pending = snapshot.pendingApproval
-  // A card past its deadline still shows what was asked, and blocks nothing: the runtime
-  // takes it down when the turn ends, and until then the person can type again.
+  // A card past its deadline is gone at once, with nothing said about it: the server ends
+  // the turn as a stop at the same moment, and until that lands the person can type again.
   const [approvalLive, setApprovalLive] = useState(true)
   useEffect(() => {
     if (!pending) {
@@ -96,7 +96,7 @@ export function PanelWindow({host, allowedOrigins}: {
   // A draft written before the card arrived remains an intentional escape hatch. An empty
   // composer stays locked, but sending the preserved draft replaces the waiting turn: the
   // Runtime cancels that turn before it submits the new message.
-  const canReplace = blocking && pending?.kind === 'navigation' && draft.trim().length > 0
+  const canReplace = blocking && pending?.kind === 'operate' && draft.trim().length > 0
   // A pending confirmation outranks whatever the connection is doing: it is the only
   // thing on screen that needs an answer.
   const state = blocking ? 'awaiting_confirmation' : snapshot.connection.state
@@ -254,7 +254,7 @@ export function PanelWindow({host, allowedOrigins}: {
       <Thread snapshot={snapshot} labels={labels} limits={limits}
               allowedOrigins={allowedOrigins}
               onLoadOlder={loadOlder} onRetry={retrySubmit}
-              footer={pending && (
+              footer={pending && approvalLive && (
                 <ApprovalCard approval={pending} labels={labels} limits={limits}
                               visibility={visibility} busy={deciding}
                               onDecide={decide} onRefused={() => undefined} />

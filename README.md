@@ -19,8 +19,8 @@ agent.
   declaration without further model calls: records by the application's own name search,
   field values by typed reads, counts and sums by scoped queries, pages by reviewed action
   routes, tabs by their visible name, filters and groups by the page's own facet state, and
-  a requested change by highlighting its control for the person. Every page switch is still
-  confirmed, every page command runs under the application's page write control, and no
+  a requested change by highlighting its control for the person. Working the page still takes
+  the turn's one leave, every page command runs under the application's page write control, and no
   control that could write is pressed. The reply is rendered from resolved values, never
   from model prose, so a fact the turn reports is one it read. The Odoo demo and the goal
   evaluation runner take this path for read-only sessions; mutation sessions and the
@@ -187,8 +187,8 @@ agent.
 - Browser actions are checked against the current observation and application route policy.
   Page observations are viewport-bound and expose at most 200 live controls; a bounded
   read-only scroll obtains the next fresh observation instead of scanning an unbounded DOM.
-  Page switches require a visible confirmation.
-  The answer is spent only by the switch it was asked for, so when answering it closes the menu the switch was in, reopening the menu and picking the same item does not ask again.
+  Working the page needs the person's leave, given once per turn on a visible card at the first page operation (opening a page, clicking, filling, choosing, submitting, going back, applying a filter); the rest of that turn goes ahead on it, and the next message asks again. Reading, scrolling, waiting and highlighting ask nothing, so a turn that only reads and answers shows no card. The leave is not a write approval: each business change is still confirmed on its own card.
+  When answering the card closes the menu the first operation's link was in, the server opens that link by its address instead of making the model reopen the menu.
   A successful same-page click can be
   reported as an interaction only when a fresh observation shows a changed page; this
   receipt is not proof that a business goal was completed. After an observed action,

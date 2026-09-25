@@ -1075,8 +1075,8 @@ class BusinessReActTransition(unittest.TestCase):
                 browser=browser, control=ReadOnlyControl(), ledger=ledger,
                 step_budget=5, wall_budget_s=30, run_id="mutation-before-route",
                 business_tools=runtime, business_mutation_approval=deny,
-                navigation_confirmation=lambda *_args, **_kwargs: (_ for _ in ()).throw(
-                    AssertionError("navigation confirmation must not be requested")))
+                operation_confirmation=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                    AssertionError("leave to work the page must not be requested")))
             session.entry_observation = _observation(1)
             session.plan()
             result = session.run()

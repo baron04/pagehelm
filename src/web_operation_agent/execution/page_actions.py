@@ -381,14 +381,13 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
             result, t0, "user_cancelled",
             "the user stopped this task before browser dispatch", steps=step))
     link = _clicked_link(args, obs) if name == "click" else None
-    navigating = name in ("goto", "back") or (
-        name == "click" and (expect_nav or link is not None))
-    if navigating:
-        reason, detail = session._approvals.confirm_navigation(
-            step, obs, action=name,
-            url=(str(args.get("url") or "") if name == "goto" else (link or "")))
-        if reason:
-            return _Next(session._finish(result, t0, reason, detail, steps=step))
+    # Working the page is the person's to allow: the first operation of the turn asks, and
+    # the rest go ahead on that answer. Reading, scrolling and pointing ask nothing.
+    reason, detail = session._approvals.confirm_operation(
+        step, obs, action=name,
+        url=(str(args.get("url") or "") if name == "goto" else (link or "")))
+    if reason:
+        return _Next(session._finish(result, t0, reason, detail, steps=step))
     prior_page_epoch = obs.epoch
     try:
         session._browser_attempts += 1
@@ -399,11 +398,11 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
         # by the main loop before the next model decision.
         receipt = session.browser.execute(name, args, expect_navigation=expect_nav)
         if _answer_closed_the_menu(session, name, link, receipt, obs):
-            # Answering the confirmation is a click on the page, and the application closed
-            # the menu this link was in. The click never dispatched, the person confirmed
-            # this exact destination, and the link was on the page the model acted on: go
-            # there by its address rather than make the model reopen the menu, which spent
-            # two steps per menu and ran a two-menu task out of budget.
+            # Answering the card is a click on the page, and the application closed the
+            # menu this link was in. The click never dispatched, the card was answered for
+            # this very link, and the link was on the page the model acted on: go there by
+            # its address rather than make the model reopen the menu, which spent two steps
+            # per menu and ran a two-menu task out of budget.
             session.ledger.append(
                 "confirmed_switch_opened_by_address", step=step,
                 url_digest=hashlib.sha256(link.encode()).hexdigest(),
@@ -422,7 +421,7 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
                             steps=step))
 
     if name not in ("observe", "wait_for"):
-        session._approvals.settle_navigation(receipt, navigating=navigating)
+        session._approvals.settle_operation()
     if name != "observe" and receipt.error_code not in {
             "stale_observation", "user_intervened"}:
         session.page_actions += 1
@@ -656,16 +655,16 @@ def _leaves_the_page(name: str, args: dict, obs: PageObservation) -> bool:
 
 def _answer_closed_the_menu(session, name: str, link: str | None, receipt,
                             obs: PageObservation) -> bool:
-    """A confirmed link click refused before dispatch, on the page it was aimed at.
+    """A link click the card was just answered for, refused before dispatch, on its page.
 
     Only a refusal that proves nothing was dispatched, only a link with an address, only
-    the destination the person confirmed, and only while the page is still the one the
+    the click the card was answered for, and only while the page is still the one the
     model acted on -- a page that moved on is the model's to re-plan.
     """
     return (name == "click" and bool(link)
             and receipt.error_code == "stale_observation"
             and receipt.url_after == obs.url
-            and session._approvals.holds_confirmation(action="click", url=link))
+            and session._approvals.answered_just_now(action="click", url=link))
 
 
 def _clicked_link(args: dict, obs: PageObservation) -> str | None:

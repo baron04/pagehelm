@@ -58,7 +58,7 @@ const ANSWER = `已扫完全部 12 条，命中 3 条。
 这三张都处于 \`to invoice\` 状态。`
 
 export type Scenario =
-  | 'read' | 'write' | 'navigation' | 'refused' | 'indeterminate'
+  | 'read' | 'write' | 'operate' | 'refused' | 'indeterminate'
   | 'reconnecting' | 'offline' | 'disconnect' | 'undelivered'
   | 'many' | 'older' | 'longtext' | 'clear'
 
@@ -98,9 +98,9 @@ export function createDevHost(): DevHost {
     })
     window.setTimeout(() => {
       if (mine !== live || state.pendingApproval?.approval_id !== request.approval_id) return
-      push(entry('result', request.kind === 'navigation'
-        ? '页面切换没有得到确认，助手没有离开当前页面。需要时请再说一次。'
-        : '本次确认已过期，因此没有执行写入。请核对当前目标后重新提交。', {
+      // Nothing is said: a timeout interrupts the message, and the server projects its
+      // ending with no text.
+      push(entry('result', '', {
         tone: 'neutral', panel_state: 'cancelled', authored: 'server',
       }))
       commit({
@@ -190,23 +190,58 @@ export function createDevHost(): DevHost {
     })
   }
 
-  async function runNavigation(goal: string): Promise<void> {
-    nextTurn()
+  async function runOperate(goal: string): Promise<void> {
+    const mine = nextTurn()
     commit({connection: {...state.connection, busy: true, state: 'observing'}})
-    push(entry('goal', goal), entry('action', '已找到唯一客户 Azure Interior', {tone: 'active'}),
-         entry('approval', '需要确认后才能打开页面', {tone: 'warning'}))
+    push(entry('goal', goal))
+    commit({optimistic: null})
+    if (!await play(mine, [
+      [300, 'progress', '正在理解目标'],
+      [500, 'progress', '正在思考', {stage: 'thinking'}],
+      [700, 'progress', '已读取 1 条：客户 Azure Interior',
+       {stage: 'read_done', tool: 'query_partners', result: '1 条 · Azure Interior'}],
+    ])) return
+    await wait(300)
+    if (mine !== live) return
+    // The first page operation of the turn asks once; the rest go ahead on that answer.
+    push(entry('approval', '需要确认后才能操作页面', {tone: 'warning'}))
     ask({
       schema_version: 1,
       approval_id: `approval-${sequence}`,
-      effect: '离开当前页面，打开另一个页面',
-      targets: ['将打开：/odoo/customers/13', `你的请求：${goal}`],
-      // Five minutes, like the real one (`navigation_approval_ttl_s`).
+      effect: '在页面上帮你完成这件事',
+      targets: [`你的请求：${goal}`, '会打开页面、点击、填写和选择'],
+      // Five minutes, like the real one (`operation_approval_ttl_s`).
       expires_at: Date.now() + 300_000,
       principal_digest: '',
       turn_id: state.entries.at(-1)?.turn_id ?? 'turn-1',
       operation_id: `operation-${sequence}`,
-      kind: 'navigation',
+      kind: 'operate',
     })
+  }
+
+  async function settleOperate(decision: 'approved' | 'denied'): Promise<void> {
+    const mine = live
+    if (decision === 'denied') {
+      push(entry('result', '已取消，助手没有动这个页面。', {
+        tone: 'neutral', panel_state: 'cancelled', authored: 'server',
+      }))
+      commit({pendingApproval: null,
+              connection: {...state.connection, busy: false, state: 'cancelled'}})
+      return
+    }
+    commit({pendingApproval: null, connection: {...state.connection, state: 'acting'}})
+    if (!await play(mine, [
+      [300, 'progress', '已收到你的确认'],
+      [700, 'action', '打开页面：/odoo/customers/13'],
+      [600, 'action', '点击“联系人”标签'],
+      [500, 'action', '等待页面状态更新'],
+    ])) return
+    await wait(400)
+    if (mine !== live) return
+    push(entry('result', '已打开 Azure Interior 的客户页面，并切到了“联系人”。', {
+      tone: 'success', panel_state: 'success', authored: 'model',
+    }))
+    commit({connection: {...state.connection, busy: false, state: 'success'}})
   }
 
   async function settleWrite(decision: 'approved' | 'denied'): Promise<void> {
@@ -251,7 +286,7 @@ export function createDevHost(): DevHost {
       if (state.pendingApproval) {
         commit({connection: {...state.connection, stopping: true, state: 'stopping'}})
         window.setTimeout(() => {
-          push(entry('result', '已中断上一项操作，没有打开页面。', {
+          push(entry('result', '已中断上一项操作，没有动这个页面。', {
             tone: 'neutral', panel_state: 'cancelled', authored: 'server',
           }))
           commit({pendingApproval: null,
@@ -287,7 +322,8 @@ export function createDevHost(): DevHost {
       }, 700)
     },
     decide(_approvalId, decision) {
-      void settleWrite(decision)
+      void (state.pendingApproval?.kind === 'operate' ? settleOperate(decision)
+        : settleWrite(decision))
     },
     newConversation() {
       // The real host clears the panel's view and tells the server; the server's own event
@@ -312,7 +348,7 @@ export function createDevHost(): DevHost {
       // The composer cannot start a turn over one in flight; a scenario button can, so it
       // ends that turn first, the way a replacing message does, rather than letting two
       // scripts write into one conversation.
-      if (['read', 'write', 'navigation'].includes(name)
+      if (['read', 'write', 'operate'].includes(name)
           && (state.connection.busy || state.pendingApproval)) {
         live = 0
         push(entry('result', '已中断上一项操作。', {
@@ -336,8 +372,8 @@ export function createDevHost(): DevHost {
         case 'write':
           void runWrite('把 Acme Corporation 的报价单 S00002 确认成销售订单')
           return
-        case 'navigation':
-          void runNavigation('打开 Azure Interior')
+        case 'operate':
+          void runOperate('打开 Azure Interior 的客户页面，看看联系人')
           return
         case 'refused':
           nextTurn()

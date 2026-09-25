@@ -178,7 +178,7 @@ class QualificationOnlyDemoSeamsFailClosed(unittest.TestCase):
 
     def test_evaluation_seams_are_read_only_provider_runs(self):
         config = self._config(scripted=False, evaluation=True, evaluation_page_click=True,
-                              confirm_navigation_in_page=True,
+                              allow_operation_in_page=True,
                               final_page_probe=lambda _page: {})
         self.assertTrue(config.evaluation_page_click)
         with self.assertRaisesRegex(ValueError, "requires an evaluation run"):
@@ -189,7 +189,7 @@ class QualificationOnlyDemoSeamsFailClosed(unittest.TestCase):
             self._config(scripted=False, evaluation=True, allow_mutations=True,
                          mutation_journal_path="/tmp/journal.sqlite3")
         with self.assertRaisesRegex(ValueError, "scripted run"):
-            self._config(scripted=False, confirm_navigation_in_page=True)
+            self._config(scripted=False, allow_operation_in_page=True)
         with self.assertRaisesRegex(ValueError, "require an evaluation run"):
             self._config(scripted=False, extra_skills=(object(),))
         with self.assertRaisesRegex(ValueError, "require an evaluation run"):

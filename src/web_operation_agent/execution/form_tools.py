@@ -235,6 +235,15 @@ def apply_form_draft(
                  before: PageObservation) -> tuple[PageObservation | None, str, str]:
         if session._cancel_requested():
             return before, "user_cancelled", "the user stopped before form preparation"
+        # Opening and filling the form is working the page, like any other operation --
+        # except the typing into a form the application saves by itself, which that form's
+        # own confirmation already covered, field by field.
+        if action == "goto" or not draft.needs_confirmation:
+            reason, detail = session._approvals.confirm_operation(
+                step, before, action=action,
+                url=args.get("url", "") if action == "goto" else "")
+            if reason:
+                return before, reason, detail
         prior_epoch = before.epoch
         nonlocal last_code
         last_code = ""
@@ -246,7 +255,7 @@ def apply_form_draft(
         except TransportError as exc:
             return before, "transport_error", str(exc)
         if action not in ("observe", "wait_for"):
-            session._approvals.settle_navigation(receipt, navigating=action == "goto")
+            session._approvals.settle_operation()
         if action not in ("observe", "handoff_form"):
             session.page_actions += 1
         write = session._writes.write_outcome(receipt, step, action_may_write=False)
@@ -277,11 +286,6 @@ def apply_form_draft(
         return after, "", ""
 
     for action, args, field in actions:
-        if action == "goto":
-            reason, detail = session._approvals.confirm_navigation(
-                step, current, action="goto", url=args["url"])
-            if reason:
-                return current, reason, detail
         current, reason, detail = dispatch(action, args, field, current)
         if reason:
             return current, reason, detail

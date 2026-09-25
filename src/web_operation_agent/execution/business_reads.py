@@ -181,7 +181,7 @@ def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: d
                     result, t0, "user_cancelled",
                     "the user stopped this task before browser dispatch",
                     steps=step))
-            reason, detail = session._approvals.confirm_navigation(
+            reason, detail = session._approvals.confirm_operation(
                 step, obs, action="goto", url=target)
             if reason:
                 return _Next(session._finish(result, t0, reason, detail, steps=step))
@@ -200,7 +200,7 @@ def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: d
                 return _Next(session._finish(
                     result, t0, session._transport_terminal(
                         "goto", may_write=False), str(exc), steps=step))
-            session._approvals.settle_navigation(receipt)
+            session._approvals.settle_operation()
             if receipt.error_code != "stale_observation":
                 session.page_actions += 1
             write = session._writes.write_outcome(

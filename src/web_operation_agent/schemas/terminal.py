@@ -17,7 +17,7 @@ SCORABLE_TERMINAL_REASONS = frozenset({
     "planning_failed",        # the source arm could not produce a valid contract
     "approval_denied",        # the authenticated user declined the proposed effect
     "approval_expired",       # the visible confirmation elapsed before dispatch
-    "navigation_not_confirmed",  # the page switch was not confirmed before it expired
+    "operation_not_confirmed",  # working the page was not allowed before the card expired
     "user_cancelled",         # the authenticated user stopped the active task
     "business_mutation_failed",  # a known-safe server write refusal was returned
     "business_mutation_blocked",  # an in-flight/unresolved business key refused dispatch

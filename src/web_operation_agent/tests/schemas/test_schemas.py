@@ -59,7 +59,7 @@ def _reasons_emitted_by(*classes) -> set[str]:
     found |= (set(re.findall(r'["\']([a-z_]+)["\']', src)) & set(S.TERMINAL_REASONS))
     found |= set(re.findall(r'"(agent_finished|agent_refused|step_budget|wall_clock_budget|'
                             r'token_budget|action_policy_budget|provider_error|transport_error|'
-                            r'indeterminate_write|navigation_not_confirmed|'
+                            r'indeterminate_write|operation_not_confirmed|'
                             r'planning_failed|control_plane_error)"', src))
     return found
 

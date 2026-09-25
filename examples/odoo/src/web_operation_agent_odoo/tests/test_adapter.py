@@ -473,11 +473,11 @@ class AdapterContract(unittest.TestCase):
         self.assertEqual(browser.actions, ["goto"])
         self.assertEqual(browser.url, BASE + "/odoo/customers/11")
 
-    def test_the_server_opened_record_is_confirmed_before_the_page_is_left(self):
+    def test_the_server_opened_record_waits_for_leave_to_work_the_page(self):
         """The one-decision open path navigates on the server's own authority; it asks the
-        person first like every other page switch, and does not leave without an answer."""
+        person first like every other page operation, and does not leave without an answer."""
         for decision, reason, actions in (("approved", "agent_finished", ["goto"]),
-                                          ("expired", "navigation_not_confirmed", [])):
+                                          ("expired", "approval_expired", [])):
             with self.subTest(decision=decision), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 adapter = OdooApplicationAdapter(
@@ -508,7 +508,7 @@ class AdapterContract(unittest.TestCase):
                     ledger=SessionLedger(root / "a02.jsonl", "a02"),
                     business_tools=adapter.business_tools,
                     business_mutation_approval=lambda *_args, **_kwargs: None,
-                    navigation_confirmation=person,
+                    operation_confirmation=person,
                     deterministic_read_navigation=True,
                     application_routes=adapter.ports.routes,
                 )

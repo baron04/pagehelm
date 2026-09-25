@@ -455,7 +455,9 @@ export function Thread(props: ThreadProps): React.JSX.Element {
                   <WorkProcess turn={turn} labels={labels}
                                stopping={turn.running && snapshot.connection.stopping} />
                 )}
-                {turn.outcome && (
+                {/* An ending the server leaves unspoken -- a card nobody answered in time --
+                    still ends the turn and marks it stopped, and adds no line of its own. */}
+                {turn.outcome?.text && (
                   <Outcome entry={turn.outcome} labels={labels} limits={limits}
                            live={!settledAtMount.current?.has(turn.outcome.id)}
                            allowedOrigins={allowedOrigins} />

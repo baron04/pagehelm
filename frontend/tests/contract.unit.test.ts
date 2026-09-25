@@ -46,9 +46,9 @@ describe('what only the panel reads is the panel\'s', () => {
     expect(Number.isInteger(z) && z >= 1 && z <= 2_147_483_646).toBe(true)
   })
 
-  it('lets a write be declined and a navigation not', () => {
+  it('lets both a write and leave to work the page be declined', () => {
     expect(declinable('write')).toBe(true)
-    expect(declinable('navigation')).toBe(false)
+    expect(declinable('operate')).toBe(true)
   })
 })
 

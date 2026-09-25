@@ -115,10 +115,10 @@ class RunResult:
     plan_status: dict = field(default_factory=dict)
     plan_withdrawn: bool = False
     write_refusals: int = 0
-    #: Page switches this run asked the person to confirm, and how each ended. Kept apart from
-    #: `business_control`, whose approval counts mean writes. None where no person could be
-    #: asked, so such a run serialises as it always did.
-    navigation_control: dict | None = None
+    #: Whether this run asked the person to let it work the page, and how that ended. Kept
+    #: apart from `business_control`, whose approval counts mean writes. None where no person
+    #: could be asked, so such a run serialises as it always did.
+    operation_control: dict | None = None
     #: What the run can say about the agent's own claim to have finished: `not_claimed`,
     #: `unverified` (no runtime evidence either way) or `disconfirmed` (the enforcement point
     #: refused every write and permitted none). A deterministic same-actor business verifier
@@ -152,7 +152,7 @@ class RunResult:
 
     def to_json(self) -> dict:
         optional = {"verified_answer", "clarification", "provider_error_code",
-                    "refusal_subject", "refused_operation", "navigation_control"}
+                    "refusal_subject", "refused_operation", "operation_control"}
         value = {k: getattr(self, k) for k in self.__dataclass_fields__
                  if k not in optional or getattr(self, k) is not None}
         if self.clarification is not None:

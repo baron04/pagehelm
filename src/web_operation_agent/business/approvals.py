@@ -12,13 +12,23 @@ from urllib.parse import urljoin, urlsplit
 from .runtime import BusinessMutationProposal, FormDraft
 from ..state.identity import OperationContext, PrincipalContext
 from ..state.ledger import SessionLedger
-from ..schemas import ActionReceipt, PageObservation
-from .writes import PRE_DISPATCH_ERRORS
+from ..schemas import PageObservation
+from ..schemas.browser import POTENTIALLY_WRITING_ACTIONS
+
+
+#: What a person authorises when they let the assistant work the page for a turn: the
+#: actions that change what the page shows or holds. Reading, scrolling, waiting and pointing
+#: at something need no one's leave, so a turn that only reads and answers never asks.
+PAGE_OPERATIONS = POTENTIALLY_WRITING_ACTIONS
 
 
 @dataclass(frozen=True)
-class NavigationPlan:
-    """The one page switch a navigation confirmation authorises."""
+class OperationPlan:
+    """The page operation that first needed the person's leave in a turn.
+
+    The leave covers the turn's page operations, not only this one; the plan is what the
+    card's answer is bound to and what the audit records as the reason it was asked.
+    """
 
     action: str
     url: str = ""
@@ -26,11 +36,11 @@ class NavigationPlan:
     @property
     def content_digest(self) -> str:
         return hashlib.sha256(json.dumps(
-            {"kind": "navigation", "action": self.action, "url": self.url},
+            {"kind": "operate", "action": self.action, "url": self.url},
             sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
     def redacted(self) -> dict:
-        return {"kind": "navigation", "action": self.action,
+        return {"kind": "operate", "action": self.action,
                 "url_digest": hashlib.sha256(self.url.encode("utf-8")).hexdigest()}
 
 
@@ -53,16 +63,16 @@ class ApprovalWatch:
 
     def __init__(self, *, ledger: SessionLedger, run_id: str,
                  principal: PrincipalContext | None, session_id: str, turn_id: str,
-                 business_approval=None, navigation_confirmation=None,
+                 business_approval=None, operation_confirmation=None,
                  cancelled: Callable[[], bool],
-                 approval_hold_s: int = 0, navigation_hold_s: int = 0):
+                 approval_hold_s: int = 0, operation_hold_s: int = 0):
         self.ledger = ledger
         self.run_id = run_id
         self.principal = principal
         self.session_id = session_id
         self.turn_id = turn_id
         self.business_approval = business_approval
-        self.navigation_confirmation = navigation_confirmation
+        self.operation_confirmation = operation_confirmation
         self.cancelled = cancelled
         self.deadline_ms = 0
         #: The longest a person may take over each kind of answer, and how long they have
@@ -70,7 +80,7 @@ class ApprovalWatch:
         #: it extends the turn's deadline rather than spending it. Without that, a turn
         #: budget of two minutes held a confirmation to whatever the model had left of it.
         self.approval_hold_ms = approval_hold_s * 1000
-        self.navigation_hold_ms = navigation_hold_s * 1000
+        self.operation_hold_ms = operation_hold_s * 1000
         self.waited_ms = 0
         self.business_counts = {
             "approval_requested": 0,
@@ -80,12 +90,12 @@ class ApprovalWatch:
             "mutation_completed": 0,
             "mutation_indeterminate": 0,
         }
-        self.navigation_counts = {"requested": 0, "confirmed": 0, "not_confirmed": 0}
-        self.confirmed_navigation = ""
-        #: Whether the pending confirmation names an exact destination. Only such a grant
-        #: may outlive an unrelated action: one for a script-routed control with no known
-        #: destination would otherwise cover the next such control, wherever it went.
-        self.confirmed_navigation_has_destination = False
+        self.operation_counts = {"requested": 0, "confirmed": 0, "not_confirmed": 0}
+        #: Whether the person has let the assistant work the page this turn. A watch lives
+        #: for one turn, so the leave ends with it: the next message asks again.
+        self.operation_granted = False
+        #: The operation the card was answered for, until the next dispatch settles it.
+        self.answered_for: tuple[str, str] | None = None
 
     @property
     def mutations_enabled(self) -> bool:
@@ -289,77 +299,66 @@ class ApprovalWatch:
             proposal_digest=proposal.content_digest,
             dispatched=False, side_effect_possible=False)
 
-    def confirm_navigation(self, step: int, obs: PageObservation, *, action: str,
-                           url: str = "") -> tuple[str, str]:
-        """Ask before leaving the current page, binding the answer to one destination."""
-        if self.navigation_confirmation is None:
+    def confirm_operation(self, step: int, obs: PageObservation, *, action: str,
+                          url: str = "") -> tuple[str, str]:
+        """Ask once per turn before working the page; later operations go ahead on that leave.
+
+        Opening the page already shown operates nothing and asks nothing.
+        """
+        if self.operation_confirmation is None or action not in PAGE_OPERATIONS:
+            return "", ""
+        if self.operation_granted:
             return "", ""
         if action == "goto" and url and _same_page(url, obs.url):
             return "", ""
-        plan = NavigationPlan(action=action, url=url)
-        if plan.content_digest == self.confirmed_navigation:
-            return "", ""
-        self.navigation_counts["requested"] += 1
-        self.ledger.append("navigation_confirmation_needed", step=step, tool=action,
+        plan = OperationPlan(action=action, url=url)
+        self.operation_counts["requested"] += 1
+        self.ledger.append("operation_confirmation_needed", step=step, tool=action,
                            plan=plan.redacted(), dispatched=False,
                            side_effect_possible=False)
         if self.cancelled():
-            return "user_cancelled", "the user stopped this task before the page switch"
+            return "user_cancelled", "the user stopped this task before working the page"
         try:
-            context = self.context(step, "navigation", hold_ms=self.navigation_hold_ms)
+            context = self.context(step, "operate", hold_ms=self.operation_hold_ms)
             with self.awaiting_person():
-                grant = self.navigation_confirmation(plan, context=context)
+                grant = self.operation_confirmation(plan, context=context)
         except Exception as exc:
-            self.navigation_counts["not_confirmed"] += 1
-            self.ledger.append("navigation_confirmation_failed", step=step, tool=action,
+            self.operation_counts["not_confirmed"] += 1
+            self.ledger.append("operation_confirmation_failed", step=step, tool=action,
                                error_type=type(exc).__name__, dispatched=False,
                                side_effect_possible=False)
-            return "navigation_not_confirmed", "the page switch could not be confirmed"
+            return "operation_not_confirmed", "working the page could not be confirmed"
         if self.cancelled():
             return ("user_cancelled",
-                    "the user stopped this task while the page switch awaited confirmation")
+                    "the user stopped this task while working the page awaited confirmation")
         decision = getattr(grant, "decision", "")
         if decision != "approved" or getattr(grant, "plan_digest", "") != plan.content_digest:
-            self.navigation_counts["not_confirmed"] += 1
-            self.ledger.append("navigation_not_confirmed", step=step, tool=action,
+            self.operation_counts["not_confirmed"] += 1
+            self.ledger.append("operation_not_confirmed", step=step, tool=action,
                                decision=str(decision)[:40], dispatched=False,
                                side_effect_possible=False)
-            return "navigation_not_confirmed", "the page switch was not confirmed"
-        self.navigation_counts["confirmed"] += 1
-        self.confirmed_navigation = plan.content_digest
-        self.confirmed_navigation_has_destination = bool(url)
-        self.ledger.append("navigation_confirmed", step=step, tool=action,
+            # A card nobody answered ends the turn the way any unanswered card does.
+            if decision == "expired":
+                return "approval_expired", "the card expired before working the page"
+            return "operation_not_confirmed", "working the page was not confirmed"
+        self.operation_counts["confirmed"] += 1
+        self.operation_granted = True
+        self.answered_for = (action, url)
+        self.ledger.append("operation_confirmed", step=step, tool=action,
                            approval_id=str(getattr(grant, "approval_id", ""))[:200])
         return "", ""
 
-    def holds_confirmation(self, *, action: str, url: str) -> bool:
-        """Whether the person has confirmed exactly this switch and it is still unspent."""
-        return bool(url) and bool(self.confirmed_navigation) and (
-            NavigationPlan(action=action, url=url).content_digest == self.confirmed_navigation)
+    def answered_just_now(self, *, action: str, url: str) -> bool:
+        """Whether the card was answered for exactly this operation, with nothing since."""
+        return bool(url) and self.answered_for == (action, url)
 
-    def settle_navigation(self, receipt: ActionReceipt, *, navigating: bool = True) -> None:
-        """Consume a confirmation once the switch it was asked for may have reached the page.
+    def settle_operation(self) -> None:
+        """The operation the card was answered for has been dispatched, or something was."""
+        self.answered_for = None
 
-        Only that switch consumes it. Answering the confirmation is itself a click on the
-        page, and an application closes an open menu on any click outside it (Odoo does, on
-        pointerdown in the capture phase), so the menu item the person just agreed to open
-        is gone by the time the switch is dispatched and the switch comes back stale. The
-        assistant reopens the menu and clicks the item again: reopening it must not spend
-        the person's answer, or the second click asks again, the answer closes the menu
-        again, and the turn loops until its budget runs out. An action in between that left
-        the page does spend it, and so does anything when the grant named no destination.
-        """
-        if not self.confirmed_navigation:
-            return
-        if navigating:
-            if receipt.error_code not in PRE_DISPATCH_ERRORS:
-                self.confirmed_navigation = ""
-        elif receipt.navigated or not self.confirmed_navigation_has_destination:
-            self.confirmed_navigation = ""
-
-    def navigation_result(self) -> dict | None:
-        return (dict(self.navigation_counts)
-                if self.navigation_confirmation is not None else None)
+    def operation_result(self) -> dict | None:
+        return (dict(self.operation_counts)
+                if self.operation_confirmation is not None else None)
 
 
 def _same_page(url: str, current: str) -> bool:

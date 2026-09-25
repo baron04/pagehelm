@@ -130,6 +130,23 @@ class PanelContractTests(unittest.TestCase):
         payload["state"] = "agent_started"
         self.assertNotIn("source_details", project_event(_event("progress", payload), at=0))
 
+    def test_a_card_nobody_answered_ends_the_turn_without_a_word(self):
+        """A timeout interrupts the message and says nothing (owner ruling, 2026-09-25).
+
+        The turn still ends, stopped, live and after a restart; the sentence the conversation
+        keeps for its own history is not shown. A stop the person asked for keeps its line.
+        """
+        unanswered = {"state": "cancelled", "terminal_reason": "approval_expired",
+                      "message": "已取消。"}
+        for entry in (project_event(_event("progress", unanswered), at=0),
+                      project_history_record({"kind": "progress", "payload": unanswered},
+                                             index=1)):
+            self.assertEqual(entry["kind"], "result")
+            self.assertEqual(entry["text"], "")
+            self.assertEqual(entry["panel_state"], "cancelled")
+        stopped = {**unanswered, "terminal_reason": "user_cancelled"}
+        self.assertEqual(project_event(_event("progress", stopped), at=0)["text"], "已取消。")
+
     def test_a_clarification_is_a_terminal_turn_that_keeps_the_session_ready(self):
         entry = project_event(_event("progress", {
             "state": "needs_input",

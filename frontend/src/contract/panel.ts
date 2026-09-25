@@ -60,7 +60,7 @@ export interface ApprovalRequest {
   principal_digest: string
   turn_id: string
   operation_id: string
-  /** `navigation` asks before the assistant leaves the page and offers no decline. */
+  /** `operate` asks once per turn before the assistant works the page. */
   kind?: ApprovalKind
 }
 

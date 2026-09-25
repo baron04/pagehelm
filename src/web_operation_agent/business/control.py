@@ -79,12 +79,12 @@ class ApprovalGate:
         self.channel = channel
         self.ledger = ledger
 
-    #: Audit event names per confirmation kind. A page switch is recorded apart from a write
-    #: approval: every reader that counts approvals means writes, and a navigation counted
-    #: among them would read as a write the person approved.
+    #: Audit event names per confirmation kind. Leave to work the page is recorded apart
+    #: from a write approval: every reader that counts approvals means writes, and a page
+    #: operation counted among them would read as a write the person approved.
     _EVENTS = {"write": ("approval_requested", "approval_decided"),
-               "navigation": ("navigation_confirmation_requested",
-                              "navigation_confirmation_decided")}
+               "operate": ("operation_confirmation_requested",
+                           "operation_confirmation_decided")}
 
     def decide_plan(self, plan, *, effect: str, targets: tuple[str, ...],
                     ttl_s: int = 120,

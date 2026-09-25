@@ -1,5 +1,5 @@
 import {useEffect, useRef, useState} from 'react'
-import {ShieldAlert, Clock, Route, TriangleAlert} from 'lucide-react'
+import {ShieldAlert, Clock, Route, Sparkles, TriangleAlert} from 'lucide-react'
 import {declinable, type ApprovalRequest, type Labels, type PanelLimits} from '../contract/panel'
 import {useVisibilityGate} from '../state/visibility'
 import {iconProps} from './icon'
@@ -26,11 +26,11 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
   const cancel = useRef<HTMLButtonElement>(null)
   const confirm = useRef<HTMLButtonElement>(null)
   const [countdown, setCountdown] = useState(() => remaining(approval.expires_at))
-  const [expired, setExpired] = useState(() => approval.expires_at <= Date.now())
   const [blocked, setBlocked] = useState(false)
-  // A write can be declined. A navigation card deliberately has only its affirmative
-  // action; a draft that predates the card can replace the waiting turn from the composer.
+  // Both kinds can be declined; a draft that predates a card for leave to work the page can
+  // also replace the waiting turn from the composer.
   const canDecline = declinable(approval.kind)
+  const operate = approval.kind === 'operate'
   const gate = useVisibilityGate({
     minVisibleRatio: visibility.min_visible_ratio,
     minVisibleMs: visibility.min_visible_ms,
@@ -49,12 +49,9 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
   }, [approval.approval_id])
 
   useEffect(() => {
-    // Expiry is in the protocol. It used to pass silently and the card would simply
-    // vanish; showing the time left is the difference between a timeout and a mystery.
-    const tick = () => {
-      setCountdown(remaining(approval.expires_at))
-      setExpired(approval.expires_at <= Date.now())
-    }
+    // The time left shows in the last minute, so the end does not come as a surprise; at
+    // the end the window takes the card away and the turn stops, with nothing to answer.
+    const tick = () => setCountdown(remaining(approval.expires_at))
     tick()
     const timer = window.setInterval(tick, 1000)
     return () => window.clearInterval(timer)
@@ -113,9 +110,9 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
           buttons -- but no labels restating what the layout already says. */}
       <div className="woa-approval__inner">
         <h2 id={titleId}>
-          {/* A change is guarded; a move is a route to another page. */}
-          {canDecline ? <ShieldAlert {...iconProps(14)} /> : <Route {...iconProps(14)} />}
-          {canDecline ? labels.approvalTitle : labels.navigationTitle}
+          {/* A change is guarded; working the page is a route through it. */}
+          {operate ? <Route {...iconProps(14)} /> : <ShieldAlert {...iconProps(14)} />}
+          {operate ? labels.operateTitle : labels.approvalTitle}
           {/* The time left shows only once it is short. The server waits a bounded time for
               an answer -- the turn is held open until then, and an answer given long after
               the page was shown is not a fresh one -- but a clock ticking from the first
@@ -136,29 +133,21 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
             <li key={`${index}-${target}`}>{target.slice(0, limits.target_max_chars)}</li>
           ))}
         </ul>
-        {expired
-          ? (
-            <p className="woa-approval__blocked" data-expired="true">
-              <TriangleAlert {...iconProps(14)} />
-              <span>{labels.approvalExpired}</span>
-            </p>
-          )
-          : blocked
+        {blocked
           ? (
             <p className="woa-approval__blocked">
               <TriangleAlert {...iconProps(14)} />
               <span>{labels.approvalObscured}</span>
             </p>
           )
-          // A navigation's note is a warning -- unsaved work on the page may be lost -- so it
-          // shows. A write's restates what the buttons already mean, so it is read, not shown.
+          // Leave to work the page carries its terms -- it can be stopped, a change is still
+          // asked about, unsaved work may be lost -- so they show. A write's restates what the
+          // buttons already mean, so it is read, not shown.
           : <p className="woa-approval__fine" id={hintId}
-               data-quiet={canDecline ? 'true' : undefined}>
-              {canDecline ? labels.approvalHint : labels.navigationHint}
+               data-quiet={operate ? undefined : 'true'}>
+              {operate ? labels.operateHint : labels.approvalHint}
             </p>}
-        {/* Past the deadline the server takes no answer, so the card offers none: a button
-            that cannot work is worse than no button, and the composer comes back instead. */}
-        {!expired && <div className="woa-approval__actions">
+        <div className="woa-approval__actions">
           {canDecline && (
             <button type="button" className="woa-btn woa-btn--ghost" ref={cancel}
                     data-testid="woa-deny" disabled={busy} onClick={answer('denied')}>
@@ -172,9 +161,9 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
           <button type="button" className="woa-btn woa-btn--primary" ref={confirm}
                   data-testid="woa-approve" disabled={busy}
                   onClick={answer('approved')}>
-            {canDecline ? labels.approve : labels.navigationConfirm}
+            {operate ? <><Sparkles {...iconProps(14)} />{labels.operateConfirm}</> : labels.approve}
           </button>
-        </div>}
+        </div>
       </div>
     </section>
   )

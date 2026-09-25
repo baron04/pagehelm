@@ -272,6 +272,16 @@ def session_ended_message(reason: str) -> str:
     return _SESSION_ENDED.get(reason, "助手会话已结束")
 
 
+#: Turns that end without a word on the panel. A card nobody answered in time interrupts the
+#: message and says nothing about it (owner ruling, 2026-09-25): the turn shows as stopped,
+#: and the sentence kept for the conversation's own history is not shown.
+_UNSPOKEN_ENDINGS = frozenset({"approval_expired"})
+
+
+def _unspoken(payload: dict) -> bool:
+    return str(payload.get("terminal_reason") or "") in _UNSPOKEN_ENDINGS
+
+
 def project_event(event: TaskEvent, *, at: int) -> dict | None:
     """Project one session event onto a panel timeline entry, or ``None`` if invisible.
 
@@ -290,7 +300,7 @@ def project_event(event: TaskEvent, *, at: int) -> dict | None:
         return {**base, "kind": "action", "tone": "active",
                 "text": describe_action(payload.get("command"))}
     if event.kind == "approval_required":
-        text = ("需要确认后才能打开页面" if payload.get("kind") == "navigation"
+        text = ("需要确认后才能操作页面" if payload.get("kind") == "operate"
                 else "需要确认后才能继续")
         return {**base, "kind": "approval", "tone": "warning",
                 "text": text, "approval_id": str(payload.get("approval_id") or "")}
@@ -313,6 +323,9 @@ def project_event(event: TaskEvent, *, at: int) -> dict | None:
     if state == "message_accepted":
         return {**base, "kind": "goal", "tone": "neutral",
                 "text": _clip(payload.get("text"), limits["goal_max_chars"])}
+    if mapping["terminal"] and _unspoken(payload):
+        return {**base, "kind": "result", "tone": mapping["tone"], "text": "",
+                "panel_state": mapping["panel_state"]}
     text = (_clip(payload.get("message"), limits["result_max_chars"])
             or progress_message(state))
     if not text:
@@ -354,6 +367,9 @@ def project_history_record(record: dict, *, index: int) -> dict | None:
     if state == "message_accepted":
         return {**base, "kind": "goal", "tone": "neutral",
                 "text": _clip(payload.get("text"), limits["goal_max_chars"])}
+    if mapping["terminal"] and _unspoken(payload):
+        return {**base, "kind": "result", "tone": mapping["tone"], "text": "",
+                "panel_state": mapping["panel_state"]}
     text = (_clip(payload.get("message"), limits["result_max_chars"])
             or progress_message(state))
     if not text:

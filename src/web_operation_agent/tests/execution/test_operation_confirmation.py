@@ -1,9 +1,11 @@
-"""The assistant asks before it leaves the current page (P7.5 owner ruling D7).
+"""The assistant asks once per turn before it works the page (owner ruling, 2026-09-25).
 
-Leaving a page can discard what the person typed there or let the application save it on the
-way out -- Odoo 18 saves a changed form when its view is left, which is how a prefilled
-customer draft became a customer nobody approved (P7.5 CR-02) -- and it loses the page's own
-state. The server sees none of that, so every switch is confirmed, whatever the application.
+A task can take several page operations -- open a page, click a tab, fill a field -- and a
+card before each page switch alone asked about some of them and none of the rest. The
+person now gives leave once, at the first page operation of a turn, and the rest of the turn
+goes ahead on it; the next message asks again. Reading, scrolling and pointing at something
+ask nothing, so a turn that only reads and answers shows no card. Changing data is still
+asked about change by change: this leave is not a write approval and is never counted as one.
 """
 from __future__ import annotations
 
@@ -17,7 +19,7 @@ from web_operation_agent import schemas as S
 from web_operation_agent.business.runtime import FormDraft, FormDraftField
 from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.schemas import ActionReceipt
-from web_operation_agent.execution.session import NavigationPlan, ServerAgentSession, TaskSpec
+from web_operation_agent.execution.session import OperationPlan, ServerAgentSession, TaskSpec
 from web_operation_agent.execution.business_tools import apply_form_draft
 from web_operation_agent.tests.support.answer import _turn
 from web_operation_agent.tests.support.route_fixture import FIXTURE_ROUTE_PORT
@@ -30,7 +32,7 @@ from web_operation_agent.tests.support.execution import (
 class _Grant:
     decision: str
     plan_digest: str
-    approval_id: str = "approval-nav"
+    approval_id: str = "approval-operate"
 
 
 class _Person:
@@ -38,7 +40,7 @@ class _Person:
 
     def __init__(self, *decisions: str, on_ask=None):
         self.decisions = list(decisions)
-        self.asked: list[NavigationPlan] = []
+        self.asked: list[OperationPlan] = []
         self.on_ask = on_ask
 
     def __call__(self, plan, *, context=None):
@@ -66,8 +68,8 @@ class _StaleFirstBrowser(_Browser):
 
 class _MenuBrowser:
     """A page with a menu toggle (e1), a link inside the menu (e2) and a script-routed
-    control (e3). With `close_first`, the first switch is refused as stale: answering the
-    confirmation closed the menu it was in."""
+    control (e3). With `close_first`, the first operation is refused as stale: answering the
+    card closed the menu it was in."""
 
     def __init__(self, *, close_first=False, menu_navigates=False, stale_moves_to=""):
         self.url = "http://app/x"
@@ -118,12 +120,13 @@ class _MenuBrowser:
         pass
 
 
-def _session(tmp, *, chat, browser, person, cancelled=None, task="open the other page"):
+def _session(tmp, *, chat, browser, person, cancelled=None, task="open the other page",
+             audit="audit.jsonl"):
     session = ServerAgentSession(
         task=TaskSpec("T", task), chat=chat, browser=browser,
         control=_Control([[], [], [], []]),
-        ledger=SessionLedger(Path(tmp) / "audit.jsonl", "navigation"),
-        navigation_confirmation=person, cancelled=cancelled)
+        ledger=SessionLedger(Path(tmp) / audit, "operate"),
+        operation_confirmation=person, cancelled=cancelled)
     session.entry_observation = browser.pages[0]
     return session
 
@@ -133,7 +136,7 @@ def _events(tmp) -> list[str]:
             for line in (Path(tmp) / "audit.jsonl").read_text().splitlines()]
 
 
-class TheSessionAsksBeforeLeavingThePage(unittest.TestCase):
+class WhatAnOperationLetsTheAnswerSay(unittest.TestCase):
     def test_pending_navigation_becomes_reportable_only_after_the_view_changes(self):
         with tempfile.TemporaryDirectory() as tmp:
             pending = _obs(2, "http://app/y")
@@ -390,42 +393,80 @@ class TheSessionAsksBeforeLeavingThePage(unittest.TestCase):
             self.assertIn("Terms tab selected", result.agent_said)
             self.assertEqual(len(session.ledger.of_kind("page_answer_evidence")), 1)
 
-    def test_a_confirmed_switch_is_dispatched_and_counted(self):
+
+class TheSessionAsksOnceBeforeWorkingThePage(unittest.TestCase):
+    def test_the_first_operation_asks_and_the_rest_of_the_turn_goes_ahead(self):
         with tempfile.TemporaryDirectory() as tmp:
             person = _Person("approved")
-            browser = _Browser([_obs(1), _obs(2, "http://app/y")])
-            session = _session(tmp, chat=_Chat([("goto", {"url": "/y"})]),
-                               browser=browser, person=person)
+            browser = _MenuBrowser()
+            session = _session(tmp, chat=_Chat([
+                ("click", {"ref": "e1"}), ("click", {"ref": "e2"}), ("back", {}),
+                ("finish", {"done": True, "why": "done"}),
+            ]), browser=browser, person=person)
 
             result = session.run()
 
-            self.assertEqual(browser.done[0], ("goto", {"url": "/y"}))
+            # Open the menu, follow its link, come back: three operations, one question.
+            self.assertEqual([action for action, _args in browser.done],
+                             ["click", "click", "back"])
             self.assertEqual([(plan.action, plan.url) for plan in person.asked],
-                             [("goto", "/y")])
-            self.assertEqual(result.navigation_control,
+                             [("click", "")])
+            self.assertEqual(result.operation_control,
                              {"requested": 1, "confirmed": 1, "not_confirmed": 0})
             events = _events(tmp)
-            self.assertLess(events.index("navigation_confirmed"),
+            self.assertLess(events.index("operation_confirmed"),
                             events.index("action_receipt"))
-            # A page switch is not a write approval, and nothing that counts approvals as
-            # writes may see it as one.
+            # Leave to work the page is not a write approval, and nothing that counts
+            # approvals as writes may see it as one.
             self.assertEqual(result.business_control["approval_requested"], 0)
 
-    def test_an_unconfirmed_switch_is_never_dispatched(self):
-        for decision in ("expired", "denied"):
+    def test_the_next_turn_asks_again(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            person = _Person("approved", "approved")
+            for turn in ("first", "second"):
+                browser = _MenuBrowser()
+                session = _session(tmp, chat=_Chat([
+                    ("click", {"ref": "e1"}), ("finish", {"done": True, "why": "done"}),
+                ]), browser=browser, person=person, audit=f"{turn}.jsonl")
+                session.run()
+
+            self.assertEqual(len(person.asked), 2)
+
+    def test_reading_scrolling_and_pointing_ask_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            person = _Person()
+            browser = _Browser([_obs(1), _obs(2), _obs(3)])
+            session = _session(tmp, chat=_Chat([
+                ("scroll", {"direction": "down", "pages": 1}),
+                ("observe", {}),
+                ("finish", {"done": True, "why": "read"}),
+            ]), browser=browser, person=person)
+
+            result = session.run()
+
+            self.assertEqual(person.asked, [])
+            self.assertEqual([action for action, _args in browser.done], ["scroll", "observe"])
+            self.assertEqual(result.operation_control,
+                             {"requested": 0, "confirmed": 0, "not_confirmed": 0})
+
+    def test_a_turn_without_leave_operates_nothing(self):
+        # Declined, the turn says it left the page alone; unanswered, it ends as any
+        # unanswered card does -- as a stop, with nothing more said.
+        for decision, reason in (("denied", "operation_not_confirmed"),
+                                 ("expired", "approval_expired")):
             with self.subTest(decision=decision), tempfile.TemporaryDirectory() as tmp:
-                browser = _Browser([_obs(1), _obs(2, "http://app/y")])
-                session = _session(tmp, chat=_Chat([("goto", {"url": "/y"})]),
+                browser = _MenuBrowser()
+                session = _session(tmp, chat=_Chat([("click", {"ref": "e1"})]),
                                    browser=browser, person=_Person(decision))
 
                 result = session.run()
 
-                self.assertEqual(result.terminal_reason, "navigation_not_confirmed")
+                self.assertEqual(result.terminal_reason, reason)
                 self.assertEqual(browser.done, [])
-                self.assertEqual(result.navigation_control["not_confirmed"], 1)
-                self.assertIn("navigation_not_confirmed", _events(tmp))
+                self.assertEqual(result.operation_control["not_confirmed"], 1)
+                self.assertIn("operation_not_confirmed", _events(tmp))
 
-    def test_stopping_while_the_card_waits_ends_the_turn_without_leaving(self):
+    def test_stopping_while_the_card_waits_ends_the_turn_without_operating(self):
         stopped = [False]
         with tempfile.TemporaryDirectory() as tmp:
             browser = _Browser([_obs(1), _obs(2, "http://app/y")])
@@ -439,7 +480,7 @@ class TheSessionAsksBeforeLeavingThePage(unittest.TestCase):
             self.assertEqual(result.terminal_reason, "user_cancelled")
             self.assertEqual(browser.done, [])
 
-    def test_opening_the_page_already_shown_is_not_a_switch(self):
+    def test_opening_the_page_already_shown_operates_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
             person = _Person()
             # The current page is /y, and its own link points at /y.
@@ -465,11 +506,11 @@ class TheSessionAsksBeforeLeavingThePage(unittest.TestCase):
             self.assertEqual(len(person.asked), 1)
             self.assertEqual([action for action, _args in browser.done], ["goto", "goto"])
 
-    def test_a_menu_link_the_answer_closed_is_opened_by_its_confirmed_address(self):
+    def test_a_menu_link_the_answer_closed_is_opened_by_its_address(self):
         # Found on live Odoo: answering the card is a click on the page, the application
-        # closes its open menu on any click outside it, and the menu item the person agreed
-        # to open is gone by dispatch. The person confirmed that destination and nothing was
-        # dispatched, so the server goes there by the link's address in the same step.
+        # closes its open menu on any click outside it, and the menu item the card was
+        # answered for is gone by dispatch. Nothing was dispatched, so the server goes there
+        # by the link's address in the same step.
         with tempfile.TemporaryDirectory() as tmp:
             person = _Person("approved")
             browser = _MenuBrowser(close_first=True)
@@ -488,7 +529,7 @@ class TheSessionAsksBeforeLeavingThePage(unittest.TestCase):
             self.assertEqual([event["reason"] for event in opened],
                              ["confirmation_closed_the_menu"])
 
-    def test_the_address_is_used_only_where_it_is_exactly_what_was_confirmed(self):
+    def test_the_address_is_used_only_for_the_click_the_card_was_answered_for(self):
         cases = {
             # The page itself moved on while the card waited: the model re-plans.
             "the page moved": dict(browser=_MenuBrowser(close_first=True,
@@ -511,96 +552,69 @@ class TheSessionAsksBeforeLeavingThePage(unittest.TestCase):
                 self.assertEqual(
                     session.ledger.of_kind("confirmed_switch_opened_by_address"), [])
 
-    def test_an_answer_is_not_spent_by_an_action_in_between(self):
-        # Reopening the menu, or any other action that does not leave the page, leaves the
-        # person's answer standing for the switch it was given for.
+    def test_the_answer_stands_for_its_operation_only_until_the_next_dispatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             browser = _MenuBrowser()
             session = _session(tmp, chat=_Chat([]), browser=browser,
                                person=_Person("approved"))
             approvals = session._approvals
             page = browser.observe()
-            self.assertEqual(approvals.confirm_navigation(1, page, action="click", url="/y"),
+            self.assertEqual(approvals.confirm_operation(1, page, action="click", url="/y"),
                              ("", ""))
+            self.assertTrue(approvals.answered_just_now(action="click", url="/y"))
+            approvals.settle_operation()
+            self.assertFalse(approvals.answered_just_now(action="click", url="/y"))
+            # The leave itself outlives the dispatch: the next operation asks nothing.
+            self.assertEqual(approvals.confirm_operation(2, page, action="fill"), ("", ""))
+            self.assertEqual(approvals.operation_counts["requested"], 1)
 
-            def receipt(*, navigated=False, code=""):
-                return ActionReceipt(schema_version=1, command_id="c", action="click",
-                                     args_echo={}, ok=not code, error_code=code,
-                                     navigated=navigated)
-
-            approvals.settle_navigation(receipt(code="stale_observation"), navigating=True)
-            approvals.settle_navigation(receipt(), navigating=False)
-            self.assertTrue(approvals.holds_confirmation(action="click", url="/y"))
-            approvals.settle_navigation(receipt(navigated=True), navigating=False)
-            self.assertFalse(approvals.holds_confirmation(action="click", url="/y"))
-
-    def test_an_answer_for_a_control_with_no_address_is_spent_by_anything(self):
-        # A script-routed control has no known destination, so a standing answer for it
-        # would cover the next such control wherever it went.
-        with tempfile.TemporaryDirectory() as tmp:
-            person = _Person("approved", "approved")
-            first = {"ref": "e3", "expect_navigation": True}
-            session = _session(tmp, chat=_Chat([
-                ("click", first), ("click", {"ref": "e1"}), ("click", first),
-                ("finish", {"done": False, "why": "stop"}),
-            ]), browser=_MenuBrowser(close_first=True), person=person)
-
-            session.run()
-
-            self.assertEqual(len(person.asked), 2)
-
-    def test_a_switch_that_reached_the_page_is_asked_about_again(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            person = _Person("approved", "approved")
-            browser = _Browser([_obs(1), _obs(2, "http://app/y"), _obs(3, "http://app/x")])
-            session = _session(
-                tmp, chat=_Chat([("goto", {"url": "/y"}), ("back", {})]),
-                browser=browser, person=person)
-
-            session.run()
-
-            self.assertEqual([plan.action for plan in person.asked], ["goto", "back"])
-
-    def test_opening_the_form_for_a_prefill_is_a_switch_too(self):
+    def test_filling_a_form_is_working_the_page_too(self):
         with tempfile.TemporaryDirectory() as tmp:
             form = form_page
-            for decision, dispatched in (("approved", ["goto", "fill", "handoff_form"]),
-                                         ("expired", [])):
-                with self.subTest(decision=decision):
+            cases = (
+                # The form has to be opened first: that asks, and filling goes ahead on it.
+                ("approved", _obs(1), ["goto", "fill", "handoff_form"],
+                 [("goto", "/accounting/do/createCustomer")]),
+                ("expired", _obs(1), [], [("goto", "/accounting/do/createCustomer")]),
+                # The form is already open: typing into it asks.
+                ("approved", form(1), ["fill", "handoff_form"], [("fill", "")]),
+            )
+            for index, (decision, start, dispatched, asked) in enumerate(cases):
+                with self.subTest(decision=decision, start=start.url):
                     person = _Person(decision)
-                    browser = _Browser([_obs(1), form(2), form(3), form(4)])
+                    browser = _Browser([start, form(2), form(3), form(4)])
                     session = ServerAgentSession(
                         task=TaskSpec("T", "填写客户但不要提交"), chat=_Chat([]),
                         browser=browser, control=_Control([[], [], []]),
-                        ledger=SessionLedger(Path(tmp) / f"{decision}.jsonl", "prefill"),
+                        ledger=SessionLedger(Path(tmp) / f"{index}.jsonl", "prefill"),
                         application_routes=FIXTURE_ROUTE_PORT, allow_form_prefill=True,
-                        navigation_confirmation=person)
+                        operation_confirmation=person)
                     draft = FormDraft(route="/accounting/do/createCustomer",
                                       fields=(FormDraftField("name", "客户名称", "NovaForge"),))
 
                     _page, reason, _detail = apply_form_draft(
                         session, draft, browser.pages[0], step=1)
 
-                    self.assertEqual([plan.url for plan in person.asked],
-                                     ["/accounting/do/createCustomer"])
+                    self.assertEqual([(plan.action, plan.url) for plan in person.asked], asked)
                     self.assertEqual([action for action, _args in browser.done], dispatched)
                     self.assertEqual(reason,
-                                     "" if decision == "approved" else "navigation_not_confirmed")
+                                     "" if decision == "approved" else "approval_expired")
 
 
 class TheCardIsItsOwnKind(unittest.TestCase):
-    def test_a_navigation_request_round_trips_and_an_unknown_kind_is_refused(self):
+    def test_an_operate_request_round_trips_and_an_unknown_kind_is_refused(self):
         request = S.ApprovalRequest(
-            schema_version=1, approval_id="approval-nav", effect="离开当前页面，打开另一个页面",
-            targets=("将打开：/y",), expires_at=2_000_000_000_000, kind="navigation")
+            schema_version=1, approval_id="approval-operate", effect="在页面上帮你完成这件事",
+            targets=("你的请求：打开 azur",), expires_at=2_000_000_000_000, kind="operate")
         self.assertEqual(S.ApprovalRequest.from_json(request.to_json()), request)
         legacy = request.to_json()
         del legacy["kind"]
         self.assertEqual(S.ApprovalRequest.from_json(legacy).kind, "write",
                          "a request recorded before kinds existed was a write approval")
-        with self.assertRaises(S.SchemaError):
-            S.ApprovalRequest(schema_version=1, approval_id="approval-x", effect="e",
-                              targets=("t",), expires_at=2_000_000_000_000, kind="maybe")
+        for kind in ("maybe", "navigation"):
+            with self.assertRaises(S.SchemaError):
+                S.ApprovalRequest(schema_version=1, approval_id="approval-x", effect="e",
+                                  targets=("t",), expires_at=2_000_000_000_000, kind=kind)
 
     def test_the_panel_and_the_wire_type_know_the_same_kinds(self):
         """Which cards can be declined is the panel's; which kinds exist is the wire's."""

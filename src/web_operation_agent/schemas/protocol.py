@@ -354,7 +354,7 @@ class ActionResultEnvelope:
 
 
 #: The kinds of confirmation a panel can be asked for; see `ApprovalRequest.kind`.
-APPROVAL_KINDS = frozenset({"write", "navigation"})
+APPROVAL_KINDS = frozenset({"write", "operate"})
 
 
 @dataclass(frozen=True)
@@ -370,9 +370,9 @@ class ApprovalRequest:
     turn_id: str = ""
     operation_id: str = ""
     #: What the person is asked to confirm. ``write`` authorises one exact business change and
-    #: can be declined; ``navigation`` asks before the assistant leaves the current page, whose
-    #: unsaved input the application may save or discard, and offers only the confirmation --
-    #: the person who does not want it stops the task instead.
+    #: can be declined; ``operate`` asks once per turn before the assistant works the page --
+    #: opening pages, clicking, filling, choosing -- and can be declined too, which ends the
+    #: turn with the page untouched.
     kind: str = "write"
 
     def __post_init__(self) -> None:

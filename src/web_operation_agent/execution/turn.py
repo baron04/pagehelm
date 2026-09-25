@@ -281,28 +281,23 @@ class AgentTurnExecutor:
                     plan_digest=proposal.content_digest, decided_at=time.time(),
                     operation_context_digest=(context.binding_digest if context else ""))
 
-        def confirm_navigation(plan, *, context: OperationContext | None = None):
+        def confirm_operation(plan, *, context: OperationContext | None = None):
+            """One card for the turn: may the assistant work the page to do this request."""
             chinese = bool(re.search(r"[\u3400-\u9fff]", turn_message.text))
-            if plan.action == "back":
-                destination = "上一页" if chinese else "the previous page"
-            else:
-                parts = urlsplit(plan.url) if plan.url else None
-                destination = ((parts.path or "/") if parts is not None
-                               else ("另一个页面" if chinese else "another page"))
-            effect = ("离开当前页面，打开另一个页面" if chinese
-                      else "Leave the current page and open another one")
+            effect = ("在页面上帮你完成这件事" if chinese
+                      else "Work the page to do this for you")
             # The card goes to the browser, which refuses a credential-looking value; the
             # request is shown as the person would recognise it, with any such value masked.
             request = redact_sensitive_assignments(
                 redact_session_handoffs(turn_message.text))[:120]
-            targets = ((f"将打开：{destination}", f"你的请求：{request}")
+            targets = ((f"你的请求：{request}", "会打开页面、点击、填写和选择")
                        if chinese else
-                       (f"Opens: {destination}", f"Your request: {request}"))
+                       (f"Your request: {request}", "Opens pages, clicks, fills and chooses"))
             try:
                 return approval_gate.decide_plan(
                     plan, effect=effect, targets=targets,
-                    ttl_s=self.config.navigation_approval_ttl_s, context=context,
-                    kind="navigation")
+                    ttl_s=self.config.operation_approval_ttl_s, context=context,
+                    kind="operate")
             except RemoteProtocolError as exc:
                 if exc.code != "approval_expired":
                     raise
@@ -338,10 +333,10 @@ class AgentTurnExecutor:
             business_mutation_approval=(
                 approve_business_mutation
                 if self.config.allow_business_mutations else None),
-            navigation_confirmation=(
-                confirm_navigation if self.config.confirm_navigation else None),
+            operation_confirmation=(
+                confirm_operation if self.config.confirm_page_operations else None),
             approval_hold_s=self.config.approval_ttl_s,
-            navigation_hold_s=self.config.navigation_approval_ttl_s,
+            operation_hold_s=self.config.operation_approval_ttl_s,
             allow_clarification=self.config.allow_clarification,
             allow_form_prefill=self.config.allow_form_prefill,
             allow_page_facets=self.config.allow_page_facets,
@@ -422,7 +417,7 @@ class AgentTurnExecutor:
                             or agent.terminal_reason in {
                                 "approval_expired", "approval_failed",
                                 "business_mutation_blocked", "business_mutation_refused",
-                                "navigation_not_confirmed", "no_progress",
+                                "operation_not_confirmed", "no_progress",
                                 "permission_denied"})
                         else self.answer_renderer(answer_context))
             if not isinstance(rendered, str) or not rendered.strip():

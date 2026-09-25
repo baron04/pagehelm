@@ -47,12 +47,12 @@ class WaitingOnAPersonMovesTheDeadline(unittest.TestCase):
             watch = ApprovalWatch(
                 ledger=SessionLedger(Path(tmp) / "audit.jsonl", "wait"), run_id="run",
                 principal=_principal(), session_id="session", turn_id="turn",
-                navigation_confirmation=person, cancelled=lambda: False,
-                navigation_hold_s=30)
+                operation_confirmation=person, cancelled=lambda: False,
+                operation_hold_s=30)
             deadline = int(time.time() * 1000) + 5_000
             watch.start_turn(deadline)
 
-            reason, _ = watch.confirm_navigation(1, _obs(1), action="goto", url="/y")
+            reason, _ = watch.confirm_operation(1, _obs(1), action="goto", url="/y")
 
             self.assertEqual(reason, "")
             # The context the person answered under reaches past the turn's deadline by the
@@ -71,8 +71,8 @@ class WaitingOnAPersonMovesTheDeadline(unittest.TestCase):
                 chat=_Chat([("goto", {"url": "/y"})]), browser=browser,
                 control=_Control([[], [], [], []]),
                 ledger=SessionLedger(Path(tmp) / "audit.jsonl", "wait"),
-                navigation_confirmation=_SlowPerson(1.3), wall_budget_s=1,
-                navigation_hold_s=30)
+                operation_confirmation=_SlowPerson(1.3), wall_budget_s=1,
+                operation_hold_s=30)
             session.entry_observation = browser.pages[0]
 
             result = session.run()
