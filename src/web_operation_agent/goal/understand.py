@@ -96,12 +96,17 @@ def understand(chat, *, prompt: str, index: ApplicationIndex, run_id: str,
                    + "\n\nPROBLEMS\n" + "\n".join(f"- {p}" for p in problems[:4])
                    + "\n\nDeclare again, correcting these and keeping what was right.")
     # The request is the last thing in the message: a small model reads the tail most
-    # reliably, and everything else is context for it.
+    # reliably, and everything else is context for it. On the staged path it also
+    # opens the message: in front of a small neighbourhood the model otherwise often
+    # declared nothing or misread the request's numbers (a replay of the same message:
+    # right 12 of 12 with the request at both ends, 7 of 12 at the end alone).
+    head = ("REQUEST\n" + prompt.strip() + "\n\n") if scope else ""
+    tail = "\n\nREQUEST (again)\n" if scope else "\n\nREQUEST\n"
     messages = [
         {"role": "system", "content": UNDERSTAND_SYSTEM},
-        {"role": "user", "content": ("APPLICATION INDEX\n" + index.render()
+        {"role": "user", "content": (head + "APPLICATION INDEX\n" + index.render()
                                      + (f"\n\nTODAY\n{today}" if today else "")
-                                     + before + "\n\nREQUEST\n" + prompt.strip())},
+                                     + before + tail + prompt.strip())},
     ]
     kwargs = {"max_tokens": 1_500, "timeout_s": timeout_s}
     attempts = 0

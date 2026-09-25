@@ -417,6 +417,9 @@ class GoalTurnTests(unittest.TestCase):
         self.assertIn("KNOWN REFERENCES", first)
         self.assertIn("APPLICATION INDEX", second)
         self.assertIn("SCOPE", second)
+        # The request opens the message and closes it.
+        self.assertTrue(second.startswith("REQUEST\nS00006 的客户是谁？"))
+        self.assertTrue(second.endswith("REQUEST (again)\nS00006 的客户是谁？"))
         self.assertIn('"about": "S00006"', second)
         kinds = [e["event"] for e in events]
         for name in ("goal_references", "goal_scope_declared", "goal_neighbourhood", "goal_declared",
