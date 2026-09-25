@@ -14,7 +14,6 @@ from unittest.mock import patch
 
 from testapps.contacts.app import (DEMO_ACTORS, DEMO_API_TOKEN, DEMO_SESSION_COOKIE,
                                    DEMO_WORKSPACE)
-from testapps.contacts.adapter import PANEL_SUGGESTIONS
 from testapps.contacts.demo import ScriptedDemoChat, WRITE_WALKTHROUGH
 from testapps.contacts.server import (
     NativeContactsHost,
@@ -39,16 +38,26 @@ def _chromium_launches() -> bool:
         return False
 
 
-def _confirm_page_switch(page, timeout_ms: int = 20_000) -> None:
-    """Confirm the page switch a task asks for, as the signed-in user would.
+#: A page makes its session when one is needed -- here, now: the tests below drive the Runtime
+#: directly rather than through the composer, so they ask for the session the way sending
+#: would, and wait for it.
+_CONNECTED = ("async () => { window.__WOA_ASSISTANT__.connect(); "
+              "await window.__WOA_RUNTIME_READY__; return true; }")
+#: Send a task through the session, making it first if the page has none yet.
+_SUBMIT = ("task => (window.__WOA_ASSISTANT__.connect(), window.__WOA_RUNTIME_READY__)"
+           ".then(runtime => runtime.submitTask(task))")
 
-    The assistant asks before it leaves the page, with one control and no decline; the
-    check below pins that the card offers nothing else.
+
+def _allow_operation(page, timeout_ms: int = 20_000) -> None:
+    """Give the leave to work the page a turn asks for, as the signed-in user would.
+
+    The assistant asks once per turn, before its first page operation, and the card can be
+    declined as well as given; the check below pins that it offers both.
     """
-    card = page.locator('section.woa-approval[data-kind="navigation"]')
+    card = page.locator('section.woa-approval[data-kind="operate"]')
     card.wait_for(state="visible", timeout=timeout_ms)
-    if card.locator('[data-testid="woa-deny"]').count():
-        raise AssertionError("a page-switch confirmation offered a decline")
+    if not card.locator('[data-testid="woa-deny"]').count():
+        raise AssertionError("leave to work the page offered no way to decline")
     # The card refuses a press it cannot prove was visible long enough to read.
     page.wait_for_timeout(700)
     card.locator('[data-testid="woa-approve"]').click()
@@ -412,11 +421,6 @@ class NativeContactsHostTests(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(first["config"]["applicationId"], "minimal.contacts")
             self.assertEqual(host.server.session_count, 1)
-            # A second, structurally different application declares its own suggestions.
-            session, _principal = next(iter(host._sessions.values()))
-            self.assertEqual(
-                [item["text"] for item in session.channel._panel_configuration()["suggestions"]],
-                [item.text for item in PANEL_SUGGESTIONS])
 
             status, second, _ = _request(
                 endpoint, body={"runtime_instance_id": "tab-instance-123"},
@@ -569,6 +573,7 @@ class NativeContactsBrowserTests(unittest.TestCase):
                         page.goto(host.origin + "/demo/login/ada-lovelace",
                                   wait_until="domcontentloaded", timeout=30_000)
                         page.evaluate("""async () => {
+                            window.__WOA_ASSISTANT__.connect();
                             window.__WOA_TEST_RUNTIME__ = await window.__WOA_RUNTIME_READY__;
                             return true;
                         }""")
@@ -581,7 +586,7 @@ class NativeContactsBrowserTests(unittest.TestCase):
                             timeout=15_000)
                         session = next(iter(host._sessions.values()))[0]
                         page.evaluate(
-                            "task => window.__WOA_RUNTIME_READY__.then(r => r.submitTask(task))",
+                            _SUBMIT,
                             "List my contacts.")
                         failed = session.runner.next_outcome(timeout_s=15)
                         self.assertEqual(failed.result.terminal_reason, "provider_error")
@@ -600,7 +605,7 @@ class NativeContactsBrowserTests(unittest.TestCase):
                         page.evaluate(
                             "task => window.__WOA_TEST_RUNTIME__.submitTask(task)",
                             "Open Grace Hopper's contact record.")
-                        _confirm_page_switch(page)
+                        _allow_operation(page)
                         recovered = session.runner.next_outcome(timeout_s=15)
                         self.assertEqual(
                             recovered.result.terminal_reason, "agent_finished")
@@ -632,22 +637,22 @@ class NativeContactsBrowserTests(unittest.TestCase):
                     page.wait_for_function(
                         "window.__WOA_RUNTIME_READY__ !== undefined", timeout=30_000)
                     page.evaluate(
-                        "async () => { await window.__WOA_RUNTIME_READY__; return true; }")
+                        _CONNECTED)
                     page.locator("#woa-assistant").wait_for(state="visible", timeout=30_000)
                     self.assertEqual(host.server.session_count, 1)
                     self.assertNotIn(DEMO_API_TOKEN, page.locator("body").inner_text())
 
                     page.evaluate(
-                        "task => window.__WOA_RUNTIME_READY__.then(r => r.submitTask(task))",
+                        _SUBMIT,
                         "Open Grace Hopper's contact record.")
-                    _confirm_page_switch(page)
+                    _allow_operation(page)
                     page.wait_for_url("**/contacts/grace-hopper", timeout=30_000)
                     page.get_by_text("Grace Hopper", exact=True).wait_for(timeout=10_000)
                     self.assertEqual(host.application.write_requests, 0)
 
                     page.reload(wait_until="domcontentloaded", timeout=30_000)
                     page.evaluate(
-                        "async () => { await window.__WOA_RUNTIME_READY__; return true; }")
+                        _CONNECTED)
                     page.locator("#woa-assistant").wait_for(state="visible", timeout=30_000)
                     self.assertEqual(host.server.session_count, 1)
                     self.assertEqual(
@@ -671,14 +676,16 @@ class NativeContactsBrowserTests(unittest.TestCase):
                     page.goto(host.origin + "/demo/login/ada-lovelace",
                               wait_until="domcontentloaded", timeout=30_000)
                     page.evaluate(
-                        "async () => { await window.__WOA_RUNTIME_READY__; return true; }")
+                        _CONNECTED)
                     page.get_by_role("link", name="New contact").click()
                     page.wait_for_url("**/contacts/new", timeout=10_000)
                     session = next(iter(host._sessions.values()))[0]
 
                     page.evaluate(
-                        "task => window.__WOA_RUNTIME_READY__.then(r => r.submitTask(task))",
+                        _SUBMIT,
                         "Fill the name and email shown in my request, but do not save.")
+                    # Filling the form works the page, so the turn asks for leave first.
+                    _allow_operation(page)
                     outcome = session.runner.next_outcome(timeout_s=20)
 
                     self.assertEqual(outcome.result.terminal_reason, "agent_finished")
@@ -724,7 +731,7 @@ class NativeContactsBrowserTests(unittest.TestCase):
                     page.goto(host.origin + "/contacts/adversarial",
                               wait_until="domcontentloaded", timeout=30_000)
                     page.evaluate(
-                        "async () => { await window.__WOA_RUNTIME_READY__; return true; }")
+                        _CONNECTED)
                     self.assertEqual(page.get_by_role("tab").count(), 2)
                     self.assertEqual(page.locator('[name="scrolled_value"]').count(), 1)
                     self.assertIn(
@@ -760,10 +767,10 @@ class NativeContactsBrowserTests(unittest.TestCase):
                     page.goto(host.origin + "/contacts/adversarial",
                               wait_until="domcontentloaded", timeout=30_000)
                     page.evaluate(
-                        "async () => { await window.__WOA_RUNTIME_READY__; return true; }")
+                        _CONNECTED)
                     session = next(iter(host._sessions.values()))[0]
                     page.evaluate(
-                        "task => window.__WOA_RUNTIME_READY__.then(r => r.submitTask(task))",
+                        _SUBMIT,
                         "Fill the customer reference, but do not save.")
                     outcome = session.runner.next_outcome(timeout_s=20)
 
@@ -798,10 +805,10 @@ class NativeContactsBrowserTests(unittest.TestCase):
                     page.goto(host.origin + "/demo/login/ada-lovelace",
                               wait_until="domcontentloaded", timeout=30_000)
                     page.evaluate(
-                        "async () => { await window.__WOA_RUNTIME_READY__; return true; }")
+                        _CONNECTED)
                     page.locator(".woa-launcher").click()
                     page.evaluate(
-                        "task => window.__WOA_RUNTIME_READY__.then(r => r.submitTask(task))",
+                        _SUBMIT,
                         "List my contacts.")
                     self.assertTrue(chat.entered.wait(5), "provider request never started")
                     page.locator('[data-stop="true"]').click()
@@ -814,9 +821,9 @@ class NativeContactsBrowserTests(unittest.TestCase):
                     self.assertEqual(host.application.write_requests, 0)
 
                     page.evaluate(
-                        "task => window.__WOA_RUNTIME_READY__.then(r => r.submitTask(task))",
+                        _SUBMIT,
                         "Open Grace Hopper's contact record.")
-                    _confirm_page_switch(page)
+                    _allow_operation(page)
                     page.wait_for_url("**/contacts/grace-hopper", timeout=30_000)
                     self.assertEqual(host.server.session_count, 1)
                 finally:
@@ -838,17 +845,17 @@ class NativeContactsBrowserTests(unittest.TestCase):
                     page.goto(host.origin + "/demo/login/ada-lovelace",
                               wait_until="domcontentloaded", timeout=30_000)
                     page.evaluate(
-                        "async () => { await window.__WOA_RUNTIME_READY__; return true; }")
+                        _CONNECTED)
                     old_session, old_principal = next(iter(host._sessions.values()))
                     page.evaluate(
-                        "task => window.__WOA_RUNTIME_READY__.then(r => r.submitTask(task))",
+                        _SUBMIT,
                         "List my contacts.")
                     self.assertTrue(chat.entered.wait(5), "provider request never started")
 
                     page.goto(host.origin + "/demo/login/mary-jackson",
                               wait_until="domcontentloaded", timeout=30_000)
                     page.evaluate(
-                        "async () => { await window.__WOA_RUNTIME_READY__; return true; }")
+                        _CONNECTED)
                     self.assertTrue(chat.cancelled.wait(5), "old actor turn was not stopped")
                     self.assertTrue(host.revocations.status(old_principal)["revoked"])
                     self.assertEqual(old_session.channel.close_reason, "principal_revoked")
@@ -899,10 +906,10 @@ class NativeContactsBrowserTests(unittest.TestCase):
                     page.goto(host.origin + "/demo/login/ada-lovelace",
                               wait_until="domcontentloaded", timeout=30_000)
                     page.evaluate(
-                        "async () => { await window.__WOA_RUNTIME_READY__; return true; }")
+                        _CONNECTED)
                     page.locator(".woa-launcher").click()
                     page.evaluate(
-                        "task => window.__WOA_RUNTIME_READY__.then(r => r.submitTask(task))",
+                        _SUBMIT,
                         "List my contacts.")
                     card = page.locator(".woa-approval")
                     card.wait_for(timeout=20_000)
@@ -952,10 +959,10 @@ class NativeContactsBrowserTests(unittest.TestCase):
                         host.origin + "/contacts?access_token=" + secret + "&next=1",
                         wait_until="domcontentloaded", timeout=30_000)
                     page.evaluate(
-                        "async () => { await window.__WOA_RUNTIME_READY__; return true; }")
+                        _CONNECTED)
                     session = next(iter(host._sessions.values()))[0]
                     page.evaluate(
-                        "task => window.__WOA_RUNTIME_READY__.then(r => r.submitTask(task))",
+                        _SUBMIT,
                         "Describe only what this page can support.")
                     outcome = session.runner.next_outcome(timeout_s=15)
                     self.assertEqual(outcome.result.terminal_reason, "agent_refused")
@@ -965,7 +972,7 @@ class NativeContactsBrowserTests(unittest.TestCase):
                             self.assertNotIn(secret.encode(), path.read_bytes(), str(path))
                     page.reload(wait_until="domcontentloaded", timeout=30_000)
                     page.evaluate(
-                        "async () => { await window.__WOA_RUNTIME_READY__; return true; }")
+                        _CONNECTED)
                     self.assertNotIn(secret, page.locator("body").inner_text())
                 finally:
                     browser.close()
@@ -985,18 +992,18 @@ class NativeContactsBrowserTests(unittest.TestCase):
                     page.goto(host.origin + "/demo/login/ada-lovelace",
                               wait_until="domcontentloaded", timeout=30_000)
                     page.evaluate(
-                        "async () => { await window.__WOA_RUNTIME_READY__; return true; }")
+                        _CONNECTED)
                     session = next(iter(host._sessions.values()))[0]
                     page.evaluate(
-                        "task => window.__WOA_RUNTIME_READY__.then(r => r.submitTask(task))",
+                        _SUBMIT,
                         "Open Grace Hopper's contact record.")
                     self.assertTrue(chat.entered.wait(5), "provider request never started")
                     page.reload(wait_until="domcontentloaded", timeout=30_000)
                     page.evaluate(
-                        "async () => { await window.__WOA_RUNTIME_READY__; return true; }")
+                        _CONNECTED)
                     self.assertEqual(host.server.session_count, 1)
                     chat.release.set()
-                    _confirm_page_switch(page)
+                    _allow_operation(page)
                     outcome = session.runner.next_outcome(timeout_s=15)
                     events = [json.loads(line) for line in
                               next((Path(directory) / "runs").glob("*/audit.jsonl"))
@@ -1033,10 +1040,10 @@ class NativeContactsBrowserTests(unittest.TestCase):
                     page.goto(first.origin + "/demo/login/ada-lovelace",
                               wait_until="domcontentloaded", timeout=30_000)
                     page.evaluate(
-                        "async () => { await window.__WOA_RUNTIME_READY__; return true; }")
+                        _CONNECTED)
                     page.locator(".woa-launcher").click()
                     page.evaluate(
-                        "task => window.__WOA_RUNTIME_READY__.then(r => r.submitTask(task))",
+                        _SUBMIT,
                         "Create Radia Perlman at radia@example.test.")
                     page.get_by_test_id("woa-approve").wait_for(
                         state="visible", timeout=20_000)
@@ -1051,7 +1058,7 @@ class NativeContactsBrowserTests(unittest.TestCase):
                         root, port=port, scripted=True, allow_mutations=True)).start()
                     page.reload(wait_until="domcontentloaded", timeout=30_000)
                     page.evaluate(
-                        "async () => { await window.__WOA_RUNTIME_READY__; return true; }")
+                        _CONNECTED)
                     fresh = next(iter(second._sessions.values()))[0]
                     self.assertEqual(fresh.grant.session_id, session_id)
                     self.assertNotEqual(fresh.grant.client_token, old_token)
@@ -1065,7 +1072,7 @@ class NativeContactsBrowserTests(unittest.TestCase):
                     self.assertEqual(rejected.exception.code, "unauthorized")
 
                     page.evaluate(
-                        "task => window.__WOA_RUNTIME_READY__.then(r => r.submitTask(task))",
+                        _SUBMIT,
                         "Create Radia Perlman at radia@example.test.")
                     page.get_by_test_id("woa-approve").wait_for(
                         state="visible", timeout=20_000)

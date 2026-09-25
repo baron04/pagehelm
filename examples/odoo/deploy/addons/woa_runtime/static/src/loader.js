@@ -98,8 +98,8 @@
   // Retry for as long as this page exists. The interval is capped so a long outage does not
   // turn every open tab into a request storm, but there is deliberately no give-up timer.
   const delays = [1000, 3000, 8000];
-  const ready = () => document.getElementById("woa-assistant-root")
-    || document.getElementById("woa-assistant-entry");
+  // `assistant.js` mounts its panel the moment it runs; from then on the panel is the entry.
+  const ready = () => document.getElementById("woa-assistant-root");
   const handoff = () => {
     if (!ready()) return false;
     stopped = true;

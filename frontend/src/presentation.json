@@ -11,7 +11,7 @@
     ],
     "overlay_z_index": 2147483646,
     "launcher_inset": 20,
-    "launcher_size": 52
+    "launcher_size": 44
   },
   "approval_visibility": {
     "min_visible_ratio": 0.9,

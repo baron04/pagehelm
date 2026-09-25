@@ -106,6 +106,17 @@ bytes it contains are a redistribution, and these are the components inside them
 | [react-dom](https://github.com/facebook/react) | 19.3.0 | MIT | npm | DOM renderer for the panel's Shadow DOM root |
 | [lucide-react](https://github.com/lucide-icons/lucide) | 0.475.0 | ISC | npm | The icons the panel draws |
 
+The bundle also carries three pictures, inlined as data URLs, of one drawn helper in a blue
+suit: `frontend/src/assets/assistant-avatar.webp`, her face on the launcher and in the title
+bar, cropped close from the half-length picture, and `frontend/src/assets/assistant-hero.webp`, her half-length figure on a new
+conversation, with `frontend/src/assets/assistant-hero-dark.webp`, the same figure cut out of
+its pale disc for the dark theme. They are not third-party material. They come from the repository owner's own
+design file for the panel (2026-09-26), made with OpenAI's image generation, as the owner's
+earlier picture for the same place was; under OpenAI's Terms of Use the output is assigned
+to the person who generated it. They were resized for the panel and converted to WebP. They
+are generated drawings, not photographs of anyone. A replacement must come with the same
+record: who made it, with what, when, and on what terms.
+
 Each of these emits its own `@license` banner into the bundle, so the notices travel
 with the bytes; esbuild-style banner stripping must not be enabled for this build.
 `frontend/package-lock.json` pins them by version and integrity, and `sbom.json`

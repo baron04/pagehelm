@@ -23,7 +23,6 @@ from web_operation_agent.composition.descriptor import (
     APPLICATION_ADAPTER_VERSION,
     ApplicationDescriptor,
 )
-from web_operation_agent.transport.panel_view import PanelSuggestion
 from web_operation_agent.composition.ports import (
     ApplicationPorts,
     DeclaredDataClassifier,
@@ -55,13 +54,6 @@ from .specs import (ANSWER_LABELS_ZH, APPLICATION_ID, ARCHIVE_CUSTOMER_TOOL,
 #: Served by the woa_runtime addon (1.5 and later): while the Agent acts on the page, every
 #: request of the person's session runs in a read-only transaction and a write is refused.
 PAGE_WRITE_GUARD = "/woa/page-guard"
-#: What the empty panel offers on Odoo: one goal for each workflow the live gate qualifies,
-#: phrased against the reference database's own records.
-PANEL_SUGGESTIONS = (
-    PanelSuggestion(text="列出所有待开票的销售订单", kind="列举", workflow="enumerate"),
-    PanelSuggestion(text="Acme 有哪些草稿报价单", kind="条件查询", workflow="filter"),
-    PanelSuggestion(text="把报价单 S00002 确认成销售订单", kind="写入", workflow="write"),
-)
 
 #: What each business tool does, in the core's entity-and-operation vocabulary. The server
 #: records it on every result, and a deployment's forbidden effect classes are checked
@@ -336,7 +328,6 @@ class OdooApplicationAdapter:
             catalog_sha256=self.business_tools.catalog_sha256,
             # woa_runtime 1.5: page actions run with this session read-only.
             page_write_guard=PAGE_WRITE_GUARD,
-            panel_suggestions=PANEL_SUGGESTIONS,
         )
 
     def source_capability(self, source_root: str | Path | None = None, *,

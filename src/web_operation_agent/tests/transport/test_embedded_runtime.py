@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from web_operation_agent.transport.gateway import EmbeddedGateway
+from web_operation_agent.transport.panel_view import panel_contract
 from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.transport import (RemoteBrowserClient, RemoteSessionChannel,
                                         RemoteSessionRegistry)
@@ -1635,15 +1636,20 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                 first = remote.observe()
                 link = next(element for element in first.elements if element.role == "link")
                 password = next(element for element in first.elements if element.role == "password")
+                # The panel's own words, read from the contract rather than restated here, so
+                # a change of copy cannot turn this into a check for text nobody renders.
+                own_words = [panel_contract()["label_keys"][key]
+                             for key in ("placeholder", "emptyGreeting", "emptyDetail")]
                 self.assertNotIn("fixture-password", first.content)
-                self.assertNotIn("描述你想完成的目标", first.content)
+                for words in own_words:
+                    self.assertNotIn(words, first.content)
                 page.locator(".woa-launcher").click()
                 page.locator("#woa-composer-input").fill("private assistant draft")
                 opened = remote.execute("observe").observation
                 self.assertNotIn("private assistant draft", opened.content)
-                self.assertNotIn("描述你想完成的目标", opened.content)
-                self.assertFalse(any("描述你想完成的目标" in element.name
-                                     for element in opened.elements))
+                for words in own_words:
+                    self.assertNotIn(words, opened.content)
+                    self.assertFalse(any(words in element.name for element in opened.elements))
                 first = opened
                 link = next(element for element in first.elements if element.role == "link")
                 password = next(element for element in first.elements if element.role == "password")

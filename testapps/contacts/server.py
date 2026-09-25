@@ -203,7 +203,6 @@ class NativeContactsHost:
                 session_id="contacts-" + stable,
                 navigation_mode=bound.descriptor.navigation_mode,
                 sensitive_query_keys=bound.ports.routes.session_handoff_query_keys,
-                panel_suggestions=bound.descriptor.panel_suggestions,
                 principal=principal,
             ).start()
             self._sessions[key] = (session, principal)

@@ -84,18 +84,10 @@ export interface TimelinePage {
 }
 
 /** Exactly what `RemoteSessionChannel._panel_configuration()` sends in the hello reply. */
-/** One empty-state suggestion the application offers: the words, and the workflow it teaches. */
-export interface Suggestion {
-  text: string
-  kind: string
-  workflow: 'enumerate' | 'filter' | 'write'
-}
-
 export interface PanelConfiguration {
   protocol: number
   limits: PanelLimits
   labels: Labels
-  suggestions: Suggestion[]
   notices: Record<string, string>
   panel_states: Record<PanelState, Tone>
   progress_states: Record<string, {panel_state: PanelState; tone: Tone; terminal: boolean}>
@@ -112,7 +104,6 @@ export const DEFAULT_CONFIGURATION: PanelConfiguration = {
   protocol: raw.protocol,
   limits: raw.limits as PanelLimits,
   labels: raw.label_keys as Labels,
-  suggestions: [],
   notices: raw.notices,
   panel_states: raw.panel_states as Record<PanelState, Tone>,
   progress_states: raw.progress_states as PanelConfiguration['progress_states'],

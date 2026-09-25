@@ -33,9 +33,7 @@ describe('the contract is the server\'s, not a copy', () => {
     expect(() => statusLabelKey('invented' as never)).toThrow()
   })
 
-  it('offers no suggestions of its own, and gives the composer limit words', () => {
-    // Suggestions disclose what one application can do, so only an application declares them.
-    expect(DEFAULT_CONFIGURATION.suggestions).toEqual([])
+  it('gives the composer limit words', () => {
     expect(DEFAULT_CONFIGURATION.labels.composerAtLimit).toBeTruthy()
   })
 })

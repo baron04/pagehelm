@@ -259,31 +259,31 @@ def _decide_in_page(page, config: DemoConfig) -> dict:
     return visible
 
 
-#: A page-switch confirmation: the assistant asks before leaving the page, with one control.
-_NAVIGATION_CARD = 'section.woa-approval[data-kind="navigation"]'
+#: Leave to work the page: the assistant asks once per turn, before its first page operation.
+_OPERATE_CARD = 'section.woa-approval[data-kind="operate"]'
 
 
-def _confirm_navigation_in_page(page) -> dict:
-    """Confirm a page switch the panel asks about, as the person at the keyboard would.
+def _allow_operation_in_page(page) -> dict:
+    """Give the leave to work the page the panel asks for, as the person at the keyboard would.
 
-    The card has one control and no decline. What it asked, and how many decline controls
-    it offered, are kept so a walkthrough can show both.
+    What it asked, and how many decline controls it offered, are kept so a walkthrough can
+    show both.
     """
-    card = page.locator(_NAVIGATION_CARD)
+    card = page.locator(_OPERATE_CARD)
     visible = {"text": card.inner_text(),
                "decline_controls": card.locator(_DENY_CONTROL).count()}
     page.wait_for_timeout(700)
     card.locator(_APPROVE_CONTROL).click()
-    page.locator(_NAVIGATION_CARD).wait_for(state="detached", timeout=10_000)
+    page.locator(_OPERATE_CARD).wait_for(state="detached", timeout=10_000)
     return visible
 
 
-def _next_outcome(page, conversation, timeout_s: float, navigations: list[dict]):
-    """The turn's outcome, confirming each page switch it asks for on the way."""
+def _next_outcome(page, conversation, timeout_s: float, operations: list[dict]):
+    """The turn's outcome, giving the leave to work the page it asks for on the way."""
     deadline = time.monotonic() + timeout_s
     while True:
-        if page.locator(_NAVIGATION_CARD).count():
-            navigations.append(_confirm_navigation_in_page(page))
+        if page.locator(_OPERATE_CARD).count():
+            operations.append(_allow_operation_in_page(page))
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError("timed out waiting for a completed conversation turn")
@@ -361,7 +361,7 @@ def _run_browser(config: DemoConfig, live: LiveProductSession,
     last_url = ""
     last_page_text = ""
     approvals: list[dict] = []
-    navigations: list[dict] = []
+    operations: list[dict] = []
     panel: dict = {}
     origin = live.grant.allowed_origins[0]
     with sync_playwright() as playwright:
@@ -424,7 +424,7 @@ def _run_browser(config: DemoConfig, live: LiveProductSession,
                             approvals.append(_decide_in_page(page, config))
                         outcome = _next_outcome(
                             page, conversation, config.turn_timeout_s + OUTCOME_GRACE_S,
-                            navigations)
+                            operations)
                         if config.replay_approval:
                             replay = page.evaluate("""async () => {
                               const item = window.__woaApprovalPosts?.[0];
@@ -485,7 +485,7 @@ def _run_browser(config: DemoConfig, live: LiveProductSession,
                 context.close()
         finally:
             browser.close()
-    return records, last_url, last_page_text, approvals, panel, navigations
+    return records, last_url, last_page_text, approvals, panel, operations
 
 
 def workspace_digest(records) -> str:
@@ -602,11 +602,10 @@ def run_demo(config: DemoConfig) -> dict:
             runner_factory=runner_factory,
             navigation_mode=bound.descriptor.navigation_mode,
             sensitive_query_keys=bound.ports.routes.session_handoff_query_keys,
-            panel_suggestions=bound.descriptor.panel_suggestions,
             principal=principal,
         ).start()
         try:
-            records, last_url, last_page_text, approvals, panel, navigations = _run_browser(
+            records, last_url, last_page_text, approvals, panel, operations = _run_browser(
                 config, live, holder["conversation"], actor.session)
         finally:
             live.close()
@@ -638,7 +637,7 @@ def run_demo(config: DemoConfig) -> dict:
         "last_url": last_url,
         "last_page_text": last_page_text,
         "approvals": approvals,
-        "navigation_confirmations": navigations,
+        "operation_confirmations": operations,
         "application_state": {
             "write_requests": application.write_requests,
             "refused_writes": application.refused_writes,

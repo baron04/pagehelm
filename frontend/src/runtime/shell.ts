@@ -8,6 +8,7 @@
  * one entry to the assistant, the panel's own launcher, and never a second thing standing in
  * for it while a session is being made or after one failed.
  */
+import type {PanelExample} from '../bridge/host'
 import {DEFAULT_CONFIGURATION, type PanelConfiguration} from '../contract/panel'
 import {createPanelContainer, keepAttached, mountPanel} from './panelBridge'
 import {PanelHost, type PanelActions} from './panelHost'
@@ -24,11 +25,12 @@ export const INERT_ACTIONS: PanelActions = {
 }
 
 export function createShell(actions: PanelActions = INERT_ACTIONS,
-                            configuration: PanelConfiguration = DEFAULT_CONFIGURATION): PanelShell {
+                            configuration: PanelConfiguration = DEFAULT_CONFIGURATION,
+                            examples: readonly PanelExample[] = []): PanelShell {
   const container = createPanelContainer()
   let alive = true
   const observer = keepAttached(container, () => alive)
-  const host = new PanelHost({configuration, actions})
+  const host = new PanelHost({configuration, actions, examples})
   const handle = mountPanel(host, container)
   return {
     host,

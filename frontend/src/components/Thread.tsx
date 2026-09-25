@@ -391,7 +391,8 @@ export function Thread(props: ThreadProps): React.JSX.Element {
     const node = content.current
     if (!node || typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(guarded('thread resize', () => {
-      if (follow.current) pin()
+      // A new conversation's greeting is read from the top; there is no newest line to keep.
+      if (follow.current && !node.hasAttribute('data-empty')) pin()
       else {
         const root = scroller.current
         if (root) {

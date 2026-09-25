@@ -16,7 +16,7 @@ import presentation from '../presentation.json'
 export const MIN_WIDTH = 320
 export const MIN_HEIGHT = 360
 export const DEFAULT_WIDTH = 420
-export const DEFAULT_HEIGHT = 680
+export const DEFAULT_HEIGHT = 700
 /**
  * How far the launcher sits from the viewport's right and bottom edges. The launcher and a
  * window nobody has moved both take their corner from here.

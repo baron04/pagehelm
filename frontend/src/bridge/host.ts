@@ -31,6 +31,14 @@ export interface HostNotice {
   turnId?: string
 }
 
+/** What a new conversation offers to start from: one kind of request, and one example of it. */
+export type ExampleKind = 'query' | 'find' | 'operate'
+export interface PanelExample {
+  kind: ExampleKind
+  /** A request the application has been shown to answer; picking it fills the composer. */
+  text: string
+}
+
 export interface PanelSnapshot {
   connection: ConnectionState
   entries: TimelineEntry[]
@@ -45,6 +53,11 @@ export interface PanelSnapshot {
 
 export interface PanelHost {
   readonly configuration: PanelConfiguration
+  /**
+   * The application's own examples, declared by the page that hosts the panel -- not by the
+   * server, which a new conversation has not spoken to yet. None offers none.
+   */
+  readonly examples?: readonly PanelExample[]
   snapshot(): PanelSnapshot
   subscribe(listener: (snapshot: PanelSnapshot) => void): () => void
   submit(text: string): void

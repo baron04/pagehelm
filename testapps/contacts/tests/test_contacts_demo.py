@@ -13,7 +13,7 @@ from testapps.contacts.app import (DEMO_API_TOKEN, DEMO_SESSION_COOKIE,
                                    DEMO_SESSION_VALUE, MinimalContactsApplication)
 from testapps.contacts.adapter import MinimalContactsAdapter
 from testapps.contacts.demo import (DemoConfig, READ_WALKTHROUGH, ScriptedDemoChat,
-                                    WRITE_WALKTHROUGH, _confirm_navigation_in_page, run_demo)
+                                    WRITE_WALKTHROUGH, _allow_operation_in_page, run_demo)
 from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.composition.sources import SourceCapability
 from web_operation_agent.business.runtime import (BusinessMutationIndeterminate,
@@ -357,14 +357,14 @@ class TheWriteWalkthroughInARealBrowser(unittest.TestCase):
             kinds = [row["event"] for row in events]
             self.assertEqual(kinds.count("business_mutation_proposed"), 1,
                              "one approval, asked for exactly once")
-            # Opening the new record leaves the page, so it is confirmed first: one card, one
-            # control, recorded apart from the write approval.
-            navigations = summary["navigation_confirmations"]
-            self.assertEqual(len(navigations), 1)
-            self.assertEqual(navigations[0]["decline_controls"], 0)
-            self.assertIn("/contacts/radia-perlman", navigations[0]["text"])
+            # Opening the new record works the page, so the turn asks for leave first: one
+            # card, which can be declined, recorded apart from the write approval.
+            operations = summary["operation_confirmations"]
+            self.assertEqual(len(operations), 1)
+            self.assertEqual(operations[0]["decline_controls"], 1)
+            self.assertIn("Your request:", operations[0]["text"])
             self.assertEqual(kinds.count("approval_requested"), 1)
-            self.assertEqual(kinds.count("navigation_confirmation_requested"), 1)
+            self.assertEqual(kinds.count("operation_confirmation_requested"), 1)
             self.assertEqual(turn["status"], "finished")
             self.assertEqual(kinds.count("business_mutation_result"), 1)
             self.assertNotIn("business_mutation_indeterminate", kinds)
@@ -413,9 +413,11 @@ class TheWriteWalkthroughInARealBrowser(unittest.TestCase):
         self.assertEqual(summary["application_state"]["post_requests"], 0)
         self.assertEqual(summary["application_state"]["records_created"], 0)
         self.assertEqual(summary["turns"][0]["terminal_reason"], "approval_expired")
-        self.assertIn("expired", summary["turns"][0]["answer"])
+        # A card nobody answered ends the turn as a stop does, and says nothing more about
+        # the timeout (owner ruling, 2026-09-25); the panel shows no line for it at all.
+        self.assertEqual(summary["turns"][0]["answer"], "The requested action was cancelled.")
         self.assertEqual(summary["mutation_journal"][0]["state"], "prepared")
-        # Nothing was pressed: past the deadline the card offers no control at all, which is
+        # Nothing was pressed: past the deadline the card is gone, controls and all, which is
         # what keeps a person out of the dead-end this used to leave them in (P7.5 CR-38).
         self.assertEqual(summary["approvals"][0]["controls_after_expiry"], 0)
 
@@ -553,9 +555,9 @@ class TheWriteWalkthroughInARealBrowser(unittest.TestCase):
                         # The completed write opens the new record, and the page switch is
                         # confirmed first, as the person on that page would.
                         pages[0].locator(
-                            'section.woa-approval[data-kind="navigation"]').wait_for(
+                            'section.woa-approval[data-kind="operate"]').wait_for(
                                 state="visible", timeout=15_000)
-                        _confirm_navigation_in_page(pages[0])
+                        _allow_operation_in_page(pages[0])
                         completed = conversations[0].next_outcome(timeout_s=15).result
                         self.assertEqual(completed.terminal_reason, "agent_finished")
                         self.assertEqual(application.post_requests, 1)

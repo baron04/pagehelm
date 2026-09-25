@@ -12,15 +12,13 @@ class ChannelPanel:
         """Every limit, state and server-sent string the panel renders by.
 
         The panel holds no copy of these.  F8b was two sets of constants drifting apart;
-        one of them is now a file the server reads and the panel is handed.  The
-        suggestions are the application's, declared on its descriptor.
+        one of them is now a file the server reads and the panel is handed.
         """
         contract = panel_contract()
         return {
             "protocol": contract["protocol"],
             "limits": panel_limits(),
             "labels": dict(contract["label_keys"]),
-            "suggestions": [item.to_json() for item in self.panel_suggestions],
             "notices": dict(contract["notices"]),
             "panel_states": dict(contract["panel_states"]),
             "progress_states": _copy_json(contract["progress_states"]),

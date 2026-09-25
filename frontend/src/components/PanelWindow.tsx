@@ -8,13 +8,13 @@ import {usePageNarrowing} from '../state/pagePush'
 import {isPanelShortcut} from '../state/shortcut'
 import {guarded} from './ErrorBoundary'
 import presentation from '../presentation.json'
+import avatar from '../assets/assistant-avatar.webp'
 import {ApprovalCard} from './ApprovalCard'
 import {Composer} from './Composer'
 import {EmptyState} from './EmptyState'
 import {iconProps} from './icon'
 import {InlineError} from './InlineError'
 import {Launcher, launcherStateFor} from './Launcher'
-import {Mark} from './Mark'
 import {Thread} from './Thread'
 
 const HANDLES: Handle[] = ['n', 's', 'e', 'w', 'nw', 'ne', 'sw', 'se']
@@ -35,10 +35,12 @@ export function PanelWindow({host, allowedOrigins}: {
   allowedOrigins: readonly string[]
 }): React.JSX.Element {
   const snapshot = useHostSnapshot(host)
-  const {labels, limits, suggestions} = host.configuration
+  const {labels, limits} = host.configuration
   const visibility = presentation.approval_visibility
   const [open, setOpenState] = useState(loadOpen)
   const [draft, setDraft] = useState('')
+  // Bumped when a new conversation's example fills the draft, so the composer takes the caret.
+  const [picked, setPicked] = useState(0)
   const [unread, setUnread] = useState(0)
   const [deciding, setDeciding] = useState(false)
   const [panelFailure, setPanelFailure] = useState<HostNotice | null>(null)
@@ -226,7 +228,9 @@ export function PanelWindow({host, allowedOrigins}: {
       ))}
 
       <header className="woa-titlebar" onPointerDown={onPointerDown('move')}>
-        <span className="woa-brand"><Mark size={20} />
+        {/* The assistant's face, always here: the one logo the panel has. */}
+        <span className="woa-brand">
+          <img className="woa-brand__face" src={avatar} alt="" aria-hidden="true" />
           <span className="woa-brand__word">{labels.product}</span></span>
         <button type="button" className="woa-icon-button" aria-label={labels.newChat}
                 data-tip={labels.newChat} onClick={newConversation}>
@@ -259,7 +263,8 @@ export function PanelWindow({host, allowedOrigins}: {
                               visibility={visibility} busy={deciding}
                               onDecide={decide} onRefused={() => undefined} />
               )}>
-        <EmptyState labels={labels} suggestions={suggestions} onPick={setDraft} />
+        <EmptyState labels={labels} examples={host.examples ?? []}
+                    onPick={text => { setDraft(text); setPicked(count => count + 1) }} />
       </Thread>
 
       {(snapshot.notice ?? panelFailure) && (
@@ -273,7 +278,7 @@ export function PanelWindow({host, allowedOrigins}: {
                 stopping={snapshot.connection.stopping}
                 disabled={closed || (blocking && !canReplace)} ended={closed}
                 history={askedBefore}
-                placeholder={placeholder} draft={draft} onDraft={setDraft}
+                placeholder={placeholder} draft={draft} focusRequest={picked} onDraft={setDraft}
                 onSubmit={submit} onCancel={cancel} />
     </section>
   )

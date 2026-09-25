@@ -14,22 +14,20 @@ import {resolve} from 'node:path'
 import {fileURLToPath} from 'node:url'
 import {test as base, type Browser, type Page} from '@playwright/test'
 import contract from '../../src/web_operation_agent/web_runtime/panel_contract.json' with {type: 'json'}
-import {SAMPLE_SUGGESTIONS} from '../dev/application'
 import type {Labels, PanelConfiguration} from '../src/contract/panel'
+import {SAMPLE_EXAMPLES} from '../dev/examples'
 
 const here = fileURLToPath(new URL('.', import.meta.url))
 export const PANEL_BUNDLE = resolve(here, '../dist/runtime/assistant.js')
 
 /**
  * The hello reply's panel configuration, as `RemoteSessionChannel._panel_configuration()`
- * assembles it from the contract -- `test_panel_contract.py` pins that correspondence -- for
- * the one stand-in application the harness plays, which declares its own suggestions.
+ * assembles it from the contract -- `test_panel_contract.py` pins that correspondence.
  */
 export const CONFIGURATION = {
   protocol: contract.protocol,
   limits: contract.limits,
   labels: contract.label_keys as Labels,
-  suggestions: SAMPLE_SUGGESTIONS,
   notices: contract.notices as Record<string, string>,
   panel_states: contract.panel_states,
   progress_states: contract.progress_states,
@@ -46,6 +44,7 @@ const DRIVER_HTML = `<!doctype html>
 <style>body{margin:0;height:2000px;font-family:system-ui}</style></head>
 <body>
 <script id="configuration" type="application/json">__CONFIGURATION__</script>
+<script id="examples" type="application/json">__EXAMPLES__</script>
 <script id="snapshot" type="application/json">__SNAPSHOT__</script>
 <script type="module" src="/driver.js"></script>
 </body></html>
@@ -62,6 +61,7 @@ window.onerror = pageHandler
 window.__onerrorIsOurs = () => window.onerror === pageHandler
 
 const configuration = JSON.parse(document.getElementById('configuration').textContent)
+const examples = JSON.parse(document.getElementById('examples').textContent)
 let snapshot = JSON.parse(document.getElementById('snapshot').textContent)
 const listeners = new Set()
 window.__calls = []
@@ -74,7 +74,7 @@ window.__calls = []
 // "something went wrong" dialog. A double more forgiving than the thing it stands in for
 // does not test the thing it stands in for.
 class ScriptedHost {
-  constructor(configuration) { this.configuration = configuration }
+  constructor(configuration, examples) { this.configuration = configuration; this.examples = examples }
   snapshot() { return this.read() }
   read() { return snapshot }
   subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener) }
@@ -95,7 +95,7 @@ class ScriptedHost {
   note(...args) { window.__calls.push(args) }
 }
 
-const host = new ScriptedHost(configuration)
+const host = new ScriptedHost(configuration, examples)
 window.__setSnapshot = patch => {
   snapshot = {...snapshot, ...patch}
   for (const listener of listeners) listener(snapshot)
@@ -145,6 +145,7 @@ export const PENDING = {
 function serve(state: Snapshot, csp: string): Promise<Server> {
   const page = DRIVER_HTML
     .replace('__CONFIGURATION__', JSON.stringify(CONFIGURATION))
+    .replace('__EXAMPLES__', JSON.stringify(SAMPLE_EXAMPLES))
     .replace('__SNAPSHOT__', JSON.stringify(state))
   const bundle = readFileSync(PANEL_BUNDLE)
   const server = createServer((request, response) => {

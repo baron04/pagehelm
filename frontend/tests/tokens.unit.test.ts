@@ -58,13 +58,6 @@ describe('the palette', () => {
   it('declares the same tokens in both themes', () => {
     expect(Object.keys(themes.dark).sort()).toEqual(Object.keys(themes.light).sort())
   })
-
-  it('keeps the brand disc the same object in both themes', () => {
-    // The launcher disc is one brand moment; a theme must not quietly fork it.
-    for (const name of ['brand-top', 'brand-mid', 'brand-bottom', 'brand-ink']) {
-      expect(themes.dark[name], name).toBe(themes.light[name])
-    }
-  })
 })
 
 describe('the generated sources', () => {
@@ -88,18 +81,12 @@ describe('the handwritten styles', () => {
    * each earned by a defect: font-size and line-height are token references, border-radius
    * too (a percentage is allowed only for a true circle); no solid colour is written inline
    * anywhere, the shadow rgba surviving because a shadow is light, not colour; the white
-   * that lights a highlight comes from the sheen tokens, except inside the brand disc -- the
-   * one object allowed its own fixed light, which the test above pins as equal across
-   * themes.
+   * that lights a highlight comes from the sheen tokens.
    */
   it('quote the scale rather than restate it', () => {
-    const disc = /\.woa-(launcher__disc|mark)\b/
     const problems: string[] = []
-    let selector = ''
     withoutComments(read('src/styles/panel.scss')).split('\n').forEach((line, index) => {
       const at = `panel.scss:${index + 1}`
-      const opened = /^([^{};]*)\{/.exec(line)
-      if (opened) selector = opened[1] ?? ''
       if (!line.trim()) return
       for (const [property, prefix] of [['font-size', '--woa-font-size'],
                                         ['line-height', '--woa-line-height']]) {
@@ -114,8 +101,8 @@ describe('the handwritten styles', () => {
         problems.push(`${at} border-radius: ${radius[1]}`)
       }
       if (/#[0-9a-fA-F]{3,8}\b/.test(line)) problems.push(`${at} colour literal: ${line.trim()}`)
-      if (/rgba\(\s*255,\s*255,\s*255/.test(line) && !disc.test(selector)) {
-        problems.push(`${at} white highlight outside the brand disc`)
+      if (/rgba\(\s*255,\s*255,\s*255/.test(line)) {
+        problems.push(`${at} white highlight not taken from the sheen tokens`)
       }
     })
     expect(problems).toEqual([])

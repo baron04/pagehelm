@@ -18,7 +18,7 @@
  *     compiled into this script, checked against the hello reply's protocol.
  */
 import type {
-  ConnectionState, HostNotice, PanelHost as PanelHostContract, PanelSnapshot,
+  ConnectionState, HostNotice, PanelExample, PanelHost as PanelHostContract, PanelSnapshot,
 } from '../bridge/host'
 import type {
   ApprovalRequest, PanelConfiguration, PanelState, TimelineEntry, TimelinePage,
@@ -137,11 +137,18 @@ export class PanelHost implements PanelHostContract {
   /** Recovered entries use sequence zero because they belong to an earlier incarnation. */
   private recoveredHistoryVisible = true
 
-  constructor({configuration, actions}: {configuration: PanelConfiguration; actions: PanelActions}) {
+  readonly examples: readonly PanelExample[]
+
+  constructor({configuration, actions, examples = []}: {
+    configuration: PanelConfiguration
+    actions: PanelActions
+    examples?: readonly PanelExample[]
+  }) {
     requireProtocol(configuration)
     requireActions(actions)
     this.current = configuration
     this.actions = actions
+    this.examples = examples
   }
 
   get configuration(): PanelConfiguration { return this.current }
@@ -158,7 +165,7 @@ export class PanelHost implements PanelHostContract {
   /**
    * The server's side of the contract, from a hello reply. The copy and the bounds are the
    * ones compiled in; what the server adds is when this session's identity and the session
-   * itself expire, and -- until the page declares its own -- the application's suggestions.
+   * itself expire.
    */
   adoptServerConfiguration(server: PanelConfiguration): void {
     requireProtocol(server)
@@ -166,8 +173,6 @@ export class PanelHost implements PanelHostContract {
       ...this.current,
       session_expires_at: server.session_expires_at,
       principal_expires_at: server.principal_expires_at,
-      suggestions: this.current.suggestions.length
-        ? this.current.suggestions : (server.suggestions ?? []),
     }
     this.commit({})
   }

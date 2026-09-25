@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import shutil
 import subprocess
 import tarfile
@@ -19,6 +20,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from web_operation_agent.transport.page_controller import PINNED_PAGE_CONTROLLER, pinned_version
+from web_operation_agent.transport.panel_view import panel_limits
 from web_operation_agent_odoo import deploy
 from web_operation_agent_odoo.deploy.__main__ import build_parser, main
 
@@ -162,13 +164,23 @@ await check('/odoo/customers/11', true, false, []);
         template = ElementTree.parse(addon / "views" / "assistant_entry.xml").find("template")
         self.assertEqual(template.get("inherit_id"), "web.webclient_bootstrap")
         script = template.find("xpath/script")
-        self.assertEqual(script.attrib, {
+        attributes = dict(script.attrib)
+        examples = json.loads(attributes.pop("data-woa-examples"))
+        self.assertEqual(attributes, {
             "type": "module",
-            "src": "/woa_runtime/static/src/loader.js?v=1.4",
+            "src": "/woa_runtime/static/src/loader.js?v=1.5",
             "data-woa-runtime": "/assistant/v1/runtime/assistant.js",
             "data-woa-identity": "/woa/session-assertion",
             "data-woa-bootstrap": "/assistant/bootstrap",
         })
+        # What a new conversation offers on Odoo: one example per kind, each a request the
+        # composer would take. The panel refuses the whole list otherwise, so a slip here
+        # would show nothing rather than fail loudly.
+        self.assertEqual([item["kind"] for item in examples], ["query", "find", "operate"])
+        limit = panel_limits()["goal_max_chars"]
+        for item in examples:
+            self.assertEqual(set(item), {"kind", "text"})
+            self.assertTrue(0 < len(item["text"].strip()) <= limit)
         self.assertIn('auth="user"', controller)
         self.assertIn("request.session.uid", controller)
         self.assertIn("WOA_SESSION_SECRET_FILE", controller)

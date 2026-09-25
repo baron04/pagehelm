@@ -9,6 +9,7 @@ import type {Page} from '@playwright/test'
 import presentation from '../src/presentation.json' with {type: 'json'}
 import tokens from '../src/styles/design_tokens.json' with {type: 'json'}
 import {formatTime} from '../src/state/clock'
+import {SAMPLE_EXAMPLES} from '../dev/examples'
 import {
   CONFIGURATION, PENDING, STRICT_CSP, entry, expect, labels, notices, snapshot, test,
   type Snapshot,
@@ -92,36 +93,79 @@ test.describe('the default state', () => {
     expect(panel.errors).toEqual([])
   })
 
-  test('a suggestion under the pointer takes the accent tint and keeps its icon tile', async ({open}) => {
-    // It used to turn white and lift, and its white icon tile vanished into it.
-    const panel = await open(snapshot())
-    await panel.page.locator('.woa-launcher').click()
-    const card = panel.page.locator('.woa-suggestions button').first()
-    await card.hover()
-    const paint = () => card.evaluate(node => ({
-      card: getComputedStyle(node).backgroundColor,
-      tile: getComputedStyle(node.querySelector('.woa-suggestions__icon')!).backgroundColor,
-      shadow: getComputedStyle(node).boxShadow,
-    }))
-    await expect.poll(paint).toEqual({card: rgb(tokens.themes.light['accent-soft']),
-                                      tile: rgb(tokens.themes.light.bg), shadow: 'none'})
-    expect(panel.errors).toEqual([])
-  })
-
-  test('opening shows it, and a suggestion only fills the composer', async ({open}) => {
+  test('opening shows it: a greeting, the assistant, and a way in for each kind of request', async ({open}) => {
     const panel = await open(snapshot())
     await panel.page.locator('.woa-launcher').click()
     const empty = panel.page.locator('.woa-empty')
     await empty.waitFor()
-    await expect(empty).toContainText(labels.emptyGreeting)
+    // Who is here, the question, and what it can be asked.
+    await expect(empty.locator('.woa-empty__intro')).toHaveText(labels.emptyIntro)
+    await expect(empty.locator('h3')).toHaveText(labels.emptyGreeting)
+    await expect(empty.locator('.woa-empty__detail')).toHaveText(labels.emptyDetail)
+    // The assistant's picture is in the bundle itself: it loads with no request of its own.
+    // The light theme shows it as drawn; the dark theme has the figure alone, on a glow.
+    for (const theme of ['light', 'dark']) {
+      await expect.poll(() => empty.locator(`.woa-empty__art[data-for="${theme}"]`)
+        .evaluate((node: HTMLImageElement) => node.naturalWidth)).toBe(360)
+    }
+    await expect(empty.locator('.woa-empty__art[data-for="light"]')).toBeVisible()
+    await expect(empty.locator('.woa-empty__art[data-for="dark"]')).toBeHidden()
+    // A way in for each kind the page offers an example of, in the page's own words, and a
+    // last one that asks the assistant itself; nothing that sends on its own.
+    const ways = empty.locator('.woa-example')
+    await expect(ways).toHaveCount(4)
+    const expected = [[labels.exampleQuery, SAMPLE_EXAMPLES[0]!.text],
+                      [labels.exampleFind, SAMPLE_EXAMPLES[1]!.text],
+                      [labels.exampleOperate, SAMPLE_EXAMPLES[2]!.text],
+                      [labels.exampleMore, labels.exampleMorePrompt]]
+    for (const [index, [title, text]] of expected.entries()) {
+      await expect(ways.nth(index).locator('.woa-example__title')).toHaveText(title!)
+      await expect(ways.nth(index).locator('.woa-example__text')).toHaveText(`“${text}”`)
+    }
+    // A full-width mark that ends an example is set half-width, so the closing quote sits
+    // against it; a sentence that ends on a character is left as it is.
+    await expect(ways.nth(3).locator('.woa-example__halt')).toHaveText('？')
+    await expect(ways.nth(3).locator('.woa-example__halt'))
+      .toHaveCSS('font-feature-settings', '"halt"')
+    await expect(ways.nth(0).locator('.woa-example__halt')).toHaveCount(0)
     // Every answer is a model's, so the panel says so under the composer, in the server's words.
     await expect(panel.page.locator('.woa-composer__disclaimer')).toHaveText(labels.aiDisclaimer)
-    const suggestions = panel.page.locator('.woa-suggestions button')
-    await expect(suggestions).toHaveCount(3)
-    await suggestions.nth(2).click()
-    expect(await panel.page.locator('#woa-composer-input').inputValue()).toContain('S00002')
-    // Filling is not submitting: a write must never start from one stray click.
+    // The composer is at the foot of the window from the start, where it stays once the
+    // conversation begins: sending does not move it. It offers nothing it cannot do.
+    const window = await panel.page.locator('.woa-window').boundingBox()
+    const composer = await panel.page.locator('.woa-composer').boundingBox()
+    expect(window!.y + window!.height - (composer!.y + composer!.height)).toBeLessThan(2)
+    await expect(panel.page.locator('.woa-composer button')).toHaveCount(1)
+    await expect(panel.page.locator('#woa-composer-input'))
+      .toHaveAttribute('placeholder', labels.placeholder)
     expect(await panel.calls()).toEqual([])
+    expect(panel.errors).toEqual([])
+  })
+
+  test('a way in fills the composer for the person to send or change, and sends nothing', async ({open}) => {
+    const panel = await open(snapshot())
+    await panel.page.locator('.woa-launcher').click()
+    await panel.page.locator('.woa-example').nth(2).click()
+    const composer = panel.page.locator('#woa-composer-input')
+    await expect(composer).toHaveValue(SAMPLE_EXAMPLES[2]!.text)
+    await expect(composer).toBeFocused()
+    expect(await composer.evaluate((node: HTMLTextAreaElement) => node.selectionStart))
+      .toBe(SAMPLE_EXAMPLES[2]!.text.length)
+    expect(await panel.calls()).toEqual([])
+    await panel.page.locator('.woa-example').nth(3).click()
+    await expect(composer).toHaveValue(labels.exampleMorePrompt)
+    expect(panel.errors).toEqual([])
+  })
+
+  test('in a short window the greeting is read from its top, not pinned to the bottom', async ({open}) => {
+    const panel = await open(snapshot(), {width: 320, height: 480})
+    await panel.page.locator('.woa-launcher').click()
+    await panel.page.locator('.woa-empty').waitFor()
+    await panel.page.waitForTimeout(300)
+    const thread = panel.page.locator('.woa-thread')
+    expect(await thread.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true)
+    expect(await thread.evaluate(node => node.scrollTop)).toBe(0)
+    await expect(panel.page.locator('.woa-empty__intro')).toBeInViewport()
     expect(panel.errors).toEqual([])
   })
 
@@ -1149,9 +1193,8 @@ test.describe('states and layout', () => {
 
     await panel.page.getByRole('button', {name: labels.newChat}).click()
     await panel.page.locator('.woa-empty').waitFor({timeout: 3000})
-    // Assert on the turns, not on the thread's text: one of the suggestions the empty state
-    // offers names S00002 too, so a substring check here passes for the wrong reason and
-    // would keep passing if nothing had cleared at all.
+    // Assert on the turns, not on the thread's text: a substring check passes for the wrong
+    // reason whenever the empty state happens to mention the same words.
     await expect(panel.page.locator('.woa-turns')).toHaveCount(0)
     await expect(panel.page.locator('.woa-user')).toHaveCount(0)
     expect((await panel.calls()).map(call => call[0])).toEqual(['newConversation'])
@@ -1321,15 +1364,21 @@ test.describe('states and layout', () => {
     expect(panel.errors).toEqual([])
   })
 
-  test('one colour carries the brand, and stopping stays legible under the pointer', async ({open}) => {
-    // Black controls beside blue ones read as two brands. The mark is the accent in the title
-    // bar and white on the launcher's accent disc; stopping is a solid accent disc.
+  test('the face is the logo, and stopping stays legible under the pointer', async ({open}) => {
+    // The assistant's face is the launcher and the title bar, from the first moment to the
+    // last. It is in the bundle itself: it loads with no request of its own.
     const panel = await open(snapshot())
-    const mark = (scope: string) => panel.page.locator(`${scope} .woa-mark`)
-      .evaluate(node => getComputedStyle(node).color)
-    expect(await mark('.woa-launcher')).toBe(rgb(tokens.themes.light['brand-ink']))
+    const loaded = (scope: string) => panel.page.locator(scope)
+      .evaluate((node: HTMLImageElement) => node.naturalWidth)
+    expect(await loaded('.woa-launcher__disc img')).toBe(192)
+    // Drawn, not a person: over the host page the face says it is an AI.
+    await expect(panel.page.locator('.woa-launcher .woa-ai-tag')).toHaveText(labels.aiTag)
     await panel.page.locator('.woa-launcher').click()
-    expect(await mark('.woa-brand')).toBe(rgb(tokens.themes.light.accent))
+    await panel.page.locator('.woa-empty').waitFor()
+    await expect(panel.page.locator('.woa-brand__face')).toBeVisible()
+    expect(await loaded('.woa-brand__face')).toBe(192)
+    // Inside the panel the name beside the face already says so.
+    await expect(panel.page.locator('.woa-titlebar .woa-ai-tag')).toHaveCount(0)
     await panel.set({connection: {state: 'acting', busy: true, stopping: false, online: true}})
     const stop = panel.page.getByRole('button', {name: labels.stop})
     const paint = () => stop.evaluate(node => {

@@ -16,6 +16,8 @@ export interface ComposerProps {
   history: readonly string[]
   placeholder: string
   draft: string
+  /** Bumped when something outside fills the draft for the person to edit: take the caret. */
+  focusRequest?: number
   onDraft: (value: string) => void
   onSubmit: (text: string) => void
   onCancel: () => void
@@ -56,6 +58,14 @@ export function Composer(props: ComposerProps): React.JSX.Element {
   useEffect(() => {
     if (!disabled && !busyNow.current) input.current?.focus()
   }, [disabled])
+  // A picked example: the caret goes to the end of it, ready to edit or send.
+  useEffect(() => {
+    const node = input.current
+    if (!props.focusRequest || !node || disabled) return
+    node.focus()
+    node.setSelectionRange(node.value.length, node.value.length)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.focusRequest])
 
   const send = () => {
     const text = draft.trim()

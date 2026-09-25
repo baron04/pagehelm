@@ -34,10 +34,7 @@ reads is this directory's alone:
 | `src/state/geometry.ts` | the window's sizes, placement, and floating or drawer mode |
 | `trace/trace_replay.html` | the replay page the server fills with a past run's data; `npm run build` inlines the tokens into it |
 
-The empty state's suggestions are neither: they disclose what one application can do, so the
-application declares them on its descriptor (`panel_suggestions`) and the hello reply carries
-them. The core offers none. Two sets of constants drifting apart is the defect this
-arrangement exists to prevent, and `src/web_operation_agent/tests/test_panel_contract.py`
+Two sets of constants drifting apart is the defect this arrangement exists to prevent, and `src/web_operation_agent/tests/test_panel_contract.py`
 fails if the panel starts declaring something the server does not send.
 
 ## Working on it

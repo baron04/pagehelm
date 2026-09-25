@@ -13,10 +13,9 @@ import re
 import unittest
 from pathlib import Path
 
-from web_operation_agent.transport.panel_view import (PanelSuggestion, collapse_timeline,
-                                            describe_action, label_keys, panel_contract,
-                                            panel_limits, panel_suggestions, project_event,
-                                            project_history_record)
+from web_operation_agent.transport.panel_view import (collapse_timeline, describe_action,
+                                            label_keys, panel_contract, panel_limits,
+                                            project_event, project_history_record)
 from web_operation_agent.execution.product import AgentTurnStatus
 from web_operation_agent.transport import RemoteSessionChannel
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionCommand,
@@ -57,35 +56,9 @@ class PanelContractTests(unittest.TestCase):
 
     def test_the_contract_holds_only_what_the_server_reads(self):
         """What only the panel reads is the frontend's (`frontend/src/presentation.json`)."""
-        for key in ("layout", "approval_visibility", "approval_kinds", "entry",
+        for key in ("layout", "approval_visibility", "approval_kinds", "start",
                     "entry_kinds", "suggestions"):
             self.assertNotIn(key, panel_contract())
-
-    def test_the_empty_state_offers_only_what_the_application_declares(self):
-        """The suggestion chips are capability disclosure, so the application declares them.
-
-        Each text must fit the limit a typed goal is clipped to -- picking a chip should
-        never land in the composer already truncated -- and name a qualified workflow.
-        """
-        maximum = panel_limits()["goal_max_chars"]
-        offered = (PanelSuggestion(text="列出所有联系人", kind="列举", workflow="enumerate"),)
-        configuration = RemoteSessionChannel(
-            "suggestions", ("https://app.test",), panel_suggestions=offered
-        )._panel_configuration()
-        self.assertEqual(configuration["suggestions"],
-                         [{"text": "列出所有联系人", "kind": "列举", "workflow": "enumerate"}])
-        self.assertEqual(RemoteSessionChannel(
-            "none", ("https://app.test",))._panel_configuration()["suggestions"], [])
-        for bad in ({"text": "x" * (maximum + 1), "kind": "k", "workflow": "filter"},
-                    {"text": "", "kind": "k", "workflow": "filter"},
-                    {"text": "t", "kind": "k", "workflow": "delete"},
-                    {"text": "t\x07", "kind": "k", "workflow": "write"}):
-            with self.assertRaises(ValueError, msg=bad):
-                PanelSuggestion(**bad)
-        with self.assertRaises(ValueError):
-            panel_suggestions(offered * 2)
-        with self.assertRaises(TypeError):
-            panel_suggestions([offered[0]])
 
     def test_session_lifecycle_metadata_is_not_rendered_as_an_empty_turn(self):
         payload = {"state": "session_recovered", "message": "会话已重新连接"}
@@ -239,7 +212,8 @@ class PanelContractTests(unittest.TestCase):
         contract = panel_contract()
         self.assertEqual(configuration["limits"], contract["limits"])
         self.assertEqual(configuration["labels"], contract["label_keys"])
-        self.assertEqual(configuration["suggestions"], [])
+        # The empty panel suggests nothing: fixed goals named records a deployment may not have.
+        self.assertNotIn("suggestions", configuration)
         self.assertEqual(configuration["notices"], contract["notices"])
         self.assertEqual(configuration["progress_states"], contract["progress_states"])
         self.assertEqual(configuration["terminal_error_codes"],

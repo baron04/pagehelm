@@ -7,6 +7,7 @@ import {InlineError} from '../src/components/InlineError'
 import {Launcher} from '../src/components/Launcher'
 import {APPROVAL, configuration, labels, limits} from './fixtures'
 import presentation from '../src/presentation.json'
+import {SAMPLE_EXAMPLES} from '../dev/examples'
 
 const frame = (children: React.ReactNode, width = 376) => (
   <div style={{width, background: 'var(--woa-bg)', borderRadius: 13,
@@ -53,8 +54,7 @@ export const ConfirmationNarrow = {
 export const Default = {
   render: () => frame(
     <div style={{padding: '0 13px'}}>
-      <EmptyState labels={labels} suggestions={configuration.suggestions}
-                  onPick={() => undefined} />
+      <EmptyState labels={labels} examples={SAMPLE_EXAMPLES} onPick={() => undefined} />
     </div>),
 }
 

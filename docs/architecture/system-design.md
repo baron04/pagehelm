@@ -463,7 +463,7 @@ Agent 的 `finish(done=true)`、页面 toast、HTTP 2xx、动作回执和用户�
   的类型化查询。英文源码对中文意图的端到端召回仍依赖 Agent 生成合适英文检索词；当前没有
   本地 embedding、跨语言召回或最终回答正确率基准。源码也不能说明 Studio/租户配置后的当前
   有效页面与权限，更不能单独解释某条业务记录的实际事件原因。
-- 页面内助手是一个独立的 React 19 项目（[frontend/](../../frontend/)），以 npm 入口挂进宿主页的 Shadow DOM。它是纯视图：不持会话、不发自己的请求、不存时间线——时间线是服务端把会话事件投影出来的，因此整页导航之后由服务端回放，而不是随旧文档一起丢掉。服务端也要读的文本上限、服务端下发的文案与状态名来自服务端拥有的 `panel_contract.json`，面板自行声明任何一项都会被契约测试判红；只有浏览器读的东西——配色与尺寸（`frontend/src/styles/design_tokens.json`）、层级、启动按钮位置、确认卡片可见性门槛、启动提示文案（`frontend/src/presentation.json`）和窗口几何——属于前端，服务端既不读也不存。空状态建议由应用在描述符上声明（`panel_suggestions`），核心包不内置。
+- 页面内助手是一个独立的 React 19 项目（[frontend/](../../frontend/)），以 npm 入口挂进宿主页的 Shadow DOM。它是纯视图：不持会话、不发自己的请求、不存时间线——时间线是服务端把会话事件投影出来的，因此整页导航之后由服务端回放，而不是随旧文档一起丢掉。服务端也要读的文本上限、服务端下发的文案与状态名来自服务端拥有的 `panel_contract.json`，面板自行声明任何一项都会被契约测试判红；只有浏览器读的东西——配色与尺寸（`frontend/src/styles/design_tokens.json`）、层级、启动按钮位置、确认卡片可见性门槛、启动失败时的文案（`frontend/src/presentation.json`）和窗口几何——属于前端，服务端既不读也不存。
 
   面板与宿主页共用同一个 JavaScript realm（不用 iframe，2026-09-11 定）。代价写在 `SECURITY.md`：宿主页里的脚本可以完成一次审批；CSP 与 Trusted Types 是宿主页的响应头，面板按"永不需要放宽"来写并有回归测试（不用 `innerHTML`、不注入内联样式或脚本、样式走 `CSSStyleSheet.replaceSync`），但开不开由宿主页决定。确认卡仍然拒绝非真实手势、以及它无法证明当时可见的按下——这堵住的是视觉欺骗，不是伪造。
 

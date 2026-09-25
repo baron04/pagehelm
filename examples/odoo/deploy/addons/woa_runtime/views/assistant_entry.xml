@@ -1,20 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
     <!--
-    The assistant on every signed-in backend page starts with a small Odoo-owned shell. The
-    shell is independent of the Agent, so it can still show startup errors and retry when the
-    Agent Runtime is missing or unavailable.
+    The assistant on every signed-in backend page is loaded by a small Odoo-owned shell. The
+    shell is independent of the Agent: it stands in only until `assistant.js` has loaded, and
+    stays, with the reason and Retry, only when the Agent cannot serve it at all.
 
-    The shell imports the versioned `assistant.js` from the Agent. That Runtime asks this addon
-    for identity and owns normal startup, renewal, reconnection and the full panel. The login
-    page does not render `web.webclient_bootstrap`, so nobody signed out sees the shell.
+    The shell imports the versioned `assistant.js` from the Agent, which mounts the panel at
+    once and hands the shell its leave. That script asks this addon for identity when a session
+    is needed, and owns startup, renewal and reconnection. The login page does not render
+    `web.webclient_bootstrap`, so nobody signed out sees the shell.
+
+    `data-woa-examples` is what a new conversation offers to start from on Odoo, one example
+    per kind of request: reading data, finding a feature, working the page. They are this
+    application's words about its own records and menus, so they are declared here, on its
+    page, and nowhere else; the panel shows them before any session exists.
     -->
     <template id="assistant_entry" inherit_id="web.webclient_bootstrap" name="Web Operation Agent assistant">
         <xpath expr="//t[@t-set='head_web']" position="inside">
-            <script type="module" src="/woa_runtime/static/src/loader.js?v=1.4"
+            <script type="module" src="/woa_runtime/static/src/loader.js?v=1.5"
                     data-woa-runtime="/assistant/v1/runtime/assistant.js"
                     data-woa-identity="/woa/session-assertion"
-                    data-woa-bootstrap="/assistant/bootstrap"/>
+                    data-woa-bootstrap="/assistant/bootstrap"
+                    data-woa-examples='[{"kind": "query", "text": "列出所有待开票的销售订单"}, {"kind": "find", "text": "在哪里新建报价单"}, {"kind": "operate", "text": "打开待开票的销售订单列表"}]'/>
         </xpath>
     </template>
 </odoo>

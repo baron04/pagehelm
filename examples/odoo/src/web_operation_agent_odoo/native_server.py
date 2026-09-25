@@ -424,7 +424,6 @@ class OdooNativeHost:
                 navigation_mode=bound.descriptor.navigation_mode,
                 sensitive_query_keys=bound.ports.routes.session_handoff_query_keys,
                 page_write_guard=bound.descriptor.page_write_guard,
-                panel_suggestions=bound.descriptor.panel_suggestions,
                 principal=principal).start()
             self._sessions[key] = _ActiveSession(
                 session=session, principal=principal, adapter=adapter,

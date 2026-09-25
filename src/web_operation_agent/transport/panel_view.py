@@ -12,7 +12,6 @@ page.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from functools import lru_cache
 from importlib.resources import files
 from typing import Any
@@ -78,53 +77,6 @@ def panel_labels(overrides: dict[str, str] | None = None) -> dict[str, str]:
 
 def label_keys() -> frozenset[str]:
     return frozenset(panel_contract()["label_keys"])
-
-
-#: The workflow kinds a suggestion can stand for; the panel picks its glyph by these.
-SUGGESTION_WORKFLOWS = frozenset({"enumerate", "filter", "write"})
-MAX_PANEL_SUGGESTIONS = 6
-
-
-@dataclass(frozen=True)
-class PanelSuggestion:
-    """One goal the empty panel offers, declared by the application that can fulfil it.
-
-    Suggestions are capability disclosure, so they belong to the application: the core
-    package cannot know what a deployment's records are called or which of them exist.
-    ``text`` fills the composer when picked, ``kind`` is the short label beside it, and
-    ``workflow`` says which qualified workflow the goal exercises.
-    """
-
-    text: str
-    kind: str
-    workflow: str
-
-    def __post_init__(self) -> None:
-        limits = panel_limits()
-        for name, value, maximum in (("text", self.text, limits["goal_max_chars"]),
-                                     ("kind", self.kind, limits["label_max_chars"])):
-            if (not isinstance(value, str) or not value.strip() or len(value) > maximum
-                    or any(ord(character) < 32 for character in value)):
-                raise ValueError(
-                    f"panel suggestion {name} must contain 1-{maximum} display characters")
-        if self.workflow not in SUGGESTION_WORKFLOWS:
-            raise ValueError(f"panel suggestion workflow must be one of "
-                             f"{sorted(SUGGESTION_WORKFLOWS)}")
-
-    def to_json(self) -> dict[str, str]:
-        return {"text": self.text, "kind": self.kind, "workflow": self.workflow}
-
-
-def panel_suggestions(value: Any) -> tuple[PanelSuggestion, ...]:
-    """Validate an application's suggestions: a bounded tuple of distinct goals."""
-    if not isinstance(value, tuple) or not all(
-            isinstance(item, PanelSuggestion) for item in value):
-        raise TypeError("panel_suggestions must be a tuple of PanelSuggestion")
-    if len(value) > MAX_PANEL_SUGGESTIONS:
-        raise ValueError(f"at most {MAX_PANEL_SUGGESTIONS} panel suggestions are shown")
-    if len({item.text for item in value}) != len(value):
-        raise ValueError("panel suggestions must not repeat a goal")
-    return value
 
 
 def _clip(value: Any, limit: int) -> str:

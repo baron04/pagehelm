@@ -13,8 +13,10 @@
  * the panel (`shell.ts`) is up from the moment this script runs, before and between sessions,
  * and says what is happening when one is being made or could not be.
  */
+import {DEFAULT_CONFIGURATION} from '../contract/panel'
 import {detach, later, listen, report, type Cancel} from './contain'
 import {engagementRecord} from './engagement'
+import {examplesFromPage} from './examples'
 import {startEmbeddedRuntime} from './runtime'
 import {createShell} from './shell'
 import {START_TEXT, panelStartStatus, type StartStatus} from './startStatus'
@@ -395,7 +397,8 @@ export function autoBoot(win: Window = window): Supervisor | null {
       if (open && engagement.read() !== 'none') supervisor.connect()
     },
     cancel() {}, decide() {}, newConversation() {}, loadOlder() {},
-  })
+  }, DEFAULT_CONFIGURATION,
+  examplesFromPage(win.document, DEFAULT_CONFIGURATION.limits.goal_max_chars))
   const supervisor: Supervisor = new Supervisor({
     source,
     start: config => startEmbeddedRuntime(config, shell),

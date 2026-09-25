@@ -76,15 +76,14 @@ describe('the panel outlives sessions: a Runtime binds its verbs and gives them 
     expect(vi.mocked(newer.submit).mock.calls).toEqual([['三']])
   })
 
-  it("takes the server's expiry and, until the page declares its own, its suggestions", () => {
+  it("takes the server's expiry and keeps the copy it was built with", () => {
     const host = new PanelHost({configuration: DEFAULT_CONFIGURATION, actions: actions()})
     const seen = vi.fn()
     host.subscribe(seen)
-    const suggestions = [{text: '列出订单', kind: '列举', workflow: 'enumerate' as const}]
     host.adoptServerConfiguration({
-      ...DEFAULT_CONFIGURATION, suggestions, session_expires_at: 5, principal_expires_at: 6})
-    expect(host.configuration.suggestions).toEqual(suggestions)
+      ...DEFAULT_CONFIGURATION, session_expires_at: 5, principal_expires_at: 6})
     expect(host.configuration.session_expires_at).toBe(5)
+    expect(host.configuration.principal_expires_at).toBe(6)
     expect(host.configuration.labels).toBe(DEFAULT_CONFIGURATION.labels)
     // The panel re-reads the configuration on the next render it is told about.
     expect(seen).toHaveBeenCalled()
