@@ -14,6 +14,7 @@ KINDS = ("fact", "aggregate", "list", "page", "handoff")
 METRIC_OPS = ("count", "sum")
 _MAX_DELIVERABLES = 4
 _MAX_TEXT = 120
+_MAX_REASON = 400
 
 
 def _text(value: object, name: str, *, allow_empty: bool = True) -> str:
@@ -27,6 +28,14 @@ def _text(value: object, name: str, *, allow_empty: bool = True) -> str:
     if not value and not allow_empty:
         raise ValueError(f"{name} must not be empty")
     return value
+
+
+def _reason(value: object) -> str:
+    """The model's explanation of what it could not declare: kept, bounded, never a
+    reason to refuse the declaration itself."""
+    if value is None or not isinstance(value, str):
+        return ""
+    return " ".join(value.split())[:_MAX_REASON]
 
 
 def _texts(value: object, name: str, *, limit: int = 8) -> tuple[str, ...]:
@@ -246,7 +255,7 @@ class GoalSpec:
         deliverables = tuple(Deliverable.from_json(d) for d in raw)
         return cls(deliverables=deliverables,
                    write_intent=bool(value.get("write_intent", False)),
-                   unsupported=_text(value.get("unsupported"), "unsupported"))
+                   unsupported=_reason(value.get("unsupported")))
 
     def to_json(self) -> dict:
         return {"deliverables": [d.to_json() for d in self.deliverables],
@@ -349,5 +358,64 @@ DECLARE_GOAL_TOOL = {
             "required": ["deliverables"]}}}
 
 
-__all__ = ["DECLARE_GOAL_TOOL", "Deliverable", "Filter", "GoalSpec", "KINDS", "Metric",
-           "PageSpec"]
+#: The first step of a staged declaration: which entities the request is about and what
+#: kind of deliverable each part of it asks for. Nothing else is decided here.
+DECLARE_SCOPE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "declare_scope",
+        "description": ("Say which entities of the index the request is about and what kind of "
+                        "deliverable each thing asked for is. The details (fields, conditions, "
+                        "pages, controls) come in a second step with the entities' own vocabulary."),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "parts": {
+                    "type": "array", "maxItems": _MAX_DELIVERABLES,
+                    "description": "one entry per thing asked, in the order asked",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "kind": {"type": "string", "enum": list(KINDS),
+                                     "description": "a question (what is, how many, which ones, list, the lines of) is answered: fact, aggregate or list. page only when asked to open, show or find where something is. handoff when asked to change, confirm, send, pay, cancel or create something."},
+                            "entity": {"type": "string",
+                                       "description": "entity key from the list. A question about a record's lines, items or products is about the line entity (marked 'lines of X'), not X"},
+                            "about": {"type": "string",
+                                      "description": "the record or records meant, in the person's words (a number, a name, a description), or empty"}},
+                        "required": ["kind", "entity"]}},
+                "write_intent": {"type": "boolean"},
+                "unsupported": {"type": "string",
+                                "description": "why nothing can be declared, when parts is empty: the request needs data the index does not hold, which no related entity may stand in for"}},
+            "required": ["parts"]}}}
+
+
+def scope_from_json(payload: object) -> tuple[list[dict], bool, str]:
+    """The first step's answer: (parts, write_intent, unsupported), leniently read."""
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    if isinstance(payload, list):
+        payload = {"parts": payload}
+    if not isinstance(payload, dict):
+        raise ValueError("scope must be an object")
+    raw = payload.get("parts")
+    if raw is None and payload.get("kind"):
+        raw = [payload]
+    raw = raw or []
+    if isinstance(raw, dict):
+        raw = [raw]
+    if not isinstance(raw, list):
+        raise ValueError("parts must be an array")
+    parts = []
+    for item in raw[:_MAX_DELIVERABLES]:
+        if not isinstance(item, dict):
+            continue
+        kind = _text(item.get("kind"), "kind").lower()
+        if kind not in KINDS:
+            raise ValueError(f"part kind must be one of {', '.join(KINDS)}")
+        parts.append({"kind": kind, "entity": _text(item.get("entity"), "entity"),
+                      "about": _text(item.get("about"), "about")})
+    return parts, bool(payload.get("write_intent", False)), _reason(payload.get("unsupported"))
+
+
+__all__ = ["DECLARE_GOAL_TOOL", "DECLARE_SCOPE_TOOL", "Deliverable", "Filter", "GoalSpec", "KINDS",
+           "Metric", "PageSpec", "scope_from_json"]

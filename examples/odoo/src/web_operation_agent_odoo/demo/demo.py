@@ -203,6 +203,9 @@ class OdooDemoConfig:
     #: Run each turn as a declared goal (one model call, then server resolution) rather
     #: than the step-by-step tool loop. The loop remains the path for Skill-driven writes.
     goal_turns: bool = True
+    #: The staged declaration (references located, entities chosen first, details
+    #: second); off until measured against the single declaration.
+    goal_staged: bool = False
 
     def __post_init__(self) -> None:
         for name in ("api_key_path", "storage_state_path", "output_dir"):
@@ -749,6 +752,7 @@ def run_demo(config: OdooDemoConfig, *,
                 goal_port=adapter.goal_port,
                 control=ReadOnlyControl(),
                 run_id_factory=lambda _message: "odoo-" + uuid.uuid4().hex[:16],
+                staged=config.goal_staged,
             )
         else:
             executor = AgentTurnExecutor(

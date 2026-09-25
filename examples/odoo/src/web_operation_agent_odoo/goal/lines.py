@@ -237,7 +237,8 @@ class _LinesResolver:
                     located = again
                     line_filters = [f for f in line_filters if f not in movable]
             if isinstance(located, Resolved):
-                return located
+                # The problem is the deliverable's, whatever kind the probe carried.
+                return replace(located, kind=d.kind)
             owner = located
         line_model = d.entity
         if owner[0] != parent[0]:

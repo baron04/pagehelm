@@ -73,9 +73,13 @@ class _IndexCompiler:
             if model not in detailed:
                 continue
             for line in self._line_metas(self._models[model]):
+                # A line model that also has a page of its own (journal items) keeps
+                # its place in the list but takes the line description: the fields the
+                # owner's form shows and the owner it belongs to.
                 self._models[line.model] = line
                 detailed.add(line.model)
-                entity_models.insert(entity_models.index(model) + 1, line.model)
+                if line.model not in entity_models:
+                    entity_models.insert(entity_models.index(model) + 1, line.model)
         rendered_filters: dict[tuple, str] = {}
         for action in actions:
             meta = self._models[action["model"]]
@@ -168,9 +172,13 @@ class _IndexCompiler:
         out = []
         for name, info in meta.fields.items():
             comodel = str(info.get("relation") or "")
+            already = self._models.get(comodel)
             if (info.get("type") != "one2many" or comodel not in self._model_labels
-                    or comodel in self._models
+                    or (already is not None and already.parent)
                     or not re.search(rf'<field\b[^>]*?\bname="{name}"', meta.form_arch)):
+                # A model already described as some record's lines is not described
+                # again; one that only has a page of its own (journal items) still gets
+                # its line description from the owner's form.
                 continue
             fields = self._client.call(comodel, "fields_get", [], {
                 "attributes": ["string", "type", "relation", "selection", "searchable", "domain"]})

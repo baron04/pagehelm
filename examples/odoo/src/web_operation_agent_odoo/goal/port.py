@@ -48,6 +48,25 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver):
         self._found_one: tuple | None = None
 
     # -- resolution -----------------------------------------------------------------
+    def locate_reference(self, text: str, *, context: OperationContext | None = None):
+        """The records a hard reference names, as (entity key, display name), looked
+        for on every entity a menu page shows; a number or a date names nothing here."""
+        if not text or not re.search(r"[A-Za-z]", text) or re.fullmatch(r"[\d.,/-]+", text):
+            return ()
+        index = self.index(context=context)
+        entities = list(dict.fromkeys(p.entity for p in index.pages if p.entity in self._models))
+        hits = []
+        for model in entities:
+            found = self._find_record(model, text)
+            if isinstance(found, tuple) and not isinstance(found, Ambiguous):
+                wanted = _norm(text)
+                shown = _norm(_strip_code(found[2]))
+                # Exact, or the record's name begins with the words; a mere substring
+                # somewhere inside a name is not a reference to that record.
+                if shown == wanted or shown.startswith(wanted) or _norm(found[2]).startswith(wanted):
+                    hits.append((model, found[2]))
+        return tuple(hits[:3])
+
     def capabilities(self) -> frozenset[str]:
         """Everything optional but source entries, which are not compiled yet."""
         return frozenset({"facets", "sections", "lines", "handoffs", "fill", "search"})

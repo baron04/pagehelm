@@ -71,7 +71,16 @@ agent.
   that needs an undeclared one is answered with what the application does not offer,
   without asking the port. The Contacts application declares tabs and handoffs and takes
   goal turns in its demo. A turn is marked complete only when every declared deliverable
-  settles.
+  settles. A staged declaration path exists behind a switch (`staged=True` on the executor,
+  `--staged` on the goal runner): the request's hard references (document numbers, codes,
+  Latin-script names) are cut out by shape and located by the adapter, the model first
+  picks entities and deliverable kinds from one ranked line per entity, and then declares
+  the details against those entities' neighbourhood of the index (their links, lines and
+  owners, a few KB rather than the whole index). Words the request shares with an entity's
+  label only order that list; nothing is dropped. The path is measured against the single
+  declaration before it becomes the default; a zero-model replay of recorded runs
+  (`evals/odoo/goals/reference_recall.py`) reports how many declared records the reference
+  cut recovers.
   If the model declares a write intent but only resolves read-only pages or facts, opening
   those pages is reported as partial guidance, never as the requested change having occurred.
   For a new record, an adapter may expose an actor-scoped `create` operation on a collection

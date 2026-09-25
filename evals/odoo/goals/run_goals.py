@@ -40,7 +40,7 @@ def load_tasks(version: str = "v2") -> dict:
 
 
 def run_attempt(task: dict, doc: dict, *, env: dict, credentials: Path, output: Path,
-                model_env: Path, container: str, database: str) -> dict:
+                model_env: Path, container: str, database: str, staged: bool = False) -> dict:
     before = fingerprint(container, database)
     started = time.monotonic()
     error = ""
@@ -58,7 +58,7 @@ def run_attempt(task: dict, doc: dict, *, env: dict, credentials: Path, output: 
             keep_open_seconds=0, turn_timeout_s=180.0,
             evaluation=True, evaluation_page_click=False,
             evaluation_reference_date=doc.get("reference_date", ""),
-            confirm_navigation_in_page=True,
+            confirm_navigation_in_page=True, goal_staged=staged,
             final_page_probe=lambda page: page.evaluate(FINAL_STATE_PROBE)))
     except Exception as exc:  # noqa: BLE001 -- one attempt's failure is a recorded result
         error = f"{type(exc).__name__}: {exc}"[:500]
@@ -140,6 +140,8 @@ def main() -> int:
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--task", action="append", default=[])
     parser.add_argument("--lane", default="1/1")
+    parser.add_argument("--staged", action="store_true",
+                        help="take the staged declaration path (references, scope, details)")
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--qualification", type=Path)
     arguments = parser.parse_args()
@@ -199,7 +201,8 @@ def main() -> int:
                 row = run_attempt(task, doc, env=env, credentials=arguments.credentials,
                                   output=arguments.output / "runs",
                                   model_env=arguments.model_env,
-                                  container=arguments.container, database=arguments.database)
+                                  container=arguments.container, database=arguments.database,
+                                  staged=arguments.staged)
                 row["repeat"] = repeat
                 path.write_text(json.dumps(row, ensure_ascii=False, indent=1) + "\n")
             rows.append(row)

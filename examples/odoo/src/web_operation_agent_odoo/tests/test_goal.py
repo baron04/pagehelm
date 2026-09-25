@@ -366,6 +366,16 @@ class OdooGoalPortTests(unittest.TestCase):
         self.assertEqual(self.port._fill_for(meta, "amount_total", "a lot")[0], "")
         self.assertEqual(plan("Confirm", "").page.fill, "")
 
+    def test_a_reference_is_located_on_the_entities_the_pages_show(self):
+        self.assertEqual(self.port.locate_reference("S00006"), (("sale.order", "S00006"),))
+        self.assertEqual(self.port.locate_reference("Gemini Furniture"),
+                         (("res.partner", "Gemini Furniture"),))
+        # A number or a date is not a name; a name found only inside a longer name is
+        # not a reference to that record.
+        self.assertEqual(self.port.locate_reference("1740"), ())
+        self.assertEqual(self.port.locate_reference("2026-08-22"), ())
+        self.assertEqual(self.port.locate_reference("Nobody"), ())
+
     def test_field_labels_match_by_whole_words_and_field_names(self):
         meta = self.port._models["sale.order"]
         self.assertEqual(meta.field_by_label("Order Date"), "date_order")

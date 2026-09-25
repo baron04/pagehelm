@@ -37,7 +37,8 @@ from ..state.ledger import SessionLedger
 from ..transport.browser import RemoteBrowserClient, TransportError, TurnCancelled
 from .ports import GoalPort, PagePlan, Resolution, Resolved, capabilities_of
 from .spec import GoalSpec
-from .understand import understand
+from .narrow import locate, neighbourhood, summaries
+from .understand import understand, understand_scope
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _CJK = re.compile(r"[㐀-鿿]")
@@ -106,7 +107,12 @@ class GoalTurnExecutor:
                  goal_port: GoalPort, control, run_id_factory,
                  ledger_factory=SessionLedger,
                  conversation_state: ConversationState | None = None,
-                 readings: int = 2):
+                 readings: int = 2, staged: bool = False):
+        #: The staged path: the request's hard references are located by the adapter,
+        #: the model first picks entities and kinds from one-line summaries, then
+        #: declares the details against those entities' neighbourhood of the index.
+        #: Off by default until it is measured against the single declaration.
+        self.staged = bool(staged)
         #: How many independent readings of the request are declared before acting.
         #: With two, a request the model reads differently each time is caught: the two
         #: readings are shown to it side by side and it declares once more, deciding.
@@ -264,14 +270,57 @@ class GoalTurnExecutor:
         elapsed = time.time() - s.started_at
         today = getattr(self.goal_port, "today", None)
         today_text = str(today() or "") if callable(today) else ""
+        scope_text = ""
+        if self.staged:
+            known = locate(self.goal_port, s.message.text,
+                           context=s.approvals.context(s.step, "locate"))
+            s.ledger.append("goal_references", step=s.step,
+                            references=[{"text": k.text, "entity": k.entity, "name": k.name}
+                                        for k in known][:8])
+            try:
+                parts, write_intent, unsupported, projection = understand_scope(
+                    chat, prompt=s.message.text,
+                    summaries=summaries(index, s.message.text, known), run_id=s.run_id,
+                    timeout_s=max(1.0, self.config.wall_budget_s - elapsed),
+                    cancelled=s.cancelled, today=today_text)
+            except ValueError as exc:
+                s.ledger.append("goal_declaration_invalid", step=s.step, detail=str(exc)[:200])
+                s.terminal_reason = "agent_refused"
+                return self._say(s, "没能理解这个请求要做什么，请换个说法。" if s.chinese
+                                 else "I could not work out what this request asks for.")
+            except ProviderError as exc:
+                s.ledger.append("provider_failed", step=s.step,
+                                provider_error_code=getattr(exc, "code", "provider_error"))
+                s.terminal_reason, s.detail = "provider_error", str(exc)[:200]
+                return self._say(s, "模型服务暂时没有响应，请稍后再试。" if s.chinese
+                                 else "The model service did not respond; please try again.")
+            s.ledger.append("goal_scope_declared", step=s.step, parts=parts,
+                            write_intent=write_intent, unsupported=unsupported, **projection)
+            if not parts:
+                s.terminal_reason = "agent_refused"
+                return self._say(s, ("这个请求助手做不到。" + (f"（{unsupported}）" if unsupported else ""))
+                                 if s.chinese else
+                                 ("The assistant cannot do this request."
+                                  + (f" ({unsupported})" if unsupported else "")))
+            index = neighbourhood(index, tuple(p["entity"] for p in parts))
+            s.ledger.append("goal_neighbourhood", step=s.step,
+                            entities=[e.key for e in index.entities], pages=len(index.pages),
+                            chars=len(index.render()))
+            scope_text = json.dumps({"parts": parts, "write_intent": write_intent,
+                                     "known_references": [
+                                         {"text": k.text, "entity": k.entity, "name": k.name}
+                                         for k in known]}, ensure_ascii=False)
+            s.step += 1
+            elapsed = time.time() - s.started_at
         read = functools.partial(
             understand, chat, prompt=s.message.text, index=index, run_id=s.run_id,
             timeout_s=max(1.0, self.config.wall_budget_s - elapsed), cancelled=s.cancelled,
-            today=today_text)
+            today=today_text, scope=scope_text)
         # The readings are independent, so they are asked for at the same time: the
-        # second costs a call, not a wait.
+        # second costs a call, not a wait. The staged path reads once: its first step
+        # already settled what the readings disagree about.
         second_reading = None
-        if self.readings > 1:
+        if self.readings > 1 and not self.staged:
             pool = ThreadPoolExecutor(max_workers=1)
             second_reading = pool.submit(read)
             pool.shutdown(wait=False)
@@ -296,9 +345,9 @@ class GoalTurnExecutor:
         if not spec.deliverables:
             s.terminal_reason = "agent_refused"
             why = spec.unsupported or ""
-            return self._say(s, ("这个请求超出了助手能做的范围。" + (f"（{why}）" if why else ""))
+            return self._say(s, ("这个请求助手做不到。" + (f"（{why}）" if why else ""))
                              if s.chinese else
-                             ("This request is outside what the assistant can do."
+                             ("The assistant cannot do this request."
                               + (f" ({why})" if why else "")))
         s.step += 1
         try:
@@ -321,7 +370,7 @@ class GoalTurnExecutor:
                     chat, prompt=s.message.text, index=index, run_id=s.run_id,
                     timeout_s=max(1.0, self.config.wall_budget_s - elapsed),
                     cancelled=s.cancelled, today=str(today() or "") if callable(today) else "",
-                    previous=spec, problems=problems)
+                    previous=spec, problems=problems, scope=scope_text)
             except (ValueError, ProviderError) as exc:
                 s.ledger.append("goal_repair_failed", step=s.step, detail=str(exc)[:200])
                 repaired = None

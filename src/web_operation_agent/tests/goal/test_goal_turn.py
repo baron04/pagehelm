@@ -55,6 +55,9 @@ class _Port:
     def capabilities(self):
         return self.offers
 
+    def locate_reference(self, text, *, context=None):
+        return (("order", "S00006"),) if text == "S00006" else ()
+
     def index(self, *, context=None):
         return _index()
 
@@ -202,7 +205,7 @@ class GoalTurnTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def _run(self, script, resolved, *, decision="approved", text="S00006 的客户是谁？看看其他信息",
-             resolved_then=None, offers=OPTIONAL):
+             resolved_then=None, offers=OPTIONAL, staged=False):
         channel = _Channel(page_url="http://127.0.0.1:8080/home", decision=decision)
         chat = _AgreeingChat(script)
         port = _Port(resolved, resolved_then, offers)
@@ -210,7 +213,7 @@ class GoalTurnTests(unittest.TestCase):
             channel=channel,
             config=AgentTurnConfig(supported_scope="read", ledger_path=self.ledger),
             chat=chat, application=bind_application(_Adapter()), goal_port=port,
-            control=ReadOnlyControl(), run_id_factory=lambda _m: "goal-run")
+            control=ReadOnlyControl(), run_id_factory=lambda _m: "goal-run", staged=staged)
         execution = executor.execute({"message_id": "m1", "text": text,
                                       "page_url": "http://127.0.0.1:8080/home"})
         events = [json.loads(line) for line in self.ledger.read_text().splitlines()]
@@ -382,6 +385,36 @@ class GoalTurnTests(unittest.TestCase):
         # Nothing was left to open, so the page was not even looked at.
         self.assertEqual(_Browser.instances[0].actions, [])
 
+    def test_the_staged_path_locates_references_chooses_a_scope_then_declares_details(self):
+        scripts = [("declare_scope", {"parts": [{"kind": "fact", "entity": "order", "about": "S00006"}]}),
+                   _declaration(kind="fact", entity="order", record="S00006", fields=["Customer"])]
+        execution, _channel, chat, port, events = self._run(
+            scripts, [Resolved(kind="fact", facts=(Fact("S00006", "Customer", "Lumber Inc"),))],
+            text="S00006 的客户是谁？", staged=True)
+        self.assertIn("Lumber Inc", execution.user_answer)
+        self.assertEqual(chat.tool_names, [{"declare_scope"}, {"declare_goal"}])
+        first, second = chat.messages[0][1]["content"], chat.messages[1][1]["content"]
+        self.assertTrue(first.startswith("ENTITIES"))
+        self.assertIn("named in request: S00006", first)
+        self.assertIn("KNOWN REFERENCES", first)
+        self.assertIn("APPLICATION INDEX", second)
+        self.assertIn("SCOPE", second)
+        self.assertIn('"about": "S00006"', second)
+        kinds = [e["event"] for e in events]
+        for name in ("goal_references", "goal_scope_declared", "goal_neighbourhood", "goal_declared"):
+            self.assertIn(name, kinds)
+        self.assertNotIn("goal_second_reading", kinds)
+        self.assertEqual(port.specs[0].deliverables[0].record, "S00006")
+
+    def test_a_staged_scope_with_no_parts_ends_the_turn_honestly(self):
+        execution, _channel, chat, port, _events = self._run(
+            [("declare_scope", {"parts": [], "unsupported": "no bank data in the index"})],
+            [], text="Acme 昨天在银行到账多少？", staged=True)
+        self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
+        self.assertIn("no bank data", execution.user_answer)
+        self.assertEqual(len(chat.messages), 1)
+        self.assertEqual(port.specs, [])
+
     def test_a_handoff_highlights_and_never_presses(self):
         execution, _channel, _chat, _port, events = self._run(
             [_declaration(kind="handoff", entity="order", record="S00005",
@@ -519,7 +552,7 @@ class GoalTurnTests(unittest.TestCase):
             [("declare_goal", {"deliverables": [], "unsupported": "no such thing"})], [],
             text="帮我订个外卖")
         self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
-        self.assertIn("超出了助手能做的范围", execution.user_answer)
+        self.assertIn("助手做不到", execution.user_answer)
         self.assertEqual(_Browser.instances[0].actions, [])
 
     def test_a_reply_without_a_declaration_is_refused_not_guessed(self):
