@@ -428,11 +428,13 @@ class OdooGoalPort:
         entities = []
         for model in entity_models:
             meta = self._models[model]
+            owner = self._models.get(meta.parent) if meta.parent else None
             entities.append(IndexEntity(
                 key=model, label=meta.label, aliases=self._aliases.get(meta.label, ()),
                 fields=tuple(self._index_fields(meta)) if model in detailed else (),
                 sections=meta.sections if model in detailed else (),
-                actions=meta.actions if model in detailed else ()))
+                actions=meta.actions if model in detailed else (),
+                lines_of=owner.label if owner is not None else ""))
         return ApplicationIndex(entities=tuple(entities), pages=tuple(pages),
                                 source_digest=str(catalog.get("descriptor_digest") or ""))
 

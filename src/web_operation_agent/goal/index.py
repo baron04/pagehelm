@@ -46,6 +46,9 @@ class IndexEntity:
     sections: tuple[str, ...] = ()
     #: Business controls on a record's page (header buttons), by their visible names.
     actions: tuple[str, ...] = ()
+    #: For a line entity: the label of the entity whose records own these lines. The
+    #: model then knows "the lines of an invoice" are this entity, not the invoice's.
+    lines_of: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "key", _label(self.key, "entity key"))
@@ -140,7 +143,8 @@ class ApplicationIndex:
         for entity in self.entities:
             fields = ", ".join(_render_field(f) for f in entity.fields)
             parts = [f"{entity.key}: {entity.label}"
-                     + (f" [{', '.join(entity.aliases)}]" if entity.aliases else "")]
+                     + (f" [{', '.join(entity.aliases)}]" if entity.aliases else "")
+                     + (f" (lines of {entity.lines_of})" if entity.lines_of else "")]
             if fields:
                 parts.append(f"fields: {fields}")
             if entity.sections:
