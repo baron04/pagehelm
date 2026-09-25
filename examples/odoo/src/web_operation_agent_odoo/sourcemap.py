@@ -172,6 +172,9 @@ class OdooCompiler:
         #: and buttons reference actions by xml_id; the route is what a user's URL shows.
         self.action_routes: dict[str, str] = {}
         self.action_names: dict[str, str] = {}
+        #: action xml_id -> the model its window shows, so that a method returning an
+        #: action by xml id can say which window opens.
+        self.action_models: dict[str, str] = {}
         #: view xml_id -> the view it patches, used to resolve every relation's root view.
         self.view_parent: dict[str, str] = {}
         self._pending_menus: list[tuple] = []
@@ -307,6 +310,7 @@ class OdooCompiler:
         self.action_routes[xml_id] = route
         if name:
             self.action_names[xml_id] = name
+        self.action_models[xml_id] = res_model
         target = self._text(rel, fields.get("target"))
         context = self._text(rel, fields.get("context"))
         # A form button may open this window with ``active_id`` supplied by its record.
@@ -533,19 +537,55 @@ class OdooCompiler:
                    "doc": docstring[:_MAX_DOC_CHARS]},
                   self.tree.cite(rel, item.lineno, end,
                                  excerpt_chars=_METHOD_EXCERPT_CHARS))
+        self._opens(rel, module, model, item)
+
+    def _opens(self, rel: str, module: str, model: str, item) -> None:
+        """What a method's returned action opens: the window's model, written in the
+        method body as a `'res_model'` literal or as the xml id of an action it looks
+        up. Recorded as the method's OUT parameter, cited at the lines that say so."""
+        found = _opened_window(item)
+        if found is None:
+            return
+        node, res_model, action_id, conditional = found
+        if action_id and not res_model:
+            res_model = self.action_models.get(action_id, "")
+        if not res_model and not action_id:
+            return
+        start, end = node.lineno, node.end_lineno or node.lineno
+        first_line = min([item.lineno] + [d.lineno for d in item.decorator_list])
+        method_end = item.end_lineno or item.lineno
+        if method_end - first_line < _MAX_GUARD_LINES:
+            # The whole method when it is short, as for a refusal.
+            start, end = first_line, method_end
+        self._add("service_parameter", f"{model}.{item.name}", "->window",
+                  {"module": module, "direction": "out", "opens": res_model,
+                   "opens_action": action_id, "conditional": conditional,
+                   "opens_name": self.action_names.get(action_id, "") if action_id else ""},
+                  self.tree.cite(rel, start, end, excerpt_chars=_ACTION_EXCERPT_CHARS))
 
     def _guards(self, rel: str, module: str, model: str, item) -> None:
         """Record each user-visible refusal together with its enclosing condition."""
         if item.name.startswith("__"):
             return
         decorators = [_literal(node) for node in item.decorator_list]
+        # `error = self._error_message(); if error: raise UserError(error)`: the refusal's
+        # text is whatever that other method returns, and the rule says so.
+        assigned = _assigned_calls(item)
+        first_line = min([item.lineno] + [d.lineno for d in item.decorator_list])
+        method_end = item.end_lineno or item.lineno
         for statement, context in _refusal_statements(item.body, ()):
+            via = ""
             if isinstance(statement, ast.Raise):
                 exception = _exception_name(statement.exc)
                 if exception not in REFUSALS:
                     continue
                 message = _message(statement.exc)
                 form = "raise"
+                argument = (statement.exc.args[0] if isinstance(statement.exc, ast.Call)
+                            and statement.exc.args else None)
+                if isinstance(argument, ast.Name) and argument.id in assigned:
+                    via = assigned[argument.id]
+                    message = f"the message of {via}"
             else:
                 if (not _REASON_METHOD.search(item.name)
                         or not any(kind == "if" for kind, _, _ in context)):
@@ -556,16 +596,22 @@ class OdooCompiler:
                 exception, form = "", "return"
             conditions = [text for kind, text, _ in context if kind == "if"]
             loops = [text for kind, text, _ in context if kind == "for"]
-            guard_line = next((line for kind, _, line in reversed(context) if kind == "if"),
-                              statement.lineno)
             end = statement.end_lineno or statement.lineno
-            start = guard_line if end - guard_line < _MAX_GUARD_LINES else statement.lineno
-            if end - item.lineno < _MAX_GUARD_LINES:
-                # The whole method when it is short: a reader wants to see which
-                # method refuses, not only the statement that does.
-                start = item.lineno
+            # The outermost enclosing condition or loop that is still close to the
+            # refusal: the reader sees what is being checked, not only the statement.
+            start = statement.lineno
+            for _kind, _text, line in context:
+                if end - line < _MAX_GUARD_LINES:
+                    start = min(start, line)
+            if end - first_line < _MAX_GUARD_LINES:
+                # From the method's first line (decorators included) when the refusal
+                # is near it: a reader wants to see which method refuses, not only the
+                # statement that does; the whole method when the method is short.
+                start = first_line
+                if method_end - first_line < _MAX_GUARD_LINES:
+                    end = method_end
             self._add("service_guard", f"{model}.{item.name}", message[:_MAX_ATTR_CHARS],
-                      {"module": module, "form": form, "exception": exception,
+                      {"module": module, "form": form, "exception": exception, "via": via,
                        "condition": " and ".join(
                            f"({text})" if len(conditions) > 1 else text
                            for text in conditions)[:_MAX_ATTR_CHARS],
@@ -599,6 +645,64 @@ def _evaluate(node, constants: dict):
         left, right = _evaluate(node.left, constants), _evaluate(node.right, constants)
         if isinstance(left, list) and isinstance(right, list):
             return left + right
+    return None
+
+
+def _assigned_calls(item) -> dict[str, str]:
+    """Names assigned in a method from a method call on something: `error = order._msg()`
+    maps `error` to `_msg`."""
+    out: dict[str, str] = {}
+    for node in ast.walk(item):
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Attribute)):
+            out[node.targets[0].id] = node.value.func.attr
+    return out
+
+
+def _opened_window(item):
+    """What a method returns as the window its action opens: the returned dict literal
+    with a `'res_model'`, or a returned name assigned such a dict or the action looked up
+    by xml id (`_for_xml_id("module.action")`, `env.ref("module.action")`). Returns
+    (statement to cite, model, action xml id, conditional) or None. Conditional means
+    the return sits under a condition: the window opens only sometimes."""
+    assigned: dict[str, tuple] = {}
+    for node in ast.walk(item):
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)):
+            found = _window_literal(node.value)
+            if found is not None:
+                assigned[node.targets[0].id] = (node,) + found
+    direct = {id(statement) for statement in item.body}
+    for node in ast.walk(item):
+        if not isinstance(node, ast.Return) or node.value is None:
+            continue
+        found = _window_literal(node.value)
+        statement = node
+        if found is None and isinstance(node.value, ast.Name) and node.value.id in assigned:
+            statement, *found = assigned[node.value.id]
+            found = tuple(found)
+        if found is None:
+            continue
+        model, action_id = found
+        return statement, model, action_id, id(node) not in direct
+    return None
+
+
+def _window_literal(node):
+    """(model, action xml id) when `node` is a dict literal naming a `res_model`, or a
+    call looking an action up by xml id; None otherwise."""
+    if isinstance(node, ast.Dict):
+        for key, value in zip(node.keys, node.values):
+            if (isinstance(key, ast.Constant) and key.value == "res_model"
+                    and isinstance(value, ast.Constant) and isinstance(value.value, str)):
+                return value.value, ""
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr in ("_for_xml_id", "ref") and node.args
+            and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)
+            and "." in node.args[0].value and _XML_ID.fullmatch(node.args[0].value)):
+        return "", node.args[0].value
     return None
 
 

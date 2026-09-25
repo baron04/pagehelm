@@ -38,14 +38,14 @@ def _reason(value: object) -> str:
     return " ".join(value.split())[:_MAX_REASON]
 
 
-def _texts(value: object, name: str, *, limit: int = 8) -> tuple[str, ...]:
+def _texts(value: object, name: str, *, limit: int = 8, clip: bool = False) -> tuple[str, ...]:
     if value is None:
         return ()
     if isinstance(value, (str, int, float)) and not isinstance(value, bool):
         value = [value]
     if not isinstance(value, list):
         raise ValueError(f"{name} must be an array of strings")
-    if len(value) > limit:
+    if len(value) > limit and not clip:
         raise ValueError(f"{name} exceeds {limit} entries")
     out = []
     for item in value[:limit]:
@@ -191,7 +191,9 @@ class Deliverable:
                    section=_text(value.get("section"), "section"),
                    action=_text(value.get("action"), "action"),
                    value=_text(value.get("value"), "value"),
-                   rules=_texts(value.get("rules"), "rules", limit=6),
+                   # A model that names every rule in sight is clipped, not refused: the
+                   # first ones named are the ones it found most relevant.
+                   rules=_texts(value.get("rules"), "rules", limit=8, clip=True),
                    sort=_text(value.get("sort"), "sort"),
                    descending=bool(value.get("descending", False)), limit=limit)
 
@@ -352,7 +354,7 @@ DECLARE_GOAL_TOOL = {
                             "action": {"type": "string",
                                        "description": "handoff: the button name from the index for a business action, the label of the field the person wants to change, or New for creating a record"},
                             "rules": {"type": "array", "items": {"type": "string"},
-                                      "description": "ids from RULES (r12) that answer a question about why a control is shown or hidden, when a field can be changed, what an action refuses, or what a field means; kind fact, entity set, record when one is named"},
+                                      "description": "ids from RULES (r12) that answer a question about why a control is shown or hidden, what it opens, when a field can be changed, what an action refuses, or what a field means; kind fact, entity set, record when one is named. Name the rules closest to the question even when they answer only part of it; the rules of the same control or action come along"},
                             "value": {"type": "string",
                                       "description": "handoff on a field: the new value the person gave, in the field's own form (a date as 2026-10-31, a number, a choice label from the index, a record's name); empty when the person gave no value"},
                             "sort": {"type": "string",

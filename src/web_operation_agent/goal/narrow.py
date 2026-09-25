@@ -137,9 +137,13 @@ def summaries(index: ApplicationIndex, request: str,
 #: Rules catalogued per chosen entity: the ones the request's words touch first, then
 #: every kind represented, then the rest until this many. A catalogue line is short
 #: (id and what the rule is about), so most of an entity's rules fit.
-_MAX_RULES_SHOWN = 160
+_MAX_RULES_SHOWN = 120
 _MIN_PER_KIND = 8
-_MAX_NEIGHBOUR_REFUSALS = 16
+#: Per kind a neighbour keeps (refusals; for the owner of chosen lines, also what its
+#: form says about editing them), and what an entity the request merely names keeps.
+_MAX_NEIGHBOUR_RULES = 24
+_MAX_NAMED_RULES = 24
+_MAX_NEIGHBOUR_PAGES = 3
 
 
 def _ranked_rules(entity: IndexEntity, request: str):
@@ -147,7 +151,13 @@ def _ranked_rules(entity: IndexEntity, request: str):
     represented so that a question the words do not reach still meets its kind."""
     words = _tokens(request)
     scored = []
+    listed: set[tuple[str, str]] = set()
     for position, rule in enumerate(entity.rules):
+        # One catalogue entry per control or field and kind: the answer brings the
+        # other rules of the same kind about the same thing along with the one named.
+        if (rule.kind, rule.about) in listed:
+            continue
+        listed.add((rule.kind, rule.about))
         overlap = len(words & (_tokens(rule.about) | _tokens(rule.text)))
         scored.append((-overlap, position, rule))
     scored.sort(key=lambda item: item[:2])
@@ -171,15 +181,39 @@ def _ranked_rules(entity: IndexEntity, request: str):
     return tuple(chosen)
 
 
+def _named(entity: IndexEntity, request: str) -> bool:
+    """Whether the request names the entity by its label or an alias, or one of its
+    controls or fields by the exact label the page shows (two words at least, so that
+    a one-word label such as Date names nothing)."""
+    request_norm = "".join(request.casefold().split())
+    if any("".join(label.casefold().split()) in request_norm
+           for label in (entity.label, *entity.aliases) if label):
+        return True
+    words = _tokens(request)
+    for about in (*entity.actions, *(r.about for r in entity.rules)):
+        # A rule about a window's field is labelled "Control › Field": each is a label.
+        for label in about.split("›"):
+            parts = _tokens(label)
+            if len(parts) >= 2 and parts <= words and any(re.search(r"[a-z]", p) for p in parts):
+                return True
+    return False
+
+
 def neighbourhood(index: ApplicationIndex, keys: tuple[str, ...],
                   request: str = "") -> ApplicationIndex:
     """The chosen entities with what a declaration about them may need to name: the
     entities their link fields point to, their lines, the records that own them, and
     every page that shows any of these. Rendered like the full index, only smaller.
-    Rules are kept on the chosen entities only, ranked by the request's words and
-    capped; the neighbours carry none."""
+    An entity the request names by label or alias is chosen too, since the first step
+    may have picked a related one instead. Rules are catalogued on the chosen entities,
+    ranked by the request's words and capped; a neighbour carries its refusals, and
+    the owner of chosen lines also what its form says about editing them."""
     chosen = {k for k in keys if index.entity(k) is not None}
-    wanted = set(chosen)
+    # An entity the request names joins with a few of its rules, without bringing its
+    # own neighbours: the first step's choice keeps the neighbourhood's shape.
+    named = {e.key for e in index.entities if e.key not in chosen and _named(e, request)}
+    wanted = set(chosen) | named
+    owners: set[str] = set()
     by_label = {e.label: e.key for e in index.entities}
     for key in chosen:
         entity = index.entity(key)
@@ -188,16 +222,43 @@ def neighbourhood(index: ApplicationIndex, keys: tuple[str, ...],
                 wanted.add(f.relation)
         if entity.lines_of and entity.lines_of in by_label:
             wanted.add(by_label[entity.lines_of])
+            owners.add(by_label[entity.lines_of])
         for other in index.entities:
             if other.lines_of == entity.label:
                 wanted.add(other.key)
-    # A neighbour keeps only what an action on the chosen record may run into: its
-    # refusals (a payment registered on an invoice is refused by the invoice's rules).
-    entities = tuple(
-        replace(e, rules=_ranked_rules(e, request) if e.key in chosen else
-                tuple(r for r in e.rules if r.kind == "refusal")[:_MAX_NEIGHBOUR_REFUSALS])
-        for e in index.entities if e.key in wanted)
-    pages = tuple(p for p in index.pages if p.entity in wanted)
+
+    def kept(entity: IndexEntity):
+        if entity.key in chosen:
+            return _ranked_rules(entity, request)
+        if entity.key in named:
+            return _ranked_rules(entity, request)[:_MAX_NAMED_RULES]
+        # A neighbour keeps what an action on the chosen record may run into: its
+        # refusals (a payment registered on an invoice is refused by the invoice's
+        # rules); the owner of chosen lines also when its form lets the lines be edited.
+        kinds = ("refusal", "editability") if entity.key in owners else ("refusal",)
+        listed: set[tuple[str, str]] = set()
+        out = []
+        for kind in kinds:
+            count = 0
+            for rule in entity.rules:
+                if rule.kind == kind and (rule.kind, rule.about) not in listed \
+                        and count < _MAX_NEIGHBOUR_RULES:
+                    listed.add((rule.kind, rule.about))
+                    out.append(rule)
+                    count += 1
+        return tuple(out)
+
+    entities = tuple(replace(e, rules=kept(e)) for e in index.entities if e.key in wanted)
+    # Every page of a chosen entity; of a neighbour, the first few (its main pages).
+    per_neighbour: dict[str, int] = {}
+    pages = []
+    for page in index.pages:
+        if page.entity in chosen:
+            pages.append(page)
+        elif page.entity in wanted and per_neighbour.get(page.entity, 0) < _MAX_NEIGHBOUR_PAGES:
+            per_neighbour[page.entity] = per_neighbour.get(page.entity, 0) + 1
+            pages.append(page)
+    pages = tuple(pages)
     return ApplicationIndex(entities=entities, pages=pages, source_digest=index.source_digest,
                             complete=index.complete, focused=True)
 

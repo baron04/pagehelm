@@ -188,6 +188,32 @@ class TrayRules(models.Model):
             return _("Pinned tray")
         return self.name
 
+    @api.constrains("pinned")
+    def _check_pinned_delete(self):
+        if any(tray.pinned for tray in self):
+            raise UserError(_("Unpin the tray before deleting it."))
+
+    def action_move_checked(self):
+        for tray in self:
+            error = tray._move_error_message()
+            if error:
+                raise UserError(error)
+        return True
+
+    def action_compose(self):
+        """Open the note composer on these trays."""
+        return {
+            'type': 'ir.actions.act_window',
+            'res_model': 'greenhouse.note.composer',
+            'view_mode': 'form',
+            'target': 'new',
+        }
+
+    def action_move_wizard(self):
+        action = self.env["ir.actions.actions"]._for_xml_id("greenhouse.action_move_trays_wizard")
+        action['context'] = dict(self.env.context)
+        return action
+
     def _compute_sprout_window(self):
         """
         Compute how long a tray may sprout. Possible outcomes:
@@ -421,11 +447,12 @@ class Rules(unittest.TestCase):
         self.assertEqual(pinned.attrs["condition"], "any((tray.pinned for tray in self))")
         cited = self.tree.read_text(pinned.evidence[0].path).splitlines()[
             pinned.evidence[0].start_line - 1:pinned.evidence[0].end_line]
-        # A short method is cited whole: the reader sees which method refuses, the
-        # condition, and the refusal itself.
+        # A short method is cited whole, first line to last: the reader sees which
+        # method refuses, the condition, the refusal itself and what else the method does.
         self.assertIn("def ", cited[0])
         self.assertTrue(any("if any(tray.pinned" in line for line in cited))
-        self.assertIn("raise UserError", cited[-1])
+        self.assertTrue(any("raise UserError" in line for line in cited))
+        self.assertIn("return True", cited[-1])
         self.assertTrue(self.tree.verify(pinned.evidence[0]))
 
     def test_joined_messages_loops_and_else_branches_are_kept(self):
@@ -452,6 +479,36 @@ class Rules(unittest.TestCase):
         self.assertEqual(returned[0].attrs["form"], "return")
         self.assertEqual(returned[0].attrs["condition"], "self.stage == 'seeded'")
         self.assertEqual(self._guards("greenhouse.tray._display_label"), [])
+
+    def test_a_short_refusing_method_is_cited_from_its_decorator(self):
+        guard = self._guards("greenhouse.tray._check_pinned_delete")[0]
+        cited = self.tree.read_text(guard.evidence[0].path).splitlines()[
+            guard.evidence[0].start_line - 1:guard.evidence[0].end_line]
+        self.assertIn("@api.constrains", cited[0])
+        self.assertIn("raise UserError", cited[-1])
+
+    def test_a_refusal_whose_text_another_method_returns_says_so(self):
+        guard = self._guards("greenhouse.tray.action_move_checked")[0]
+        self.assertEqual(guard.object, "the message of _move_error_message")
+        self.assertEqual(guard.attrs["via"], "_move_error_message")
+        self.assertEqual(guard.attrs["condition"], "error")
+
+    def test_the_window_a_method_opens_is_its_out_parameter(self):
+        windows = {relation.subject: relation for relation in self.map.by_kind("service_parameter")
+                   if relation.object == "->window"}
+        compose = windows["greenhouse.tray.action_compose"]
+        self.assertEqual(compose.attrs["opens"], "greenhouse.note.composer")
+        self.assertEqual(compose.attrs["opens_action"], "")
+        wizard = windows["greenhouse.tray.action_move_wizard"]
+        self.assertEqual(wizard.attrs["opens_action"], "greenhouse.action_move_trays_wizard")
+        self.assertEqual(wizard.attrs["opens"], "greenhouse.move.wizard")
+        self.assertEqual(wizard.attrs["opens_name"], "Move Trays")
+        # A short method is cited whole; the lines that name the window are inside.
+        cited = self.tree.read_text(wizard.evidence[0].path).splitlines()[
+            wizard.evidence[0].start_line - 1:wizard.evidence[0].end_line]
+        self.assertIn("def action_move_wizard", cited[0])
+        self.assertTrue(any("_for_xml_id" in line for line in cited))
+        self.assertNotIn("greenhouse.tray.action_move", windows)
 
     def test_a_selection_named_by_a_module_constant_carries_its_values(self):
         stage = next(relation for relation in self.map.by_kind("service_entity")

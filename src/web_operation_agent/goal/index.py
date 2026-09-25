@@ -12,7 +12,7 @@ _MAX_ENTITIES = 80
 _MAX_PAGES = 160
 _MAX_FIELDS = 40
 _MAX_LABEL = 80
-_MAX_RULE = 320
+_MAX_RULE = 640
 _MAX_RULES_PER_ENTITY = 160
 
 
@@ -52,9 +52,14 @@ class IndexRule:
     text: str
     #: `path:start-end@release sha256:<hex>` -- the exact lines, hashed.
     citation: str = ""
+    #: The operation the rule concerns (the method a control calls, the action it
+    #: opens, the method that refuses), so that the rules of one operation -- a control's
+    #: conditions, what it opens, what it refuses -- are answered together.
+    subject: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", _label(self.id, "rule id"))
+        object.__setattr__(self, "subject", " ".join(str(self.subject).split())[:_MAX_LABEL])
         object.__setattr__(self, "kind", _label(self.kind, "rule kind"))
         object.__setattr__(self, "about", " ".join(str(self.about).split())[:_MAX_LABEL])
         object.__setattr__(self, "text", " ".join(str(self.text).split())[:_MAX_RULE])

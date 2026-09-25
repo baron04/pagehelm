@@ -400,22 +400,85 @@ class OdooGoalPortTests(unittest.TestCase):
                            evidence=(ref("addons/sale/models/sale_order.py", 120, 124),)),
             SourceRelation(kind="menu_link", subject="Orders", object="sales/orders",
                            attrs={}, evidence=(ref("addons/sale/views/sale_menus.xml", 1, 2),)),
+            # The window "Create Invoice" opens, its own refusal and a field's meaning,
+            # and a button whose method opens a window by xml id, for a group only.
+            SourceRelation(kind="request_handler", subject="odoo/action-330", object="sale.advance.payment.inv",
+                           attrs={"action_id": "330", "name": "Create invoice(s)", "target": "new",
+                                  "event_type": "dialog"},
+                           evidence=(ref("addons/sale/wizard/sale_make_invoice_advance_views.xml", 40, 48),)),
+            SourceRelation(kind="service_guard", subject="sale.advance.payment.inv._check_amount_is_positive",
+                           object="The value of the down payment amount must be positive.",
+                           attrs={"condition": "wizard.amount <= 0.0"},
+                           evidence=(ref("addons/sale/wizard/sale_make_invoice_advance.py", 125, 130),)),
+            SourceRelation(kind="service_entity", subject="sale.advance.payment.inv",
+                           object="consolidated_billing",
+                           attrs={"string": "Consolidated Billing",
+                                  "help": "Create one invoice for all orders related to same customer and same invoicing address"},
+                           evidence=(ref("addons/sale/wizard/sale_make_invoice_advance.py", 60, 63),)),
+            SourceRelation(kind="form_target", subject="sale.view_order_form", object="action_reverse",
+                           attrs={"model": "sale.order", "label": "Credit Note", "target_type": "object",
+                                  "invisible": "state != 'posted'", "groups": "account.group_account_invoice"},
+                           evidence=(ref("addons/sale/views/sale_order_views.xml", 769, 772),)),
+            SourceRelation(kind="service_parameter", subject="sale.order.action_reverse", object="->window",
+                           attrs={"direction": "out", "opens": "", "opens_action": "331", "opens_name": ""},
+                           evidence=(ref("addons/sale/models/sale_order.py", 5550, 5556),)),
+            SourceRelation(kind="request_handler", subject="odoo/action-331", object="account.move.reversal",
+                           attrs={"action_id": "331", "name": "Reverse", "target": "new", "event_type": "dialog"},
+                           evidence=(ref("addons/account/wizard/account_move_reversal_view.xml", 28, 37),)),
+            SourceRelation(kind="service_guard", subject="sale.order.action_confirm",
+                           object="the message of _confirmation_error_message",
+                           attrs={"condition": "error_msg", "via": "_confirmation_error_message"},
+                           evidence=(ref("addons/sale/models/sale_order.py", 1154, 1157),)),
         ]
         source_map = SourceMap(schema_version=SCHEMA_VERSIONS["SourceMap"], attestation_id="a",
                                repository_id="odoo", release="bound", relations=relations)
         self.port.attach_source(source_map, release="18.0-20260909")
         self.assertIn("source", self.port.capabilities())
         entity = self.port.index().entity("sale.order")
-        by_kind = {r.kind: r for r in entity.rules}
-        self.assertEqual(set(by_kind), {"visibility", "editability", "refusal", "meaning"})
+        by_kind = {}
+        for r in entity.rules:
+            by_kind.setdefault(r.kind, r)
+        self.assertEqual(set(by_kind), {"visibility", "editability", "refusal", "meaning", "target"})
         self.assertEqual(by_kind["visibility"].about, "Create Invoice")
         self.assertIn("hidden when state != 'sale'", by_kind["visibility"].text)
         self.assertEqual(by_kind["visibility"].citation,
                          "addons/sale/views/sale_order_views.xml:266-271@18.0-20260909 sha256:" + "b" * 64)
-        self.assertIn('Field "Order Date" (date_order): read-only when', by_kind["editability"].text)
-        self.assertIn('action_confirm refuses with "It is not allowed', by_kind["refusal"].text)
-        self.assertIn("Validity of the order", by_kind["meaning"].text)
+        self.assertIn('Field "Order Date" (date_order): readonly when', by_kind["editability"].text)
+        self.assertTrue(any("Validity of the order" in r.text for r in entity.rules))
         self.assertNotIn("RULES", self.port.index().render())
+        # The button says which window it opens; the window's own refusal and field
+        # meaning come along under the button's name, on the button's operation.
+        create = by_kind["visibility"]
+        self.assertIn("which opens the Create invoice(s) window of sale.advance.payment.inv", create.text)
+        self.assertEqual(create.subject, "330")
+        texts = {r.text: r for r in entity.rules}
+        opened = next(r for r in entity.rules if r.kind == "target" and r.about == "Create Invoice")
+        self.assertIn("opens the Create invoice(s) window of sale.advance.payment.inv as a dialog", opened.text)
+        self.assertTrue(opened.citation.startswith(
+            "addons/sale/wizard/sale_make_invoice_advance_views.xml:40-48@18.0-20260909"))
+        positive = next(r for r in entity.rules if "_check_amount_is_positive" in r.about)
+        self.assertEqual(positive.kind, "refusal")
+        self.assertTrue(positive.about.startswith("Create Invoice › "))
+        self.assertEqual(positive.subject, "330")
+        consolidated = next(r for r in entity.rules if r.about == "Create Invoice › Consolidated Billing")
+        self.assertIn("In the Create invoice(s) window (sale.advance.payment.inv)", consolidated.text)
+        self.assertIn("same invoicing address", consolidated.text)
+        # A method that opens a window by xml id names the window; a group restriction
+        # is a condition; a refusal whose text another method returns says so.
+        credit = next(r for r in entity.rules if r.about == "Credit Note" and r.kind == "visibility")
+        self.assertIn("calls action_reverse, which opens the Reverse window of account.move.reversal", credit.text)
+        self.assertIn("only for members of account.group_account_invoice", credit.text)
+        self.assertEqual(credit.subject, "action_reverse")
+        declared = [r for r in entity.rules if r.about == "Credit Note" and r.kind == "target"]
+        self.assertEqual([r.citation.split("@")[0] for r in declared],
+                         ["addons/sale/models/sale_order.py:5550-5556",
+                          "addons/account/wizard/account_move_reversal_view.xml:28-37"])
+        via = next(r for r in entity.rules if "the message of" in r.text)
+        self.assertEqual(via.text, "action_confirm refuses with the message of _confirmation_error_message when error_msg")
+        self.assertEqual(via.subject, "_confirmation_error_message")
+        refusals = [r for r in entity.rules if r.about == "action_confirm"]
+        self.assertIn('action_confirm refuses with "It is not allowed', refusals[0].text)
+        self.assertEqual(refusals[0].subject, "action_confirm")
 
     def test_field_labels_match_by_whole_words_and_field_names(self):
         meta = self.port._models["sale.order"]

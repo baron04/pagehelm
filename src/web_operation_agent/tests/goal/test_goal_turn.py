@@ -30,7 +30,15 @@ from web_operation_agent.tests.support.business import _Chat
 
 _RULE = IndexRule(id="r1", kind="visibility", about="Create Invoice",
                   text='Button "Create Invoice" opens sale.advance_payment; hidden when state != sale',
-                  citation="addons/sale/views/sale_order_views.xml:266-271@18.0 sha256:" + "a" * 64)
+                  citation="addons/sale/views/sale_order_views.xml:266-271@18.0 sha256:" + "a" * 64,
+                  subject="330")
+#: The window the control opens brought its own refusal, on the control's operation.
+_WINDOW_RULE = IndexRule(id="r2", kind="refusal", about="Create Invoice › _check_amount",
+                         text="Create Invoice › _check_amount refuses with \"must be positive\" when amount <= 0",
+                         citation="addons/sale/wizard/advance.py:125-130@18.0 sha256:" + "c" * 64,
+                         subject="330")
+_OTHER_RULE = IndexRule(id="r3", kind="meaning", about="Expiration", text="Field Expiration: validity",
+                        citation="addons/sale/models/sale_order.py:120-124@18.0 sha256:" + "d" * 64)
 
 
 def _index() -> ApplicationIndex:
@@ -42,7 +50,7 @@ def _index() -> ApplicationIndex:
                     IndexField(key="state", label="Status", kind="choice",
                                choices=("Quotation", "Sales Order"))),
             sections=("Order Lines", "Other Info"), actions=("Confirm", "Send by Email"),
-            rules=(_RULE,)),),
+            rules=(_RULE, _WINDOW_RULE, _OTHER_RULE)),),
         pages=(IndexPage(key="p1", label="Orders", breadcrumb="Sales / Orders",
                          entity="order", views=("list", "kanban"),
                          filters=("My Orders",), groups=("Salesperson",)),),
@@ -447,6 +455,26 @@ class GoalTurnTests(unittest.TestCase):
         # The port was not asked: the rule is the index's, and the citation the server's.
         self.assertEqual(port.specs, [])
         self.assertEqual([a for a, _ in _Browser.instances[0].actions], [])
+        # The rules of the same operation come along -- what the window the control
+        # opens refuses -- each with its citation; an unrelated rule does not.
+        self.assertIn("must be positive", execution.user_answer)
+        self.assertIn("addons/sale/wizard/advance.py:125-130@18.0 sha256:" + "c" * 64, execution.user_answer)
+        self.assertNotIn("validity", execution.user_answer)
+
+    def test_a_rule_question_the_source_does_not_answer_is_refused_in_the_persons_words(self):
+        scripts = [("declare_scope", {"parts": [{"kind": "fact", "entity": "order", "about": ""}]}),
+                   ("declare_goal", {"deliverables": [], "unsupported": "no approval rule"})]
+        execution, _channel, _chat, _port, _events = self._run(
+            scripts, [], text="报价超过十万美元要两名经理批准吗？", staged=True)
+        self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
+        self.assertIn("部署源码里没有找到关于「报价超过十万美元要两名经理批准吗？」的规则。", execution.user_answer)
+        self.assertIn("no approval rule", execution.user_answer)
+
+    def test_a_declaration_naming_many_rules_is_clipped_not_refused(self):
+        scripts = [_declaration(kind="fact", entity="order", rules=[f"r{n}" for n in (1, 2, 3, 1, 2, 3, 1, 2, 3, 1)])]
+        execution, _channel, _chat, _port, _events = self._run(scripts, [], text="开票按钮的规则？")
+        self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+        self.assertIn("hidden when state != sale", execution.user_answer)
 
     def test_an_unknown_rule_id_is_a_repairable_problem(self):
         scripts = [_declaration(kind="fact", entity="order", record="S00001", rules=["r9"]),

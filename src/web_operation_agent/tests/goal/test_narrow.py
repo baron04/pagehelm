@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import unittest
 
-from web_operation_agent.goal.index import ApplicationIndex, IndexEntity, IndexField, IndexPage
+from web_operation_agent.goal.index import (ApplicationIndex, IndexEntity, IndexField, IndexPage,
+                                             IndexRule)
 from web_operation_agent.goal.narrow import (KnownReference, locate, neighbourhood,
                                               ranked_entities, references, summaries)
 
@@ -88,6 +89,51 @@ class RankingTests(unittest.TestCase):
         self.assertEqual({e.key for e in wide.entities}, {"order", "partner", "line"})
         self.assertNotIn("tag", [e.key for e in wide.entities])
         self.assertEqual(neighbourhood(index, ("nope",)).entities, ())
+
+    def test_an_entity_the_request_names_joins_with_a_few_rules_and_no_neighbours(self):
+        def rule(n, kind, about, subject=""):
+            return IndexRule(id=f"r{n}", kind=kind, about=about, text=f"{about} {kind} {n}",
+                             subject=subject)
+        invoice = IndexEntity(key="invoice", label="Journal Entry", aliases=("发票",),
+                              fields=(IndexField("partner", "Partner", "link", relation="partner"),),
+                              rules=tuple(rule(n, "editability", f"Field {n}") for n in range(30))
+                              + (rule(40, "visibility", "Request Cancel", "button_request_cancel"),))
+        payment = IndexEntity(key="payment", label="Payments", aliases=("付款",),
+                              rules=(rule(50, "visibility", "Request Cancel", "button_request_cancel"),))
+        order = IndexEntity(key="order", label="Sales Order",
+                            rules=(rule(60, "editability", "Order Lines"),
+                                   rule(61, "editability", "Order Lines"),
+                                   rule(62, "refusal", "action_confirm", "action_confirm"),
+                                   rule(63, "meaning", "Expiration")))
+        line = IndexEntity(key="line", label="Sales Order Line", aliases=("订单行",), lines_of="Sales Order")
+        partner = IndexEntity(key="partner", label="Contact")
+        index = ApplicationIndex(entities=(invoice, payment, order, line, partner),
+                                 pages=(IndexPage(key=f"p{n}", label=f"Invoices {n}",
+                                                  breadcrumb=f"Invoicing / {n}", entity="invoice")
+                                        for n in range(5)))
+        # The first step chose Payments; the request says 发票 (Journal Entry's alias)
+        # and names the control: Journal Entry joins with its best rules, capped, and
+        # without its own neighbour (Contact); its pages are a few, not all.
+        near = neighbourhood(index, ("payment",), request="发票上的 Request Cancel 什么时候才出现？")
+        self.assertEqual([e.key for e in near.entities], ["invoice", "payment"])
+        joined = near.entity("invoice")
+        self.assertEqual(joined.rules[0].about, "Request Cancel")
+        self.assertLessEqual(len(joined.rules), 24)
+        self.assertEqual(len(near.pages), 3)
+        # The owner of chosen lines keeps its refusals and what its form says about
+        # editing them, one entry per control or field; meanings stay out.
+        near = neighbourhood(index, ("line",), request="订单行什么时候整块都不能编辑？")
+        self.assertEqual({r.id for r in near.entity("order").rules}, {"r62", "r60"})
+        # A one-word control label ("Expiration") never names an entity.
+        near = neighbourhood(index, ("payment",), request="Expiration of what?")
+        self.assertEqual([e.key for e in near.entities], ["payment"])
+
+    def test_the_catalogue_lists_one_entry_per_control_and_kind(self):
+        rules = tuple(IndexRule(id=f"r{n}", kind="editability", about="Currency",
+                                text=f"readonly when state {n}") for n in range(4))
+        index = ApplicationIndex(entities=(IndexEntity(key="invoice", label="Journal Entry", rules=rules),))
+        near = neighbourhood(index, ("invoice",), request="currency")
+        self.assertEqual([r.id for r in near.entity("invoice").rules], ["r0"])
 
 
 if __name__ == "__main__":

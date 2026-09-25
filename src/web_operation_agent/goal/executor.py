@@ -48,6 +48,10 @@ _READY_WAITS = 12
 _SELECTED_ATTRS = ("aria-selected", "selected", "aria-pressed", "aria-checked")
 #: Element roles a handoff never highlights: navigation, not the control asked for.
 _NO_HIGHLIGHT_ROLES = frozenset({"tab", "menuitem", "menu", "menubar", "tablist", "navigation"})
+#: Rules about the same control or field, and rules of the same operation, answered
+#: along with the one named.
+_SAME_ABOUT_RULES = 10
+_SAME_OPERATION_RULES = 6
 #: Roles of elements a value can be entered into.
 _INPUT_ROLES = frozenset({"textbox", "combobox", "select", "searchbox", "spinbutton"})
 #: Roles a field's own suggestion list uses for the records it proposes.
@@ -100,6 +104,9 @@ class _TurnState:
     cancelled: Callable[[], bool] = lambda: False
     #: The index the declaration was read against (the neighbourhood, when staged).
     index: object = None
+    #: The whole index, which the neighbourhood was cut from; rules are answered from
+    #: it, so that a rule the catalogue left out still comes with the ones it names.
+    full_index: object = None
 
 
 
@@ -266,7 +273,7 @@ class GoalTurnExecutor:
                         elements=len(s.obs.elements), digest=s.obs.content_digest)
         chat = AuditedChat(self.chat, s.ledger)
         index = self.goal_port.index(context=s.approvals.context(0, "index"))
-        s.index = index
+        s.index = s.full_index = index
         s.ledger.append("goal_index_ready", entities=len(index.entities),
                         pages=len(index.pages), source_digest=index.source_digest,
                         complete=index.complete)
@@ -353,9 +360,12 @@ class GoalTurnExecutor:
             why = spec.unsupported or ""
             if getattr(s.index, "focused", False) and any(e.rules for e in s.index.entities):
                 # The rules of the source were in front of the model and it named none:
-                # what the person asks about is not a rule the deployed source holds.
-                why = ("部署源码里没有找到关于这件事的规则。" if s.chinese
-                       else "The deployed source holds no rule about this.") + (f" {why}" if why else "")
+                # what the person asks about, in their words, is not a rule the deployed
+                # source holds.
+                asked = " ".join(s.message.text.split())[:120]
+                why = ((f"部署源码里没有找到关于「{asked}」的规则。" if s.chinese
+                        else f"The deployed source holds no rule about \"{asked}\".")
+                       + (f" {why}" if why else ""))
             return self._say(s, ("这个请求助手做不到。" + (f"（{why}）" if why else ""))
                              if s.chinese else
                              ("The assistant cannot do this request."
@@ -798,7 +808,7 @@ class GoalTurnExecutor:
         """The rules a deliverable names, as facts with their citations. A rule id the
         index does not have is a problem the model can repair, since the ids it may
         name are the ones it was shown."""
-        index = s.index
+        index = s.full_index or s.index
         facts, citations, unknown, shown = [], [], [], set()
         for rule_id in d.rules:
             found = index.rule(rule_id) if index is not None else None
@@ -806,11 +816,16 @@ class GoalTurnExecutor:
                 unknown.append(rule_id)
                 continue
             entity, rule = found
-            # A control's or field's rules come as a set: the one named and the others
-            # of the same kind about the same thing (the same field in several views,
-            # the same button under several conditions), each with its citation.
+            # A control's or field's rules come as a set: the one named, the others
+            # about the same thing (the same field in several views, its meaning and
+            # when it can be changed, the same button under several conditions), and
+            # the rules of the same operation (what the button opens, what its method
+            # refuses), each with its citation.
             group = [rule] + [r for r in entity.rules
-                              if r is not rule and r.kind == rule.kind and r.about == rule.about][:3]
+                              if r is not rule and r.about == rule.about][:_SAME_ABOUT_RULES]
+            if rule.subject:
+                group += [r for r in entity.rules if r not in group
+                          and r.subject == rule.subject][:_SAME_OPERATION_RULES]
             for item in group:
                 if item.id in shown:
                     continue

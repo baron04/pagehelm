@@ -24,7 +24,7 @@ _TEXT_ATTRS = {
     "service_guard": ("condition", "loop", "exception", "decorators"),
     "service_entity": ("string", "help", "selection", "compute", "related", "domain",
                        "field_type"),
-    "service_parameter": ("doc", "decorators"),
+    "service_parameter": ("doc", "decorators", "opens", "opens_name"),
     "request_handler": ("name", "domain", "help", "view_mode"),
     "form_target": ("label", "invisible", "confirm", "root_view"),
 }
