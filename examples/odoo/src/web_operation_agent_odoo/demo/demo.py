@@ -204,8 +204,9 @@ class OdooDemoConfig:
     #: than the step-by-step tool loop. The loop remains the path for Skill-driven writes.
     goal_turns: bool = True
     #: The staged declaration (references located, entities chosen first, details
-    #: second); off until measured against the single declaration.
-    goal_staged: bool = False
+    #: second against their neighbourhood, where the source rules are); off, one
+    #: declaration against the whole index.
+    goal_staged: bool = True
 
     def __post_init__(self) -> None:
         for name in ("api_key_path", "storage_state_path", "output_dir"):

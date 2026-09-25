@@ -42,7 +42,7 @@ def load_tasks(version: str = "v2") -> dict:
 
 
 def run_attempt(task: dict, doc: dict, *, env: dict, credentials: Path, output: Path,
-                model_env: Path, container: str, database: str, staged: bool = False) -> dict:
+                model_env: Path, container: str, database: str, staged: bool = True) -> dict:
     source = (bound_source(doc, Path(env["WOA_ODOO_SOURCE_ROOT"]),
                            env["WOA_ODOO_SOURCE_RELEASE"])
               if "source_binding" in doc else None)
@@ -145,8 +145,9 @@ def main() -> int:
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--task", action="append", default=[])
     parser.add_argument("--lane", default="1/1")
-    parser.add_argument("--staged", action="store_true",
-                        help="take the staged declaration path (references, scope, details)")
+    parser.add_argument("--single", action="store_true",
+                        help="declare once against the whole index instead of the staged "
+                             "default (references, scope, details), for comparison")
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--qualification", type=Path)
     arguments = parser.parse_args()
@@ -209,7 +210,7 @@ def main() -> int:
                                   output=arguments.output / "runs",
                                   model_env=arguments.model_env,
                                   container=arguments.container, database=arguments.database,
-                                  staged=arguments.staged)
+                                  staged=not arguments.single)
                 row["repeat"] = repeat
                 path.write_text(json.dumps(row, ensure_ascii=False, indent=1) + "\n")
             rows.append(row)

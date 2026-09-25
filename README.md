@@ -71,14 +71,17 @@ agent.
   that needs an undeclared one is answered with what the application does not offer,
   without asking the port. The Contacts application declares tabs and handoffs and takes
   goal turns in its demo. A turn is marked complete only when every declared deliverable
-  settles. A staged declaration path exists behind a switch (`staged=True` on the executor,
-  `--staged` on the goal runner): the request's hard references (document numbers, codes,
-  Latin-script names) are cut out by shape and located by the adapter, the model first
-  picks entities and deliverable kinds from one ranked line per entity, and then declares
-  the details against those entities' neighbourhood of the index (their links, lines and
-  owners, a few KB rather than the whole index). Words the request shares with an entity's
-  label only order that list; nothing is dropped. The path is measured against the single
-  declaration before it becomes the default; a zero-model replay of recorded runs
+  settles. The declaration is staged by default: the request's hard references (document
+  numbers, codes, Latin-script names) are cut out by shape and located by the adapter, the
+  model first picks entities and deliverable kinds from one ranked line per entity, and
+  then declares the details against those entities' neighbourhood of the index (their
+  links, lines and owners, a few KB rather than the whole index), with the request at the
+  start and at the end of that message; the details are read twice and reconciled like a
+  single declaration. Words the request shares with an entity's label only order that
+  list; nothing is dropped. `staged=False` on the executor (`--single` on the goal runner)
+  declares once against the whole index, for comparison; the Contacts demo's scripted
+  walkthrough does so. On the development set of 94 Chinese requests the staged path
+  answered 89 and the single declaration 87 (one full pass each). A zero-model replay of recorded runs
   (`evals/odoo/goals/reference_recall.py`) reports how many declared records the reference
   cut recovers. With a compiled source map attached to the Odoo port (the demo attaches
   the same compile the tool loop uses), the index carries rules of the deployment's

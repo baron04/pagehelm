@@ -32,7 +32,7 @@ class ContactsGoalPortTests(unittest.TestCase):
             operation_id="goal-resolve", deadline_ms=int(time.time() * 1000) + 60_000)
         return adapter, principal, context
 
-    def test_rest_facts_are_actor_scoped_and_goal_turn_uses_one_model_call(self):
+    def test_rest_facts_are_actor_scoped_and_a_staged_goal_turn_answers_them(self):
         with MinimalContactsApplication() as application, tempfile.TemporaryDirectory() as tmp:
             north, principal, context = self._bound(application, "ada-lovelace")
             port = ContactsGoalPort(north)
@@ -48,7 +48,10 @@ class ContactsGoalPortTests(unittest.TestCase):
 
             channel = _Channel(page_url=application.origin + "/contacts",
                                principal=principal)
-            chat = _Chat([("declare_goal", spec.to_json())])
+            # The default staged path: the entity first, then the details.
+            chat = _Chat([("declare_scope", {"parts": [{"kind": "fact", "entity": "contacts",
+                                                        "about": "Grace Hopper"}]}),
+                          ("declare_goal", spec.to_json())])
             executor = GoalTurnExecutor(
                 channel=channel, config=AgentTurnConfig(
                     supported_scope="Read actor-visible contacts.",
@@ -62,7 +65,7 @@ class ContactsGoalPortTests(unittest.TestCase):
                     "page_url": application.origin + "/contacts"})
             self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
             self.assertIn("grace@example.test", execution.user_answer)
-            self.assertEqual(len(chat.messages), 1)
+            self.assertEqual(len(chat.messages), 2)
             self.assertEqual(execution.agent.page_actions, 0)
 
             south, _south_principal, south_context = self._bound(application, "mary-jackson")

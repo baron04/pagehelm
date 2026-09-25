@@ -539,8 +539,10 @@ def run_demo(config: DemoConfig) -> dict:
                     chat=chat, application=bound, goal_port=ContactsGoalPort(adapter),
                     control=ReadOnlyControl(),
                     run_id_factory=lambda _message: "minimal-" + uuid.uuid4().hex[:16],
-                    # A scripted apparatus declares once; a provider reads twice.
-                    readings=1 if isinstance(chat, ScriptedDemoChat) else 2)
+                    # A scripted apparatus declares once against the whole index; a
+                    # provider takes the staged path and reads the details twice.
+                    readings=1 if isinstance(chat, ScriptedDemoChat) else 2,
+                    staged=not isinstance(chat, ScriptedDemoChat))
             executor = executor or AgentTurnExecutor(
                 channel=channel,
                 config=AgentTurnConfig(

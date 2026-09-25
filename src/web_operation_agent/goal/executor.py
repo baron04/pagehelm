@@ -117,11 +117,12 @@ class GoalTurnExecutor:
                  goal_port: GoalPort, control, run_id_factory,
                  ledger_factory=SessionLedger,
                  conversation_state: ConversationState | None = None,
-                 readings: int = 2, staged: bool = False):
-        #: The staged path: the request's hard references are located by the adapter,
-        #: the model first picks entities and kinds from one-line summaries, then
-        #: declares the details against those entities' neighbourhood of the index.
-        #: Off by default until it is measured against the single declaration.
+                 readings: int = 2, staged: bool = True):
+        #: The staged path (the default): the request's hard references are located by
+        #: the adapter, the model first picks entities and kinds from one-line summaries,
+        #: then declares the details against those entities' neighbourhood of the index,
+        #: where the rules of the deployment's source are. Off, the model declares once
+        #: against the whole index, as a comparison or for a scripted apparatus.
         self.staged = bool(staged)
         #: How many independent readings of the request are declared before acting.
         #: With two, a request the model reads differently each time is caught: the two
