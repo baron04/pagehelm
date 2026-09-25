@@ -413,6 +413,8 @@ source compilation, fixture provisioning, and qualification.
 
 The second Chinese goal holdout is frozen with 84 normal goals and 10 honest-limitation goals; see [evaluation details](evals/odoo/README.md). It has offline oracle checks, but has not been model-run or fully walked in a browser. Select it with `--version v5` in the goal runner.
 
+The frozen `v6-rules` set adds 40 source-rule questions bound to deployment release `18.0-20260909`. Its evaluator checks cited source bytes and reports answer and citation matches separately; this is evaluation support, not a completed three-arm experiment. See [the citation contract](evals/odoo/README.md#source-rule-holdout).
+
 ## License
 
 See [LICENSE](LICENSE) and [THIRD_PARTY.md](THIRD_PARTY.md).

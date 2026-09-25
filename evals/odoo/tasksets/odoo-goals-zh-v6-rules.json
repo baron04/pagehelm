@@ -1,0 +1,1482 @@
+{
+  "schema_version": 1,
+  "suite_id": "odoo-goals-zh-v6-rules",
+  "status": "FROZEN",
+  "entry_path": "/odoo",
+  "reference_date": "2026-09-25",
+  "timezone": "Asia/Shanghai",
+  "note": "40道规则留出题：可见性8、只读8、相似控件6、拒绝8、含义5、源码无对应规则5。普通woa.reader及v5同一参考数据；场景假设不是数据库断言。真值只来自部署绑定18.0-20260909源码，逐题核对元素/方法、原文及行范围；不以GitHub上游替代。三臂分别报告answer_checks与source_checks；无引用不得满足source_regex。引用格式file:start-end@release sha256:<64hex>，哈希为UTF-8原始行字节（含换行），可放在引用或代码块里。引用经封印文件哈希、切片哈希及release校验后，转成file:line@release覆盖原子匹配准确规则位置；允许编译元素或通用检索较大代码块（至多512行）。正向题须说明是部署版本源码中的规则，不是当前数据。做不到题使用impossible+explains_regex，不能从没有源码证据推出外部公司政策不存在。全题数据库必须不变；未运行模型。",
+  "categories": {
+    "answer": "源码规则回答",
+    "impossible": "如实说明缺少源码规则"
+  },
+  "source_binding": {
+    "release": "18.0-20260909",
+    "deployment_release": "18.0-20260909+image:sha256:c01e5bc381f087a3be2800d65cff8ad51ab0709dc54c3b81cd9b0d6c9b3a4d77",
+    "citation_releases": [
+      "18.0-20260909",
+      "18.0-20260909+image:sha256:c01e5bc381f087a3be2800d65cff8ad51ab0709dc54c3b81cd9b0d6c9b3a4d77"
+    ],
+    "files": {
+      "addons/account/models/account_move.py": "b0a83a4667dd1532f18198b53f19f3eb5fbef1bfc48a7b9214c87785003b8bb9",
+      "addons/account/models/account_move_send.py": "96a07e792979c3b99f79104f06208141c1f914d6f7a5871ff3483cf6b1b957f4",
+      "addons/account/views/account_move_views.xml": "6ced689100c6031fc0125ecc263b86fd44e5c773c4fe1775c0ac874b0036225e",
+      "addons/account/wizard/account_move_reversal_view.xml": "795237c86638315005496be7ed9e0eac14692cba10bfac6c14ef1493081651ac",
+      "addons/account/wizard/account_payment_register.py": "0aba69d0acba5e860d1db2c0d1d8353b5ad5114de2e7a0eddb51ebdd90701f8f",
+      "addons/sale/models/sale_order.py": "b2607b08b1b095264d683dcfe4ef316de8becd68c39d7c5e286372fd782dcc61",
+      "addons/sale/views/sale_order_views.xml": "4883c9dfef071e9fa909b76eac0151f3a2c78449e944c6f7fac6054316c497e4",
+      "addons/sale/wizard/sale_make_invoice_advance.py": "ef681d2d9f45f73a3f999b2e31729df72b990ee28c60fb9279150ccddd99c00a"
+    }
+  },
+  "tasks": [
+    {
+      "id": "visibility01",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/rule",
+      "condition": "visibility",
+      "prompt": "销售单上的 Capture Transaction 要满足什么条件才会出现？",
+      "parts": [
+        {
+          "quote": "销售单上的 Capture Transaction 要满足什么条件才会出现",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:authorized_transaction_ids|已授权.*交易|授权交易))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:259@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:261@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/views/sale_order_views.xml",
+            "start_line": 259,
+            "end_line": 261,
+            "symbol": "view_order_form/button@payment_action_capture",
+            "clauses": [
+              "invisible=\"not authorized_transaction_ids\""
+            ],
+            "sha256": "325a2f47a387990f06b3f687a7e1880bf0f49808e50c9b705d2bd7a25ca772d1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "visibility02",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/rule",
+      "condition": "visibility",
+      "prompt": "什么情况下销售单会显示 Void Transaction，点之前会提醒什么？",
+      "parts": [
+        {
+          "quote": "什么情况下销售单会显示 Void Transaction，点之前会提醒什么",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:authorized_transaction_ids|授权交易))(?=.*(?:undone|不可撤销|不能撤销))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:262@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:265@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/views/sale_order_views.xml",
+            "start_line": 262,
+            "end_line": 265,
+            "symbol": "view_order_form/button@payment_action_void",
+            "clauses": [
+              "not authorized_transaction_ids",
+              "This action can't be undone."
+            ],
+            "sha256": "5ae3061932870390e3390dc9187abcbabd7b5fbcb266c16018411540c051b0e1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "visibility03",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/rule",
+      "condition": "visibility",
+      "prompt": "销售单的 Cancel 按钮是不是锁定以后就不显示了，除此之外还有哪些限制？",
+      "parts": [
+        {
+          "quote": "销售单的 Cancel 按钮是不是锁定以后就不显示了，除此之外还有哪些限制",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:locked|锁定))(?=.*(?:draft|草稿))(?=.*(?:sent|已发送))(?=.*(?:sale|已确认))(?=.*(?:\bid\b|已保存|记录.*存在))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:291@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/views/sale_order_views.xml",
+            "start_line": 291,
+            "end_line": 291,
+            "symbol": "view_order_form/button@action_cancel",
+            "clauses": [
+              "state not in ['draft', 'sent', 'sale'] or not id or locked"
+            ],
+            "sha256": "7d12740f79390224a18318211d64e65b337f6635eeaca6ebc033912b3b315488"
+          }
+        ]
+      }
+    },
+    {
+      "id": "visibility04",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/rule",
+      "condition": "visibility",
+      "prompt": "Set to Quotation 是任何销售单都能看到，还是只有取消的单据才有？",
+      "parts": [
+        {
+          "quote": "Set to Quotation 是任何销售单都能看到，还是只有取消的单据才有",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:cancel|取消))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:292@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/views/sale_order_views.xml",
+            "start_line": 292,
+            "end_line": 292,
+            "symbol": "view_order_form/button@action_draft",
+            "clauses": [
+              "state != 'cancel'"
+            ],
+            "sha256": "7bbc26dcbe9844373e22e7e9342502ae21ca0b504b6f7c3ff826fc3e67370594"
+          }
+        ]
+      }
+    },
+    {
+      "id": "visibility05",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "visibility",
+      "prompt": "客户退款单上为什么没有 Credit Note 按钮，这个按钮适用于什么单据和状态？",
+      "parts": [
+        {
+          "quote": "客户退款单上为什么没有 Credit Note 按钮，这个按钮适用于什么单据和状态",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:out_invoice|客户发票))(?=.*(?:in_invoice|供应商账单))(?=.*(?:posted|已过账))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:769@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:772@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 769,
+            "end_line": 772,
+            "symbol": "view_move_form/button@action_reverse",
+            "clauses": [
+              "move_type not in ('out_invoice', 'in_invoice') or state != 'posted'"
+            ],
+            "sha256": "731944d78a49a25c01064e3cde58f61ffdbf264dc502ef26cd8dc9c668d1f343"
+          }
+        ]
+      }
+    },
+    {
+      "id": "visibility06",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "visibility",
+      "prompt": "供应商账单能出现 Preview 吗，客户发票又在什么状态下能看到它？",
+      "parts": [
+        {
+          "quote": "供应商账单能出现 Preview 吗，客户发票又在什么状态下能看到它",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:out_invoice|客户发票))(?=.*(?:out_refund|客户退款|贷项))(?=.*(?:draft|草稿))(?=.*(?:cancel|取消))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:762@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:764@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 762,
+            "end_line": 764,
+            "symbol": "view_move_form/button@preview_invoice",
+            "clauses": [
+              "move_type not in ('out_invoice', 'out_refund') or state in ('draft', 'cancel')"
+            ],
+            "sha256": "fcd5f1c45d8adb9c2b1b7b59e92afee65fe4dbabd8fc361d118a255fe077a610"
+          }
+        ]
+      }
+    },
+    {
+      "id": "visibility07",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "visibility",
+      "prompt": "发票上的 Request Cancel 什么时候才出现？",
+      "parts": [
+        {
+          "quote": "发票上的 Request Cancel 什么时候才出现",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:posted|已过账))(?=.*(?:show_reset_to_draft_button|重置.*草稿))(?=.*(?:need_cancel_request|需要.*取消.*申请|需要.*申请.*取消))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:782@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:787@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 782,
+            "end_line": 787,
+            "symbol": "view_move_form/button@button_request_cancel",
+            "clauses": [
+              "state != 'posted' or show_reset_to_draft_button or not need_cancel_request"
+            ],
+            "sha256": "08e479c17214ef8cd31bf7ad81c310a0fd7ae8e06fab3786aff053a717090e60"
+          }
+        ]
+      }
+    },
+    {
+      "id": "visibility08",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/rule",
+      "condition": "visibility",
+      "prompt": "改过价目表以后，Update Prices 按钮还会因为什么情况隐藏？",
+      "parts": [
+        {
+          "quote": "改过价目表以后，Update Prices 按钮还会因为什么情况隐藏",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:show_update_pricelist|更新.*标志))(?=.*(?:sale|已确认))(?=.*(?:cancel|取消))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:378@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:383@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/views/sale_order_views.xml",
+            "start_line": 378,
+            "end_line": 383,
+            "symbol": "view_order_form/button@action_update_prices",
+            "clauses": [
+              "not show_update_pricelist or state in ['sale', 'cancel']"
+            ],
+            "sha256": "ab5ac074ff8b90464cb73ceb01ed8c7a1ad1f9fd51807c82467428d1d67abb5f"
+          }
+        ]
+      }
+    },
+    {
+      "id": "readonly01",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/rule",
+      "condition": "readonly",
+      "prompt": "S00004 的客户选框为什么不能直接换人，什么状态下才不受这个限制？",
+      "parts": [
+        {
+          "quote": "S00004 的客户选框为什么不能直接换人，什么状态下才不受这个限制",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:sale|已确认))(?=.*(?:cancel|取消))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:344@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:347@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/views/sale_order_views.xml",
+            "start_line": 344,
+            "end_line": 347,
+            "symbol": "view_order_form/field@partner_id",
+            "clauses": [
+              "readonly=\"state in ['cancel', 'sale']\""
+            ],
+            "sha256": "34e056d11293584f75acb028bb76d9723c24ce247dbb25a00726edcfd1f8e445"
+          }
+        ]
+      }
+    },
+    {
+      "id": "readonly02",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/rule",
+      "condition": "readonly",
+      "prompt": "销售单的送货地址是确认后就不能改，还是锁定才不能改？",
+      "parts": [
+        {
+          "quote": "销售单的送货地址是确认后就不能改，还是锁定才不能改",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:cancel|取消))(?=.*(?:locked|锁定))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:353@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:357@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/views/sale_order_views.xml",
+            "start_line": 353,
+            "end_line": 357,
+            "symbol": "view_order_form/field@partner_shipping_id",
+            "clauses": [
+              "state == 'cancel' or locked"
+            ],
+            "sha256": "1b4fb456eda2b39ccedc3953647bf7999fb2bd80332d089cf946c5a9fe634900"
+          }
+        ]
+      }
+    },
+    {
+      "id": "readonly03",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/rule",
+      "condition": "readonly",
+      "prompt": "订单行什么时候整块都不能编辑，是只要确认就会这样吗？",
+      "parts": [
+        {
+          "quote": "订单行什么时候整块都不能编辑，是只要确认就会这样吗",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:cancel|取消))(?=.*(?:locked|锁定))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:396@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:400@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/views/sale_order_views.xml",
+            "start_line": 396,
+            "end_line": 400,
+            "symbol": "view_order_form/field@order_line",
+            "clauses": [
+              "state == 'cancel' or locked"
+            ],
+            "sha256": "a89af20834abb9645d0b1b22b3371486fe91239cbbe4ce96b3e63a81dfaff9a7"
+          }
+        ]
+      }
+    },
+    {
+      "id": "readonly04",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/rule",
+      "condition": "readonly",
+      "prompt": "已确认订单的价目表下拉框为什么锁住了，取消状态也会锁住吗？",
+      "parts": [
+        {
+          "quote": "已确认订单的价目表下拉框为什么锁住了，取消状态也会锁住吗",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:sale|已确认))(?=.*(?:cancel|取消))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:377@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/views/sale_order_views.xml",
+            "start_line": 377,
+            "end_line": 377,
+            "symbol": "view_order_form/field@pricelist_id",
+            "clauses": [
+              "state in ['cancel', 'sale']"
+            ],
+            "sha256": "dd5fb73ebdcd657c646ac8c94e691f25add6e0a6cb5de369f199368f462c5c98"
+          }
+        ]
+      }
+    },
+    {
+      "id": "readonly05",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "readonly",
+      "prompt": "供应商账单的付款参考什么时候会变成只读，是有不可变哈希就不能改吗？",
+      "parts": [
+        {
+          "quote": "供应商账单的付款参考什么时候会变成只读，是有不可变哈希就不能改吗",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:inalterable_hash|不可变.*哈希))(?=.*(?:False|只读|read.?only))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:1030@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:1033@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 1030,
+            "end_line": 1033,
+            "symbol": "view_move_form/field@payment_reference",
+            "clauses": [
+              "readonly=\"inalterable_hash != False\""
+            ],
+            "sha256": "4113e2e308d0914e6028ebe9b0d9cba054fdff703a97021a2b16b3a168d4ecfd"
+          }
+        ]
+      }
+    },
+    {
+      "id": "readonly06",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "readonly",
+      "prompt": "收款银行账号是不是发出去以后就永远不能换了，回到草稿又怎样？",
+      "parts": [
+        {
+          "quote": "收款银行账号是不是发出去以后就永远不能换了，回到草稿又怎样",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:is_move_sent|已发送))(?=.*(?:draft|草稿))(?=.*(?:and|同时|且))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:1034@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:1038@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 1034,
+            "end_line": 1038,
+            "symbol": "view_move_form/field@partner_bank_id",
+            "clauses": [
+              "is_move_sent and state != 'draft'"
+            ],
+            "sha256": "10feb832c3a444dc93b46449093440a52234ea0cadced608b0c30febff0d308a"
+          }
+        ]
+      }
+    },
+    {
+      "id": "readonly07",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "readonly",
+      "prompt": "单据回到草稿后日记账为什么还可能不能改，跟以前过账和编号有关系吗？",
+      "parts": [
+        {
+          "quote": "单据回到草稿后日记账为什么还可能不能改，跟以前过账和编号有关系吗",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:posted_before|曾.*过账))(?=.*(?:name|编号))(?=.*(?:/|空))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:1064@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:1067@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 1064,
+            "end_line": 1067,
+            "symbol": "view_move_form/field@journal_id",
+            "clauses": [
+              "posted_before and name not in (False, '', '/')"
+            ],
+            "sha256": "ad3d6e47d1248b982b9fb0f202c22666e7875fd2b1d42c76b8a95cec164e3ad4"
+          }
+        ]
+      }
+    },
+    {
+      "id": "readonly08",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "readonly",
+      "prompt": "发票的币种在哪些状态下可以编辑，已取消的也能改吗？",
+      "parts": [
+        {
+          "quote": "发票的币种在哪些状态下可以编辑，已取消的也能改吗",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:draft|草稿))(?=.*(?:readonly|只读|不能))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:1088@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:1091@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 1088,
+            "end_line": 1091,
+            "symbol": "view_move_form/field@currency_id",
+            "clauses": [
+              "readonly=\"state != 'draft'\""
+            ],
+            "sha256": "6790929bd00bb7b27dd0e5ece98a994415ecc0c2a3257e59ecf350b7e065158d"
+          }
+        ]
+      }
+    },
+    {
+      "id": "controls01",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/rule",
+      "condition": "controls",
+      "prompt": "报价单草稿和已发送时的 Confirm 是不是同一个确认操作，只是高亮不同？",
+      "parts": [
+        {
+          "quote": "报价单草稿和已发送时的 Confirm 是不是同一个确认操作，只是高亮不同",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:draft|草稿))(?=.*(?:sent|已发送))(?=.*(?:action_confirm))(?=.*(?:btn-primary|高亮))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:278@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:283@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/views/sale_order_views.xml",
+            "start_line": 278,
+            "end_line": 283,
+            "symbol": "view_order_form/buttons@action_confirm",
+            "clauses": [
+              "state != 'sent'",
+              "state != 'draft'",
+              "btn-primary"
+            ],
+            "sha256": "003f48fb85ea2c5aac1c868cf38a0206b799d822dda9e2beb37aedebac2ee78c"
+          }
+        ]
+      }
+    },
+    {
+      "id": "controls02",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/rule",
+      "condition": "controls",
+      "prompt": "草稿时高亮的 Send by Email 和确认后普通的那个，分别什么时候显示，会打开同一种窗口吗？",
+      "parts": [
+        {
+          "quote": "草稿时高亮的 Send by Email 和确认后普通的那个，分别什么时候显示，会打开同一种窗口吗",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:draft|草稿))(?=.*(?:sent|已发送))(?=.*(?:sale|已确认))(?=.*(?:mail.compose.message|邮件.*编写|邮件.*编辑))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:272@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:274@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:285@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:1077@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:1085@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/views/sale_order_views.xml",
+            "start_line": 272,
+            "end_line": 274,
+            "symbol": "view_order_form/button@send_by_email_primary",
+            "clauses": [
+              "state != 'draft'"
+            ],
+            "sha256": "7d5d7cb8b5495c7133c5e3c194bac1bdb3ee118741043620cf714a221eab7c21"
+          },
+          {
+            "file": "addons/sale/views/sale_order_views.xml",
+            "start_line": 285,
+            "end_line": 285,
+            "symbol": "view_order_form/button@send_by_email",
+            "clauses": [
+              "state not in ('sent', 'sale')"
+            ],
+            "sha256": "5ab28d92d46c3f7ae9a7bfe78f678cf5cb47a9f3b185a09b354c93937995abfe"
+          },
+          {
+            "file": "addons/sale/models/sale_order.py",
+            "start_line": 1077,
+            "end_line": 1085,
+            "symbol": "action_quotation_send/action",
+            "clauses": [
+              "mail.compose.message"
+            ],
+            "sha256": "c676da76f3815ba7f382db3e49687eb8c005b303030c75ce95a7da8e043486f7"
+          }
+        ]
+      }
+    },
+    {
+      "id": "controls03",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "controls",
+      "prompt": "会计凭证上的 Post 和发票上的 Confirm 是两种过账操作吗，各自为什么显示？",
+      "parts": [
+        {
+          "quote": "会计凭证上的 Post 和发票上的 Confirm 是两种过账操作吗，各自为什么显示",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:action_post))(?=.*(?:entry|凭证))(?=.*(?:hide_post_button))(?=.*(?:display_inactive_currency_warning|停用.*币种))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:708@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:715@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 708,
+            "end_line": 715,
+            "symbol": "view_move_form/buttons@action_post",
+            "clauses": [
+              "move_type != 'entry'",
+              "move_type == 'entry'",
+              "display_inactive_currency_warning"
+            ],
+            "sha256": "f5c6c247db235229cc066f3dccd64dc9ebd13dbe15f8493aa00167412fc15a5c"
+          }
+        ]
+      }
+    },
+    {
+      "id": "controls04",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "controls",
+      "prompt": "发票有未核销款项时 Pay 为什么不是高亮的，两个 Pay 做的事一样吗？",
+      "parts": [
+        {
+          "quote": "发票有未核销款项时 Pay 为什么不是高亮的，两个 Pay 做的事一样吗",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:invoice_has_outstanding|未核销))(?=.*(?:action_register_payment))(?=.*(?:posted|已过账))(?=.*(?:not_paid|未付款))(?=.*(?:partial|部分))(?=.*(?:in_payment|付款中))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:738@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:748@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:750@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:760@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 738,
+            "end_line": 748,
+            "symbol": "view_move_form/button@account_invoice_payment_btn",
+            "clauses": [
+              "or invoice_has_outstanding",
+              "state != 'posted'"
+            ],
+            "sha256": "3bc560ba6029728616e4d2a941403f50e44852bc0a9545f40645f9331fa1dadb"
+          },
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 750,
+            "end_line": 760,
+            "symbol": "view_move_form/button@account_invoice_payment_secondary_btn",
+            "clauses": [
+              "or not invoice_has_outstanding"
+            ],
+            "sha256": "a42daa7c88cfe552eaf34f7ad0157492bf19a41e1240605e2a5259efd3aa0da6"
+          }
+        ]
+      }
+    },
+    {
+      "id": "controls05",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "controls",
+      "prompt": "我要冲销普通凭证和给发票开贷项时，Reverse Entry 跟 Credit Note 应该选哪个，最后打开什么窗口？",
+      "parts": [
+        {
+          "quote": "我要冲销普通凭证和给发票开贷项时，Reverse Entry 跟 Credit Note 应该选哪个，最后打开什么窗口",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:entry|普通凭证))(?=.*(?:posted|已过账))(?=.*(?:out_invoice|客户发票))(?=.*(?:in_invoice|供应商账单))(?=.*(?:reversed|已冲销))(?=.*(?:account.move.reversal|冲销.*向导))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:766@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:772@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/models/account_move\\.py:5550@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/models/account_move\\.py:5556@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/wizard/account_move_reversal_view\\.xml:28@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/wizard/account_move_reversal_view\\.xml:33@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 766,
+            "end_line": 772,
+            "symbol": "view_move_form/buttons@reversal",
+            "clauses": [
+              "payment_state == 'reversed'",
+              "action_reverse"
+            ],
+            "sha256": "1bd41b6023e214049952efe3b97ac7ac6e1f16a11535c0132e4a23d068641f6a"
+          },
+          {
+            "file": "addons/account/models/account_move.py",
+            "start_line": 5550,
+            "end_line": 5556,
+            "symbol": "action_reverse",
+            "clauses": [
+              "account.action_view_account_move_reversal"
+            ],
+            "sha256": "30c79e508ee800a71383b9bb69aa193824473882c4188e207b3d84edc0091a43"
+          },
+          {
+            "file": "addons/account/wizard/account_move_reversal_view.xml",
+            "start_line": 28,
+            "end_line": 33,
+            "symbol": "action_view_account_move_reversal",
+            "clauses": [
+              "account.move.reversal"
+            ],
+            "sha256": "883aa7497103dd5c0ff76c97d7495d1a776f6225f49f125867ad88edf2c71e82"
+          }
+        ]
+      }
+    },
+    {
+      "id": "controls06",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/rule",
+      "condition": "controls",
+      "prompt": "我只想寄形式发票，Send PRO-FORMA Invoice 和 Send by Email 在显示条件和邮件窗口上有什么区别？",
+      "parts": [
+        {
+          "quote": "我只想寄形式发票，Send PRO-FORMA Invoice 和 Send by Email 在显示条件和邮件窗口上有什么区别",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:proforma))(?=.*(?:invoice_count|已有.*发票))(?=.*(?:draft|草稿))(?=.*(?:sale.group_proforma_sales|形式发票.*权限))(?=.*(?:mail.compose.message|邮件.*窗口))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:272@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:285@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:1047@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:1061@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:1077@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:1085@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/views/sale_order_views.xml",
+            "start_line": 272,
+            "end_line": 285,
+            "symbol": "view_order_form/buttons@quotation_send",
+            "clauses": [
+              "sale.group_proforma_sales",
+              "'proforma': True",
+              "invoice_count &gt;= 1"
+            ],
+            "sha256": "c6bb30387288b0b4fb40412953ba7c50999e0dd099803da7b8ad32316471d294"
+          },
+          {
+            "file": "addons/sale/models/sale_order.py",
+            "start_line": 1047,
+            "end_line": 1061,
+            "symbol": "action_quotation_send/context",
+            "clauses": [
+              "'proforma': self.env.context.get('proforma', False)"
+            ],
+            "sha256": "b49bbecc27caeecfc280e002a1015191572c0a72cf3103e3a6c8394f4796f696"
+          },
+          {
+            "file": "addons/sale/models/sale_order.py",
+            "start_line": 1077,
+            "end_line": 1085,
+            "symbol": "action_quotation_send/action",
+            "clauses": [
+              "mail.compose.message"
+            ],
+            "sha256": "c676da76f3815ba7f382db3e49687eb8c005b303030c75ce95a7da8e043486f7"
+          }
+        ]
+      }
+    },
+    {
+      "id": "refusal01",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/rule",
+      "condition": "refusal",
+      "prompt": "已经发出的报价单可以直接删除吗，还是必须先取消？",
+      "parts": [
+        {
+          "quote": "已经发出的报价单可以直接删除吗，还是必须先取消",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:sent|已发送))(?=.*(?:confirmed|已确认))(?=.*(?:cancel|取消))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:1008@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:1014@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/models/sale_order.py",
+            "start_line": 1008,
+            "end_line": 1014,
+            "symbol": "_unlink_except_draft_or_cancel",
+            "clauses": [
+              "You can not delete a sent quotation or a confirmed sales order."
+            ],
+            "sha256": "faf2d315e9448803be341b115e551fa8db66ca1f561446c79a667532e435da69"
+          }
+        ]
+      }
+    },
+    {
+      "id": "refusal02",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/rule",
+      "condition": "refusal",
+      "prompt": "即使绕过下拉框限制，已确认订单的价目表提交修改会被拒绝吗？",
+      "parts": [
+        {
+          "quote": "即使绕过下拉框限制，已确认订单的价目表提交修改会被拒绝吗",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:pricelist|价目表))(?=.*(?:confirmed|已确认|sale))(?=.*(?:cannot change|拒绝|不能))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:1016@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:1018@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/models/sale_order.py",
+            "start_line": 1016,
+            "end_line": 1018,
+            "symbol": "write",
+            "clauses": [
+              "You cannot change the pricelist of a confirmed order !"
+            ],
+            "sha256": "23a9893c580af2730b42cffa2801f90201e278840900a6c86845fbea4c1f3043"
+          }
+        ]
+      }
+    },
+    {
+      "id": "refusal03",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/rule",
+      "condition": "refusal",
+      "prompt": "把一张已确认销售单直接标成已发送，系统会怎么拦？",
+      "parts": [
+        {
+          "quote": "把一张已确认销售单直接标成已发送，系统会怎么拦",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:draft|草稿))(?=.*(?:marked as sent|标.*发送))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:1132@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:1138@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/models/sale_order.py",
+            "start_line": 1132,
+            "end_line": 1138,
+            "symbol": "action_quotation_sent",
+            "clauses": [
+              "Only draft orders can be marked as sent directly."
+            ],
+            "sha256": "a0548dda64632356b8ee51f73aa5d36b11f0b131c26c0e42a09fe2e61232899d"
+          }
+        ]
+      }
+    },
+    {
+      "id": "refusal04",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/rule",
+      "condition": "refusal",
+      "prompt": "锁定的销售单提交取消会报什么，需要先做什么？",
+      "parts": [
+        {
+          "quote": "锁定的销售单提交取消会报什么，需要先做什么",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:locked|锁定))(?=.*(?:unlock|解锁))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:1273@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:1281@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/models/sale_order.py",
+            "start_line": 1273,
+            "end_line": 1281,
+            "symbol": "action_cancel",
+            "clauses": [
+              "You cannot cancel a locked order. Please unlock it first."
+            ],
+            "sha256": "4f72f3b00f81ae3f4f030fde39cd00d152be3ac98c31750336e810860c15c67a"
+          }
+        ]
+      }
+    },
+    {
+      "id": "refusal05",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/rule",
+      "condition": "refusal",
+      "prompt": "报价里有一条不是章节也不是预付款、却没选产品的明细，确认时会报什么？",
+      "parts": [
+        {
+          "quote": "报价里有一条不是章节也不是预付款、却没选产品的明细，确认时会报什么",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:product|产品))(?=.*(?:display_type|章节|展示))(?=.*(?:downpayment|预付款))(?=.*(?:cannot confirm|不能确认|无法确认))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:1154@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:1157@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:1194@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:1201@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/models/sale_order.py",
+            "start_line": 1154,
+            "end_line": 1157,
+            "symbol": "action_confirm/error",
+            "clauses": [
+              "raise UserError(error_msg)"
+            ],
+            "sha256": "f1a2592ba3cadb13125f1a48c69f1189576238f3e42016aa85b18d7e88d5b952"
+          },
+          {
+            "file": "addons/sale/models/sale_order.py",
+            "start_line": 1194,
+            "end_line": 1201,
+            "symbol": "_confirmation_error_message/missing_product",
+            "clauses": [
+              "A line on these orders missing a product, you cannot confirm it."
+            ],
+            "sha256": "49705092fc72194d698347cae15ed5c8beef1c97a21e9b6dc1e8d835678502f4"
+          }
+        ]
+      }
+    },
+    {
+      "id": "refusal06",
+      "category": "answer",
+      "entity": "sale.advance.payment.inv",
+      "delivery": "answer/rule",
+      "condition": "refusal",
+      "prompt": "预付款按百分比和按固定金额时，填零或负数能创建发票吗？",
+      "parts": [
+        {
+          "quote": "预付款按百分比和按固定金额时，填零或负数能创建发票吗",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:percentage|百分比))(?=.*(?:fixed|固定))(?=.*(?:positive|正数|大于.?0))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/wizard/sale_make_invoice_advance\\.py:125@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/wizard/sale_make_invoice_advance\\.py:130@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/wizard/sale_make_invoice_advance.py",
+            "start_line": 125,
+            "end_line": 130,
+            "symbol": "_check_amount_is_positive",
+            "clauses": [
+              "The value of the down payment amount must be positive."
+            ],
+            "sha256": "0883a91a99b5f902271bdd3e56ecff9c28b713c873eab9694079e6cc932a7f7c"
+          }
+        ]
+      }
+    },
+    {
+      "id": "refusal07",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "refusal",
+      "prompt": "草稿发票直接登记付款会被哪条限制拦住？",
+      "parts": [
+        {
+          "quote": "草稿发票直接登记付款会被哪条限制拦住",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:posted|已过账))(?=.*(?:only|只有|仅))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/models/account_move\\.py:5487@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/models/account_move\\.py:5489@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/models/account_move.py",
+            "start_line": 5487,
+            "end_line": 5489,
+            "symbol": "action_register_payment",
+            "clauses": [
+              "You can only register payment for posted journal entries."
+            ],
+            "sha256": "b1f3f578f7f46bcc1d175b3fd81f0e6da1e7b00a78fe84375a12dd6869d23345"
+          }
+        ]
+      }
+    },
+    {
+      "id": "refusal08",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "refusal",
+      "prompt": "发票已付清或者正在付款，我还能把付款状态改成阻止付款吗？",
+      "parts": [
+        {
+          "quote": "发票已付清或者正在付款，我还能把付款状态改成阻止付款吗",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:paid|已付清))(?=.*(?:in_payment|正在付款|付款中))(?=.*(?:block|阻止))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/models/account_move\\.py:5713@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/models/account_move\\.py:5721@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/models/account_move.py",
+            "start_line": 5713,
+            "end_line": 5721,
+            "symbol": "action_toggle_block_payment",
+            "clauses": [
+              "You can't block a paid invoice."
+            ],
+            "sha256": "e603ca220b15cd56446ffd673aeec811f5bbdc78a54a3816d69bc180e7cf1acf"
+          }
+        ]
+      }
+    },
+    {
+      "id": "meaning01",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/rule",
+      "condition": "meaning",
+      "prompt": "销售单里 Delivery Date 填了以后，交货安排还按产品提前期计算吗？",
+      "parts": [
+        {
+          "quote": "销售单里 Delivery Date 填了以后，交货安排还按产品提前期计算吗",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:promised|承诺))(?=.*(?:lead time|提前期))(?=.*(?:rather than|而不是|代替|优先))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:103@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:107@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/models/sale_order.py",
+            "start_line": 103,
+            "end_line": 107,
+            "symbol": "SaleOrder.commitment_date/help",
+            "clauses": [
+              "this date rather than product lead times."
+            ],
+            "sha256": "c225766a5f1d1b2671369a335761ac48662484e600e7a2508711b9790f1ba8bd"
+          }
+        ]
+      }
+    },
+    {
+      "id": "meaning02",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/rule",
+      "condition": "meaning",
+      "prompt": "Order Date 对草稿报价和已确认订单分别表示创建时间还是确认时间？",
+      "parts": [
+        {
+          "quote": "Order Date 对草稿报价和已确认订单分别表示创建时间还是确认时间",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:draft|草稿))(?=.*(?:sent|已发送))(?=.*(?:creation|创建))(?=.*(?:confirmation|确认))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:108@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:112@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/models/sale_order.py",
+            "start_line": 108,
+            "end_line": 112,
+            "symbol": "SaleOrder.date_order/help",
+            "clauses": [
+              "Creation date of draft/sent orders,"
+            ],
+            "sha256": "ee147f26620e506e3265e585cc499484d170ad3bae87c8028a088a39d9074a63"
+          }
+        ]
+      }
+    },
+    {
+      "id": "meaning03",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/rule",
+      "condition": "meaning",
+      "prompt": "Online signature 勾上是让谁签字，签字是为了确认订单吗？",
+      "parts": [
+        {
+          "quote": "Online signature 勾上是让谁签字，签字是为了确认订单吗",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:customer|客户))(?=.*(?:signature|签))(?=.*(?:confirm|确认))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:121@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:125@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/models/sale_order.py",
+            "start_line": 121,
+            "end_line": 125,
+            "symbol": "SaleOrder.require_signature/help",
+            "clauses": [
+              "Request a online signature from the customer to confirm the order."
+            ],
+            "sha256": "370d384af9b368185bde40fcda64d1228b14a20cc22960a3d0d5c2ab88b9dc73"
+          }
+        ]
+      }
+    },
+    {
+      "id": "meaning04",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/rule",
+      "condition": "meaning",
+      "prompt": "Prepayment percentage 指的是客户确认订单前要先付的比例吗？",
+      "parts": [
+        {
+          "quote": "Prepayment percentage 指的是客户确认订单前要先付的比例吗",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:percentage|比例|百分比))(?=.*(?:customer|客户))(?=.*(?:confirm|确认))(?=.*(?:paid|付))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:131@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:135@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/models/sale_order.py",
+            "start_line": 131,
+            "end_line": 135,
+            "symbol": "SaleOrder.prepayment_percent/help",
+            "clauses": [
+              "The percentage of the amount needed that must be paid by the customer to confirm the order."
+            ],
+            "sha256": "183bfb1c6874d42f773c9501fbaaa5a290eca1fb351c94837b13a8097cc1b99d"
+          }
+        ]
+      }
+    },
+    {
+      "id": "meaning05",
+      "category": "answer",
+      "entity": "sale.advance.payment.inv",
+      "delivery": "answer/rule",
+      "condition": "meaning",
+      "prompt": "Consolidated Billing 是只要同一个客户就合并开票，还是开票地址也得相同？",
+      "parts": [
+        {
+          "quote": "Consolidated Billing 是只要同一个客户就合并开票，还是开票地址也得相同",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:same customer|同一.*客户|客户.*相同))(?=.*(?:same invoicing address|同一.*开票地址|开票地址.*相同))(?=.*(?:one invoice|一张.*发票|合并))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/wizard/sale_make_invoice_advance\\.py:60@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/wizard/sale_make_invoice_advance\\.py:63@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/wizard/sale_make_invoice_advance.py",
+            "start_line": 60,
+            "end_line": 63,
+            "symbol": "SaleAdvancePaymentInv.consolidated_billing/help",
+            "clauses": [
+              "Create one invoice for all orders related to same customer and same invoicing address"
+            ],
+            "sha256": "50af0984cff6994af0be5b5eee936480cccb6ffb029ce635bf7603ddc82e2fe0"
+          }
+        ]
+      }
+    },
+    {
+      "id": "absent01",
+      "category": "impossible",
+      "entity": "sale.order",
+      "delivery": "impossible",
+      "condition": "absent_rule",
+      "prompt": "每天最多确认 20 张销售订单这个限制，超出以后要找谁放行？",
+      "parts": [
+        {
+          "quote": "每天最多确认 20 张销售订单这个限制，超出以后要找谁放行",
+          "check": {
+            "impossible": true,
+            "explains_regex": "(?is)(?=.*(?:20|二十))(?=.*(?:每天|每日))(?=.*(?:未找到|没有找到|不存在|未定义))(?=.*(?:上限|限制|放行|规则))"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/models/sale_order.py",
+            "start_line": 1145,
+            "end_line": 1181,
+            "symbol": "action_confirm",
+            "clauses": [
+              "def action_confirm("
+            ],
+            "sha256": "0b3d05fd0a89182e771ff2e52c7a0c97ce40743f6210afb2770b6e221ee1dc73"
+          },
+          {
+            "file": "addons/sale/models/sale_order.py",
+            "start_line": 1189,
+            "end_line": 1202,
+            "symbol": "_confirmation_error_message",
+            "clauses": [
+              "def _confirmation_error_message("
+            ],
+            "sha256": "7a7869ec9131335e917795ee48e1d7bb484819eb8df18c293da4aa2c90e77d52"
+          }
+        ],
+        "absence_scope": "No matching policy in the allowlisted deployed source; base execution entrypoints inspected. Absence does not establish an external/company policy or a runtime permission.",
+        "searched_terms": [
+          "daily_confirmation_limit",
+          "daily order limit",
+          "每天最多确认"
+        ]
+      }
+    },
+    {
+      "id": "absent02",
+      "category": "impossible",
+      "entity": "sale.order",
+      "delivery": "impossible",
+      "condition": "absent_rule",
+      "prompt": "报价超过十万美元是不是必须让两名经理批准以后才能确认？",
+      "parts": [
+        {
+          "quote": "报价超过十万美元是不是必须让两名经理批准以后才能确认",
+          "check": {
+            "impossible": true,
+            "explains_regex": "(?is)(?=.*(?:两名|两位|双人|two))(?=.*(?:经理|审批|批准))(?=.*(?:未找到|没有找到|不存在|未定义))"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/models/sale_order.py",
+            "start_line": 1145,
+            "end_line": 1181,
+            "symbol": "action_confirm",
+            "clauses": [
+              "def action_confirm("
+            ],
+            "sha256": "0b3d05fd0a89182e771ff2e52c7a0c97ce40743f6210afb2770b6e221ee1dc73"
+          },
+          {
+            "file": "addons/sale/models/sale_order.py",
+            "start_line": 1189,
+            "end_line": 1202,
+            "symbol": "_confirmation_error_message",
+            "clauses": [
+              "def _confirmation_error_message("
+            ],
+            "sha256": "7a7869ec9131335e917795ee48e1d7bb484819eb8df18c293da4aa2c90e77d52"
+          }
+        ],
+        "absence_scope": "No matching policy in the allowlisted deployed source; base execution entrypoints inspected. Absence does not establish an external/company policy or a runtime permission.",
+        "searched_terms": [
+          "two_manager_approval",
+          "two managers",
+          "双人审批"
+        ]
+      }
+    },
+    {
+      "id": "absent03",
+      "category": "impossible",
+      "entity": "account.move",
+      "delivery": "impossible",
+      "condition": "absent_rule",
+      "prompt": "客户发票超过五万美元一定要董事长签批才能过账吗？",
+      "parts": [
+        {
+          "quote": "客户发票超过五万美元一定要董事长签批才能过账吗",
+          "check": {
+            "impossible": true,
+            "explains_regex": "(?is)(?=.*(?:董事长|chairman))(?=.*(?:签批|批准|审批|approval))(?=.*(?:未找到|没有找到|不存在|未定义))"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/models/account_move.py",
+            "start_line": 5558,
+            "end_line": 5579,
+            "symbol": "action_post",
+            "clauses": [
+              "def action_post("
+            ],
+            "sha256": "15e4944cd5387a0726eae819582063e613cf0748013680147517b4f2d1eee5e5"
+          },
+          {
+            "file": "addons/account/models/account_move.py",
+            "start_line": 5101,
+            "end_line": 5296,
+            "symbol": "_post",
+            "clauses": [
+              "def _post("
+            ],
+            "sha256": "18fe5cf6047e52269486cb5cf40d8514746a32122032d170a41f0e0a45312ed9"
+          }
+        ],
+        "absence_scope": "No matching policy in the allowlisted deployed source; base execution entrypoints inspected. Absence does not establish an external/company policy or a runtime permission.",
+        "searched_terms": [
+          "chairman_approval",
+          "chairman approval",
+          "董事长签批"
+        ]
+      }
+    },
+    {
+      "id": "absent04",
+      "category": "impossible",
+      "entity": "account.move",
+      "delivery": "impossible",
+      "condition": "absent_rule",
+      "prompt": "登记付款前是不是必须上传银行盖章回单，没上传会报什么错？",
+      "parts": [
+        {
+          "quote": "登记付款前是不是必须上传银行盖章回单，没上传会报什么错",
+          "check": {
+            "impossible": true,
+            "explains_regex": "(?is)(?=.*(?:银行.*(?:盖章|回单)|盖章回单))(?=.*(?:未找到|没有找到|不存在|未定义))(?=.*(?:必传|必须上传|强制|拒绝|规则))"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/models/account_move.py",
+            "start_line": 5487,
+            "end_line": 5490,
+            "symbol": "action_register_payment",
+            "clauses": [
+              "def action_register_payment("
+            ],
+            "sha256": "29239a8bd5cdc182543c9226c3205d94375e13b8707b30f468560fd109fc605b"
+          },
+          {
+            "file": "addons/account/wizard/account_payment_register.py",
+            "start_line": 1214,
+            "end_line": 1290,
+            "symbol": "_create_payments",
+            "clauses": [
+              "def _create_payments("
+            ],
+            "sha256": "b9d415792dec4601795bcc8495567466b60fee6a08d4d1cb69ded5ad3a4e4070"
+          }
+        ],
+        "absence_scope": "No matching policy in the allowlisted deployed source; base execution entrypoints inspected. Absence does not establish an external/company policy or a runtime permission.",
+        "searched_terms": [
+          "stamped_bank_receipt",
+          "bank stamped receipt",
+          "银行盖章回单"
+        ]
+      }
+    },
+    {
+      "id": "absent05",
+      "category": "impossible",
+      "entity": "account.move",
+      "delivery": "impossible",
+      "condition": "absent_rule",
+      "prompt": "给客户发送发票之前一定得法务审核吗，审核通过的条件是什么？",
+      "parts": [
+        {
+          "quote": "给客户发送发票之前一定得法务审核吗，审核通过的条件是什么",
+          "check": {
+            "impossible": true,
+            "explains_regex": "(?is)(?=.*(?:法务|legal review))(?=.*(?:未找到|没有找到|不存在|未定义))(?=.*(?:审核|审批|条件|规则))"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/models/account_move.py",
+            "start_line": 5507,
+            "end_line": 5519,
+            "symbol": "action_send_and_print",
+            "clauses": [
+              "def action_send_and_print("
+            ],
+            "sha256": "00071282a6ba610eef48ebb4113cc1bc36977217866197bd265d9ef12e540f50"
+          },
+          {
+            "file": "addons/account/models/account_move_send.py",
+            "start_line": 288,
+            "end_line": 291,
+            "symbol": "_check_move_constrains",
+            "clauses": [
+              "def _check_move_constrains("
+            ],
+            "sha256": "dec623dcc5961367b0b54d3aaef962ab70447987baa591af3126eaef6e23023a"
+          }
+        ],
+        "absence_scope": "No matching policy in the allowlisted deployed source; base execution entrypoints inspected. Absence does not establish an external/company policy or a runtime permission.",
+        "searched_terms": [
+          "legal_approval_required",
+          "legal review approval",
+          "法务审核"
+        ]
+      }
+    }
+  ]
+}

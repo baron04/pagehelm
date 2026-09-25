@@ -302,6 +302,8 @@ PYTHONPATH=src:examples/odoo/src:. \
 
 第二批中文目标留出题已冻结，包含 84 道正常题和 10 道如实说明限制题，详见[评估说明](evals/odoo/README.md)。已做离线真值断言校验，尚未模型试跑或完整浏览器逐题验证；目标题运行器使用 `--version v5` 选择。
 
+已冻结的 `v6-rules` 包含 40 道规则题，绑定部署 release `18.0-20260909`。评估器校验引用源码字节，分别报告答案与引证命中；这属于评估支持，尚未完成三臂实验。详见[引用契约](evals/odoo/README.md#source-rule-holdout)。
+
 ## 许可证
 
 参见 [LICENSE](LICENSE) 与 [THIRD_PARTY.md](THIRD_PARTY.md)。

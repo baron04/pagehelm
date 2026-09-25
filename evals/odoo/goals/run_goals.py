@@ -18,12 +18,14 @@ from pathlib import Path
 
 from evals.odoo.goals.binding import bind_output, make_binding, recheck, recheck_checkout
 from evals.odoo.goals.judge import score
+from evals.odoo.goals.source_citations import bound_source
 from evals.odoo.goals.probe import FINAL_STATE_PROBE
 from evals.odoo.p87_gate import fingerprint
 from web_operation_agent_odoo.demo.demo import OdooDemoConfig, run_demo
 
 ROOT = Path(__file__).resolve().parents[3]
 TASKSETS = {
+    "v6-rules": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v6-rules.json", "7f2616cb8c34daa5b4bb0d2f29430454c7ce03021cb618243f48733b313fcfa2"),
     "v2": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v2.json", "d01fb4e3fa3d92b7e6916f3d36d6df35961a32442e7d9f2212c4c5eee152b57b"),
     "v4": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v4-holdout.json", "5fe83d925961164375d49ee7f9fe72d696f4370dae2b58be8c1a3dd7161e32e9"),
     "v3": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v3.json", "63ad3017827fce2dd055b4f0248672c3180e783eb8ba1b94a7fd979237b0c15b"),
@@ -41,6 +43,9 @@ def load_tasks(version: str = "v2") -> dict:
 
 def run_attempt(task: dict, doc: dict, *, env: dict, credentials: Path, output: Path,
                 model_env: Path, container: str, database: str, staged: bool = False) -> dict:
+    source = (bound_source(doc, Path(env["WOA_ODOO_SOURCE_ROOT"]),
+                           env["WOA_ODOO_SOURCE_RELEASE"])
+              if "source_binding" in doc else None)
     before = fingerprint(container, database)
     started = time.monotonic()
     error = ""
@@ -77,7 +82,7 @@ def run_attempt(task: dict, doc: dict, *, env: dict, credentials: Path, output: 
     terminal = turn.get("terminal_reason") or ("harness_error" if error else "")
     verdict = score(task, probe=probe, visited=visited, answer=answer,
                     finished=terminal == "agent_finished", refused=terminal == "agent_refused",
-                    write_detected=write_detected)
+                    write_detected=write_detected, source=source)
     return {
         "task": task["id"], "category": task.get("category", ""), "prompt": task["prompt"], "terminal_reason": terminal,
         "answer": answer, "probe": probe, "visited": visited,
@@ -155,6 +160,8 @@ def main() -> int:
     if arguments.page_controller_module:
         env["WOA_ODOO_PAGE_CONTROLLER_MODULE"] = arguments.page_controller_module
     doc = load_tasks(arguments.taskset)
+    if "source_binding" in doc:
+        bound_source(doc, Path(env["WOA_ODOO_SOURCE_ROOT"]), env["WOA_ODOO_SOURCE_RELEASE"])
     binding = None
     if arguments.taskset == "v4":
         binding = make_binding(

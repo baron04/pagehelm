@@ -58,6 +58,55 @@ and reports reachable and limitation outcomes separately. The prior independent 
 suite still has five failures in `test_p74b_defect_paths` on both this candidate
 and main; they are not counted as passing qualification.
 
+## Source-rule holdout
+
+`--version v6-rules` selects 40 frozen questions: visibility 8, field editability 8,
+similar controls 6, refusal guards 8, field meanings 5, and absent rules 5. Truth is
+bound to the deployed `18.0-20260909` tree, including its configured image suffix;
+freeze date and reference date are 2026-09-25 (Asia/Shanghai). Every task's source
+locations, element/method names, clauses and slice digests are in evaluator-only
+truth. The adjacent seal records each verified location, the eight whole-file
+hashes checked against the isolated deployment, the allowlisted source surface
+digest, and the negative-rule search scope. No task truth is passed to the Agent.
+
+`source_regex` matches **only verified citations in the visible answer**. The
+interoperability format is a citation line, optionally in a Markdown quote or code
+block: `relative/file.py:10-14@release sha256:<64 lowercase hexadecimal digits>`.
+The digest covers the exact UTF-8 source lines, including their original line
+endings. `sha256=` and a newline before the digest are also accepted. No bare path,
+unverified hash, changed file, out-of-range citation or different release counts.
+The evaluator reads only files listed in the sealed binding; the configured root
+is never supplied by the answer. A binding mismatch fails before model dispatch.
+
+Verified citations are normalized to `file:start-end@release` and their covered
+`file:line@release` atoms. Rule checks require the exact truth lines, allowing both
+a compiler's element slice and a generic retriever's enclosing block to qualify.
+Limits are 512 lines per citation, 64 citations and 200,000 characters per answer.
+A valid digest verifies bytes, not the semantic accuracy of an explanation; answer
+keywords and source positions are separate checks, neither proves entailment.
+A citation also does not prove which retrieval tool the assistant used.
+
+Attempt JSON now includes per-part `answer_checks` and `source_checks` (null where
+inapplicable), alongside the unchanged combined `achieved` field. A metadata-only
+answer can pass the keyword check but cannot pass the citation check without a
+verified citation. Compiled-source and generic-retrieval arms use the same oracle.
+Positive answers must distinguish deployed-source rules from current data. Correct
+rule text saying an operation cannot be done is not treated as assistant failure
+when all answer and source checks pass. Database writes still fail every task.
+Absent-rule tasks require a specific `explains_regex`, an explicit limitation and
+a finished/refused turn; missing source evidence does not establish that an external
+company policy does not exist. Regex grading is not a complete semantic assessment.
+
+This change supplies the frozen questions and evaluator, not arm selection or a new
+product source-rule renderer. Producers must emit the citation format above; the
+current goal port does not yet declare the optional `source` capability. No three-arm
+model run has been performed. Recheck the source locations without exposing prompts:
+
+```bash
+PYTHONPATH=src:examples/odoo/src:. python -m evals.odoo.goals.verify_rules \
+  --source-root "$WOA_ODOO_SOURCE_ROOT" --source-release "$WOA_ODOO_SOURCE_RELEASE"
+```
+
 ## Arms and capabilities
 
 | Arm | Capability | Used for |
