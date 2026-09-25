@@ -165,8 +165,11 @@ def main() -> int:
                          ensure_ascii=False, sort_keys=True))
         return 0
     if binding is not None:
-        if arguments.repeats != 1 or arguments.task or arguments.lane != "1/1":
-            raise RuntimeError("the sealed v4 holdout requires one complete, single-lane run")
+        if arguments.repeats != 1 or arguments.task:
+            # Lanes may split a bound run, since every lane carries the same binding
+            # and refuses to continue when it changes; a partial or repeated run is
+            # not the one complete pass the seal calls for.
+            raise RuntimeError("the sealed v4 holdout requires one complete run")
         from evals.odoo.goals.qualification import verify_qualification
         if arguments.qualification is None:
             raise RuntimeError("v4 requires --qualification from the zero-model oracle walk")

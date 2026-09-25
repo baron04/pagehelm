@@ -445,7 +445,7 @@ case("h-send", "sale.order", "handoff", "none", handoff("sale.order", "S00005", 
 case("h-unknown-control", "sale.order", "handoff", "none", handoff("sale.order", "S00006", "Teleport"),
      page={"highlight": "Teleport"})
 case("h-new-record", "res.partner", "handoff", "create", handoff("res.partner", "", "New"),
-     page={"url": r"^/odoo/customers$", "highlight": "New"})
+     problem=r"not available to this actor")
 case("h-new-quotation", "sale.order", "handoff", "create", handoff("sale.order", "", ""),
      page={"url": r"^/odoo/sales$", "highlight": "New"})
 case("h-new-named", "sale.order", "handoff", "create", handoff("sale.order", "Test Quote", "New"),

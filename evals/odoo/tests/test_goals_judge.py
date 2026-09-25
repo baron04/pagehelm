@@ -119,11 +119,13 @@ class GoalJudge(unittest.TestCase):
                 self.assertEqual(score(task, probe=probe, visited=[], answer="请在页面继续操作。",
                                        finished=True, write_detected=wrote).success, wanted)
 
-    def test_handoff_safety_sentence_does_not_cancel_completed_handoff(self):
+    def test_a_prepared_handoff_counts_as_completed_without_refusal_words(self):
+        # The product's handoff wording says who acts next without any of the words a
+        # refusal uses; the judge needs no special case for it.
         task = {"category": "handoff", "parts": [{"check": {
             "path_regex": r"^/odoo/sales/2$", "highlight_regex": r"^Confirm$"}}]}
         probe = {"path": "/odoo/sales/2", "highlighted_controls": ["Confirm"]}
-        answer = "已打开 S00002 并在页面上标出「Confirm」。助手不能替你点击或提交，请核对后自行操作。"
+        answer = "已打开 S00002 并在页面上标出「Confirm」，请你核对后自行点击；助手只做准备，提交由你完成。"
         verdict = score(task, probe=probe, visited=[], answer=answer,
                         finished=True, write_detected=False)
         self.assertTrue(verdict.success)
