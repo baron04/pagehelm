@@ -77,6 +77,8 @@ def rules_for(source_map: SourceMap, *, release: str, metas: dict[str, _ModelMet
                 continue
             seen.add(key)
             text = f'Button "{label}"{look} {what}' + ("; " + "; ".join(conditions) if conditions else "")
+            if attrs.get("confirm"):
+                text += f'; asks first: "{_short(attrs["confirm"], _MAX_MESSAGE)}"'
             add(model, "visibility" if conditions else "target", label, text, relation)
         elif relation.kind == "form_field" and any(attrs.get(k) for k in ("readonly", "required", "invisible")):
             name = relation.object
@@ -99,7 +101,7 @@ def rules_for(source_map: SourceMap, *, release: str, metas: dict[str, _ModelMet
             if sig in seen:
                 continue
             seen.add(sig)
-            add(model_name, "refusal", method,
+            add(model_name, "refusal", f'{method} "{_short(relation.object, 70)}"',
                 f'{method} refuses with "{message}"' + (f" when {condition}" if condition else ""),
                 relation)
         elif relation.kind == "service_entity" and attrs.get("help"):

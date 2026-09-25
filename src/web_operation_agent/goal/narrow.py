@@ -86,9 +86,9 @@ def _tokens(text: str) -> set[str]:
 def _mentions(entity: IndexEntity, request: str) -> bool:
     request_norm = "".join(request.casefold().split())
     words = _tokens(request)
-    for label in (entity.label, *entity.aliases):
+    for label in (entity.label, *entity.aliases, *entity.actions):
         norm = "".join(label.casefold().split())
-        if norm and (norm in request_norm or _tokens(label) <= words):
+        if norm and (norm in request_norm or (_tokens(label) and _tokens(label) <= words)):
             return True
     return False
 
@@ -120,6 +120,8 @@ def summaries(index: ApplicationIndex, request: str,
                  + (f" (lines of {entity.lines_of})" if entity.lines_of else "")]
         if entity.key in named:
             parts.append(f"named in request: {named[entity.key].name}")
+        if entity.actions:
+            parts.append("controls: " + ", ".join(entity.actions[:8]))
         pages = pages_of.get(entity.key, [])
         if pages:
             parts.append("pages: " + "; ".join(pages[:6]))
@@ -132,11 +134,12 @@ def summaries(index: ApplicationIndex, request: str,
     return "\n".join(lines)
 
 
-#: Rules shown per chosen entity: the ones the request's words touch, then the rest
-#: until this many, with every kind of rule represented by at least a few. An entity
-#: may carry a hundred; a small model reads a few dozen.
-_MAX_RULES_SHOWN = 36
-_MIN_PER_KIND = 5
+#: Rules catalogued per chosen entity: the ones the request's words touch first, then
+#: every kind represented, then the rest until this many. A catalogue line is short
+#: (id and what the rule is about), so most of an entity's rules fit.
+_MAX_RULES_SHOWN = 160
+_MIN_PER_KIND = 8
+_MAX_NEIGHBOUR_REFUSALS = 16
 
 
 def _ranked_rules(entity: IndexEntity, request: str):
@@ -188,8 +191,11 @@ def neighbourhood(index: ApplicationIndex, keys: tuple[str, ...],
         for other in index.entities:
             if other.lines_of == entity.label:
                 wanted.add(other.key)
+    # A neighbour keeps only what an action on the chosen record may run into: its
+    # refusals (a payment registered on an invoice is refused by the invoice's rules).
     entities = tuple(
-        replace(e, rules=_ranked_rules(e, request) if e.key in chosen else ())
+        replace(e, rules=_ranked_rules(e, request) if e.key in chosen else
+                tuple(r for r in e.rules if r.kind == "refusal")[:_MAX_NEIGHBOUR_REFUSALS])
         for e in index.entities if e.key in wanted)
     pages = tuple(p for p in index.pages if p.entity in wanted)
     return ApplicationIndex(entities=entities, pages=pages, source_digest=index.source_digest,

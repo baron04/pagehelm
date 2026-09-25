@@ -13,7 +13,7 @@ _MAX_PAGES = 160
 _MAX_FIELDS = 40
 _MAX_LABEL = 80
 _MAX_RULE = 320
-_MAX_RULES_PER_ENTITY = 60
+_MAX_RULES_PER_ENTITY = 160
 
 
 def _label(value: object, name: str) -> str:
@@ -217,11 +217,19 @@ class ApplicationIndex:
                 parts.append("operations: " + ", ".join(page.operations))
             lines.append(" | ".join(parts))
         if self.focused and any(e.rules for e in self.entities):
+            # A catalogue, not the rules themselves: id, kind and what each is about,
+            # grouped by entity and kind. The model names ids; the server answers with
+            # the rules' text and citations. Kinds: visibility (when a control shows),
+            # editability (when a field can be changed), refusal (what an action
+            # refuses), meaning (what a field is for), target (what a control opens).
             lines.append("")
-            lines.append("RULES from the deployment's source (id [kind] entity · about: rule)")
+            lines.append("RULES of the deployment's source, by entity and kind (id about; ...)")
             for entity in self.entities:
+                by_kind: dict[str, list[str]] = {}
                 for rule in entity.rules[:_MAX_RULES_PER_ENTITY]:
-                    lines.append(f"{rule.id} [{rule.kind}] {entity.label} · {rule.about}: {rule.text}")
+                    by_kind.setdefault(rule.kind, []).append(f"{rule.id} {rule.about}")
+                for kind, items in by_kind.items():
+                    lines.append(f"{entity.label} · {kind}: " + "; ".join(items))
         return "\n".join(lines)
 
 

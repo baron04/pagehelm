@@ -384,6 +384,7 @@ class OdooCompiler:
                            "label": button.attrs.get("string", ""),
                            "button_id": button.attrs.get("id", ""),
                            "class": button.attrs.get("class", "")[:_MAX_ATTR_CHARS],
+                           "confirm": button.attrs.get("confirm", "")[:_MAX_ATTR_CHARS],
                            **_conditions(button.attrs)},
                           self._cite(rel, button, excerpt=240)),
                 xml_id))

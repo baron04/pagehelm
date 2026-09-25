@@ -428,8 +428,10 @@ class GoalTurnTests(unittest.TestCase):
         self.assertNotIn("RULES", full.render())
         focused = neighbourhood(full, ("order",))
         text = focused.render()
-        self.assertIn("RULES from the deployment's source", text)
-        self.assertIn("r1 [visibility] Sales Order · Create Invoice: Button", text)
+        self.assertIn("RULES of the deployment's source", text)
+        self.assertIn("Sales Order · visibility: r1 Create Invoice", text)
+        # The catalogue names rules; their text and citations stay on the server.
+        self.assertNotIn("hidden when", text)
         self.assertNotIn("sha256", text)
 
     def test_a_rule_question_is_answered_from_the_index_with_its_citation(self):
