@@ -162,6 +162,9 @@ class Deliverable:
     action: str = ""
     #: For a handoff on a field: the new value the person gave, in the field's form.
     value: str = ""
+    #: Ids of RULES entries that answer a question about why a control shows, why a
+    #: field cannot be changed, what an action refuses or what a field means.
+    rules: tuple[str, ...] = ()
     #: For a list: the field to order by, its direction, and how many records to show.
     sort: str = ""
     descending: bool = False
@@ -188,6 +191,7 @@ class Deliverable:
                    section=_text(value.get("section"), "section"),
                    action=_text(value.get("action"), "action"),
                    value=_text(value.get("value"), "value"),
+                   rules=_texts(value.get("rules"), "rules", limit=6),
                    sort=_text(value.get("sort"), "sort"),
                    descending=bool(value.get("descending", False)), limit=limit)
 
@@ -198,6 +202,8 @@ class Deliverable:
                 out[name] = getattr(self, name)
         if self.fields:
             out["fields"] = list(self.fields)
+        if self.rules:
+            out["rules"] = list(self.rules)
         if self.sort:
             out["sort"] = self.sort
             out["descending"] = self.descending
@@ -345,6 +351,8 @@ DECLARE_GOAL_TOOL = {
                                         "description": "section (tab) name on the record's page"},
                             "action": {"type": "string",
                                        "description": "handoff: the button name from the index for a business action, the label of the field the person wants to change, or New for creating a record"},
+                            "rules": {"type": "array", "items": {"type": "string"},
+                                      "description": "ids from RULES (r12) that answer a question about why a control is shown or hidden, when a field can be changed, what an action refuses, or what a field means; kind fact, entity set, record when one is named"},
                             "value": {"type": "string",
                                       "description": "handoff on a field: the new value the person gave, in the field's own form (a date as 2026-10-31, a number, a choice label from the index, a record's name); empty when the person gave no value"},
                             "sort": {"type": "string",
@@ -354,7 +362,7 @@ DECLARE_GOAL_TOOL = {
                         "required": ["kind"]}},
                 "write_intent": {"type": "boolean"},
                 "unsupported": {"type": "string",
-                                "description": "why nothing can be declared, when deliverables is empty: the request needs data the index does not hold (an external system, a bank, a source not listed), which no related entity may stand in for"}},
+                                "description": "why nothing can be declared, when deliverables is empty: the request needs data the index does not hold (an external system, a bank, a source not listed), which no related entity may stand in for; or it asks about a rule, policy or limit and RULES holds no such rule -- then say the deployed source has no rule about it"}},
             "required": ["deliverables"]}}}
 
 

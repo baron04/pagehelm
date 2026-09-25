@@ -376,6 +376,47 @@ class OdooGoalPortTests(unittest.TestCase):
         self.assertEqual(self.port.locate_reference("2026-08-22"), ())
         self.assertEqual(self.port.locate_reference("Nobody"), ())
 
+    def test_source_rules_become_index_entries_with_citations(self):
+        from web_operation_agent.schemas.planning import EvidenceRef, SourceMap, SourceRelation
+        from web_operation_agent.schemas.planning import SCHEMA_VERSIONS
+
+        def ref(path, start, end):
+            return EvidenceRef(repository_id="odoo", release="bound", path=path,
+                               start_line=start, end_line=end, sha256="b" * 64)
+        relations = [
+            SourceRelation(kind="form_target", subject="sale.view_order_form", object="330",
+                           attrs={"model": "sale.order", "label": "Create Invoice",
+                                  "target_type": "action", "invisible": "state != 'sale'"},
+                           evidence=(ref("addons/sale/views/sale_order_views.xml", 266, 271),)),
+            SourceRelation(kind="form_field", subject="sale.view_order_form", object="date_order",
+                           attrs={"model": "sale.order", "readonly": "state in ('sale', 'cancel')"},
+                           evidence=(ref("addons/sale/views/sale_order_views.xml", 300, 300),)),
+            SourceRelation(kind="service_guard", subject="sale.order.action_confirm",
+                           object="It is not allowed to confirm an order in the following states: %s",
+                           attrs={"condition": "order.state not in ('draft', 'sent')"},
+                           evidence=(ref("addons/sale/models/sale_order.py", 1010, 1014),)),
+            SourceRelation(kind="service_entity", subject="sale.order", object="validity_date",
+                           attrs={"string": "Expiration", "help": "Validity of the order, after it, a customer can no longer accept it."},
+                           evidence=(ref("addons/sale/models/sale_order.py", 120, 124),)),
+            SourceRelation(kind="menu_link", subject="Orders", object="sales/orders",
+                           attrs={}, evidence=(ref("addons/sale/views/sale_menus.xml", 1, 2),)),
+        ]
+        source_map = SourceMap(schema_version=SCHEMA_VERSIONS["SourceMap"], attestation_id="a",
+                               repository_id="odoo", release="bound", relations=relations)
+        self.port.attach_source(source_map, release="18.0-20260909")
+        self.assertIn("source", self.port.capabilities())
+        entity = self.port.index().entity("sale.order")
+        by_kind = {r.kind: r for r in entity.rules}
+        self.assertEqual(set(by_kind), {"visibility", "editability", "refusal", "meaning"})
+        self.assertEqual(by_kind["visibility"].about, "Create Invoice")
+        self.assertIn("hidden when state != 'sale'", by_kind["visibility"].text)
+        self.assertEqual(by_kind["visibility"].citation,
+                         "addons/sale/views/sale_order_views.xml:266-271@18.0-20260909 sha256:" + "b" * 64)
+        self.assertIn('Field "Order Date" (date_order): read-only when', by_kind["editability"].text)
+        self.assertIn('action_confirm refuses with "It is not allowed', by_kind["refusal"].text)
+        self.assertIn("Validity of the order", by_kind["meaning"].text)
+        self.assertNotIn("RULES", self.port.index().render())
+
     def test_field_labels_match_by_whole_words_and_field_names(self):
         meta = self.port._models["sale.order"]
         self.assertEqual(meta.field_by_label("Order Date"), "date_order")

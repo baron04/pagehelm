@@ -383,6 +383,7 @@ class OdooCompiler:
                           {**base, "target_type": button.attrs.get("type", "object"),
                            "label": button.attrs.get("string", ""),
                            "button_id": button.attrs.get("id", ""),
+                           "class": button.attrs.get("class", "")[:_MAX_ATTR_CHARS],
                            **_conditions(button.attrs)},
                           self._cite(rel, button, excerpt=240)),
                 xml_id))
@@ -558,6 +559,10 @@ class OdooCompiler:
                               statement.lineno)
             end = statement.end_lineno or statement.lineno
             start = guard_line if end - guard_line < _MAX_GUARD_LINES else statement.lineno
+            if end - item.lineno < _MAX_GUARD_LINES:
+                # The whole method when it is short: a reader wants to see which
+                # method refuses, not only the statement that does.
+                start = item.lineno
             self._add("service_guard", f"{model}.{item.name}", message[:_MAX_ATTR_CHARS],
                       {"module": module, "form": form, "exception": exception,
                        "condition": " and ".join(

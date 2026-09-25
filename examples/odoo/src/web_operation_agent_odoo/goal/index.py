@@ -19,6 +19,7 @@ from web_operation_agent.goal.ports import Aggregate, Fact, PagePlan, Resolution
 from web_operation_agent.goal.spec import Deliverable, Filter, GoalSpec, Metric, PageSpec
 from web_operation_agent.state.identity import OperationContext
 
+from .source import rules_for
 from .text import (_FIELD_TAG, _KIND_RANK, _MAX_FIELDS, _MAX_LINE_FIELDS, _ModelMeta, _SKIP_FIELDS, _SKIP_FIELD_PREFIXES, _SKIP_LINE_FIELDS, _SearchFilter, _TECHNICAL_MODULES, _kind_of, _literal_dict, _norm, _parse_filters)
 
 
@@ -118,6 +119,9 @@ class _IndexCompiler:
                 scope=tuple(dict.fromkeys(scope)),
                 operations=(("create",) if "create" in model_operations.get(action["model"], ())
                             and "form" in (action.get("view_modes") or ()) else ())))
+        source_map = getattr(self, "_source_map", None)
+        rules = rules_for(source_map, release=getattr(self, "_source_release", ""),
+                          metas=self._models, models=tuple(entity_models)) if source_map else {}
         entities = []
         for model in entity_models:
             meta = self._models[model]
@@ -127,7 +131,8 @@ class _IndexCompiler:
                 fields=tuple(self._index_fields(meta)) if model in detailed else (),
                 sections=meta.sections if model in detailed else (),
                 actions=meta.actions if model in detailed else (),
-                lines_of=owner.label if owner is not None else ""))
+                lines_of=owner.label if owner is not None else "",
+                rules=rules.get(model, ())))
         return ApplicationIndex(entities=tuple(entities), pages=tuple(pages),
                                 source_digest=str(catalog.get("descriptor_digest") or ""))
 

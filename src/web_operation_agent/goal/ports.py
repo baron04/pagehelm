@@ -88,6 +88,9 @@ class Resolved:
     #: succeed: the fields an entity does have, the records a description matched.
     #: Empty when the problem is not one a different declaration would fix.
     repair: str = ""
+    #: Source citations backing the facts (`path:start-end@release sha256:<hex>`), each
+    #: rendered verbatim in the reply as a rule of the deployment's source, not data.
+    citations: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

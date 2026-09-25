@@ -11,7 +11,7 @@ a label only order the list, never cut it.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import re
 
 from .index import ApplicationIndex, IndexEntity
@@ -132,10 +132,49 @@ def summaries(index: ApplicationIndex, request: str,
     return "\n".join(lines)
 
 
-def neighbourhood(index: ApplicationIndex, keys: tuple[str, ...]) -> ApplicationIndex:
+#: Rules shown per chosen entity: the ones the request's words touch, then the rest
+#: until this many, with every kind of rule represented by at least a few. An entity
+#: may carry a hundred; a small model reads a few dozen.
+_MAX_RULES_SHOWN = 36
+_MIN_PER_KIND = 5
+
+
+def _ranked_rules(entity: IndexEntity, request: str):
+    """The entity's rules, those sharing words with the request first, each kind kept
+    represented so that a question the words do not reach still meets its kind."""
+    words = _tokens(request)
+    scored = []
+    for position, rule in enumerate(entity.rules):
+        overlap = len(words & (_tokens(rule.about) | _tokens(rule.text)))
+        scored.append((-overlap, position, rule))
+    scored.sort(key=lambda item: item[:2])
+    hits = [rule for overlap, _, rule in scored if overlap < 0]
+    rest = [rule for overlap, _, rule in scored if overlap == 0]
+    # Every kind keeps a floor, so a question the words do not reach (a refusal asked
+    # about in other terms) still meets rules of its kind; the rest round-robin.
+    by_kind: dict[str, list] = {}
+    for rule in rest:
+        by_kind.setdefault(rule.kind, []).append(rule)
+    chosen = list(hits[:_MAX_RULES_SHOWN])
+    for kind, pool in by_kind.items():
+        have = sum(1 for r in chosen if r.kind == kind)
+        while pool and have < _MIN_PER_KIND and len(chosen) < _MAX_RULES_SHOWN:
+            chosen.append(pool.pop(0))
+            have += 1
+    while any(by_kind.values()) and len(chosen) < _MAX_RULES_SHOWN:
+        for kind in list(by_kind):
+            if by_kind[kind] and len(chosen) < _MAX_RULES_SHOWN:
+                chosen.append(by_kind[kind].pop(0))
+    return tuple(chosen)
+
+
+def neighbourhood(index: ApplicationIndex, keys: tuple[str, ...],
+                  request: str = "") -> ApplicationIndex:
     """The chosen entities with what a declaration about them may need to name: the
     entities their link fields point to, their lines, the records that own them, and
-    every page that shows any of these. Rendered like the full index, only smaller."""
+    every page that shows any of these. Rendered like the full index, only smaller.
+    Rules are kept on the chosen entities only, ranked by the request's words and
+    capped; the neighbours carry none."""
     chosen = {k for k in keys if index.entity(k) is not None}
     wanted = set(chosen)
     by_label = {e.label: e.key for e in index.entities}
@@ -149,10 +188,12 @@ def neighbourhood(index: ApplicationIndex, keys: tuple[str, ...]) -> Application
         for other in index.entities:
             if other.lines_of == entity.label:
                 wanted.add(other.key)
-    entities = tuple(e for e in index.entities if e.key in wanted)
+    entities = tuple(
+        replace(e, rules=_ranked_rules(e, request) if e.key in chosen else ())
+        for e in index.entities if e.key in wanted)
     pages = tuple(p for p in index.pages if p.entity in wanted)
     return ApplicationIndex(entities=entities, pages=pages, source_digest=index.source_digest,
-                            complete=index.complete)
+                            complete=index.complete, focused=True)
 
 
 __all__ = ["KnownReference", "locate", "neighbourhood", "ranked_entities", "references",

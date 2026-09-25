@@ -67,9 +67,20 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver):
                     hits.append((model, found[2]))
         return tuple(hits[:3])
 
+    def attach_source(self, source_map, *, release: str) -> None:
+        """Give the index the rules compiled from the deployment's source, cited under
+        `release` (the deployment's own release name, the one an evaluator can bind).
+        The index is recompiled on its next use."""
+        with self._lock:
+            self._source_map, self._source_release = source_map, release
+            self._index = None
+
     def capabilities(self) -> frozenset[str]:
-        """Everything optional but source entries, which are not compiled yet."""
-        return frozenset({"facets", "sections", "lines", "handoffs", "fill", "search"})
+        """Everything optional; source rules only once a compiled map is attached."""
+        base = {"facets", "sections", "lines", "handoffs", "fill", "search"}
+        if getattr(self, "_source_map", None) is not None:
+            base.add("source")
+        return frozenset(base)
 
     def resolve(self, spec: GoalSpec, *, context: OperationContext | None = None,
                 current_path: str = "") -> Resolution:

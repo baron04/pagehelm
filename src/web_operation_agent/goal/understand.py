@@ -21,7 +21,7 @@ from .spec import DECLARE_GOAL_TOOL, DECLARE_SCOPE_TOOL, GoalSpec, scope_from_js
 
 UNDERSTAND_SYSTEM = """You translate one request to a business web application into a goal declaration by calling declare_goal exactly once.
 
-Use only names that appear in the APPLICATION INDEX: entity keys, field labels, page keys, filter names, group names, section names and action names. The person may write in another language than the index; map their words to the index's names (for example a word meaning "quotations" maps to the Quotations page, a word meaning "customer" to the Customer field). Copy record references (order numbers, invoice numbers, names) exactly as the person wrote them. Never invent a name that is not in the index; if nothing fits, leave deliverables empty and say why in `unsupported`.
+Use only names that appear in the APPLICATION INDEX: entity keys, field labels, page keys, filter names, group names, section names and action names. The person may write in another language than the index; map their words to the index's names (for example a word meaning "quotations" maps to the Quotations page, a word meaning "customer" to the Customer field). Copy record references (order numbers, invoice numbers, names) exactly as the person wrote them. Never invent a name that is not in the index; if nothing fits, leave deliverables empty and say why in `unsupported`, in the person's language.
 
 Deliverable kinds:
 - fact: the value of one or more fields of one named record. Set entity, record and fields. If the record is reached through a link field of the named record (the customer of order X), set entity and record to what the person named, via to the link field's label, and fields to labels of the linked entity.
@@ -86,20 +86,22 @@ def understand(chat, *, prompt: str, index: ApplicationIndex, run_id: str,
     field the entity does not have, several records a description matched) are shown,
     and the model declares again.
     """
-    tail = ""
+    before = ""
     if scope:
         # The staged path: what the first step settled, and the known references, so
         # that the second step fills in details rather than choosing again.
-        tail += "\n\nSCOPE\n" + scope
+        before += "\n\nSCOPE\n" + scope
     if previous is not None and problems:
-        tail = ("\n\nYOUR DECLARATION\n" + json.dumps(previous.to_json(), ensure_ascii=False)
-                + "\n\nPROBLEMS\n" + "\n".join(f"- {p}" for p in problems[:4])
-                + "\n\nDeclare again, correcting these and keeping what was right.")
+        before += ("\n\nYOUR DECLARATION\n" + json.dumps(previous.to_json(), ensure_ascii=False)
+                   + "\n\nPROBLEMS\n" + "\n".join(f"- {p}" for p in problems[:4])
+                   + "\n\nDeclare again, correcting these and keeping what was right.")
+    # The request is the last thing in the message: a small model reads the tail most
+    # reliably, and everything else is context for it.
     messages = [
         {"role": "system", "content": UNDERSTAND_SYSTEM},
         {"role": "user", "content": ("APPLICATION INDEX\n" + index.render()
                                      + (f"\n\nTODAY\n{today}" if today else "")
-                                     + "\n\nREQUEST\n" + prompt.strip() + tail)},
+                                     + before + "\n\nREQUEST\n" + prompt.strip())},
     ]
     kwargs = {"max_tokens": 1_500, "timeout_s": timeout_s}
     attempts = 0

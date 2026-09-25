@@ -80,7 +80,16 @@ agent.
   label only order that list; nothing is dropped. The path is measured against the single
   declaration before it becomes the default; a zero-model replay of recorded runs
   (`evals/odoo/goals/reference_recall.py`) reports how many declared records the reference
-  cut recovers.
+  cut recovers. With a compiled source map attached to the Odoo port (the demo attaches
+  the same compile the tool loop uses), the index carries rules of the deployment's
+  source per entity: when a form control is shown or disabled and what it opens or
+  calls, when a field is read-only, required or hidden, what a model method refuses and
+  under which condition, and what a field means by its help text. Rules render only in a
+  focused index (the staged path's neighbourhood), ranked by the request's words and
+  capped, never in the full index. The model names rules by id; the server answers from
+  the index and appends each rule's citation verbatim (`path:start-end@release
+  sha256:<hex>` over the exact lines), marked as a rule of the deployed version's source,
+  not current data.
   If the model declares a write intent but only resolves read-only pages or facts, opening
   those pages is reported as partial guidance, never as the requested change having occurred.
   For a new record, an adapter may expose an actor-scoped `create` operation on a collection

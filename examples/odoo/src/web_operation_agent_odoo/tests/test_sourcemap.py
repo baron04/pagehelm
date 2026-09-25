@@ -421,7 +421,10 @@ class Rules(unittest.TestCase):
         self.assertEqual(pinned.attrs["condition"], "any((tray.pinned for tray in self))")
         cited = self.tree.read_text(pinned.evidence[0].path).splitlines()[
             pinned.evidence[0].start_line - 1:pinned.evidence[0].end_line]
-        self.assertIn("if any(tray.pinned", cited[0])
+        # A short method is cited whole: the reader sees which method refuses, the
+        # condition, and the refusal itself.
+        self.assertIn("def ", cited[0])
+        self.assertTrue(any("if any(tray.pinned" in line for line in cited))
         self.assertIn("raise UserError", cited[-1])
         self.assertTrue(self.tree.verify(pinned.evidence[0]))
 

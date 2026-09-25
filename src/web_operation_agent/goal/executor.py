@@ -35,7 +35,7 @@ from ..state.conversation import ConversationState
 from ..state.identity import PrincipalError
 from ..state.ledger import SessionLedger
 from ..transport.browser import RemoteBrowserClient, TransportError, TurnCancelled
-from .ports import GoalPort, PagePlan, Resolution, Resolved, capabilities_of
+from .ports import Fact, GoalPort, PagePlan, Resolution, Resolved, capabilities_of
 from .spec import GoalSpec
 from .narrow import locate, neighbourhood, summaries
 from .understand import understand, understand_scope
@@ -98,6 +98,9 @@ class _TurnState:
     chinese: bool = False
     write_intent: bool = False
     cancelled: Callable[[], bool] = lambda: False
+    #: The index the declaration was read against (the neighbourhood, when staged).
+    index: object = None
+
 
 
 class GoalTurnExecutor:
@@ -263,6 +266,7 @@ class GoalTurnExecutor:
                         elements=len(s.obs.elements), digest=s.obs.content_digest)
         chat = AuditedChat(self.chat, s.ledger)
         index = self.goal_port.index(context=s.approvals.context(0, "index"))
+        s.index = index
         s.ledger.append("goal_index_ready", entities=len(index.entities),
                         pages=len(index.pages), source_digest=index.source_digest,
                         complete=index.complete)
@@ -302,7 +306,9 @@ class GoalTurnExecutor:
                                  if s.chinese else
                                  ("The assistant cannot do this request."
                                   + (f" ({unsupported})" if unsupported else "")))
-            index = neighbourhood(index, tuple(p["entity"] for p in parts))
+            index = neighbourhood(index, tuple(p["entity"] for p in parts),
+                                  request=s.message.text)
+            s.index = index
             s.ledger.append("goal_neighbourhood", step=s.step,
                             entities=[e.key for e in index.entities], pages=len(index.pages),
                             chars=len(index.render()))
@@ -345,6 +351,11 @@ class GoalTurnExecutor:
         if not spec.deliverables:
             s.terminal_reason = "agent_refused"
             why = spec.unsupported or ""
+            if getattr(s.index, "focused", False) and any(e.rules for e in s.index.entities):
+                # The rules of the source were in front of the model and it named none:
+                # what the person asks about is not a rule the deployed source holds.
+                why = ("部署源码里没有找到关于这件事的规则。" if s.chinese
+                       else "The deployed source holds no rule about this.") + (f" {why}" if why else "")
             return self._say(s, ("这个请求助手做不到。" + (f"（{why}）" if why else ""))
                              if s.chinese else
                              ("The assistant cannot do this request."
@@ -472,7 +483,12 @@ class GoalTurnExecutor:
         # answered here, plainly; the port sees only what it can resolve.
         offered = capabilities_of(self.goal_port)
         missing = [_needs_beyond(d, offered) for d in spec.deliverables]
-        asked = GoalSpec(deliverables=tuple(d for d, m in zip(spec.deliverables, missing) if not m),
+        # A question answered by rules of the source is answered here, from the index the
+        # model read, with the rules' citations; the port is not asked.
+        by_rule = [self._rules_answer(s, d) if d.rules else None for d in spec.deliverables]
+        missing = [frozenset() if r is not None else m for r, m in zip(by_rule, missing)]
+        asked = GoalSpec(deliverables=tuple(d for d, m, r in zip(spec.deliverables, missing, by_rule)
+                                            if not m and r is None),
                          write_intent=spec.write_intent, unsupported=spec.unsupported)
         if any(missing):
             s.ledger.append("goal_capability_missing", step=s.step,
@@ -492,10 +508,11 @@ class GoalTurnExecutor:
             raise _ContractBroken()
         resolved = iter(partial.deliverables)
         resolution = Resolution(deliverables=tuple(
+            r if r is not None else
             Resolved(kind=d.kind, problem="this application does not offer "
                      + ", ".join(sorted(m)) + " here")
             if m else next(resolved)
-            for d, m in zip(spec.deliverables, missing)), reads=partial.reads)
+            for d, m, r in zip(spec.deliverables, missing, by_rule)), reads=partial.reads)
         s.ledger.append("goal_resolved", step=s.step,
                         kinds=[d.kind for d in resolution.deliverables],
                         problems=[d.problem for d in resolution.deliverables],
@@ -777,6 +794,37 @@ class GoalTurnExecutor:
                         kind=plan.fill_kind, verified=verified, shown=bool(value))
         return shown, verified
 
+    def _rules_answer(self, s: _TurnState, d) -> Resolved:
+        """The rules a deliverable names, as facts with their citations. A rule id the
+        index does not have is a problem the model can repair, since the ids it may
+        name are the ones it was shown."""
+        index = s.index
+        facts, citations, unknown, shown = [], [], [], set()
+        for rule_id in d.rules:
+            found = index.rule(rule_id) if index is not None else None
+            if found is None:
+                unknown.append(rule_id)
+                continue
+            entity, rule = found
+            # A control's or field's rules come as a set: the one named and the others
+            # of the same kind about the same thing (the same field in several views,
+            # the same button under several conditions), each with its citation.
+            group = [rule] + [r for r in entity.rules
+                              if r is not rule and r.kind == rule.kind and r.about == rule.about][:3]
+            for item in group:
+                if item.id in shown:
+                    continue
+                shown.add(item.id)
+                facts.append(Fact(subject=f"{entity.label} · {item.about}", label=item.kind,
+                                  value=item.text))
+                if item.citation:
+                    citations.append(item.citation)
+        if not facts:
+            return Resolved(kind=d.kind, problem="no such rule: " + ", ".join(unknown),
+                            repair="rules must be ids shown under RULES, such as r1")
+        return Resolved(kind="fact", facts=tuple(facts), citations=tuple(dict.fromkeys(citations)),
+                        problem=("unknown rule ids: " + ", ".join(unknown)) if unknown else "")
+
     def _find_input(self, s: _TurnState, plan: PagePlan):
         """The input the plan's value goes into: the one carrying the application's
         field identifier when the page exposes it, else the input the label names."""
@@ -976,6 +1024,12 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool) -> list[
         for fact in resolved.facts:
             lines.append(f"**{fact.subject} · {fact.label}**：{fact.value}" if zh
                          else f"**{fact.subject} · {fact.label}**: {fact.value}")
+        if resolved.citations:
+            # The rule's source, verbatim: the lines it names are hashed, so a reader
+            # or an evaluator can check the citation names exactly those bytes.
+            lines.append(("依据（部署版本源码中的规则，不是当前数据）：" if zh
+                          else "Source (a rule of the deployed version's source, not current data):")
+                         + "\n" + "\n".join(resolved.citations))
     agg = resolved.aggregate
     if agg is not None:
         if resolved.kind == "list":

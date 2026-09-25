@@ -16,14 +16,21 @@ from web_operation_agent.composition.descriptor import (APPLICATION_ADAPTER_VERS
 from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnStatus
 from web_operation_agent.goal import executor as executor_module
 from web_operation_agent.goal.executor import GoalTurnExecutor
-from web_operation_agent.goal.index import ApplicationIndex, IndexEntity, IndexField, IndexPage
+from web_operation_agent.goal.index import (ApplicationIndex, IndexEntity, IndexField, IndexPage,
+                                             IndexRule)
 from web_operation_agent.goal.ports import OPTIONAL, Aggregate, Fact, PagePlan, Resolution, Resolved
 from web_operation_agent.goal.spec import DECLARE_GOAL_TOOL, GoalSpec
+from web_operation_agent.goal.narrow import neighbourhood
 from web_operation_agent.goal.understand import understand
 from web_operation_agent.schemas.browser import ActionReceipt, ElementRef, PageObservation
 from web_operation_agent.tests.execution.product_support import _Channel
 from web_operation_agent.tests.support.application import _InvoiceAdapter
 from web_operation_agent.tests.support.business import _Chat
+
+
+_RULE = IndexRule(id="r1", kind="visibility", about="Create Invoice",
+                  text='Button "Create Invoice" opens sale.advance_payment; hidden when state != sale',
+                  citation="addons/sale/views/sale_order_views.xml:266-271@18.0 sha256:" + "a" * 64)
 
 
 def _index() -> ApplicationIndex:
@@ -34,7 +41,8 @@ def _index() -> ApplicationIndex:
                     IndexField(key="total", label="Total", kind="money"),
                     IndexField(key="state", label="Status", kind="choice",
                                choices=("Quotation", "Sales Order"))),
-            sections=("Order Lines", "Other Info"), actions=("Confirm", "Send by Email")),),
+            sections=("Order Lines", "Other Info"), actions=("Confirm", "Send by Email"),
+            rules=(_RULE,)),),
         pages=(IndexPage(key="p1", label="Orders", breadcrumb="Sales / Orders",
                          entity="order", views=("list", "kanban"),
                          filters=("My Orders",), groups=("Salesperson",)),),
@@ -414,6 +422,37 @@ class GoalTurnTests(unittest.TestCase):
         self.assertIn("no bank data", execution.user_answer)
         self.assertEqual(len(chat.messages), 1)
         self.assertEqual(port.specs, [])
+
+    def test_rules_render_only_in_a_focused_index(self):
+        full = _index()
+        self.assertNotIn("RULES", full.render())
+        focused = neighbourhood(full, ("order",))
+        text = focused.render()
+        self.assertIn("RULES from the deployment's source", text)
+        self.assertIn("r1 [visibility] Sales Order · Create Invoice: Button", text)
+        self.assertNotIn("sha256", text)
+
+    def test_a_rule_question_is_answered_from_the_index_with_its_citation(self):
+        scripts = [("declare_scope", {"parts": [{"kind": "fact", "entity": "order", "about": "S00001"}]}),
+                   _declaration(kind="fact", entity="order", record="S00001", rules=["r1"])]
+        execution, _channel, _chat, port, events = self._run(
+            scripts, [], text="S00001 上怎么没有开票按钮？", staged=True)
+        self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+        self.assertIn("hidden when state != sale", execution.user_answer)
+        self.assertIn("依据（部署版本源码中的规则，不是当前数据）", execution.user_answer)
+        self.assertIn("addons/sale/views/sale_order_views.xml:266-271@18.0 sha256:" + "a" * 64,
+                      execution.user_answer)
+        # The port was not asked: the rule is the index's, and the citation the server's.
+        self.assertEqual(port.specs, [])
+        self.assertEqual([a for a, _ in _Browser.instances[0].actions], [])
+
+    def test_an_unknown_rule_id_is_a_repairable_problem(self):
+        scripts = [_declaration(kind="fact", entity="order", record="S00001", rules=["r9"]),
+                   _declaration(kind="fact", entity="order", record="S00001", rules=["r9"]),
+                   _declaration(kind="fact", entity="order", record="S00001", rules=["r1"])]
+        execution, _channel, chat, _port, _events = self._run(scripts, [], text="S00001 上怎么没有开票按钮？")
+        self.assertIn("hidden when state != sale", execution.user_answer)
+        self.assertIn("rules must be ids shown under RULES", chat.messages[2][1]["content"])
 
     def test_a_handoff_highlights_and_never_presses(self):
         execution, _channel, _chat, _port, events = self._run(

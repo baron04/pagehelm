@@ -12,6 +12,8 @@ _MAX_ENTITIES = 80
 _MAX_PAGES = 160
 _MAX_FIELDS = 40
 _MAX_LABEL = 80
+_MAX_RULE = 320
+_MAX_RULES_PER_ENTITY = 60
 
 
 def _label(value: object, name: str) -> str:
@@ -37,6 +39,28 @@ class IndexField:
 
 
 @dataclass(frozen=True)
+class IndexRule:
+    """A rule of the deployment's source about an entity: when a control shows, when a
+    field can be changed, what an action refuses, what a field means. The model names a
+    rule by its id; the citation stays on the server and is rendered verbatim."""
+    id: str
+    #: visibility | editability | refusal | meaning | target
+    kind: str
+    #: The control, field or action the rule is about, as the page labels it.
+    about: str
+    #: The rule in one sentence, in the application's own terms and identifiers.
+    text: str
+    #: `path:start-end@release sha256:<hex>` -- the exact lines, hashed.
+    citation: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "id", _label(self.id, "rule id"))
+        object.__setattr__(self, "kind", _label(self.kind, "rule kind"))
+        object.__setattr__(self, "about", " ".join(str(self.about).split())[:_MAX_LABEL])
+        object.__setattr__(self, "text", " ".join(str(self.text).split())[:_MAX_RULE])
+
+
+@dataclass(frozen=True)
 class IndexEntity:
     key: str
     label: str
@@ -49,6 +73,9 @@ class IndexEntity:
     #: For a line entity: the label of the entity whose records own these lines. The
     #: model then knows "the lines of an invoice" are this entity, not the invoice's.
     lines_of: str = ""
+    #: Rules compiled from the deployment's source about this entity's controls, fields
+    #: and actions. Rendered only in a focused index (a neighbourhood), never in full.
+    rules: tuple[IndexRule, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "key", _label(self.key, "entity key"))
@@ -111,6 +138,9 @@ class ApplicationIndex:
     #: A digest of the metadata this index was compiled from, for the audit record.
     source_digest: str = ""
     complete: bool = True
+    #: A focused index (the neighbourhood of a few entities) renders its rules too; the
+    #: full index never does, since it is bounded by what a small model can read.
+    focused: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "entities", tuple(self.entities)[:_MAX_ENTITIES])
@@ -121,6 +151,13 @@ class ApplicationIndex:
         page_keys = [p.key for p in self.pages]
         if len(set(page_keys)) != len(page_keys):
             raise ValueError("page keys must be unique")
+
+    def rule(self, rule_id: str) -> tuple[IndexEntity, IndexRule] | None:
+        for entity in self.entities:
+            for rule in entity.rules:
+                if rule.id == rule_id:
+                    return entity, rule
+        return None
 
     def entity(self, key: str) -> IndexEntity | None:
         wanted = _norm(key)
@@ -179,6 +216,12 @@ class ApplicationIndex:
             if page.operations:
                 parts.append("operations: " + ", ".join(page.operations))
             lines.append(" | ".join(parts))
+        if self.focused and any(e.rules for e in self.entities):
+            lines.append("")
+            lines.append("RULES from the deployment's source (id [kind] entity · about: rule)")
+            for entity in self.entities:
+                for rule in entity.rules[:_MAX_RULES_PER_ENTITY]:
+                    lines.append(f"{rule.id} [{rule.kind}] {entity.label} · {rule.about}: {rule.text}")
         return "\n".join(lines)
 
 
@@ -196,4 +239,4 @@ def _norm(text: str) -> str:
     return "".join(ch for ch in (text or "").casefold() if not ch.isspace())
 
 
-__all__ = ["ApplicationIndex", "IndexEntity", "IndexField", "IndexPage"]
+__all__ = ["ApplicationIndex", "IndexEntity", "IndexField", "IndexPage", "IndexRule"]

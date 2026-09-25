@@ -724,6 +724,10 @@ def run_demo(config: OdooDemoConfig, *,
                   adapter.source_capability(config.source_root,
                                             release=config.source_release,
                                             deployed_commit=config.source_commit))
+    if getattr(capability, "source_map", None) is not None and config.source_release:
+        # The goal index carries the rules of the deployment's source, cited under the
+        # deployment's release name; the same compile the tool loop uses.
+        adapter.goal_port.attach_source(capability.source_map, release=config.source_release)
     chat, meter = _chat(config, run_dir, adapter)
     holder: dict[str, LiveConversationRunner] = {}
 
