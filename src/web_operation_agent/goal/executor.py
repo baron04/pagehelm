@@ -8,7 +8,9 @@ question and the rest of the turn is server code the audit can replay.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+import functools
 import json
 import re
 import time
@@ -259,12 +261,21 @@ class GoalTurnExecutor:
                         complete=index.complete)
         s.step += 1
         elapsed = time.time() - s.started_at
+        today = getattr(self.goal_port, "today", None)
+        today_text = str(today() or "") if callable(today) else ""
+        read = functools.partial(
+            understand, chat, prompt=s.message.text, index=index, run_id=s.run_id,
+            timeout_s=max(1.0, self.config.wall_budget_s - elapsed), cancelled=s.cancelled,
+            today=today_text)
+        # The readings are independent, so they are asked for at the same time: the
+        # second costs a call, not a wait.
+        second_reading = None
+        if self.readings > 1:
+            pool = ThreadPoolExecutor(max_workers=1)
+            second_reading = pool.submit(read)
+            pool.shutdown(wait=False)
         try:
-            today = getattr(self.goal_port, "today", None)
-            spec, projection = understand(
-                chat, prompt=s.message.text, index=index, run_id=s.run_id,
-                timeout_s=max(1.0, self.config.wall_budget_s - elapsed),
-                cancelled=s.cancelled, today=str(today() or "") if callable(today) else "")
+            spec, projection = read()
         except ValueError as exc:
             s.ledger.append("goal_declaration_invalid", step=s.step, detail=str(exc)[:200])
             s.terminal_reason = "agent_refused"
@@ -277,8 +288,8 @@ class GoalTurnExecutor:
             return self._say(s, "模型服务暂时没有响应，请稍后再试。" if s.chinese
                              else "The model service did not respond; please try again.")
         s.ledger.append("goal_declared", step=s.step, spec=spec.to_json(), **projection)
-        if self.readings > 1 and spec.deliverables:
-            spec = self._agree(s, chat, index, spec, today)
+        if second_reading is not None and spec.deliverables:
+            spec = self._agree(s, chat, index, spec, today, second_reading)
         if not spec.deliverables:
             s.terminal_reason = "agent_refused"
             why = spec.unsupported or ""
@@ -335,7 +346,7 @@ class GoalTurnExecutor:
             s.terminal_reason = "agent_finished" if achieved else "agent_refused"
         return self._reply(s, resolution.deliverables, outcomes)
 
-    def _agree(self, s: _TurnState, chat, index, first: GoalSpec, today) -> GoalSpec:
+    def _agree(self, s: _TurnState, chat, index, first: GoalSpec, today, second_reading) -> GoalSpec:
         """A second, independent reading of the request; when it disagrees with the
         first, both are put in front of the model and a third reading decides.
 
@@ -345,13 +356,9 @@ class GoalTurnExecutor:
         two that differ are a question the model itself answers best when it sees both.
         A reading that fails to arrive leaves the first in place.
         """
-        elapsed = time.time() - s.started_at
         s.step += 1
         try:
-            second, projection = understand(
-                chat, prompt=s.message.text, index=index, run_id=s.run_id,
-                timeout_s=max(1.0, self.config.wall_budget_s - elapsed), cancelled=s.cancelled,
-                today=str(today() or "") if callable(today) else "")
+            second, projection = second_reading.result()
         except (ValueError, ProviderError) as exc:
             s.ledger.append("goal_second_reading_failed", step=s.step, detail=str(exc)[:200])
             return first

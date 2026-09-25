@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import tempfile
 import unittest
 from pathlib import Path
@@ -168,12 +169,18 @@ def _declaration(**deliverable) -> tuple:
 
 class _AgreeingChat(_Chat):
     """A scripted chat whose second reading repeats the first, as a steady model would,
-    unless the script provides a different one."""
+    unless the script provides a different one. The two readings arrive from two
+    threads, so the script is handed out under a lock."""
+
+    def __init__(self, script):
+        super().__init__(script)
+        self._lock = threading.Lock()
 
     def complete(self, messages, tools, _run_id, **_kwargs):
-        if len(self.script) == 1:
-            self.script.append(self.script[0])
-        return super().complete(messages, tools, _run_id, **_kwargs)
+        with self._lock:
+            if len(self.script) == 1:
+                self.script.append(self.script[0])
+            return super().complete(messages, tools, _run_id, **_kwargs)
 
 
 class GoalTurnTests(unittest.TestCase):
