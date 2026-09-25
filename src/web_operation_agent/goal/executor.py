@@ -37,7 +37,7 @@ from ..state.ledger import SessionLedger
 from ..transport.browser import RemoteBrowserClient, TransportError, TurnCancelled
 from .ports import Fact, GoalPort, PagePlan, Resolution, Resolved, capabilities_of
 from .spec import GoalSpec
-from .narrow import locate, neighbourhood, summaries
+from .narrow import correct_records, locate, neighbourhood, summaries
 from .understand import understand, understand_scope
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -282,6 +282,8 @@ class GoalTurnExecutor:
         today = getattr(self.goal_port, "today", None)
         today_text = str(today() or "") if callable(today) else ""
         scope_text = ""
+        scope_parts: list[dict] = []
+        known = ()
         if self.staged:
             known = locate(self.goal_port, s.message.text,
                            context=s.approvals.context(s.step, "locate"))
@@ -305,6 +307,7 @@ class GoalTurnExecutor:
                 s.terminal_reason, s.detail = "provider_error", str(exc)[:200]
                 return self._say(s, "模型服务暂时没有响应，请稍后再试。" if s.chinese
                                  else "The model service did not respond; please try again.")
+            scope_parts = parts
             s.ledger.append("goal_scope_declared", step=s.step, parts=parts,
                             write_intent=write_intent, unsupported=unsupported, **projection)
             if not parts:
@@ -313,8 +316,12 @@ class GoalTurnExecutor:
                                  if s.chinese else
                                  ("The assistant cannot do this request."
                                   + (f" ({unsupported})" if unsupported else "")))
+            # The rules of the source are shown only when the first step says a part
+            # asks how the application behaves: a long catalogue of rule ids in front of
+            # a question about data disturbs how a small model reads the question.
             index = neighbourhood(index, tuple(p["entity"] for p in parts),
-                                  request=s.message.text)
+                                  request=s.message.text,
+                                  rules=any(p.get("rules") for p in parts))
             s.index = index
             s.ledger.append("goal_neighbourhood", step=s.step,
                             entities=[e.key for e in index.entities], pages=len(index.pages),
@@ -330,10 +337,10 @@ class GoalTurnExecutor:
             timeout_s=max(1.0, self.config.wall_budget_s - elapsed), cancelled=s.cancelled,
             today=today_text, scope=scope_text)
         # The readings are independent, so they are asked for at the same time: the
-        # second costs a call, not a wait. The staged path reads once: its first step
-        # already settled what the readings disagree about.
+        # second costs a call, not a wait. The staged path's second step is read twice
+        # too: a settled scope still leaves the values and record numbers to misread.
         second_reading = None
-        if self.readings > 1 and not self.staged:
+        if self.readings > 1:
             pool = ThreadPoolExecutor(max_workers=1)
             second_reading = pool.submit(read)
             pool.shutdown(wait=False)
@@ -351,8 +358,30 @@ class GoalTurnExecutor:
             return self._say(s, "模型服务暂时没有响应，请稍后再试。" if s.chinese
                              else "The model service did not respond; please try again.")
         s.ledger.append("goal_declared", step=s.step, spec=spec.to_json(), **projection)
+        if (self.staged and not spec.deliverables and scope_parts
+                and not any(p.get("rules") for p in scope_parts)):
+            # The first step found things to deliver in this request and the second
+            # declared none: the two readings contradict each other, and a small model
+            # now and then answers the index instead of the request. It is asked once
+            # more with what the first step found; its answer stands either way.
+            try:
+                again, projection = read(
+                    previous=spec,
+                    problems=("the request asks for: " + "; ".join(
+                        f"{p['kind']} on {p['entity']}" + (f" ({p['about']})" if p.get("about") else "")
+                        for p in scope_parts) + ". Declare these from the REQUEST below.",))
+                s.ledger.append("goal_declared", step=s.step, spec=again.to_json(),
+                                redeclared=True, **projection)
+                if again.deliverables:
+                    spec = again
+            except (ValueError, ProviderError) as exc:
+                s.ledger.append("goal_declaration_invalid", step=s.step, detail=str(exc)[:200])
         if second_reading is not None and spec.deliverables:
             spec = self._agree(s, chat, index, spec, today, second_reading)
+        spec, corrections = correct_records(spec, s.message.text, known)
+        if corrections:
+            s.ledger.append("goal_records_corrected", step=s.step,
+                            corrections=[{"declared": a, "located": b} for a, b in corrections])
         s.write_intent = spec.write_intent or any(
             d.kind == "handoff" for d in spec.deliverables)
         if not spec.deliverables:
@@ -1048,7 +1077,10 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool) -> list[
     agg = resolved.aggregate
     if agg is not None:
         if resolved.kind == "list":
-            names = "、".join(agg.records) if zh else ", ".join(agg.records)
+            # A record's name may carry a line break (a product's description under its
+            # name); one record reads as one line.
+            records = [" ".join(str(r).split()) for r in agg.records]
+            names = "、".join(records) if zh else ", ".join(records)
             head = (f"**{agg.subject}**：共 {agg.count} 条" if zh
                     else f"**{agg.subject}**: {agg.count} records")
             if names:

@@ -221,7 +221,7 @@ class GoalTurnTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def _run(self, script, resolved, *, decision="approved", text="S00006 的客户是谁？看看其他信息",
-             resolved_then=None, offers=OPTIONAL, staged=False):
+             resolved_then=None, offers=OPTIONAL, staged=False, readings=2):
         channel = _Channel(page_url="http://127.0.0.1:8080/home", decision=decision)
         chat = _AgreeingChat(script)
         port = _Port(resolved, resolved_then, offers)
@@ -229,7 +229,8 @@ class GoalTurnTests(unittest.TestCase):
             channel=channel,
             config=AgentTurnConfig(supported_scope="read", ledger_path=self.ledger),
             chat=chat, application=bind_application(_Adapter()), goal_port=port,
-            control=ReadOnlyControl(), run_id_factory=lambda _m: "goal-run", staged=staged)
+            control=ReadOnlyControl(), run_id_factory=lambda _m: "goal-run", staged=staged,
+            readings=readings)
         execution = executor.execute({"message_id": "m1", "text": text,
                                       "page_url": "http://127.0.0.1:8080/home"})
         events = [json.loads(line) for line in self.ledger.read_text().splitlines()]
@@ -408,7 +409,8 @@ class GoalTurnTests(unittest.TestCase):
             scripts, [Resolved(kind="fact", facts=(Fact("S00006", "Customer", "Lumber Inc"),))],
             text="S00006 的客户是谁？", staged=True)
         self.assertIn("Lumber Inc", execution.user_answer)
-        self.assertEqual(chat.tool_names, [{"declare_scope"}, {"declare_goal"}])
+        # The scope once, then the details read twice in parallel; the readings agree.
+        self.assertEqual(chat.tool_names, [{"declare_scope"}, {"declare_goal"}, {"declare_goal"}])
         first, second = chat.messages[0][1]["content"], chat.messages[1][1]["content"]
         self.assertTrue(first.startswith("ENTITIES"))
         self.assertIn("named in request: S00006", first)
@@ -417,9 +419,9 @@ class GoalTurnTests(unittest.TestCase):
         self.assertIn("SCOPE", second)
         self.assertIn('"about": "S00006"', second)
         kinds = [e["event"] for e in events]
-        for name in ("goal_references", "goal_scope_declared", "goal_neighbourhood", "goal_declared"):
+        for name in ("goal_references", "goal_scope_declared", "goal_neighbourhood", "goal_declared",
+                     "goal_second_reading"):
             self.assertIn(name, kinds)
-        self.assertNotIn("goal_second_reading", kinds)
         self.assertEqual(port.specs[0].deliverables[0].record, "S00006")
 
     def test_a_staged_scope_with_no_parts_ends_the_turn_honestly(self):
@@ -430,6 +432,27 @@ class GoalTurnTests(unittest.TestCase):
         self.assertIn("no bank data", execution.user_answer)
         self.assertEqual(len(chat.messages), 1)
         self.assertEqual(port.specs, [])
+
+    def test_an_empty_second_step_after_a_found_scope_is_asked_once_more(self):
+        scripts = [("declare_scope", {"parts": [{"kind": "fact", "entity": "order", "about": "S00006"}]}),
+                   ("declare_goal", {"deliverables": [], "unsupported": "the message contains only the index"}),
+                   _declaration(kind="fact", entity="order", record="S00006", fields=["Customer"])]
+        execution, _channel, chat, _port, events = self._run(
+            scripts, [Resolved(kind="fact", facts=(Fact("S00006", "Customer", "Lumber Inc"),))],
+            text="S00006 的客户是谁？", staged=True, readings=1)
+        self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+        self.assertIn("Lumber Inc", execution.user_answer)
+        self.assertIn("the request asks for: fact on order (S00006)", chat.messages[2][1]["content"])
+        self.assertTrue(any(e.get("redeclared") for e in events if e["event"] == "goal_declared"))
+
+    def test_a_data_question_is_declared_without_the_rules_catalogue(self):
+        scripts = [("declare_scope", {"parts": [{"kind": "fact", "entity": "order", "about": "S00006"}]}),
+                   _declaration(kind="fact", entity="order", record="S00006", fields=["Customer"])]
+        execution, _channel, chat, _port, _events = self._run(
+            scripts, [Resolved(kind="fact", facts=(Fact("S00006", "Customer", "Lumber Inc"),))],
+            text="S00006 的客户是谁？", staged=True)
+        self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+        self.assertNotIn("RULES", chat.messages[1][1]["content"])
 
     def test_rules_render_only_in_a_focused_index(self):
         full = _index()
@@ -443,7 +466,7 @@ class GoalTurnTests(unittest.TestCase):
         self.assertNotIn("sha256", text)
 
     def test_a_rule_question_is_answered_from_the_index_with_its_citation(self):
-        scripts = [("declare_scope", {"parts": [{"kind": "fact", "entity": "order", "about": "S00001"}]}),
+        scripts = [("declare_scope", {"parts": [{"kind": "fact", "entity": "order", "about": "S00001", "rules": True}]}),
                    _declaration(kind="fact", entity="order", record="S00001", rules=["r1"])]
         execution, _channel, _chat, port, events = self._run(
             scripts, [], text="S00001 上怎么没有开票按钮？", staged=True)
@@ -462,7 +485,7 @@ class GoalTurnTests(unittest.TestCase):
         self.assertNotIn("validity", execution.user_answer)
 
     def test_a_rule_question_the_source_does_not_answer_is_refused_in_the_persons_words(self):
-        scripts = [("declare_scope", {"parts": [{"kind": "fact", "entity": "order", "about": ""}]}),
+        scripts = [("declare_scope", {"parts": [{"kind": "fact", "entity": "order", "about": "", "rules": True}]}),
                    ("declare_goal", {"deliverables": [], "unsupported": "no approval rule"})]
         execution, _channel, _chat, _port, _events = self._run(
             scripts, [], text="报价超过十万美元要两名经理批准吗？", staged=True)
@@ -604,6 +627,16 @@ class GoalTurnTests(unittest.TestCase):
         self.assertIn("3 条", execution.user_answer)
         self.assertIn("92,750.00 USD", execution.user_answer)
         self.assertEqual(_Browser.instances[0].actions, [])
+
+    def test_a_listed_record_with_a_line_break_reads_as_one_line(self):
+        execution, *_ = self._run(
+            [_declaration(kind="list", entity="order", page={"key": "p1"})],
+            [Resolved(kind="list", aggregate=Aggregate(
+                subject="Lines", count=1,
+                records=("[D1] Four Person Desk\nFour person workstation — Unit Price: 2,350.00",)))],
+            text="名称含 Desk 的行")
+        self.assertIn("[D1] Four Person Desk Four person workstation — Unit Price: 2,350.00",
+                      execution.user_answer)
 
     def test_a_declined_page_switch_ends_the_turn_without_acting(self):
         execution, *_ = self._run(

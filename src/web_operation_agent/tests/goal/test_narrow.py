@@ -5,7 +5,8 @@ import unittest
 
 from web_operation_agent.goal.index import (ApplicationIndex, IndexEntity, IndexField, IndexPage,
                                              IndexRule)
-from web_operation_agent.goal.narrow import (KnownReference, locate, neighbourhood,
+from web_operation_agent.goal.spec import GoalSpec
+from web_operation_agent.goal.narrow import (KnownReference, correct_records, locate, neighbourhood,
                                               ranked_entities, references, summaries)
 
 
@@ -127,6 +128,34 @@ class RankingTests(unittest.TestCase):
         # A one-word control label ("Expiration") never names an entity.
         near = neighbourhood(index, ("payment",), request="Expiration of what?")
         self.assertEqual([e.key for e in near.entities], ["payment"])
+
+    def test_a_composed_record_number_is_replaced_by_the_located_one(self):
+        known = (KnownReference(text="S00009", entity="order", name="S00009"),)
+        spec = GoalSpec.from_json({"deliverables": [{"kind": "fact", "entity": "order", "record": "S00096",
+                                                     "fields": ["Order Date"]}]})
+        fixed, corrections = correct_records(spec, "S00009 的订单日期是哪一天？", known)
+        self.assertEqual(fixed.deliverables[0].record, "S00009")
+        self.assertEqual(corrections, (("S00096", "S00009"),))
+        # A record the request wrote, a description, or no located reference: untouched.
+        for record, request, refs in (("S00009", "S00009 的日期", known),
+                                      ("the larger quotation", "S00009 的日期", known),
+                                      ("S00096", "S00009 的日期", ())):
+            spec = GoalSpec.from_json({"deliverables": [{"kind": "fact", "entity": "order", "record": record}]})
+            self.assertEqual(correct_records(spec, request, refs)[1], ())
+        # Two located records it could be: nothing is guessed.
+        two = known + (KnownReference(text="S00010", entity="order", name="S00010"),)
+        spec = GoalSpec.from_json({"deliverables": [{"kind": "fact", "entity": "order", "record": "S00096"}]})
+        self.assertEqual(correct_records(spec, "S00009 和 S00010", two)[1], ())
+
+    def test_a_data_question_carries_no_rules(self):
+        rules = (IndexRule(id="r1", kind="visibility", about="Request Cancel", text="t"),)
+        index = ApplicationIndex(entities=(
+            IndexEntity(key="invoice", label="Journal Entry", rules=rules),
+            IndexEntity(key="payment", label="Payments", rules=rules)))
+        near = neighbourhood(index, ("invoice",), request="Request Cancel", rules=False)
+        self.assertEqual([e.key for e in near.entities], ["invoice"])
+        self.assertEqual(near.entity("invoice").rules, ())
+        self.assertNotIn("RULES", near.render())
 
     def test_the_catalogue_lists_one_entry_per_control_and_kind(self):
         rules = tuple(IndexRule(id=f"r{n}", kind="editability", about="Currency",

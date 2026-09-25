@@ -391,7 +391,9 @@ DECLARE_SCOPE_TOOL = {
                             "entity": {"type": "string",
                                        "description": "entity key from the list. A question about a record's lines, items or products is about the line entity (marked 'lines of X'), not X"},
                             "about": {"type": "string",
-                                      "description": "the record or records meant, in the person's words (a number, a name, a description), or empty"}},
+                                      "description": "the record or records meant, in the person's words (a number, a name, a description), or empty"},
+                            "rules": {"type": "boolean",
+                                      "description": "true when this part asks how the application itself behaves -- why a control is shown or hidden, what it opens, when a field can be changed, what an action refuses or requires, what a field means -- rather than about the data in its records"}},
                         "required": ["kind", "entity"]}},
                 "write_intent": {"type": "boolean"},
                 "unsupported": {"type": "string",
@@ -422,8 +424,11 @@ def scope_from_json(payload: object) -> tuple[list[dict], bool, str]:
         kind = _text(item.get("kind"), "kind").lower()
         if kind not in KINDS:
             raise ValueError(f"part kind must be one of {', '.join(KINDS)}")
-        parts.append({"kind": kind, "entity": _text(item.get("entity"), "entity"),
-                      "about": _text(item.get("about"), "about")})
+        part = {"kind": kind, "entity": _text(item.get("entity"), "entity"),
+                "about": _text(item.get("about"), "about")}
+        if item.get("rules") is True:
+            part["rules"] = True
+        parts.append(part)
     return parts, bool(payload.get("write_intent", False)), _reason(payload.get("unsupported"))
 
 

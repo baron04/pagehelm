@@ -61,6 +61,35 @@ def references(text: str) -> tuple[str, ...]:
     return tuple(found[:_MAX_REFERENCES])
 
 
+def correct_records(spec, request: str, known: tuple[KnownReference, ...]):
+    """A declared record written like a code that is not in the request, where the
+    request's located references leave exactly one record it can be, is that record:
+    record numbers are copied, not composed, and a small model now and then composes
+    one (S00096 for S00009). Returns (spec, corrections as (declared, located))."""
+    from dataclasses import replace as _replace
+    if not known:
+        return spec, ()
+    asked = {_norm_ref(r) for r in references(request)}
+    corrections = []
+    out = []
+    for d in spec.deliverables:
+        record = (d.record or "").strip()
+        if record and _CODE.fullmatch(record) and _norm_ref(record) not in asked:
+            same = {k.name for k in known if k.entity == d.entity} or {k.name for k in known}
+            if len(same) == 1:
+                located = next(iter(same))
+                corrections.append((record, located))
+                d = _replace(d, record=located)
+        out.append(d)
+    if not corrections:
+        return spec, ()
+    return _replace(spec, deliverables=tuple(out)), tuple(corrections)
+
+
+def _norm_ref(text: str) -> str:
+    return "".join((text or "").casefold().split())
+
+
 def locate(port, text: str, *, context=None) -> tuple[KnownReference, ...]:
     """Ask the adapter which records the request's hard references name.
 
@@ -200,18 +229,21 @@ def _named(entity: IndexEntity, request: str) -> bool:
 
 
 def neighbourhood(index: ApplicationIndex, keys: tuple[str, ...],
-                  request: str = "") -> ApplicationIndex:
+                  request: str = "", *, rules: bool = True) -> ApplicationIndex:
     """The chosen entities with what a declaration about them may need to name: the
     entities their link fields point to, their lines, the records that own them, and
     every page that shows any of these. Rendered like the full index, only smaller.
     An entity the request names by label or alias is chosen too, since the first step
     may have picked a related one instead. Rules are catalogued on the chosen entities,
     ranked by the request's words and capped; a neighbour carries its refusals, and
-    the owner of chosen lines also what its form says about editing them."""
+    the owner of chosen lines also what its form says about editing them. With
+    `rules` false (a request about data, not about how the application behaves) no
+    rules are carried at all, and an entity is joined only by its label or alias."""
     chosen = {k for k in keys if index.entity(k) is not None}
     # An entity the request names joins with a few of its rules, without bringing its
     # own neighbours: the first step's choice keeps the neighbourhood's shape.
-    named = {e.key for e in index.entities if e.key not in chosen and _named(e, request)}
+    named = {e.key for e in index.entities if e.key not in chosen
+             and _named(e if rules else replace(e, actions=(), rules=()), request)}
     wanted = set(chosen) | named
     owners: set[str] = set()
     by_label = {e.label: e.key for e in index.entities}
@@ -228,6 +260,8 @@ def neighbourhood(index: ApplicationIndex, keys: tuple[str, ...],
                 wanted.add(other.key)
 
     def kept(entity: IndexEntity):
+        if not rules:
+            return ()
         if entity.key in chosen:
             return _ranked_rules(entity, request)
         if entity.key in named:
@@ -263,5 +297,5 @@ def neighbourhood(index: ApplicationIndex, keys: tuple[str, ...],
                             complete=index.complete, focused=True)
 
 
-__all__ = ["KnownReference", "locate", "neighbourhood", "ranked_entities", "references",
+__all__ = ["KnownReference", "correct_records", "locate", "neighbourhood", "ranked_entities", "references",
            "summaries"]
